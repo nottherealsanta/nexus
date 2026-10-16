@@ -80,6 +80,9 @@ pub struct Snapshot {
     /// Local: the Queued section is collapsed (caret click); carried across snapshots.
     #[serde(skip)]
     pub queue_collapsed: bool,
+    /// Local: the Live pane is expanded to nearly the full height; reset when the call ends.
+    #[serde(skip)]
+    pub live_expanded: bool,
     /// The running turn's status line; absent while idle.
     pub turn_status: Option<TurnStatus>,
     /// Set while the daemon holds this session's turn back on its global concurrent-turn cap.
@@ -333,6 +336,12 @@ pub struct LiveBar {
     pub level_out: f64,
     /// The call's session id when it is not the session on screen.
     pub elsewhere: String,
+    /// The open call's card rows (`tone TAB label TAB text` per line), drawn in the Live
+    /// pane below the composer; empty when the call's session is not on screen.
+    pub detail: String,
+    pub collapsed: bool,
+    /// `live_toggle`: opens or closes the rows (instructions, commentary, long text).
+    pub operation: Option<Value>,
 }
 #[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
@@ -390,7 +399,7 @@ pub struct Content {
     /// elapsed time; and the milliseconds it took once finished (0 = unknown or running).
     pub started_ms: u64,
     pub elapsed_ms: u64,
-    /// `tool_group`: failed members, drawn under the folded header so a failure is never hidden.
+    /// `tool_group`: failed members (data only; a folded group no longer draws them, the count shows in the header).
     pub failed_members: Vec<Content>,
     /// `tool_group`: the newest running member, drawn as the live tail of a folded group.
     pub live_member: Option<Box<Content>>,
@@ -821,8 +830,8 @@ mod section_tests {
             dashboard: Some(serde_json::json!({"rows": []})),
             ..Default::default()
         };
-        let fields = serde_json::from_str::<serde_json::Map<String, Value>>(r#"{"schema":3}"#)
-            .unwrap();
+        let fields =
+            serde_json::from_str::<serde_json::Map<String, Value>>(r#"{"schema":3}"#).unwrap();
         let mut next: Snapshot = serde_json::from_value(Value::Object(fields.clone())).unwrap();
         next.merge_missing(&mut old, &fields);
         assert_eq!(next.dashboard, Some(serde_json::json!({"rows": []})));
@@ -848,19 +857,36 @@ mod section_tests {
         assert_eq!(group.started_ms, 1_700_000_000_000);
         assert_eq!(group.failed_members[0].id, "bad");
         let live = group.live_member.as_deref().unwrap();
-        assert_eq!(live.signal[1], ("clip".to_string(), "… 3 lines".to_string()));
+        assert_eq!(
+            live.signal[1],
+            ("clip".to_string(), "… 3 lines".to_string())
+        );
         assert_eq!(live.inspect_operation.as_ref().unwrap()["id"], "now");
 
-        let explicit = Content { tokens: "~348".into(), active: false, text: "body".into(), ..Default::default() };
+        let explicit = Content {
+            tokens: "~348".into(),
+            active: false,
+            text: "body".into(),
+            ..Default::default()
+        };
         assert!(!explicit.is_active(), "explicit `active` wins over content");
         assert_eq!(explicit.token_label().as_deref(), Some("~348"));
-        let legacy = Content { status: "~2.1k tokens".into(), ..Default::default() };
+        let legacy = Content {
+            status: "~2.1k tokens".into(),
+            ..Default::default()
+        };
         assert!(legacy.is_active());
         assert_eq!(legacy.token_label().as_deref(), Some("~2.1k"));
-        let unknown = Content { status: "tokens unknown".into(), ..Default::default() };
+        let unknown = Content {
+            status: "tokens unknown".into(),
+            ..Default::default()
+        };
         assert_eq!(unknown.token_label().as_deref(), Some("~?"));
         assert_eq!(Content::default().token_label(), None);
-        let zero = Content { local_preview: "~0".into(), ..Default::default() };
+        let zero = Content {
+            local_preview: "~0".into(),
+            ..Default::default()
+        };
         assert!(!zero.is_active());
     }
 
@@ -868,7 +894,10 @@ mod section_tests {
     fn carried_presentation_keeps_signal_only_while_open() {
         let source = Content {
             running_label: "Running 1 command".into(),
-            failed_members: vec![Content { id: "bad".into(), ..Default::default() }],
+            failed_members: vec![Content {
+                id: "bad".into(),
+                ..Default::default()
+            }],
             signal: vec![("text".into(), "x".into())],
             ..Default::default()
         };

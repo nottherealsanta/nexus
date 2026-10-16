@@ -6,9 +6,7 @@
 //! Every focus id and hit part is the one the input handler already knows.
 use super::draw::wrap;
 use super::model::*;
-use nexus_widgets::{
-    fill, hit::Part, put, put_right, row_style, truncate, width, Theme, Ui,
-};
+use nexus_widgets::{fill, hit::Part, put, put_right, row_style, truncate, width, Theme, Ui};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -39,10 +37,18 @@ struct Span {
 }
 
 fn sp(text: impl Into<String>, style: Style) -> Span {
-    Span { text: text.into(), style, part: None }
+    Span {
+        text: text.into(),
+        style,
+        part: None,
+    }
 }
 fn sp_part(text: impl Into<String>, style: Style, part: &str) -> Span {
-    Span { text: text.into(), style, part: Some(Part::Named(part.into())) }
+    Span {
+        text: text.into(),
+        style,
+        part: Some(Part::Named(part.into())),
+    }
 }
 fn spans_width(spans: &[Span]) -> u16 {
     spans.iter().map(|s| width(&s.text) as u16).sum()
@@ -65,7 +71,15 @@ fn purple(t: &Theme) -> Style {
 }
 
 /// Draw spans so they end at `right` (exclusive), registering their hit parts.
-fn put_spans_right(buf: &mut Buffer, ui: &mut Ui, id: &str, right: u16, y: u16, spans: &[Span], bg: Color) {
+fn put_spans_right(
+    buf: &mut Buffer,
+    ui: &mut Ui,
+    id: &str,
+    right: u16,
+    y: u16,
+    spans: &[Span],
+    bg: Color,
+) {
     let mut x = right.saturating_sub(spans_width(spans));
     for s in spans {
         let w = width(&s.text) as u16;
@@ -95,7 +109,14 @@ pub fn heading(buf: &mut Buffer, ui: &Ui, f: &mut Flow, label: &str) {
         end.saturating_sub(x),
     );
     if let Some(sub) = sub {
-        x += put(buf, x, f.y, &format!(" · {sub}"), quiet(t), end.saturating_sub(x));
+        x += put(
+            buf,
+            x,
+            f.y,
+            &format!(" · {sub}"),
+            quiet(t),
+            end.saturating_sub(x),
+        );
     }
     let rule = end.saturating_sub(x + 1) as usize;
     if rule > 0 {
@@ -114,7 +135,11 @@ pub fn heading(buf: &mut Buffer, ui: &Ui, f: &mut Flow, label: &str) {
 /// A quiet note line (errors stay red; "warning" is not louder than any other note).
 pub fn note(buf: &mut Buffer, ui: &Ui, f: &mut Flow, text_: &str, tone: &str) {
     let t = ui.theme;
-    let st = if tone == "error" { Style::default().fg(t.error) } else { quiet(t) };
+    let st = if tone == "error" {
+        Style::default().fg(t.error)
+    } else {
+        quiet(t)
+    };
     for line in wrap(text_, f.w.saturating_sub(2) as usize, 4) {
         put(buf, f.x + 2, f.y, &line, st, f.w.saturating_sub(2));
         f.y += 1;
@@ -124,7 +149,14 @@ pub fn note(buf: &mut Buffer, ui: &Ui, f: &mut Flow, text_: &str, tone: &str) {
 /// Quiet description lines under a selected row.
 fn description(buf: &mut Buffer, ui: &Ui, f: &mut Flow, lines: &[String]) {
     for line in lines {
-        put(buf, f.x + 4, f.y, line, quiet(ui.theme), f.w.saturating_sub(4));
+        put(
+            buf,
+            f.x + 4,
+            f.y,
+            line,
+            quiet(ui.theme),
+            f.w.saturating_sub(4),
+        );
         f.y += 1;
     }
 }
@@ -144,7 +176,11 @@ fn is_create(label: &str) -> bool {
 
 fn button_spans(t: &Theme, label: &str, variant: &str) -> Vec<Span> {
     if is_create(label) {
-        let l = if label.starts_with('+') { label.to_string() } else { format!("+ {label}") };
+        let l = if label.starts_with('+') {
+            label.to_string()
+        } else {
+            format!("+ {label}")
+        };
         vec![sp(l, purple(t))]
     } else if variant == "danger" {
         vec![sp(format!("{label} ›"), Style::default().fg(t.error))]
@@ -180,18 +216,37 @@ fn control_spans(ui: &Ui, c: &Control, focused: bool) -> Vec<Span> {
                 vec![sp("off", quiet(t))]
             }
         }
-        Control::Segmented { options, active, .. } => segmented_spans(t, options, *active, focused),
-        Control::Select { value, .. } => vec![sp_part(format!("{} ›", truncate(value, 30, ui.glyphs.ellipsis)), text(t), "control")],
+        Control::Segmented {
+            options, active, ..
+        } => segmented_spans(t, options, *active, focused),
+        Control::Select { value, .. } => vec![sp_part(
+            format!("{} ›", truncate(value, 30, ui.glyphs.ellipsis)),
+            text(t),
+            "control",
+        )],
         Control::Stepper { display, .. } => vec![
             sp_part("‹ ", quiet(t), "dec"),
             sp(display.clone(), text(t)),
             sp_part(" ›", quiet(t), "inc"),
         ],
-        Control::Text { value, secret, placeholder, .. } => {
+        Control::Text {
+            value,
+            secret,
+            placeholder,
+            ..
+        } => {
             if value.is_empty() {
-                vec![sp_part(format!("{} ›", truncate(placeholder, 28, ui.glyphs.ellipsis)), quiet(t), "control")]
+                vec![sp_part(
+                    format!("{} ›", truncate(placeholder, 28, ui.glyphs.ellipsis)),
+                    quiet(t),
+                    "control",
+                )]
             } else {
-                let shown = if *secret { "•".repeat(value.graphemes(true).count().min(24)) } else { truncate(value, 28, ui.glyphs.ellipsis) };
+                let shown = if *secret {
+                    "•".repeat(value.graphemes(true).count().min(24))
+                } else {
+                    truncate(value, 28, ui.glyphs.ellipsis)
+                };
                 vec![sp_part(format!("{shown} ›"), text(t), "control")]
             }
         }
@@ -211,9 +266,21 @@ pub fn row(
     let rid = row_id(&r.id);
     let t = ui.theme;
     let focused = ui.focus.is(&rid);
-    let spans = if edit.is_some() { Vec::new() } else { control_spans(ui, &r.control, focused) };
-    let cw = if edit.is_some() { 30 } else { spans_width(&spans) };
-    let scope_w = if r.scope.is_empty() { 0 } else { width(&r.scope) as u16 + 3 };
+    let spans = if edit.is_some() {
+        Vec::new()
+    } else {
+        control_spans(ui, &r.control, focused)
+    };
+    let cw = if edit.is_some() {
+        30
+    } else {
+        spans_width(&spans)
+    };
+    let scope_w = if r.scope.is_empty() {
+        0
+    } else {
+        width(&r.scope) as u16 + 3
+    };
     let stack = width(&r.label) as u16 + 4 + scope_w + cw + 2 > f.w;
     let h = 1 + u16::from(stack);
     let rect = Rect::new(f.x, f.y, f.w, h);
@@ -222,11 +289,33 @@ pub fn row(
     fill(buf, rect, st);
     let bg = st.bg.unwrap_or(t.bg);
     put(buf, f.x, f.y, "▸ ", quiet(t).bg(bg), 2);
-    let label_st = if resp.focused { st.add_modifier(Modifier::BOLD) } else { st };
-    let lw = if stack { f.w.saturating_sub(4 + scope_w) } else { f.w.saturating_sub(cw + 5 + scope_w) };
-    let used = put(buf, f.x + 2, f.y, &truncate(&r.label, lw as usize, ui.glyphs.ellipsis), label_st, lw);
+    let label_st = if resp.focused {
+        st.add_modifier(Modifier::BOLD)
+    } else {
+        st
+    };
+    let lw = if stack {
+        f.w.saturating_sub(4 + scope_w)
+    } else {
+        f.w.saturating_sub(cw + 5 + scope_w)
+    };
+    let used = put(
+        buf,
+        f.x + 2,
+        f.y,
+        &truncate(&r.label, lw as usize, ui.glyphs.ellipsis),
+        label_st,
+        lw,
+    );
     if scope_w > 0 {
-        put(buf, f.x + 2 + used, f.y, &format!(" · {}", r.scope), quiet(t).bg(bg), scope_w);
+        put(
+            buf,
+            f.x + 2 + used,
+            f.y,
+            &format!(" · {}", r.scope),
+            quiet(t).bg(bg),
+            scope_w,
+        );
     }
     let vy = f.y + u16::from(stack);
     let right = f.x + f.w - 1;
@@ -235,11 +324,23 @@ pub fn row(
         let x = right.saturating_sub(30);
         let est = Style::default().fg(t.text).bg(t.element_hi);
         fill(buf, Rect::new(x, vy, 30, 1), est);
-        let shown = if secret { "•".repeat(e.value.graphemes(true).count()) } else { e.value.clone() };
-        put(buf, x + 1, vy, &truncate(&shown, 27, ui.glyphs.ellipsis), est, 28);
+        let shown = if secret {
+            "•".repeat(e.value.graphemes(true).count())
+        } else {
+            e.value.clone()
+        };
+        put(
+            buf,
+            x + 1,
+            vy,
+            &truncate(&shown, 27, ui.glyphs.ellipsis),
+            est,
+            28,
+        );
         let cur = x + 1 + (e.cursor as u16).min(27);
         buf[(cur, vy)].set_style(est.add_modifier(Modifier::REVERSED));
-        ui.hits.add(Rect::new(x, vy, 30, 1), &rid, Part::Named("control".into()));
+        ui.hits
+            .add(Rect::new(x, vy, 30, 1), &rid, Part::Named("control".into()));
     } else {
         put_spans_right(buf, ui, &rid, right, vy, &spans, bg);
     }
@@ -249,7 +350,11 @@ pub fn row(
             buf,
             f.x + 4,
             f.y,
-            &truncate(&format!("! {}", r.error), f.w.saturating_sub(5) as usize, ui.glyphs.ellipsis),
+            &truncate(
+                &format!("! {}", r.error),
+                f.w.saturating_sub(5) as usize,
+                ui.glyphs.ellipsis,
+            ),
             Style::default().fg(t.error),
             f.w.saturating_sub(4),
         );
@@ -272,18 +377,47 @@ pub fn buttons(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, bs: &Buttons) {
         let bg = st.bg.unwrap_or(t.bg);
         let spans = button_spans(t, &item.label, &item.variant);
         let create = is_create(&item.label);
-        let weight = if resp.focused { Modifier::BOLD } else { Modifier::empty() };
+        let weight = if resp.focused {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
         if create && bs.label.is_empty() {
-            put(buf, f.x, f.y, &spans[0].text, spans[0].style.bg(bg).add_modifier(weight), f.w);
+            put(
+                buf,
+                f.x,
+                f.y,
+                &spans[0].text,
+                spans[0].style.bg(bg).add_modifier(weight),
+                f.w,
+            );
         } else if bs.label.is_empty() {
             put(buf, f.x, f.y, "▸ ", quiet(t).bg(bg), 2);
-            let label = if item.variant == "danger" { Style::default().fg(t.error) } else { text(t) };
+            let label = if item.variant == "danger" {
+                Style::default().fg(t.error)
+            } else {
+                text(t)
+            };
             let lw = f.w.saturating_sub(6);
-            put(buf, f.x + 2, f.y, &truncate(&item.label, lw as usize, ui.glyphs.ellipsis), label.bg(bg).add_modifier(weight), lw);
+            put(
+                buf,
+                f.x + 2,
+                f.y,
+                &truncate(&item.label, lw as usize, ui.glyphs.ellipsis),
+                label.bg(bg).add_modifier(weight),
+                lw,
+            );
             put_right(buf, f.x + f.w - 1, f.y, "›", quiet(t).bg(bg));
         } else {
             put(buf, f.x, f.y, "▸ ", quiet(t).bg(bg), 2);
-            put(buf, f.x + 2, f.y, &truncate(&bs.label, 20, ui.glyphs.ellipsis), st.add_modifier(weight), 20);
+            put(
+                buf,
+                f.x + 2,
+                f.y,
+                &truncate(&bs.label, 20, ui.glyphs.ellipsis),
+                st.add_modifier(weight),
+                20,
+            );
             put_spans_right(buf, ui, &id, f.x + f.w - 1, f.y, &spans, bg);
         }
         f.y += 1;
@@ -301,19 +435,38 @@ pub fn section(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, sec: &Section, open:
     let bg = st.bg.unwrap_or(t.bg);
     let caret = if open { "▾ " } else { "▸ " };
     put(buf, f.x, f.y, caret, quiet(t).bg(bg), 2);
-    let label_st = if resp.focused { st.add_modifier(Modifier::BOLD) } else { st };
+    let label_st = if resp.focused {
+        st.add_modifier(Modifier::BOLD)
+    } else {
+        st
+    };
     let sw = width(&sec.summary) as u16;
     let lw = f.w.saturating_sub(sw + 5);
-    put(buf, f.x + 2, f.y, &truncate(&sec.title, lw as usize, ui.glyphs.ellipsis), label_st, lw);
+    put(
+        buf,
+        f.x + 2,
+        f.y,
+        &truncate(&sec.title, lw as usize, ui.glyphs.ellipsis),
+        label_st,
+        lw,
+    );
     if sw > 0 {
         let color = match sec.tone.as_str() {
             "ok" | "success" => Some(t.success),
             "error" => Some(t.error),
             _ => None,
         };
-        let sst = color.map_or_else(|| quiet(t), |c| Style::default().fg(c)).bg(bg);
+        let sst = color
+            .map_or_else(|| quiet(t), |c| Style::default().fg(c))
+            .bg(bg);
         let room = f.w.saturating_sub(5 + width(&sec.title) as u16);
-        put_right(buf, f.x + f.w - 1, f.y, &truncate(&sec.summary, room as usize, ui.glyphs.ellipsis), sst);
+        put_right(
+            buf,
+            f.x + f.w - 1,
+            f.y,
+            &truncate(&sec.summary, room as usize, ui.glyphs.ellipsis),
+            sst,
+        );
     }
     f.y += 1;
 }
@@ -353,11 +506,19 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
         if show_ops {
             if o.editable {
                 ops_left = right.saturating_sub(8);
-                for (k, (name, gl)) in [("up", g.up), ("down", g.down), ("remove", "✕")].iter().enumerate() {
+                for (k, (name, gl)) in [("up", g.up), ("down", g.down), ("remove", "✕")]
+                    .iter()
+                    .enumerate()
+                {
                     let x = ops_left + k as u16 * 3;
-                    let s = if *name == "remove" { Style::default().fg(t.error) } else { quiet(t) };
+                    let s = if *name == "remove" {
+                        Style::default().fg(t.error)
+                    } else {
+                        quiet(t)
+                    };
                     put(buf, x, f.y, &format!(" {gl} "), s.bg(bg), 3);
-                    ui.hits.add(Rect::new(x, f.y, 3, 1), &rid, Part::Named((*name).into()));
+                    ui.hits
+                        .add(Rect::new(x, f.y, 3, 1), &rid, Part::Named((*name).into()));
                 }
             }
             if let Some(Control::Select { value, .. }) = eff.map(|r| &r.control) {
@@ -376,15 +537,45 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
             "fallback"
         };
         let lw = (label_w as u16).min(ops_left.saturating_sub(f.x + 5));
-        let label_st = if resp.focused { st.add_modifier(Modifier::BOLD) } else { st };
-        put(buf, f.x + 3, f.y, &truncate(&it.label, lw as usize, g.ellipsis), label_st, lw);
+        let label_st = if resp.focused {
+            st.add_modifier(Modifier::BOLD)
+        } else {
+            st
+        };
+        put(
+            buf,
+            f.x + 3,
+            f.y,
+            &truncate(&it.label, lw as usize, g.ellipsis),
+            label_st,
+            lw,
+        );
         let tx = f.x + 3 + label_w as u16 + 2;
         let room = ops_left.saturating_sub(tx + 1);
-        let tag_st = if tag == "in use" { success(t) } else { quiet(t) }.bg(bg);
-        let used = put(buf, tx, f.y, &truncate(tag, room as usize, g.ellipsis), tag_st, room);
+        let tag_st = if tag == "in use" {
+            success(t)
+        } else {
+            quiet(t)
+        }
+        .bg(bg);
+        let used = put(
+            buf,
+            tx,
+            f.y,
+            &truncate(tag, room as usize, g.ellipsis),
+            tag_st,
+            room,
+        );
         if !it.note.is_empty() && !focused {
             let nroom = room.saturating_sub(used);
-            put(buf, tx + used, f.y, &truncate(&format!(" · {}", it.note), nroom as usize, g.ellipsis), quiet(t).bg(bg), nroom);
+            put(
+                buf,
+                tx + used,
+                f.y,
+                &truncate(&format!(" · {}", it.note), nroom as usize, g.ellipsis),
+                quiet(t).bg(bg),
+                nroom,
+            );
         }
         f.y += 1;
         if focused && !it.note.is_empty() {
@@ -400,10 +591,29 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
     let resp = ui.stop(&aid, rect);
     let st = row_style(ui, &aid, resp.focused, t.bg);
     fill(buf, rect, st);
-    let label = if o.add_label.is_empty() { "Add…" } else { o.add_label.as_str() };
-    let label = if label.starts_with('+') { label.to_string() } else { format!("+ {label}") };
-    let weight = if resp.focused { Modifier::BOLD } else { Modifier::empty() };
-    put(buf, f.x + 3, f.y, &label, purple(t).bg(st.bg.unwrap_or(t.bg)).add_modifier(weight), f.w.saturating_sub(3));
+    let label = if o.add_label.is_empty() {
+        "Add…"
+    } else {
+        o.add_label.as_str()
+    };
+    let label = if label.starts_with('+') {
+        label.to_string()
+    } else {
+        format!("+ {label}")
+    };
+    let weight = if resp.focused {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    };
+    put(
+        buf,
+        f.x + 3,
+        f.y,
+        &label,
+        purple(t).bg(st.bg.unwrap_or(t.bg)).add_modifier(weight),
+        f.w.saturating_sub(3),
+    );
     f.y += 1;
     // Effort pickers register after the list (focus order is unchanged) and draw at their row.
     for (i, row) in o.controls.iter().take(o.items.len()).enumerate() {
@@ -427,7 +637,8 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
         // Keep the row fill behind the value.
         let bg = buf[(x, y)].bg;
         put(buf, x, y, &txt, s.bg(bg), w);
-        ui.hits.add(Rect::new(x, y, w, 1), &id, Part::Named("control".into()));
+        ui.hits
+            .add(Rect::new(x, y, w, 1), &id, Part::Named("control".into()));
     }
 }
 
@@ -449,7 +660,12 @@ pub fn table(
         f.w.saturating_sub(used) / flexes
     };
     while flex_of(&shown, &fixed) < 20 && shown.len() > 1 {
-        match shown.iter().copied().filter(|&i| fixed[i] > 8).max_by_key(|&i| fixed[i]) {
+        match shown
+            .iter()
+            .copied()
+            .filter(|&i| fixed[i] > 8)
+            .max_by_key(|&i| fixed[i])
+        {
             Some(i) => fixed[i] -= 1,
             None => {
                 shown.pop();
@@ -457,7 +673,10 @@ pub fn table(
         }
     }
     let flex = flex_of(&shown, &fixed).max(4);
-    let widths: Vec<u16> = shown.iter().map(|&i| if fixed[i] == 0 { flex } else { fixed[i] }).collect();
+    let widths: Vec<u16> = shown
+        .iter()
+        .map(|&i| if fixed[i] == 0 { flex } else { fixed[i] })
+        .collect();
     let mut x = f.x + 2;
     for (&i, w) in shown.iter().zip(&widths) {
         put(buf, x, f.y, &cols[i].0, quiet(t), *w);
@@ -478,11 +697,22 @@ pub fn table(
             let s = if cols[c].0 == "Keys" {
                 bold(t)
             } else if c == 0 {
-                if resp.focused { st.add_modifier(Modifier::BOLD) } else { st }
+                if resp.focused {
+                    st.add_modifier(Modifier::BOLD)
+                } else {
+                    st
+                }
             } else {
                 quiet(t)
             };
-            put(buf, x, f.y, &truncate(cell, *w as usize, ui.glyphs.ellipsis), s.bg(bg), *w);
+            put(
+                buf,
+                x,
+                f.y,
+                &truncate(cell, *w as usize, ui.glyphs.ellipsis),
+                s.bg(bg),
+                *w,
+            );
             x += w + 1;
         }
         f.y += 1;
@@ -494,10 +724,21 @@ pub fn tip(buf: &mut Buffer, ui: &Ui, area: Rect, y: u16, footer: &str) {
     if footer.is_empty() {
         return;
     }
-    let s = truncate(&format!("Tip · {footer}"), area.width.saturating_sub(4) as usize, "…");
+    let s = truncate(
+        &format!("Tip · {footer}"),
+        area.width.saturating_sub(4) as usize,
+        "…",
+    );
     let w = width(&s) as u16;
     let x = area.x + area.width.saturating_sub(w) / 2;
-    put(buf, x, y, &s, quiet(ui.theme).add_modifier(Modifier::ITALIC), w);
+    put(
+        buf,
+        x,
+        y,
+        &s,
+        quiet(ui.theme).add_modifier(Modifier::ITALIC),
+        w,
+    );
 }
 
 /// Page scope switch (`Scope  Global / Project`), quiet, top right.

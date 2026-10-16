@@ -1,4 +1,4 @@
-"""GPT Live in a real controlling PTY: consent, call bar, mute, Live card, hang up (M4).
+"""GPT Live in a real controlling PTY: consent, pane header, mute, Live card, hang up (M4).
 
 Real Python bridge + real native binary + a real host whose Live manager uses the fake transport,
 and the helper is `tests/fixtures/live/fake_nexus_live.py`. A dev-mode `live-call` mock scenario was
@@ -100,9 +100,13 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
     app.wait_for("● Live")
     screen = app.redraw()
     assert consent.exists()  # consent survives in a file, not memory
-    bar = next(line for line in screen.splitlines() if "● Live" in line)
-    assert "mic" in bar and "spk" in bar and "00:0" in bar and "listening" in bar, bar  # narrow: the model name yields
-    app.wait_for("gpt-live-1-codex · sol")  # the timeline card
+    app.wait_for("⤢ expand")  # the open call's pane above the composer
+    screen = app.redraw()
+    lines = screen.splitlines()
+    bar = next(line for line in lines if "● Live" in line)  # the pane header carries the call line
+    assert "mic" in bar and "spk" in bar and "00:0" in bar and "listening" in bar and "⤢ expand" in bar, bar
+    assert sum("● Live" in line for line in lines) == 1  # not also in the composer
+    assert "gpt-live-1-codex · sol" not in screen  # no timeline card while the call is open
     app.wait_for("read the readme please")
     screen = app.redraw()
     assert "Voice" in screen and "Sure, asking the agent." in screen
@@ -115,4 +119,6 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
     while "● Live" in app.redraw(.4):
         assert time.monotonic() < deadline, "the call bar never left"
     screen = app.redraw()
+    assert "⤢ expand" not in screen  # the pane closes with the call
+    assert "gpt-live-1-codex · sol" in screen  # the ended call joins the timeline as a card
     assert "Ended" in screen and "user" in screen  # the card records how it ended

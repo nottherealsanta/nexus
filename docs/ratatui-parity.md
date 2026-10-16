@@ -1,5 +1,9 @@
 # Ratatui implementation and parity ledger
 
+The session dashboard opens with the 20 most recent sessions. Search queries (up to 256 characters) run on the server across session
+metadata and snippets, with at most 1,000 results. Clearing search restores the
+recent 20; refresh and polling retain the current query and ignore stale results.
+
 On Settings → Providers, Antigravity CLI entries expose **Refresh models** even
 when the CLI is not currently detected; it re-runs `agy models` (command
 `ProviderModelsRefresh`, separate from the models.dev `ModelsRefresh`) without
@@ -139,7 +143,29 @@ Member toggles retain all labelled parameters, results, reasoning and diffs;
 
 The transcript auto-scrolls only while the reader is at the bottom: scrolling up
 (wheel, PageUp) stops following, and any scroll that lands back on the last row
-(wheel, PageDown, Down) resumes it. Typing, sending and Ctrl+End also return to the live end.
+(wheel, PageDown, Down) resumes it, including overshooting into the blank tail: the
+last content row need only be visible, not aligned exactly with the viewport bottom.
+Upward scrolling always pauses follow, even if the last row remains visible or the
+conversation is shorter than the viewport; only scrolling downward resumes it.
+A transcript taller than the viewport has a **bottom buffer** of `session::BOTTOM_BUFFER` (20) blank
+rows below the last content row, clamped to (viewport height - 4) on short viewports, so the last reply
+never sits against the composer. The bottom position (`session::live_offset` = last row at the bottom
+plus the buffer) is where scrolling down stops, where following parks (new output stays readable with
+room above the composer), and where a scroll that arrives re-arms following without a jump. A transcript
+that fits the viewport gets no buffer (no pointless scrolling). The pinned-prompt tail padding is
+**(viewport height - 2) / 2** rows; the reachable maximum (`max_scroll`) is the larger of the two, so a
+pinned prompt can still reach the top. Scrolling down never snaps back up from beyond the bottom position
+(a pinned prompt's offset), and the scrollbar spans `live_scroll.max(offset)` -- the same value that
+clamps scrolling -- so its thumb touches the track end exactly when scrolling stops. Regression tests:
+`render::tests::scrolling_down_through_a_long_transcript_*`,
+`render::tests::a_long_transcript_scrolls_exactly_the_buffer_past_the_last_row`, `session::tests::scrolling_down_*`.
+Typing, starting a new turn and Ctrl+End also return to the live end.
+Native queue submissions (Ctrl+Enter), including an idle queue consumed immediately,
+preserve the current follow mode, scroll offset and prompt pin. Plain Enter while
+a turn is running (including permission/input waits) queues steering and likewise
+does not re-arm prompt following. This applies to both transcript and dashboard
+submission routes; idle plain Enter and interrupt submissions still arm the next
+user prompt. A separately running `!` shell command is not an active agent turn.
 
 While scrolled up with content below, a centred quiet pill sits on its own row: the transcript's last row is reserved for it (the viewport shrinks by one) so it never covers content:
 `↓ N more lines · Ctrl+End to jump`; when new content arrived after the reader scrolled away it
@@ -149,10 +175,15 @@ the bottom.
 
 **User cards** are a full-width band in the palette's `element` colour (`#242424` dark) with a padding row above and below, `#N` right-aligned in quiet; the pinned copy uses the identical band.
 
-**Sticky user message.** When a turn's user card has scrolled off the top (its title row is above
-the viewport) but the turn's content is still visible, the card's band (padding row, at most 3 text
+**Sticky user message.** When a turn's entire user card has scrolled off the top (including
+attachments and bottom padding) but the turn's content is still visible, the card's band (padding row, at most 3 text
 rows with the last ending in `…` when longer, padding row; `#N` included) is pinned over the top of the transcript
-(`rust/tui/src/sticky.rs`, `Cache.sticky`). The next turn's card pushes the pin up and then
+(`rust/tui/src/sticky.rs`, `Cache.sticky`). The span starts at the actual top padding rather
+than the title row, keeping the bottom padding even for long clipped messages. While any
+part of the real card remains visible, no pinned copy overlays it: this prevents attachment
+chips from appearing as a detached second band beneath a truncated sticky message. The pinned
+copy's bottom padding has a quiet dotted texture, unlike the full card's plain padding.
+The next turn's card pushes the pin up and then
 replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
 
@@ -219,7 +250,8 @@ halfway and leaves a half-row gap above the path; the `┃` rail ends with `╹`
 blank row always separates the last editor row from the agent/model controls,
 however many rows the draft has (`composer_keeps_a_blank_row_above_the_controls`).
 A blank background row always sits directly above the card as a margin; queued
-messages and the attachment line get their own rows above that margin.
+messages get their own rows above that margin; pending attachments take no row
+(they are the inline chips described under attachments).
 
 `nexus chat` launches the most recently modified native executable among the one
 beside the interpreter, `rust/tui/target/release` and `PATH`, so a fresh
@@ -370,7 +402,7 @@ terminal rendering performance still need measurement.
 The native dark theme uses explicit black for the conversation and dialogs;
 other color roles follow `rust/tui/src/render.rs`, and the light theme remains available.
 The four-row top bar contains tabs, a divider, workspace/status and a bottom rule.
-Sessions retain two-line cards with no blank row between cards; sidebar toggle
+Sessions retain two-line cards with a padding row above and below each; sidebar toggle
 hit targets span three columns and the first two top-bar rows. User messages have
 a one-cell left inset, thin blue rules, and muted turn numbers on the card's own
 background. The composer uses the same thin rule, a runtime row, and a blank row
@@ -465,7 +497,8 @@ The composer grows with its wrapped content from the 8-row resting layout up to
 
 Running tool rows animate: Python puts the private-use slot `U+E000` where the
 spinner glyph goes, and Rust draws the current braille frame there and redraws
-at ~8 Hz only while some block holds a slot. Cached wrapped rows keep the slot,
+at ~8 Hz only while some block holds a slot. A running tool group's header
+uses the same spinner in place of its `▸`/`▾` glyph until the group finishes. Cached wrapped rows keep the slot,
 so animation costs no re-wrap and sends no snapshots.
 
 Completion is requested as you type, not only on Tab: when the token at the
@@ -566,8 +599,11 @@ Native context rows have no diamond/dot prefix: labels are immediately followed 
 counts (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`) and a two-space gap before any
 token estimate. The native top bar is one row, with no separator row below it.
 The workspace/status row no longer repeats the details-sidebar toggle beside
-`idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` or `· N failed`
-(the harness recovers on its own; the expanded call still shows the error output). A
+`idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` marks. A finished
+group with failed calls shows `· N failed` in the dark red `Palette::error_deep` and stays
+collapsed by default, exactly like a group without failures; failed calls are not drawn
+under a folded header, and the user expands the group to see them (the expanded call
+shows the error output). A
 subagent row has a blank row above and below and shows only its latest tool call.
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 terminal); Appearance and Layout use labels and end with `Reset to default`.
@@ -586,8 +622,9 @@ key hints. Appearance (Theme, which cycles on Enter/←/→) and Layout rows are
 drilled pages' (`sp_appearance`/`sp_layout`) and search filters them too. Keyboard stays a drill row
 with a `N shortcuts` summary. Every row starts with a quiet `▸`; drill rows
 show a summary from the snapshot where cheap (theme, model, agent); Providers shows `2 of 6 connected`
-from `summaries.providers` in the settings overview (`settings_pages.provider_summary`: cached 30 s,
-filled by the Providers page, one `providers_status` refresh capped at 1.5 s when stale, no host change). Framed modals centre over
+from `summaries.providers` in the settings overview (`settings_pages.cached_provider_summary`: the last
+count the Providers page fetched, any age, absent until that page has been opened; opening Settings never
+calls `providers_status`, so the root opens without network latency). Framed modals centre over
 the whole window. Drilled pages use the same grammar, drawn centrally by `settings_page/grok.rs`: `Title · sub ───`
 headings (Title Case from the host, never uppercased), `▸ label … value` rows with the `element` fill
 and bold label on the selected row (its description shows only then; the page intro stays), toggles as
@@ -646,8 +683,8 @@ typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
 models and the live `Thinking · …` summary). While a turn runs, one status line sits above the
-composer (`render.rs::above_layout`): `⠋ Waiting for response… 2.0s` on the left
-(agent-coloured spinner, activity, time in that activity) and `4m40s ↓121k [stop]`
+composer (`render.rs::above_layout`): `⠋ Waiting for response…` on the left
+(agent-coloured spinner and activity, no time of its own) and `4m40s ↓121k [stop]`
 right-aligned (turn time, output tokens when known, `[stop]`). The fields come from
 `turn_status` in the snapshot (`ui/ratatui/turn_status.py`, epoch seconds from
 durable event timestamps; the client computes elapsed against its own clock and
@@ -655,7 +692,9 @@ redraws at the spinner rate). Output tokens are live: usage lands per model call
 thinking streams the count is `~` chars/4 of this turn's streamed text+thinking (`output_estimated`),
 shown only while it exceeds usage, and exact again once usage catches up. Activities: Waiting for response, Thinking, Running
 `tool`, Writing, Waiting for permission/answer. Clicking `[stop]` sends the same
-`cancel` action as Esc Esc and Ctrl+C. The transcript draws no second working row.
+`cancel` action as Esc Esc and Ctrl+C; hovering exactly those cells (the hit test and
+the highlight share `stop_at`) draws them bold in the error colour on the element
+background (`stop_button_highlights_only_its_cells_on_hover`). The transcript draws no second working row.
 Pending steering, queued and interrupt messages form Grok's unboxed section under it
 (only messages waiting behind a running turn: the head input of an idle send starts its own
 turn and is never listed, `_waiting_inputs` in `prototype.py`)
@@ -663,13 +702,13 @@ after one blank row: `▾ Queued N`, then `#n text` rows (`#n` quiet, accent for
 four rows, then `+N more`). The hovered row shows `↑ ↓ ✕` at the right (move up,
 move down, remove, by durable `queued_id` through `SessionQueueMove`/
 `SessionQueueRemove`); a click on the caret or label collapses to `▸ Queued N`
-(client-local, kept across snapshots). One blank row separates the section from the
-card. When the daemon's global concurrent-turn cap holds this session's turn back
+(client-local, kept across snapshots). The section and the status line sit directly on the
+card, with no blank row (the one-row margin stays only when nothing is drawn there). When the daemon's global concurrent-turn cap holds this session's turn back
 (`slot_wait` in the snapshot, see `docs/host.md`), the status line reads
 `⋯ Waiting for a free turn slot (4 of 4 running)` (glyph and counts quiet, text in the
 text colour, no `[stop]`) and `_waiting_inputs` keeps the head entry, so the held
 message shows as `#1 …` under `▾ Queued N` instead of being treated as the input
-that starts the turn. The composer grows to fit the box; attachments sit above it. A newer release is announced
+that starts the turn. The composer grows to fit the box. A newer release is announced
 once as an info toast that expires on its own (`UpdateStatus(announce=True)`;
 the host records the announced version in `~/.nexus/cache/update-announced.json`,
 so restarts do not repeat it); the footer never shows it, and `/update` still names
@@ -870,6 +909,17 @@ samples and presents percentiles in Logs; `NEXUS_TUI_TRACE_FILE` selects the
 exit report. Trace files contain timings, not conversation bodies. See the plan
 ledger for measured limits, including the remaining streaming CPU budget gap.
 
+### Composer mouse cursor and selection
+
+A left click in the composer text area places the caret at the nearest grapheme
+boundary using the same word-wrapped rows as rendering (`Editor::cursor_at_point`),
+so wide CJK/emoji and combining sequences resolve to whole graphemes and image/paste
+markers snap to their nearer edge. Dragging extends a selection from the press
+point (`Editor::drag_to_point`); the pointer is clamped to the text area, and the
+usual copy/replace/delete keys act on it. Composer presses never touch the
+transcript selection. Limitation: no edge auto-scroll while dragging, and no
+double/triple-click word/line selection.
+
 ### Empty composer cursor
 
 The native composer retains its accent-colored insertion marker before the
@@ -890,6 +940,18 @@ The editor treats valid references as atomic navigation/deletion units; removing
 one excludes its payload from submission, and undo restores it. Up to eight
 attachments may be included in a message. The model receives the original bytes
 alongside a labelled reference, not merely the marker text.
+There is no separate pending-attachment filename row above the composer: valid
+references draw inside the editor as chips (accent text on the `element_hi`
+background, first letter capitalised: `[Image 1]`, `[Document 2]`) with one padding
+cell of the same tint on each side. The stored text stays `[image 1]`; the padding is
+display-only and is counted in the width of the chip's first and last grapheme by
+`Editor::visual_layout`, so wrapping, the cursor column, vertical navigation and
+pointer hit-testing (`cursor_at_point`) all use the padded columns while cursor and
+selection offsets stay source offsets. A click on a padding cell snaps to the chip's
+nearer edge. The cursor and selection colours win over the chip tint. Secret input
+never styles chips but still reserves the padding cells (so a reference is visible as
+extra spacing there) (`attachment_references_draw_as_padded_highlighted_chips`).
+Submitted user cards no longer show a "Click an attachment to open it" hint.
 
 Attachment More info uses `ratatui-image` for a resized native preview with name,
 media type and byte size. Image bytes come only from the daemon's bounded
@@ -1078,7 +1140,9 @@ permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
 Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ ~/path branch worktree`
-(title bold, path text colour, branch and worktree quiet; the worktree name comes from
+(the host's session title only, with `New session` while unavailable; no Nexus prefix
+or session number/ID; subagent pages keep their own title and breadcrumb).
+The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
 the snapshot's `worktree` key, set by `prototype._worktree_name` when the workspace is a
 linked Git worktree), right the update notice and `[Sessions]`, separated by quiet `│`.
 There is no context counter (the composer row shows usage) and no `‹ i/n ›` session
@@ -1254,21 +1318,32 @@ no Antigravity-specific feature.
 `/live [stop|mute|new|status|revoke]` and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
 `LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
 `nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
-`active state phase model muted started in out elsewhere`. `rust/tui/src/live_bar.rs` draws
-`● Live · model · phase · mm:ss` plus `mic`/`spk` meters and a `MUTED` badge in the blank row above
-the composer controls (the shell-mode hint yields to it); the clock is computed in Rust from the
+`active state phase model muted started in out elsewhere detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
+`● Live · phase · mm:ss` plus `mic`/`spk` meters and a `MUTED` badge (model name when there is room) as the
+Live pane's header row; the composer no longer shows it; the clock is computed in Rust from the
 call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the
 snapshot every 250 ms while a call is open so the meters move. Covered by Python tests
 (`tests/test_ratatui_live.py`, fake helper and fake transport) and Rust unit tests; real terminal,
 microphone and call behavior are not verified. The desktop route for `Ctrl+X D` lands with M5
 (`tests/test_desktop_keymap_parity.py` lists it as pending).
 
+While a call is open, the terminal draws the card rows in a Live pane between the timeline and the
+composer, not in the timeline (`bar()["detail"]`, `collapsed`, `operation`). The pane is 6 rows (the call-line header above, then five content rows) and follows the newest rows; the wheel scrolls it, clicking a row sends `live_toggle`, a button at its top
+right (` ⤢ expand ` / ` ⤡ collapse `) expands it to nearly full screen (up to just below the top bar,
+leaving the timeline one row) and collapses it again, and
+hidden rows are announced. The expanded state is local to the terminal client and resets when the call
+ends. The open call is left out of the timeline; its card joins the timeline when the call ends. The
+desktop client (`shell.live.pane = False`) keeps the card in the timeline. A call on another session
+(or one still connecting, no rows yet) shows the header alone as a one-row pane, with `· in <session>`.
+Python matches the call before its id is known (state `starting`) by the newest non-ended call of the shown
+session, so the card never flashes in the timeline. Not verified in a real terminal.
+
 The Live timeline card is a `live` block (`detail` = `tone TAB label TAB text` per line; click or Enter
 sends `live_toggle`, which flips `Live.opened`): chip, title (`model · voice`), status, a rail and
 labelled rows with hanging indent (`rust/tui/src/transcript.rs::live_card`). Delegation user cards
 carry `status = "live"` and show `via voice · #N`. Covered by `tests/test_ratatui_live.py`, Rust unit
 tests and `tests/test_ratatui_pty_live.py` (real bridge, real binary, fake transport and helper:
-consent dialog, call bar, mute, card, hang up). No `live-call` mock scenario was added: mock scenarios
+consent dialog, pane header, mute, card, hang up). No `live-call` mock scenario was added: mock scenarios
 script model responses, not `live.*` events. Real microphone and OpenAI behavior: not verified.
 
 ### Antigravity visibility and safe discovery
@@ -1278,8 +1353,10 @@ bounded `agy models` probe only. Configured `agy` aliases and custom executables
 are respected. The host model list exposes these rows labelled **Subagents only**
 (including native clients); selecting one as the main model is refused with an
 explanation, while explicit subagent tier/role/Task references remain supported.
-Discovery does not acknowledge inherited settings: worker execution still requires
-`worker_inherits_agy_settings = true` in an explicit provider section.
+Worker execution inherits agy's own user/global settings, MCP servers and plugins
+by default, even without a provider section; Nexus PathGuard does not apply inside
+agy. Set `worker_inherits_agy_settings = false` to refuse execution. Read-only
+roles and tool restrictions remain refused.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
 in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified
@@ -1318,29 +1395,24 @@ not imply completion of the Ratatui port or PTY verification.
 The Sessions page is a full-width list grouped by last-updated time in local time
 (Today, Yesterday, This week, Earlier; empty groups omitted; the host projects `bucket` and
 `updated` on each row) in the Grok style: `▾ Today 3 ────` group headers, newest first.
-Each session is two rows plus a blank spacer: `◇ Title · branch project … age`, then a
+Each session is two rows between a blank padding row above and below: `◇ Title · branch project … age`, then a
 quiet one-line plain-text summary of the last agent message. Status shows in the glyph
 (working = animated purple braille, needs input = warning `◆`, idle `◇`); the header
 chips (`⁙ 1 working │ ◇ 3 idle`) stay. The selected row's `element` background fills the
-whole three-row band (1-column inset, no rail, title not bold) and the age becomes a
+whole four-row band (1-column inset, no rail, title not bold) and the age becomes a
 clickable quiet `[×]` that asks to archive (the existing confirmation and busy refusal);
 hover only tints the row. Below the `+ New Agent` actions row sits a `/ Search sessions`
 row with a rule under it. It activates with Up on the top-most row, a click, `/` or
 `Ctrl+K`; typed text filters title, summary, project and branch (case-insensitive) and
 owns all keys, Down or Enter moves into the results, Esc clears and leaves. Nothing
-expands inline. The selected session's `Response` box is a
-bordered, square-cornered box directly above the composer at the composer card's
-width, shown only for the keyboard selection (Up/Down with an empty composer; before that,
-and on hover or click, there is no box): `❯ last user message`, `…` when clipped, the Markdown tail of the last agent
-message (at most half the region), and `Worked for Xs` when the host supplies a
-`worked` field (not projected yet, so usually absent). It updates live from the
-`SessionDashboardPreview` data. Known gap: the host cleans previews to one line, so
-the tail's Markdown block structure is flattened. The composer under the list is
-the existing composer and is not redrawn here. Enter with text sends to the
-selected session. Enter on an empty composer opens that session. `+ New Agent`,
-Open Previous (`/resume`) and Worktree are the header actions. Preview data is
-still the additive `SessionDashboardPreview` contract, distinct from archive
-`SessionPreview`. Keep the user-facing title **Sessions** and `/sessions`.
+expands inline, and the dashboard has no preview pane: there is no `Response`
+box, no hover expansion and no `Worked for Xs` line. `SessionDashboardPreview` was removed
+(see [decisions.md](decisions.md#sessions-dashboard-has-no-preview-pane-2026-10)).
+The Sessions dashboard has no composer: the list takes those rows, typing does not feed
+a hidden draft, and keys that are not list shortcuts are ignored. Enter opens the selected
+session, where the composer appears as usual.
+`+ New Agent`, Open Previous (`/resume`) and Worktree are the header actions. Keep the
+user-facing title **Sessions** and `/sessions`. The archive `SessionPreview` is unrelated.
 The Mermaid module is registered and called from `markdown.rs`, with
 an explicit code-block fallback for unsupported or streaming fences.
 
@@ -1357,3 +1429,21 @@ failure, and timings for a new animate-only idle scenario.
 ## Sentence-case tool verbs and purple accents
 
 Tool verbs in verb groups and tool-detail section headings are sentence case (`Read`, `Bash`, `Parameters`), never uppercase, and the Sessions page and Settings create/primary accents (`+ New Agent`, `Worktree`, `+ New file`, `+ Add model…`) use the palette `purple`; green stays reserved for status ("in use", "connected").
+
+## Native chrome polish (2026-10)
+
+The ordinary top bar ends with a session-list `☰` control opening the Sessions
+dashboard and an outlined split-panel `◫` control toggling the details sidebar.
+These Unicode icons do not require a Nerd Font. Each has a three-cell padded hit
+target, with a one-cell gap between controls and two cells of right padding;
+subagent headers use the same padded `◫` target and right margin. Drawing, hover,
+and clicks share the header layout.
+
+Transcript image attachment chips display only `▣ Image N`, omitting the filename
+and metadata after ` · `; document chips retain their filenames and metadata.
+Attachment operations and their per-chip hit ranges remain intact.
+
+The running activity row above the composer starts two columns farther inward.
+Only the left edge moves: elapsed/token metrics and `[stop]` keep their right edge
+and click position. Status text uses quiet gray; the spinner retains agent color.
+Regression coverage lives in `render/chrome.rs`, `transcript.rs`, and `render.rs`.

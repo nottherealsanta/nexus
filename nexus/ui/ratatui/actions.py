@@ -462,7 +462,6 @@ class ShellActions:
             append_history(text)
             if dashboard is not None and dashboard.visible:
                 await dashboard.refresh()
-                await dashboard.refresh_preview()
             return True
         try:
             kwargs = {}
@@ -483,7 +482,6 @@ class ShellActions:
             self.marker_attachments.clear()
         if dashboard is not None and dashboard.visible:
             await dashboard.refresh()
-            await dashboard.refresh_preview()
         return True
 
     async def run_shell(self, text):

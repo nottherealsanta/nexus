@@ -259,10 +259,13 @@ fn block(v: &Value) -> Block {
         }),
         "ordered" => Block::Ordered(Ordered {
             id: s(v, "id"),
-            controls: arr(v, "controls").iter().filter_map(|v| match block(v) {
-                Block::Row(row) => Some(row),
-                _ => None,
-            }).collect(),
+            controls: arr(v, "controls")
+                .iter()
+                .filter_map(|v| match block(v) {
+                    Block::Row(row) => Some(row),
+                    _ => None,
+                })
+                .collect(),
             items: arr(v, "items")
                 .iter()
                 .map(|i| OItem {

@@ -4,14 +4,34 @@ use unicode_width::UnicodeWidthStr;
 
 /// Source ranges for visual rows. Soft breaks never change the editor's text;
 /// renderers should render these slices rather than wrapping them again.
+///
+/// Attachment chips (`[image 1]`, `[document 2]`) draw with one padding cell on
+/// each side. The padding is not stored text: it is counted in the width of the
+/// chip's first and last grapheme, so wrapping, cursor columns and pointer
+/// hit-testing all agree with what the renderer draws.
 pub struct VisualLayout<'a> {
     text: &'a str,
     pub rows: Vec<std::ops::Range<usize>>,
+    /// Source byte ranges of the attachment chips.
+    pub chips: Vec<(usize, usize)>,
+}
+
+/// Padding cells drawn before and after the grapheme at source offset `at`.
+pub fn chip_padding(chips: &[(usize, usize)], at: usize, grapheme: &str) -> (usize, usize) {
+    (
+        usize::from(chips.iter().any(|&(start, _)| start == at)),
+        usize::from(chips.iter().any(|&(_, end)| end == at + grapheme.len())),
+    )
 }
 
 impl VisualLayout<'_> {
     pub fn row_text(&self, row: usize) -> &str {
         &self.text[self.rows[row].clone()]
+    }
+
+    fn cell_width(&self, at: usize, grapheme: &str) -> usize {
+        let (lead, trail) = chip_padding(&self.chips, at, grapheme);
+        grapheme.width() + lead + trail
     }
 
     /// A cursor at a soft break belongs to the following row. At a hard break
@@ -23,10 +43,15 @@ impl VisualLayout<'_> {
             .rposition(|range| range.start <= cursor)
             .unwrap_or(0);
         let range = &self.rows[row];
-        let column = self.text[range.start..cursor.min(range.end)]
-            .graphemes(true)
-            .map(UnicodeWidthStr::width)
+        let end = cursor.min(range.end);
+        let mut column: usize = self.text[range.start..end]
+            .grapheme_indices(true)
+            .map(|(offset, g)| self.cell_width(range.start + offset, g))
             .sum();
+        // The cursor cell sits after a chip's leading padding.
+        if cursor < range.end && self.chips.iter().any(|&(start, _)| start == cursor) {
+            column += 1;
+        }
         (row, column)
     }
 
@@ -35,10 +60,11 @@ impl VisualLayout<'_> {
         let mut columns = 0;
         let mut cursor = range.start;
         for (offset, grapheme) in self.row_text(row).grapheme_indices(true) {
-            if columns + grapheme.width() > column {
+            let width = self.cell_width(range.start + offset, grapheme);
+            if columns + width > column {
                 break;
             }
-            columns += grapheme.width();
+            columns += width;
             cursor = range.start + offset + grapheme.len();
         }
         // A soft row's end is also the next row's start. Keep navigation on
@@ -135,6 +161,7 @@ impl Editor {
     /// boundaries. Whitespace is retained, including at soft row boundaries.
     pub fn visual_layout(&self, width: usize) -> VisualLayout<'_> {
         let width = width.max(1);
+        let chips = self.attachment_chips();
         let mut rows = Vec::new();
         let mut logical_start = 0;
         for logical in self.text.split('\n') {
@@ -150,7 +177,9 @@ impl Editor {
                     while index < graphemes.len()
                         && !graphemes[index].1.chars().all(char::is_whitespace)
                     {
-                        token_width += graphemes[index].1.width();
+                        let (at, g) = graphemes[index];
+                        let (lead, trail) = chip_padding(&chips, logical_start + at, g);
+                        token_width += g.width() + lead + trail;
                         index += 1;
                     }
                     if token_width <= width && columns + token_width > width && columns > 0 {
@@ -159,20 +188,24 @@ impl Editor {
                         columns = 0;
                     }
                     for &(offset, grapheme) in &graphemes[token_start..index] {
-                        if columns + grapheme.width() > width && columns > 0 {
+                        let (lead, trail) = chip_padding(&chips, logical_start + offset, grapheme);
+                        let cell = grapheme.width() + lead + trail;
+                        if columns + cell > width && columns > 0 {
                             rows.push(row_start..logical_start + offset);
                             row_start = logical_start + offset;
                             columns = 0;
                         }
-                        columns += grapheme.width();
+                        columns += cell;
                     }
                 } else {
-                    if columns + grapheme.width() > width && columns > 0 {
+                    let (lead, trail) = chip_padding(&chips, logical_start + offset, grapheme);
+                    let cell = grapheme.width() + lead + trail;
+                    if columns + cell > width && columns > 0 {
                         rows.push(row_start..logical_start + offset);
                         row_start = logical_start + offset;
                         columns = 0;
                     }
-                    columns += grapheme.width();
+                    columns += cell;
                     index += 1;
                 }
             }
@@ -182,7 +215,16 @@ impl Editor {
         VisualLayout {
             text: &self.text,
             rows,
+            chips,
         }
+    }
+
+    /// Source ranges of the image/document references (not paste markers).
+    pub fn attachment_chips(&self) -> Vec<(usize, usize)> {
+        self.markers()
+            .into_iter()
+            .filter(|&(start, _)| !self.text[start..].starts_with("[Pasted"))
+            .collect()
     }
 
     /// Navigate with exactly the same source ranges used for visual rendering.
@@ -197,6 +239,51 @@ impl Editor {
         if let Some(target) = target {
             self.cursor = layout.cursor_at(target, column);
         }
+    }
+
+    /// Source offset under a pointer at `(column, row)` inside a `width` x `height`
+    /// editor viewport, in cells relative to its top-left. Mirrors the composer view:
+    /// the viewport follows the cursor, and a cursor resting after a full row gets a
+    /// spare trailing row. Points past the text clamp to the nearest row or row end,
+    /// and a point inside an image/paste marker snaps to its nearer edge.
+    pub fn cursor_at_point(&self, width: u16, height: u16, column: u16, row: u16) -> usize {
+        let layout = self.visual_layout(usize::from(width.max(1)));
+        let (mut cursor_row, cursor_column) = layout.cursor_position(self.cursor);
+        let spare = self.cursor == layout.rows[cursor_row].end
+            && cursor_column >= usize::from(width.max(1));
+        let spare_row = cursor_row + 1;
+        if spare {
+            cursor_row += 1;
+        }
+        let top = cursor_row.saturating_sub(usize::from(height.max(1)) - 1);
+        let visual = top + usize::from(row.min(height.saturating_sub(1)));
+        let at = if spare && visual == spare_row {
+            self.cursor
+        } else {
+            let source = if spare && visual > spare_row {
+                visual - 1
+            } else {
+                visual
+            };
+            layout.cursor_at(source.min(layout.rows.len() - 1), usize::from(column))
+        };
+        match self
+            .markers()
+            .into_iter()
+            .find(|(start, end)| *start < at && at < *end)
+        {
+            Some((start, end)) if at - start <= end - at => start,
+            Some((_, end)) => end,
+            None => at,
+        }
+    }
+
+    /// Extend a pointer selection that began at source offset `start` to the point
+    /// under the pointer. Dragging back onto `start` leaves a plain cursor.
+    pub fn drag_to_point(&mut self, start: usize, width: u16, height: u16, column: u16, row: u16) {
+        let at = self.cursor_at_point(width, height, column, row);
+        self.cursor = at;
+        self.anchor = (at != start).then_some(start);
     }
 
     fn image_marker(content: &str) -> bool {
@@ -563,6 +650,71 @@ mod tests {
         for row in 0..layout.rows.len() {
             assert!(e.text.is_char_boundary(layout.cursor_at(row, 1)));
         }
+    }
+
+    #[test]
+    fn pointer_maps_wrapped_unicode_rows_to_source_offsets() {
+        let mut e = Editor::default();
+        e.insert("a abcdefghi 界界 e\u{301}🙂");
+        e.cursor = 0;
+        // Rows at width 5: "a abc", "defgh", "i ", "界界 ", "e\u{301}🙂"
+        assert_eq!(e.cursor_at_point(5, 10, 3, 0), 3);
+        assert_eq!(e.cursor_at_point(5, 10, 2, 1), e.text.find('f').unwrap());
+        let wide = e.text.find("界界").unwrap();
+        assert_eq!(e.cursor_at_point(5, 10, 0, 3), wide);
+        // Either cell of a wide grapheme lands before it; the next one is after it.
+        assert_eq!(e.cursor_at_point(5, 10, 1, 3), wide);
+        assert_eq!(e.cursor_at_point(5, 10, 2, 3), wide + "界".len());
+        assert_eq!(e.cursor_at_point(5, 10, 1, 4), e.text.find("🙂").unwrap());
+        // Below the text clamps to the last row; far right clamps to the row end.
+        assert_eq!(e.cursor_at_point(5, 10, 0, 9), e.text.rfind('e').unwrap());
+        assert_eq!(e.cursor_at_point(5, 10, 4, 4), e.text.len());
+    }
+
+    #[test]
+    fn pointer_follows_the_scrolled_viewport_and_spare_row() {
+        let mut e = Editor::default();
+        e.insert("aaaa\nbbbb\ncccc\ndddd");
+        // Height 2 with the cursor on the last row shows "cccc" and "dddd".
+        assert_eq!(
+            e.cursor_at_point(8, 2, 1, 0),
+            e.text.find("cccc").unwrap() + 1
+        );
+        assert_eq!(
+            e.cursor_at_point(8, 2, 1, 1),
+            e.text.find("dddd").unwrap() + 1
+        );
+        // A full row with the cursor after it shows a spare row for the cursor.
+        let mut full = Editor::default();
+        full.insert("abcd");
+        assert_eq!(full.cursor_at_point(4, 5, 0, 1), 4);
+        assert_eq!(full.cursor_at_point(4, 5, 2, 0), 2);
+    }
+
+    #[test]
+    fn pointer_inside_a_marker_snaps_to_its_nearer_edge() {
+        let mut e = Editor::default();
+        e.insert("a[image 1]b");
+        assert_eq!(e.cursor_at_point(40, 3, 3, 0), 1);
+        assert_eq!(e.cursor_at_point(40, 3, 8, 0), 10);
+    }
+
+    #[test]
+    fn dragging_selects_across_wrapped_unicode_rows() {
+        let mut e = Editor::default();
+        e.insert("a abcdefghi 界界 e\u{301}🙂");
+        let start = e.cursor_at_point(5, 10, 2, 0);
+        e.cursor = start;
+        e.drag_to_point(start, 5, 10, 2, 3);
+        let wide = e.text.find("界界").unwrap();
+        assert_eq!(e.selection(), Some((2, wide + "界".len())));
+        assert_eq!(e.selected(), "abcdefghi 界");
+        // Dragging backwards and onto the start again collapses the selection.
+        e.drag_to_point(start, 5, 10, 2, 0);
+        assert_eq!(e.selection(), None);
+        assert_eq!(e.anchor, None);
+        e.drag_to_point(start, 5, 10, 0, 0);
+        assert_eq!(e.selected(), "a ");
     }
 
     #[test]

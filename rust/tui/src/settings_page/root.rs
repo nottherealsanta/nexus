@@ -82,7 +82,12 @@ fn area_desc(key: &str) -> &'static str {
 /// A short current value for a drill row, from data already in the snapshot.
 fn summary(key: &str, s: &crate::bridge::Snapshot) -> String {
     match key {
-        "appearance" => if s.theme == "nexus-light" { "Light" } else { "Dark" }.to_string(),
+        "appearance" => if s.theme == "nexus-light" {
+            "Light"
+        } else {
+            "Dark"
+        }
+        .to_string(),
         "models" => s.model.clone(),
         "agents" => s.agent.clone(),
         _ => String::new(),
@@ -103,7 +108,11 @@ fn host_row(r: &crate::settings_page::model::Row) -> Option<RootRow> {
     let (value, next, prev) = match &r.control {
         Control::Toggle { on, locked, op } if locked.is_empty() => {
             let flip = Some(with(op, json!(!on)));
-            (if *on { "on" } else { "off" }.to_string(), flip.clone(), flip)
+            (
+                if *on { "on" } else { "off" }.to_string(),
+                flip.clone(),
+                flip,
+            )
         }
         Control::Segmented {
             options,
@@ -555,7 +564,9 @@ pub fn draw(frame: &mut Frame, inner: Rect, st: &mut RootState, rows: &[RootRow]
                 ]));
                 owner.push(None);
             }
-            RootRow::Toggle { label, on, desc, .. } => {
+            RootRow::Toggle {
+                label, on, desc, ..
+            } => {
                 let (value, vstyle) = if *on {
                     ("on".to_string(), Style::default().fg(p.text))
                 } else {
@@ -571,11 +582,17 @@ pub fn draw(frame: &mut Frame, inner: Rect, st: &mut RootState, rows: &[RootRow]
                     owner.push(Some(i));
                 }
             }
-            RootRow::Host { label, desc, value, .. } => {
+            RootRow::Host {
+                label, desc, value, ..
+            } => {
                 if i == st.cursor {
                     selected_line = lines.len();
                 }
-                let vstyle = if value == "off" { quiet } else { Style::default().fg(p.text) };
+                let vstyle = if value == "off" {
+                    quiet
+                } else {
+                    Style::default().fg(p.text)
+                };
                 lines.push(row_line(label, value, vstyle, i == st.cursor, width, p));
                 owner.push(Some(i));
                 if i == st.cursor && !desc.is_empty() {
@@ -586,7 +603,12 @@ pub fn draw(frame: &mut Frame, inner: Rect, st: &mut RootState, rows: &[RootRow]
                     owner.push(Some(i));
                 }
             }
-            RootRow::Drill { label, desc, summary, .. } => {
+            RootRow::Drill {
+                label,
+                desc,
+                summary,
+                ..
+            } => {
                 if i == st.cursor {
                     selected_line = lines.len();
                 }
@@ -614,7 +636,8 @@ pub fn draw(frame: &mut Frame, inner: Rect, st: &mut RootState, rows: &[RootRow]
     let visible: Vec<Line<'static>> = lines.iter().skip(st.scroll).take(room).cloned().collect();
     for (n, who) in owner.iter().skip(st.scroll).take(room).enumerate() {
         if let Some(i) = who {
-            st.hits.push((Rect::new(body.x, body.y + n as u16, body.width, 1), *i));
+            st.hits
+                .push((Rect::new(body.x, body.y + n as u16, body.width, 1), *i));
         }
     }
     frame.render_widget(Paragraph::new(visible).style(bg), body);
@@ -698,8 +721,16 @@ mod tests {
     fn rows_group_by_heading_and_inline_the_toggles() {
         let rows = build(&nav(), &toggles(), "", &Default::default());
         assert!(matches!(&rows[0], RootRow::Header(h) if h == "General"));
-        assert!(matches!(&rows[1], RootRow::Toggle { key: "animate_activity", .. }));
-        assert!(rows.iter().any(|r| matches!(r, RootRow::Drill { index: 5, .. })));
+        assert!(matches!(
+            &rows[1],
+            RootRow::Toggle {
+                key: "animate_activity",
+                ..
+            }
+        ));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, RootRow::Drill { index: 5, .. })));
         let found = build(&nav(), &toggles(), "provid", &Default::default());
         assert_eq!(found.len(), 2);
         assert!(matches!(&found[0], RootRow::Header(h) if h == "Configure"));
@@ -746,15 +777,26 @@ mod tests {
         let mut nav = nav();
         nav.items.push(("Keyboard".into(), "keys".into(), false));
         let rows = build(&nav, &toggles(), "", &snap);
-        assert!(!rows.iter().any(|r| matches!(r, RootRow::Drill { label, .. } if label == "Appearance")));
-        assert!(rows.iter().any(|r| matches!(r, RootRow::Host { value, .. } if value == "Dark ›")));
-        assert!(rows.iter().any(|r| matches!(r, RootRow::Drill { summary, .. } if summary == "24 shortcuts")));
-        assert!(rows.iter().any(|r| matches!(r, RootRow::Drill { summary, .. } if summary == "2 of 6 connected")));
+        assert!(!rows
+            .iter()
+            .any(|r| matches!(r, RootRow::Drill { label, .. } if label == "Appearance")));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, RootRow::Host { value, .. } if value == "Dark ›")));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, RootRow::Drill { summary, .. } if summary == "24 shortcuts")));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, RootRow::Drill { summary, .. } if summary == "2 of 6 connected")));
         let found = build(&nav, &toggles(), "sidebar", &snap);
         assert_eq!(found.len(), 2, "{found:?}");
         let mut st = RootState::default();
         st.track(true);
-        st.cursor = rows.iter().position(|r| matches!(r, RootRow::Host { .. })).unwrap();
+        st.cursor = rows
+            .iter()
+            .position(|r| matches!(r, RootRow::Host { .. }))
+            .unwrap();
         match key(&mut st, &rows, press(KeyCode::Enter)) {
             RootAct::Send(op) => assert_eq!(op["value"], "l"),
             other => panic!("{other:?}"),

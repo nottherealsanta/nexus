@@ -54,7 +54,10 @@ pub fn draw(out: &mut Rows, b: &Content, viewport_width: usize, p: &Palette) {
             parts.push(Span::styled("]", Style::default().fg(tone)));
         }
         if let Some(tokens) = chip.token_label() {
-            parts.push(Span::styled(format!("  {tokens}"), Style::default().fg(figure)));
+            parts.push(Span::styled(
+                format!("  {tokens}"),
+                Style::default().fg(figure),
+            ));
         }
         let w: usize = parts.iter().map(|s| s.content.width()).sum();
         let row = serde_json::json!({"kind":"context_chips","chips":[
@@ -87,7 +90,10 @@ pub fn chip(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             .add_modifier(Modifier::BOLD),
     )];
     if let Some(tokens) = b.token_label() {
-        head.push(Span::styled(format!(" {tokens}"), Style::default().fg(figure)));
+        head.push(Span::styled(
+            format!(" {tokens}"),
+            Style::default().fg(figure),
+        ));
     }
     indented(out, head, 2, width, &b.operation);
     for text in b.text.lines() {

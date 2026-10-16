@@ -151,7 +151,11 @@ mod tests {
         let mut out = Vec::new();
         rows(&mut out, &signal, &lead, 30, &p, &op);
         assert!(out.len() > 2);
-        assert!(out.iter().all(|(row, row_op)| row.width() <= 30 && row_op == &op));
-        assert!(out.iter().all(|(row, _)| row.to_string().starts_with("    │ ")));
+        assert!(out
+            .iter()
+            .all(|(row, row_op)| row.width() <= 30 && row_op == &op));
+        assert!(out
+            .iter()
+            .all(|(row, _)| row.to_string().starts_with("    │ ")));
     }
 }

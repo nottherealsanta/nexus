@@ -71,7 +71,13 @@ pub fn is_live(span: &Span<'_>) -> bool {
 /// Recolour the [`live`] spans of one drawn row with the wave: a single-grapheme span
 /// (a rail or bullet) follows the row, longer text shimmers per column. Returns the
 /// row unchanged when it has nothing live. Pure: the caller passes `tick`.
-pub fn animate_row(line: &Line<'static>, tick: u64, row: u16, base: Color, peak: Color) -> Line<'static> {
+pub fn animate_row(
+    line: &Line<'static>,
+    tick: u64,
+    row: u16,
+    base: Color,
+    peak: Color,
+) -> Line<'static> {
     if !line.spans.iter().any(is_live) {
         return line.clone();
     }
@@ -134,7 +140,10 @@ mod tests {
         assert_eq!(drawn.spans[0], still);
         assert_eq!(drawn.to_string(), line.to_string());
         // One span per grapheme of the shimmering label, one for the rail.
-        assert_eq!(drawn.spans.len(), 1 + "Thinking…".graphemes(true).count() + 1);
+        assert_eq!(
+            drawn.spans.len(),
+            1 + "Thinking…".graphemes(true).count() + 1
+        );
         assert!(drawn.spans[1..].iter().all(|span| span.style.fg.is_some()));
         let plain = Line::from("no motion");
         assert_eq!(animate_row(&plain, 7, 3, base, peak), plain);

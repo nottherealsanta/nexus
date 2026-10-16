@@ -3,8 +3,8 @@
 //! Header: `▸ Ran 2 commands, Read 3 files · 1.8s · 1 failed`. While anything runs the
 //! header shows the present-tense label brightly (`Running 1 command`) with the live
 //! elapsed time; finished, the past-tense label is subdued, the seconds are quiet and the
-//! failures are red. Folded, only a live tail (`╰─ ⠋ Read path`) and failed members show
-//! under the header, so a failure is never folded away.
+//! failure count is a dark red (`error_deep`). Folded, only a live tail (`╰─ ⠋ Read path`)
+//! shows under the header; a failure does not expand a group, the user opens it.
 //!
 //! An expanded member is a small box: `┌ Read path`, the relevant rows or reasoning behind
 //! a `│` rail, then `╰ 0.8s` in italics. A collapsed member is one row, `▸ Read path  0.8s`.
@@ -73,7 +73,13 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     } else {
         glyphs.closed
     };
-    let corner_tone = if failed { p.error } else if running { p.text } else { p.border_strong };
+    let corner_tone = if failed {
+        p.error
+    } else if running {
+        p.text
+    } else {
+        p.border_strong
+    };
     let time = took(m);
     // A collapsed row ends with its seconds; the text gives way before they do.
     let reserve = match (&time, open) {
@@ -125,7 +131,10 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
                 gutter(),
                 Span::styled(look::corner_end(), Style::default().fg(p.border)),
                 Span::raw(" "),
-                Span::styled(time, Style::default().fg(p.quiet).add_modifier(Modifier::ITALIC)),
+                Span::styled(
+                    time,
+                    Style::default().fg(p.quiet).add_modifier(Modifier::ITALIC),
+                ),
             ]),
             op,
         ));
@@ -150,9 +159,15 @@ fn tail(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     ];
     let shown = truncate(&rest, width.saturating_sub(14));
     if !shown.is_empty() {
-        row.push(Span::styled(format!(" {shown}"), Style::default().fg(p.muted)));
+        row.push(Span::styled(
+            format!(" {shown}"),
+            Style::default().fg(p.muted),
+        ));
     }
-    out.push((Line::from(row), tools::with_inspect(&m.operation, &m.inspect_operation)));
+    out.push((
+        Line::from(row),
+        tools::with_inspect(&m.operation, &m.inspect_operation),
+    ));
 }
 
 /// The header row of a group.
@@ -206,7 +221,7 @@ fn header(b: &Content, width: usize, p: &Palette, now_ms: u64) -> Line<'static> 
         } else {
             truncate(failure.trim_start_matches([' ', '·']).trim_start(), room)
         };
-        suffix.push(Span::styled(text, Style::default().fg(p.error)));
+        suffix.push(Span::styled(text, Style::default().fg(p.error_deep)));
     }
     let used: usize = suffix.iter().map(|s| s.content.width()).sum();
     let style = if running {
@@ -230,20 +245,14 @@ fn header(b: &Content, width: usize, p: &Palette, now_ms: u64) -> Line<'static> 
 /// Draw one group at `now_ms` (the live elapsed time).
 pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64) {
     out.push((header(b, width, p, now_ms), b.operation.clone()));
-    // Failed members that the expanded list does not already show stay visible.
-    let shown = |m: &Content| !b.collapsed && b.members.iter().any(|other| other.id == m.id);
-    for failed in b.failed_members.iter().filter(|m| !shown(m)) {
-        member(out, failed, width, p);
-    }
+    // A failure never opens a group: folded stays folded (only the count shows in the header).
     if !b.collapsed && !b.members.is_empty() {
         for m in &b.members {
             member(out, m, width, p);
         }
     } else if b.status == "running" {
         if let Some(live) = b.live_member.as_deref() {
-            if !b.failed_members.iter().any(|m| m.id == live.id) {
-                tail(out, live, width, p);
-            }
+            tail(out, live, width, p);
         }
     }
 }
@@ -289,19 +298,28 @@ mod tests {
     }
 
     #[test]
-    fn finished_header_is_subdued_with_quiet_seconds_and_red_failures() {
+    fn finished_header_is_subdued_with_quiet_seconds_and_error_deep_failures() {
         let p = Palette::new(false);
         let mut block = group();
         block.failures = 2;
         let mut rows = Vec::new();
         draw(&mut rows, &block, 80, &p, 0);
-        assert_eq!(plain(&rows), ["    ▸ Ran 2 commands, Read 3 files · 1.8s · 2 failed"]);
+        assert_eq!(
+            plain(&rows),
+            ["    ▸ Ran 2 commands, Read 3 files · 1.8s · 2 failed"]
+        );
         let spans = &rows[0].0.spans;
         assert_eq!(spans[3].style.fg, Some(p.muted));
         assert!(!look::is_live(&spans[3]));
         assert_eq!(spans[4].style.fg, Some(p.quiet));
-        assert_eq!(spans[5].style.fg, Some(p.error));
+        assert_eq!(spans[5].style.fg, Some(p.error_deep));
+        assert_ne!(p.error_deep, p.error);
         assert_eq!(rows[0].1, block.operation);
+        let light = Palette::new(true);
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &light, 0);
+        assert_eq!(rows[0].0.spans[5].style.fg, Some(light.error_deep));
+        assert_ne!(light.error_deep, light.error);
     }
 
     #[test]
@@ -316,7 +334,10 @@ mod tests {
         draw(&mut rows, &block, 80, &p, 6_400);
         assert_eq!(
             plain(&rows),
-            [format!("    {} Running 1 command, Read 3 files · 2.4s", look::SLOT)]
+            [format!(
+                "    {} Running 1 command, Read 3 files · 2.4s",
+                look::SLOT
+            )]
         );
         let label = &rows[0].0.spans[3];
         assert_eq!(label.style.fg, Some(p.text));
@@ -324,7 +345,27 @@ mod tests {
     }
 
     #[test]
-    fn folded_running_group_shows_failures_and_only_the_live_tail() {
+    fn running_header_glyph_is_the_spinner_slot_folded_or_open() {
+        let p = Palette::new(false);
+        let mut block = group();
+        block.status = "running".into();
+        for collapsed in [true, false] {
+            block.collapsed = collapsed;
+            let mut rows = Vec::new();
+            draw(&mut rows, &block, 80, &p, 0);
+            let glyph = &rows[0].0.spans[1];
+            assert_eq!(glyph.content, look::SLOT);
+            assert_eq!(glyph.style.fg, Some(p.text));
+        }
+        // Finished, the slot gives way to the disclosure glyph.
+        block.status = "completed".into();
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p, 0);
+        assert_ne!(rows[0].0.spans[1].content, look::SLOT);
+    }
+
+    #[test]
+    fn folded_running_group_shows_only_the_live_tail() {
         let p = Palette::new(false);
         let mut block = group();
         block.status = "running".into();
@@ -334,17 +375,33 @@ mod tests {
         let mut rows = Vec::new();
         draw(&mut rows, &block, 80, &p, 0);
         let lines = plain(&rows);
-        assert_eq!(lines.len(), 3, "{lines:#?}");
-        assert_eq!(lines[1], "    ✗ Read src/main.rs  0.8s");
-        assert_eq!(lines[2], format!("    ╰─ {} Read src/main.rs", look::SLOT));
-        assert_eq!(rows[1].0.spans[1].style.fg, Some(p.error), "red mark");
-        assert_eq!(rows[1].0.spans[3].style.fg, Some(p.error));
-        assert!(look::is_live(&rows[2].0.spans[5]));
+        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert!(lines[0].contains("1 failed"));
+        assert_eq!(lines[1], format!("    ╰─ {} Read src/main.rs", look::SLOT));
+        assert!(look::is_live(&rows[1].0.spans[5]));
         // Finished groups show no tail.
         block.status = "completed".into();
         let mut rows = Vec::new();
         draw(&mut rows, &block, 80, &p, 0);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn finished_group_with_failures_stays_collapsed_like_one_without() {
+        let p = Palette::new(false);
+        let mut clean = group();
+        clean.members = vec![read("ok", "completed")];
+        let mut failed = clean.clone();
+        failed.failures = 1;
+        failed.members = vec![read("bad", "failed")];
+        failed.failed_members = vec![read("bad", "failed")];
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        draw(&mut a, &clean, 80, &p, 0);
+        draw(&mut b, &failed, 80, &p, 0);
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1, "{:?}", plain(&b));
+        assert!(plain(&b)[0].starts_with("    ▸ "));
+        assert!(plain(&b)[0].contains("· 1 failed"));
     }
 
     #[test]
@@ -383,20 +440,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_member_not_in_the_expanded_list_is_still_drawn_once() {
-        let p = Palette::new(false);
-        let mut block = group();
-        block.collapsed = false;
-        block.members = vec![read("ok", "completed")];
-        block.failed_members = vec![read("bad", "failed"), read("ok", "completed")];
-        let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
-        let lines = plain(&rows);
-        assert_eq!(lines.iter().filter(|l| l.contains('✗')).count(), 1);
-        assert_eq!(lines.iter().skip(1).filter(|l| l.contains("Read")).count(), 2, "{lines:?}");
-    }
-
-    #[test]
     fn thought_members_open_to_their_trace() {
         let p = Palette::new(false);
         let mut block = group();
@@ -430,10 +473,16 @@ mod tests {
             draw(&mut rows, &block, width, &p, 0);
             let lines = plain(&rows);
             assert!(lines[0].contains("2 failed"), "{width}: {lines:?}");
-            assert!(rows.iter().all(|(row, _)| row.width() <= width), "{width}: {lines:?}");
+            assert!(
+                rows.iter().all(|(row, _)| row.width() <= width),
+                "{width}: {lines:?}"
+            );
             assert!(lines[0].width() <= width);
-            assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.error));
-            assert!(lines.iter().skip(1).any(|l| l.contains("Read")), "{width}: {lines:?}");
+            assert_eq!(
+                rows[0].0.spans.last().unwrap().style.fg,
+                Some(p.error_deep)
+            );
+            assert_eq!(lines.len(), 1, "{width}: {lines:?}");
         }
         let mut rows = Vec::new();
         draw(&mut rows, &block, 50, &p, 0);
@@ -452,7 +501,11 @@ mod tests {
         for width in [12, 20, 40] {
             let mut rows = Vec::new();
             draw(&mut rows, &block, width, &p, 0);
-            assert!(rows.iter().all(|(row, _)| row.width() <= width), "{width}: {:?}", plain(&rows));
+            assert!(
+                rows.iter().all(|(row, _)| row.width() <= width),
+                "{width}: {:?}",
+                plain(&rows)
+            );
         }
     }
 }

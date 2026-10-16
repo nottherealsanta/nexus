@@ -7,6 +7,24 @@ pub struct PromptPin {
     mode: Follow,
 }
 impl PromptPin {
+    /// Only submissions starting/replacing a turn should opt into prompt following.
+    /// Queue mode stays put even when idle (the host may consume it immediately).
+    /// Steer during an active run is queued too; don't replace an existing pin.
+    pub fn on_submit(
+        &mut self,
+        mode: &str,
+        running: bool,
+        follow: &mut bool,
+        scope: Scope,
+        blocks: &[crate::bridge::Content],
+    ) {
+        if mode == "queue" || (mode == "steer" && running) {
+            return;
+        }
+        self.arm(scope, blocks);
+        *follow = true;
+    }
+
     /// Explicit submit: wait for the next user message not already in `blocks`.
     pub fn arm(&mut self, scope: Scope, blocks: &[crate::bridge::Content]) {
         let users: Vec<UserRow> = blocks
@@ -70,9 +88,7 @@ impl PromptPin {
             let rows = cache.block_rows(index).unwrap_or_else(|| {
                 1 + ops
                     .range(top + 1, usize::MAX)
-                    .take_while(|op| {
-                        op.as_ref().map_or(true, |op| op["prompt_turn"].is_null())
-                    })
+                    .take_while(|op| op.as_ref().map_or(true, |op| op["prompt_turn"].is_null()))
                     .count()
             });
             users.push(UserRow {
@@ -91,11 +107,38 @@ impl PromptPin {
         matches!(self.mode, Follow::Prompt(_)).then_some(r.offset)
     }
 }
+/// Rows the user can scroll below the last content row (blank room between the last reply and
+/// the composer), and the follow position's extra rows.
+pub const BOTTOM_BUFFER: usize = 20;
+
+/// The bottom buffer for a viewport: `BOTTOM_BUFFER`, clamped so at least 4 content rows stay
+/// visible on short viewports. A transcript that fits the viewport gets none (no pointless scroll).
+pub fn bottom_buffer(content: usize, height: usize) -> usize {
+    if content <= height {
+        0
+    } else {
+        BOTTOM_BUFFER.min(height.saturating_sub(4))
+    }
+}
+
+/// The bottom position: the last content row plus the buffer. It is both the follow offset and
+/// where a user scroll down stops; the scrollbar range and the scroll clamp share it.
+pub fn live_offset(content: usize, height: usize) -> usize {
+    content.saturating_sub(height) + bottom_buffer(content, height)
+}
+
+/// Largest reachable offset: the bottom position, or further for a pinned prompt's tail padding.
+pub fn max_offset(content: usize, height: usize) -> usize {
+    (content + tail_padding(content, height))
+        .saturating_sub(height)
+        .max(live_offset(content, height))
+}
+
 pub fn tail_padding(content: usize, height: usize) -> usize {
     if content == 0 {
         0
     } else {
-        height.saturating_sub(2)
+        height.saturating_sub(2) / 2
     }
 }
 
@@ -140,11 +183,23 @@ impl Metrics {
         tail_padding(self.content, self.height)
     }
     pub fn max_scroll(self) -> usize {
-        (self.content + self.pad()).saturating_sub(self.height)
+        max_offset(self.content, self.height)
     }
-    /// Offset that shows the last row at the bottom of the viewport.
+    /// The bottom position: last content row plus the bottom buffer.
     pub fn live(self) -> usize {
-        self.content.saturating_sub(self.height)
+        live_offset(self.content, self.height)
+    }
+}
+
+/// Result of a user scroll down: the new stored offset and whether following resumes.
+/// Offsets past `live` (tail padding, or a pinned prompt) have no content below them, so a
+/// scroll down there is a no-op instead of snapping back up to `live`.
+pub fn scroll_down(current: usize, step: usize, live: usize, follow: bool) -> (usize, bool) {
+    if current > live {
+        (current, follow)
+    } else {
+        let next = (current + step).min(live);
+        (next, next >= live)
     }
 }
 
@@ -200,10 +255,10 @@ impl Follow {
         }
     }
     /// User scroll by `delta` rows from what is on screen (`current` is the resolved offset).
-    /// Landing on the live bottom resumes following; anything else freezes.
+    /// Upward scrolling always pauses following; scrolling down to visible tail resumes it.
     pub fn scrolled(current: usize, delta: isize, m: Metrics) -> Self {
         let next = current.saturating_add_signed(delta).min(m.max_scroll());
-        if next == m.live() {
+        if delta >= 0 && next >= m.live() {
             Follow::Latest
         } else {
             Follow::Frozen(next)
@@ -284,9 +339,20 @@ mod tests {
     };
 
     #[test]
+    fn scrolling_down_reaches_the_live_bottom_and_never_snaps_back() {
+        assert_eq!(scroll_down(0, 3, 20, false), (3, false));
+        assert_eq!(scroll_down(19, 3, 20, false), (20, true));
+        assert_eq!(scroll_down(20, 3, 20, true), (20, true));
+        // Pinned prompt or padding zone: no-op, never jumps up to `live`.
+        assert_eq!(scroll_down(24, 3, 20, true), (24, true));
+        assert_eq!(scroll_down(40, 3, 40, false), (40, true));
+        assert_eq!(scroll_down(24, 3, 20, false), (24, false));
+    }
+    #[test]
     fn latest_shows_bottom_with_tail_available() {
         let r = Follow::Latest.resolve(&scope(""), M, &[]);
-        assert_eq!((r.offset, M.max_scroll()), (20, 28));
+        // 30 content rows, 10 high: the bottom buffer is 6 (viewport - 4), the pin padding only 4.
+        assert_eq!((r.offset, M.max_scroll()), (26, 26));
     }
     #[test]
     fn submit_pins_new_prompt_and_adopts_it() {
@@ -294,7 +360,7 @@ mod tests {
         let f = Follow::submit(scope(""), &old);
         // Not arrived yet: follow bottom, keep waiting.
         let r = f.resolve(&scope(""), M, &old);
-        assert_eq!((r.offset, &r.follow), (20, &f));
+        assert_eq!((r.offset, &r.follow), (26, &f));
         let now = [user("a", 0, 0), user("b", 1, 26)];
         let m = Metrics {
             content: 30,
@@ -313,7 +379,7 @@ mod tests {
             height: 10,
         };
         let r = f.resolve(&scope(""), grown, &now);
-        assert_eq!((r.offset, r.follow), (26, Follow::Latest));
+        assert_eq!((r.offset, r.follow), (32, Follow::Latest));
     }
     #[test]
     fn frozen_ignores_arrival_and_finish_until_submit() {
@@ -334,10 +400,11 @@ mod tests {
             content: 12,
             height: 10,
         };
-        assert_eq!(Follow::Frozen(25).resolve(&scope(""), small, &[]).offset, 10);
-        // M.live() is 20: landing exactly there follows; past it (tail padding) freezes.
-        assert_eq!(Follow::scrolled(18, 2, M), Follow::Latest);
-        assert_eq!(Follow::scrolled(18, 5, M), Follow::Frozen(23));
+        assert_eq!(Follow::Frozen(25).resolve(&scope(""), small, &[]).offset, 8);
+        // M.live() is 26: reaching or passing the last content row follows.
+        assert_eq!(Follow::scrolled(24, 2, M), Follow::Latest);
+        assert_eq!(Follow::scrolled(22, 5, M), Follow::Latest);
+        assert_eq!(Follow::scrolled(18, 2, M), Follow::Frozen(20));
         assert_eq!(Follow::scrolled(2, -9, M), Follow::Frozen(0));
     }
     #[test]
@@ -348,7 +415,10 @@ mod tests {
         let mut g = scope("");
         g.generation = 2;
         assert_eq!(f.resolve(&g, M, &u).follow, Follow::Latest);
-        assert!(matches!(f.resolve(&scope(""), M, &u).follow, Follow::Prompt(_)));
+        assert!(matches!(
+            f.resolve(&scope(""), M, &u).follow,
+            Follow::Prompt(_)
+        ));
         // Missing message drops the pin.
         assert_eq!(f.resolve(&scope(""), M, &[]).follow, Follow::Latest);
     }
@@ -504,7 +574,10 @@ mod tests {
             height: 10,
         };
         let f = Follow::jump(scope(""), &user("b", 1, 11));
-        assert_eq!(f.resolve(&scope(""), m, &[user("b", 1, 11)]).offset, m.max_scroll());
+        assert_eq!(
+            f.resolve(&scope(""), m, &[user("b", 1, 11)]).offset,
+            m.max_scroll()
+        );
     }
     #[test]
     fn finish_only_stops_a_pending_submit_without_a_prompt() {
@@ -521,6 +594,58 @@ mod tests {
         pin.finish(&[user_block("a")]);
         assert!(!pin.is_pending());
     }
+    #[test]
+    fn queued_submit_preserves_follow_scroll_and_existing_pin() {
+        for mode in ["queue", "steer"] {
+            for running in [false, true] {
+                if mode == "steer" && !running {
+                    continue;
+                }
+                for following in [false, true] {
+                    let mut items = filler(30);
+                    let mut cache = crate::render::Cache::default();
+                    let s = snapshot(items.clone().into());
+                    frame(&s, &mut cache, 0, true);
+                    cache.prompt_pin.arm(Scope::default(), &s.blocks);
+                    let mut follow = following;
+                    let scroll = 7;
+                    frame(&s, &mut cache, scroll, follow);
+                    let offset = cache.current_offset;
+                    let pin = format!("{:?}", cache.prompt_pin.mode);
+                    cache.prompt_pin.on_submit(
+                        mode,
+                        running,
+                        &mut follow,
+                        Scope::default(),
+                        &s.blocks,
+                    );
+                    assert_eq!(follow, following);
+                    assert_eq!(format!("{:?}", cache.prompt_pin.mode), pin);
+                    frame(&s, &mut cache, scroll, follow);
+                    assert_eq!(cache.current_offset, offset);
+                    // A queued user block must not unfreeze a reader either.
+                    items.push(serde_json::json!({"id":"queued", "kind":"user", "turn_id":"queued", "title":"queued"}));
+                    if !following {
+                        let s = snapshot(items.into());
+                        frame(&s, &mut cache, scroll, follow);
+                        assert_eq!(cache.current_offset, offset);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn immediate_submit_arms_prompt_and_follows() {
+        for (mode, running) in [("steer", false), ("interrupt", false), ("interrupt", true)] {
+            let mut pin = PromptPin::default();
+            let mut follow = false;
+            pin.on_submit(mode, running, &mut follow, Scope::default(), &[]);
+            assert!(follow);
+            assert!(pin.is_pending());
+        }
+    }
+
     #[test]
     fn drawn_offset_tracks_live_pinned_and_frozen_frames() {
         let mut items = filler(30);
@@ -544,7 +669,9 @@ mod tests {
         frame(&s, &mut cache, 0, true);
         let top = cache.prompt_top("t1").unwrap();
         assert_eq!(cache.current_offset, top.min(cache.max_scroll));
-        assert!(cache.current_offset > cache.live_scroll);
+        // On a short viewport the bottom buffer already covers the pin's padding; on tall ones
+        // the pin may reach past the bottom position.
+        assert!(cache.current_offset >= cache.live_scroll);
 
         // Scrolling away (follow false) draws the requested offset and drops the pin.
         frame(&s, &mut cache, 3, false);
@@ -563,8 +690,26 @@ mod tests {
     #[test]
     fn permanent_tail_padding() {
         assert_eq!(super::tail_padding(0, 20), 0);
-        assert_eq!(super::tail_padding(3, 20), 18);
-        assert_eq!(super::tail_padding(300, 20), 18);
+        assert_eq!(super::tail_padding(3, 20), 9);
+        assert_eq!(super::tail_padding(300, 20), 9);
         assert_eq!(super::tail_padding(3, 1), 0);
+    }
+
+    #[test]
+    fn last_content_row_visible_resumes_follow_before_the_padded_end() {
+        let m = Metrics {
+            content: 100,
+            height: 20,
+        };
+        // Bottom position = 80 + buffer 16 = 96.
+        assert!(Follow::scrolled(95, 1, m).is_latest());
+        assert!(Follow::scrolled(93, 3, m).is_latest());
+        assert_eq!(Follow::scrolled(79, 1, m), Follow::Frozen(80));
+        assert_eq!(Follow::scrolled(96, -1, m), Follow::Frozen(95));
+        let short = Metrics {
+            content: 3,
+            height: 20,
+        };
+        assert_eq!(Follow::scrolled(0, -3, short), Follow::Frozen(0));
     }
 }

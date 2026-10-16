@@ -67,9 +67,9 @@ pub(super) fn control_spans(
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
-    /// `[Sessions]`: opens the Sessions dashboard (`/sessions`).
+    /// `☰`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
-    /// Sub-agent page only: toggles the details sidebar.
+    /// `◫`: toggles the details sidebar.
     Details,
 }
 pub struct TabCell {
@@ -87,11 +87,12 @@ enum Seg {
     Notice,
     Worktree,
     Dashboard,
+    Details,
     Gap,
 }
 /// Grok's in-session top bar, laid out once for drawing and hit-testing. Left:
 /// `Title │ ~/path branch worktree` (path text colour, branch and worktree quiet; the
-/// worktree only inside a linked worktree). Right: update notice and `[Sessions]`,
+/// worktree only inside a linked worktree). Right: update notice, dashboard `☰` and details `◫`,
 /// separated by `│`; the notice drops out before the title is squeezed below 12 columns.
 /// Returns (start column, text, how to paint it).
 /// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
@@ -103,7 +104,7 @@ fn partition(text: &str) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
-    let dash = "[Sessions]".to_string();
+    let dash = " ☰ ".to_string();
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
     let sep = " │ ";
@@ -117,6 +118,8 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         }
         out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
+        out.push((" ◫ ".into(), Seg::Details));
+        out.push(("  ".into(), Seg::Gap));
         out
     };
     let size = |v: &[(String, Seg)]| v.iter().map(|(t, _)| t.width()).sum::<usize>();
@@ -138,7 +141,11 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         left.push((text, seg));
     };
     let mut room = room;
-    let title = if s.title.is_empty() { "Nexus" } else { s.title.as_str() };
+    let title = if s.title.is_empty() {
+        "New session"
+    } else {
+        s.title.as_str()
+    };
     // The title keeps at most 40 columns, and leaves space for the path when there is any.
     let title_cap = if path.is_empty() { 40 } else { room.min(40) };
     place(
@@ -174,22 +181,24 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     }
     out
 }
-/// Clickable cells of the top bar (arrows and `[Sessions]`). On a sub-agent page the
+/// Padded clickable cells of the top bar (`☰` and `◫`). On a sub-agent page the
 /// only cell is the details toggle.
 pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     if !s.agent_page.is_empty() {
         return vec![TabCell {
             kind: TabHit::Details,
-            start: width.saturating_sub(3),
-            end: width,
+            start: width.saturating_sub(5),
+            end: width.saturating_sub(2),
         }];
     }
     top_layout(s, width)
         .into_iter()
         .filter_map(|(start, text, seg)| match seg {
             Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
+            Seg::Details => Some((TabHit::Details, start, start + text.width())),
             _ => None,
         })
+        .filter(|(_, start, end)| start < end && *end <= width)
         .map(|(kind, start, end)| TabCell { kind, start, end })
         .collect()
 }
@@ -206,14 +215,15 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
             usize::from(area.width).saturating_sub(16 + model.width()),
         );
         let gap = usize::from(area.width)
-            .saturating_sub(title.width() + model.width() + status.len() + 7);
+            .saturating_sub(title.width() + model.width() + status.len() + 9);
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
                     Span::raw(format!("  {title}{} ", " ".repeat(gap))),
                     Span::styled(model, Style::default().fg(p.muted)),
                     Span::raw(format!("{status} ")),
-                    Span::styled("▐", Style::default().fg(p.border_strong)),
+                    Span::styled(" ◫ ", Style::default().fg(p.border_strong)),
+                    Span::raw("  "),
                 ]),
                 Line::styled(
                     "─".repeat(usize::from(area.width)),
@@ -242,7 +252,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
             Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap => background.fg(p.quiet),
             Seg::Path => background.fg(p.text),
             Seg::Notice => background.fg(p.accent),
-            Seg::Dashboard => background.fg(p.muted),
+            Seg::Dashboard | Seg::Details => background.fg(p.muted),
         };
         spans.push(Span::styled(text, style));
     }
@@ -502,7 +512,18 @@ mod chrome_tests {
     }
 
     #[test]
-    fn top_bar_shows_title_path_branch_worktree_and_dashboard_only() {
+    fn top_bar_empty_title_uses_new_session_without_brand_or_id() {
+        let s = Snapshot::default();
+        let text = bar_text(&s, 100);
+        assert!(text.contains("New session"), "{text}");
+        assert!(
+            !text.contains("Nexus") && !text.contains("opaque-session-id"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn top_bar_shows_title_path_branch_worktree_and_both_controls() {
         let s = Snapshot {
             title: "Fix the parser".into(),
             breadcrumb: "~/repo:main".into(),
@@ -513,15 +534,36 @@ mod chrome_tests {
             ..Snapshot::default()
         };
         let text = bar_text(&s, 100);
-        assert!(text.contains("Fix the parser │ ~/repo main wt-fix"), "{text}");
-        assert!(!text.contains("72K") && !text.contains('‹') && !text.contains('›'), "{text}");
-        assert!(text.contains("[Sessions]"), "{text}");
+        assert!(
+            text.contains("Fix the parser │ ~/repo main wt-fix"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("72K") && !text.contains('‹') && !text.contains('›'),
+            "{text}"
+        );
+        assert!(text.contains("☰"), "{text}");
+        assert!(text.contains("◫"), "{text}");
+        assert!(!text.contains('⧠') && !text.contains('◨'), "{text}");
         let cells = tab_cells(&s, 100);
         let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
-        assert_eq!(kinds, [TabHit::Dashboard]);
+        assert_eq!(kinds, [TabHit::Dashboard, TabHit::Details]);
         let dash = &cells[0];
-        assert_eq!(&text.chars().skip(dash.start).take(dash.end - dash.start).collect::<String>(), "[Sessions]");
-        let plain = Snapshot { worktree: String::new(), ..s };
+        assert_eq!(
+            &text
+                .chars()
+                .skip(dash.start)
+                .take(dash.end - dash.start)
+                .collect::<String>(),
+            " ☰ "
+        );
+        assert!(text.ends_with(" ☰   ◫   "), "{text}");
+        assert_eq!(cells[1].start, dash.end + 1);
+        assert_eq!(cells[1].end, 98);
+        let plain = Snapshot {
+            worktree: String::new(),
+            ..s
+        };
         assert!(bar_text(&plain, 100).contains("Fix the parser │ ~/repo main "));
     }
 
@@ -539,10 +581,13 @@ mod chrome_tests {
         assert!(text.contains("update 9.9.9"));
         for width in 12..120u16 {
             let cells = tab_cells(&s, usize::from(width));
-            assert!(cells.iter().all(|c| c.end <= usize::from(width).max(1)), "{width}");
+            assert!(
+                cells.iter().all(|c| c.end <= usize::from(width).max(1)),
+                "{width}"
+            );
             let _ = bar_text(&s, width.max(1));
         }
-        assert!(bar_text(&s, 30).contains("[Sessions]"));
+        assert!(bar_text(&s, 30).contains("☰"));
     }
 
     #[test]

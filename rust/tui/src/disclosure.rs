@@ -97,7 +97,10 @@ impl Disclosure {
         };
         fn contains(block: &Content, op: &Value) -> bool {
             ((block.local_ui || op["kind"] == "context_toggle")
-                && (block.operation.as_ref().is_some_and(|source| same_target(source, op))
+                && (block
+                    .operation
+                    .as_ref()
+                    .is_some_and(|source| same_target(source, op))
                     || block
                         .output_operation
                         .as_ref()
@@ -163,7 +166,8 @@ impl Disclosure {
                 // Keyboard Enter/Space toggles inline; a mouse click opens the inspector.
                 let mut toggle = serde_json::json!({"kind":"context_toggle", "id": member.id});
                 if let Some(key) = member.id.strip_prefix("context:") {
-                    toggle["inspect_operation"] = serde_json::json!({"kind":"context_show","key":key});
+                    toggle["inspect_operation"] =
+                        serde_json::json!({"kind":"context_show","key":key});
                 }
                 member.operation = Some(toggle);
                 shown
@@ -217,7 +221,7 @@ impl Disclosure {
                 .is_none_or(|scope| !scope.contains_key(id));
         match source.kind.as_str() {
             "tool_group" => {
-                shown.collapsed = !(open || preview || source.failures > 0);
+                shown.collapsed = !(open || preview);
             }
             "tool" | "thought" => {
                 let full = self.verbose
@@ -281,10 +285,8 @@ impl Disclosure {
             }
             _ => {}
         }
-        if (open || preview || (source.kind == "tool_group" && source.failures > 0))
-            && source.kind != "user"
-        {
-            let start = if preview && source.failures == 0 {
+        if (open || preview) && source.kind != "user" {
+            let start = if preview {
                 source.members.len().saturating_sub(source.preview_limit)
             } else {
                 0
@@ -507,6 +509,8 @@ mod tests {
         assert!(ui.project(&rows)[0].members.is_empty());
         let mut completed = rows.clone();
         completed[0].preview_limit = 0;
+        completed[0].failures = 1; // a failure never opens a finished group
+        completed[0].members[0].status = "failed".into();
         let fresh = Disclosure::default();
         assert!(fresh.project(&completed)[0].collapsed);
     }

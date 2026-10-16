@@ -106,9 +106,9 @@ def test_there_is_no_sessions_sidebar_and_the_top_bar_opens_the_dashboard():
         t.redraw()
         text = t.text()
         assert "SESSIONS" not in text and "Filter sessions" not in text and "Refresh docs" not in text
-        assert "Fix token refresh" in text and "[Sessions]" in text and "1/2" not in text, "top bar"
+        assert "Fix token refresh" in text and "☰" in text and "◫" in text and "1/2" not in text, "top bar"
         assert text.index("~/w") < text.index("main"), "path comes before the branch"
-        click(t, 113, 2)  # inside [Sessions]
+        click(t, 113, 2)  # inside the session-list icon's padded hit target
         assert t.action() == {"type": "command", "text": "/sessions"}
         t.key(b"\x02")  # Ctrl+B is the dashboard too
         assert t.action() == {"type": "command", "text": "/sessions"}

@@ -33,11 +33,15 @@ class Live:
         self.state = "idle"  # idle|starting|active|stopping
         self.session = ""
         self.started_at = 0.0
+        self.begin_ts = 0.0  # wall clock when the current start began (matches a call before its id is known)
         self.muted = False
         self.watch: asyncio.Task | None = None
         self.opened: set[str] = set()  # call ids whose card is expanded (instructions, commentary)
         self.watch_interval = 0.5
         self.status_interval = 5.0
+        # The native terminal draws the open call in a pane above the composer instead of
+        # a timeline card; the desktop client keeps the card (prototype.run sets this).
+        self.pane = True
 
     # -- state ---------------------------------------------------------------
 
@@ -61,20 +65,35 @@ class Live:
         if self.state == "stopping":
             phase = "ended"
         current = getattr(self.shell.controller, "session", "")
+        pane = (self._card(view, self._turn_numbers(self.shell.controller.view))
+                if self.pane and view is not None else {})
         return {
             "active": True, "state": self.state, "phase": _STATE_LABEL.get(phase, phase),
             "model": (view.model if view is not None else "") or "", "muted": self.muted,
             "started": self.started_at, "in": 0.0 if self.muted else round(helper.level_in if helper else 0.0, 3),
             "out": round(helper.level_out if helper else 0.0, 3),
             "elsewhere": self.session if self.session and self.session != current else "",
+            # The open call's card rows, drawn in the Live pane above the composer.
+            "detail": pane.get("detail", ""), "collapsed": pane.get("collapsed", True),
+            "operation": pane.get("operation"),
         }
 
     def _view_call(self):
         """This call's folded view, when the shown session is the call's session."""
-        if self.call is None or self.call.result is None:
+        if self.call is None:
             return None
-        for call in reversed(getattr(self.shell.controller.view, "live_calls", [])):
-            if call.call_id == self.call.result.call_id:
+        calls = getattr(self.shell.controller.view, "live_calls", [])
+        if self.call.result is not None:
+            return next((c for c in reversed(calls) if c.call_id == self.call.result.call_id), None)
+        # The daemon records ``live.started`` before this client has the start result, so for
+        # a moment the call id is unknown. This client holds one call (the daemon allows one),
+        # so the newest call of the shown session that has not ended and began after we did
+        # is ours; matching it keeps the pane up and the card out of the timeline.
+        if self.state not in {"starting", "active", "stopping"} or getattr(
+                self.shell.controller, "session", "") != self.session:
+            return None
+        for call in reversed(calls):
+            if call.status != "ended" and (call.started_ts or 0.0) >= self.begin_ts - 5.0:
                 return call
         return None
 
@@ -146,6 +165,7 @@ class Live:
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
+        self.begin_ts = time.time()
         self.call = LiveCall(self.shell.client, session)
         await self._refresh()
         try:
@@ -282,22 +302,33 @@ class Live:
         Cards are collapsed by default (voice instructions, commentary and long text);
         clicking one sends ``live_toggle``. The block ``status`` field carries the call
         phase; the native client draws kind ``live`` (``rust/tui/src/transcript.rs``).
+        The call that is open on this client is left out: the Live pane above the
+        composer shows it (``bar()["detail"]``) until it ends, then it joins the timeline.
         """
+        turns = self._turn_numbers(view)
+        open_call = self._view_call()
+        pane_id = open_call.call_id if self.pane and open_call is not None and self.state != "idle" else None
+        return [(call.started_ts or 0.0, self._card(call, turns))
+                for call in view.live_calls if call.call_id != pane_id]
+
+    @staticmethod
+    def _turn_numbers(view) -> dict[str, int]:
+        """Delegation id -> number of the turn its user message started."""
         turns: dict[str, int] = {}
-        for turn in view.turns:
+        for turn in getattr(view, "turns", ()):
             for message in turn.messages:
                 origin = message.origin or {}
                 if message.role == "user" and origin.get("kind") == "live" and origin.get("delegation_id"):
                     turns[str(origin["delegation_id"])] = turn.index + 1
-        cards = []
-        for call in view.live_calls:
-            expanded = call.call_id in self.opened
-            rows = card_rows(call, expanded=expanded, turns=turns)
-            cards.append((call.started_ts or 0.0, {
-                "id": f"live:{call.call_id}", "kind": "live", "title": card_title(call),
-                "status": card_status(call), "collapsed": not expanded, "gap": 1,
-                "detail": card_encode(rows), "operation": {"kind": "live_toggle", "id": call.call_id}}))
-        return cards
+        return turns
+
+    def _card(self, call, turns: dict[str, int]) -> dict:
+        expanded = call.call_id in self.opened
+        rows = card_rows(call, expanded=expanded, turns=turns)
+        return {
+            "id": f"live:{call.call_id}", "kind": "live", "title": card_title(call),
+            "status": card_status(call), "collapsed": not expanded, "gap": 1,
+            "detail": card_encode(rows), "operation": {"kind": "live_toggle", "id": call.call_id}}
 
     # -- display -------------------------------------------------------------
 

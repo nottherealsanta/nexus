@@ -78,7 +78,10 @@ pub fn draw(frame: &mut Frame, rows: Rect, a: &Appearance, cursor: usize, p: &Pa
             ])
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), rows);
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(p.dialog)),
+        rows,
+    );
 }
 
 #[cfg(test)]
@@ -92,7 +95,10 @@ mod tests {
         assert_eq!(key(0, KeyCode::Down, false), Act::Move(1));
         assert_eq!(key(1, KeyCode::Down, false), Act::Move(1));
         assert_eq!(key(0, KeyCode::Up, false), Act::Move(0));
-        assert_eq!(key(0, KeyCode::Char(' '), false), Act::Toggle("animate_activity"));
+        assert_eq!(
+            key(0, KeyCode::Char(' '), false),
+            Act::Toggle("animate_activity")
+        );
         assert_eq!(key(1, KeyCode::Enter, false), Act::Toggle("mono"));
         assert_eq!(key(0, KeyCode::Char('m'), true), Act::Toggle("mono"));
         assert_eq!(key(0, KeyCode::Char('x'), false), Act::Pass);
@@ -127,9 +133,14 @@ mod tests {
         a.animate_activity = Some(false);
         a.mono = Some(true);
         let mut term = Terminal::new(TestBackend::new(40, 2)).unwrap();
-        term.draw(|f| draw(f, Rect::new(0, 0, 40, 2), &a, 1, &p)).unwrap();
+        term.draw(|f| draw(f, Rect::new(0, 0, 40, 2), &a, 1, &p))
+            .unwrap();
         let text: Vec<String> = (0..2)
-            .map(|y| (0..40).map(|x| term.backend().buffer()[(x, y)].symbol().to_string()).collect())
+            .map(|y| {
+                (0..40)
+                    .map(|x| term.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect()
+            })
             .collect();
         assert!(text[0].contains("[ ] Animate activity"), "{}", text[0]);
         assert!(text[1].contains("▸ [x] Monochrome"), "{}", text[1]);

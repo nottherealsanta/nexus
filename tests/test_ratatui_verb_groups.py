@@ -124,7 +124,9 @@ def test_wall_time_and_failures_are_separate_fields(tmp_path, monkeypatch):
     assert (group["started_ms"], group["elapsed_ms"], group["elapsed_label"]) == (100_000, 1_800, "1.8s")
     assert group["failures"] == 1
     assert group["collapsed"] and group["members"] == []
-    assert [m["id"] for m in group["failed_members"]] == ["b"], "a failure stays visible under a folded header"
+    # A failure never opens the group; Rust draws only the header count while folded.
+    assert group["collapsed"] and group["failures"] == 1
+    assert [m["id"] for m in group["failed_members"]] == ["b"]
     assert group["failed_members"][0]["inspect_operation"] == {"kind": "tool_details", "id": "b"}
 
 

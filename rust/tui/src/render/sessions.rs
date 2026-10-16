@@ -1,22 +1,20 @@
 //! Full-width Sessions dashboard (Grok style). Rows are grouped by last-updated time
 //! (Today, Yesterday, This week, Earlier), two lines each (`◇ Title · branch project … age`,
-//! then a one-line summary) followed by a blank spacer row. A `/ Search sessions` row sits
-//! above the first group. Nothing expands inline: the keyboard-selected session's
-//! `Response` preview is a bordered box at the bottom of this region, directly above the
-//! composer and as wide as its card; hover never changes it. The composer is the normal
-//! composer; this module does not draw one.
+//! then a one-line summary) between a blank padding row above and below, all part of the
+//! row's band, hit target and selection background. A `/ Search sessions` row sits
+//! above the first group. Nothing expands inline and there is no preview pane: the list
+//! uses the whole region above the composer. The composer is the normal composer; this
+//! module does not draw one.
 use crate::picker::{section, section_label, text, Dashboard};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
-
-pub type MarkdownFn = Box<dyn Fn(&str, usize) -> Vec<Line<'static>>>;
 
 pub struct Colors {
     pub text: Color,
@@ -31,8 +29,6 @@ pub struct Colors {
     pub border_strong: Color,
     pub purple: Color,
     pub warning: Color,
-    /// Renders the preview's Markdown tail at a width; plain wrapped text without it.
-    pub markdown: Option<MarkdownFn>,
 }
 
 impl Default for Colors {
@@ -48,7 +44,6 @@ impl Default for Colors {
             border_strong: Color::Gray,
             purple: Color::Magenta,
             warning: Color::Yellow,
-            markdown: None,
         }
     }
 }
@@ -82,54 +77,6 @@ fn rows_of(dashboard: &Value) -> &[Value] {
         .unwrap_or(&[])
 }
 
-fn wrap_lines(value: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut rest = value.trim();
-    while !rest.is_empty() && lines.len() < 12 {
-        if rest.width() <= width {
-            lines.push(rest.to_owned());
-            break;
-        }
-        let mut end = 0;
-        let mut last_space = None;
-        let mut acc = 0;
-        for (index, ch) in rest.char_indices() {
-            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if acc + w > width && end > 0 {
-                break;
-            }
-            acc += w;
-            end = index + ch.len_utf8();
-            if ch == ' ' {
-                last_space = Some(end);
-            }
-        }
-        let cut = last_space.filter(|at| *at > 0).unwrap_or(end.max(1));
-        let (head, tail) = rest.split_at(cut.min(rest.len()));
-        lines.push(head.trim_end().to_owned());
-        rest = tail.trim_start();
-    }
-    lines
-}
-
-fn take_lines(value: &str, width: usize, max_lines: usize) -> Vec<String> {
-    let mut lines = wrap_lines(value, width);
-    if lines.len() <= max_lines {
-        return lines;
-    }
-    lines.truncate(max_lines);
-    if let Some(last) = lines.last_mut() {
-        if !last.ends_with('…') {
-            *last = fit(last, width.max(1));
-            if !last.ends_with('…') {
-                last.push('…');
-            }
-        }
-    }
-    lines
-}
-
 fn age_of(row: &Value) -> &str {
     let age = text(row, "age");
     if age.is_empty() {
@@ -150,21 +97,6 @@ fn meta_of(row: &Value) -> String {
     }
 }
 
-fn tail_field(row: &Value, preview: &Value, key: &str) -> String {
-    let matched = preview.as_object().is_some()
-        && preview.get("session").and_then(Value::as_str) == Some(text(row, "id"));
-    if matched {
-        if key == "activity" {
-            return text(preview, key).to_owned();
-        }
-        let value = text(preview, key);
-        if !value.is_empty() {
-            return value.to_owned();
-        }
-    }
-    text(row, key).to_owned()
-}
-
 /// First line of Markdown source as plain text: markers stripped, cut at the first
 /// sentence end when that leaves a usable summary.
 fn plain_summary(source: &str) -> String {
@@ -173,8 +105,13 @@ fn plain_summary(source: &str) -> String {
         .map(|l| l.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']))
         .find(|l| !l.is_empty() && !l.starts_with("```"))
         .unwrap_or("");
-    let line = line.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(". ");
-    let mut out = line.replace("**", "").replace("__", "").replace(['`', '*'], "");
+    let line = line
+        .trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start_matches(". ");
+    let mut out = line
+        .replace("**", "")
+        .replace("__", "")
+        .replace(['`', '*'], "");
     if let Some(at) = out.find(". ") {
         if at >= 12 {
             out.truncate(at + 1);
@@ -254,7 +191,10 @@ fn status_chips(shown: &[&Value], colors: &Colors, width: usize) -> Vec<Span<'st
         let mut spans = Vec::new();
         for (index, (count, glyph, label, color)) in present.iter().enumerate() {
             if index > 0 {
-                spans.push(Span::styled(" │ ", Style::default().fg(colors.border_strong)));
+                spans.push(Span::styled(
+                    " │ ",
+                    Style::default().fg(colors.border_strong),
+                ));
             }
             let body = if labels {
                 format!("{glyph} {count} {label}")
@@ -291,9 +231,10 @@ pub fn draw(
         (cell.bg, cell.fg)
     };
     frame.render_widget(Clear, area);
-    frame.buffer_mut().set_style(area, Style::default().bg(bg).fg(fg));
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(bg).fg(fg));
     state.list_area = Rect::default();
-    state.preview_area = Rect::default();
     state.line_rows.clear();
     state.line_headings.clear();
     state.new_hit = Rect::default();
@@ -305,7 +246,11 @@ pub fn draw(
     }
     state.sync(dashboard);
     // Two-column gutters on both sides; row backgrounds and the rail use `full`.
-    let area = Rect { x: area.x + 2, width: area.width - 4, ..area };
+    let area = Rect {
+        x: area.x + 2,
+        width: area.width - 4,
+        ..area
+    };
     let all = rows_of(dashboard);
     let shown = state.filtered(all);
     let quiet = Style::default().fg(colors.quiet);
@@ -348,7 +293,10 @@ pub fn draw(
         .nth(path.chars().count())
         .map_or(location.len(), |(i, _)| i);
     let (head, tail) = location.split_at(path_len);
-    let mut header = vec![Span::styled(head.to_owned(), Style::default().fg(colors.text))];
+    let mut header = vec![Span::styled(
+        head.to_owned(),
+        Style::default().fg(colors.text),
+    )];
     if !tail.is_empty() {
         header.push(Span::styled(tail.to_owned(), quiet));
     }
@@ -390,7 +338,9 @@ pub fn draw(
     if show_new {
         actions.push(Span::styled(
             new_label,
-            Style::default().fg(colors.purple).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors.purple)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     let actions_w = spans_width(&actions);
@@ -420,9 +370,16 @@ pub fn draw(
             Style::default().fg(colors.accent),
         )))
     } else if !state.notice.is_empty() {
-        Some(Line::from(Span::styled(state.notice.clone(), Style::default().fg(colors.accent))))
-    } else if let Some(error) = dashboard.get("error").and_then(Value::as_str).filter(|e| !e.is_empty()) {
-        Some(Line::from(Span::styled(format!("Preview error: {error}"), quiet)))
+        Some(Line::from(Span::styled(
+            state.notice.clone(),
+            Style::default().fg(colors.accent),
+        )))
+    } else if let Some(error) = dashboard
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|e| !e.is_empty())
+    {
+        Some(Line::from(Span::styled(format!("Error: {error}"), quiet)))
     } else {
         None
     };
@@ -514,29 +471,10 @@ pub fn draw(
         bands[5],
     );
 
-    let list = Rect { x: full.x, width: full.width, ..bands[6] };
-    let preview = &dashboard["preview"];
-    let target = if state.kb_selected {
-        shown.iter().find(|row| text(row, "id") == state.selected_id).copied()
-    } else {
-        None
-    };
-    // The Response box sits at the bottom of this region, above the composer.
-    let box_height = match target {
-        Some(row) if list.height >= 12 => {
-            Some(preview_lines(row, preview, usize::from(area.width), usize::from(list.height / 2), colors))
-        }
-        _ => None,
-    };
-    let (list, preview_rect) = match &box_height {
-        Some((lines, _)) => {
-            let height = (lines.len() as u16 + 2).min(list.height.saturating_sub(5));
-            (
-                Rect { height: list.height - height - 1, ..list },
-                Some(Rect { x: area.x, y: list.bottom() - height, width: area.width, height }),
-            )
-        }
-        None => (list, None),
+    let list = Rect {
+        x: full.x,
+        width: full.width,
+        ..bands[6]
     };
     let mut lines: Vec<RowLine> = Vec::new();
     let mut archive_at: Option<(usize, (usize, usize))> = None;
@@ -579,10 +517,12 @@ pub fn draw(
         lines.push((Line::default(), None, None));
         for index in members {
             let row = shown[*index];
-            let user = tail_field(row, preview, "last_user");
-            let agent = tail_field(row, preview, "last_agent");
-            let activity = tail_field(row, preview, "activity");
-            let summary = one_line(row, &user, &agent, &activity);
+            let summary = one_line(
+                row,
+                text(row, "last_user"),
+                text(row, "last_agent"),
+                text(row, "activity"),
+            );
             let id = text(row, "id");
             let is_selected = id == state.selected_id;
             let is_hover = !is_selected && id == state.hovered_id;
@@ -594,8 +534,15 @@ pub fn draw(
             } else {
                 None
             };
-            let (mut title, close) =
-                title_spans(row, list_width, is_selected, renaming.as_deref(), colors, spin);
+            let (mut title, close) = title_spans(
+                row,
+                list_width,
+                is_selected,
+                renaming.as_deref(),
+                colors,
+                spin,
+            );
+            lines.push((band(Vec::new(), list_width, bg), Some(*index), None));
             if let Some(close) = close {
                 archive_at = Some((lines.len(), close));
             }
@@ -625,12 +572,21 @@ pub fn draw(
     let selected_line = lines
         .iter()
         .position(|(_, index, _)| {
-            index.is_some_and(|i| shown.get(i).is_some_and(|row| text(row, "id") == state.selected_id))
+            index.is_some_and(|i| {
+                shown
+                    .get(i)
+                    .is_some_and(|row| text(row, "id") == state.selected_id)
+            })
         })
         .unwrap_or(0);
     let mut selected_end = selected_line;
-    if lines.get(selected_line).and_then(|(_, index, _)| *index).is_some() {
-        while selected_end + 1 < lines.len() && lines[selected_end + 1].1 == lines[selected_line].1 {
+    if lines
+        .get(selected_line)
+        .and_then(|(_, index, _)| *index)
+        .is_some()
+    {
+        while selected_end + 1 < lines.len() && lines[selected_end + 1].1 == lines[selected_line].1
+        {
             selected_end += 1;
         }
     }
@@ -648,7 +604,10 @@ pub fn draw(
     let top = state.list_top;
     let visible: Vec<_> = lines.into_iter().skip(top).take(height).collect();
     state.line_rows = visible.iter().map(|(_, index, _)| *index).collect();
-    state.line_headings = visible.iter().map(|(_, _, heading)| heading.clone()).collect();
+    state.line_headings = visible
+        .iter()
+        .map(|(_, _, heading)| heading.clone())
+        .collect();
     state.list_area = list;
     state.archive_hit = Rect::default();
     if let Some((at, (start, len))) = archive_at {
@@ -662,102 +621,17 @@ pub fn draw(
         }
     }
     frame.render_widget(
-        Paragraph::new(visible.into_iter().map(|(line, _, _)| line).collect::<Vec<_>>()),
+        Paragraph::new(
+            visible
+                .into_iter()
+                .map(|(line, _, _)| line)
+                .collect::<Vec<_>>(),
+        ),
         list,
     );
-    if let (Some(rect), Some((lines, age))) = (preview_rect, box_height) {
-        state.preview_area = rect;
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_set(ratatui::symbols::border::PLAIN)
-            .border_style(Style::default().fg(colors.border));
-        let inner = block.inner(rect);
-        frame.render_widget(block, rect);
-        let mut body = lines;
-        body.truncate(usize::from(inner.height));
-        if let Some(first) = body.first_mut() {
-            let used = spans_width(&first.spans);
-            let room = usize::from(inner.width).saturating_sub(used + age.width() + 2);
-            first.spans.push(Span::raw(" ".repeat(room + 1)));
-            first.spans.push(Span::styled(age, quiet));
-        }
-        frame.render_widget(Paragraph::new(body), inner);
-    }
     if let Some(line) = footer {
         frame.render_widget(Paragraph::new(line), bands[7]);
     }
-}
-
-/// The Response box body (header, user message, Markdown tail, duration) and the age.
-fn preview_lines(
-    row: &Value,
-    preview: &Value,
-    width: usize,
-    max_rows: usize,
-    colors: &Colors,
-) -> (Vec<Line<'static>>, String) {
-    let quiet = Style::default().fg(colors.quiet);
-    let muted = Style::default().fg(colors.muted);
-    let user = tail_field(row, preview, "last_user");
-    let agent = tail_field(row, preview, "last_agent");
-    let activity = tail_field(row, preview, "activity");
-    let text_w = width.saturating_sub(4).max(1);
-    let pad = || Span::raw(" ");
-    let mut lines = vec![Line::from(vec![pad(), Span::styled("Response", quiet)])];
-    let worked = {
-        let matched = preview.get("session").and_then(Value::as_str) == Some(text(row, "id"));
-        let value = if matched { text(preview, "worked") } else { "" };
-        if value.is_empty() { text(row, "worked") } else { value }.to_owned()
-    };
-    let reserved = 1 + usize::from(!worked.is_empty());
-    let budget = max_rows.saturating_sub(2 + reserved).max(2);
-    if user.is_empty() && agent.is_empty() && activity.is_empty() {
-        lines.push(Line::from(vec![pad(), Span::styled("no messages yet", quiet)]));
-    }
-    if !user.is_empty() {
-        let wrapped = take_lines(&user, text_w.saturating_sub(2).max(1), 2);
-        let clipped = wrapped.last().is_some_and(|l| l.ends_with('…'));
-        for (i, line) in wrapped.into_iter().enumerate() {
-            let mark = if i == 0 { "❯ " } else { "  " };
-            lines.push(Line::from(vec![
-                pad(),
-                Span::styled(mark, Style::default().fg(colors.accent)),
-                Span::styled(line, Style::default().fg(colors.text).add_modifier(Modifier::BOLD)),
-            ]));
-        }
-        if clipped {
-            lines.push(Line::from(vec![pad(), Span::styled("…", quiet)]));
-        }
-    }
-    let room = budget.saturating_sub(lines.len().saturating_sub(1));
-    if !agent.is_empty() && room > 0 {
-        let rows: Vec<Line<'static>> = match &colors.markdown {
-            Some(render) => render(&agent, text_w),
-            None => wrap_lines(&agent, text_w)
-                .into_iter()
-                .map(|l| Line::from(Span::styled(l, muted)))
-                .collect(),
-        };
-        let skip = if rows.len() > room { rows.len() - room.saturating_sub(1) } else { 0 };
-        let mut shown: Vec<Line<'static>> = rows.into_iter().skip(skip).collect();
-        if skip > 0 {
-            shown.insert(0, Line::from(Span::styled("…", quiet)));
-        }
-        for mut line in shown {
-            line.spans.insert(0, pad());
-            lines.push(line);
-        }
-    }
-    if !activity.is_empty() {
-        lines.push(Line::from(vec![
-            pad(),
-            Span::styled(fit(&activity, text_w), Style::default().fg(colors.purple)),
-        ]));
-    }
-    if !worked.is_empty() {
-        lines.push(Line::from(vec![pad(), Span::styled(format!("Worked for {worked}"), quiet)]));
-    }
-    (lines, age_of(row).to_owned())
 }
 
 /// Title row content (after the 2-column indent) and, on the selected row, the `[×]`
@@ -771,7 +645,11 @@ fn title_spans(
     spin: usize,
 ) -> (Vec<Span<'static>>, Option<(usize, usize)>) {
     let quiet = Style::default().fg(colors.quiet);
-    let tail = if selected { "[×]".to_owned() } else { age_of(row).to_owned() };
+    let tail = if selected {
+        "[×]".to_owned()
+    } else {
+        age_of(row).to_owned()
+    };
     let meta = meta_of(row);
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
@@ -789,9 +667,7 @@ fn title_spans(
     let pad = inner
         .saturating_sub(2 + 2 + title.width() + meta.width() + tail.width() + 2)
         .max(1);
-    let close = selected.then(|| {
-        (1 + 2 + 2 + title.width() + meta.width() + pad, tail.width())
-    });
+    let close = selected.then(|| (1 + 2 + 2 + title.width() + meta.width() + pad, tail.width()));
     let spans = vec![
         status_glyph(text(row, "status"), colors, spin),
         Span::raw(" "),
@@ -838,13 +714,17 @@ mod tests {
                 {"id":"b","title":"Beta","status":"input","bucket":"Yesterday","updated":5.0,"project":"nexus","branch":"feat/ui","age":"now",
                  "worktree":"feat/ui","last_user":"Need a decision","last_agent":"Which option?"},
             ],
-            "preview": {"session":"a","title":"Alpha","state":"idle","last_user":"What should we work on?","last_agent":"Python sample: frozen Task"},
         })
     }
 
     #[test]
     fn draws_without_rows() {
-        let screen = render(90, 25, &json!({"rows":[],"path":"~/repos/nexus","branch":"main"}), &mut Dashboard::default());
+        let screen = render(
+            90,
+            25,
+            &json!({"rows":[],"path":"~/repos/nexus","branch":"main"}),
+            &mut Dashboard::default(),
+        );
         assert!(screen.contains("+ New Agent"));
         assert!(screen.contains("No sessions yet"));
     }
@@ -853,18 +733,17 @@ mod tests {
     fn wide_layout_is_a_full_width_list() {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("Today") && screen.contains("Alpha") && screen.contains("Yesterday"));
+        assert!(
+            screen.contains("Today") && screen.contains("Alpha") && screen.contains("Yesterday")
+        );
         assert!(screen.contains("/ Search sessions"));
-        assert!(screen.contains("Python sample: frozen Task"), "second row summary");
-        assert!(!screen.contains("Response"), "no preview before a keyboard selection");
-        assert_eq!(state.preview_area.width, 0);
-        state.kb_selected = true;
-        let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("Response") && screen.contains("❯ What should we work on?"));
+        assert!(
+            screen.contains("Python sample: frozen Task"),
+            "second row summary"
+        );
+        assert!(!screen.contains("Response"), "no preview pane");
         assert!(screen.contains("+ New Agent") && screen.contains("Open Previous"));
         assert!(screen.contains("main") && screen.contains("~/repos/nexus"));
-        assert_eq!(state.preview_area.width, 136);
-        assert_eq!(state.preview_area.bottom(), 30);
         assert!(state.list_area.width >= 56);
         assert!(state.new_hit.width > 0 && state.resume_hit.width > 0);
     }
@@ -875,18 +754,36 @@ mod tests {
         let screen = render(50, 20, &sample(), &mut state);
         assert!(screen.contains("Alpha"));
         assert!(!screen.contains("Agent build"));
-        assert_eq!(state.preview_area.width, 0);
     }
 
     #[test]
     fn rows_map_to_click_targets() {
         let mut state = Dashboard::default();
         render(140, 30, &sample(), &mut state);
-        assert_eq!(state.line_rows[..5], [None, None, Some(0), Some(0), Some(0)]);
+        assert_eq!(
+            state.line_rows[..5],
+            [None, None, Some(0), Some(0), Some(0)]
+        );
+        assert_eq!(state.line_rows[5], Some(0), "top and bottom padding");
         state.click(state.list_area.x, state.list_area.y + 2, &sample());
         assert_eq!(state.selected_id, "a");
-        state.click(state.list_area.x, state.list_area.y + 8, &sample());
+        state.click(state.list_area.x, state.list_area.y + 9, &sample());
         assert_eq!(state.selected_id, "b");
+    }
+
+    #[test]
+    fn each_row_has_a_top_padding_line_inside_its_band() {
+        let mut state = Dashboard::default();
+        render(140, 30, &sample(), &mut state);
+        let rows = &state.line_rows;
+        // heading, spacer, then 4 lines per session: pad, title, summary, pad
+        assert_eq!(rows[..2], [None, None]);
+        assert_eq!(rows[2..6], [Some(0); 4]);
+        // the second session's band starts after any group separator/heading
+        let start = rows.iter().position(|row| *row == Some(1)).unwrap();
+        assert!(start >= 6);
+        assert_eq!(rows[start..start + 4], [Some(1); 4]);
+        assert_eq!(rows.iter().filter(|row| **row == Some(1)).count(), 4);
     }
 
     #[test]
@@ -899,13 +796,19 @@ mod tests {
             terminal
                 .draw(|frame| {
                     let area = frame.area();
-                    frame.buffer_mut().set_style(area, Style::default().bg(light));
+                    frame
+                        .buffer_mut()
+                        .set_style(area, Style::default().bg(light));
                     draw(frame, area, &sample(), &mut state, &Colors::default(), 0);
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(10, 5)].bg, light, "width {width}");
-            assert_eq!(buffer[(width - 1, 29)].bg, light, "footer bg, width {width}");
+            assert_eq!(
+                buffer[(width - 1, 29)].bg,
+                light,
+                "footer bg, width {width}"
+            );
             let footer: String = (0..width).map(|x| buffer[(x, 29)].symbol()).collect();
             assert!(!footer.contains("Esc close"), "width {width}: {footer}");
         }
@@ -954,7 +857,10 @@ mod tests {
 
     #[test]
     fn plain_summary_is_first_line() {
-        assert_eq!(plain_summary("# Hello **world** from `mock`. More text follows\n- item"), "Hello world from mock.");
+        assert_eq!(
+            plain_summary("# Hello **world** from `mock`. More text follows\n- item"),
+            "Hello world from mock."
+        );
         assert_eq!(plain_summary("```\ncode"), "code");
     }
 }

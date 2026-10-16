@@ -302,7 +302,13 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         let mut rows: Vec<Vec<(String, Option<Value>)>> = vec![Vec::new()];
         let mut used = 0;
         for (index, chip) in b.chips.iter().enumerate() {
-            let mut label = format!(" ▣ {} ", capitalized(chip));
+            let label = capitalized(chip);
+            let label = if label.starts_with("Image ") {
+                label.split(" · ").next().unwrap_or(&label)
+            } else {
+                &label
+            };
+            let mut label = format!(" ▣ {label} ");
             if label.width() > inner {
                 label = truncate(&label, inner);
             }
@@ -340,22 +346,6 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
                 crate::copy_button::mark(&b.id, None, &row),
             ));
         }
-        out.push((
-            line(
-                bar(()),
-                wrap(
-                    &[Span::styled(
-                        "Click an attachment to open it",
-                        Style::default().fg(p.quiet),
-                    )],
-                    inner,
-                )
-                .remove(0),
-                Some(width),
-                base,
-            ),
-            chip_op,
-        ));
     }
     out.push((line(bar(()), vec![], Some(width), base), op.clone()));
     if b.collapsed && !b.text.is_empty() {
@@ -662,11 +652,30 @@ fn live_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     if !b.status.is_empty() {
         head.push(Span::styled(
             format!(" · {}", b.status),
-            Style::default().fg(if b.status == "ended" { p.quiet } else { p.success }),
+            Style::default().fg(if b.status == "ended" {
+                p.quiet
+            } else {
+                p.success
+            }),
         ));
     }
     indented(out, head, 2, width, op);
-    for row in b.detail.lines() {
+    out.extend(live_rows(&b.detail, rail, 4, width, p, op));
+}
+
+/// Labelled Live rows (`tone TAB label TAB text` per line) behind a `│` rail, `indent`
+/// columns in, wrapped to `width` with a hanging indent. Shared by the timeline card and
+/// the Live pane below the composer.
+pub fn live_rows(
+    detail: &str,
+    rail: Color,
+    indent: usize,
+    width: usize,
+    p: &Palette,
+    op: &Option<Value>,
+) -> Rows {
+    let mut out = Rows::new();
+    for row in detail.lines() {
         let mut parts = row.splitn(3, '\t');
         let tone = parts.next().unwrap_or("");
         let label = parts.next().unwrap_or("");
@@ -685,15 +694,19 @@ fn live_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             _ => (Style::default().fg(p.quiet), Style::default().fg(p.muted)),
         };
         // Hanging indent: wrapped text lines up under the first row's text, not under the label.
-        let label_width = if label.is_empty() { 2 } else { label.width() + 2 };
-        let room = width.saturating_sub(4 + 2 + label_width).max(8);
+        let label_width = if label.is_empty() {
+            2
+        } else {
+            label.width() + 2
+        };
+        let room = width.saturating_sub(indent + 2 + label_width).max(8);
         let mut wrapped = wrap(&[Span::styled(text.to_string(), text_style)], room);
         if wrapped.is_empty() {
             wrapped.push(Vec::new()); // a blank line keeps its row
         }
         for (i, cells) in wrapped.into_iter().enumerate() {
             let mut prefix = vec![
-                Span::raw("    "),
+                Span::raw(" ".repeat(indent)),
                 Span::styled("│ ", Style::default().fg(rail)),
             ];
             if i == 0 && !label.is_empty() {
@@ -708,6 +721,7 @@ fn live_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             out.push((line(prefix, cells, None, Style::default()), op.clone()));
         }
     }
+    out
 }
 
 pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
@@ -895,7 +909,11 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 "done" => p.success,
                 _ => p.accent,
             };
-            let marker = if b.status == "attention" { "\u{25B2} " } else { "\u{25C6} " };
+            let marker = if b.status == "attention" {
+                "\u{25B2} "
+            } else {
+                "\u{25C6} "
+            };
             indented(
                 &mut out,
                 vec![Span::styled(
@@ -1020,19 +1038,27 @@ mod tests {
     #[test]
     fn external_worker_card_is_labelled_and_attention_is_distinct() {
         let p = Palette::new(false);
-        let card = |status: &str| Content {
+        let card = |status: &str| {
+            Content {
             kind: "external".into(),
             status: status.into(),
             title: "Claude Code needs attention".into(),
             text: "Needs attention: trust this folder yourself with `cd /w && claude`\nUsage: unknown (this is not zero)".into(),
             ..Default::default()
+        }
         };
         let render = |status: &str| build(&card(status), 60, &p);
         let attention = render("attention");
         let lines: Vec<String> = attention.iter().map(|(l, _)| l.to_string()).collect();
-        assert!(lines[0].contains("Claude Code needs attention"), "{lines:#?}");
+        assert!(
+            lines[0].contains("Claude Code needs attention"),
+            "{lines:#?}"
+        );
         let joined = lines.join(" ");
-        assert!(joined.contains("Needs attention:") && joined.contains("claude"), "{joined}");
+        assert!(
+            joined.contains("Needs attention:") && joined.contains("claude"),
+            "{joined}"
+        );
         assert!(joined.contains("Usage: unknown"), "{joined}");
         let color = |rows: &Rows| rows[0].0.spans.iter().find_map(|s| s.style.fg);
         assert_eq!(color(&attention), Some(p.warning));
@@ -1102,8 +1128,20 @@ mod tests {
             .find(|(line, _)| line.to_string().contains("▣ Image 1"))
             .unwrap();
         let text = line.to_string();
-        let title_row = rows.iter().position(|(l, _)| l.to_string().contains("see [image 1]"));
-        let chip_row = rows.iter().position(|(l, _)| l.to_string().contains("▣ Image 1"));
+        assert!(
+            !text.contains("a.png"),
+            "image filenames stay hidden: {text}"
+        );
+        assert!(
+            text.contains("▣ Image 1") && text.contains("Document 2 · b.md · 1 KB"),
+            "{text}"
+        );
+        let title_row = rows
+            .iter()
+            .position(|(l, _)| l.to_string().contains("see [image 1]"));
+        let chip_row = rows
+            .iter()
+            .position(|(l, _)| l.to_string().contains("▣ Image 1"));
         assert!(title_row < chip_row, "chips sit below the message text");
         let inner = crate::copy_button::inner(op).unwrap();
         assert_eq!(inner["kind"], "context_chips");
@@ -1155,7 +1193,7 @@ mod tests {
             .flat_map(|(l, _)| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(all.contains("▣ Image 1") && all.contains("Click an attachment to open it"));
+        assert!(all.contains("▣ Image 1") && !all.contains("Click an attachment"));
     }
 
     #[test]
@@ -1254,7 +1292,12 @@ mod tests {
         };
         let mark = |task: &Content| {
             let rows = build(task, 80, &p);
-            let span = rows[0].0.spans.iter().find(|s| s.content == "\u{25c6}").cloned();
+            let span = rows[0]
+                .0
+                .spans
+                .iter()
+                .find(|s| s.content == "\u{25c6}")
+                .cloned();
             span.map(|s| s.style.fg)
         };
         assert_eq!(mark(&task), Some(Some(color("#ff0000", p.blue, &p))));
@@ -1488,12 +1531,12 @@ mod tests {
         let rows = build(&group, 60, &p);
         let spans = &rows[0].0.spans;
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        // No per-row marks; the header carries the failure count in the error colour.
+        // No per-row marks; the header carries the failure count in the darker error colour.
         assert!(!text.contains('✗') && !text.contains('✓'), "{text}");
         assert!(text.ends_with("Grep pattern=x · 2 failed"), "{text}");
         assert!(spans
             .iter()
-            .any(|s| s.content.contains("2 failed") && s.style.fg == Some(p.error)));
+            .any(|s| s.content.contains("2 failed") && s.style.fg == Some(p.error_deep)));
         let chip = |title: &str, counts: Vec<usize>, key: &str| Content {
             title: title.into(),
             counts,
@@ -1556,13 +1599,33 @@ mod tests {
         };
         let rows = build(&block, 60, &p);
         let text = plain(&rows).join("\n");
-        assert!(text.contains("› ") && text.contains(" Live ") && text.contains("gpt-live-1-codex · sol · active"), "{text}");
-        for label in ["Started", "You", "Sent to agent (queue)", "→ turn #3", "Told voice [final]", "Ended"] {
+        assert!(
+            text.contains("› ")
+                && text.contains(" Live ")
+                && text.contains("gpt-live-1-codex · sol · active"),
+            "{text}"
+        );
+        for label in [
+            "Started",
+            "You",
+            "Sent to agent (queue)",
+            "→ turn #3",
+            "Told voice [final]",
+            "Ended",
+        ] {
             assert!(text.contains(label), "{label} missing in\n{text}");
         }
-        assert!(plain(&rows).iter().all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 60));
-        assert!(rows.iter().all(|(_, row_op)| row_op.as_ref() == Some(&op)), "every row toggles the card");
-        assert!(plain(&rows).iter().filter(|l| l.contains("word")).count() > 1, "long text wraps");
+        assert!(plain(&rows)
+            .iter()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 60));
+        assert!(
+            rows.iter().all(|(_, row_op)| row_op.as_ref() == Some(&op)),
+            "every row toggles the card"
+        );
+        assert!(
+            plain(&rows).iter().filter(|l| l.contains("word")).count() > 1,
+            "long text wraps"
+        );
     }
 
     #[test]
@@ -1574,10 +1637,11 @@ mod tests {
             number: 3,
             ..Default::default()
         };
-        assert!(!plain(&build(&block, 60, &p)).join("\n").contains("via voice"));
+        assert!(!plain(&build(&block, 60, &p))
+            .join("\n")
+            .contains("via voice"));
         block.status = "live".into();
         let text = plain(&build(&block, 60, &p)).join("\n");
         assert!(text.contains("via voice · #3"), "{text}");
     }
-
 }

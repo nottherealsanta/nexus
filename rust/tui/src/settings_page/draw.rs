@@ -10,12 +10,7 @@ use nexus_widgets::{
     callout, feedback::progress, key_hints, put, scrolled, select_popup, tabs, truncate, width,
     Glyphs, Tab, Theme, Ui,
 };
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-    Frame,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style, Frame};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Greedy word wrap into at most `max_lines`; the last line ends with an ellipsis if cut.
@@ -71,7 +66,11 @@ fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx
             Block::Gap => f.y += 1,
             Block::Row(r) => {
                 let rid = row_id(&r.id);
-                let editing = cx.edit.as_ref().filter(|(id, _)| *id == rid).map(|(_, t)| t);
+                let editing = cx
+                    .edit
+                    .as_ref()
+                    .filter(|(id, _)| *id == rid)
+                    .map(|(_, t)| t);
                 grok::row(buf, ui, f, r, editing);
             }
             Block::Tabs(tb) => {
@@ -148,7 +147,10 @@ fn page_hints(blocks: &[Block]) -> Vec<(&'static str, &'static str)> {
                     f.reorder |= o.editable;
                     o.controls.iter().for_each(|r| row(r, f));
                 }
-                Block::Buttons(_) | Block::Callout { action: Some(_), .. } => f.open = true,
+                Block::Buttons(_)
+                | Block::Callout {
+                    action: Some(_), ..
+                } => f.open = true,
                 Block::Section(sec) => {
                     f.open |= sec.collapsible;
                     scan(&sec.blocks, f);
@@ -224,19 +226,13 @@ pub fn draw(
     }
     let mut y = area.y + u16::from(page.scope.is_some());
     for line in wrap(&page.intro, area.width.saturating_sub(5) as usize, 2) {
-        put(
-            buf,
-            area.x,
-            y,
-            &line,
-            t.quiet_style(),
-            area.width,
-        );
+        put(buf, area.x, y, &line, t.quiet_style(), area.width);
         y += 1;
     }
     y += 1;
     // Footer: the saved-where line, then only the keys that work on this page.
-    let hint_rows = crate::settings_page::root::hint_lines(&page_hints(&page.blocks), area.width as usize, p);
+    let hint_rows =
+        crate::settings_page::root::hint_lines(&page_hints(&page.blocks), area.width as usize, p);
     let footer_h = 1 + hint_rows.len() as u16;
     let body = Rect::new(
         area.x,
@@ -269,9 +265,19 @@ pub fn draw(
         {
             if let Some(anchor) = ui.hits.rect_of_part(&popup.id, "control") {
                 // The value is quiet text now, so widen the anchor to fit the longest option.
-                let longest = options.iter().map(|(l, _)| width(l) as u16).max().unwrap_or(0) + 4;
+                let longest = options
+                    .iter()
+                    .map(|(l, _)| width(l) as u16)
+                    .max()
+                    .unwrap_or(0)
+                    + 4;
                 let grow = longest.saturating_sub(anchor.width);
-                let anchor = Rect::new(anchor.x.saturating_sub(grow), anchor.y, anchor.width + grow, anchor.height);
+                let anchor = Rect::new(
+                    anchor.x.saturating_sub(grow),
+                    anchor.y,
+                    anchor.width + grow,
+                    anchor.height,
+                );
                 let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
                 let current = options.iter().position(|(l, _)| l == value).unwrap_or(0);
                 select_popup(
@@ -288,11 +294,16 @@ pub fn draw(
             }
         }
     }
-    grok::tip(buf, &ui, area, area.bottom().saturating_sub(footer_h), &page.footer);
+    grok::tip(
+        buf,
+        &ui,
+        area,
+        area.bottom().saturating_sub(footer_h),
+        &page.footer,
+    );
     let _ = (key_hints, truncate, width);
     frame.render_widget(
-        ratatui::widgets::Paragraph::new(hint_rows.clone())
-            .style(Style::default().bg(p.dialog)),
+        ratatui::widgets::Paragraph::new(hint_rows.clone()).style(Style::default().bg(p.dialog)),
         Rect::new(
             area.x,
             area.bottom().saturating_sub(hint_rows.len() as u16),
@@ -304,7 +315,7 @@ pub fn draw(
     st.focus = ui.focus.current().unwrap_or("").to_string();
     st.order = ui.focus.order().to_vec();
     st.hits = std::mem::take(&mut ui.hits);
-    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -382,19 +393,35 @@ mod tests {
         let focused = bg(&mut st, "row:b");
         let idle = bg(&mut st, "row:b");
         assert_eq!(focused, idle);
-        assert!(hover(&page, &mut st, Some(b)) == false, "locked row never hovers");
-        assert!(!hover(&page, &mut st, Some(c)), "read-only row never hovers");
+        assert!(
+            hover(&page, &mut st, Some(b)) == false,
+            "locked row never hovers"
+        );
+        assert!(
+            !hover(&page, &mut st, Some(c)),
+            "read-only row never hovers"
+        );
         assert!(hover(&page, &mut st, Some(a)));
-        assert!(!hover(&page, &mut st, Some(a)), "unchanged target is not a redraw");
+        assert!(
+            !hover(&page, &mut st, Some(a)),
+            "unchanged target is not a redraw"
+        );
         st.focus = "row:b".into();
         let hovered_unfocused = bg(&mut st, "row:a");
         st.hover = None;
         let plain = bg(&mut st, "row:a");
         assert_ne!(hovered_unfocused, plain, "hover changes the row");
-        assert_ne!(hovered_unfocused, bg(&mut st, "row:b"), "hover differs from focus");
+        assert_ne!(
+            hovered_unfocused,
+            bg(&mut st, "row:b"),
+            "hover differs from focus"
+        );
         // A popup/edit invalidates hover, and leaving the page clears it.
         hover(&page, &mut st, Some(a));
-        st.edit = Some(crate::settings_page::input::Edit { id: "row:a".into(), text: Default::default() });
+        st.edit = Some(crate::settings_page::input::Edit {
+            id: "row:a".into(),
+            text: Default::default(),
+        });
         assert!(hover(&page, &mut st, Some(a)));
         assert!(st.hover.is_none());
         st.edit = None;
@@ -449,24 +476,59 @@ mod tests {
             let effort = st.hits.rect_of("row:effort:0").unwrap();
             let screen = render(&page, &mut st, width, 24);
             assert_eq!(first.height, 1);
-            assert_eq!(second.y - first.y, 2, "the selected row's note takes a line");
+            assert_eq!(
+                second.y - first.y,
+                2,
+                "the selected row's note takes a line"
+            );
             assert_eq!(effort.y, first.y);
             assert_eq!(effort.right(), first.right() - 11);
-            assert!(st.hits.rect_of("row:effort:1").is_none(), "effort shows on the selected row only");
+            assert!(
+                st.hits.rect_of("row:effort:1").is_none(),
+                "effort shows on the selected row only"
+            );
             assert!(screen.contains("Default"));
             st.focus = "row:effort:0".into();
-            assert_eq!(crate::settings_page::input::key(&page, &mut st,
-                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE)), crate::settings_page::input::Act::Done);
+            assert_eq!(
+                crate::settings_page::input::key(
+                    &page,
+                    &mut st,
+                    crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Enter,
+                        crossterm::event::KeyModifiers::NONE
+                    )
+                ),
+                crate::settings_page::input::Act::Done
+            );
             assert!(render(&page, &mut st, width, 24).contains("High"));
             st.popup = None;
             render(&page, &mut st, width, 24);
-            assert_eq!(crate::settings_page::input::click(&page, &mut st, effort.x, effort.y), crate::settings_page::input::Act::Done);
+            assert_eq!(
+                crate::settings_page::input::click(&page, &mut st, effort.x, effort.y),
+                crate::settings_page::input::Act::Done
+            );
             assert_eq!(st.popup.as_ref().unwrap().id, "row:effort:0");
-            crate::settings_page::input::key(&page, &mut st,
-                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Down, crossterm::event::KeyModifiers::NONE));
-            assert_eq!(crate::settings_page::input::key(&page, &mut st,
-                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE)),
-                crate::settings_page::input::Act::Send(serde_json::json!({"kind": "effort", "value": "high"})));
+            crate::settings_page::input::key(
+                &page,
+                &mut st,
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Down,
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            );
+            assert_eq!(
+                crate::settings_page::input::key(
+                    &page,
+                    &mut st,
+                    crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Enter,
+                        crossterm::event::KeyModifiers::NONE
+                    )
+                ),
+                crate::settings_page::input::Act::Send(
+                    serde_json::json!({"kind": "effort", "value": "high"})
+                )
+            );
         }
     }
 

@@ -1,4 +1,4 @@
-"""Sessions dashboard projection and visibility-scoped preview polling.
+"""Sessions dashboard projection and visibility-scoped list polling.
 
 ``snapshot()`` is the ``dashboard`` field of the process-bridge payload: ``None`` unless the
 dashboard is visible. ``close()`` runs when the surface is dismissed, replaced by another
@@ -16,6 +16,7 @@ from ...ui_support.text import escape_controls
 BUSY_STATUS = {"working", "input"}
 BUSY_STATE = {"running", "awaiting_input", "awaiting_permission"}
 TITLE_LIMIT = 200
+QUERY_LIMIT = 256
 POLL_SECONDS = 0.5
 
 
@@ -62,18 +63,22 @@ class SessionDashboard:
         self.visible = False
         self.rows = []
         self.selected = ""
-        self.preview = None
-        self.generation = 0  # latest-request guard for previews
+        self.generation = 0  # latest-request guard for list refreshes
         self.epoch = 0  # bumped on open and close: a stale list refresh cannot publish
         self.task = None
         self.error = ""
+        self.query = ""
+        self.rows_query = ""
+        self.list_generation = 0
 
     async def open(self):
         self.close()
         self.visible = True
         self.selected = ""
-        self.preview = None
         self.error = ""
+        self.query = ""
+        self.rows_query = ""
+        self.rows = []
         await self.refresh()
         if self.visible:
             self.task = asyncio.create_task(self._poll())
@@ -88,39 +93,30 @@ class SessionDashboard:
 
     async def refresh(self):
         from .workflows import session_rows
-        epoch = self.epoch
-        result = await self.shell.client.project_sessions()
-        if not self.visible or epoch != self.epoch:
+        epoch, query = self.epoch, self.query
+        self.list_generation += 1
+        generation = self.list_generation
+        result = await self.shell.client.project_sessions(limit=1000 if query else 20, query=query)
+        if not self.visible or epoch != self.epoch or query != self.query or generation != self.list_generation:
             return
         self.rows = _plain(session_rows(result, self.shell.controller.session, self.shell.seen_seq))
+        self.rows_query = query
         self.shell.refresh_session_tabs(self.rows)
         self.shell.sessions_truncated = bool(result.truncated)
         ids = [row["id"] for row in self.rows if row.get("id")]
         if self.selected not in ids:
-            await self.select(self.shell.controller.session if self.shell.controller.session in ids else next(iter(ids), ""))
+            self.selected = self.shell.controller.session if self.shell.controller.session in ids else next(iter(ids), "")
+            self.generation += 1
 
-    async def select(self, session_id):
-        if not self.visible:
+    async def search(self, query):
+        if not self.visible or not isinstance(query, str) or len(query) > QUERY_LIMIT:
             return
-        if session_id != self.selected:
-            self.preview = None
-        self.selected = session_id
+        self.query = query
+        self.rows = []
+        self.selected = ""
+        self.error = ""
         self.generation += 1
-        await self.refresh_preview()
-
-    async def refresh_preview(self):
-        generation, selected = self.generation, self.selected
-        if not self.visible or not selected:
-            return
-        try:
-            preview = await self.shell.client.dashboard_preview(selected, max_rows=12)
-        except Exception as exc:
-            if self.visible and generation == self.generation:
-                self.error = escape_controls(str(exc))
-            return
-        if self.visible and generation == self.generation and selected == self.selected:
-            self.preview = _plain(preview)
-            self.error = ""
+        await self.refresh()
 
     async def _poll(self):
         while self.visible:
@@ -128,13 +124,13 @@ class SessionDashboard:
             if not self.visible:
                 return
             before = repr(self.snapshot())
+            epoch, query = self.epoch, self.query
             try:
                 await self.refresh()
-                await self.refresh_preview()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if self.visible:
+                if self.visible and epoch == self.epoch and query == self.query:
                     self.error = escape_controls(str(exc))
             update = getattr(self.shell, "on_update", None)
             if self.visible and update is not None and repr(self.snapshot()) != before:
@@ -149,12 +145,15 @@ class SessionDashboard:
         if not self.visible or not isinstance(operation, dict):
             return False
         kind = operation.get("kind")
+        if kind == "sessions_search":
+            query = operation.get("query")
+            return isinstance(query, str) and len(query) <= QUERY_LIMIT
         if kind in {"sessions_close", "sessions_refresh", "session_new", "worktrees", "archived"}:
             return True
         row = self.row(operation.get("id"))
         if row is None:
             return False
-        if kind in {"session_preview", "session_archive"}:
+        if kind == "session_archive":
             return True
         if kind == "session_rename":
             title = operation.get("title")
@@ -183,7 +182,7 @@ class SessionDashboard:
     def snapshot(self):
         if not self.visible:
             return None
-        from ...host_support.session_preview import message_tails, worked_label
+        from ...host_support.session_preview import message_tails
         path, branch = _location(self.shell)
         workspace = str(getattr(self.shell, "workspace", "") or "")
         rows = []
@@ -200,7 +199,6 @@ class SessionDashboard:
         controller = getattr(self.shell, "controller", None)
         current = getattr(controller, "session", "") or ""
         view = getattr(controller, "view", None)
-        preview = self.preview
         if current and view is not None:
             tails = message_tails(view)
             for item in rows:
@@ -212,19 +210,9 @@ class SessionDashboard:
                         item[key] = escape_controls(value)
                 item["activity"] = escape_controls(tails.get("activity") or "")
                 break
-            if isinstance(preview, dict) and preview.get("session") == current:
-                preview = dict(preview)
-                for key in ("last_user", "last_agent"):
-                    value = tails.get(key) or ""
-                    if value:
-                        preview[key] = escape_controls(value)
-                preview["activity"] = escape_controls(tails.get("activity") or "")
-                worked = worked_label(view)
-                if worked:
-                    preview["worked"] = worked
         return {
-            "kind": "sessions", "rows": rows, "selected": self.selected,
-            "preview": preview, "error": self.error,
+            "kind": "sessions", "rows": rows, "selected": self.selected, "query": self.rows_query,
+            "error": self.error,
             "truncated": bool(self.shell.sessions_truncated),
             "path": escape_controls(path), "branch": escape_controls(branch),
             "worktree": escape_controls(str(getattr(self.shell, "worktree", "") or ""))[:80],

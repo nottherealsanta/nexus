@@ -750,6 +750,14 @@ def _child_turn_blocks(shell, agent, turn, flags):
     return blocks
 
 
+def _session_title(session_id: str, shell=None) -> str:
+    """Use the host's session summary, never the opaque session identifier."""
+    for row in getattr(shell, "sessions", ()):
+        if row.get("id") == session_id:
+            return escape_controls(row.get("title") or "New session")
+    return "New session"
+
+
 def project(controller: TuiController, revision: int, error: str = "", shell=None, literal: bool = True) -> dict:
     """Project labelled, control-safe context and transcript from canonical state.
 
@@ -859,7 +867,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         blocks.append({"id": "notice", "title": "Notice", "text": escape_controls(notice), "kind": "literal"})
     display_view = _context_display_view(view, shell)
     used, window, _measured = context_measure(display_view)
-    snapshot = {"schema": 1, "revision": revision, "title": f"Nexus · {view.session_id}",
+    snapshot = {"schema": 1, "revision": revision, "title": _session_title(view.session_id, shell),
             "status": view.phase,
             "panel_layout": shell.panel_layout if shell else "modal",
             "panel_format": shell.panel_format if shell else "plain",
@@ -1010,6 +1018,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
     shell.command_help = {spec.name: spec.summary for spec in SPECS if not spec.hidden}
     shell.local_transcript = not desktop
+    shell.live.pane = not desktop  # the terminal shows the open call above the composer
     shell.ui_ack = 0
     shell.inline_images_enabled = desktop
     shell.workspace = str(workspace)
@@ -1092,6 +1101,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 *[item.get("operation") for item in shell.items],
                 *[item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")],
                 *[item.get(key) for item in shell.items for key in ("move_up", "move_down", "remove")],
+                (snapshot.get("live") or {}).get("operation"),  # the Live pane's open/close
                 *_block_operations(snapshot["blocks"])] if op}
             snapshot["completion_bell"] = controller.completion_bell
             shell.notify_completion()

@@ -6,6 +6,7 @@ mod disclosure;
 mod editor;
 mod graphics;
 mod input;
+mod jump;
 mod live_bar;
 mod local_ui;
 mod markdown;
@@ -13,9 +14,8 @@ mod mermaid;
 mod picker;
 mod render;
 mod session;
-mod jump;
-mod sticky;
 mod settings_page;
+mod sticky;
 mod trace;
 mod transcript;
 use bridge::Snapshot;
@@ -38,18 +38,24 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-/// The composer draft belongs to the open session. Pin its transcript only when the
-/// dashboard send is aimed at that same session.
-fn composer_targets_session(composer_key: &str, session: &str) -> bool {
-    if session.is_empty() {
-        return true;
+/// Where the composer card draws its draft (mirrors `render::draw`'s `editor_area`).
+/// `None` while a read-only sub-agent page replaces the editor or voice dictation is
+/// splicing a preview into the text.
+fn composer_editor_area(
+    composer: ratatui::layout::Rect,
+    s: &bridge::Snapshot,
+) -> Option<ratatui::layout::Rect> {
+    if !s.agent_page.is_empty() || matches!(s.voice_phase.as_str(), "recording" | "transcribing") {
+        return None;
     }
-    serde_json::from_str::<Vec<String>>(composer_key)
-        .ok()
-        .and_then(|parts| parts.into_iter().nth(1))
-        .is_some_and(|id| id == session)
+    let card = render::composer_rows(composer, s)[1];
+    Some(ratatui::layout::Rect {
+        x: card.x + 5,
+        y: card.y + 1,
+        width: card.width.saturating_sub(9),
+        height: card.height.saturating_sub(2).max(1),
+    })
 }
-
 /// `+ New Agent` takes the current draft with it into the new session.
 fn take_new_session_text(operation: &mut Value, draft: &mut Editor) {
     if operation.get("kind").and_then(|value| value.as_str()) != Some("session_new") {
@@ -265,6 +271,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut nav: Option<usize> = None;
     let mut recording_since: Option<Instant> = None;
     let mut press: Option<(usize, usize)> = None;
+    // Source offset where a left press began inside the composer text; set while dragging.
+    let mut composer_press: Option<usize> = None;
     let mut typed = (String::new(), 0usize);
     let mut complete_due: Option<Instant> = None;
     let mut asked = String::new();
@@ -521,6 +529,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             next.last_opened = s.last_opened.clone();
             next.queue_collapsed = s.queue_collapsed;
+            next.live_expanded = s.live_expanded && next.live.active;
             // The completion cue is played by the Python shell
             // (`notify_completion`); ringing the terminal bell here as well
             // made one completion sound twice.
@@ -594,12 +603,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if s.dashboard.is_none() {
             cache.dashboard = picker::Dashboard::default();
         } else if s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none() {
-            if let Some(operation) = s
-                .dashboard
-                .as_ref()
-                .and_then(|dashboard| cache.dashboard.reconcile(dashboard))
-            {
-                send(json!({"type":"operation","operation":operation,"generation":s.generation}))?;
+            if let Some(dashboard) = s.dashboard.as_ref() {
+                cache.dashboard.reconcile(dashboard);
             }
         }
         dirty |= cache.toasts.tick(Instant::now(), cache.pointer);
@@ -825,75 +830,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         action("quit", "")?;
                         break 'app;
                     }
-                    // The Sessions dashboard sits above the existing composer. Search, rename
-                    // and archive confirmation own every key. Otherwise arrows and shortcuts
-                    // move the list, and the composer receives everything else so Enter sends
-                    // to the selected session.
+                    // The Sessions dashboard has no composer. Search, rename and archive
+                    // confirmation own every key; otherwise the list shortcuts apply and any
+                    // other key is ignored.
                     if let Some(dashboard) = s.dashboard.as_ref().filter(|_| {
                         s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
                     }) {
-                        let draft_empty = draft.text.trim().is_empty() && s.attachments == 0;
-                        if cache.dashboard.owns(&key, draft_empty) {
-                            if let Some(mut operation) = cache.dashboard.key(key, dashboard) {
-                                take_new_session_text(&mut operation, &mut draft);
+                        if cache.dashboard.owns(&key, true) {
+                            if let Some(operation) = cache.dashboard.key(key, dashboard) {
                                 send(
                                     json!({"type":"operation","operation":operation,"generation":s.generation}),
                                 )?;
                             }
                             dirty = true;
-                            continue;
                         }
-                        if key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            if !draft.text.is_empty() {
-                                draft.take();
-                            }
-                            dirty = true;
-                            continue;
-                        }
-                        if key.code == KeyCode::Enter
-                            && key.modifiers.contains(KeyModifiers::SHIFT)
-                        {
-                            draft.insert("\n");
-                            dirty = true;
-                            continue;
-                        }
-                        if key.code == KeyCode::Enter
-                            && (!draft.text.trim().is_empty() || s.attachments > 0)
-                        {
-                            let mode = if input::composer_submit(key) {
-                                "steer"
-                            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                "queue"
-                            } else {
-                                "interrupt"
-                            };
-                            let text = draft.take();
-                            let selected = cache.dashboard.selected_id.clone();
-                            let mut payload = json!({"type":"submit","text":text,"mode":mode,"generation":s.generation});
-                            if !selected.is_empty() {
-                                payload["session"] = json!(selected);
-                            }
-                            send(payload)?;
-                            if selected.is_empty()
-                                || composer_targets_session(&s.composer_key, &selected)
-                            {
-                                cache.prompt_pin.arm(
-                                    session::Scope {
-                                        session: s.composer_key.clone(),
-                                        page: s.agent_page.clone(),
-                                        generation: s.generation,
-                                    },
-                                    &s.blocks,
-                                );
-                                follow = true;
-                            }
-                            dirty = true;
-                            continue;
-                        }
-                        edit(&mut draft, key, true);
-                        dirty = true;
                         continue;
                     }
                     if key.code == KeyCode::Esc
@@ -1359,8 +1309,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if render::appearance_selected(&s) {
                             let alt = key.modifiers.contains(KeyModifiers::ALT);
                             if alt {
-                                match render::appearance::key(cache.appearance_cursor, key.code, alt)
-                                {
+                                match render::appearance::key(
+                                    cache.appearance_cursor,
+                                    key.code,
+                                    alt,
+                                ) {
                                     render::appearance::Act::Pass => {}
                                     render::appearance::Act::Move(row) => {
                                         cache.appearance_cursor = row;
@@ -1642,16 +1595,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     scroll = cache.current_offset;
                                 }
                                 scroll = scroll.saturating_sub(10);
-                                follow = scroll == cache.live_scroll;
+                                follow = false;
                             }
                             KeyCode::PageDown | KeyCode::Down => {
                                 if follow {
                                     scroll = cache.current_offset;
                                 }
-                                scroll = (scroll
-                                    + if key.code == KeyCode::PageDown { 10 } else { 1 })
-                                .min(cache.max_scroll);
-                                follow = scroll == cache.live_scroll;
+                                (scroll, follow) = session::scroll_down(
+                                    scroll,
+                                    if key.code == KeyCode::PageDown { 10 } else { 1 },
+                                    cache.live_scroll,
+                                    follow,
+                                );
                             }
                             KeyCode::Home => {
                                 follow = false;
@@ -1675,7 +1630,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Settings stays on Ctrl+X S.
                         let command = match key.code {
                             KeyCode::Char('n') => "/new",
-                            KeyCode::Char('o') | KeyCode::Char('s') | KeyCode::Char('b') => "/sessions",
+                            KeyCode::Char('o') | KeyCode::Char('s') | KeyCode::Char('b') => {
+                                "/sessions"
+                            }
                             KeyCode::Char('f') => "/fork",
                             KeyCode::Char('g') => "/agent",
                             KeyCode::Char('i') => "/context",
@@ -1775,7 +1732,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 send(
                                     json!({"type":"submit","text":text,"mode":mode,"generation":s.generation}),
                                 )?;
-                                cache.prompt_pin.arm(
+                                cache.prompt_pin.on_submit(
+                                    mode,
+                                    matches!(
+                                        s.status.as_str(),
+                                        "running" | "awaiting_permission" | "awaiting_input"
+                                    ),
+                                    &mut follow,
                                     session::Scope {
                                         session: s.composer_key.clone(),
                                         page: s.agent_page.clone(),
@@ -1783,23 +1746,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     },
                                     &s.blocks,
                                 );
-                                follow = true;
                             }
                         }
                         KeyCode::PageDown => {
                             if follow {
                                 scroll = cache.current_offset;
                             }
-                            scroll = (scroll + 10).min(cache.max_scroll);
                             // Reaching the bottom resumes auto-scroll.
-                            follow = scroll == cache.live_scroll;
+                            (scroll, follow) =
+                                session::scroll_down(scroll, 10, cache.live_scroll, follow);
                         }
                         KeyCode::PageUp => {
                             if follow {
                                 scroll = cache.current_offset;
                             }
                             scroll = scroll.saturating_sub(10);
-                            follow = scroll == cache.live_scroll;
+                            follow = false;
                         }
                         KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             follow = true;
@@ -1878,10 +1840,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && s.prompt.is_none()
                         && s.form.is_none();
                     let over_dashboard = dashboard_open
-                        && drawn_regions.transcript.contains(ratatui::layout::Position::new(
-                            mouse.column,
-                            mouse.row,
-                        ));
+                        && drawn_regions
+                            .transcript
+                            .contains(ratatui::layout::Position::new(mouse.column, mouse.row));
                     if dashboard_open && !over_dashboard && !cache.dashboard.hovered_id.is_empty() {
                         if let Some(operation) = cache.dashboard.leave() {
                             send(
@@ -1896,18 +1857,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 MouseEventKind::Down(event::MouseButton::Left) => {
                                     cache.dashboard.click(mouse.column, mouse.row, dashboard)
                                 }
-                                MouseEventKind::ScrollUp => cache.dashboard.wheel(
-                                    mouse.column,
-                                    mouse.row,
-                                    false,
-                                    dashboard,
-                                ),
-                                MouseEventKind::ScrollDown => cache.dashboard.wheel(
-                                    mouse.column,
-                                    mouse.row,
-                                    true,
-                                    dashboard,
-                                ),
+                                MouseEventKind::ScrollUp => {
+                                    cache
+                                        .dashboard
+                                        .wheel(mouse.column, mouse.row, false, dashboard)
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    cache
+                                        .dashboard
+                                        .wheel(mouse.column, mouse.row, true, dashboard)
+                                }
                                 MouseEventKind::Moved => {
                                     cache.dashboard.hover(mouse.column, mouse.row, dashboard)
                                 }
@@ -1933,9 +1892,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let in_composer = |x: u16, y: u16| {
                             r.composer.contains(ratatui::layout::Position::new(x, y))
                         };
-                        let was_in_composer = cache
-                            .pointer
-                            .is_some_and(|(x, y)| in_composer(x, y));
+                        let was_in_composer = cache.pointer.is_some_and(|(x, y)| in_composer(x, y));
                         cache.pointer = pointer;
                         // Pointer motion is presentation-only; redraw only if a
                         // transcript hover target, the composer rows or a component changes.
@@ -1956,7 +1913,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             && !cache.settings_root.active
                             && !s.panel_title.is_empty()
                             && s.prompt.is_none()
-                            && s.form.is_none() && {
+                            && s.form.is_none()
+                            && {
                                 let area = render::panel_area(render::panel_host(&r, &s), &s);
                                 let at = ratatui::layout::Position::new(mouse.column, mouse.row);
                                 area.contains(at) && !render::nav_rect(area).contains(at)
@@ -1973,9 +1931,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 cache.page_state = state;
                                 changed
                             }
-                            None => {
-                                cache.page_state.hover.take().is_some()
-                            }
+                            None => cache.page_state.hover.take().is_some(),
                         };
                         if changed {
                             dirty = true;
@@ -2078,6 +2034,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
+                            if r.live.contains((mouse.column, mouse.row).into()) {
+                                cache.live_back = (cache.live_back + 1).min(cache.live_max_back);
+                                dirty = true;
+                                continue;
+                            }
                             if r.details.contains((mouse.column, mouse.row).into()) {
                                 details_scroll = details_scroll.saturating_sub(3);
                                 dirty = true;
@@ -2088,7 +2049,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     scroll = cache.current_offset;
                                 }
                                 scroll = scroll.saturating_sub(3);
-                                follow = scroll == cache.live_scroll;
+                                follow = false;
                             } else {
                                 panel_scroll = panel_scroll.saturating_sub(3);
                             }
@@ -2153,16 +2114,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
+                            if r.live.contains((mouse.column, mouse.row).into()) {
+                                cache.live_back = cache.live_back.saturating_sub(1);
+                                dirty = true;
+                                continue;
+                            }
                             if s.panel_title.is_empty() && s.prompt.is_none() {
                                 if follow {
                                     scroll = cache.current_offset;
                                 }
-                                scroll = (scroll + 3).min(cache.max_scroll);
                                 // Back at the bottom: follow new output again.
-                                follow = scroll == cache.live_scroll;
+                                (scroll, follow) =
+                                    session::scroll_down(scroll, 3, cache.live_scroll, follow);
                             } else {
                                 panel_scroll += 3;
                             }
+                        }
+                        MouseEventKind::Drag(event::MouseButton::Left)
+                            if composer_press.is_some() =>
+                        {
+                            if let (Some(start), Some(area)) =
+                                (composer_press, composer_editor_area(r.composer, &s))
+                            {
+                                draft.drag_to_point(
+                                    start,
+                                    area.width,
+                                    area.height,
+                                    mouse.column.clamp(area.x, area.right().saturating_sub(1))
+                                        - area.x,
+                                    mouse.row.clamp(area.y, area.bottom().saturating_sub(1))
+                                        - area.y,
+                                );
+                            }
+                        }
+                        MouseEventKind::Up(event::MouseButton::Left)
+                            if composer_press.is_some() =>
+                        {
+                            composer_press = None;
                         }
                         MouseEventKind::Drag(event::MouseButton::Left) => {
                             if let Some(start) = press {
@@ -2237,11 +2225,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             clicks.reset();
                                         }
                                         if tool.is_some() && !double {
-                                            nav = render::targets(&cache)
-                                                .iter()
-                                                .position(|&(first, end)| {
-                                                    (first..=end).contains(&line)
-                                                });
+                                            nav = render::targets(&cache).iter().position(
+                                                |&(first, end)| (first..=end).contains(&line),
+                                            );
                                             dirty = true;
                                         } else if cache.disclosure.toggle(&operation, &s.blocks) {
                                             cache.invalidate_disclosure();
@@ -2263,6 +2249,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
+                            if r.live.contains((mouse.column, mouse.row).into()) {
+                                if cache
+                                    .live_button
+                                    .is_some_and(|b| b.contains((mouse.column, mouse.row).into()))
+                                {
+                                    // Local view state: no host round trip.
+                                    s.live_expanded = !s.live_expanded;
+                                } else if let Some(operation) = &s.live.operation {
+                                    send(
+                                        json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                    )?;
+                                }
+                                dirty = true;
+                                continue;
+                            }
                             if let Some(hit) = cache.toasts.hit(mouse.column, mouse.row) {
                                 use render::toasts::Hit;
                                 match hit {
@@ -2373,9 +2374,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             continue;
                                         }
                                         settings_page::root::RootAct::Toggle(name) => {
-                                            if let Some((animate, mono)) =
-                                                render::appearance::apply(&mut cache.appearance, name)
-                                            {
+                                            if let Some((animate, mono)) = render::appearance::apply(
+                                                &mut cache.appearance,
+                                                name,
+                                            ) {
                                                 let _ = config::save(&cache.appearance);
                                                 cache.animate = animate;
                                                 cache.mono = mono;
@@ -2473,6 +2475,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
+                            if let Some(area) = composer_editor_area(r.composer, &s).filter(|a| {
+                                let card = render::composer_rows(r.composer, &s)[1];
+                                !r.details.contains((mouse.column, mouse.row).into())
+                                    && mouse.column >= card.x
+                                    && mouse.column < a.right()
+                                    && mouse.row >= a.y
+                                    && mouse.row < a.bottom()
+                            }) {
+                                // Place the caret under the pointer; a drag extends a selection
+                                // from here. The transcript selection is left alone.
+                                let start = draft.cursor_at_point(
+                                    area.width,
+                                    area.height,
+                                    mouse.column.saturating_sub(area.x),
+                                    mouse.row - area.y,
+                                );
+                                draft.cursor = start;
+                                draft.anchor = None;
+                                composer_press = Some(start);
+                                press = None;
+                                details_focus = false;
+                                dirty = true;
+                                continue;
+                            }
                             if r.details.contains((mouse.column, mouse.row).into()) {
                                 details_focus = true;
                                 if mouse.row == r.details.y {
@@ -2519,10 +2545,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 follow = true;
                                 cache.prompt_pin.release();
-                            } else if cache
-                                .sticky
-                                .is_some_and(|(rect, _)| rect.contains((mouse.column, mouse.row).into()))
-                                && s.panel_title.is_empty()
+                            } else if cache.sticky.is_some_and(|(rect, _)| {
+                                rect.contains((mouse.column, mouse.row).into())
+                            }) && s.panel_title.is_empty()
                                 && s.prompt.is_none()
                             {
                                 // The pinned user message covers the rows below it: a click
@@ -2627,7 +2652,10 @@ mod tests {
             inspect_for(&header),
             Some(json!({"kind":"tool_details","id":"c"}))
         );
-        assert_eq!(inspect_for(&Some(json!({"kind":"block_toggle","id":"g"}))), None);
+        assert_eq!(
+            inspect_for(&Some(json!({"kind":"block_toggle","id":"g"}))),
+            None
+        );
     }
 
     #[test]

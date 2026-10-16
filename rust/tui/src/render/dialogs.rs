@@ -520,7 +520,10 @@ fn meter_spans(body: &str, tone: &str, p: &Palette) -> Vec<Span<'static>> {
             _ => p.border_strong,
         };
         if run_color.is_some_and(|current| current != color) {
-            spans.push(Span::styled(std::mem::take(&mut run), style(run_color.unwrap())));
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                style(run_color.unwrap()),
+            ));
         }
         run.push(c);
         run_color = Some(color);
@@ -536,7 +539,11 @@ fn meter_spans(body: &str, tone: &str, p: &Palette) -> Vec<Span<'static>> {
         } else {
             p.muted
         };
-        let text = if i == 0 { part.to_string() } else { format!(" · {part}") };
+        let text = if i == 0 {
+            part.to_string()
+        } else {
+            format!(" · {part}")
+        };
         spans.push(Span::styled(text, style(color)));
     }
     spans
@@ -734,7 +741,11 @@ mod tests {
         s.panel_layout = "page".into();
         s.nav = Some(crate::bridge::Nav::default());
         let area = panel_area(parent, &s);
-        assert_eq!(area, Rect::new(9, 6, 112, 36), "min(120, w-8) by h-4, centred");
+        assert_eq!(
+            area,
+            Rect::new(9, 6, 112, 36),
+            "min(120, w-8) by h-4, centred"
+        );
         assert_eq!(nav_rect(area).width, 0, "no left area column any more");
     }
     #[test]

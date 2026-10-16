@@ -58,7 +58,10 @@ fn wrapped(text: &str, room: usize, p: &Palette) -> Vec<Vec<super::Cell>> {
 pub fn trace(out: &mut Rows, b: &Content, lead: &[Span<'static>], width: usize, p: &Palette) {
     let lead_width: usize = lead.iter().map(|s| s.content.width()).sum();
     for cells in wrapped(body(b), width.saturating_sub(lead_width).max(1), p) {
-        out.push((line(lead.to_vec(), cells, None, Style::default()), b.operation.clone()));
+        out.push((
+            line(lead.to_vec(), cells, None, Style::default()),
+            b.operation.clone(),
+        ));
     }
 }
 
@@ -75,7 +78,10 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
             Span::styled("Thinking…", live),
         ];
         if let Some(elapsed) = look::live_elapsed(b.started_ms, now_ms) {
-            head.push(Span::styled(format!(" ({elapsed})"), Style::default().fg(p.quiet)));
+            head.push(Span::styled(
+                format!(" ({elapsed})"),
+                Style::default().fg(p.quiet),
+            ));
         }
         out.push((ratatui::text::Line::from(head), op.clone()));
         let room = width.saturating_sub(6).max(1);
@@ -87,7 +93,10 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
                     Span::raw("    "),
                     Span::styled(glyphs.rail, Style::default().fg(p.border)),
                     Span::styled(
-                        format!(" … {hidden} earlier line{}", if hidden == 1 { "" } else { "s" }),
+                        format!(
+                            " … {hidden} earlier line{}",
+                            if hidden == 1 { "" } else { "s" }
+                        ),
                         Style::default().fg(p.quiet),
                     ),
                 ]),
@@ -97,7 +106,10 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
         for cells in rows.into_iter().skip(hidden) {
             let lead = vec![
                 Span::raw("    "),
-                Span::styled(glyphs.rail_heavy, look::live(Style::default().fg(p.border_strong))),
+                Span::styled(
+                    glyphs.rail_heavy,
+                    look::live(Style::default().fg(p.border_strong)),
+                ),
                 Span::raw(" "),
             ];
             out.push((line(lead, cells, None, Style::default()), op.clone()));
@@ -119,7 +131,10 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
         ),
     ];
     if !rest.is_empty() {
-        head.push(Span::styled(format!(" {rest}"), Style::default().fg(p.quiet)));
+        head.push(Span::styled(
+            format!(" {rest}"),
+            Style::default().fg(p.quiet),
+        ));
     }
     out.push((ratatui::text::Line::from(head), op.clone()));
     if opened {
@@ -176,7 +191,10 @@ mod tests {
             title: "Thought for 9s".into(),
             status: "running".into(),
             started_ms: 10_000,
-            detail: (1..=12).map(|n| format!("step {n}")).collect::<Vec<_>>().join("\n"),
+            detail: (1..=12)
+                .map(|n| format!("step {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
             ..Default::default()
         };
         let mut rows = Vec::new();

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import asyncio
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -44,27 +45,31 @@ def test_full_nested_tool_lookup():
 
 
 @pytest.mark.asyncio
-async def test_preview_latest_selection_guard_and_close():
-    pending = {}
+async def test_snapshot_has_no_preview_and_poll_never_requests_one(monkeypatch):
+    from nexus.ui.ratatui import bridge
+
+    monkeypatch.setattr(bridge, "POLL_SECONDS", 0)
+    calls = {"list": 0}
+
     class Client:
-        async def dashboard_preview(self, session_id, max_rows):
-            assert max_rows == 12
-            future = asyncio.get_running_loop().create_future()
-            pending[session_id] = future
-            return await future
-    shell = SimpleNamespace(client=Client(), sessions_truncated=False)
+        async def project_sessions(self, *, limit=1000, query=""):
+            calls["list"] += 1
+            return SimpleNamespace(sessions=[], truncated=False)
+
+        def __getattr__(self, name):
+            assert "preview" not in name, name
+            raise AttributeError(name)
+
+    shell = SimpleNamespace(client=Client(), sessions_truncated=False, controller=SimpleNamespace(session="s"), seen_seq={})
     dashboard = SessionDashboard(shell)
     dashboard.visible = True
-    first = asyncio.create_task(dashboard.select("first"))
-    await asyncio.sleep(0)
-    second = asyncio.create_task(dashboard.select("second"))
-    await asyncio.sleep(0)
-    pending["second"].set_result({"session": "second", "title": "safe\x1b[31m"})
-    await second
-    pending["first"].set_result({"session": "first"})
-    await first
-    assert dashboard.preview["session"] == "second"
-    assert "\x1b" not in dashboard.preview["title"]
+    assert not hasattr(dashboard, "preview") and not hasattr(dashboard, "refresh_preview")
+    dashboard.task = asyncio.create_task(dashboard._poll())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    snap = dashboard.snapshot()
+    assert "preview" not in snap
+    assert set(snap) == {"kind", "rows", "selected", "query", "error", "truncated", "path", "branch", "worktree", "workspace"}
     dashboard.close()
     assert dashboard.snapshot() is None
 
@@ -100,16 +105,12 @@ def test_snapshot_overlays_live_tails_and_keeps_a_stored_prompt():
         "id": "a", "workspace": "/work/nexus", "repo": "", "worktree": "",
         "title": "A", "last_user": "old prompt", "last_agent": "stored reply",
     }]
-    dashboard.preview = {"session": "a", "last_user": "stale", "last_agent": "stale reply", "activity": "old"}
     snap = dashboard.snapshot()
     assert snap["path"] == "/work/nexus" and snap["branch"] == "main" and snap["workspace"] == "/work/nexus"
     assert snap["rows"][0]["branch"] == "main"
     assert snap["rows"][0]["last_user"] == "hello there"
     assert snap["rows"][0]["last_agent"] == "stored reply"
     assert snap["rows"][0]["activity"] == "grep notes.md"
-    assert snap["preview"]["last_user"] == "hello there"
-    assert snap["preview"]["activity"] == "grep notes.md"
-    assert snap["preview"]["last_agent"] == "stale reply"
 
 
 def test_dashboard_accepts_header_actions_without_a_row():
@@ -121,8 +122,9 @@ def test_dashboard_accepts_header_actions_without_a_row():
 
 def test_dashboard_accepts_only_listed_rows_and_valid_titles():
     dashboard = _visible([{"id": "a", "workspace": "/w", "repo": "/r", "status": "idle", "state": "idle"}])
-    assert dashboard.accepts({"kind": "session_preview", "id": "a"})
-    assert not dashboard.accepts({"kind": "session_preview", "id": "other"})
+    assert dashboard.accepts({"kind": "session_archive", "id": "a"})
+    assert not dashboard.accepts({"kind": "session_archive", "id": "other"})
+    assert not dashboard.accepts({"kind": "session_preview", "id": "a"})
     assert dashboard.accepts({"kind": "session_open", "id": "a", "workspace": "/w"})
     assert not dashboard.accepts({"kind": "session_open", "id": "a", "workspace": "/elsewhere"})
     assert dashboard.accepts({"kind": "session_rename", "id": "a", "title": "New"})
@@ -179,7 +181,7 @@ def test_snapshot_is_hidden_while_a_panel_or_prompt_owns_input():
 async def test_stale_list_refresh_cannot_publish_after_close():
     future = asyncio.get_running_loop().create_future()
     class Client:
-        async def project_sessions(self):
+        async def project_sessions(self, *, limit=1000, query=""):
             return await future
     dashboard = SessionDashboard(SimpleNamespace(client=Client(), controller=SimpleNamespace(session="s"), seen_seq={}))
     dashboard.visible = True
@@ -203,18 +205,12 @@ def _shell_with_dashboard(dashboard):
 
 @pytest.mark.asyncio
 async def test_replacement_overlay_closes_dashboard_stops_polling_and_ignores_inflight():
-    list_gate, preview_gate = asyncio.Event(), asyncio.Event()
-    calls = {"preview": 0}
+    list_gate = asyncio.Event()
 
     class Client:
-        async def project_sessions(self):
+        async def project_sessions(self, *, limit=1000, query=""):
             await list_gate.wait()
             return SimpleNamespace(sessions=[], truncated=False)
-
-        async def dashboard_preview(self, session_id, max_rows):
-            calls["preview"] += 1
-            await preview_gate.wait()
-            return {"session": session_id}
 
     dashboard = SessionDashboard(SimpleNamespace(client=Client(), controller=SimpleNamespace(session="s"), seen_seq={}))
     shell = _shell_with_dashboard(dashboard)
@@ -222,7 +218,6 @@ async def test_replacement_overlay_closes_dashboard_stops_polling_and_ignores_in
     dashboard.visible = True
     dashboard.task = asyncio.create_task(dashboard._poll())
     poll = dashboard.task
-    selecting = asyncio.create_task(dashboard.select("a"))
     refreshing = asyncio.create_task(dashboard.refresh())
     await asyncio.sleep(0)
 
@@ -230,15 +225,10 @@ async def test_replacement_overlay_closes_dashboard_stops_polling_and_ignores_in
 
     assert not dashboard.visible and dashboard.snapshot() is None and dashboard.task is None
     list_gate.set()
-    preview_gate.set()
-    await selecting
     await refreshing
     await asyncio.sleep(0)
     assert poll.cancelled() or poll.done()
-    assert dashboard.preview is None and dashboard.rows == []
-    before = calls["preview"]
-    await asyncio.sleep(0)
-    assert calls["preview"] == before
+    assert dashboard.rows == []
     shell.show("Again", "y")  # closing is idempotent
 
 
@@ -246,7 +236,7 @@ async def test_replacement_overlay_closes_dashboard_stops_polling_and_ignores_in
 async def test_dashboard_operations_keep_it_open():
     dashboard = _visible([{"id": "a", "workspace": "/w", "status": "idle", "state": "idle"}])
     shell = _shell_with_dashboard(dashboard)
-    for operation in ({"kind": "session_preview", "id": "a"}, {"kind": "session_rename", "id": "a", "title": "T"},
+    for operation in ({"kind": "session_rename", "id": "a", "title": "T"},
                       {"kind": "session_archive", "id": "a"}, {"kind": "sessions_refresh"}):
         assert dashboard.accepts(operation)
     assert dashboard.visible and shell.workflows.dashboard.snapshot() is not None
@@ -274,13 +264,11 @@ async def test_submit_targets_the_selected_dashboard_session():
         {"id": "remote", "workspace": "/other", "title": "Remote"},
     ]
     dashboard.refresh = AsyncMock()
-    dashboard.refresh_preview = AsyncMock()
     shell.workflows.dashboard = dashboard
 
     assert await shell.submit("hello", session="other")
     assert enqueued == [("other", "hello", "steer", None)]
     dashboard.refresh.assert_awaited()
-    dashboard.refresh_preview.assert_awaited()
 
     shell.attachments.append(SimpleNamespace(attachment_id="a", kind="image"))
     assert await shell.submit("with file", session="other")
@@ -301,22 +289,6 @@ async def test_submit_targets_the_selected_dashboard_session():
     assert await shell.submit("go", session="remote")
     assert switched["args"] == ("/other", "remote")
     assert enqueued[-1][0] == "remote"
-
-
-@pytest.mark.asyncio
-async def test_dismissed_preview_cannot_publish():
-    future = asyncio.get_running_loop().create_future()
-    class Client:
-        async def dashboard_preview(self, *args, **kwargs):
-            return await future
-    dashboard = SessionDashboard(SimpleNamespace(client=Client()))
-    dashboard.visible = True
-    task = asyncio.create_task(dashboard.select("session"))
-    await asyncio.sleep(0)
-    dashboard.close()
-    future.set_result({"session": "session"})
-    await task
-    assert dashboard.preview is None
 
 
 def test_preview_tails_keep_agent_newlines_and_project_worked():
@@ -356,3 +328,52 @@ def test_rows_carry_local_time_buckets():
     assert _time_bucket(now - 3 * day, now) == "This week"
     assert _time_bucket(now - 9 * day, now) == "Earlier"
     assert _time_bucket(0.0, now) == "Earlier"
+
+def _search_shell():
+    return SimpleNamespace(
+        client=SimpleNamespace(project_sessions=AsyncMock(return_value=SimpleNamespace(sessions=[], truncated=False))),
+        controller=SimpleNamespace(session="s", view=None), seen_seq={},
+        refresh_session_tabs=Mock(), sessions_truncated=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_search_limits_clear_refresh_and_validation():
+    shell = _search_shell()
+    dash = SessionDashboard(shell)
+    await dash.open()
+    try:
+        assert dash.accepts({"kind": "sessions_search", "query": "x" * 256})
+        for query in (None, 42, "x" * 257):
+            assert not dash.accepts({"kind": "sessions_search", "query": query})
+        await dash.search("workspace needle")
+        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle")
+        assert dash.snapshot()["query"] == "workspace needle"
+        await dash.refresh()
+        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle")
+        await dash.search("")
+        shell.client.project_sessions.assert_awaited_with(limit=20, query="")
+        assert dash.snapshot()["query"] == ""
+    finally:
+        dash.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_search_ignores_stale_query():
+    shell = _search_shell()
+    dash = SessionDashboard(shell)
+    dash.visible = True
+    old_gate = asyncio.Event()
+    async def listing(*, limit, query):
+        if query == "old":
+            await old_gate.wait()
+        return SimpleNamespace(sessions=[], truncated=False)
+    shell.client.project_sessions = AsyncMock(side_effect=listing)
+    old = asyncio.create_task(dash.search("old"))
+    await asyncio.sleep(0)
+    await dash.search("new")
+    old_gate.set()
+    await old
+    assert dash.snapshot()["query"] == "new"
+    assert dash.rows == []
+    dash.close()

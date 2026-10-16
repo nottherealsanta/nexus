@@ -45,7 +45,14 @@ pub fn expanded(b: &Content) -> bool {
 }
 
 /// The body behind `lead`: the relevant rows, else the labelled details.
-pub fn body(out: &mut Rows, b: &Content, lead: &[Span<'static>], width: usize, p: &Palette, op: &Option<Value>) {
+pub fn body(
+    out: &mut Rows,
+    b: &Content,
+    lead: &[Span<'static>],
+    width: usize,
+    p: &Palette,
+    op: &Option<Value>,
+) {
     if !b.signal.is_empty() {
         signal::rows(out, &b.signal, lead, width, p, op);
         return;
@@ -56,7 +63,14 @@ pub fn body(out: &mut Rows, b: &Content, lead: &[Span<'static>], width: usize, p
 
 /// The full labelled details (`tool_details`): `  Label: value` rows in a 12-column
 /// label gutter, other rows as plain text. Shown under `/verbose` and by older hosts.
-fn details(out: &mut Rows, text: &str, lead: &[Span<'static>], width: usize, p: &Palette, op: &Option<Value>) {
+fn details(
+    out: &mut Rows,
+    text: &str,
+    lead: &[Span<'static>],
+    width: usize,
+    p: &Palette,
+    op: &Option<Value>,
+) {
     const LABEL: usize = 12;
     let lead_width: usize = lead.iter().map(|s| s.content.width()).sum();
     for row in text.lines() {
@@ -67,23 +81,40 @@ fn details(out: &mut Rows, text: &str, lead: &[Span<'static>], width: usize, p: 
         };
         let Some((label, value)) = pair else {
             let shown = row.strip_prefix("  ").unwrap_or(row);
-            let tone = if row.starts_with(' ') { p.text } else { p.muted };
+            let tone = if row.starts_with(' ') {
+                p.text
+            } else {
+                p.muted
+            };
             for cells in super::wrap(
                 &[Span::styled(shown.to_string(), Style::default().fg(tone))],
                 width.saturating_sub(lead_width).max(1),
             ) {
-                out.push((super::line(lead.to_vec(), cells, None, Style::default()), op.clone()));
+                out.push((
+                    super::line(lead.to_vec(), cells, None, Style::default()),
+                    op.clone(),
+                ));
             }
             continue;
         };
         let labels = super::wrap(
-            &[Span::styled(label.to_string(), Style::default().fg(p.muted))],
+            &[Span::styled(
+                label.to_string(),
+                Style::default().fg(p.muted),
+            )],
             LABEL,
         );
         // A long key wraps over its own rows before the first value row.
-        let own_rows = if label.width() > LABEL { labels.len() } else { labels.len() - 1 };
+        let own_rows = if label.width() > LABEL {
+            labels.len()
+        } else {
+            labels.len() - 1
+        };
         for cells in labels.iter().take(own_rows) {
-            out.push((super::line(lead.to_vec(), cells.clone(), None, Style::default()), op.clone()));
+            out.push((
+                super::line(lead.to_vec(), cells.clone(), None, Style::default()),
+                op.clone(),
+            ));
         }
         let first = if label.width() <= LABEL { label } else { "" };
         let values = super::wrap(
@@ -93,10 +124,17 @@ fn details(out: &mut Rows, text: &str, lead: &[Span<'static>], width: usize, p: 
         for (index, cells) in values.into_iter().enumerate() {
             let mut prefix = lead.to_vec();
             prefix.push(Span::styled(
-                if index == 0 { format!("{first:<w$}", w = LABEL) } else { " ".repeat(LABEL) },
+                if index == 0 {
+                    format!("{first:<w$}", w = LABEL)
+                } else {
+                    " ".repeat(LABEL)
+                },
                 Style::default().fg(p.muted),
             ));
-            out.push((super::line(prefix, cells, None, Style::default()), op.clone()));
+            out.push((
+                super::line(prefix, cells, None, Style::default()),
+                op.clone(),
+            ));
         }
     }
 }
@@ -117,7 +155,10 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     for (index, text) in b.text.lines().enumerate() {
         let text = if index == 0 { relevant(text) } else { text };
         out.push((
-            Line::styled(format!("    {}", truncate(text, width.saturating_sub(6))), style),
+            Line::styled(
+                format!("    {}", truncate(text, width.saturating_sub(6))),
+                style,
+            ),
             op.clone(),
         ));
     }
@@ -181,7 +222,10 @@ mod tests {
             let op = op.as_ref().unwrap();
             assert_eq!(op["kind"], "block_toggle");
             assert_eq!(op["id"], "c:output");
-            assert_eq!(op["inspect_operation"], json!({"kind":"tool_details","id":"x"}));
+            assert_eq!(
+                op["inspect_operation"],
+                json!({"kind":"tool_details","id":"x"})
+            );
         }
     }
 
@@ -204,15 +248,23 @@ mod tests {
         let mut rows = Vec::new();
         draw(&mut rows, &tool, 40, &p);
         let lines = plain(&rows);
-        assert_eq!(lines, ["    $ cargo test", "    │ $ cargo test", "    │ exit 2"]);
+        assert_eq!(
+            lines,
+            ["    $ cargo test", "    │ $ cargo test", "    │ exit 2"]
+        );
         assert_eq!(rows[0].0.style.fg, Some(p.error));
-        assert!(rows.iter().all(|(_, op)| op.as_ref().unwrap()["inspect_operation"]["id"] == "c"));
+        assert!(rows
+            .iter()
+            .all(|(_, op)| op.as_ref().unwrap()["inspect_operation"]["id"] == "c"));
         assert!(!lines.join("\n").contains("Call ID"));
         tool.status = "running".into();
         tool.signal.clear();
         let mut rows = Vec::new();
         draw(&mut rows, &tool, 40, &p);
         assert_eq!(rows[0].0.style.fg, Some(p.text));
-        assert!(plain(&rows).join("\n").contains("Call ID: abc"), "full details fall back");
+        assert!(
+            plain(&rows).join("\n").contains("Call ID: abc"),
+            "full details fall back"
+        );
     }
 }

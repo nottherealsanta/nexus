@@ -6,6 +6,31 @@ from nexus.view import initial_state
 from nexus.view.model import TurnView, ToolCallView, MessageView, BlockView
 
 
+def test_snapshot_title_uses_current_host_summary_without_brand_or_id():
+    from nexus.ui.ratatui.actions import ShellActions
+
+    controller = SimpleNamespace(view=initial_state("opaque-session-id"), session="opaque-session-id")
+    shell = ShellActions(controller)
+    shell.refresh_session_tabs([
+        {"id": "other", "title": "Other session", "workspace": ".", "state": "idle", "status": "idle"},
+        {"id": "opaque-session-id", "title": "Fix the parser", "workspace": ".", "state": "idle", "status": "idle"},
+    ])
+    assert project(controller, 1, shell=shell)["title"] == "Fix the parser"
+    shell.sessions[1]["title"] = "Renamed session"
+    assert project(controller, 2, shell=shell)["title"] == "Renamed session"
+    shell.sessions[1]["title"] = ""
+    assert project(controller, 3, shell=shell)["title"] == "New session"
+    assert project(controller, 4)["title"] == "New session"
+
+
+def test_session_title_escapes_terminal_controls_and_ignores_other_sessions():
+    from nexus.ui.ratatui.prototype import _session_title
+
+    shell = SimpleNamespace(sessions=[{"id": "current", "title": "Hello\x1b[2J"}])
+    assert "\x1b" not in _session_title("current", shell)
+    assert _session_title("unknown", shell) == "New session"
+
+
 def test_projection_preserves_tool_fields_and_escapes_controls():
     view = initial_state("native")
     view.turns.append(TurnView(index=1, messages=[MessageView(blocks=[

@@ -9,15 +9,15 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use ratatui_markdown::{
+    markdown::{MarkdownBlock, MarkdownRenderer},
+    theme::{Generation, RichTextTheme},
+};
 use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
     rc::Rc,
-};
-use ratatui_markdown::{
-    markdown::{MarkdownBlock, MarkdownRenderer},
-    theme::{Generation, RichTextTheme},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -926,10 +926,15 @@ mod tests {
     }
 
     fn mermaid_rows(source: &str, width: usize) -> Vec<Row> {
-        lines(&format!("```mermaid\n{source}\n```"), &Palette::new(false), width)
+        lines(
+            &format!("```mermaid\n{source}\n```"),
+            &Palette::new(false),
+            width,
+        )
     }
     fn drawn(rows: &[Row]) -> bool {
-        rows.iter().any(|r| plain(r).contains('┌')) && rows.iter().all(|r| r.bg != Some(Palette::new(false).panel))
+        rows.iter().any(|r| plain(r).contains('┌'))
+            && rows.iter().all(|r| r.bg != Some(Palette::new(false).panel))
     }
     fn as_code_block(rows: &[Row]) -> bool {
         rows.iter().all(|r| r.bg == Some(Palette::new(false).panel))
@@ -944,7 +949,11 @@ mod tests {
             "sequenceDiagram\n  Alice->>Bob: hello",
         ] {
             let rows = mermaid_rows(source, 80);
-            assert!(drawn(&rows), "{source}: {:#?}", rows.iter().map(plain).collect::<Vec<_>>());
+            assert!(
+                drawn(&rows),
+                "{source}: {:#?}",
+                rows.iter().map(plain).collect::<Vec<_>>()
+            );
             assert!(rows.iter().all(|r| r.fence == Some(0)));
             assert!(plain(rows.last().unwrap()).contains("◇ mermaid"));
             assert!(rows.iter().all(|r| plain(r).width() <= 80));
@@ -962,9 +971,17 @@ mod tests {
         assert!(as_code_block(&mermaid_rows("pie\n\"a\" : 1", 80)));
         let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
         assert!(as_code_block(&open));
-        let themed = lines("```mermaid theme=dark\ngraph TD\n  A --> B\n```", &Palette::new(false), 80);
+        let themed = lines(
+            "```mermaid theme=dark\ngraph TD\n  A --> B\n```",
+            &Palette::new(false),
+            80,
+        );
         assert!(drawn(&themed));
-        let tilde = lines("~~~mermaid\ngraph TD\n  A --> B\n~~~", &Palette::new(false), 80);
+        let tilde = lines(
+            "~~~mermaid\ngraph TD\n  A --> B\n~~~",
+            &Palette::new(false),
+            80,
+        );
         assert!(drawn(&tilde));
     }
     #[test]
@@ -972,11 +989,17 @@ mod tests {
         let rows = mermaid_rows("pie\n\"a\" : 1", 80);
         let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("pie") && text.contains("\"a\" : 1"), "{text}");
-        assert!(text.contains("mermaid") && !text.contains("◇ mermaid"), "{text}");
+        assert!(
+            text.contains("mermaid") && !text.contains("◇ mermaid"),
+            "{text}"
+        );
         assert!(as_code_block(&rows));
         let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
         let open = open.iter().map(plain).collect::<Vec<_>>().join("\n");
-        assert!(open.contains("graph TD") && open.contains("A --> B"), "{open}");
+        assert!(
+            open.contains("graph TD") && open.contains("A --> B"),
+            "{open}"
+        );
         // A later fence after drawn art still falls back with its own source.
         let both = lines(
             "```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\npie\n\"a\" : 1\n```",
@@ -985,15 +1008,24 @@ mod tests {
         );
         let text = both.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("◇ mermaid") && text.contains("pie"), "{text}");
-        assert_eq!(crate::markdown::fence_sources("```mermaid\npie\n\"a\" : 1\n```"), ["pie\n\"a\" : 1"]);
+        assert_eq!(
+            crate::markdown::fence_sources("```mermaid\npie\n\"a\" : 1\n```"),
+            ["pie\n\"a\" : 1"]
+        );
     }
     #[test]
     fn mermaid_streaming_matches_one_shot() {
         let full = "text\n\n```mermaid\ngraph TD\n  A --> B\n```\n";
-        let one_shot: Vec<String> = lines(full, &Palette::new(false), 60).iter().map(plain).collect();
+        let one_shot: Vec<String> = lines(full, &Palette::new(false), 60)
+            .iter()
+            .map(plain)
+            .collect();
         let mut last = Vec::new();
         for end in (0..=full.len()).filter(|i| full.is_char_boundary(*i)) {
-            last = lines(&full[..end], &Palette::new(false), 60).iter().map(plain).collect();
+            last = lines(&full[..end], &Palette::new(false), 60)
+                .iter()
+                .map(plain)
+                .collect();
         }
         assert_eq!(last, one_shot);
     }
@@ -1001,7 +1033,11 @@ mod tests {
     fn mermaid_wide_lr_retries_top_down() {
         let source = "graph LR\n  A[service_alpha] --> B[service_bravo] --> C[service_charlie] --> D[service_delta] --> E[service_echo]";
         let rows = mermaid_rows(source, 60);
-        assert!(drawn(&rows), "{:#?}", rows.iter().map(plain).collect::<Vec<_>>());
+        assert!(
+            drawn(&rows),
+            "{:#?}",
+            rows.iter().map(plain).collect::<Vec<_>>()
+        );
         assert!(rows.iter().any(|r| plain(r).contains('▼')));
     }
     #[test]
@@ -1019,21 +1055,52 @@ mod tests {
     #[test]
     fn mermaid_fuzzed_bodies_never_panic() {
         let tokens = [
-            "graph TD", "graph LR", "flowchart RL", "A", "B[x]", "-->", "-.->", "==>", "subgraph s",
-            "end", "stateDiagram-v2", "[*]", ": ev", "classDiagram", "class A", "A <|-- B", "erDiagram",
-            "A ||--o{ B : has", "sequenceDiagram", "Alice->>Bob: hi", "Note over A: n", "界", "|lbl|",
-            "((", "))", "{", "}", ";", "\n", "\n", " ",
+            "graph TD",
+            "graph LR",
+            "flowchart RL",
+            "A",
+            "B[x]",
+            "-->",
+            "-.->",
+            "==>",
+            "subgraph s",
+            "end",
+            "stateDiagram-v2",
+            "[*]",
+            ": ev",
+            "classDiagram",
+            "class A",
+            "A <|-- B",
+            "erDiagram",
+            "A ||--o{ B : has",
+            "sequenceDiagram",
+            "Alice->>Bob: hi",
+            "Note over A: n",
+            "界",
+            "|lbl|",
+            "((",
+            "))",
+            "{",
+            "}",
+            ";",
+            "\n",
+            "\n",
+            " ",
         ];
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let start = std::time::Instant::now();
         for _ in 0..300 {
             let mut body = String::new();
             for _ in 0..(seed % 40) {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 body.push_str(tokens[(seed >> 33) as usize % tokens.len()]);
                 body.push(' ');
             }
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let width = 20 + (seed >> 40) as usize % 120;
             let _ = mermaid_rows(&body.replace("```", ""), width);
         }

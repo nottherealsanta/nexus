@@ -1,6 +1,6 @@
 //! Sessions dashboard state, filtering and keys, independent of generic menu pickers.
 //!
-//! The host owns the rows and the preview; this module owns only presentation state
+//! The host owns the rows; this module owns only presentation state
 //! (query, selection, scroll, rename and archive confirmation). Every host-visible effect
 //! is returned as an operation for the caller to send.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -10,28 +10,26 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(300);
-const QUERY_LIMIT: usize = 80;
+const QUERY_LIMIT: usize = 256;
 const TITLE_LIMIT: usize = 200;
 
 #[derive(Default)]
 pub struct Dashboard {
     pub query: String,
+    /// Query echoed by the host for these rows. None supports older hosts.
+    response_query: Option<String>,
     /// `/` was pressed: printable keys edit the query instead of acting as shortcuts.
     pub searching: bool,
     pub selected: usize,
     pub selected_id: String,
-    /// The session whose preview was last requested (or the host's initial selection).
-    pub requested: String,
     pub rename: Option<String>,
     /// Session id awaiting archive confirmation.
     pub confirm_archive: Option<String>,
     pub by_project: bool,
-    pub preview_scroll: usize,
     pub list_top: usize,
     pub notice: String,
     /// Geometry recorded by the last draw, for click and wheel mapping.
     pub list_area: Rect,
-    pub preview_area: Rect,
     pub line_rows: Vec<Option<usize>>,
     /// Heading label for a list line that toggles a group, else None.
     pub line_headings: Vec<Option<String>>,
@@ -42,8 +40,6 @@ pub struct Dashboard {
     /// When set, only rows in `workspace` (or its repo) stay in the list.
     pub this_project: bool,
     pub workspace: String,
-    /// The selection was moved with the keyboard: only then does the Response preview show.
-    pub kb_selected: bool,
     /// The `/ Search sessions` row, and the `[×]` on the selected row.
     pub search_hit: Rect,
     pub archive_hit: Rect,
@@ -86,9 +82,18 @@ pub fn section_label(section: u8) -> &'static str {
     }
 }
 
-/// Only what the list shows. The workspace path is not searchable.
+/// Fallback for hosts without an echoed server query.
 fn searchable(row: &Value) -> String {
-    ["title", "project", "worktree", "branch", "last_agent"]
+    [
+        "title",
+        "project",
+        "worktree",
+        "branch",
+        "last_agent",
+        "last_user",
+        "workspace",
+        "repo",
+    ]
     .iter()
     .map(|key| text(row, key))
     .collect::<Vec<_>>()
@@ -120,15 +125,21 @@ impl Dashboard {
                         return false;
                     }
                 }
-                query.is_empty() || searchable(row).contains(&query)
+                match &self.response_query {
+                    Some(echo) => echo == &self.query,
+                    None => query.is_empty() || searchable(row).contains(&query),
+                }
             })
             .collect();
         if !self.by_project {
             shown.sort_by(|a, b| {
-                let updated = |row: &Value| row.get("updated").and_then(Value::as_f64).unwrap_or(0.0);
-                section(a)
-                    .cmp(&section(b))
-                    .then(updated(b).partial_cmp(&updated(a)).unwrap_or(std::cmp::Ordering::Equal))
+                let updated =
+                    |row: &Value| row.get("updated").and_then(Value::as_f64).unwrap_or(0.0);
+                section(a).cmp(&section(b)).then(
+                    updated(b)
+                        .partial_cmp(&updated(a))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
             });
         }
         shown
@@ -137,6 +148,10 @@ impl Dashboard {
     /// Keep the selection on the same session across host refreshes.
     pub fn sync(&mut self, dashboard: &Value) {
         self.workspace = text(dashboard, "workspace").to_owned();
+        self.response_query = dashboard
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         if self.selected_id.is_empty() {
             self.selected_id = dashboard
                 .get("selected")
@@ -144,15 +159,18 @@ impl Dashboard {
                 .unwrap_or("")
                 .to_owned();
         }
-        if self.requested.is_empty() {
-            self.requested = text(dashboard, "selected").to_owned();
-        }
         let shown = self.filtered(rows_of(dashboard));
-        let (index, id) = match shown.iter().position(|row| text(row, "id") == self.selected_id) {
+        let (index, id) = match shown
+            .iter()
+            .position(|row| text(row, "id") == self.selected_id)
+        {
             Some(index) => (index, self.selected_id.clone()),
             None => {
                 let index = self.selected.min(shown.len().saturating_sub(1));
-                let id = shown.get(index).map_or("", |row| text(row, "id")).to_owned();
+                let id = shown
+                    .get(index)
+                    .map_or("", |row| text(row, "id"))
+                    .to_owned();
                 (index, id)
             }
         };
@@ -165,22 +183,10 @@ impl Dashboard {
         }
     }
 
-    /// The preview follows the keyboard selection only; hover never changes it.
-    fn preview_for_selection(&mut self) -> Option<Value> {
-        let target = self.selected_id.clone();
-        if !self.kb_selected || target.is_empty() || target == self.requested {
-            return None;
-        }
-        self.preview_scroll = 0;
-        self.requested = target.clone();
-        Some(json!({"kind":"session_preview","id":target}))
-    }
-
-    /// Called every frame: when the selection moved without a key (the host removed or
-    /// reordered rows), ask for the preview of the session now selected.
-    pub fn reconcile(&mut self, dashboard: &Value) -> Option<Value> {
+    /// Called every frame: keeps the selection on the same session after the host
+    /// removed or reordered rows.
+    pub fn reconcile(&mut self, dashboard: &Value) {
         self.sync(dashboard);
-        self.preview_for_selection()
     }
 
     fn select(&mut self, index: usize, dashboard: &Value) -> Option<Value> {
@@ -188,10 +194,13 @@ impl Dashboard {
             let shown = self.filtered(rows_of(dashboard));
             let index = index.min(shown.len().saturating_sub(1));
             self.selected = index;
-            shown.get(index).map_or("", |row| text(row, "id")).to_owned()
+            shown
+                .get(index)
+                .map_or("", |row| text(row, "id"))
+                .to_owned()
         };
         self.selected_id = id;
-        self.preview_for_selection()
+        None
     }
 
     fn group_key(&self, row: &Value) -> String {
@@ -233,10 +242,8 @@ impl Dashboard {
         let visible = self.visible_indices(dashboard);
         if delta == -1 && visible.first().is_none_or(|first| *first == self.selected) {
             self.searching = true;
-            self.kb_selected = false;
             return None;
         }
-        self.kb_selected = true;
         self.move_by(delta, dashboard)
     }
 
@@ -253,12 +260,11 @@ impl Dashboard {
             .find(|row| text(row, "id") == self.selected_id)
     }
 
-    fn query_changed(&mut self, dashboard: &Value) -> Option<Value> {
+    fn query_changed(&mut self, _dashboard: &Value) -> Option<Value> {
         self.selected = 0;
         self.selected_id.clear();
         self.list_top = 0;
-        self.sync(dashboard);
-        self.preview_for_selection()
+        Some(json!({"kind":"sessions_search","query":self.query}))
     }
 
     /// One key while the dashboard is visible. The dashboard owns every key: search owns
@@ -323,8 +329,11 @@ impl Dashboard {
                 KeyCode::Enter | KeyCode::Down => {
                     // Into the results: the first match becomes the keyboard selection.
                     self.searching = false;
-                    self.kb_selected = true;
-                    let first = self.visible_indices(dashboard).first().copied().unwrap_or(0);
+                    let first = self
+                        .visible_indices(dashboard)
+                        .first()
+                        .copied()
+                        .unwrap_or(0);
                     return self.select(first, dashboard);
                 }
                 KeyCode::Backspace => {
@@ -364,7 +373,6 @@ impl Dashboard {
             KeyCode::Char('w') if control => return Some(json!({"kind":"worktrees"})),
             KeyCode::Char('k') if control => {
                 self.searching = true;
-                self.kb_selected = false;
                 return None;
             }
             KeyCode::Up => return self.key_move(-1, dashboard),
@@ -372,19 +380,15 @@ impl Dashboard {
             KeyCode::PageUp => return self.key_move(-10, dashboard),
             KeyCode::PageDown => return self.key_move(10, dashboard),
             KeyCode::Home => {
-                self.kb_selected = true;
                 let visible = self.visible_indices(dashboard);
                 return self.select(visible.first().copied().unwrap_or(0), dashboard);
             }
             KeyCode::End => {
-                self.kb_selected = true;
                 let visible = self.visible_indices(dashboard);
                 return self.select(visible.last().copied().unwrap_or(0), dashboard);
             }
             KeyCode::Enter => {
-                return self
-                    .selected_row(dashboard)
-                    .map(Self::open_op);
+                return self.selected_row(dashboard).map(Self::open_op);
             }
             KeyCode::Delete => return self.ask_archive(dashboard),
             _ => {}
@@ -397,7 +401,6 @@ impl Dashboard {
         }
         if shortcut('/') {
             self.searching = true;
-            self.kb_selected = false;
             return None;
         }
         if shortcut('g') {
@@ -448,14 +451,16 @@ impl Dashboard {
             KeyCode::Char('c') if control => draft_empty,
             KeyCode::Char('s' | 'n' | 'w') if control => true,
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => true,
-            KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd') if plain && draft_empty => {
+            KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd')
+                if plain && draft_empty =>
+            {
                 true
             }
             _ => false,
         }
     }
 
-    /// Pointer motion only highlights the row under it. It never changes the preview.
+    /// Pointer motion only highlights the row under it. It never changes the selection.
     pub fn hover(&mut self, x: u16, y: u16, dashboard: &Value) -> Option<Value> {
         self.sync(dashboard);
         self.hovered_id = self
@@ -524,7 +529,6 @@ impl Dashboard {
         }
         if self.search_hit.contains(at) {
             self.searching = true;
-            self.kb_selected = false;
             return None;
         }
         if self.archive_hit.contains(at) {
@@ -544,7 +548,6 @@ impl Dashboard {
             }
             return None;
         };
-        self.kb_selected = false;
         let double = self
             .last_click
             .is_some_and(|(last, at)| last == index && at.elapsed() < DOUBLE_CLICK);
@@ -557,18 +560,10 @@ impl Dashboard {
         self.select(index, dashboard)
     }
 
-    /// The wheel scrolls the preview over the right pane, otherwise it moves the selection.
+    /// The wheel over the list moves the selection.
     pub fn wheel(&mut self, x: u16, y: u16, down: bool, dashboard: &Value) -> Option<Value> {
         self.sync(dashboard);
         let at = Position::new(x, y);
-        if self.preview_area.contains(at) {
-            self.preview_scroll = if down {
-                self.preview_scroll + 3
-            } else {
-                self.preview_scroll.saturating_sub(3)
-            };
-            return None;
-        }
         if self.list_area.contains(at) {
             return self.move_by(if down { 1 } else { -1 }, dashboard);
         }
@@ -592,15 +587,15 @@ mod tests {
         ]))
     }
     #[test]
-    fn arrows_preview_enter_opens() {
+    fn arrows_move_locally_enter_opens() {
         let rows = two();
         let mut picker = Dashboard::default();
-        assert_eq!(
-            picker.key(key(KeyCode::Down), &rows).unwrap()["kind"],
-            "session_preview"
-        );
+        assert!(picker.key(key(KeyCode::Down), &rows).is_none());
         let open = picker.key(key(KeyCode::Enter), &rows).unwrap();
-        assert_eq!((open["id"].as_str(), open["workspace"].as_str()), (Some("b"), Some("/b")));
+        assert_eq!(
+            (open["id"].as_str(), open["workspace"].as_str()),
+            (Some("b"), Some("/b"))
+        );
     }
     #[test]
     fn search_owns_shortcut_letters() {
@@ -615,7 +610,7 @@ mod tests {
         assert!(picker.confirm_archive.is_none());
     }
     #[test]
-    fn filter_matches_visible_fields_only() {
+    fn fallback_filter_matches_workspace() {
         let rows = dash(json!([
             {"id":"secret-id","title":"Alpha","workspace":"/hidden/path","status":"idle"},
         ]));
@@ -623,7 +618,7 @@ mod tests {
             query: "hidden".into(),
             ..Default::default()
         };
-        assert!(picker.filtered(rows_of(&rows)).is_empty());
+        assert_eq!(picker.filtered(rows_of(&rows)).len(), 1);
         let picker = Dashboard {
             query: "alpha".into(),
             ..Default::default()
@@ -688,12 +683,33 @@ mod tests {
             query: "be".into(),
             ..Default::default()
         };
-        picker.key(key(KeyCode::Esc), &rows);
+        assert_eq!(
+            picker.key(key(KeyCode::Esc), &rows).unwrap(),
+            json!({"kind":"sessions_search","query":""})
+        );
         assert!(picker.query.is_empty());
         assert_eq!(
             picker.key(key(KeyCode::Esc), &rows).unwrap()["kind"],
             "sessions_close"
         );
+    }
+    #[test]
+    fn remote_search_trusts_matches_and_rejects_stale_rows() {
+        let mut picker = Dashboard::default();
+        let mut rows = two();
+        rows["query"] = json!("");
+        picker.key(key(KeyCode::Char('/')), &rows);
+        assert_eq!(
+            picker.key(key(KeyCode::Char('z')), &rows).unwrap(),
+            json!({"kind":"sessions_search","query":"z"})
+        );
+        picker.sync(&rows);
+        assert!(picker.filtered(rows_of(&rows)).is_empty());
+        rows["query"] = json!("z");
+        rows["rows"] = json!([{"id":"snippet-match","title":"No visible match"}]);
+        picker.reconcile(&rows);
+        assert_eq!(picker.filtered(rows_of(&rows)).len(), 1);
+        assert_eq!(picker.selected_id, "snippet-match");
     }
     #[test]
     fn composer_text_keeps_letters_and_arrows_stay() {
@@ -708,11 +724,16 @@ mod tests {
         assert!(picker.owns(&enter, true));
     }
     #[test]
-    fn hover_highlights_without_touching_preview_or_selection() {
+    fn hover_highlights_without_touching_selection() {
         let rows = two();
         let mut picker = Dashboard::default();
         picker.sync(&rows);
-        picker.list_area = Rect { x: 0, y: 0, width: 10, height: 4 };
+        picker.list_area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 4,
+        };
         picker.line_rows = vec![Some(0), Some(1)];
         assert!(picker.hover(0, 1, &rows).is_none());
         assert_eq!(picker.selected_id, "a");
@@ -725,30 +746,19 @@ mod tests {
         let rows = two();
         let mut picker = Dashboard::default();
         assert!(picker.key(key(KeyCode::Up), &rows).is_none());
-        assert!(picker.searching && !picker.kb_selected);
+        assert!(picker.searching);
         picker.key(key(KeyCode::Char('b')), &rows);
         assert_eq!(picker.query, "b");
-        let op = picker.key(key(KeyCode::Down), &rows).unwrap();
-        assert!(!picker.searching && picker.kb_selected);
-        assert_eq!(op["id"], "b");
-        picker.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL), &rows);
+        assert!(picker.key(key(KeyCode::Down), &rows).is_none());
+        assert!(!picker.searching);
+        assert_eq!(picker.selected_id, "b");
+        picker.key(
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            &rows,
+        );
         assert!(picker.searching, "Ctrl+K searches");
         picker.key(key(KeyCode::Esc), &rows);
         assert!(!picker.searching && picker.query.is_empty());
-    }
-    #[test]
-    fn preview_is_requested_only_for_keyboard_moves() {
-        let rows = two();
-        let mut picker = Dashboard::default();
-        picker.sync(&rows);
-        picker.list_area = Rect { x: 0, y: 0, width: 10, height: 4 };
-        picker.line_rows = vec![Some(0), Some(1)];
-        assert!(picker.click(0, 1, &rows).is_none());
-        assert!(!picker.kb_selected);
-        picker.selected_id = "a".into();
-        picker.selected = 0;
-        assert_eq!(picker.key(key(KeyCode::Down), &rows).unwrap()["kind"], "session_preview");
-        assert!(picker.kb_selected);
     }
     #[test]
     fn time_groups_sort_newest_first() {
@@ -772,7 +782,11 @@ mod tests {
             {"id":"b","title":"Beta","workspace":"/other","repo":"/w","status":"idle"},
             {"id":"c","title":"Gamma","workspace":"/else","status":"idle"},
         ]));
-        let picker = Dashboard { this_project: true, workspace: "/w".into(), ..Default::default() };
+        let picker = Dashboard {
+            this_project: true,
+            workspace: "/w".into(),
+            ..Default::default()
+        };
         let shown = picker.filtered(rows_of(&rows));
         assert_eq!(shown.len(), 2);
         assert!(shown.iter().all(|row| text(row, "id") != "c"));

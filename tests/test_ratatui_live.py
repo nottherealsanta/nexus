@@ -470,3 +470,94 @@ async def test_toggle_opens_and_closes_the_card_and_replay_matches(shell):
 def test_projection_without_a_live_call_is_unchanged(shell):
     snapshot = project(shell.controller, 1, shell=shell, literal=False)
     assert not [b for b in snapshot["blocks"] if b["kind"] == "live"] and snapshot["live"] == {}
+
+
+async def test_terminal_pane_shows_the_open_call_and_keeps_it_out_of_the_timeline(shell):
+    """The native terminal draws the open call in the Live pane, not as a timeline card."""
+    shell.controller.view = fold(call_events(ended=False))
+    await shell.command("/live", ())  # FakeCall answers with call_id "c1"
+    assert shell.live.state == "active" and shell.live.pane is True
+    snapshot = project(shell.controller, 1, shell=shell, literal=False)
+    assert not [b for b in snapshot["blocks"] if b["kind"] == "live"]
+    live = snapshot["live"]
+    assert "Sent to agent (queue)" in live["detail"] and "→ turn #1" in live["detail"]
+    assert live["operation"] == {"kind": "live_toggle", "id": "c1"}
+    assert live["collapsed"] is True
+    await shell.live.shutdown()
+
+
+async def test_the_card_joins_the_timeline_once_the_call_ends(shell):
+    shell.controller.view = fold(call_events(ended=False))
+    await shell.command("/live", ())
+    await shell.command("/live", ())  # hang up
+    assert shell.live.state == "idle"
+    shell.controller.view = fold(call_events(ended=True))
+    snapshot = project(shell.controller, 2, shell=shell, literal=False)
+    card = next(b for b in snapshot["blocks"] if b["kind"] == "live")
+    assert card["status"] == "ended" and card["operation"] == {"kind": "live_toggle", "id": "c1"}
+    assert snapshot["live"] == {}
+
+
+async def test_desktop_keeps_the_card_in_the_timeline(shell):
+    shell.live.pane = False  # prototype.run sets this for the desktop client
+    shell.controller.view = fold(call_events(ended=False))
+    await shell.command("/live", ())
+    assert shell.live.bar()["detail"] == ""
+    snapshot = project(shell.controller, 1, shell=shell, literal=False)
+    card = next(b for b in snapshot["blocks"] if b["kind"] == "live")
+    assert "Sent to agent (queue)" in card["detail"] and card["collapsed"] is True
+    await shell.live.shutdown()
+
+
+async def test_running_the_pane_operation_opens_the_rows(shell):
+    shell.controller.view = fold(call_events(ended=False))
+    await shell.command("/live", ())
+    operation = shell.live.bar()["operation"]
+    assert operation == {"kind": "live_toggle", "id": "c1"}
+    assert shell.live.bar()["collapsed"] is True
+    await shell.workflows.operate(operation)
+    opened = shell.live.bar()
+    assert opened["collapsed"] is False and "Agent progress 0" in opened["detail"]
+    await shell.workflows.operate(operation)
+    assert shell.live.bar()["collapsed"] is True
+    await shell.live.shutdown()
+
+
+def _starting(shell, begin_ts=100.0):
+    """A client that is still starting: the daemon recorded ``live.started``, the result is not back."""
+    shell.live.call = FakeCall(shell.controller.client, "s")
+    shell.live.state, shell.live.session, shell.live.begin_ts = "starting", "s", begin_ts
+
+
+async def test_pane_appears_and_card_stays_out_while_the_start_result_is_unknown(shell):
+    shell.controller.view = fold(call_events(ended=False))
+    _starting(shell)
+    assert shell.live.call.result is None
+    assert not shell.live.card_blocks(shell.controller.view)  # no flash of the timeline card
+    snapshot = project(shell.controller, 1, shell=shell, literal=False)
+    assert not [b for b in snapshot["blocks"] if b["kind"] == "live"]
+    assert "Sent to agent (queue)" in snapshot["live"]["detail"]
+    assert snapshot["live"]["operation"] == {"kind": "live_toggle", "id": "c1"}
+    assert snapshot["live"]["model"] == "gpt-live-1-codex"
+
+
+async def test_starting_without_the_started_event_has_no_pane_yet(shell):
+    _starting(shell)
+    bar = shell.live.bar()
+    assert bar["state"] == "starting" and bar["detail"] == "" and bar["phase"] == "connecting"
+
+
+async def test_an_older_or_ended_call_is_never_taken_for_the_one_starting(shell):
+    shell.controller.view = fold(call_events(ended=True))
+    _starting(shell, begin_ts=500.0)
+    assert shell.live.bar()["detail"] == ""
+    assert [b for _, b in shell.live.card_blocks(shell.controller.view)]  # the ended call stays a card
+    shell.controller.view = fold(call_events(ended=False))  # started long before this start began
+    assert shell.live.bar()["detail"] == ""
+
+
+async def test_the_card_is_not_matched_in_another_session_while_starting(shell):
+    shell.controller.view = fold(call_events(ended=False))
+    _starting(shell)
+    shell.controller.session = "other"
+    assert shell.live.bar()["detail"] == "" and shell.live.bar()["elsewhere"] == "s"
