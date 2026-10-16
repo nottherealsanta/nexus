@@ -32,7 +32,6 @@ MAX_APPEND_BYTES = 500
 #: Bounds for what the daemon accepts from the wire.
 MAX_EVENT_BYTES = 1_048_576
 MAX_DELEGATION_CHARS = 16_000
-FINAL_LABEL = '"Agent Final Message":'
 CHANNELS = ("speakable", "commentary")
 _FATAL_CODES = frozenset({"authentication_error", "invalid_token", "token_expired", "invalid_api_key"})
 
@@ -271,11 +270,6 @@ def chunk_utf8(text: str, limit: int = MAX_APPEND_BYTES) -> list[str]:
     return chunks
 
 
-def final_message(text: str) -> str:
-    """The final-answer append text: label, blank line, raw text (no escaping)."""
-    return f"{FINAL_LABEL}\n\n{text}"
-
-
 def append_message(text: str, *, channel: str | None = None, delegation_id: str | None = None) -> dict[str, Any]:
     """One context-append message; ``delegation.context.append`` when ``delegation_id`` is set."""
     if channel is not None and channel not in CHANNELS:
@@ -310,9 +304,9 @@ def valid_call_id(value: str) -> bool:
 
 
 __all__ = [
-    "CHANNELS", "DEFAULT_VOICE", "FINAL_LABEL", "MAX_APPEND_BYTES", "MAX_DELEGATION_CHARS", "MODEL",
+    "CHANNELS", "DEFAULT_VOICE", "MAX_APPEND_BYTES", "MAX_DELEGATION_CHARS", "MODEL",
     "VOICES", "CallRequest", "LiveError", "DelegationCreated", "ErrorEvent", "LiveEvent", "LiveSession",
     "SessionClosed", "SessionStarted", "SessionUpdated", "SidebandOpen", "SidebandReconnected", "TranscriptAdded",
     "TranscriptDelta", "TurnDone", "Unknown", "append_message", "append_messages", "chunk_utf8",
-    "close_message", "final_message", "parse_event", "resolve_voice", "valid_call_id",
+    "close_message", "parse_event", "resolve_voice", "valid_call_id",
 ]

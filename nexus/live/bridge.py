@@ -12,8 +12,15 @@ Contract:
   (``LiveHost.observe``), so it never changes presence or the unattended policy.
 - Progress: ``tool.requested`` bursts become one short ``commentary`` append at
   most every 5 s, only when ``[live].progress`` is on.
-- ``turn.completed`` sends the last visible assistant text, prefixed with the
-  ``"Agent Final Message":`` label, on the delegation. ``turn.failed`` /
+- The user message is the delegation text **plus** a labelled transcript of both speakers
+  since the previous delegation and a note that it was speech (``compose_request``), like
+  Codex's ``<realtime_delegation>`` wrapper (codex-rs core/src/context/realtime_delegation.rs).
+  It is plain text in the message itself, so the timeline shows exactly what the agent saw;
+  Nexus has no hidden-context channel for user messages and must not grow one. Each part is
+  bounded at 4 KiB and clipping is announced. An empty delegation falls back to the transcript.
+- ``turn.completed`` sends the last visible assistant text as plain speakable text (no label;
+  the manager sends it as ``session.context.append``/``speakable``, as Codex's TUI does).
+  ``turn.failed`` /
   ``turn.cancelled`` send a notice. ``permission.requested`` and
   ``question.requested`` send a notice that the answer happens **on screen**.
 - Every append goes through ``append`` (the manager), which chunks it to 500 UTF-8
@@ -30,7 +37,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ..util import redact_secrets
-from .protocol import final_message
 
 log = logging.getLogger("nexus.live")
 
@@ -39,6 +45,15 @@ MAX_FINAL_CHARS = 12_000
 MAX_TOOLS_IN_PROGRESS = 5
 MAX_TRACKED_TURNS = 32
 MAX_HEARD_CHARS = 2_000
+MAX_INPUT_BYTES = 4_096  # delegation text kept (start), as Codex bounds <input>
+MAX_TRANSCRIPT_BYTES = 4_096  # transcript kept (end), as Codex bounds <transcript_delta>
+SPEECH_NOTE = (
+    "Note: this request came from a voice call. The text is speech recognition output and may "
+    "contain errors or be unpunctuated; work out what the user meant and say so if unsure. "
+    "Your final answer is read back to the user by a voice assistant, so lead with a short "
+    "plain-language summary."
+)
+ROLE_LABELS = {"user": "You", "assistant": "Voice"}
 
 Append = Callable[[str, str, "str | None"], Awaitable[None]]
 
@@ -50,6 +65,76 @@ def _clip(text: str, limit: int) -> str:
 
 def _norm(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _clip_bytes(text: str, limit: int, *, keep: str) -> tuple[str, int]:
+    """Clip to ``limit`` UTF-8 bytes keeping the ``start`` or the ``end``; returns (text, characters dropped)."""
+    if len(text.encode("utf-8")) <= limit:
+        return text, 0
+    raw = text.encode("utf-8")
+    kept = (raw[:limit] if keep == "start" else raw[-limit:]).decode("utf-8", "ignore")
+    return kept, len(text) - len(kept)
+
+
+def format_transcript(entries: list[tuple[str, str]]) -> str:
+    """``You: ...`` / ``Voice: ...`` lines, one per spoken turn."""
+    lines = []
+    for role, text in entries:
+        text = " ".join(str(text).split())
+        if text:
+            lines.append(f"{ROLE_LABELS.get(role, role.title())}: {text}")
+    return "\n".join(lines)
+
+
+def compose_request(text: str, transcript: list[tuple[str, str]]) -> tuple[str, dict[str, Any]]:
+    """The user message for one delegation, plus the facts recorded in ``live.delegated``.
+
+    Layout (plain text, readable to the agent and in the timeline)::
+
+        Voice request
+        <delegation text>
+
+        Spoken conversation since the previous request
+        You: ...
+        Voice: ...
+
+        Note: ...
+
+    A trailing ``You`` line equal to the request is dropped (it would repeat it). With no
+    delegation text the transcript is the request. Returns ``("", ...)`` when both are empty.
+    """
+    entries = [(role, " ".join(str(t).split())) for role, t in transcript if str(t).strip()]
+    request = text.strip()
+    if request and entries and entries[-1][0] == "user" and _norm(entries[-1][1]) == _norm(request):
+        entries.pop()
+    body = format_transcript(entries)
+    from_transcript = not request
+    input_dropped = delta_dropped = 0
+    if from_transcript:
+        request, body = body, ""
+        request, delta_dropped = _clip_bytes(request, MAX_TRANSCRIPT_BYTES, keep="end")
+        if delta_dropped:
+            request = f"[… {delta_dropped} earlier characters omitted]\n{request}"
+    else:
+        request, input_dropped = _clip_bytes(request, MAX_INPUT_BYTES, keep="start")
+        if input_dropped:
+            request += f"\n[… {input_dropped} more characters omitted]"
+        body, delta_dropped = _clip_bytes(body, MAX_TRANSCRIPT_BYTES, keep="end")
+        if delta_dropped:
+            body = f"[… {delta_dropped} earlier characters omitted]\n{body}"
+    if not request:
+        return "", {}
+    head = "Voice request (taken from the spoken conversation)" if from_transcript else "Voice request"
+    parts = [f"{head}\n{request}"]
+    if body:
+        parts.append(f"Spoken conversation since the previous request\n{body}")
+    parts.append(SPEECH_NOTE)
+    facts = {
+        "transcript": body or (request if from_transcript else ""),
+        "transcript_omitted": delta_dropped, "input_omitted": input_dropped,
+        "from_transcript": from_transcript,
+    }
+    return "\n\n".join(parts), facts
 
 
 def _is_subagent(data: Mapping[str, Any]) -> bool:
@@ -112,7 +197,9 @@ class LiveBridge:
 
     # -- delegation --------------------------------------------------------
 
-    async def on_delegation(self, delegation_id: str, text: str, heard: str = "") -> None:
+    async def on_delegation(
+        self, delegation_id: str, text: str, heard: str = "", transcript: list[tuple[str, str]] | None = None
+    ) -> None:
         """Hand one spoken request to the session as a queued or steering user message.
 
         ``heard`` is the user's latest transcript when the manager has one; it is recorded
@@ -123,13 +210,15 @@ class LiveBridge:
             if self._closed:
                 return
             text = text.strip()
-            if not text:
+            message, facts = compose_request(text, transcript or [])
+            if not message:
                 await self._append("The request was empty, so nothing was sent to the agent.", "notice", delegation_id)
                 return
             mode = "steer" if self._host.turn_running(self._session) else "queue"
             try:
                 queued_id = await self._host.enqueue(
-                    self._session, text, mode, {"kind": "live", "delegation_id": delegation_id}
+                    self._session, message, mode, {"kind": "live", "delegation_id": delegation_id},
+                    title=text or facts["transcript"],
                 )
             except asyncio.CancelledError:
                 raise
@@ -149,9 +238,9 @@ class LiveBridge:
                 self._queued.setdefault(queued_id, delegation_id)
             heard = " ".join(heard.split())[:MAX_HEARD_CHARS]
             self._emit("live.delegated", {
-                "delegation_id": delegation_id, "text": text, "mode": mode, "queued_id": queued_id,
+                "delegation_id": delegation_id, "text": text or facts["transcript"], "mode": mode, "queued_id": queued_id,
                 "source": "delegation", "heard": heard,
-                "verbatim": bool(heard) and _norm(heard) == _norm(text),
+                "verbatim": bool(heard) and _norm(heard) == _norm(text), **facts,
             })
             self._set_phase("working")
 
@@ -274,7 +363,7 @@ class LiveBridge:
             body = text.strip() or "The agent finished without a written reply."
             if len(body) > MAX_FINAL_CHARS:
                 body = body[:MAX_FINAL_CHARS] + f"\n[{len(body) - MAX_FINAL_CHARS} more characters omitted]"
-            await self._append(final_message(body), "final", last)
+            await self._append(body, "final", last)
         elif kind == "turn.failed":
             await self._append(
                 f"The agent's work on this request failed: {_clip(str(data.get('error') or 'unknown error'), 300)}.",

@@ -10,7 +10,7 @@ from nexus.events import Event
 from nexus.host import HostFacade
 from nexus.host import protocol as p
 from nexus.live import protocol as lp
-from nexus.live.bridge import MAX_FINAL_CHARS, LiveBridge
+from nexus.live.bridge import MAX_FINAL_CHARS, MAX_INPUT_BYTES, MAX_TRANSCRIPT_BYTES, LiveBridge, compose_request
 from nexus.live.manager import LiveManager
 from nexus.model.providers.scripted import ScriptedProvider, Wait, text_response, tool_response
 from nexus.runtime import Runtime
@@ -83,7 +83,7 @@ async def test_final_failure_cancel_and_drop_notices():
     await bridge.handle_event(ev("text", text="first"))
     await bridge.handle_event(ev("text", text="the real answer"))
     await bridge.handle_event(ev("turn.completed", stop_reason="end_turn"))
-    assert sent == [(lp.final_message("the real answer"), "final", "d1")] and phases[-1] == "listening"
+    assert sent == [("the real answer", "final", "d1")] and phases[-1] == "listening"
 
     sent.clear()
     await delegated_turn(bridge, "d2", "q2", "t2")
@@ -162,7 +162,7 @@ async def test_delegation_mode_follows_whether_a_turn_runs():
     await bridge.on_delegation("d1", " read README ")
     host.running = True
     await bridge.on_delegation("d2", "also tests")
-    assert [(e[1], e[2]) for e in host.enqueued] == [("read README", "queue"), ("also tests", "steer")]
+    assert [(e[1].split("\n")[1], e[2]) for e in host.enqueued] == [("read README", "queue"), ("also tests", "steer")]
     assert all(e[3]["kind"] == "live" for e in host.enqueued)
     assert [(d["delegation_id"], d["mode"], d["queued_id"]) for k, d in emitted if k == "live.delegated"] == [
         ("d1", "queue", "q1"), ("d2", "steer", "q2")]
@@ -188,7 +188,7 @@ async def test_quick_tap_consuming_input_leaves_no_stale_mapping():
     bridge, sent, *_ = unit_bridge()
     host = bridge._host
 
-    async def fast_enqueue(session, text, mode, origin):
+    async def fast_enqueue(session, text, mode, origin, title=None):
         # the tap delivers queued + consumed before enqueue() returns to the bridge
         await bridge.handle_event(ev("input.queued", on=None, queued_id="q1", origin=origin))
         await bridge.handle_event(ev("input.consumed", on="t1", queued_id="q1", mode="queue", turn="t1"))
@@ -235,6 +235,10 @@ async def make_call(tmp_path, provider, **config):
     return runtime, facade, transport
 
 
+def final_sent(transport) -> bool:
+    return any(m.get("type") == "session.context.append" for m in transport.sent)
+
+
 def delegation(i: str, text: str) -> lp.DelegationCreated:
     return lp.DelegationCreated(i, text)
 
@@ -244,16 +248,17 @@ async def test_idle_delegation_runs_a_normal_turn_and_appends_a_chunked_final(tm
     runtime, facade, transport = await make_call(tmp_path, ScriptedProvider(text_response(answer)))
     try:
         transport.push(delegation("d1", "summarise the README"))
-        await settle(lambda: any("Agent Final Message" in t for t in transport.texts()))
+        await settle(lambda: final_sent(transport))
         await settle(lambda: runtime.live.snapshot().phase == "listening")
 
         sent = [m for m in transport.sent if "content" in m]
-        assert {m["type"] for m in sent} == {"delegation.context.append"}
-        assert {m["delegation_item_id"] for m in sent} == {"d1"}
+        # Codex TUI: the final answer is a plain session-level speakable append, no id, no label
+        assert {m["type"] for m in sent} == {"session.context.append"}
+        assert all("delegation_item_id" not in m and m["channel"] == "speakable" for m in sent)
         assert all(len(m["content"][0]["text"].encode()) <= 500 for m in sent)
         joined = "".join(m["content"][0]["text"] for m in sent)
-        assert joined == lp.final_message(answer.strip()) and len(sent) >= 3
-        assert "channel" not in sent[0]  # the final answer carries no channel (notes 4.3)
+        assert joined == answer.strip() and len(sent) >= 3
+        assert "Agent Final Message" not in joined
 
         handle = runtime.session("s")
         view, _ = facade.state("s")
@@ -263,7 +268,8 @@ async def test_idle_delegation_runs_a_normal_turn_and_appends_a_chunked_final(tm
         assert call.appends[0].text == joined  # recorded exactly as sent
         # the user message the delegation created: same text as a typed prompt, plus an origin label
         user = next(m for m in view.messages if m.role == "user")
-        assert user.text == "summarise the README"
+        assert user.text == compose_request("summarise the README", [])[0]
+        assert user.text.startswith("Voice request\nsummarise the README") and "speech recognition" in user.text
         assert user.origin == {"kind": "live", "delegation_id": "d1"}
         queued = next(e for e in handle.events if e.type == "input.queued")
         assert queued.data["origin"] == {"kind": "live", "delegation_id": "d1"}
@@ -277,9 +283,9 @@ async def test_delegated_transcript_equals_a_typed_prompt_apart_from_the_origin(
     runtime, facade, transport = await make_call(tmp_path, ScriptedProvider(text_response("ok"), text_response("ok")))
     try:
         transport.push(delegation("d1", "do the thing"))
-        await settle(lambda: any("Agent Final Message" in t for t in transport.texts()))
+        await settle(lambda: final_sent(transport))
         facade.open_session("typed")
-        await facade.enqueue("typed", "do the thing", mode="queue")
+        await facade.enqueue("typed", compose_request("do the thing", [])[0], mode="queue")
         await facade.wait_idle(timeout=5.0)
 
         def shape(session):
@@ -309,14 +315,16 @@ async def test_delegation_during_a_running_turn_steers_it(tmp_path):
         transport.push(delegation("d2", "and mention the size"))
         await settle(lambda: len(facade.state("s")[0].live.delegations) == 2)
         gate.set()
-        await settle(lambda: any("Agent Final Message" in t for t in transport.texts()), timeout=5.0)
+        await settle(lambda: final_sent(transport), timeout=5.0)
         view, _ = facade.state("s")
         assert [(d.delegation_id, d.mode) for d in view.live.delegations] == [("d1", "queue"), ("d2", "steer")]
-        finals = [m for m in transport.sent if "Agent Final Message" in m["content"][0]["text"]]
-        assert [m["delegation_item_id"] for m in finals] == ["d2"]  # the later request carries the answer
+        finals = [m for m in transport.sent if m["type"] == "session.context.append"]
+        assert "".join(m["content"][0]["text"] for m in finals) == "both requests done"
+        view_appends = facade.state("s")[0].live.appends
+        assert [(a.channel, a.delegation_id) for a in view_appends if a.channel == "final"] == [("final", "d2")]
         assert any(m["delegation_item_id"] == "d1" and "merged" in m["content"][0]["text"] for m in transport.sent if "content" in m)
         steered = [m for m in view.messages if m.role == "user" and m.origin and m.origin["delegation_id"] == "d2"]
-        assert steered and steered[0].text == "and mention the size"
+        assert steered and steered[0].text == compose_request("and mention the size", [])[0]
     finally:
         await runtime.aclose()
 
@@ -340,7 +348,7 @@ async def test_permission_request_is_announced_and_never_resolved_by_the_bridge(
         assert not (tmp_path / "b.txt").exists()
         # the user answers on screen
         assert facade.resolve_permission("s", pending[0].id, "deny_once", client_id="user")
-        await settle(lambda: any("Agent Final Message" in t for t in transport.texts()), timeout=5.0)
+        await settle(lambda: final_sent(transport), timeout=5.0)
     finally:
         await view_stream.aclose()
         await runtime.aclose()
@@ -352,7 +360,7 @@ async def test_progress_commentary_uses_the_commentary_channel(tmp_path):
     runtime, facade, transport = await make_call(tmp_path, provider)
     try:
         transport.push(delegation("d1", "read a.txt"))
-        await settle(lambda: any("Agent Final Message" in t for t in transport.texts()), timeout=5.0)
+        await settle(lambda: final_sent(transport), timeout=5.0)
         progress = [m for m in transport.sent if m.get("channel") == "commentary"]
         assert len(progress) == 1 and "Read" in progress[0]["content"][0]["text"]
         view, _ = facade.state("s")
@@ -374,7 +382,7 @@ async def test_ending_the_call_does_not_cancel_the_running_turn(tmp_path):
         await facade.wait_idle(timeout=5.0)
         view, _ = facade.state("s")
         assert view.turns[-1].phase == "completed" and view.live.status == "ended"
-        assert not any("Agent Final Message" in t for t in transport.texts())  # nobody left to tell
+        assert not final_sent(transport)  # nobody left to tell
         assert [e.type for e in runtime.session("s").events].count("live.ended") == 1
     finally:
         await runtime.aclose()
@@ -389,3 +397,51 @@ async def test_delegated_event_records_source_heard_and_verbatim():
     assert [r["source"] for r in rows] == ["delegation"] * 3
     assert [r["verbatim"] for r in rows] == [True, False, False]
     assert rows[1]["heard"] == "okay read the readme" and rows[2]["heard"] == ""
+
+
+# -- Codex-style handoff: transcript context and the speech note -------------
+
+async def test_delegation_message_carries_the_labelled_transcript_and_speech_note():
+    bridge, _s, emitted, _p, _c = unit_bridge()
+    host = bridge._host
+    transcript = [("user", "hello there"), ("assistant", "Hi, what can I do?"),
+                  ("user", "um check the readme"), ("assistant", "Sure."), ("user", "Check the README.")]
+    await bridge.on_delegation("d1", "Check the README.", heard="check the readme", transcript=transcript)
+    _sid, message, mode, origin = host.enqueued[0]
+    assert message == (
+        "Voice request\nCheck the README.\n\n"
+        "Spoken conversation since the previous request\n"
+        "You: hello there\nVoice: Hi, what can I do?\nYou: um check the readme\nVoice: Sure.\n\n"
+        + message.rsplit("\n\n", 1)[1]
+    )
+    assert "speech recognition output" in message and origin == {"kind": "live", "delegation_id": "d1"}
+    assert host.titles == ["Check the README."]  # the session title is the request, not the wrapper
+    row = next(d for k, d in emitted if k == "live.delegated")
+    assert row["text"] == "Check the README." and row["verbatim"] is True
+    assert row["transcript"].startswith("You: hello there") and row["transcript"].endswith("Voice: Sure.")
+    assert row["transcript_omitted"] == 0 and row["from_transcript"] is False
+
+
+def test_empty_delegation_uses_the_transcript_as_the_request():
+    message, facts = compose_request("  ", [("user", "run the tests"), ("assistant", "ok")])
+    assert message.startswith("Voice request (taken from the spoken conversation)\nYou: run the tests\nVoice: ok")
+    assert "Spoken conversation since" not in message and facts["from_transcript"] is True
+    assert compose_request("", []) == ("", {})
+
+
+def test_transcript_and_input_are_bounded_and_clipping_is_announced():
+    long_turns = [("user", f"turn {i} " + "é" * 400) for i in range(40)]
+    message, facts = compose_request("x" * 10_000, long_turns)
+    assert facts["input_omitted"] > 0 and facts["transcript_omitted"] > 0
+    assert "more characters omitted]" in message and "earlier characters omitted]" in message
+    body = message.split("Spoken conversation since the previous request\n")[1].split("\n\nNote:")[0]
+    kept = body.split("\n", 1)[1]
+    assert len(kept.encode()) <= MAX_TRANSCRIPT_BYTES and kept.rstrip().endswith("é" * 400)  # the end is kept
+    request = message.split("\n\n")[0].split("\n", 1)[1]
+    assert request.startswith("xxx") and len(request.encode()) <= MAX_INPUT_BYTES + 60
+
+
+async def test_empty_delegation_and_empty_transcript_is_still_rejected():
+    bridge, sent, emitted, *_ = unit_bridge()
+    await bridge.on_delegation("d9", "  ", transcript=[])
+    assert "empty" in sent[0][0] and not bridge._host.enqueued

@@ -67,6 +67,7 @@ MAX_TRANSCRIPT_CHARS = 16_000
 MAX_CAPTION_CHARS = 4_000
 MAX_APPEND_CHARS = 32_000
 MAX_PENDING_DELEGATIONS = 8
+MAX_SPOKEN_TURNS = 64  # transcript turns kept between two delegations
 MAX_HELPER_DETAIL = 2_048
 RAW_LOG_MAX_BYTES = 1_048_576
 HELPER_KINDS = ("ready", "levels", "phase", "dc_error", "dropped", "closed")
@@ -107,8 +108,10 @@ class LiveHost(Protocol):
 
     def turn_running(self, session_id: str) -> bool: ...
 
-    async def enqueue(self, session_id: str, text: str, mode: str, origin: dict[str, str]) -> str:
-        """Queue or steer a user message; return its ``queued_id``."""
+    async def enqueue(
+        self, session_id: str, text: str, mode: str, origin: dict[str, str], title: str | None = None
+    ) -> str:
+        """Queue or steer a user message; return its ``queued_id``. ``title`` seeds a fresh session's title."""
 
     def observe(self, session_id: str) -> EventTap:
         """A non-viewer tap on the session's persisted events."""
@@ -168,6 +171,9 @@ class _Call:
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     bridge: LiveBridge | None = None
     last_heard: str = ""  # latest final user transcript, recorded beside delegations
+    # (role, text) finals since the previous delegation; bounded, handed to the bridge (plan 4.1)
+    spoken: list[tuple[str, str]] = field(default_factory=list)
+    sent_partial: dict[str, str] = field(default_factory=dict)  # role -> partial already handed over
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # transcripts
     partial: dict[str, str] = field(default_factory=dict)
@@ -665,8 +671,13 @@ class LiveManager:
         text = text[:MAX_APPEND_CHARS]
         if not text.strip() or call.ending is not None or call.transport is None:
             return
-        channel = {"commentary": "commentary", "notice": "speakable"}.get(label)
-        messages = append_messages(text, channel=channel, delegation_id=delegation_id)
+        channel = {"commentary": "commentary", "notice": "speakable", "final": "speakable"}.get(label)
+        # Codex's TUI sends the final answer as a plain ``session.context.append`` on the
+        # speakable channel with no delegation id (codex-rs tui realtime_handoff_e2e.rs);
+        # progress and notices stay on the delegation. ``live.appended`` still names the
+        # delegation so the card can pair the answer with its request.
+        wire_id = None if label == "final" else delegation_id
+        messages = append_messages(text, channel=channel, delegation_id=wire_id)
         parts = [m["content"][0]["text"] for m in messages]
         confirmed = 0
         failure: LiveError | None = None
@@ -688,6 +699,7 @@ class LiveManager:
                 self._emit(call, "live.appended", {
                     "delegation_id": delegation_id, "channel": label,
                     "text": "".join(parts[:confirmed]), "chunks": confirmed,
+                    "wire": messages[0]["type"], "wire_channel": channel or "",
                 })
         if failure is None:
             return
@@ -786,6 +798,11 @@ class LiveManager:
         call.dirty.discard(event.role)
         if text.strip() and event.role == "user":
             call.last_heard = text[:MAX_TRANSCRIPT_CHARS]
+        if text.strip() and _alnum(call.sent_partial.pop(event.role, "")) == _alnum(text):
+            pass  # this utterance already went to the agent as an in-progress partial
+        elif text.strip():
+            call.spoken.append((event.role, text[:MAX_TRANSCRIPT_CHARS]))
+            del call.spoken[:-MAX_SPOKEN_TURNS]
         if text.strip():
             call.turn_count += 1
             clipped = text[:MAX_TRANSCRIPT_CHARS]
@@ -805,9 +822,17 @@ class LiveManager:
             # bounded: beyond MAX_REJECTION_NOTICES in flight the durable error above is all there is
             self._spawn_notice(call, "nexus-live-reject", MAX_REJECTION_NOTICES, REJECT_NOTICE, event.id)
             return
+        transcript = list(call.spoken)
+        call.spoken.clear()
+        for role in ("user", "assistant"):  # speech still in progress belongs to this request
+            partial = call.partial.get(role, "").strip()
+            if partial:
+                transcript.append((role, partial[:MAX_TRANSCRIPT_CHARS]))
+                call.sent_partial[role] = partial
         task = asyncio.create_task(
             bridge.on_delegation(
-                event.id, event.text[:MAX_DELEGATION_CHARS], call.partial.get("user") or call.last_heard
+                event.id, event.text[:MAX_DELEGATION_CHARS], call.partial.get("user") or call.last_heard,
+                transcript=transcript,
             ), name="nexus-live-delegation"
         )
         call.tasks.add(task)
@@ -818,6 +843,10 @@ class LiveManager:
                 self._note_error(call, f"delegation failed: {safe_detail(finished.exception())}")
 
         task.add_done_callback(_done)
+
+
+def _alnum(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
 def _unit(value: Any) -> float:

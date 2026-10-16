@@ -131,8 +131,11 @@ class FacadeLiveHost:
     def turn_running(self, session_id: str) -> bool:
         return self._handle(session_id).active_turn_id is not None
 
-    async def enqueue(self, session_id: str, text: str, mode: str, origin: dict[str, str]) -> str:
-        queued_id, _turn = await self._facade.enqueue(session_id, text, mode=mode, origin=origin)
+    async def enqueue(
+        self, session_id: str, text: str, mode: str, origin: dict[str, str], title: str | None = None
+    ) -> str:
+        # ``title`` is the spoken request alone, so a fresh session is not titled "Voice request ...".
+        queued_id, _turn = await self._facade.enqueue(session_id, text, mode=mode, origin=origin, title_text=title)
         return queued_id
 
     def observe(self, session_id: str) -> _Tap:

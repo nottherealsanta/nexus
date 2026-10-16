@@ -442,6 +442,30 @@ async def test_transcripts_are_final_only_and_deltas_are_coalesced():
     await manager.stop("s1")
 
 
+async def test_delegation_gets_the_transcript_since_the_previous_one_and_in_progress_speech():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    t = transports[0]
+    t.push(lp.TurnDone("user", "hi"))
+    t.push(lp.TurnDone("assistant", "Hello, how can I help?"))
+    t.push(lp.TurnDone("user", "open the readme"))
+    t.push(lp.DelegationCreated("d1", "open the readme"))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert "You: hi\nVoice: Hello, how can I help?" in msg and msg.count("open the readme") == 1  # input not repeated
+    t.push(lp.TurnDone("assistant", "On it."))
+    t.push(lp.TranscriptAdded("user", "and the tests"))  # still being spoken when the delegation lands
+    t.push(lp.DelegationCreated("d2", "and the tests"))
+    await settle(lambda: len(host.enqueued) == 2)
+    msg2 = host.enqueued[1][1]
+    assert "Voice: On it." in msg2 and "hi" not in msg2.split("Note:")[0].replace("this", "")
+    t.push(lp.TurnDone("user", "and the tests"))  # the final of the partial already sent: not queued again
+    t.push(lp.DelegationCreated("d3", "   "))
+    await settle(lambda: host.of("live.appended"))  # empty request and no transcript: told it was empty
+    assert len(host.enqueued) == 2
+    await manager.stop("s1")
+
+
 async def test_delta_rate_is_bounded_to_four_hertz():
     manager, transports = make(flush_interval=0.25)
     host, _ = await start(manager)
@@ -480,7 +504,7 @@ def test_instructions_bundled_and_overrides(tmp_path):
     cfg = live_config()
     text, source = load_instructions(tmp_path / "myproj", "build", cfg)
     assert source == "bundled" and "build" in text and "myproj" in text and "{{" not in text
-    assert "Agent Final Message" in text and "on screen" in text
+    assert "Agent Final Message" not in text and "finished answer" in text and "on screen" in text
     assert "Silence from the user is normal" in text and "duplicate a handoff" in text and "Never read it aloud" in text
     import getpass
     assert getpass.getuser() not in text or getpass.getuser() in ("build", "myproj")
@@ -500,20 +524,14 @@ def test_instructions_bundled_and_overrides(tmp_path):
         load_instructions(tmp_path, "x", live_config(instructions="missing.md"))
 
 
-def test_bundled_instructions_ask_for_actionable_delegations(tmp_path):
+def test_bundled_instructions_describe_the_codex_style_handoff(tmp_path):
     text, _ = load_instructions(tmp_path, "build", live_config())
     assert "You have no tools of your own" in text
-    assert "Rewrite before you hand off" in text
-    assert "never pass the user's words or transcript through" in text
-    assert "Synthesize a concise task in your own words" in text
-    for part in ("resolve", "lead with the outcome", "context, constraints, and how to verify"):
-        assert part in text
-    assert "Keep the user's intent and any uncertainty they expressed" in text
-    assert "Never invent file names, facts, requirements, or extra scope" in text
-    assert "never say or imply the work is done" in text
-    assert "investigate and report without changing anything" in text
-    assert "Bad handoff: that sentence repeated as heard." in text
-    assert "This is a check only; do not change anything." in text
+    assert "Rewrite before you hand off" not in text and "Synthesize a concise task" not in text
+    assert "the service sends the agent what the user said, together with the recent conversation" in text
+    assert "You cannot add wording of your own" in text
+    assert "Never invent file names, facts or extra scope" in text and "never say or imply the work is done" in text
+    assert "finished answer" in text and "as if it were your own" in text
     assert "Do not claim it is done" in text
 
 

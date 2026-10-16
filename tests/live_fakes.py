@@ -107,6 +107,7 @@ class FakeHost:
         self.viewer_count = 1
         self.running = False
         self.enqueued: list[tuple[str, str, str, dict]] = []
+        self.titles: list[str | None] = []
         self.turns = list(turns or [])
         self.tap = FakeTap()
         self.agent = "build"
@@ -132,9 +133,10 @@ class FakeHost:
             raise self.context
         return self.context if self.context is not None else SessionContext()
 
-    async def enqueue(self, session_id, text, mode, origin):
+    async def enqueue(self, session_id, text, mode, origin, title=None):
         queued_id = f"q{len(self.enqueued) + 1}"
         self.enqueued.append((session_id, text, mode, dict(origin)))
+        self.titles.append(title)
         return queued_id
 
     def observe(self, session_id): return self.tap

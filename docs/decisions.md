@@ -845,6 +845,28 @@ double-enqueueing. Known gap: the voice model cannot yet send its own wording; a
 with `[live].log_raw` should test a `tools` array on the session. Details:
 `plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md` "Authorship of delegation text".
 
+## GPT Live: Codex-style handoff, transcript context and speakable replies (2026-10)
+
+Decision: the agent receives the delegation text plus a labelled transcript of both speakers
+since the previous delegation and a speech-recognition note, as one plain-text user message
+(`bridge.compose_request`); the final answer goes back as plain speakable text via
+`session.context.append` with no label and no delegation id. The "rewrite before you hand off"
+instruction is removed.
+Reason: Codex (commit 6ae8b8aa, `core/src/context/realtime_delegation.rs`, `core/src/realtime_conversation.rs`,
+`codex-api .../methods.rs`) does exactly this on `gpt-live-1-codex`: no voice-authored message
+exists, so the agent gets the heard input and the recent transcript (input keeps its start,
+transcript keeps its end, 4 KiB each) and the TUI replies with a speakable session append. The
+"Agent Final Message" label is a v1 artefact of other clients. Nexus data already showed the
+rewrite rule had no effect.
+Why in the message text and not hidden: Nexus shows the user everything the agent sees; the
+reducer has an `origin` label but no hidden-context channel for user messages, so the transcript
+is visible in the timeline and replays from `input.queued`. Progress and notices keep the
+delegation id (Codex's core-managed path); only the final answer follows the TUI path.
+Not verified against the real service: that the service accepts a final append without the
+delegation id, and what a voice model does with it. Tests: `tests/test_live_bridge.py`,
+`tests/test_live_manager.py`, `tests/test_live_protocol.py`. This supersedes the "no
+voice-authored handoff yet" gap above: the gap stays, the handoff no longer depends on it.
+
 ## GPT Live: Codex-style sideband (no client pings, unlimited backoff reconnect) (2026-10)
 
 Decision: the sideband sends no client WebSocket pings, retries an early 404 on the initial join

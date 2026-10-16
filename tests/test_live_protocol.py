@@ -141,9 +141,12 @@ def test_append_messages_shapes():
     assert "".join(m["content"][0]["text"] for m in many) == "é" * 600
 
 
-def test_final_message_prefix_is_raw_not_escaped():
-    text = lp.final_message("<b>a & b</b>")
-    assert text == '"Agent Final Message":\n\n<b>a & b</b>'
+def test_final_answer_is_a_session_level_speakable_append_without_a_label():
+    # Codex TUI shape (tui realtime_handoff_e2e.rs): session.context.append, channel speakable, no id.
+    assert not hasattr(lp, "final_message") and not hasattr(lp, "FINAL_LABEL")
+    message = lp.append_message("<b>a & b</b>", channel="speakable")
+    assert message == {"type": "session.context.append", "channel": "speakable",
+                       "content": [{"type": "input_text", "text": "<b>a & b</b>"}]}
 
 
 def test_close_message_and_call_ids():

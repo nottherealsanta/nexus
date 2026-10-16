@@ -28,7 +28,7 @@ experimental and may stop working without notice.
 
 | Path | Owns |
 | --- | --- |
-| `live/protocol.py` | frozen shapes: call request, inbound events (`parse_event` is total, unrecognised frames become `Unknown`), outbound appends, `chunk_utf8` (<= 500 UTF-8 bytes, never inside a code point), the `"Agent Final Message":` prefix |
+| `live/protocol.py` | frozen shapes: call request, inbound events (`parse_event` is total, unrecognised frames become `Unknown`), outbound appends, `chunk_utf8` (<= 500 UTF-8 bytes, never inside a code point) |
 | `live/transport.py` | `LiveTransport` protocol; `CodexLiveTransport`: signaling POST, call id from `Location`, sideband WebSocket, serialised sends, `session.close` on stop |
 | `live/manager.py` | `LiveManager`: one call per daemon, state machine, deadline, detach watchdog, events, instructions and continuity |
 | `live/bridge.py` | `LiveBridge`: delegations in, progress/final/notice appends out |
@@ -157,44 +157,70 @@ A delegation is **untrusted input**, exactly like a typed prompt.
 
 What GPT Live can and cannot do: the session offers a client delegation
 (`delegation: {type: client}`) and no documented native tool capability, and Nexus sends
-no tool schemas to it. So Live never calls Nexus tools itself. The bundled instructions
-require the voice model to rewrite each project-work request before delegating: never
-pass the transcription through (even trimmed), but synthesize a concise task in its own
-words that resolves references from the conversation, leads with the desired outcome, and
-adds relevant context, constraints and verification. It must keep the user's intent and
-uncertainty, add no imagined scope or file names, never claim the work is done, and say
-"investigate and report, change nothing" when the user only asked to check or explain.
-The prompt includes a bad-vs-good example (a rambling "check what context GPT Live
-gets" utterance becomes a check-only inspection task). The model also tells the user
-aloud that the coding agent will do the work. The delegation text still becomes an
-ordinary user message.
+no tool schemas to it. So Live never calls Nexus tools itself, and the voice model cannot
+author its own wording for the agent: in the recorded call `session-1ce5e575` every
+`live.delegated` text equalled the user's final spoken transcript word for word. The public
+GPT-Live docs go further and say a client delegation event carries no task text at all, and
+Codex has the same shape (no tools; the delegation content is the user's input). So Nexus
+follows Codex's handoff instead of asking the voice model to rewrite requests (see
+[decisions.md](decisions.md) and `plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` section 3).
 
-**Limitation (observed, not fixable client-side today).** The voice model does not author
-the `delegation.created` text. In the recorded call `session-1ce5e575` every `live.delegated`
-text equals the user's final spoken transcript word for word, despite the rewrite rule
-above; the service builds the delegation content from the user's turn. The public
-GPT-Live docs go further and say a client delegation event carries no task text at all
-(the app reconstructs it from transcript events), and they describe no session-level
-function tools for the voice model (function tools exist only under
-`delegation.responses.tools`, which runs OpenAI's backend, not Nexus). OC's `end_call`
-is a tool of its coding agent, not a voice-model tool. So there is no verified way for
-the voice model to send its own wording; see
-[GPT_LIVE_PROTOCOL_NOTES.md](../plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md) "Authorship of
-delegation text" and [decisions.md](decisions.md). `live.delegated` therefore also records
-`source` (`"delegation"`), `heard` (the user's latest transcript when known) and
-`verbatim` (the delegated text equals what was heard, ignoring case and punctuation) so
-clients can show "You" and "Sent to agent" honestly. The rewrite rule stays in the
-instructions as best effort: not verified to have any effect. The normal Nexus agent
-chooses and runs the tools, under the usual permissions, approval gates and errors. How
-good the delegation is depends on the model following the prompt; it is not enforced.
+**What the agent receives.** One ordinary user message, plain text, with the request, a
+labelled transcript of both speakers since the previous delegation of the call (or call
+start), and a note that it was speech:
+
+```
+Voice request
+Check the README.
+
+Spoken conversation since the previous request
+You: hello there
+Voice: Hi, what can I do?
+You: um check the readme
+
+Note: this request came from a voice call. The text is speech recognition output and may
+contain errors or be unpunctuated; work out what the user meant and say so if unsure. Your
+final answer is read back to the user by a voice assistant, so lead with a short
+plain-language summary.
+```
+
+- The block is the message text itself, so the timeline (labelled "via voice") shows exactly
+  what the agent saw. Nexus has no hidden-context channel for user messages and Live does not
+  add one. Replay reproduces it, because it is the durable `input.queued` text.
+- A trailing `You:` line equal to the request is dropped (it would repeat it). Speech still in
+  progress when the delegation lands is included and is not queued again when it is finalised.
+- Bounds, as in Codex: the request keeps its first 4 KiB, the transcript keeps its last
+  4 KiB; clipping is announced inside the text (`[… N more characters omitted]`,
+  `[… N earlier characters omitted]`). The manager keeps at most 64 turns between delegations.
+- An empty or whitespace delegation uses the transcript as the request (heading "Voice request
+  (taken from the spoken conversation)"). Only if both are empty is the request rejected.
+- A fresh session is titled from the request alone, not from the wrapper.
+- `live.delegated` keeps `text` (the delegation text, or the transcript when it was empty),
+  `heard`, `source`, `verbatim`, and adds `transcript` (the transcript lines as sent),
+  `transcript_omitted` and `input_omitted` (characters clipped) and `from_transcript`.
+- Whether the service's `delegation.created` content is ever the voice model's own wording is
+  **not verified**. The bundled instructions no longer ask for a rewrite; they tell the model
+  the service passes the user's words and the recent conversation on.
+
+**What the voice model receives back.** The final answer is plain speakable text with no
+label: a `session.context.append` with `channel: "speakable"` and no `delegation_item_id`,
+what Codex's TUI sends for `gpt-live-1-codex` (client-managed handoffs,
+`tui/src/app/tests/realtime_handoff_e2e.rs`). Chunked at 500 UTF-8 bytes; <= 12,000
+characters, omission announced. Progress stays a quiet `delegation.context.append` on
+`commentary`; failure, cancellation, merge and on-screen-approval notices stay
+`delegation.context.append` on `speakable`. `live.appended` records the text exactly as sent,
+the card channel (`final`/`notice`/`commentary`, unchanged) plus `wire` (the message type) and
+`wire_channel`. Not verified against the real service: that the service accepts a final answer
+without the delegation id and has the model speak it, and that it does not wait on the
+delegation id.
 
 | Situation | Behaviour |
 | --- | --- |
 | idle session | `HostFacade.enqueue(mode="queue")`: a new turn |
 | a turn is running | `enqueue(mode="steer")`: consumed at the next model step |
-| the user message | its `input.queued` event carries `origin = {"kind": "live", "delegation_id"}`; the text and the turn are identical to a typed prompt, clients label it "via voice" |
+| the user message | its `input.queued` event carries `origin = {"kind": "live", "delegation_id"}`; the text is the request block above, the turn is otherwise identical to a typed prompt, clients label it "via voice" |
 | progress | `tool.requested` bursts become one `commentary` append at most every 5 s (`[live].progress`) |
-| `turn.completed` | last visible assistant text, prefixed `"Agent Final Message":`, appended on the delegation (<= 12,000 characters, the omission is announced) |
+| `turn.completed` | last visible assistant text, plain speakable `session.context.append` (<= 12,000 characters, the omission is announced) |
 | `turn.failed` / `turn.cancelled` | a short notice append |
 | several delegations in one turn | the last gets the final answer; earlier ones get a "merged into a later request" notice |
 | `permission.requested` / `question.requested` | a notice that the user must answer **on screen**. The bridge never resolves, grants or auto-approves anything; a heard "yes" is never a permission |
@@ -259,6 +285,8 @@ Transport timing and credentials:
   timeouts), with credential redaction and bounded detail. An empty timeout message
   is not evidence of an auth failure. Reconnects remain bounded; commentary that was
   not sent, or whose delivery is uncertain, is never replayed automatically.
+  (`sideband_lost` after a recovery is now a 404/410, an auth refusal, the 5-minute cap, or a
+  non-retryable refusal; it no longer means "two attempts failed".)
 - HTTP refusals retain their status across the connector boundary. Only 408 and
   5xx responses are eligible for the existing bounded retry policy; other HTTP
   errors (including 404/410, auth and rate limits) end opening/recovery immediately,
@@ -285,8 +313,6 @@ Transport timing and credentials:
   during recovery. **Known limitation / not verified**: whether the service ends the
   call when the sideband drops, expires it, or rejects a second sideband for the id
   needs a real-service trace (response body, timing, whether a second WebSocket on a
-  (`sideband_lost` after a recovery is now a 404/410, an auth refusal, the 5-minute cap, or a
-  non-retryable refusal; it no longer means "two attempts failed".)
   live call works). If the call was already torn down by the media-path bug in
   [Root cause](#root-cause-of-the-43-s-drop), the 404 is a consequence, not a separate fault.
   Nexus does not automatically POST a replacement call: that would start a new
