@@ -16,6 +16,8 @@ pub enum Command {
     Offer,
     Answer { sdp: String },
     Mute { on: bool },
+    /// Pause: silence the microphone and drop the voice's audio; the peer stays up.
+    Pause { on: bool },
     Stop,
 }
 

@@ -25,7 +25,7 @@ EXPECTED_ALLOWED = {
     },
     "approve": {"PermissionResolve", "QuestionAnswer"},
     "voice": {"VoiceCancel"},
-    "live": {"LiveStart", "LiveMute", "LiveStop", "LiveHelperEvent"},
+    "live": {"LiveStart", "LiveMute", "LivePause", "LiveStop", "LiveHelperEvent"},
 }
 
 
@@ -107,6 +107,7 @@ def test_a_missing_scope_is_a_distinct_denial():
         (p.VoiceCancel(request_id="abc"), "voice"),
         (p.LiveStart(session="s", offer_sdp="v=0"), "live"),
         (p.LiveMute(session="s"), "live"),
+        (p.LivePause(session="s"), "live"),
         (p.LiveStop(session="s"), "live"),
         (p.LiveHelperEvent(session="s", kind="ready"), "live"),
     ],
@@ -165,6 +166,7 @@ def test_session_ids_are_restricted(session):
     invalid(p.SessionOpen(session=session))
     invalid(p.SessionState(session=session), ("read",))
     invalid(p.LiveMute(session=session))
+    invalid(p.LivePause(session=session))
 
 
 def test_session_id_boundaries_are_accepted():

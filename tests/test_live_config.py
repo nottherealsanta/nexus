@@ -26,11 +26,16 @@ def test_environment_fields_are_schema_typed():
 
 @pytest.mark.parametrize("values", [
     {"max_minutes": 0}, {"max_minutes": 241}, {"max_minutes": True}, {"carry_turns": -1},
-    {"carry_turns": 101}, {"voice": "x" * 41}, {"instructions": "a\x00b"}, {"unknown": True},
+    {"carry_turns": 101}, {"pause_seconds": 4}, {"pause_seconds": 3601}, {"pause_seconds": True}, {"voice": "x" * 41}, {"instructions": "a\x00b"}, {"unknown": True},
 ])
 def test_invalid_live_policy(values):
     with pytest.raises(ConfigError):
         build_v2({"live": values})
+
+
+def test_pause_seconds_defaults_and_env():
+    assert build_v2({}).live.pause_seconds == 120
+    assert build_v2(env_overlay_v2({"NEXUS_LIVE__PAUSE_SECONDS": "30"})).live.pause_seconds == 30
 
 
 def test_live_policy_roundtrips():

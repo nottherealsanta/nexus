@@ -387,6 +387,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.LiveStatus(),
         p.LiveStart(session="s", offer_sdp="v=0", voice="cove", new_conversation=True),
         p.LiveMute(session="s", muted=True),
+        p.LivePause(session="s", paused=True),
         p.LiveStop(session="s", reason="user"),
         p.LiveHelperEvent(session="s", kind="closed", detail="mic denied"),
         p.LiveConsent(accept=True),
@@ -1744,7 +1745,7 @@ def _live_runtime(tmp_path, *, transport=None, availability=None, consent=True, 
 def test_live_commands_round_trip_on_the_wire():
     commands = [
         p.LiveStatus(), p.LiveStart(session="s", offer_sdp="v=0", voice="cove", new_conversation=True),
-        p.LiveMute(session="s", muted=None), p.LiveStop(session="s"),
+        p.LiveMute(session="s", muted=None), p.LivePause(session="s"), p.LiveStop(session="s"),
         p.LiveHelperEvent(session="s", kind="levels", detail="{}"),
     ]
     for command in commands:
@@ -1800,6 +1801,11 @@ async def test_live_call_lifecycle_through_the_facade_is_durable_and_secret_free
 
         muted = await facade.handle(p.LiveMute(session="s", muted=None))
         assert isinstance(muted, p.LiveStatusResult) and muted.muted is True and muted.state == "muted"
+        paused = await facade.handle(p.LivePause(session="s", paused=None))
+        assert isinstance(paused, p.LiveStatusResult) and paused.paused and paused.state == "paused"
+        assert paused.pause_remaining_s > 0
+        resumed = await facade.handle(p.LivePause(session="s", paused=False))
+        assert resumed.paused is False and resumed.state == "muted"
         ack = await facade.handle(p.LiveHelperEvent(session="s", kind="dropped", detail="3"))
         assert isinstance(ack, p.LiveHelperEventResult) and ack.ok
         bad = await facade.handle(p.LiveHelperEvent(session="s", kind="explode"))

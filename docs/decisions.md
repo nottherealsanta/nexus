@@ -880,3 +880,16 @@ the socket wait up to 10 s for the reconnect; a write that failed or timed out i
 Costs: a half-open socket is no longer caught by a pong deadline (only reads, failed writes, server
 close); Codex replays a pending message after reconnect and we deliberately do not, because a replay can
 duplicate a delegation. Tests: `tests/test_live_transport.py`. Not verified against the real service.
+
+## GPT Live: pause is bounded mute, not a held-open call (2026-10)
+
+Decision: `Ctrl+X P` / `/live pause` silences the microphone (helper sends silence) and the voice's audio, holds
+voice-bound updates (<= 8, commentary dropped) and ends the call with reason `pause_timeout` after
+`[live].pause_seconds` (120); a later `Ctrl+X P` starts a new call that carries the transcript over (the
+existing handoff). Stop stays `Ctrl+X D`. `Ctrl+X F` was not used: it is Fork session in both clients.
+Reason: OpenAI's Realtime costs guide bills GPT Live per second of session time including silence and says
+muting "does not close the session", so a pause that keeps the call open keeps billing; and Nexus cannot close
+the socket and keep the call (WebRTC media dies with the peer, no resumable call id). Codex has only mute, the
+same silence-over-RTP behavior. Cost: a pause longer than the window loses the live voice context and is a new
+call (transcript carried over, not the model's hidden state). Not verified: real billing on a ChatGPT-account
+call, and a sideband cancel for a response already being produced. Details: [live.md](live.md#pause-vs-stop).

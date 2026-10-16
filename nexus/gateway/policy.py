@@ -42,7 +42,7 @@ _PROMPT = (
 )
 _APPROVE = (p.PermissionResolve, p.QuestionAnswer)
 _VOICE = (p.VoiceCancel,)
-_LIVE = (p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent)
+_LIVE = (p.LiveStart, p.LiveMute, p.LivePause, p.LiveStop, p.LiveHelperEvent)
 
 #: command type -> required scope (``LiveConsent`` is resolved per call).
 COMMAND_SCOPES: dict[type, str] = {
@@ -213,7 +213,7 @@ def _validate(command: p.Command, device_id: str) -> p.Command:  # noqa: C901 - 
             if not command.offer_sdp or len(command.offer_sdp.encode("utf-8")) > MAX_OFFER_SDP_BYTES:
                 _bad("invalid offer")
             _line(command.voice, 64, "voice")
-        case p.LiveMute():
+        case p.LiveMute() | p.LivePause():
             _session(command.session)
         case p.LiveStop():
             _session(command.session)

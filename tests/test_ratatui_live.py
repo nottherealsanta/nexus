@@ -51,6 +51,11 @@ class FakeCall:
         self.helper.muted = not self.helper.muted if muted is None else muted
         return SimpleNamespace(muted=self.helper.muted, state="muted" if self.helper.muted else "active")
 
+    async def pause(self, paused=None):
+        self.paused = (not getattr(self, "paused", False)) if paused is None else paused
+        return SimpleNamespace(paused=self.paused, state="paused" if self.paused else "active",
+                               pause_remaining_s=120.0)
+
     async def stop(self, reason="user"):
         self.stops.append(reason)
         self.helper.running = False
@@ -137,6 +142,37 @@ async def test_call_bar_reports_view_phase_model_mute_and_other_session(shell):
     shell.controller.session = "other"
     assert shell.live.bar()["elsewhere"] == "s"  # the mic stays visible in every session
     await shell.live.shutdown()
+
+
+async def test_pause_shows_in_the_bar_and_toggles_independently_of_stop(shell):
+    await shell.command("/live", ())
+    await shell.command("/live", ("pause",))
+    bar = shell.live.bar()
+    assert bar["phase"] == "paused" and bar["paused"] and bar["in"] == 0.0 and 0 < bar["pause_left"] <= 120
+    assert "paused" in shell.notice and "Ctrl+X P" in shell.notice and shell.live.state == "active"
+    await shell.command("/live", ("pause",))  # toggles back
+    assert not shell.live.bar()["paused"] and shell.live.bar()["phase"] != "paused"
+    await shell.command("/live", ("pause",))
+    await shell.command("/live", ("resume",))
+    assert not shell.live.paused
+    await shell.command("/live", ("pause",))
+    await shell.command("/live", ())  # the toggle (Ctrl+X D) still stops a paused call
+    assert shell.live.state == "idle" and not shell.live.paused
+    assert FakeCall.instances[0].stops == ["user"]
+
+
+async def test_pause_with_no_call_is_a_notice_and_a_timed_out_pause_restarts(shell):
+    await shell.command("/live", ("pause",))
+    assert shell.notice == "No active Live call" and not FakeCall.instances
+    shell.live.hibernated = True  # the last call ended with reason pause_timeout
+    await shell.command("/live", ("pause",))
+    assert len(FakeCall.instances) == 1 and shell.live.state == "active" and not shell.live.hibernated
+    await shell.live.shutdown()
+
+
+async def test_pause_timeout_end_names_the_resume_key(shell):
+    from nexus.ui.ratatui.live import Live
+    assert "Ctrl+X P" in Live._ended_text(LiveCallView(status="ended", end_reason="pause_timeout"))
 
 
 async def test_busy_second_start_does_not_spawn_another_helper(shell):

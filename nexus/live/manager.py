@@ -4,7 +4,8 @@ Contract:
 
 - At most **one call** exists per daemon (one mic, one speaker). A second
   ``start`` fails with ``live_busy`` naming the session that owns it.
-- State machine ``idle -> connecting -> active <-> muted -> closing -> idle``.
+- State machine ``idle -> connecting -> active <-> muted <-> paused -> closing -> idle``.
+  Pause is bounded: after ``[live].pause_seconds`` the call ends (``pause_timeout``).
 - **Exactly one** durable ``live.ended`` per ``live.started``, on every exit path:
   startup failure, explicit stop, transport error, remote close, call deadline,
   client detach (no attached view for ``detach_timeout`` seconds), session
@@ -71,7 +72,9 @@ MAX_SPOKEN_TURNS = 64  # transcript turns kept between two delegations
 MAX_HELPER_DETAIL = 2_048
 RAW_LOG_MAX_BYTES = 1_048_576
 HELPER_KINDS = ("ready", "levels", "phase", "dc_error", "dropped", "closed")
-PHASES = ("connecting", "listening", "speaking", "working", "muted")
+PHASES = ("connecting", "listening", "speaking", "working", "muted", "paused")
+MAX_HELD_APPENDS = 8  # voice-bound updates kept while paused (docs/live.md "Pause vs stop")
+DEFAULT_PAUSE_SECONDS = 120
 _FATAL_ERROR_HINT = "authentication"
 # Transport send failures that leave the call running: not sent / delivery unknown (never replayed).
 RECOVERABLE_SEND_ERRORS = ("live_not_connected", "live_send_ambiguous")
@@ -141,12 +144,14 @@ class LiveInfo:
 
     available: bool = True
     reason: str = ""  # disabled|unsupported|no_credential|busy
-    state: str = "idle"  # idle|connecting|active|muted|closing
+    state: str = "idle"  # idle|connecting|active|muted|paused|closing
     phase: str = ""
     active_session: str = ""
     call_id: str = ""
     voice: str = ""
     muted: bool = False
+    paused: bool = False
+    pause_remaining_s: float = 0.0
     elapsed_s: float = 0.0
     max_minutes: int = 30
     levels_in: float = 0.0
@@ -166,6 +171,11 @@ class _Call:
     state: str = "connecting"
     phase: str = "connecting"
     muted: bool = False
+    paused: bool = False
+    paused_at: float = 0.0
+    # (text, label, delegation_id) updates for the voice model held while paused, flushed on resume
+    held: list[tuple[str, str, str | None]] = field(default_factory=list)
+    held_dropped: int = 0
     ending: asyncio.Task[None] | None = None
     start_task: asyncio.Task[Any] | None = None
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
@@ -367,6 +377,7 @@ class LiveManager:
         return LiveInfo(
             available=False, reason="busy", state=call.state, phase=call.phase,
             active_session=call.session_id, call_id=call.call_id, voice=call.voice, muted=call.muted,
+            paused=call.paused, pause_remaining_s=self._pause_remaining(call),
             elapsed_s=round(max(0.0, self._clock() - call.started), 1), max_minutes=max_minutes,
             levels_in=call.levels[0], levels_out=call.levels[1], dropped_frames=call.dropped_frames,
             last_error=call.last_error,
@@ -495,10 +506,85 @@ class LiveManager:
     def mute(self, session_id: str, muted: bool | None = None) -> LiveInfo:
         call = self._owned(session_id)
         call.muted = (not call.muted) if muted is None else bool(muted)
-        if call.state in ("active", "muted"):
-            call.state = "muted" if call.muted else "active"
-        self._set_phase(call, "muted" if call.muted else "listening")
+        if call.state in ("active", "muted", "paused"):
+            call.state = self._rest_state(call)
+        self._set_phase(call, self._rest_phase(call))
         return self._info(call)
+
+    @staticmethod
+    def _rest_state(call: _Call) -> str:
+        return "paused" if call.paused else "muted" if call.muted else "active"
+
+    @staticmethod
+    def _rest_phase(call: _Call) -> str:
+        return "paused" if call.paused else "muted" if call.muted else "listening"
+
+    def _pause_window_s(self) -> float:
+        seconds = getattr(self.config, "pause_seconds", DEFAULT_PAUSE_SECONDS)
+        seconds = seconds if isinstance(seconds, int) and 1 <= seconds <= 3600 else DEFAULT_PAUSE_SECONDS
+        return seconds * self._minute_s / 60.0
+
+    def _pause_remaining(self, call: _Call) -> float:
+        if not call.paused:
+            return 0.0
+        return round(max(0.0, self._pause_window_s() - (self._clock() - call.paused_at)), 1)
+
+    def pause(self, session_id: str, paused: bool | None = None) -> LiveInfo:
+        """Pause or resume the call (toggle with ``None``); docs/live.md "Pause vs stop".
+
+        Paused: the client's helper sends silence and drops the voice's audio, voice-bound
+        updates are held (at most ``MAX_HELD_APPENDS``), and the call ends with reason
+        ``pause_timeout`` after ``[live].pause_seconds``. The socket stays open meanwhile
+        because GPT Live bills session time, muted or not, so the window is the cost cap.
+        Resume flushes what was held. Idempotent either way.
+        """
+        call = self._owned(session_id)
+        target = (not call.paused) if paused is None else bool(paused)
+        if call.state == "connecting":
+            raise LiveError("live_not_active", "The call is still connecting")
+        if target == call.paused:
+            return self._info(call)
+        call.paused = target
+        for task in [t for t in call.tasks if t.get_name() == "nexus-live-pause"]:
+            task.cancel()
+            call.tasks.discard(task)
+        if target:
+            call.paused_at = self._clock()
+            call.tasks.add(asyncio.create_task(self._pause_timeout(call), name="nexus-live-pause"))
+        else:
+            self._flush_held(call)
+        call.state = self._rest_state(call)
+        self._set_phase(call, self._rest_phase(call))
+        return self._info(call)
+
+    async def _pause_timeout(self, call: _Call) -> None:
+        await asyncio.sleep(self._pause_window_s())
+        if call.paused:
+            self._begin_end(call, "pause_timeout", None)
+
+    def _flush_held(self, call: _Call) -> None:
+        """Send what was held while paused, in order, from one tracked task."""
+        held, call.held = call.held, []
+        dropped, call.held_dropped = call.held_dropped, 0
+        if dropped:
+            self._record_error(call, f"{dropped} update(s) for the voice were dropped while paused; "
+                                     "the agent's turns are on screen.")
+        if not held or call.ending is not None:
+            return
+
+        async def run() -> None:
+            for text, label, delegation_id in held:
+                await self._append(call, text, label, delegation_id)
+
+        task = asyncio.create_task(run(), name="nexus-live-resume-flush")
+        call.tasks.add(task)
+
+        def _done(finished: asyncio.Task[Any]) -> None:
+            call.tasks.discard(finished)
+            if not finished.cancelled() and finished.exception() is not None:
+                log.debug("live resume flush failed: %s", safe_detail(finished.exception()))
+
+        task.add_done_callback(_done)
 
     async def stop(self, session_id: str, reason: str = "user") -> LiveInfo:
         """Idempotent: an idle manager returns the idle snapshot."""
@@ -529,7 +615,7 @@ class LiveManager:
                 call.levels = (_unit(parsed.get("in")), _unit(parsed.get("out")))
             except (ValueError, AttributeError, TypeError):
                 pass
-        elif kind == "phase" and text in ("listening", "speaking") and not call.muted and call.state == "active":
+        elif kind == "phase" and text in ("listening", "speaking") and call.state == "active":
             self._set_phase(call, text)
         return self._info(call)
 
@@ -671,6 +757,15 @@ class LiveManager:
         text = text[:MAX_APPEND_CHARS]
         if not text.strip() or call.ending is not None or call.transport is None:
             return
+        if call.paused:  # nothing may make the voice speak while paused; hold it for resume
+            if label == "commentary":  # quiet progress goes stale
+                call.held_dropped += 1
+            else:
+                call.held.append((text, label, delegation_id))
+                while len(call.held) > MAX_HELD_APPENDS:
+                    del call.held[0]
+                    call.held_dropped += 1
+            return
         channel = {"commentary": "commentary", "notice": "speakable", "final": "speakable"}.get(label)
         # Codex's TUI sends the final answer as a plain ``session.context.append`` on the
         # speakable channel with no delegation id (codex-rs tui realtime_handoff_e2e.rs);
@@ -742,11 +837,11 @@ class LiveManager:
             return
         if isinstance(event, SidebandOpen):
             if call.state == "connecting":
-                call.state = "muted" if call.muted else "active"
-                self._set_phase(call, "muted" if call.muted else "listening")
+                call.state = self._rest_state(call)
+                self._set_phase(call, self._rest_phase(call))
         elif isinstance(event, (SessionStarted, SessionUpdated)):
             if call.phase == "connecting":
-                self._set_phase(call, "muted" if call.muted else "listening")
+                self._set_phase(call, self._rest_phase(call))
         elif isinstance(event, SidebandReconnected):
             self._on_reconnected(call, event)
         elif isinstance(event, SessionClosed):
@@ -786,7 +881,7 @@ class LiveManager:
             merged = previous + text
         call.partial[role] = merged[-MAX_TRANSCRIPT_CHARS:]
         call.dirty.add(role)
-        if role == "assistant" and not call.muted:
+        if role == "assistant" and not (call.muted or call.paused):
             self._set_phase(call, "speaking")
         elif role == "user" and call.phase == "speaking":
             self._set_phase(call, "listening")
@@ -811,7 +906,7 @@ class LiveManager:
                 "truncated": len(clipped) < len(text),
             })
         if event.role == "assistant" and call.phase == "speaking":
-            self._set_phase(call, "muted" if call.muted else "listening")
+            self._set_phase(call, self._rest_phase(call))
 
     def _delegate(self, call: _Call, event: DelegationCreated) -> None:
         bridge = call.bridge

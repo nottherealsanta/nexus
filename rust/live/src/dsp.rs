@@ -52,6 +52,11 @@ impl SampleRing {
         self.buf.len()
     }
 
+    /// Drop everything buffered (pause discards audio the voice was still sending).
+    pub fn clear(&mut self) {
+        self.buf.clear();
+    }
+
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }

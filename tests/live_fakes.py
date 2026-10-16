@@ -153,7 +153,7 @@ class FakeHost:
 
 
 def live_config(**overrides) -> SimpleNamespace:
-    values = dict(enabled=True, voice="default", max_minutes=30, carry_turns=12, progress=True,
+    values = dict(enabled=True, voice="default", max_minutes=30, carry_turns=12, pause_seconds=120, progress=True,
                   instructions="", log_raw=False)
     values.update(overrides)
     return SimpleNamespace(**values)

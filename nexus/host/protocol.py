@@ -765,6 +765,13 @@ class LiveMute(msgspec.Struct, tag=True, frozen=True):
     muted: bool | None = None
 
 
+class LivePause(msgspec.Struct, tag=True, frozen=True):
+    """Set (``True``/``False``) or toggle (``None``) the call's pause state (docs/live.md)."""
+
+    session: str
+    paused: bool | None = None
+
+
 class LiveStop(msgspec.Struct, tag=True, frozen=True):
     """End the call. Idempotent; never cancels the agent's running turn."""
 
@@ -943,6 +950,7 @@ Command = (
     | LiveStatus
     | LiveStart
     | LiveMute
+    | LivePause
     | LiveStop
     | LiveHelperEvent
     | LiveConsent
@@ -1053,6 +1061,7 @@ COMMANDS: tuple[type, ...] = (
     LiveStatus,
     LiveStart,
     LiveMute,
+    LivePause,
     LiveStop,
     LiveHelperEvent,
     LiveConsent,
@@ -1682,12 +1691,15 @@ class LiveStatusResult(msgspec.Struct, tag=True, frozen=True):
 
     available: bool = True
     reason: str = ""
-    state: str = "idle"  # idle|connecting|active|muted|closing
+    state: str = "idle"  # idle|connecting|active|muted|paused|closing
     phase: str = ""
     active_session: str = ""
     call_id: str = ""
     voice: str = ""
     muted: bool = False
+    #: Paused (docs/live.md "Pause vs stop"); ``pause_remaining_s`` counts down to ``pause_timeout``.
+    paused: bool = False
+    pause_remaining_s: float = 0.0
     elapsed_s: float = 0.0
     max_minutes: int = 30
     levels_in: float = 0.0
@@ -2157,6 +2169,7 @@ __all__ = [
     "LiveHelperEvent",
     "LiveHelperEventResult",
     "LiveMute",
+    "LivePause",
     "LiveStart",
     "LiveStartResult",
     "LiveStatus",

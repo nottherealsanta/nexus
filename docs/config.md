@@ -57,7 +57,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
-| `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Experimental, see [live.md](live.md) |
+| `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `pause_seconds` 120 (5-3600: a paused call ends after this long, see [live.md](live.md#pause-vs-stop)), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Experimental, see [live.md](live.md) |
 | `[updates]` | `check` true |
 
 `[permissions] mode` defaults to `allow` in the schema while `PermissionEngine`'s

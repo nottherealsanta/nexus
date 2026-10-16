@@ -95,7 +95,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
-| `/live` | `[stop\|mute\|new\|status\|revoke]` | | spoken GPT Live call on this session, again to hang up (`Ctrl+X D`); first use asks for consent ([live.md](live.md#client-flow-ratatui-m4)) |
+| `/live` | `[stop\|pause\|resume\|mute\|new\|status\|revoke]` | | spoken GPT Live call on this session, again to hang up (`Ctrl+X D`); `pause` toggles pause (`Ctrl+X P`, bounded by `[live].pause_seconds`, [live.md](live.md#pause-vs-stop)); first use asks for consent ([live.md](live.md#client-flow-ratatui-m4)) |
 | `/speak` | `[download]` | | speak the latest completed answer with local Paradee (ONNX, CPU); a missing model opens the consent and download dialog (`download` runs only that) |
 | `/mock` | | | dev mode only (`DEV_SPECS`) |
 

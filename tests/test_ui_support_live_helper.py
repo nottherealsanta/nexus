@@ -53,6 +53,11 @@ class FakeClient:
         self.calls.append(("mute", session, muted))
         return SimpleNamespace(state="muted" if self.muted else "active", muted=self.muted)
 
+    async def live_pause(self, session, paused=None):
+        self.paused = (not getattr(self, "paused", False)) if paused is None else paused
+        self.calls.append(("pause", session, paused))
+        return SimpleNamespace(state="paused" if self.paused else "active", paused=self.paused)
+
     async def live_helper_event(self, session, kind, detail=""):
         self.calls.append(("event", kind, detail))
         return SimpleNamespace(ok=True)
@@ -125,11 +130,14 @@ async def test_offer_answer_mute_stop(fake_binary, tmp_path):
     assert (helper.level_in, helper.level_out, helper.phase) == (0.25, 0.5, "speaking")
     await helper.mute(True)
     assert helper.muted
+    await helper.pause(True)
+    assert helper.paused
     await helper.stop()
     await helper.stop()  # idempotent
     assert not helper.running and helper.process.returncode == 0
-    assert [c["type"] for c in commands(tmp_path)] == ["offer", "answer", "mute", "stop"]
+    assert [c["type"] for c in commands(tmp_path)] == ["offer", "answer", "mute", "pause", "stop"]
     assert commands(tmp_path)[2] == {"type": "mute", "on": True}
+    assert commands(tmp_path)[3] == {"type": "pause", "on": True}
     # phase, dropped and dc_error reach the daemon; levels do not; our own stop is not forwarded
     assert ("phase", "speaking") in forwarded and ("dropped", "3") in forwarded and ("dc_error", "boom") in forwarded
     assert not [f for f in forwarded if f[0] in {"levels", "closed"}]
@@ -217,6 +225,10 @@ async def test_call_handshake_mute_and_stop(fake_binary, tmp_path):
     assert client.calls[0] == ("start", "s1", "v=0\r\nfake-offer", "cove", True)
     state = await call.mute(None)
     assert state.muted and call.helper.muted
+    state = await call.pause(None)
+    assert state.paused and call.helper.paused
+    state = await call.pause(False)
+    assert not state.paused and not call.helper.paused
     await asyncio.sleep(0.2)
     assert ("event", "dropped", "3") in client.calls
     await call.stop("user")

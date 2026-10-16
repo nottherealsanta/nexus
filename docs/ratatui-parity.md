@@ -1314,10 +1314,10 @@ no Antigravity-specific feature.
 
 ## GPT Live call bar and commands (M4)
 
-`/live [stop|mute|new|status|revoke]` and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
+`/live [stop|pause|resume|mute|new|status|revoke]`, `Ctrl+X P` (leader `p`, pause) and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
 `LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
 `nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
-`active state phase model muted started in out elsewhere detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
+`active state phase model muted paused pause_left started in out elsewhere detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
 `● Live · phase · mm:ss` plus `mic`/`spk` meters and a `MUTED` badge (model name when there is room) as the
 Live pane's header row; the composer no longer shows it; the clock is computed in Rust from the
 call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the

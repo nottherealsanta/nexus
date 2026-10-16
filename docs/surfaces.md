@@ -284,7 +284,7 @@ text. Details: [voice.md](voice.md).
 
 ## Live (GPT Live voice calls)
 
-`/live`, `Ctrl+X D`: a spoken conversation with OpenAI's voice model while the open
+`/live`, `Ctrl+X D` (start or stop), `Ctrl+X P` / `/live pause` (pause or resume; a `PAUSED mm:ss` badge, [live.md](live.md#pause-vs-stop)): a spoken conversation with OpenAI's voice model while the open
 session does the work ([live.md](live.md)). The native client shows a **call bar** in
 the composer chrome (`● Live · model · phase · mm:ss`, input and output level meters, a
 Muted badge); the editor stays usable and typing is ordinary steering. First use shows a

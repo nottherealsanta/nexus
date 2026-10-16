@@ -35,6 +35,7 @@ pub async fn run(
     let mut encoder: Option<Encoder> = None;
     let mut gate = EchoGate::new(opts.gate);
     let mut muted = false;
+    let mut paused = false;
     let (mut answered, mut connected, mut dc_open, mut ready) = (false, false, false, false);
     let mut phase = Phase::Listening;
     let mut tick = interval(Duration::from_millis(20));
@@ -57,6 +58,15 @@ pub async fn run(
                         Err(message) => emit(Event::Error { message }),
                         Ok(Command::Stop) => break "stop".to_string(),
                         Ok(Command::Mute { on }) => muted = on,
+                        Ok(Command::Pause { on }) => {
+                            paused = on;
+                            if on {
+                                // Audio already received but not yet played is discarded.
+                                if let Ok(mut p) = pipes.playback.lock() {
+                                    p.clear();
+                                }
+                            }
+                        }
                         Ok(Command::Offer) => {
                             if peer.is_some() {
                                 emit(Event::Error { message: "offer already created".into() });
@@ -109,8 +119,8 @@ pub async fn run(
                 let mic = pipes.capture.lock().ok().and_then(|mut r| r.pop_frame(FRAME));
                 let mic_rms = mic.as_deref().map(rms_i16).unwrap_or(0.0);
                 let pcm = match mic {
-                    Some(f) if !muted && gate.allow_mic(now, mic_rms) => f,
-                    // Muted, gated or starved: send silence so RTP keeps its clock.
+                    Some(f) if !muted && !paused && gate.allow_mic(now, mic_rms) => f,
+                    // Muted, paused, gated or starved: send silence so RTP keeps its clock.
                     _ => vec![0i16; FRAME],
                 };
                 if answered {
@@ -127,7 +137,13 @@ pub async fn run(
                         }
                     }
                 }
-                in_acc = in_acc.max(if muted { 0.0 } else { mic_rms });
+                if paused {
+                    // Keep the speaker empty while paused (the decoder keeps filling the ring).
+                    if let Ok(mut p) = pipes.playback.lock() {
+                        p.clear();
+                    }
+                }
+                in_acc = in_acc.max(if muted || paused { 0.0 } else { mic_rms });
                 in_n += 1;
 
                 if !ready && answered && connected && dc_open {
@@ -214,6 +230,16 @@ mod tests {
         h.await.unwrap();
         let evs = drain(erx).await;
         assert_eq!(evs, vec![Event::Closed { reason: "stdin_eof".into() }]);
+    }
+
+    #[tokio::test]
+    async fn pause_is_accepted_and_does_not_close() {
+        let (itx, erx, h) = spawn_run();
+        itx.send(Input::Line(r#"{"type":"pause","on":true}"#.into())).unwrap();
+        itx.send(Input::Line(r#"{"type":"pause","on":false}"#.into())).unwrap();
+        itx.send(Input::Line(r#"{"type":"stop"}"#.into())).unwrap();
+        h.await.unwrap();
+        assert_eq!(drain(erx).await, vec![Event::Closed { reason: "stop".into() }]);
     }
 
     #[tokio::test]

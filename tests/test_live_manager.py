@@ -568,3 +568,83 @@ async def test_continuity_is_carried_and_shown_and_new_conversation_skips_it():
     await start(manager3, host=host3)
     assert host3.of("live.started")[0]["carried_turns"] == 0
     await manager3.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Pause vs stop (docs/live.md "Pause vs stop")
+# ---------------------------------------------------------------------------
+
+
+async def test_pause_toggles_state_and_phase_and_is_idempotent():
+    manager, _ = make()
+    host, _ = await start(manager)
+    info = manager.pause("s1", None)
+    assert info.paused and info.state == "paused" and info.phase == "paused" and info.pause_remaining_s > 0
+    assert manager.pause("s1", True).paused is True
+    manager.mute("s1", True)  # mute while paused keeps the paused state
+    assert manager.snapshot().state == "paused"
+    manager.helper_event("s1", "phase", "speaking")  # the helper cannot un-pause the phase
+    resumed = manager.pause("s1", False)
+    assert not resumed.paused and resumed.state == "muted" and resumed.phase == "muted"
+    assert manager.pause("s1", False).paused is False
+    with pytest.raises(lp.LiveError):
+        manager.pause("s2")
+    await manager.stop("s1")
+    assert_one_ended(host, "user")
+    with pytest.raises(lp.LiveError) as err:
+        manager.pause("s1")
+    assert err.value.code == "live_not_active"
+
+
+async def test_pause_holds_voice_updates_and_resume_flushes_them_in_order():
+    manager, transports = make()
+    host, _ = await start(manager)
+    t = transports[0]
+    call = manager._call
+    manager.pause("s1", True)
+    await manager._append(call, "agent finished", "final", "d1")
+    await manager._append(call, "quiet progress", "commentary", "d1")
+    await manager._append(call, "oops", "notice", None)
+    assert t.texts() == [] and host.of("live.appended") == []
+    manager.pause("s1", False)
+    await settle(lambda: len(host.of("live.appended")) == 2)
+    assert t.texts() == ["agent finished", "oops"]
+    assert any("dropped while paused" in e["message"] for e in host.of("live.error"))
+
+
+async def test_held_updates_are_bounded():
+    manager, transports = make()
+    host, _ = await start(manager)
+    call = manager._call
+    manager.pause("s1", True)
+    for i in range(12):
+        await manager._append(call, f"update {i}", "notice", None)
+    assert len(call.held) == 8 and call.held[0][0] == "update 4"
+    manager.pause("s1", False)
+    await settle(lambda: len(transports[0].texts()) == 8)
+    assert transports[0].texts()[0] == "update 4"
+
+
+async def test_pause_ends_the_call_after_the_window_and_resume_cancels_the_timer():
+    manager, _ = make(config=live_config(pause_seconds=1), minute_s=0.05)  # 1 s window -> ~0.8 ms
+    host, _ = await start(manager)
+    manager.pause("s1", True)
+    await settle(lambda: host.of("live.ended"))
+    assert_one_ended(host, "pause_timeout")
+    assert manager.snapshot().state == "idle"
+
+    manager, _ = make(config=live_config(pause_seconds=1), minute_s=60.0)
+    host, _ = await start(manager)
+    manager.pause("s1", True)
+    manager.pause("s1", False)
+    assert not [t for t in manager._call.tasks if t.get_name() == "nexus-live-pause"]
+    await manager.stop("s1")
+    assert_one_ended(host, "user")
+
+
+async def test_pause_phase_is_durable_and_status_reports_it():
+    manager, _ = make()
+    host, _ = await start(manager)
+    manager.pause("s1", True)
+    await settle(lambda: any(e["phase"] == "paused" for e in host.of("live.phase")))
+    await manager.stop("s1")

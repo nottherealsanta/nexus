@@ -71,7 +71,8 @@ verified.** Daemon, helper and call flow: [live.md](live.md).
 
 - `Ctrl+X D` (the `Live` action) and typing `/live` run the same `toggle_live` flow as the
   terminal client through the shared Python bridge (`nexus/ui/ratatui/live.py`): consent
-  dialog on first use, helper spawn, `LiveStart`, `/live stop|mute|new|status|revoke`.
+  dialog on first use, helper spawn, `LiveStart`, `/live stop|pause|resume|mute|new|status|revoke`.
+  `Ctrl+X P` (the `LivePause` action) toggles pause (`Ctrl+X F` is Fork); the call bar shows a `PAUSED mm:ss` badge and a resume button.
   There is no Cmd alias: the leader chords carry no Cmd convention in `keymap.rs`.
 - Wire: the call bar is the snapshot field `live` (`active`, `state`, `phase`, `model`,
   `muted`, `started`, `in`, `out`, `elsewhere`; empty object when no call is open). It has

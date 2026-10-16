@@ -65,7 +65,7 @@ enqueued.
 record into, so that one `live.ended` is logged instead of persisted. The facade
 ends the call before it closes sessions on shutdown, so the event is durable.
 
-States: `idle -> connecting -> active <-> muted -> closing -> idle`. A second
+States: `idle -> connecting -> active <-> muted <-> paused -> closing -> idle`. A second
 `LiveStart` fails with `live_busy` naming the owning session. Mute is local to the
 client's helper; the daemon records it so every view agrees (no sideband message
 exists for it).
@@ -107,6 +107,8 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 | --- | --- |
 | `/live` | start, or hang up when a call is open |
 | `/live stop` | hang up (idempotent) |
+| `/live pause` | pause or resume (`LivePause`; `Ctrl+X P`), see [Pause vs stop](#pause-vs-stop) |
+| `/live resume` | resume (idempotent); after a pause ran out, `/live pause` or `Ctrl+X P` starts a new call |
 | `/live mute` | toggle the microphone (`LiveMute`; the helper mutes, the daemon records it) |
 | `/live new` | start a call without the carried-over turns (`new_conversation`) |
 | `/live status` | availability, state, consent, helper installed, last error |
@@ -150,6 +152,79 @@ reconnect or replay shows the same thing (`tests/test_ratatui_live.py`). In the 
 open call is left out of the timeline while it is open, and its card joins the timeline when
 the call ends. The desktop client (`shell.live.pane = False`) keeps the card in the timeline
 during the call and has no pane.
+
+## Pause vs stop
+
+| | Stop | Pause |
+| --- | --- | --- |
+| Keys / commands | `Ctrl+X D` (also starts a call), `/live`, `/live stop` | `Ctrl+X P`, `/live pause` (toggle), `/live resume` |
+| Call | ends: `live.ended`, helper and socket closed, billing stops | stays open, bounded by `[live].pause_seconds` (default 120) |
+| Microphone | released | held open but sends silence |
+| Voice audio | stops | dropped by the helper (what it was still sending is discarded) |
+| Agent turns | untouched | untouched; its results for the voice are **held** |
+| Resume | a new call (`Ctrl+X D`); the transcript is carried over | `Ctrl+X P` again: held results are spoken in order |
+
+**Why `Ctrl+X P` and not `Ctrl+X F`.** `F` is already Fork session in the terminal client
+(`rust/tui/src/main.rs` leader `f`, `LEADER_SHORTCUTS`) and the desktop client (`ctrl-x f`), so it was not free.
+`P` was unbound in both (desktop `Ctrl+P` is the palette, which does not collide with the chord).
+
+**What Codex does.** Nothing named pause. Its voice mode has `toggle_voice` and `toggle_voice_mute`
+(`tui/src/keymap.rs`), and mute only keeps the WebRTC/RTP track alive with generated silence: "Muted capture
+sends generated silence to keep the peer alive" (`voice-host/src/audio_track.rs`, see
+`plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` sections 1.5 and 6). So Codex's closest thing is mute with the
+socket and session open. Nexus's `mute` is the same and stays as it was.
+
+**Billing (the reason pause is bounded).** Source: OpenAI's Realtime costs guide,
+<https://developers.openai.com/api/docs/guides/realtime-costs>, read 2026-10-16 through a summarising fetch
+(quotes below are from that summary of the page, not a direct read of the HTML).
+
+- GPT Live voice sessions are "billed per second at the current model rate", not rounded up to a minute.
+  *Confident: stated plainly in the docs.*
+- "Active session time includes time when the user speaks, the assistant speaks, both are silent, or the
+  backend is working." *Confident.* Silence and idle time are billed.
+- "Muting microphone input does not close the session." *Confident*; the guide's example says closing "saves
+  $0.05 per minute of idle voice time" (an illustrative rate, not the real one) and points to an inactivity
+  timeout and a close-and-resume workflow. So **a muted or paused call that stays open keeps billing.**
+- A WebRTC session request "bills 15 seconds of voice duration while the session initializes", credited
+  against duration charges once it runs. *Fairly confident:* resuming by starting a new call costs no extra
+  beyond that credited initial charge.
+- The older token-based Realtime models bill per response and say empty audio is not counted; that page section
+  does **not** apply to GPT Live and is not relied on.
+- Whether the real service meters differently for a paused sideband, what the real per-minute rate is, whether
+  the 60-minute cap that the Realtime docs state for ordinary Realtime sessions applies to `gpt-live-1-codex`,
+  and how these calls appear on a ChatGPT-account (OAuth) bill rather than an API key: **not verified**. This
+  integration uses the ChatGPT sign-in, and the guide describes API billing.
+
+**Design.** A pause that keeps the socket open is not free, and Nexus cannot close the socket and keep the call:
+the audio is WebRTC and the sideband only carries events (media dies with the peer; a sideband rejoin of a gone
+call is a 404, see the recovery notes above), and there is no resumable call id. So:
+
+1. **Paused (<= `pause_seconds`).** The client's helper receives `pause`: it sends Opus silence (the RTP clock and
+   ICE consent keepalive keep running, as for mute) and clears the playback ring every 20 ms. The daemon sets the
+   state `paused`, phase `paused` (durable `live.phase`), and **holds** voice-bound updates: nothing may make the
+   voice speak while paused. At most 8 final/notice updates are kept (oldest dropped), quiet `commentary` is dropped
+   as stale, and the drops are announced as a `live.error` on resume. The agent's turns keep running and are visible
+   as usual. A late `delegation.created` still goes to the agent (an ordinary delegation).
+2. **Resume.** The timer is cancelled and held updates are sent in order (the voice then speaks them).
+3. **Bounded.** After `pause_seconds` the call ends like any other end (`live.ended`, reason `pause_timeout`),
+   so billing stops. `Ctrl+X P` (or `/live pause`) in that client then starts a new call, which the existing
+   handoff carries over: session context and the last `carry_turns` spoken turns are in the instructions
+   ([Instructions and continuity](#instructions-and-continuity)). The deadline (`max_minutes`) keeps running
+   during a pause.
+4. **Not done:** cancelling a response the voice is mid-way through producing (the sideband has no verified cancel
+   message, so the helper just discards the audio; the model may finish generating it, billed as session time
+   anyway), and any client-side `input_audio_buffer` clearing (there is none: audio is WebRTC, not appended).
+
+The trade-off: a short pause (a phone call, a cough) resumes instantly with the same voice context and costs only
+the seconds it lasts; a long one costs at most `pause_seconds` of idle time and then behaves like stop plus start.
+Setting `pause_seconds = 5` makes pause almost a stop; `3600` keeps a quiet call open for an hour at full price.
+
+**Where it shows.** The Live pane header reads `● Live · paused · mm:ss  ... PAUSED mm:ss` (the badge counts down to
+the end of the pause; `Ctrl+X P resume` replaces the `/live stop` hint), the desktop call bar shows `PAUSED mm:ss`
+and a resume button, `/live status` has a `Paused` row, and `LiveStatusResult` carries `paused` and
+`pause_remaining_s`. State is the daemon's, so every view agrees and a reconnect sees it. Tested offline
+(`tests/test_live_manager.py`, `test_ratatui_live.py`, `test_ui_support_live_helper.py`, Rust `cargo test`);
+no real call: not verified.
 
 ## Delegation bridge (M2)
 
@@ -414,7 +489,7 @@ terminal). Not verified: a real call and microphone from this command.
 
 ## Host commands
 
-`LiveStatus`, `LiveStart`, `LiveMute`, `LiveStop`, `LiveHelperEvent` (see
+`LiveStatus`, `LiveStart`, `LiveMute`, `LivePause`, `LiveStop`, `LiveHelperEvent` (see
 [host.md](host.md)); results `LiveStatusResult` (also returned by mute and stop),
 `LiveStartResult`, `LiveHelperEventResult`. Errors are `ErrorResult(kind, message)`
 with a stable `kind`: `live_disabled`, `live_consent_required`, `live_busy`, `live_no_session`,
@@ -423,7 +498,7 @@ with a stable `kind`: `live_disabled`, `live_consent_required`, `live_busy`, `li
 `live_no_call_id`, `live_timeout`, `live_not_active`, `live_unavailable`.
 `LiveHelperEvent.kind` is one of `ready levels phase dc_error dropped closed`;
 `detail` is bounded to 2 KiB. Client methods: `live_status`, `live_start`,
-`live_mute`, `live_stop`, `live_helper_event` in `client/protocol.py`.
+`live_mute`, `live_pause`, `live_stop`, `live_helper_event` in `client/protocol.py`.
 
 `LiveStatusResult.reason` is `disabled`, `unsupported` (the `websockets`
 client is missing from a broken install), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)
@@ -431,7 +506,7 @@ or `busy`.
 
 ## Config
 
-See [config.md](config.md): `[live]` `enabled voice max_minutes carry_turns progress
+See [config.md](config.md): `[live]` `enabled voice max_minutes carry_turns pause_seconds progress
 instructions log_raw`, and `NEXUS_LIVE=off`. The WebSocket client (`websockets>=14,<16`) is a
 base dependency, imported lazily; the `live` extra (`nexus-harness[live]`) remains only
 as a compatibility alias. The audio helper `nexus-live` ships inside published platform
@@ -490,10 +565,10 @@ Durable, turn-less, one `call_id` per call (see [events-and-view.md](events-and-
 | `live.transcript.delta` | the current partial caption `role text`; coalesced to <= 4 Hz |
 | `live.delegated` | `delegation_id text mode queued_id source heard verbatim` |
 | `live.appended` | `delegation_id channel(commentary/final/notice) text chunks`, text exactly as sent |
-| `live.phase` | `connecting listening speaking working muted`; <= 4 Hz |
+| `live.phase` | `connecting listening speaking working muted paused`; <= 4 Hz |
 | `live.error` | a redacted non-fatal error, <= 1 per second (reconnect, partial-append and enqueue warnings are always recorded) |
 | `live.levels` | reserved, never persisted (see decisions) |
-| `live.ended` | `reason duration_s error` (redacted), exactly one per `live.started` |
+| `live.ended` | `reason duration_s error` (reason includes `pause_timeout`) (redacted), exactly one per `live.started` |
 
 The reducer folds them into `ConversationView.live_calls` (`LiveCallView`:
 transcript, delegations, appends, caption, phase, errors; bounded). Replay of the

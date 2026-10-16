@@ -21,9 +21,9 @@ from ...ui_support.live_card import encode as card_encode
 from ...ui_support.live_helper import CONSENT_LINES, LiveCall, describe_failure
 from ...ui_support.voice_capture import play_cue
 
-USAGE = "Use /live [stop|mute|new|status|revoke]"
+USAGE = "Use /live [stop|pause|resume|mute|new|status|revoke]"
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
-                "working": "working", "muted": "muted", "ended": "ended"}
+                "working": "working", "muted": "muted", "paused": "paused", "ended": "ended"}
 
 
 class Live:
@@ -35,6 +35,9 @@ class Live:
         self.started_at = 0.0
         self.begin_ts = 0.0  # wall clock when the current start began (matches a call before its id is known)
         self.muted = False
+        self.paused = False
+        self.pause_left = 0.0
+        self.hibernated = False  # the last call ended because a pause ran out (Ctrl+X P restarts it)
         self.watch: asyncio.Task | None = None
         self.opened: set[str] = set()  # call ids whose card is expanded (instructions, commentary)
         self.watch_interval = 0.5
@@ -62,6 +65,8 @@ class Live:
             phase = helper.phase
         if self.muted and self.state == "active":
             phase = "muted"
+        if self.paused and self.state == "active":
+            phase = "paused"
         if self.state == "stopping":
             phase = "ended"
         current = getattr(self.shell.controller, "session", "")
@@ -70,7 +75,9 @@ class Live:
         return {
             "active": True, "state": self.state, "phase": _STATE_LABEL.get(phase, phase),
             "model": (view.model if view is not None else "") or "", "muted": self.muted,
-            "started": self.started_at, "in": 0.0 if self.muted else round(helper.level_in if helper else 0.0, 3),
+            "paused": self.paused,
+            "pause_left": round(max(0.0, self.pause_left - time.time()), 1) if self.paused else 0.0,
+            "started": self.started_at, "in": 0.0 if self.muted or self.paused else round(helper.level_in if helper else 0.0, 3),
             "out": round(helper.level_out if helper else 0.0, 3),
             "elsewhere": self.session if self.session and self.session != current else "",
             # The open call's card rows, drawn in the Live pane above the composer.
@@ -101,7 +108,7 @@ class Live:
 
     async def command(self, args: tuple[str, ...]) -> None:
         action = args[0].casefold() if args else ""
-        if len(args) > 1 or action not in {"", "stop", "mute", "new", "status", "revoke"}:
+        if len(args) > 1 or action not in {"", "stop", "pause", "resume", "mute", "new", "status", "revoke"}:
             raise ValueError(USAGE)
         if action == "":
             if self.active:
@@ -112,6 +119,8 @@ class Live:
             await self.stop()
         elif action == "mute":
             await self.mute()
+        elif action in ("pause", "resume"):
+            await self.pause(None if action == "pause" else False)
         elif action == "new":
             if self.active:
                 raise ValueError("A call is open. End it with /live stop, then use /live new.")
@@ -165,6 +174,7 @@ class Live:
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
+        self.paused, self.pause_left, self.hibernated = False, 0.0, False
         self.begin_ts = time.time()
         self.call = LiveCall(self.shell.client, session)
         await self._refresh()
@@ -208,6 +218,22 @@ class Live:
         self.muted = bool(state.muted)
         self.shell.notice = "Microphone muted" if self.muted else "Microphone live"
 
+    async def pause(self, paused: bool | None = None) -> None:
+        """Pause or resume (docs/live.md "Pause vs stop"); with no call, a timed-out pause restarts it."""
+        if self.call is None or self.state != "active":
+            if self.hibernated and self.state == "idle" and paused is not True:
+                await self.start()  # the carried transcript is the resume
+                return
+            self.shell.notice = "No active Live call"
+            return
+        state = await self.call.pause(paused)
+        self.paused = bool(state.paused)
+        left = float(getattr(state, "pause_remaining_s", 0.0) or 0.0)
+        self.pause_left = time.time() + left  # wall-clock deadline; the bar counts down
+        self.shell.notice = (
+            f"Live paused · microphone and voice silent · call ends in {int(left)}s · "
+            "Ctrl+X P resumes, /live stop ends" if self.paused else "Live resumed · microphone live")
+
     async def status(self) -> None:
         status = await self.shell.client.live_status()
         helper = "installed" if live_helper.available() else "missing (build or install nexus-live)"
@@ -216,6 +242,7 @@ class Live:
             "State": status.state, "Phase": status.phase or "none",
             "Session": status.active_session or "none", "Voice": status.voice or "default",
             "Muted": "yes" if status.muted else "no",
+            "Paused": f"yes ({int(status.pause_remaining_s)}s left)" if status.paused else "no",
             "Elapsed": f"{int(status.elapsed_s)}s of {status.max_minutes} min",
             "Consent": "given" if status.consent else "not given yet",
             "Audio helper": helper, "Last error": status.last_error or "none",
@@ -240,6 +267,7 @@ class Live:
     async def _release(self) -> None:
         call, self.call = self.call, None
         self.state, self.started_at, self.muted = "idle", 0.0, False
+        self.paused, self.pause_left = False, 0.0
         if call is not None:
             with contextlib.suppress(Exception):
                 await call.helper.stop()
@@ -275,6 +303,7 @@ class Live:
                     return
                 view = self._view_call()
                 if view is not None and view.status == "ended":
+                    self.hibernated = view.end_reason == "pause_timeout"
                     await self._finished(self._ended_text(view))
                     return
                 if time.monotonic() - last_status >= self.status_interval:
@@ -292,6 +321,8 @@ class Live:
     @staticmethod
     def _ended_text(view) -> str:
         reason = view.end_reason or "ended"
+        if reason == "pause_timeout":
+            return "Live call ended: the pause ran out · Ctrl+X P starts a new call with the transcript carried over"
         return "Live call ended" if reason in {"user", "stop"} else f"Live call ended ({reason})"
 
     # -- timeline ------------------------------------------------------------

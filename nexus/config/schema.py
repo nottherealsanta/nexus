@@ -907,6 +907,8 @@ class LiveSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     voice: str = "default"
     max_minutes: int = 30
     carry_turns: int = 12
+    #: A paused call ends after this many seconds (GPT Live bills open session time; docs/live.md).
+    pause_seconds: int = 120
     progress: bool = True
     #: Workspace-relative or absolute path to a replacement instructions file.
     instructions: str = ""
@@ -918,6 +920,8 @@ class LiveSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("live.max_minutes must be an integer from 1 to 240")
         if type(self.carry_turns) is not int or not 0 <= self.carry_turns <= 100:
             raise ValueError("live.carry_turns must be an integer from 0 to 100")
+        if type(self.pause_seconds) is not int or not 5 <= self.pause_seconds <= 3600:
+            raise ValueError("live.pause_seconds must be an integer from 5 to 3600")
         if not isinstance(self.voice, str) or len(self.voice) > 40:
             raise ValueError("live.voice must be a voice name or 'default'")
         if not isinstance(self.instructions, str) or len(self.instructions) > 4096 or "\x00" in self.instructions:

@@ -292,6 +292,9 @@ class Client:
             p.LiveStart(session=session, offer_sdp=offer_sdp, voice=voice, new_conversation=new_conversation)
         )  # type: ignore[return-value]
 
+    async def live_pause(self, session: str, paused: bool | None = None) -> p.LiveStatusResult:
+        return await self._request(p.LivePause(session=session, paused=paused))  # type: ignore[return-value]
+
     async def live_mute(self, session: str, muted: bool | None = None) -> p.LiveStatusResult:
         return await self._request(p.LiveMute(session=session, muted=muted))  # type: ignore[return-value]
 

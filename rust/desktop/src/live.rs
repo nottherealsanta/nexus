@@ -102,7 +102,7 @@ impl Desktop {
                     .text_color(t.muted)
                     .child(format!("mic {} spk {}", meter(live.level_in), meter(live.level_out))),
             )
-            .when(live.muted, |d| {
+            .when(live.muted || live.paused, |d| {
                 d.child(
                     div()
                         .px_2()
@@ -110,7 +110,18 @@ impl Desktop {
                         .bg(t.amber)
                         .text_color(t.background)
                         .font_weight(FontWeight::BOLD)
-                        .child("MUTED"),
+                        .child(if live.paused {
+                            format!("PAUSED {}", clock(live.pause_left.max(0.0).ceil() as u64))
+                        } else {
+                            "MUTED".to_string()
+                        }),
+                )
+            })
+            .when(live.paused, |d| {
+                d.child(
+                    self.button("live-resume", "Ctrl+X P resume", json!({"type":"command","text":"/live resume"}), cx)
+                        .px_2()
+                        .text_color(t.text_tertiary),
                 )
             })
             .child(

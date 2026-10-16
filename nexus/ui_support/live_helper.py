@@ -198,6 +198,7 @@ class LiveHelper:
         self.closed_reason: str | None = None
         self.ready = False
         self.muted = False
+        self.paused = False
         self.phase = "listening"
         self.level_in = 0.0
         self.level_out = 0.0
@@ -254,6 +255,11 @@ class LiveHelper:
     async def mute(self, on: bool) -> None:
         self.muted = bool(on)
         await self._send({"type": "mute", "on": bool(on)})
+
+    async def pause(self, on: bool) -> None:
+        """Silence the microphone and drop the voice's audio; the peer stays up (docs/live.md)."""
+        self.paused = bool(on)
+        await self._send({"type": "pause", "on": bool(on)})
 
     async def stop(self, timeout: float = STOP_TIMEOUT) -> None:
         """Idempotent shutdown: ``stop`` command, stdin EOF, then terminate and kill."""
@@ -486,6 +492,12 @@ class LiveCall:
         """Toggle (``None``) or set mute; the helper mutes, the daemon records it."""
         state = await self.client.live_mute(self.session, muted)
         await self.helper.mute(state.muted)
+        return state
+
+    async def pause(self, paused: bool | None = None) -> Any:
+        """Toggle (``None``) or set pause; the daemon records it first, then the helper goes quiet."""
+        state = await self.client.live_pause(self.session, paused)
+        await self.helper.pause(state.paused)
         return state
 
     async def stop(self, reason: str = "user") -> Any:

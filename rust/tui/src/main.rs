@@ -1036,6 +1036,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char('m') => "/model",
                             KeyCode::Char('v') => "/voice",
                             KeyCode::Char('d') => "/live",
+                            KeyCode::Char('p') => "/live pause",
                             KeyCode::Char('n') => "/new",
                             KeyCode::Char('o') => "/sessions",
                             KeyCode::Char('f') => "/fork",

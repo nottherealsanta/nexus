@@ -328,6 +328,9 @@ pub struct LiveBar {
     pub phase: String,
     pub model: String,
     pub muted: bool,
+    /// Paused (`/live pause`); `pause_left` is the seconds until the call ends.
+    pub paused: bool,
+    pub pause_left: f64,
     /// Wall-clock start of the call (seconds since the epoch); 0 while connecting.
     pub started: f64,
     #[serde(rename = "in")]

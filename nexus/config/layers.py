@@ -123,6 +123,7 @@ _V2_NUMERIC = {
     "voice.unload_after_minutes": int,
     "live.max_minutes": int,
     "live.carry_turns": int,
+    "live.pause_seconds": int,
 }
 _V2_BOOL = frozenset(
     {

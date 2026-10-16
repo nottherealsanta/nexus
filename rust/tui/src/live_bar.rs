@@ -112,9 +112,17 @@ pub fn spans(
         meter(live.level_in),
         meter(live.level_out)
     );
-    let hint = "   /live stop";
-    let badge = if live.muted { " MUTED " } else { "" };
-    let fixed = 2 + badge.width() + usize::from(live.muted);
+    let hint = if live.paused { "   Ctrl+X P resume" } else { "   /live stop" };
+    // Paused wins over muted: it silences the voice too, and it counts down to ending the call.
+    let badge = if live.paused {
+        format!(" PAUSED {} ", clock(live.pause_left.max(0.0).ceil() as u64))
+    } else if live.muted {
+        " MUTED ".to_string()
+    } else {
+        String::new()
+    };
+    let badged = live.paused || live.muted;
+    let fixed = 2 + badge.width() + usize::from(badged);
     // (with model, with meters, with hint), most informative first.
     let variants = [
         (true, true, true),
@@ -158,10 +166,10 @@ pub fn spans(
     if with_hint {
         out.push(Span::styled(hint.to_string(), Style::default().fg(p.quiet)));
     }
-    if live.muted {
+    if badged {
         out.push(Span::raw(" "));
         out.push(Span::styled(
-            badge.to_string(),
+            badge,
             Style::default()
                 .fg(p.background)
                 .bg(p.warning)
@@ -277,6 +285,21 @@ mod tests {
             );
             assert!(line.ends_with(" MUTED "), "{width}: {line:?}");
         }
+    }
+    #[test]
+    fn paused_badge_counts_down_and_survives_a_narrow_width() {
+        let p = Palette::new(false);
+        let mut live = bar();
+        live.paused = true;
+        live.pause_left = 95.0;
+        live.phase = "paused".into();
+        for width in [100, 60, 40, 24] {
+            let line = text(&spans(&live, &p, 0, 1161.0, width));
+            assert!(line.width() <= width, "{width}: {line:?}");
+            assert!(line.ends_with(" PAUSED 01:35 "), "{width}: {line:?}");
+        }
+        let wide = text(&spans(&live, &p, 0, 1161.0, 100));
+        assert!(wide.contains("Ctrl+X P resume") && !wide.contains("/live stop"), "{wide}");
     }
     #[test]
     fn narrow_bars_keep_the_meters_before_the_model_name() {

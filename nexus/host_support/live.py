@@ -1,6 +1,6 @@
 """Host projection and dispatch for GPT Live commands (docs/live.md).
 
-``dispatch_live`` maps ``LiveStatus/Start/Mute/Stop/HelperEvent`` onto the
+``dispatch_live`` maps ``LiveStatus/Start/Mute/Pause/Stop/HelperEvent`` onto the
 runtime's ``LiveManager``; ``FacadeLiveHost`` is the per-call seam that lets the
 manager (which imports no host code) emit durable events, read earlier
 transcripts, observe the session without becoming a viewer, and enqueue a
@@ -26,7 +26,7 @@ CONSENT_REQUIRED_MESSAGE = (
     "conversation of the current session go to OpenAI. "
     "Accept the notice with /live in a Nexus chat, or run `nexus live`."
 )
-_COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
+_COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LivePause, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
 _MAX_SESSION_ID = 200
 
 
@@ -185,6 +185,8 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
             )
         if isinstance(command, p.LiveMute):
             return live_status_result(manager.mute(command.session, command.muted), consent=bool(read_consent(home)))
+        if isinstance(command, p.LivePause):
+            return live_status_result(manager.pause(command.session, command.paused), consent=bool(read_consent(home)))
         if isinstance(command, p.LiveStop):
             return live_status_result(
                 await manager.stop(command.session, command.reason), consent=bool(read_consent(home)))
