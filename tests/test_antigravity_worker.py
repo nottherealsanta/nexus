@@ -249,6 +249,23 @@ def test_unrecognised_terminal_fails_closed(tmp_path, lines):
     assert res.status == "failed" and res.is_error
 
 
+@pytest.mark.parametrize("response", ["", "   \n"])
+def test_success_with_empty_answer_needs_attention(tmp_path, response):
+    lines = [INIT, step(1, "DONE", "tool", tool_name="run_command",
+                        tool_info={"name": "run_command", "error": {"type": "Denied", "message": "soft-denied"}}),
+             result("SUCCESS", response)]
+    res, events, _ = run_worker(tmp_path, {"lines": lines})
+    assert res.status == "needs_attention" and res.is_error
+    assert "permissions.allow" in res.attention and "approved nothing" in res.text
+    assert events[-1][1]["status"] == "needs_attention"
+
+
+def test_success_with_empty_response_uses_finished_agent_text(tmp_path):
+    lines = [INIT, step(1, "DONE", "agent_response", text_delta="the sentinel"), result("SUCCESS", "")]
+    res, *_ = run_worker(tmp_path, {"lines": lines})
+    assert res.status == "completed" and res.text.startswith("the sentinel")
+
+
 def test_non_success_status_keeps_partial_answer_and_usage(tmp_path):
     lines = [INIT, step(1, "ACTIVE", "agent_response", text_delta="partway"), result("TIMEOUT", "", usage=USAGE)]
     res, events, _ = run_worker(tmp_path, {"lines": lines})

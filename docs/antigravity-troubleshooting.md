@@ -23,6 +23,18 @@ is inspected; this was the original preflight failure, not a need to add `--prin
 A missing flag error now names the missing capabilities. Do not work around a
 missing capability by disabling permission checks.
 
+## Empty answer after SUCCESS (soft-denied tool)
+
+In headless mode agy cannot ask for approval: shell commands default to Ask and
+are soft-denied unless agy's own `settings.json` has a scoped `permissions.allow`
+rule (see the headless docs, "Permissions in headless mode"; workspace file reads
+are auto-allowed). agy can then end with `status: SUCCESS` and an empty
+`response`. Nexus never reports that as `completed`: with no answer text (neither
+the `result.response` nor a finished `agent_response` step) the assignment ends
+as `needs_attention`, naming the likely soft denial. Nexus does not add allow
+rules, pass `--dangerously-skip-permissions` or answer prompts; edit agy's own
+settings with a narrowly scoped rule and re-run.
+
 ## Settings inheritance and the Nexus child path
 
 `providers.<name>.worker_inherits_agy_settings` defaults to `true`, including when

@@ -546,7 +546,17 @@ class AntigravityWorker:
             run.texts.append(run.pending[max(run.pending)])
             run.pending.clear()
         if status == SCHEMA["success_status"] and run.init_seen and isinstance(answer, str):
-            run.final = ("completed", answer or (run.texts[-1] if run.texts else ""), None)
+            text = answer if answer.strip() else (run.texts[-1] if run.texts else "")
+            if text.strip():
+                run.final = ("completed", text, None)
+                return
+            # SUCCESS with no answer at all: agy ends this way after soft-denying a tool request in headless
+            # mode (shell commands default to Ask), so an empty final is never reported as completed.
+            reason = ("agy reported SUCCESS but returned no answer; a tool request may have been soft-denied "
+                      "because headless mode cannot ask for approval (add scoped `permissions.allow` rules in "
+                      "agy's own settings, docs: antigravity.google/docs/cli/headless) and re-run")
+            run.attention = reason
+            run.final = ("failed", "", reason)
             return
         if status == SCHEMA["success_status"]:
             detail = ("success reported before init" if not run.init_seen else "success without a response string")
@@ -776,8 +786,7 @@ class AntigravityWorker:
             if process_code not in (0, None):
                 err_text = f"agy exited with code {process_code} after reporting success; not trusted"
                 return self._result(run, started, "failed", err_text + "." + partial(), error=err_text)
-            return self._result(run, started, "completed",
-                                run.final[1] or "(Antigravity finished without a text answer)", stop="result")
+            return self._result(run, started, "completed", run.final[1], stop="result")
         stderr_text = redact_secrets(terminal_text(run.stderr))
         reason = run.attention or (None if run.final else _attention_for(stderr_text))
         if reason:
