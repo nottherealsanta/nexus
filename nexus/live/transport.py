@@ -64,10 +64,10 @@ CONNECT_TIMEOUT_S = 15.0
 #: Plan §6: one retry for a 5xx before media; signaling timeout.
 SIGNALING_TIMEOUT_S = 30.0
 SIGNALING_5XX_RETRIES = 1
-#: Plan §6: a dropped sideband gets a reconnect attempt within 5 s, at most twice per call.
+#: Credential refresh bound, separate from a WebSocket open (DNS/TCP/TLS/HTTP upgrade).
 RECONNECT_TIMEOUT_S = 5.0
 #: The per-call reconnect budget. Receive-detected and send-detected drops share it; it is
-#: never reset or raised after a successful reconnect.
+#: never reset or raised after a successful reconnect. Failed opens consume it too.
 MAX_RECONNECTS = 2
 #: One write attempt. A write that raises or times out is delivery-ambiguous and never replayed.
 SEND_TIMEOUT_S = 5.0
@@ -120,19 +120,39 @@ def safe_detail(text: object, limit: int = MAX_DETAIL_CHARS) -> str:
     return redact_secrets(" ".join(str(text).split()))[:limit]
 
 
-def error_for_status(status: int, detail: str = "") -> LiveError:
+class LiveHTTPError(LiveError):
+    """An HTTP refusal with retry policy retained across the connector boundary."""
+
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(code, message)
+        self.status = status
+        # A missing call/route is not evidence of eventual consistency. Retry only
+        # request timeouts and server failures; auth/rate limits remain terminal.
+        self.retryable = status == 408 or 500 <= status < 600
+
+
+def _terminal_open_error(error: LiveError) -> bool:
+    return (isinstance(error, LiveHTTPError) and not error.retryable
+            or error.code in (*_AUTH_CODES, "live_unsupported", "live_closed"))
+
+
+def error_for_status(status: int, detail: str = "", *, sideband: bool = False) -> LiveHTTPError:
     """Map a signaling HTTP status to an actionable, redacted error (notes §8.1)."""
     if status == 401:
-        return LiveError("live_auth", "ChatGPT rejected the sign-in; run `nexus auth codex login` and try again")
+        return LiveHTTPError(status, "live_auth", "ChatGPT rejected the sign-in; run `nexus auth codex login` and try again")
     if status == 403:
-        return LiveError(
-            "live_forbidden",
+        return LiveHTTPError(
+            status, "live_forbidden",
             "GPT Live is not available on this ChatGPT plan, or the voice allowance is used up",
         )
     if status == 429:
-        return LiveError("live_rate_limited", "The GPT Live usage limit was reached; try again later")
-    text = f"call creation failed ({status})"
-    return LiveError("live_signaling", f"{text}: {safe_detail(detail)}" if detail.strip() else text)
+        return LiveHTTPError(status, "live_rate_limited", "The GPT Live usage limit was reached; try again later")
+    text = f"sideband WebSocket upgrade rejected ({status})" if sideband else f"call creation failed ({status})"
+    if status in (404, 410):
+        text += ("; call unavailable/expired or signaling endpoint/protocol mismatch; not retrying"
+                 if sideband else "; signaling endpoint unavailable or protocol mismatch; not retrying")
+    return LiveHTTPError(status, "live_sideband" if sideband else "live_signaling",
+                         f"{text}: {safe_detail(detail)}" if detail.strip() else text)
 
 
 def parse_call_id(location: str | None, url: str, fallback: str | None = None) -> str:
@@ -154,6 +174,15 @@ def websocket_available() -> bool:
     return importlib.util.find_spec("websockets") is not None
 
 
+# Keepalive pings go out every 20s. A call dropped ~40s in with "no close frame
+# received or sent", which matches ping_interval=20 + ping_timeout=20 but does not
+# prove it (abrupt peer/proxy/network termination fits too). The pong deadline is
+# kept finite at 60s as a diagnostic tolerance: a slow Pong no longer closes the
+# call at ~40s, yet a half-open socket is still detected. Not a verified fix.
+HEARTBEAT_PING_INTERVAL_S = 20
+HEARTBEAT_PING_TIMEOUT_S = 60
+
+
 async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketLike:
     """Connect with ``websockets`` (a base dependency), imported lazily."""
     try:
@@ -168,10 +197,15 @@ async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketL
     try:
         return await connect(
             url, additional_headers=dict(headers), open_timeout=CONNECT_TIMEOUT_S,
-            max_size=1_048_576, ping_interval=20, ping_timeout=20, user_agent_header=None,
+            max_size=1_048_576, ping_interval=HEARTBEAT_PING_INTERVAL_S,
+            ping_timeout=HEARTBEAT_PING_TIMEOUT_S, user_agent_header=None,
         )
     except InvalidStatus as exc:
-        raise error_for_status(exc.response.status_code) from None
+        # This module-level connector has no call-local credential scrubber. Do
+        # not include arbitrary provider bodies: truncating before _connect can
+        # scrub them could expose a partial credential. Status and actionable
+        # protocol guidance are safe and sufficient to classify the refusal.
+        raise error_for_status(exc.response.status_code, sideband=True) from None
 
 
 class _SendDropped(Exception):
@@ -238,6 +272,21 @@ class CodexLiveTransport:
         raw = _BEARER.sub("***", raw)  # never leave the scheme word behind a scrubbed token
         return safe_detail(raw, limit)
 
+    def _describe_drop(self, exc: BaseException) -> str:
+        """Exception text plus any WebSocket close metadata (type, rcvd/sent code and reason)."""
+        parts = [self._clean(exc) or type(exc).__name__]
+        if type(exc).__name__ not in parts[0]:
+            parts.insert(0, type(exc).__name__)
+        for side in ("rcvd", "sent"):
+            frame = getattr(exc, side, None)
+            if frame is None:
+                parts.append(f"{side}=none")
+                continue
+            code = getattr(frame, "code", None)
+            reason = self._clean(getattr(frame, "reason", "") or "", 80)
+            parts.append(f"{side}={code}" + (f" {reason!r}" if reason else ""))
+        return self._clean(" ".join(parts), 240)
+
     async def _headers(self) -> dict[str, str]:
         try:
             base = dict(await self._auth.headers())
@@ -283,7 +332,9 @@ class CodexLiveTransport:
             break
         assert response is not None
         if not 200 <= response.status_code < 300:
-            raise error_for_status(response.status_code, self._clean(response.text[:2048]))
+            # Scrub the full buffered body before any display truncation, so a
+            # credential straddling the limit cannot leave a visible fragment.
+            raise error_for_status(response.status_code, self._clean(response.text))
         answer = response.text
         if not answer.strip():
             raise LiveError("live_signaling", "The call was created but the SDP answer was empty")
@@ -298,7 +349,10 @@ class CodexLiveTransport:
 
     # -- sideband ----------------------------------------------------------
 
-    async def _connect(self, *, attempts: int, timeout: float) -> WebSocketLike:
+    async def _connect(self, *, attempts: int) -> WebSocketLike:
+        # One open budget for initial connection and recovery. In particular, the
+        # credential-refresh deadline must never be passed to this operation.
+        timeout = CONNECT_TIMEOUT_S
         url = self._sideband_url.format(call_id=quote(self._call_id, safe=""))
         headers = {k: v for k, v in (self._headers_cache or {}).items() if k not in ("content-type", "accept")}
         last: Exception | None = None
@@ -308,14 +362,29 @@ class CodexLiveTransport:
             try:
                 return await asyncio.wait_for(self._connector(url, headers), timeout)
             except LiveError as exc:
-                if exc.code in _AUTH_CODES or exc.code == "live_unsupported":
-                    raise  # notes "Discrepancies": do not retry auth failures
+                if _terminal_open_error(exc):
+                    if isinstance(exc, LiveHTTPError):
+                        raise LiveHTTPError(exc.status, exc.code, self._clean(exc.message)) from None
+                    raise LiveError(exc.code, self._clean(exc.message)) from None
                 last = exc
             except Exception as exc:  # noqa: BLE001
                 last = exc
             if attempt + 1 < attempts:
                 await self._sleep(CONNECT_BASE_DELAY_S * (2 ** attempt))
-        raise LiveError("live_sideband", f"Could not open the sideband connection: {self._clean(last or '')}")
+        # wait_for (and some WebSocket open failures) raises a TimeoutError with
+        # an empty str(). Keep the type and bound explicit so the terminal error
+        # doesn't lose the only useful diagnostic. Scrub before display as usual.
+        if isinstance(last, TimeoutError):
+            detail = f"TimeoutError: WebSocket open did not complete within {timeout:g}s"
+            if str(last).strip():
+                detail += f" ({last})"
+        elif isinstance(last, LiveError):
+            detail = f"{last.code}: {last.message}"
+        elif last is not None:
+            detail = f"{type(last).__name__}: {last}"
+        else:
+            detail = "No WebSocket open attempt completed"
+        raise LiveError("live_sideband", f"Could not open the sideband connection: {self._clean(detail)}")
 
     async def _emit(self, event: LiveEvent) -> None:
         if self._on_event is not None:
@@ -387,7 +456,7 @@ class CodexLiveTransport:
     async def _run(self) -> None:
         reconnects = 0
         try:
-            ws = await self._connect(attempts=CONNECT_ATTEMPTS, timeout=CONNECT_TIMEOUT_S)
+            ws = await self._connect(attempts=CONNECT_ATTEMPTS)
             drop = self._install(ws)
             self._first_open.set()
             await self._emit(SidebandOpen())
@@ -404,19 +473,37 @@ class CodexLiveTransport:
                     if getattr(exc, "code", None) == 1000 or type(exc).__name__ == "ConnectionClosedOK":
                         await self._notify_closed("remote_closed", None)
                         return
-                    if reconnects >= MAX_RECONNECTS:
-                        await self._notify_closed("sideband_lost", self._clean(exc) or "connection lost")
-                        return
-                    reconnects += 1
-                    try:
-                        # Fresh credentials: the access token may have rotated since the call began.
-                        self._headers_cache = await asyncio.wait_for(self._headers(), RECONNECT_TIMEOUT_S)
-                        ws = await self._connect(attempts=1, timeout=RECONNECT_TIMEOUT_S)
-                    except asyncio.TimeoutError:
-                        await self._notify_closed("sideband_lost", "Timed out refreshing credentials")
-                        return
-                    except LiveError as err:
-                        await self._notify_closed("sideband_lost", err.message)
+                    failure = self._clean(exc) or type(exc).__name__
+                    recovered = False
+                    while reconnects < MAX_RECONNECTS:
+                        if reconnects:
+                            await self._sleep(CONNECT_BASE_DELAY_S * (2 ** (reconnects - 1)))
+                        reconnects += 1
+                        try:
+                            # Refresh on EVERY attempt; auth refusals never get retried.
+                            self._headers_cache = await asyncio.wait_for(self._headers(), RECONNECT_TIMEOUT_S)
+                            # An open includes DNS, TCP, TLS and HTTP upgrade. The old 5s
+                            # outer wait cancelled the library's 15s open prematurely.
+                            ws = await self._connect(attempts=1)
+                        except asyncio.TimeoutError:
+                            failure = "Timed out refreshing credentials"
+                            break
+                        except LiveError as err:
+                            failure = err.message
+                            if isinstance(err, LiveHTTPError) and err.status in (404, 410):
+                                # The same call id opened this call earlier, so the service has
+                                # stopped accepting it. The protocol has no rejoin or URL refresh,
+                                # and a replacement call would lose the conversation: end instead.
+                                failure += "; id was accepted earlier; no replacement call created"
+                            if _terminal_open_error(err):
+                                break
+                        else:
+                            recovered = True
+                            break
+                    if not recovered:
+                        gap = asyncio.get_running_loop().time() - lost_at
+                        detail = f"{failure}; recovery attempts used {reconnects}/{MAX_RECONNECTS}, gap {gap:.1f}s; drop: {self._describe_drop(exc)}"
+                        await self._notify_closed("sideband_lost", self._clean(detail))
                         return
                     if self._closing:
                         self._retired.append(ws)

@@ -76,6 +76,17 @@ def test_cargo_lock_keeps_uuid_within_the_crate_msrv():
     assert uuid["version"] == "1.18.1"
 
 
+def test_cargo_lock_pins_webrtc_ice_past_the_consent_freshness_fix():
+    # Regression: webrtc-ice 0.13 only sent an ICE consent check when no packet was sent or
+    # received for the keepalive interval. Audio RTP keeps the path busy, so no check was
+    # ever sent and the server dropped the call after about 43 s (RFC 7675). The fix is
+    # pion/ice PR #767 (webrtc-rs/rtc PR #86), shipped in webrtc-ice 0.17.2.
+    lock = tomllib.loads((ROOT / "rust/live/Cargo.lock").read_text(encoding="utf-8"))
+    ice = next(p for p in lock["package"] if p["name"] == "webrtc-ice")
+    version = tuple(int(part) for part in ice["version"].split("."))
+    assert version >= (0, 17, 2), ice["version"]
+
+
 def test_native_toolchain_pin_matches_the_crate_msrv():
     manifest = tomllib.loads((ROOT / "rust/live/Cargo.toml").read_text(encoding="utf-8"))
     rust_version = manifest["package"]["rust-version"]

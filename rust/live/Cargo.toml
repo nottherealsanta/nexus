@@ -10,7 +10,7 @@ default = ["audio"]
 audio = ["dep:cpal"]
 
 [dependencies]
-webrtc = "0.13"
+webrtc = "0.17.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "io-std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

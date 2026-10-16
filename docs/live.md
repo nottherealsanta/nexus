@@ -82,8 +82,10 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
    that owns a busy call).
 2. The `nexus-live` binary must exist (`NEXUS_LIVE_BINARY`, the venv's bin, `rust/live/target`,
    `PATH`); otherwise an `unsupported` panel says to upgrade or reinstall the normal Nexus default package, then restart the daemon; source builds are only in developer notes. Asked before consent.
-3. First use only: a consent dialog says that microphone audio and summaries of the
-   agent's work go to OpenAI through the user's ChatGPT account. Agreeing calls
+3. First use only (and again whenever the notice version changes; it is 2 since the call
+   started receiving session context): a consent dialog says that microphone audio,
+   summaries of the agent's work and a bounded excerpt of the session conversation go to
+   OpenAI through the user's ChatGPT account. Agreeing calls
    `LiveConsent(accept=True)`, a record in `<nexus home>/live-consent.json`
    (once per machine, every client; `/live revoke` removes it). The **daemon refuses** a
    `LiveStart` until that record exists (`live_consent_required`, no signaling and no
@@ -110,10 +112,28 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 | `/live status` | availability, state, consent, helper installed, last error |
 | `/live revoke` | withdraw the data-sharing consent |
 
-**Call bar.** While a call is open the blank row above the composer controls reads
-`● Live · <model> · <phase> · mm:ss   mic ▰▰▱▱▱▱ spk ▱▱▱▱▱▱   /live stop`, plus a
-`MUTED` badge, and `· in <session>` when another session is on screen (the microphone stays
-visible everywhere). The editor is untouched: typing during a call is ordinary steering.
+**Call line.** The composer carries nothing of the call. The call's status line is the
+header row of the Live pane (below): `● Live · <phase> · mm:ss   mic ▰▰▱▱▱▱ spk ▱▱▱▱▱▱   /live stop`
+with a `MUTED` badge, then `↑ N more` and the expand button at the right. Pieces drop by
+width, in this order: the `/live stop` hint, the model name (`● Live · <model> · <phase>`, shown
+only when there is room), the meters; the dot, clock, phase and `MUTED` badge stay, and the
+phase is truncated last. Typing during a call is ordinary steering.
+When the call is on another session or has no rows yet (still connecting) there is no row
+list, but the microphone must stay visible: the pane is then the header alone, one row above
+the composer, `● Live · listening · 00:12 · in <session>   /live stop` (a connecting call reads
+`● Live · connecting · 00:00`). No expand button, no scrolling.
+
+**Live pane (terminal).** The native terminal draws the open call's card rows in a pane
+between the timeline and the composer, not in the timeline (`Live.pane`; `bar()["detail"]`,
+`collapsed`, `operation`). The pane is 6 rows, the call-line header and five content rows, and follows the newest rows. The mouse wheel
+over it scrolls. Clicking a row opens or closes the card (the `live_toggle` operation, the
+same as the card). A button at the header's right (` ⤢ expand ` / ` ⤡ collapse `, beside the `↑ N more` notice) expands it to nearly full screen, up to
+just below the top bar (the timeline keeps one row), so the transcript can be read; the same button collapses it again.
+The expanded state is local to the terminal client and resets when the call ends. Hidden
+rows are announced as `↑ N more` or `↓ N newer`; clipping is never silent. The pane appears as
+soon as the daemon has recorded `live.started`, even before this client has the start result:
+`Live._view_call()` then matches the newest non-ended call of the shown session that began after
+this start, so the old timeline card never flashes. After the call ends the card joins the timeline.
 
 **Timeline card.** Each call renders as one labelled `Live` card (native block kind `live`,
 rows from `ui_support/live_card.py`), placed before the first turn that started after the
@@ -126,11 +146,47 @@ error). Collapsed by default: commentary becomes one counted row, long text is c
 "+N more characters", and the instructions are summarised; click the card (or Enter on it) to
 open everything. Nothing is dropped. A user message created by a delegation shows
 `via voice` beside its turn number. The card is rebuilt from the durable events, so a
-reconnect or replay shows the same thing (`tests/test_ratatui_live.py`).
+reconnect or replay shows the same thing (`tests/test_ratatui_live.py`). In the terminal the
+open call is left out of the timeline while it is open, and its card joins the timeline when
+the call ends. The desktop client (`shell.live.pane = False`) keeps the card in the timeline
+during the call and has no pane.
 
 ## Delegation bridge (M2)
 
 A delegation is **untrusted input**, exactly like a typed prompt.
+
+What GPT Live can and cannot do: the session offers a client delegation
+(`delegation: {type: client}`) and no documented native tool capability, and Nexus sends
+no tool schemas to it. So Live never calls Nexus tools itself. The bundled instructions
+require the voice model to rewrite each project-work request before delegating: never
+pass the transcription through (even trimmed), but synthesize a concise task in its own
+words that resolves references from the conversation, leads with the desired outcome, and
+adds relevant context, constraints and verification. It must keep the user's intent and
+uncertainty, add no imagined scope or file names, never claim the work is done, and say
+"investigate and report, change nothing" when the user only asked to check or explain.
+The prompt includes a bad-vs-good example (a rambling "check what context GPT Live
+gets" utterance becomes a check-only inspection task). The model also tells the user
+aloud that the coding agent will do the work. The delegation text still becomes an
+ordinary user message.
+
+**Limitation (observed, not fixable client-side today).** The voice model does not author
+the `delegation.created` text. In the recorded call `session-1ce5e575` every `live.delegated`
+text equals the user's final spoken transcript word for word, despite the rewrite rule
+above; the service builds the delegation content from the user's turn. The public
+GPT-Live docs go further and say a client delegation event carries no task text at all
+(the app reconstructs it from transcript events), and they describe no session-level
+function tools for the voice model (function tools exist only under
+`delegation.responses.tools`, which runs OpenAI's backend, not Nexus). OC's `end_call`
+is a tool of its coding agent, not a voice-model tool. So there is no verified way for
+the voice model to send its own wording; see
+[GPT_LIVE_PROTOCOL_NOTES.md](../plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md) "Authorship of
+delegation text" and [decisions.md](decisions.md). `live.delegated` therefore also records
+`source` (`"delegation"`), `heard` (the user's latest transcript when known) and
+`verbatim` (the delegated text equals what was heard, ignoring case and punctuation) so
+clients can show "You" and "Sent to agent" honestly. The rewrite rule stays in the
+instructions as best effort: not verified to have any effect. The normal Nexus agent
+chooses and runs the tools, under the usual permissions, approval gates and errors. How
+good the delegation is depends on the model following the prompt; it is not enforced.
 
 | Situation | Behaviour |
 | --- | --- |
@@ -161,20 +217,83 @@ Transport timing and credentials:
 
 - Waiting for a connection (the lock, the initial connect or a reconnect) is bounded at 5 s
   and each write at 5 s; both failures are reported as above and never replayed.
-- At most **2 reconnects per call**, shared by receive-detected and send-detected drops,
-  each bounded at 5 s. A clean server close (code 1000), whether seen by the reader or by a
+- At most **2 reconnect open attempts per call**, shared by receive-detected and send-detected
+  drops (failed attempts count too). Each refreshes credentials within 5 s and opens
+  within 15 s, matching the initial WebSocket open and its library `open_timeout`.
+  A transient failed open uses the remaining attempt after 0.2 s backoff; the budget
+  never resets after success. Recovery is thus bounded to 40.2 s per call in total
+  (plus bounded socket cleanup), not an unbounded background reconnect loop.
+  A clean server close (code 1000), whether seen by the reader or by a
   failed write, ends the call as `remote_closed` without reconnecting.
+- **Heartbeat:** the `websockets` connector pings every 20 s (`ping_interval=20`) with a
+  `ping_timeout=60` (`transport.py`), so dead connections are still detected. The earlier
+  `ping_timeout=20` was **not** the cause of the ~43 s drops; see
+  [Root cause of the ~43 s drop](#root-cause-of-the-43-s-drop). Disconnect reports append the
+  exception type and `rcvd=`/`sent=` close code and reason (`none` when no frame).
 - Every reconnect fetches **fresh credentials** from the auth manager first (the access
   token may have rotated); a new token is redacted like the first. An auth failure at
   that point ends the call at once instead of retrying.
+- A terminal `sideband_lost` with `Could not open the sideband connection` means an
+  already-open sideband failed to reconnect; initial setup failure is `startup_failed`.
+  Open failures include the exception type (and the configured open timeout for
+  timeouts), with credential redaction and bounded detail. An empty timeout message
+  is not evidence of an auth failure. Reconnects remain bounded; commentary that was
+  not sent, or whose delivery is uncertain, is never replayed automatically.
+- HTTP refusals retain their status across the connector boundary. Only 408 and
+  5xx responses are eligible for the existing bounded retry policy; other HTTP
+  errors (including 404/410, auth and rate limits) end opening/recovery immediately,
+  without spending the remaining attempts. Network failures still use bounded
+  recovery. A WebSocket refusal is labeled `sideband WebSocket upgrade rejected`,
+  not `call creation failed`; bounded response-body detail is credential-redacted.
+  Recovery counters include the one attempt that received the terminal response.
+- A 404 during recovery means the HTTP upgrade was refused, not simply a dropped
+  socket. It may mean the call expired/disappeared or that the configured endpoint,
+  provider deployment or protocol version no longer supports this route. The
+  reverse-engineered protocol does **not** establish which, or promise that a 404
+  will become recoverable. Earlier versions mislabeled upgrade errors as call
+  creation failures and retried them, obscuring this distinction. A preceding
+  `no close frame received or sent` describes the original drop, not why HTTP
+  returned 404. Confirming the cause needs the service response and deployed
+  endpoint/version/configuration; the elapsed time alone cannot establish expiry.
+  Observed report: `Ended sideband_lost · 00:43 … upgrade rejected (404) … recovery
+  attempts used 1/2, gap 6.1s; drop: no close frame received or sent`. The initial
+  open had succeeded (the call ran 43 s), so the 404 came from the first reconnect
+  with the same call id, URL and freshly fetched headers. Both reference integrations
+  reuse that id for every attempt; the documented protocol has no rejoin call or
+  short-lived URL/token to refresh, so there is nothing more correct to retry. The
+  terminal text adds `id was accepted earlier; no replacement call created` for 404/410
+  during recovery. **Known limitation / not verified**: whether the service ends the
+  call when the sideband drops, expires it, or rejects a second sideband for the id
+  needs a real-service trace (response body, timing, whether a second WebSocket on a
+  live call works). If the call was already torn down by the media-path bug in
+  [Root cause](#root-cause-of-the-43-s-drop), the 404 is a consequence, not a separate fault.
+  Nexus does not automatically POST a replacement call: that would start a new
+  semantic conversation and cannot safely restore unheard audio or uncertain
+  commentary. Start a fresh live call explicitly after checking configuration.
 - Outgoing JSON is ASCII-escaped, so text containing a lone surrogate cannot fail the
   UTF-8 encode of a healthy socket.
 - Stopping is **best effort**: the call is marked terminal in the same loop turn as the
   cancellation of in-flight sends, so a send cancelled mid-write cannot start a reconnect.
   `session.close` is attempted (<= 1 s) only on a socket no write was cancelled or failed
   on; otherwise the socket is just closed locally. The server may not see an explicit close.
-- Liveness uses the WebSocket library's default ping (every 20 s, 20 s timeout), not an
-  application keepalive.
+- Liveness uses the `websockets` ping (`ping_interval=20`, `ping_timeout=60`), not an
+  application keepalive. Previously, reconnect imposed a 5 s outer deadline on
+  the connector despite its 15 s open budget: that cancelled DNS/TCP/TLS/proxy/HTTP
+  upgrade work early. The diagnostic is built from `_connect`'s outer
+  `asyncio.wait_for` deadline: passing 5 s reproduces exactly
+  `TimeoutError: WebSocket open did not complete within 5s`, even when the
+  library's `open_timeout` is 15 s. The current recovery path already passes
+  15 s; a fresh failure reporting 5 s indicates older running code or an
+  overridden deadline, not a credential-refresh timeout. Restart the service
+  after deploying the fix rather than relying on an already-running process.
+  `_connect` now owns the 15 s open deadline for both initial setup and recovery;
+  callers cannot accidentally pass the credential-refresh deadline as its limit.
+  A refresh timeout is instead reported as `Timed out refreshing credentials` and
+  ends recovery immediately; it is not classified as a timed-out WebSocket open.
+  Terminal recovery detail now includes the original drop cause,
+  attempt count and recovery gap (redacted and bounded). This does not establish
+  which network stage stalled; confirming that needs a real service/network trace.
+  No commentary or ambiguous write is replayed.
 
 - **Appends** are serialized per call under one lock, and the call is rechecked for
   ending once the lock is held. If chunk N fails, `live.appended` records only the
@@ -198,6 +317,26 @@ Transport timing and credentials:
   normal, never to duplicate a delegation because it is quiet, to keep commentary silent,
   and to explain interruptions honestly, asking for a repeat only if necessary.
   Progress commentary still comes only from real `tool.requested` events.
+
+### Root cause of the ~43 s drop
+
+- **Evidence:** every call in the session database since 2026-10-13 ended at 40 to 49 s,
+  whatever the WebSocket ping settings were. A typical end reads `Ended sideband_lost · 00:43
+  … sideband WebSocket upgrade rejected (404) … drop: ConnectionClosedError no close frame
+  received or sent`. The 404 is the reconnect; by then the call was already gone.
+- **Cause:** the `nexus-live` helper used webrtc-rs 0.13 (webrtc-ice 0.13.0). Its keepalive
+  sends an ICE consent check (a STUN binding request) only when no packet was sent or received
+  for the keepalive interval (2 s). Audio RTP flows every 20 ms and RTCP runs both ways, so
+  no consent check was ever sent. The server enforces RFC 7675 consent freshness (about 30 s),
+  so the media path ends, the sideband drops without a close frame, and the reconnect is 404.
+- **Fix:** `rust/live/Cargo.toml` depends on `webrtc = "0.17.2"` (webrtc-ice 0.17.2). It sends a
+  binding request every keepalive interval regardless of media (`last_consent_ping` in
+  `agent_internal.rs`). This is the same bug fixed upstream in pion/ice PR #767 and
+  webrtc-rs/rtc PR #86. `tests/test_live_packaging.py` pins the locked version. It builds
+  with Rust 1.88 and the crate's cargo tests pass.
+- **Not verified against a real call.** The expected result is a call that runs past 50 s
+  with no `sideband_lost`. Confirm it with a real call's session record before treating this
+  as closed.
 
 ## Headless CLI (`nexus live`)
 
@@ -272,10 +411,26 @@ Override with `[live].instructions` or `<workspace>/.agents/live/instructions.md
 (<= 32 KiB, `{{agent}}` and `{{workspace}}` placeholders). The rendered text is the
 `instructions` field of `live.started`: what the voice model is told is shown.
 
+Session context: unless `new_conversation`, the instructions get a labelled block of
+the current Nexus session (`LiveHost.session_context`, built in `host_support/live.py`
+from the shared `nexus.view` projection; `nexus/live` imports no session code). It
+holds user prompts and the final assistant text of each turn, oldest first, plus a
+status word (running, awaiting input, awaiting permission, error). Internal thinking,
+tool calls and tool output are omitted, as are user messages Live delegated itself.
+Text is redacted and control characters cleaned (pattern based: not a guarantee), at
+most 60 items of 2,000 characters, quoted line by line as untrusted background that
+is never instructions. The block is clipped to 8 KiB keeping the newest items, and
+says how many older messages were omitted. `live.started` records
+`session_context_items` and `session_context_omitted`. A projection failure or a
+deleted session yields no block and the call still starts.
+
 Continuity: one voice conversation per Nexus session. The last `carry_turns` (12)
-final transcript turns of earlier calls, trimmed to 8 KiB, are appended to the
-instructions as quoted background and counted in `live.started.carried_turns`.
-`new_conversation` starts empty, and later calls then carry only turns after it.
+final transcript turns of earlier calls, trimmed to 8 KiB, are appended after the
+session context as quoted background and counted in `live.started.carried_turns`.
+The rendered instructions as a whole stay under 32 KiB (the carry-over gets what the
+base prompt and session context leave). `new_conversation` starts empty (neither
+block), and later calls then carry only turns after it. What the real service does
+with instructions of this size is not verified.
 
 ## Events and view
 
@@ -283,10 +438,10 @@ Durable, turn-less, one `call_id` per call (see [events-and-view.md](events-and-
 
 | Event | Data |
 | --- | --- |
-| `live.started` | `model voice instructions_source instructions carried_turns new_conversation` |
+| `live.started` | `model voice instructions_source instructions carried_turns new_conversation session_context_items session_context_omitted` |
 | `live.transcript` | final only: `role text turn truncated` |
 | `live.transcript.delta` | the current partial caption `role text`; coalesced to <= 4 Hz |
-| `live.delegated` | `delegation_id text mode queued_id` |
+| `live.delegated` | `delegation_id text mode queued_id source heard verbatim` |
 | `live.appended` | `delegation_id channel(commentary/final/notice) text chunks`, text exactly as sent |
 | `live.phase` | `connecting listening speaking working muted`; <= 4 Hz |
 | `live.error` | a redacted non-fatal error, <= 1 per second (reconnect, partial-append and enqueue warnings are always recorded) |

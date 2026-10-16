@@ -95,7 +95,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
 | **Explicit `claude-code/<model>` subagents run Claude Code's own agent loop and tools in a PTY, outside Nexus's dispatcher; the earlier text-only PTY model bridge (`model/providers/claude_code.py`) was dropped and deleted.** | A bridge that disables Claude's tools and feeds JSON tool intentions into a Nexus child loop wastes what Claude Code is for and implies Nexus enforcement it cannot give an interactive CLI. Instead the policy is explicit and refuse-don't-widen (read-only roles only get `Read,Grep,Glob`; budgets refused; bypass/auto never passed; no prompt is ever answered), usage is reported as unknown, and file changes are measured by Nexus. Main-agent use stays on the SDK. Live behavior not verified; remaining gaps are listed in [agents.md](agents.md#external-claude-code-workers). | `agents/claude_code_worker.py`, `runtime.py:_ChildRuntime` |
 | **`claude-code` subagents have a backend switch (`[models] claude_code_subagent_backend`: `worker` default, or `sdk`).** | Some users want Claude as a subagent under Nexus's tools, permissions and measured usage rather than Claude's own tools. `sdk` reuses the Agent SDK provider in the normal child loop, built per child so it never makes Claude a selectable main model. No silent default model on either backend. | `runtime.py:_ChildRuntime`, `host_support/model_settings.py` |
-| **Antigravity (`kind = "antigravity"`, alias `agy`) is a subagent-only external worker, run headless over stream-json with agy's own tools; it requires `worker_inherits_agy_settings = true` and refuses what Nexus cannot enforce.** | Same refuse-don't-widen rule as `claude-code`, but agy is driven over pipes (the Claude worker's earlier "ZMX" design used a PTY) so no terminal is emulated. A separate provider kind rather than extending `claude_code_subagent_backend`, which keeps Claude behaviour untouched and lets agy have no Nexus-tools backend. agy applies its own settings, MCP servers and plugins and PathGuard cannot reach it, so read-only roles, tool/MCP/restriction fields, worktrees and token/cost budgets are refused, and only `accept-edits`/`plan` are passed. Models are the exact IDs `agy models` reports (no hard-coded catalogue); tiers may name `antigravity/<id>` explicitly, with no price ranking; never the root, title or fallback model. Usage is the terminal `result.usage` or `unknown`; cost is always `unknown`. Implemented offline only (no real model turn, no credentials). | `agents/antigravity_worker.py`, `model/providers/antigravity_cli.py`, `runtime.py:_plan_antigravity` |
+| **Antigravity (`kind = "antigravity"`, alias `agy`) is a subagent-only external worker, run headless over stream-json with agy's own tools; it defaults to `worker_inherits_agy_settings = true` (explicit `false` refuses execution) and refuses what Nexus cannot enforce.** | Same refuse-don't-widen rule as `claude-code`, but agy is driven over pipes (the Claude worker's earlier "ZMX" design used a PTY) so no terminal is emulated. A separate provider kind rather than extending `claude_code_subagent_backend`, which keeps Claude behaviour untouched and lets agy have no Nexus-tools backend. agy applies its own settings, MCP servers and plugins and PathGuard cannot reach it, so read-only roles, tool/MCP/restriction fields, worktrees and token/cost budgets are refused, and only `auto`/`accept-edits`/`plan` are passed. Models are the exact IDs `agy models` reports (no hard-coded catalogue); tiers may name `antigravity/<id>` explicitly, with no price ranking; never the root, title or fallback model. Usage is the terminal `result.usage` or `unknown`; cost is always `unknown`. Implemented offline only (no real model turn, no credentials). | `agents/antigravity_worker.py`, `model/providers/antigravity_cli.py`, `runtime.py:_plan_antigravity` |
 | **Antigravity sign-in and quota are manual and honest.** | `agy` has no `auth` subcommand, so Nexus can prove only that the CLI exists, never that it is signed in; Settings says to run `agy`. Usage is shown as unavailable (no windows) with a note to run `/usage` in `agy`: its output format is unverified, so `agy -p /usage` is not run and no numbers are invented. | `host_support/provider_auth.py`, `host_support/provider_usage.py` |
 | **Provider usage reuses the credentials Nexus already holds;** Claude's comes from `claude -p /usage`, not the `api/oauth/usage` endpoint CodexBar calls. | Reading Claude Code's OAuth token from its keychain item would break "the CLI owns the credential store"; `/usage` is a local command that costs no tokens. Its text format is unversioned, so a CLI change shows as a row error rather than wrong numbers. | `host_support/provider_usage.py` |
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
@@ -711,6 +711,8 @@ on a light theme.
 
 ## Sessions dashboard groups by time and previews only on keyboard selection (2026-10)
 
+Superseded in part: the preview pane (the `Response` box) was removed; see "Sessions dashboard has no preview pane" below.
+
 The native dashboard groups by last-updated local time (Today, Yesterday, This week,
 Earlier) instead of status: people look for "the thing I did recently", and status is
 still carried by the row glyph and header chips. The host computes `bucket` and
@@ -730,3 +732,115 @@ durable log: the wait is scheduling state, not history, so it is not journaled a
 a reconnect re-derives it. The head entry is kept only while `slot_wait` is set, so
 the "steer" flash fix for ordinary idle sends stands. The count of running turns is
 a snapshot at the last event and may lag while the session stays parked.
+
+## Sessions dashboard has no preview pane (2026-10)
+
+The dashboard has no preview: no `SessionDashboardPreview` host command or
+`SessionDashboardPreviewResult` (with `PreviewRow` and `PendingInput`), no client
+`dashboard_preview` method, no `preview` key on the dashboard snapshot, no preview pane
+in the Rust terminal client, and no `session_preview` dashboard operation. The list
+(`ProjectSessionsList`, about 10 ms) and its schema 4 row snippets remain. The archive
+`SessionPreview` command is unchanged.
+
+Why: `dashboard_preview` replayed the selected session's whole event log through the
+reducer on the daemon event loop, and the dashboard re-polled it every 0.5 s. Measured
+0.40 s for a 12k-event session and 1.83 s for a 19k-event session, so `/sessions` felt
+slow and blocked other daemon requests. Caching was considered; removing the preview
+was chosen. Not verified: that the concurrent removal is complete in code.
+
+## Sessions dashboard has no composer (2026-10)
+
+The native client does not draw the composer on the Sessions dashboard
+(`render::composer_height` is 0 while a dashboard is shown), and `main.rs` no longer
+routes dashboard keys into a draft: list shortcuts, search and rename own their keys and
+everything else is ignored. Enter opens the selected session. Sending to a selected
+session from the dashboard is gone.
+
+Why: a hidden-or-duplicate input under the list made typing ambiguous (search versus
+message) and cost rows the list can use. Not verified: visually in a real terminal.
+
+## Failed tool calls do not open a group; the failed count is dark red (2026-10)
+
+A folded tool group draws only its header (and the live tail while running). The native
+client used to draw failed members under the folded header, which in effect expanded the
+group; `transcript/groups.rs` no longer does. The `· N failed` count stays in the header,
+coloured with the new `Palette::error_deep` (dark `196,66,88`, light `160,28,48`), darker
+than `error`, which was too light there. The Python projection still sends `failed_members`
+(operations stay allowed); the web app has no such rule.
+
+Why: the user wants groups collapsed by default regardless of outcome and opens them
+manually. Not verified: visually in a real terminal.
+
+## Slow commands do not block the connection's read loop (2026-10)
+
+The daemon read loop awaited every command before reading the next frame, so the
+startup `Doctor` (full `PRAGMA quick_check` and session-tail scan over a ~1.7 GB
+`nexus.db`) delayed a `SessionOpen` sent right behind it on the chat client's single
+connection. Measured on a cloned cold database: session open 13.2 s behind Doctor,
+1.8 s after the change (0.4 s warm). `Doctor`, `UpdateStatus`, `ModelsList`,
+`ModelsRefresh` and `SetupStatus` now run as bounded background tasks
+(`SLOW_COMMANDS` in `host/daemon.py`); all other commands keep strict arrival order.
+
+Why: results are already matched by frame id, so out-of-order replies are safe, and
+detaching only the known slow commands avoids reordering pipelined session commands.
+Not addressed: Doctor itself still reads the whole database cold (it competes for disk
+with the first session read; the remaining 1.8 s vs 0.4 s warm), and the TUI's own
+request path was not changed.
+
+## Tier edits apply live, without a daemon restart (2026-10)
+
+Settings -> Models reorders, adds and removes tier models (and sets tier efforts).
+`HostFacade` used to reload only when no turn was running; otherwise it wrote the
+config, returned `restart_required=True`, and the new order never applied until a
+restart. It now always calls `Runtime.reload_tier_config` (tier table, registry
+re-index, `ModelRouter.set_tiers`), which touches no provider. Subagent models are
+resolved at spawn, so the next spawn uses the new order; running children keep their
+model. `restart_required` remains only for runtimes with injected routes, and for
+provider-changing settings, which still need an idle runtime.
+Test: `tests/test_host_tier_hot_apply.py`. Not verified: the roster's effort labels in an
+already-running turn (they read the runner's construction-time config).
+
+## Transcript keeps a 20-row bottom buffer, and following parks there (2026-10)
+
+The last reply sat against the composer. A transcript taller than the viewport now scrolls
+`BOTTOM_BUFFER` (20, clamped to viewport - 4) blank rows past the last content row. That bottom
+position is the follow position, the scroll-down clamp and the scrollbar range, all from one
+function (`session::live_offset`); the earlier stuck-scroll bug came from these disagreeing. The
+pinned-prompt tail padding is unchanged, and `max_scroll` takes the larger of padding and buffer.
+Transcripts that fit the viewport get no buffer, so they never scroll. Tests: see
+`docs/ratatui-parity.md`. Not verified: feel in a real terminal (only TestBackend and unit tests).
+
+## GPT Live: upgrade webrtc-rs instead of vendoring a patch (2026-10)
+
+Calls dropped at about 43 s. The cause is webrtc-ice 0.13, which sends an ICE consent
+check only when the path is idle, so audio never triggers one and the server ends the
+media path (see [live.md](live.md#root-cause-of-the-43-s-drop)). We upgraded the
+`nexus-live` helper to `webrtc = "0.17.2"` (webrtc-ice 0.17.2), which contains the upstream
+fix (pion/ice PR #767, webrtc-rs/rtc PR #86). Vendoring and patching webrtc-ice 0.13 was
+rejected: it would carry a fork of ICE code we do not own, and the upstream release already
+fixes it. The locked version is pinned by `tests/test_live_packaging.py`. Not verified
+against a real call.
+
+## Terminal shows the open call in a pane above the composer; the card follows once it ends (2026-10)
+
+The Live card was a timeline block, so a long call pushed the conversation and the
+controls around. In the terminal the open call's rows now sit in a 5-row pane between the
+timeline and the composer. It follows the newest rows, the wheel scrolls it, and a button
+expands it to read the transcript; the expanded state is local and resets when the call ends.
+The open call is left out of the timeline, and its card joins the timeline once the call
+ends, so the record reads in call order. The desktop client keeps the card in the timeline
+during a call, because its layout has no pane. Tests: `tests/test_ratatui_live.py`. Not verified
+in a real terminal.
+
+## GPT Live: delegation text is the heard utterance; no voice-authored handoff yet (2026-10)
+
+Decision: keep `delegation: {type: client}` and record, on `live.delegated`, `source`,
+`heard` and `verbatim` beside `text`, instead of declaring a `send_to_agent` function tool.
+Reason: in the recorded call `session-1ce5e575` every delegation text equals the user's
+transcript although the instructions demand a rewrite; the public GPT-Live docs describe no
+session-level function tools for the voice model (only `delegation.responses.tools`, which
+runs OpenAI's backend), and OC's `end_call` is a tool of its coding agent, not of the voice
+model. Declaring tools would be a guess against an undocumented endpoint, with a risk of
+double-enqueueing. Known gap: the voice model cannot yet send its own wording; a live spike
+with `[live].log_raw` should test a `tools` array on the session. Details:
+`plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md` "Authorship of delegation text".
