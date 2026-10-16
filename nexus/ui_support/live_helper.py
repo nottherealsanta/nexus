@@ -110,6 +110,8 @@ CONSENT_LINES = (  # short lines: list dialogs clip instead of wrapping
     "  - audio from your microphone during the call",
     "  - summaries of the agent's work and results,",
     "    which can include file contents and output",
+    "  - at call start, up to 8 KiB of this session's recent",
+    "    prompts and replies (not thinking or tool output)",
     "",
     "The session's model, tools and permissions do the",
     "work. The voice can ask the agent to act but can",

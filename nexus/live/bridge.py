@@ -38,6 +38,7 @@ PROGRESS_INTERVAL_S = 5.0
 MAX_FINAL_CHARS = 12_000
 MAX_TOOLS_IN_PROGRESS = 5
 MAX_TRACKED_TURNS = 32
+MAX_HEARD_CHARS = 2_000
 
 Append = Callable[[str, str, "str | None"], Awaitable[None]]
 
@@ -45,6 +46,10 @@ Append = Callable[[str, str, "str | None"], Awaitable[None]]
 def _clip(text: str, limit: int) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _norm(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
 def _is_subagent(data: Mapping[str, Any]) -> bool:
@@ -107,8 +112,13 @@ class LiveBridge:
 
     # -- delegation --------------------------------------------------------
 
-    async def on_delegation(self, delegation_id: str, text: str) -> None:
-        """Hand one spoken request to the session as a queued or steering user message."""
+    async def on_delegation(self, delegation_id: str, text: str, heard: str = "") -> None:
+        """Hand one spoken request to the session as a queued or steering user message.
+
+        ``heard`` is the user's latest transcript when the manager has one; it is recorded
+        beside ``text`` so a client can show whether the voice model's request was its own
+        wording or the heard utterance passed through (``verbatim``).
+        """
         async with self._lock:
             if self._closed:
                 return
@@ -137,8 +147,11 @@ class LiveBridge:
             # re-adding the mapping then would leave a stale entry that nothing ever pops.
             if queued_id not in self._settled:
                 self._queued.setdefault(queued_id, delegation_id)
+            heard = " ".join(heard.split())[:MAX_HEARD_CHARS]
             self._emit("live.delegated", {
                 "delegation_id": delegation_id, "text": text, "mode": mode, "queued_id": queued_id,
+                "source": "delegation", "heard": heard,
+                "verbatim": bool(heard) and _norm(heard) == _norm(text),
             })
             self._set_phase("working")
 

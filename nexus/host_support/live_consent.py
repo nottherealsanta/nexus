@@ -1,7 +1,9 @@
 """Once-per-machine consent for GPT Live (GPT_LIVE_PLAN section 7).
 
-Live sends microphone audio and summaries of the agent's work (which may include
-file contents) to OpenAI through the user's ChatGPT account. A client shows that
+Live sends microphone audio, summaries of the agent's work (which may include
+file contents) and, at call start, a bounded excerpt of the current session's
+conversation (user prompts and final assistant text) to OpenAI through the
+user's ChatGPT account. A client shows that
 notice before the first call and records the answer here, so it survives restarts
 and applies to every client of the daemon. The record holds a timestamp and the
 notice version only; revoking deletes it. Stored beside the other machine state
@@ -17,7 +19,7 @@ from pathlib import Path
 from ..config.paths import nexus_home
 
 #: Bump when the notice text changes materially; an older record then counts as not given.
-NOTICE_VERSION = 1
+NOTICE_VERSION = 2  # 2: the call now also receives a bounded excerpt of the session conversation
 _MAX_BYTES = 4096
 
 

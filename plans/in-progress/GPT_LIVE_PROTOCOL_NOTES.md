@@ -595,3 +595,45 @@ keep the MIT notice in `live/NOTICE`, as the Nexus plan already requires.
 10. Whether `session.created` ever appears on the wire.
 11. Whether the server validates voice names, and how it reports a bad one.
 12. Whether OC's prompts or its `mute` implementation contain rules the Nexus design should copy in spirit (for example, stop and approval handling). Read `src/server/prompts/` and `native/` before deciding.
+
+
+---
+
+## Authorship of delegation text (researched later; why requests arrive verbatim)
+
+Question: can the voice model send the agent its own wording?
+
+Evidence:
+- Nexus data: session `session-1ce5e575` (`~/.nexus/nexus.db`, table `records`): the
+  `live.delegated` text at seq 30 ("Okay, how do we think about Uh GPT Live, uh taking the
+  whole session context, how does that work here") equals the last cumulative
+  `live.transcript.delta` for role user, speech-recognition noise ("Uh", "uh") included,
+  although `live.started` (seq 7) recorded the bundled instructions with the rewrite rule.
+  No `log_raw` frames exist on this machine (`~/.nexus/logs/live/` absent; `[live].log_raw`
+  defaults to false, `nexus/config/schema.py:914`), so the raw frame was not inspected.
+- OC `src/server/live.ts` (c23101c): `LiveSession` is `{model, instructions, audio, delegation:
+  {type: "client"; ack_filler?: boolean}}`; no tools array or function-call event; `delegation.created`
+  parsed into `{kind: "delegation", id, text}`. OC `bridge.ts`: `toVoice` wraps the text as
+  `<request>...</request>`; `gptlive_end_call` appears only in `TOOL_LABELS` and as `endCall()`
+  returning a string: it is a tool exposed to OC's own coding agent (the opencode voice session),
+  not a tool declared to the voice model. The earlier note in section 4.6 ("the voice agent calls an
+  `end_call` tool") should be read that way: it is not evidence of client function tools.
+  `ack_filler` is declared but never set; effect unknown.
+- OpenAI docs "Delegation and tools in GPT-Live" (developers.openai.com/api/docs/guides/live-delegation):
+  client delegation is `{"model": "gpt-live-1", "delegation": {"type": "client"}}`;
+  `session.delegation.created` "does not contain the user's utterance or task text"; the app builds
+  the request from `session.input_transcript.delta` / `output_transcript.delta`; results go back with
+  `session.commentary.append` / `session.thinking.append` / `session.instructions.append` carrying
+  `delegation_id`. Function tools are documented only under `delegation.responses.tools` (Responses
+  mode: OpenAI's backend runs the model, calls come back as `response.output_item.done`, answered with
+  `response.item.create` `function_call_output` + `response.create`). The primary-websocket reference
+  (first 100k chars read) lists session fields `model instructions audio delegation client input store
+  triggers`; no top-level `tools`. That API (`gpt-live-1`, websocket, `session.start`) differs from the
+  undocumented codex WebRTC endpoint Nexus uses, so it is only suggestive here.
+- oh-my-pi @ 818dd42: the guessed protocol.ts URL returned 404; not re-checked.
+
+Conclusion: there is no evidence that client function tools exist on this endpoint, and the one
+observed delegation was the heard utterance. Nothing was implemented that assumes tools. Not verified:
+whether the codex endpoint accepts a `tools` array or `delegation.responses` (a spike would need a
+live call with `log_raw`), whether `ack_filler` changes anything, and whether the rewrite rule ever
+changes the delegation text. Nexus now records `source`, `heard` and `verbatim` on `live.delegated`.

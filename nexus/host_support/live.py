@@ -14,13 +14,16 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from ..host import protocol as p
-from ..live.manager import LiveInfo, LiveManager
+from ..live.manager import LiveInfo, LiveManager, SessionContext
 from ..live.protocol import LiveError
 from ..util import redact_secrets
+from ..view import fold
 from .live_consent import read_consent, write_consent
+from .session_preview import clean_multiline
 
 CONSENT_REQUIRED_MESSAGE = (
-    "GPT Live needs your consent first: microphone audio and summaries of the agent's work go to OpenAI. "
+    "GPT Live needs your consent first: microphone audio, summaries of the agent's work and the recent "
+    "conversation of the current session go to OpenAI. "
     "Accept the notice with /live in a Nexus chat, or run `nexus live`."
 )
 _COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
@@ -31,6 +34,18 @@ def live_status_result(info: LiveInfo, *, consent: bool = False) -> p.LiveStatus
     values = dataclasses.asdict(info)
     values["last_error"] = redact_secrets(str(values["last_error"]))[:300]
     return p.LiveStatusResult(**values, consent=consent)
+
+
+_CONTEXT_STATUS = {"running": "running", "awaiting_input": "awaiting_input", "awaiting_permission": "awaiting_permission"}
+_CONTEXT_MAX_ITEMS = 60
+_CONTEXT_ITEM_CHARS = 2000
+
+
+def _context_text(value: Any) -> str:
+    text = clean_multiline(value, max_lines=60, max_chars=100_000)
+    if len(text) > _CONTEXT_ITEM_CHARS:
+        text = text[:_CONTEXT_ITEM_CHARS].rstrip() + " [...]"
+    return text
 
 
 class _Tap:
@@ -85,6 +100,33 @@ class FacadeLiveHost:
                 role = "assistant" if data.get("role") == "assistant" else "user"
                 turns.append((role, data["text"]))
         return turns
+
+    def session_context(self, session_id: str) -> SessionContext:
+        """User prompts and final assistant text of the session, from the shared event projection.
+
+        Omits thinking, tool calls and tool output, and the user messages GPT Live itself
+        delegated (the voice already knows what it asked). Text is redacted and cleaned.
+        """
+        try:
+            view = fold(self._handle(session_id).read(force=True).events())
+        except Exception:  # noqa: BLE001 - a deleted or unreadable session simply has no context
+            return SessionContext()
+        items: list[tuple[str, str]] = []
+        for turn in view.turns:
+            for message in turn.messages:
+                if message.role == "user":
+                    if (message.origin or {}).get("kind") == "live":
+                        continue
+                    text = _context_text(message.text)
+                    if text:
+                        items.append(("user", text))
+            final = next((m for m in reversed(turn.messages) if m.role == "assistant" and m.done and m.text.strip()), None)
+            if final is not None:
+                items.append(("assistant", _context_text(final.text)))
+        status = _CONTEXT_STATUS.get(view.phase, "")
+        if not status and view.turns and view.turns[-1].phase == "failed":
+            status = "error"
+        return SessionContext(turns=tuple(items[-_CONTEXT_MAX_ITEMS:]), status=status)
 
     def turn_running(self, session_id: str) -> bool:
         return self._handle(session_id).active_turn_id is not None

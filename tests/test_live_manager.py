@@ -500,6 +500,23 @@ def test_instructions_bundled_and_overrides(tmp_path):
         load_instructions(tmp_path, "x", live_config(instructions="missing.md"))
 
 
+def test_bundled_instructions_ask_for_actionable_delegations(tmp_path):
+    text, _ = load_instructions(tmp_path, "build", live_config())
+    assert "You have no tools of your own" in text
+    assert "Rewrite before you hand off" in text
+    assert "never pass the user's words or transcript through" in text
+    assert "Synthesize a concise task in your own words" in text
+    for part in ("resolve", "lead with the outcome", "context, constraints, and how to verify"):
+        assert part in text
+    assert "Keep the user's intent and any uncertainty they expressed" in text
+    assert "Never invent file names, facts, requirements, or extra scope" in text
+    assert "never say or imply the work is done" in text
+    assert "investigate and report without changing anything" in text
+    assert "Bad handoff: that sentence repeated as heard." in text
+    assert "This is a check only; do not change anything." in text
+    assert "Do not claim it is done" in text
+
+
 def test_carried_block_is_bounded_and_ordered():
     turns = [("user", "q1"), ("assistant", "a1"), ("user", "q2")]
     block, count = carried_block(turns, 2)

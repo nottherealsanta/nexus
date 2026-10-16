@@ -7,6 +7,7 @@ from typing import Any
 
 from nexus.events import Event
 from nexus.live import protocol as lp
+from nexus.live.manager import SessionContext
 from nexus.live.transport import CallAnswer
 
 
@@ -98,8 +99,10 @@ class FakeTap:
 class FakeHost:
     """An in-memory LiveHost recording emitted events."""
 
-    def __init__(self, sessions=("s1",), turns=None) -> None:
+    def __init__(self, sessions=("s1",), turns=None, context=None) -> None:
         self.sessions = set(sessions)
+        self.context = context  # a SessionContext, or an exception to raise
+        self.context_calls = 0
         self.events: list[tuple[str, str, dict]] = []
         self.viewer_count = 1
         self.running = False
@@ -122,6 +125,12 @@ class FakeHost:
     def agent_name(self, session_id): return self.agent
     def transcript_turns(self, session_id): return list(self.turns)
     def turn_running(self, session_id): return self.running
+
+    def session_context(self, session_id):
+        self.context_calls += 1
+        if isinstance(self.context, Exception):
+            raise self.context
+        return self.context if self.context is not None else SessionContext()
 
     async def enqueue(self, session_id, text, mode, origin):
         queued_id = f"q{len(self.enqueued) + 1}"

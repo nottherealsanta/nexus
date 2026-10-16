@@ -378,3 +378,14 @@ async def test_ending_the_call_does_not_cancel_the_running_turn(tmp_path):
         assert [e.type for e in runtime.session("s").events].count("live.ended") == 1
     finally:
         await runtime.aclose()
+
+
+async def test_delegated_event_records_source_heard_and_verbatim():
+    bridge, _s, emitted, _p, _c = unit_bridge()
+    await bridge.on_delegation("d1", "Okay, read the README.", heard="okay read the readme")
+    await bridge.on_delegation("d2", "Summarize README.md and report only.", heard="okay read the readme")
+    await bridge.on_delegation("d3", "no transcript yet")
+    rows = [d for k, d in emitted if k == "live.delegated"]
+    assert [r["source"] for r in rows] == ["delegation"] * 3
+    assert [r["verbatim"] for r in rows] == [True, False, False]
+    assert rows[1]["heard"] == "okay read the readme" and rows[2]["heard"] == ""
