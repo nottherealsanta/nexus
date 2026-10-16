@@ -10,7 +10,7 @@ Contract (plans/ANTIGRAVITY_PLAN.md sections 3-5), same duck contract as
   its dispatcher, permission engine and PathGuard do not apply, and NO sandbox
   is requested, so nothing here claims one. That is stated in every result.
 * Authority comes from agy's own user settings, MCP servers and plugins, so the
-  operator must set ``worker_inherits_agy_settings = true`` explicitly. Any
+  inheritance defaults to ``worker_inherits_agy_settings = true``. Any
   configuration Nexus cannot enforce on agy (read-only role, tool lists, MCP
   config, setting sources, ``restricted``, non-agy permission modes) is refused,
   never silently ignored. Bypass/"always proceed" flags are never passed and
@@ -156,8 +156,8 @@ class WorkerConfig:
     setting_sources: str = ""
     mcp_config: str | None = None
     restricted: bool = False
-    #: Must be explicitly ``True``: agy applies its own settings, MCP servers and plugins.
-    worker_inherits_agy_settings: bool | None = None
+    #: Enabled by default: agy applies its own settings, MCP servers and plugins.
+    worker_inherits_agy_settings: bool | None = True
     config_dir: Path | None = None
 
     def __post_init__(self) -> None:
@@ -189,7 +189,12 @@ class WorkerConfig:
             setting_sources="" if sources is None else sources,
             mcp_config=getattr(section, "worker_mcp_config", None),
             restricted=False if restricted is None else bool(restricted),
-            worker_inherits_agy_settings=getattr(section, "worker_inherits_agy_settings", None),
+            # Older section-like callers use None for an omitted option. Preserve
+            # an explicit False, but give omission the same default as the schema.
+            worker_inherits_agy_settings=(
+                True if getattr(section, "worker_inherits_agy_settings", None) is None
+                else section.worker_inherits_agy_settings
+            ),
             config_dir=config_dir,
         )
 
@@ -222,7 +227,8 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
     """Resolve the authority for one assignment, refusing anything not enforceable on agy."""
     if config.worker_inherits_agy_settings is not True:
         raise ConfigError(
-            "antigravity worker refused: agy applies its own user/global settings, MCP servers and plugins "
+            "antigravity worker refused: worker_inherits_agy_settings is explicitly disabled; "
+            "agy applies its own user/global settings, MCP servers and plugins "
             "and Nexus PathGuard does not apply inside it; set worker_inherits_agy_settings = true to accept that")
     if read_only:
         raise ConfigError(
@@ -340,7 +346,7 @@ class AntigravityWorker:
     async def _probe(self, executable: str, flag: str, env: dict, cwd: str) -> str:
         process = await asyncio.create_subprocess_exec(
             executable, flag, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
         self._active.add(process)
 
         async def collect() -> str:
@@ -368,15 +374,23 @@ class AntigravityWorker:
         help_text = await self._probe(policy.executable, "--help", env, cwd)
         required = ["--input-format", "--output-format", "stream-json", "--model", "--mode", "--print-timeout",
                     policy.permission_mode]
-        if any(item not in help_text for item in required):
-            raise ProviderError("antigravity lacks required flags; refusing to start")
+        # Match flag tokens, not prefixes (e.g. --print-timeout is not --print).
+        missing = [item for item in required if not re.search(
+            rf"(?<![\w-]){re.escape(item)}(?![\w-])", help_text)]
+        if missing:
+            raise ProviderError(
+                "antigravity lacks required headless flags/values: "
+                + ", ".join(missing) + "; refusing to start (check `agy --help`)"
+            )
 
     # -- argv ------------------------------------------------------------
 
     @staticmethod
     def build_argv(policy: WorkerPolicy, *, model: str, print_timeout: int) -> list[str]:
-        """The exact agy argv. Never contains ``-p``, bypass flags, a sandbox flag or the prompt.
+        """The documented streaming argv; stream-json selects headless stdin input.
 
+        Do not pass ``--print``/``-p``: those accept a command-line prompt, which
+        streaming mode ignores. The prompt is sent only as a user event on stdin.
         ``--print-timeout`` is a Go-style duration (``60s``), never a bare integer.
         """
         return [policy.executable, "--input-format", "stream-json", "--output-format", "stream-json",

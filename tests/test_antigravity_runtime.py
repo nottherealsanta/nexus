@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,8 +27,43 @@ REF = f"antigravity/{MODEL}"
 
 
 def section(**fields):
-    fields.setdefault("worker_inherits_agy_settings", True)
     return ProviderSection(kind="antigravity", **fields)
+
+
+@pytest.mark.parametrize("explicit", [None, True, False])
+def test_actual_schema_and_fresh_layered_config_default(tmp_path, explicit):
+    from nexus.agents.antigravity_worker import WorkerConfig, resolve_policy
+
+    assert ProviderSection().worker_inherits_agy_settings is True
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    suffix = "" if explicit is None else f"worker_inherits_agy_settings = {str(explicit).lower()}\n"
+    (workspace / "nexus.toml").write_text(
+        'config_version = 2\n[providers.antigravity]\nkind = "antigravity"\n' + suffix)
+    config = Config.load(workspace, home=tmp_path / "home", environ={})
+    provider = config.v2.providers["antigravity"]
+    expected = explicit is not False
+    assert provider.worker_inherits_agy_settings is expected
+    assert WorkerConfig.from_section(provider).worker_inherits_agy_settings is expected
+    if expected:
+        Runtime._validate_antigravity_section(provider, "antigravity")
+        resolve_policy(WorkerConfig.from_section(provider), read_only=False)
+    else:
+        with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
+            resolve_policy(WorkerConfig.from_section(provider), read_only=False)
+
+
+def test_lower_layer_explicit_false_survives_omission(tmp_path):
+    workspace, home = tmp_path / "ws", tmp_path / "home"
+    workspace.mkdir()
+    (home / ".nexus").mkdir(parents=True)
+    (home / ".nexus" / "config.toml").write_text(
+        'config_version = 2\n[providers.antigravity]\nkind = "antigravity"\n'
+        'worker_inherits_agy_settings = false\n')
+    (workspace / "nexus.toml").write_text(
+        'config_version = 2\n[providers.antigravity]\nkind = "antigravity"\n')
+    config = Config.load(workspace, home=home, environ={})
+    assert config.v2.providers["antigravity"].worker_inherits_agy_settings is False
 
 
 def fake_runtime(providers=None, registry=None, tiers=None):
@@ -48,14 +84,14 @@ def spec_for(tmp_path, *, model=REF, config=None, **extra):
 # -- schema and kind ---------------------------------------------------------
 
 
-def test_schema_opt_in_is_false_by_default_and_validated():
-    assert ProviderSection(kind="antigravity").worker_inherits_agy_settings is False
+def test_schema_inheritance_is_true_by_default_and_validated():
+    assert ProviderSection(kind="antigravity").worker_inherits_agy_settings is True
     assert ProviderSection(kind="agy", worker_inherits_agy_settings=True).worker_inherits_agy_settings
     assert ProviderSection(worker_inherits_agy_settings=True).worker_inherits_agy_settings
     with pytest.raises(ValueError, match="boolean"):
         ProviderSection(kind="antigravity", worker_inherits_agy_settings="yes")
-    with pytest.raises(ValueError, match="only to kind = antigravity"):
-        ProviderSection(kind="claude-code", worker_inherits_agy_settings=True)
+    # This shared default must not prevent configuring other provider kinds.
+    assert ProviderSection(kind="claude-code").kind == "claude-code"
     assert "worker_inherits_agy_settings=True" in repr(section())
 
 
@@ -65,15 +101,24 @@ def test_kind_alias_and_adapter_kind():
         assert Runtime._adapter_kind(name, sec) == ADAPTER_ANTIGRAVITY
 
 
+@pytest.mark.parametrize("provider", ["antigravity", "agy"])
+@pytest.mark.parametrize("option", ["", "worker_inherits_agy_settings = true\n"])
+def test_loaded_config_omission_defaults_for_nexus_child(tmp_path, provider, option):
+    (tmp_path / "nexus.toml").write_text(
+        f'config_version = 2\n[providers.{provider}]\nkind = "antigravity"\n' + option)
+    config = Config.load(tmp_path, home=tmp_path / "home", environ={})
+    assert config.v2.providers[provider].worker_inherits_agy_settings is True
+    child = _ChildRuntime(fake_runtime(), spec_for(tmp_path, config=config, model=f"{provider}/{MODEL}"), object())
+    assert child._external.inherits_settings
+
+
 def test_section_validation_refuses_fields_agy_cannot_honour():
     Runtime._validate_antigravity_section("antigravity", section(executable="agy", timeout_seconds=30))
     with pytest.raises(ConfigError, match="worker_tools"):
         Runtime._validate_antigravity_section("antigravity", section(worker_tools=["Read"]))
     with pytest.raises(ConfigError, match="api_key"):
         Runtime._validate_antigravity_section("antigravity", section(api_key="x"))
-    with pytest.raises(ConfigError, match="only to kind = antigravity"):
-        Runtime._validate_claude_section("claude-agent", SimpleNamespace(
-            kind="claude-agent", worker_inherits_agy_settings=True))
+    Runtime._validate_claude_section("claude-agent", ProviderSection(kind="claude-agent"))
 
 
 # -- root, title and fallback exclusion --------------------------------------
@@ -209,8 +254,8 @@ def test_refusals_are_explicit(tmp_path):
     unsupported = Config(v2=ConfigV2(providers={"antigravity": section(worker_mcp_config="{}")}))
     with pytest.raises(ConfigError, match="worker_mcp_config"):
         build(config=unsupported)
-    # The worker's own explicit-consent rule is not bypassed.
-    optout = Config(v2=ConfigV2(providers={"antigravity": ProviderSection(kind="antigravity")}))
+    # An explicit opt-out still refuses execution.
+    optout = Config(v2=ConfigV2(providers={"antigravity": section(worker_inherits_agy_settings=False)}))
     with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
         build(config=optout)
 
@@ -247,6 +292,48 @@ def test_pinned_tier_routes_to_antigravity_for_children_only(tmp_path):
 
 
 # -- registry discovery ------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", ["worker", "sdk"])
+@pytest.mark.parametrize("flagged", [False, True])
+@pytest.mark.parametrize("agy_provider", ["antigravity", "agy-alias"])
+def test_read_only_tier_skips_antigravity_for_nexus(tmp_path, backend, flagged, agy_provider):
+    from nexus.model.registry import ModelInfo
+    from nexus.model.capabilities import Capabilities
+
+    reference = f"{agy_provider}/{MODEL}"
+    config = Config(v2=ConfigV2(
+        providers={agy_provider: section()},
+        models=ModelsSection(tiers={"low": [reference, "missing/model", "test/safe"]},
+                             claude_code_subagent_backend=backend)))
+    runtime = Runtime(tmp_path, config=config, home=tmp_path / "home", environ={})
+    info = ModelInfo(id="safe", provider="test")
+    registry = SimpleNamespace(get=lambda ref: info if ref == "test/safe" else None)
+    runtime._router._registry = registry
+    provider = SimpleNamespace(capabilities=lambda model: Capabilities())
+    runtime._router._providers["test"] = provider
+    # Writable tools plus the metadata flag must also trigger read-only routing.
+    spec = SimpleNamespace(agent="task", config=config, workspace=tmp_path, model="low",
+                           tools=("read", "edit") if flagged else ("read",),
+                           metadata={"selection": {"read_only": flagged}})
+    child = _ChildRuntime(runtime, spec, object())
+    assert child._external is None
+    assert runtime._router.resolve(ModelRequest(messages=[], model="low")).provider is provider
+    # Writable children retain the ordered Antigravity route.
+    assert runtime._external_tier_route("low") == reference
+
+
+def test_read_only_antigravity_only_tier_has_actionable_resolution(tmp_path):
+    config = Config(v2=ConfigV2(
+        providers={"antigravity": section()}, models=ModelsSection(tiers={"low": [REF]})))
+    runtime = Runtime(tmp_path, config=config, home=tmp_path / "home", environ={})
+    spec = SimpleNamespace(agent="task", config=config, workspace=tmp_path, model="low",
+                           tools=("read",), metadata={})
+    with pytest.raises(ConfigError, match=(
+        r"models.tiers.low.*explicitly select a Nexus-controlled provider/model "
+        r"\(not Antigravity\) for this task"
+    )):
+        _ChildRuntime(runtime, spec, object())
 
 
 class FakeCli:
@@ -323,16 +410,17 @@ async def test_refresh_replaces_and_clears_models_without_refetching_the_catalog
     assert registry.list(provider="antigravity") == []
 
 
-async def test_unconfigured_registry_discovers_without_execution_consent():
+async def test_unconfigured_registry_discovers_and_defaults_to_inheritance():
     cli = FakeCli([(MODEL, "A")])
     registry = ModelRegistry(providers={}, offline=True, use_snapshot=False, antigravity_cli=cli)
     await registry.load()
     assert cli.made == [(None, None)]
     assert registry.get(REF) is not None
     assert not registry.provider_status("antigravity").selectable
-    with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
-        from nexus.agents.antigravity_worker import WorkerConfig, resolve_policy
-        resolve_policy(WorkerConfig.from_section(None), read_only=False)
+    from nexus.agents.antigravity_worker import WorkerConfig, resolve_policy
+    assert resolve_policy(WorkerConfig.from_section(None), read_only=False).permission_mode == "auto"
+    child = _ChildRuntime(fake_runtime(), spec_for(Path.cwd(), config=Config()), object())
+    assert child._external.inherits_settings
 
 
 async def test_runtime_rejects_a_model_agy_did_not_report(tmp_path):
@@ -418,7 +506,9 @@ async def run_stub(tmp_path, **fields):
 
     workspace = tmp_path / "ws"
     workspace.mkdir(parents=True)
-    config = Config(model="standard", v2=ConfigV2(providers={"antigravity": section()}))
+    (workspace / "nexus.toml").write_text(
+        'config_version = 2\n[providers.antigravity]\nkind = "antigravity"\n')
+    config = Config.load(workspace, home=tmp_path / "home", environ={})
     runtime = Runtime(workspace, config=config, home=tmp_path / "home", environ={"PATH": os.environ["PATH"]},
                       agents=AgentManager.for_workspace(workspace, seed=False))
 

@@ -31,7 +31,8 @@ args = sys.argv[1:]
 if args == ["--version"]:
     print(scenario.get("version", "1.3.4")); sys.exit(0)
 if args == ["--help"]:
-    print(scenario.get("help", "--input-format --output-format stream-json --model --mode auto|accept-edits|plan --print-timeout"))
+    print(scenario.get("help", "--print --input-format --output-format stream-json --model --mode auto|accept-edits|plan --print-timeout"),
+          file=sys.stderr if scenario.get("help_stderr") else sys.stdout)
     sys.exit(0)
 stdin = sys.stdin.read()
 json.dump({{"argv": args, "stdin": stdin, "cwd": os.getcwd()}}, open(os.path.join(here, "record.json"), "w"))
@@ -85,7 +86,7 @@ def make_fake(tmp_path: Path, **scenario) -> Path:
 
 
 def worker_for(script: Path, tmp_path: Path, **config) -> tuple[AntigravityWorker, object]:
-    cfg = WorkerConfig(executable=str(script), worker_inherits_agy_settings=True, **config)
+    cfg = WorkerConfig(executable=str(script), **config)
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)}
     return AntigravityWorker(cfg, environ=env), resolve_policy(cfg, read_only=False)
 
@@ -108,20 +109,21 @@ def run_worker(tmp_path: Path, scenario: dict, *, prompt="do it", cancel=None, m
 # -- policy -------------------------------------------------------------------
 
 
-def test_requires_explicit_acknowledgment():
+def test_default_inheritance_and_explicit_opt_out():
+    assert resolve_policy(WorkerConfig(), read_only=False).permission_mode == "auto"
     for value in (None, False):
         with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
             resolve_policy(WorkerConfig(worker_inherits_agy_settings=value), read_only=False)
 
 
 def test_read_only_and_unenforceable_settings_are_refused():
-    ok = WorkerConfig(worker_inherits_agy_settings=True)
+    ok = WorkerConfig()
     with pytest.raises(ConfigError, match="read-only"):
         resolve_policy(ok, read_only=True)
     for override in ({"tools": ("Read",)}, {"allowed_tools": ("Bash",)}, {"disallowed_tools": ("Bash",)},
                      {"mcp_config": "{}"}, {"setting_sources": "user"}, {"restricted": True}):
         with pytest.raises(ConfigError, match="cannot be enforced"):
-            resolve_policy(WorkerConfig(worker_inherits_agy_settings=True, **override), read_only=False)
+            resolve_policy(WorkerConfig(**override), read_only=False)
     for mode in ("dontAsk", "bypassPermissions", "yolo"):
         with pytest.raises(ConfigError, match="auto, accept-edits or plan"):
             resolve_policy(WorkerConfig(worker_inherits_agy_settings=True, permission_mode=mode), read_only=False)
@@ -132,11 +134,47 @@ def test_from_section_and_authority_disclosure():
                               worker_inherits_agy_settings=True)
     policy = resolve_policy(WorkerConfig.from_section(section), read_only=False)
     assert (policy.executable, policy.permission_mode, policy.timeout_seconds) == ("agy", "accept-edits", 30.0)
-    assert resolve_policy(WorkerConfig.from_section(SimpleNamespace(worker_inherits_agy_settings=True)), read_only=False).permission_mode == "auto"
+    assert resolve_policy(WorkerConfig.from_section(SimpleNamespace()), read_only=False).permission_mode == "auto"
     text = policy.authority("/w")
     assert "did not mediate" in text and "no sandbox requested" in text and "read-only" not in text
     with pytest.raises(ConfigError):
         WorkerConfig(timeout_seconds=0)
+
+
+@pytest.mark.parametrize("section", [None, SimpleNamespace(), SimpleNamespace(worker_inherits_agy_settings=None)])
+def test_omitted_section_option_uses_default(section):
+    assert WorkerConfig.from_section(section).worker_inherits_agy_settings is True
+    assert resolve_policy(WorkerConfig.from_section(section), read_only=False).permission_mode == "auto"
+
+
+def test_section_explicit_opt_out_is_not_defaulted():
+    with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
+        resolve_policy(WorkerConfig.from_section(SimpleNamespace(worker_inherits_agy_settings=False)), read_only=False)
+
+
+def test_preflight_help_on_stderr(tmp_path):
+    res, _, bin_dir = run_worker(tmp_path, {"help_stderr": True, "lines": [INIT, OK]})
+    assert res.status == "completed"
+    assert "--print" not in json.loads((bin_dir / "record.json").read_text())["argv"]
+
+
+def test_streaming_preflight_does_not_require_prompt_flag(tmp_path):
+    res, _, _ = run_worker(tmp_path, {
+        "help": "--input-format --output-format stream-json --model --mode auto --print-timeout",
+        "lines": [INIT, OK],
+    })
+    assert res.status == "completed"
+
+
+@pytest.mark.parametrize("flag", ["--input-format", "--output-format", "--model", "--mode", "--print-timeout"])
+def test_preflight_requires_headless_flags(tmp_path, flag):
+    help_text = "--print --input-format --output-format stream-json --model --mode auto|accept-edits|plan --print-timeout"
+    # Token replacement must not accidentally remove --print-timeout too.
+    help_text = " ".join(token for token in help_text.split() if token != flag)
+    with pytest.raises(ProviderError, match="required headless flags") as refused:
+        run_worker(tmp_path, {"help": help_text, "help_stderr": True})
+    assert flag in str(refused.value)
+    assert not (tmp_path / "bin" / "record.json").exists()
 
 
 # -- runs ---------------------------------------------------------------------
@@ -166,7 +204,7 @@ def test_success_argv_stdin_events(tmp_path):
     argv = record["argv"]
     assert argv[:9] == ["--input-format", "stream-json", "--output-format", "stream-json", "--model", MODEL,
                         "--mode", "auto", "--print-timeout"]
-    assert argv[9].endswith("s") and argv[9][:-1].isdigit() and "-p" not in argv
+    assert argv[9].endswith("s") and argv[9][:-1].isdigit() and "-p" not in argv and "--print" not in argv
     assert not any("dangerous" in a or "yolo" in a or "sandbox" in a or "always-proceed" in a or a == "--yes"
                    for a in argv)
     kinds = [kind for kind, _ in events]
