@@ -24,6 +24,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Change session storage, locks, fork, export, archive | [sessions.md](sessions.md) | `nexus/session/` |
 | Add or change a tool, permission rule, shell job, patch | [tools.md](tools.md) | `nexus/tools/` |
 | Subagents, worktrees, agent definitions | [agents.md](agents.md) | `nexus/agents/` |
+| Antigravity (`agy`) worker fails to start | [antigravity-troubleshooting.md](antigravity-troubleshooting.md) | `nexus/agents/` |
 | Skills, hooks, MCP, hot-loaded extensions, Settings files | [extensions.md](extensions.md) | `nexus/ext/`, `nexus/skills/`, `nexus/hooks/`, `nexus/mcp/` |
 | Add a host command; daemon, transports, presence | [host.md](host.md) | `nexus/host/`, `nexus/host_support/` |
 | Enable the optional device gateway | [gateway.md](gateway.md) | `nexus/gateway/` |

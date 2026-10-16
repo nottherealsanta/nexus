@@ -29,6 +29,7 @@ Update the matching doc in the same change as the code.
 | Sessions, SQLite storage, locks, export | [docs/sessions.md](docs/sessions.md) |
 | Tools, permissions, bundles, shell jobs | [docs/tools.md](docs/tools.md) |
 | Subagents, agent definitions, worktrees | [docs/agents.md](docs/agents.md) |
+| Antigravity (`agy`) worker startup failures | [docs/antigravity-troubleshooting.md](docs/antigravity-troubleshooting.md) |
 | Hot reload, skills, hooks, MCP, Settings files | [docs/extensions.md](docs/extensions.md), [docs/extending.md](docs/extending.md) |
 | Host commands, daemon, transports, presence | [docs/host.md](docs/host.md) |
 | CLI subcommands and chat slash commands | [docs/cli.md](docs/cli.md) |
