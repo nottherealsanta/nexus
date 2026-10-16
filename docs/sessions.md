@@ -67,7 +67,12 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 
 `StateDatabase.project_sessions` supplies a bounded cross-project sidebar index
 by joining session metadata to recorded project roots; it excludes archive,
-trash and child namespaces and orders by newest activity.
+trash and child namespaces and orders by newest activity. Its optional `limit`
+(default 1,000) bounds SQL results, and `query` (default empty, at most 256
+characters) filters title, session ID, saved user/agent snippets and workspace
+root before applying the limit. Search is case-insensitive literal substring
+matching: `%` and `_` are text, not wildcard operators. It searches metadata,
+not full conversation logs.
 
 Legacy JSONL session directories are not imported. JSONL is an export format only.
 
@@ -184,21 +189,17 @@ default) and `SessionManager.set_auto_title` stores the result (`auto`).
   Clients see the new title on their normal session-list refresh.
 - Settings → Session titles switches it off and shows which model titles go to.
 
-# Session dashboard naming and preview
+# Session dashboard naming
 
 The durable user-facing title remains **Sessions**, with `/sessions` as its
-command. `SessionDashboardPreview` is an additive preview contract for the
-dashboard; the existing archive `SessionPreview` remains distinct and unchanged.
+command. The dashboard has no preview pane and no preview command
+(`SessionDashboardPreview` and `dashboard_preview` were removed). The archive
+`SessionPreview` remains distinct and unchanged.
 
 The Ratatui sessions page is a full-width list grouped by status (Needs input,
-Working, Idle, Done). Each row shows its age and a one-line tail. Hovering a row,
-or leaving the pointer off the list so the selected row stands in, expands that
-row to the last user message and the last agent message. The open session's tails
-come from the live view on every snapshot. Other sessions use the schema 4
-snippets, refreshed on the list poll, and a hovered row's preview re-reads the log
-so a streaming reply shows up before the message record is stored. The composer
-under the list is the normal composer. Enter sends to the selected session.
-`+ New Agent` starts a session, Open Previous opens the archived list (`/resume`),
-and Worktree opens the worktree list. Cross-workspace sends switch to that
-workspace. Attachments stay on the open session.
+Working, Idle, Done). Each row shows its age and a one-line tail from the schema 4
+snippets, refreshed on the list poll. The composer under the list is the normal
+composer. Enter sends to the selected session. `+ New Agent` starts a session, Open
+Previous opens the archived list (`/resume`), and Worktree opens the worktree list.
+Cross-workspace sends switch to that workspace. Attachments stay on the open session.
 

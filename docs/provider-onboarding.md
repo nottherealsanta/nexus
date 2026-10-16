@@ -132,8 +132,10 @@ bounded `agy models` probe only. Configured `agy` aliases and custom executables
 are respected. The host model list exposes these rows labelled **Subagents only**
 (including native clients); selecting one as the main model is refused with an
 explanation, while explicit subagent tier/role/Task references remain supported.
-Discovery does not acknowledge inherited settings: worker execution still requires
-`worker_inherits_agy_settings = true` in an explicit provider section.
+Worker execution inherits agy's own user/global settings, MCP servers and plugins
+by default, even without a provider section; Nexus PathGuard does not apply inside
+agy. Set `worker_inherits_agy_settings = false` to refuse execution. Read-only
+roles and tool restrictions remain refused.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
 in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified

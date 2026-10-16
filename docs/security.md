@@ -28,7 +28,7 @@ for setup and usage.
 | Provider URLs | http(s) only; plain http only for loopback; userinfo always redacted | `config/schema.py` |
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
-| External Antigravity worker | Nexus does **not** mediate agy's tools, settings, MCP servers or plugins; no `PathGuard`; requires an explicit `worker_inherits_agy_settings = true` ([below](#external-antigravity-worker)) | `agents/antigravity_worker.py` |
+| External Antigravity worker | Nexus does **not** mediate agy's tools, settings, MCP servers or plugins; no `PathGuard`; inherits agy settings by default; `worker_inherits_agy_settings = false` refuses execution ([below](#external-antigravity-worker)) | `agents/antigravity_worker.py` |
 | Worktrees | authenticated records, service-root lock, no shell for children, integration applies frozen bytes only to a clean parent | `agents/worktrees*.py` |
 | Settings agent | blocked from `credentials.json`, sessions, cache, daemon files, trash, `nexus.db` | `tools/permissions.py`, `host_support/settings_scope.py` |
 | GPT Live (experimental) | the ChatGPT OAuth bearer and account id exist only in `live/transport.py` (headers per request, scrubbed with `redact_secrets` plus the literal values from every error, raw dev log and result); `Live*` results carry the SDP answer and state only; the audio helper sees SDP, never a credential; the voice model's delegations are untrusted input that go through the normal permission engine; **approvals are resolved only on screen, never by audio**; the signaling and sideband hosts are fixed OpenAI hosts, not user URLs, and (like provider calls) bypass `net/outbound.py`; no raw audio is stored | `live/`, `host_support/live.py` |
@@ -94,8 +94,10 @@ were used, and the stream schema is not live-verified.
 
 Not enforced by Nexus: tool grants, `[permissions]` rules, `PathGuard` write and
 read-deny roots, the `Task` tool profile, and budgets. agy applies its **own** user
-and global settings, MCP servers and plugins, which is why the operator must set
-`worker_inherits_agy_settings = true`; without it every assignment is refused. No
+and global settings, MCP servers and plugins **by default**, including when no
+provider section exists (`worker_inherits_agy_settings = true` may be omitted).
+Set it to `false` to refuse every assignment. This does not enable Nexus
+PathGuard inside agy or relax the restrictions below. No
 sandbox is requested (`--sandbox` is never passed), and agy may edit files or run
 commands under its own permission mode (`auto` by default; explicit `accept-edits` or `plan` overrides).
 
@@ -124,8 +126,9 @@ anything, and attention detection wording is unverified against real agy output.
 A GPT Live call ([live.md](live.md)) sends to OpenAI, through the user's own
 ChatGPT account: the microphone audio (from the client's helper, directly to
 OpenAI's media servers), the rendered voice instructions (workspace folder name,
-agent name and, unless `new_conversation`, the last `carry_turns` spoken turns,
-all shown in `live.started`), and **the agent's progress and final answers**,
+agent name and, unless `new_conversation`, a bounded excerpt of the **current
+session's conversation** and the last `carry_turns` spoken turns, all shown in
+`live.started`), and **the agent's progress and final answers**,
 which can contain file contents or command output. The voice model's text is
 treated as an untrusted prompt. Live never auto-approves anything and an
 unattended session keeps its `on_unattended` policy. The first use is
@@ -136,6 +139,21 @@ only; `/live revoke` deletes it). The **daemon refuses `LiveStart` without that 
 the same check; this is tested offline, not verified against a real call. `NEXUS_LIVE=off` and
 `[live] enabled = false` disable it. The endpoints are undocumented, may change
 or stop working, and nothing was exercised against the real service.
+
+The session excerpt is built by the host from the durable event projection: user
+prompts and the final assistant text of each turn, at most 60 items of 2,000
+characters each, newest kept, plus a status word (running, awaiting input,
+awaiting permission or error). Thinking, tool calls, tool output and the user
+messages Live itself delegated are left out. Text is passed through the secret
+redaction helper and control characters are replaced; redaction is pattern based, so
+unrecognised secrets in prompts or answers can still be sent. The excerpt is
+quoted as untrusted background, not instructions. It is clipped to 8 KiB (newest
+first; the block states how many older messages were omitted), and the whole rendered
+instructions stay within 32 KiB (the excerpt is placed before the spoken carry-over,
+which takes what room remains). `new_conversation` sends none of it. Because this
+widened what leaves the machine, the consent notice version was raised to 2: a
+version 1 record counts as not given and the notice is shown again. Whether the
+real service accepts or truncates instructions of this size is **not verified**.
 
 ## Outbound HTTP (`net/`)
 
@@ -174,14 +192,13 @@ When changing anything in the table above, add or extend a regression test
 (`tests/test_security_regressions.py`, `test_extension_security.py`,
 `test_outbound_*.py`, `test_config_secrets.py`, `test_web_transport.py`) and keep
 [decisions.md](decisions.md) accurate.
-# In-progress UI signal and session preview boundaries
+# In-progress UI signal and session snippet boundaries
 
 Tool verb/activity signals are presentation/projection data; they are not
 authorization evidence and must not grant capabilities or bypass host policy.
-Session dashboard preview uses the additive `SessionDashboardPreview` contract,
-separate from archive `SessionPreview`; preserve the existing user-facing
-Sessions title. `last_user` and `last_agent` are bounded snippets cleaned before
-they reach the terminal. They are not copied onto every `SessionSummary`. Late
-dashboard results are discarded after the overlay closes.
+The sessions dashboard has no preview command (`SessionDashboardPreview` was
+removed; see [decisions.md](decisions.md)). `last_user` and `last_agent` are bounded
+snippets cleaned before they reach the terminal. They are not copied onto every
+`SessionSummary`. Archive `SessionPreview` is unchanged.
 The `i` inspector keeps full tool details reachable, so the local double-click
 view hides nothing from the user. This note does not assert final verification.

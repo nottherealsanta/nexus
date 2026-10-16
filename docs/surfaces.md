@@ -288,8 +288,8 @@ text. Details: [voice.md](voice.md).
 session does the work ([live.md](live.md)). The native client shows a **call bar** in
 the composer chrome (`● Live · model · phase · mm:ss`, input and output level meters, a
 Muted badge); the editor stays usable and typing is ordinary steering. First use shows a
-consent dialog (audio and summaries of the agent's work go to OpenAI through the ChatGPT
-account); errors show the host's redacted message with the fix. The timeline shows a
+consent dialog (audio, summaries of the agent's work and a bounded excerpt of the session conversation go to
+OpenAI through the ChatGPT account); errors show the host's redacted message with the fix. The timeline shows a
 labelled **Live** card per call (captions, `Sent to agent`, `Told voice`, commentary collapsed
 with a count, start and end rows) and marks delegated user messages `via voice`. The web client has no
 Live support. Real microphone behavior: not verified.

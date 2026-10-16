@@ -242,7 +242,7 @@ here, so add a row when you add a file.
 | `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
 | `session_archive.py` | Bounded host projections for durable session archive metadata |
-| `session_preview.py` | Bounded, redacted session projection for the sessions dashboard (distinct from the archive `SessionPreview`) |
+| `session_preview.py` | Sessions dashboard text helpers: current-session message tails, the worked label and text cleaning (`message_tails`, `worked_label`, `clean_preview_text`); the dashboard preview projection was removed |
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `setup.py` | First-run setup behind the host boundary |
@@ -519,7 +519,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
-| `bridge.py` | Sessions dashboard projection and visibility-scoped preview polling |
+| `bridge.py` | Sessions dashboard projection and list polling |
 | `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls and thoughts |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
@@ -576,7 +576,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/mermaid.rs` | Self-contained Mermaid renderer (flowchart, sequence, state) as Unicode art; unsupported or oversized diagrams return `None` for the code-block fallback. Registered and called from `markdown.rs`; behaviour is unverified end to end |
 | `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
 | `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
-| `rust/tui/src/render/sessions.rs` | Full-width Sessions dashboard: status groups, hover tails, header actions. The composer below is unchanged |
+| `rust/tui/src/render/sessions.rs` | Full-width Sessions dashboard: status groups, one-line row tails, header actions. The composer below is unchanged |
 | `rust/tui/src/transcript/groups.rs` | Verb-group header, live tail and expanded member boxes |
 | `rust/tui/src/transcript/header.rs` | Context header rows, grey tones, open form and chip |
 | `rust/tui/src/transcript/look.rs` | Shared look of activity rows: glyphs, time format, live-run marker and animation recolouring |

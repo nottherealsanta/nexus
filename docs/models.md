@@ -61,7 +61,8 @@ with a `base_url`.
 (`chatgpt_oauth` \| `github_copilot` \| `keychain` \| `xai_oauth`), `profile`, `executable`,
 `timeout_seconds`, `command`, `args`, `permission_policy`, `inherit_env`, `env`,
 and, for `kind = "claude-code"` only, the `worker_*` keys
-([config.md](config.md#claude-code-worker-keys)); `worker_*` on any other kind is a `ConfigError`.
+([config.md](config.md#claude-code-worker-keys)), with the Antigravity exceptions
+below. The shared `worker_inherits_agy_settings` default is ignored by other kinds.
 `kind = "antigravity"` (alias `agy`) accepts only `executable`, `timeout_seconds`,
 `worker_inherits_agy_settings` and `worker_permission_mode`
 ([config.md](config.md#antigravity-worker-keys)); any other field is refused.
@@ -150,8 +151,14 @@ the effort prompt for remembered models; `/effort` remains available to change i
   with Nexus → blended cost `input + output/4` (`low ≤ 2.5 < medium ≤ 10 < high`)
   → no cost data reads as `low`. Role/nested-child tier clamps only ever
   narrow.
-- **A tier runs the first runnable model of the user's list.** `[models.tiers]`
-  lists are ordered; `ModelRouter._first_pinned` walks the list in order and uses
+- **A tier runs the first runnable model of the user's list.**
+  Read-only child selection skips Antigravity routes, whose own tools cannot
+  enforce read-only access, and continues to a runnable Nexus-controlled route.
+  If only Antigravity is available, selection fails with instructions to add a
+  Nexus-controlled provider/model to the tier or explicitly select a
+  Nexus-controlled provider/model (not Antigravity) for the task. Direct
+  Antigravity selection for a read-only child still fails closed.
+  `[models.tiers]` lists are ordered; `ModelRouter._first_pinned` walks the list in order and uses
   the first model whose provider can stream, before falling back to the
   catalogue's order. Settings → Models edits these lists (`ModelTierSet`,
   `ModelTierReset`, global `config.toml`) and rebuilds routes while no turn runs.
@@ -167,8 +174,8 @@ the effort prompt for remembered models; `/effort` remains available to change i
   IDs and tells the caller to try the next listed model if a child route fails.
 - Antigravity discovery probes the built-in `antigravity` route even when a
   differently named Antigravity section exists. Reported models appear in the
-  subagent picker, never the main/title picker. Discovery does not authorize
-  execution: the configured acknowledgement and permission gates still apply.
+  subagent picker, never the main/title picker. Execution inherits agy settings by default; an explicit opt-out and all
+  permission/restriction gates still apply.
 
 ## Authentication
 
@@ -302,6 +309,15 @@ restart does not wait on `agy`. Tier-only edits (`ModelTierSet`, `ModelTierReset
 call `Runtime.reload_tier_config`: new `TierTable`, registry re-index from the
 held catalogue (`ModelRegistry.retier`), `ModelRouter.set_tiers`, and the
 context coordinator; providers and the registry object are untouched.
+The host always requests this reload, **even while a turn runs** (it touches no
+provider, so the idle guard of `reload_model_routes` is not needed) and returns
+`restart_required=False`; it is `True` only when the runtime was built with injected
+routes and cannot reload. A subagent's model is resolved when the spawn tool call
+creates its session (`ModelRouter.resolve` -> `tier_candidates`), so reordering a tier
+makes the next spawn and the next turn use the new first model. Running children and
+the in-flight request keep the model they already chose. Not covered: a runner built
+for an already-running turn keeps its construction-time config for the roster's effort
+labels and the tier-name lookup of concrete refs until the next turn.
 
 ### Antigravity visibility and safe discovery
 
@@ -310,8 +326,10 @@ bounded `agy models` probe only. Configured `agy` aliases and custom executables
 are respected. The host model list exposes these rows labelled **Subagents only**
 (including native clients); selecting one as the main model is refused with an
 explanation, while explicit subagent tier/role/Task references remain supported.
-Discovery does not acknowledge inherited settings: worker execution still requires
-`worker_inherits_agy_settings = true` in an explicit provider section.
+Worker execution inherits agy's own user/global settings, MCP servers and plugins
+by default, even without a provider section; Nexus PathGuard does not apply inside
+agy. Set `worker_inherits_agy_settings = false` to refuse execution. Read-only
+roles and tool restrictions remain refused.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
 in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified

@@ -110,15 +110,15 @@ Minimal config:
 ```toml
 [providers.antigravity]
 kind = "antigravity"
-worker_inherits_agy_settings = true
+worker_inherits_agy_settings = true # default; may be omitted
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `executable` | `agy` | agy binary (`agy` on `PATH`, or an absolute path) |
 | `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds`; passed to agy as `--print-timeout <n>s` plus 5 s slack |
-| `worker_inherits_agy_settings` | unset (**required `true`**) | Explicit opt-in: agy applies its own user/global settings, MCP servers and plugins and Nexus `PathGuard` does not apply. Without it every assignment is refused. Valid only on this kind |
-| `worker_permission_mode` | `accept-edits` | `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused |
+| `worker_inherits_agy_settings` | `true` | agy applies its own user/global settings, MCP servers and plugins; Nexus `PathGuard` does not apply inside agy. Omission allows execution, including without a provider section; explicit `false` refuses every assignment. Only used by Antigravity |
+| `worker_permission_mode` | `auto` | `auto`, `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused |
 
 The Claude `worker_tools`, `worker_allowed_tools`, `worker_disallowed_tools`,
 `worker_setting_sources`, `worker_mcp_config` and `worker_restricted` keys, and
@@ -225,5 +225,5 @@ parent tier bounds still apply. Session titles default to `openai/gpt-5-mini`;
 legacy tier-valued title settings keep the first-message title until changed.
 
 Antigravity `worker_permission_mode` defaults to `auto`; explicit `accept-edits`
-or `plan` remain supported. The mode does not remove execution acknowledgement,
+or `plan` remain supported. The mode does not override an explicit inheritance opt-out,
 read-only/tool restriction checks, or the ban on bypass/always-proceed flags.

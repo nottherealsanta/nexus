@@ -201,6 +201,12 @@ fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 - SIGINT/SIGTERM stop the accept loop and close every session through the facade.
   Every log line and peer-visible error passes `redact_secrets`. ≤ 64
   subscriptions per client.
+- **Command dispatch:** a connection's read loop awaits each command, so ordering
+  is preserved, except `SLOW_COMMANDS` (`Doctor`, `UpdateStatus`, `ModelsList`,
+  `ModelsRefresh`, `SetupStatus`), which run as background tasks (at most 8 per
+  client, cancelled on teardown) and reply by frame id, possibly out of order. The
+  chat client sends `Doctor` at startup; on a large database it takes seconds and
+  used to hold up an immediate session open on the same connection.
 - CLI: `nexus daemon status|stop|restart|logs`, `nexus restart`.
 
 ### HTTP/SSE and the browser
@@ -287,9 +293,15 @@ log. Other callers retain the existing cancellation contract by default.
 ### Cross-project session navigation
 
 `ProjectSessionsList` reads the shared SQLite index, returning the workspace and
-project identity beside each session (up to 1,000; `truncated` is explicit). It
+project identity beside each session (`limit` defaults to 1,000 and is clamped
+to 1–1,000; `truncated` is explicit via one extra SQL row). Clients can request
+the recent 20 initially and use `query` to find older sessions without loading
+the full index. The optional query defaults to empty, is limited to 256
+characters, and matches literal case-insensitive substrings in title, ID,
+saved user/agent snippets and workspace root before the SQL limit. It
 excludes child, archived and trashed sessions. The active workspace retains live
-status; other workspaces expose saved activity. When a workspace is a linked Git
+status using only cached handles for returned local rows (no full session list
+or log rehydration); other workspaces expose saved activity. When a workspace is a linked Git
 worktree, its rows also carry `repo` (the main checkout, from `git_head`'s
 `main_root`; one bounded `.git` read per distinct workspace, cached for five
 minutes so the sidebar's polls never touch the disk, no subprocess) and
@@ -349,13 +361,11 @@ uses the Agent SDK and that subagents are configured per role; `subagent_backend
 and `backend_message` state the backend and what it mediates.
 `Runtime.claude_code_main_enabled()` reads the effective config on every call, so
 the model picker follows the toggle without a restart.
-# In-progress session dashboard preview contract
+# Sessions dashboard has no preview command
 
-The dashboard host boundary is additive: `SessionDashboardPreview` describes
-the full session dashboard preview and is not a replacement for the existing
-archive `SessionPreview`. Preserve the durable user-facing title **Sessions**
-and the `/sessions` command. The result also carries `last_user`, `last_agent`
-and `activity` so the list can show both tails while a turn is working. The
-preview is a host/projection contract. The dashboard invalidates its in-flight
-preview requests when a replacement overlay closes, so a late result is dropped
-rather than applied.
+There is no `SessionDashboardPreview` host command, `SessionDashboardPreviewResult`
+type, or client `dashboard_preview` method, and the dashboard snapshot has no
+`preview` key. The list (`ProjectSessionsList`) is the whole dashboard data path;
+its rows carry the schema 4 snippets. Preserve the durable user-facing title
+**Sessions** and the `/sessions` command. The archive `SessionPreview` command is
+unchanged. Why it was removed: [decisions.md](decisions.md#sessions-dashboard-has-no-preview-pane-2026-10).

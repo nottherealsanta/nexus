@@ -179,7 +179,7 @@ parent session) and local `agy --version`, `--help` and `models` output on agy
 usage URL. Event shapes live in `antigravity_worker.SCHEMA` so a real run can
 correct them in one place.
 
-**Launch.** `agy --input-format stream-json --output-format stream-json --model <id>
+**Launch.** `agy --print --input-format stream-json --output-format stream-json --model <id>
 --mode <auto|accept-edits|plan> --print-timeout <n>s` with `cwd` = the assigned
 workspace. There is no `-p` prompt and the prompt is never on argv: it is written to
 stdin as one stream-json user event (`{"event":"user","message":{"content":...}}`,
@@ -187,7 +187,10 @@ stdin as one stream-json user event (`{"event":"user","message":{"content":...}}
 as for Claude), then stdin is closed. `--print-timeout` is a Go-style duration in
 seconds with 5 s slack so Nexus' own deadline decides first. The child leads its own
 process group, signalled on completion, cancel, deadline and close. The preflight
-probes `--version` and `--help` (time-bounded) and refuses a missing flag. POSIX only.
+probes `--version` and `--help` (time-bounded, collecting stdout and stderr) and
+refuses a missing flag. `--print` selects headless mode without placing the prompt
+on argv. POSIX only. See [startup troubleshooting](antigravity-troubleshooting.md)
+for settings defaults, daemon restarts and read-only refusals.
 The child environment is the fixed allowlist; agy uses its own cached login.
 
 **Readback.** stdout is NDJSON keyed by `event`: `init` (cwd, tools, permission
@@ -212,6 +215,12 @@ tier); inheriting a parent's `antigravity/...` model is refused, as is any route
 without an exact model ID that `agy models` reported (a refresh hint follows).
 A tier entry such as `low = ["antigravity/<id>"]` routes ordinary child
 subagents only; the root never receives it, and tiers are not ranked by price.
+For read-only children (including read-only `task` audits), tier selection skips
+Antigravity and continues through the ordered routes to a runnable Nexus-controlled
+provider. If none is available, add a Nexus-controlled provider/model to that tier in
+Settings → Models, or explicitly select a Nexus-controlled provider/model (not
+Antigravity) for the task. Selecting Antigravity
+directly still fails closed; auto/plan mode is not a read-only guarantee.
 Refused with `ConfigError`, never ignored, because agy's own tools are not
 mediated by Nexus and no Nexus control reaches them:
 
@@ -220,8 +229,12 @@ mediated by Nexus and no Nexus control reaches them:
   setting sources, `worker_restricted`);
 - worktree children;
 - token and cost budgets;
-- unsupported section fields, and a section without
-  `worker_inherits_agy_settings = true`.
+- unsupported section fields, and an explicit
+  `worker_inherits_agy_settings = false`.
+
+Inheritance defaults to `true`, even without a provider section: agy uses its own
+user/global settings, MCP servers and plugins. Omission allows worker execution;
+set the field to `false` to opt out.
 
 There is no `PathGuard`, permission-engine or tool-dispatch mediation of agy's
 tools ([security.md](security.md#external-antigravity-worker)). Antigravity is
