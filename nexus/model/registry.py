@@ -1496,7 +1496,7 @@ class ModelRegistry:
         or until the executable/section changes. A failed probe keeps the last
         good list and records the error.
         """
-        # Probe-only default; never supplies worker execution acknowledgement.
+        # Probe-only default; worker execution separately applies inheritance and policy checks.
         if "antigravity" not in self._providers:
             self._providers["antigravity"] = {}
         await asyncio.to_thread(self._load_probe_file)

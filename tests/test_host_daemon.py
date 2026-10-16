@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -439,6 +440,36 @@ async def test_reconnect_replays_from_the_log(short_dir):
         assert "turn.started" in kinds and "turn.completed" in kinds
         assert kinds.index("turn.started") < kinds.index("turn.completed")
         await reconnected.close()
+
+
+async def test_slow_command_does_not_block_the_next_command_on_one_connection(short_dir):
+    """A cold-start Doctor (seconds on a large database) must not hold up a session open.
+
+    The chat client sends Doctor and then opens a session on the same connection;
+    the read loop used to await each command, so the open queued behind the scan.
+    """
+    async with running_daemon(short_dir) as (daemon, sock, _workspace):
+        release = threading.Event()
+        started = threading.Event()
+
+        def slow_doctor(*, explain_reload: bool = False) -> dict[str, Any]:
+            started.set()
+            release.wait(10)
+            return {}
+
+        daemon.facade.doctor = slow_doctor  # type: ignore[method-assign]
+        client = await UDSClient.connect(sock)
+        try:
+            doctor = asyncio.ensure_future(client.call(p.Doctor()))
+            await wait_for(started.is_set)
+            opened = await asyncio.wait_for(client.call(p.SessionOpen(session="s")), 5)
+            assert isinstance(opened, p.SessionOpenResult)
+            assert not doctor.done()
+            release.set()
+            assert isinstance(await asyncio.wait_for(doctor, 5), p.DoctorResult)
+        finally:
+            release.set()
+            await client.close()
 
 
 async def test_stale_socket_is_reclaimed(short_dir):

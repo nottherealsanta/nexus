@@ -2012,7 +2012,15 @@ class _ChildRuntime:
         reference = str(getattr(spec, "model", None) or "")
         in_tiers = reference in getattr(getattr(runtime, "_tiers", None), "order", ())
         if in_tiers:
-            route = runtime._external_tier_route(reference, claude=not sdk_backend)
+            from .agents.claude_code_worker import nexus_child_is_read_only
+
+            selection = (getattr(spec, "metadata", None) or {}).get("selection")
+            flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
+            route = runtime._external_tier_route(
+                reference, claude=not sdk_backend,
+                read_only=nexus_child_is_read_only(
+                    tuple(getattr(spec, "tools", ()) or ()), flagged=flagged),
+            )
             reference = route or reference
             in_tiers = route is None
         head, sep, tail = reference.partition("/")
@@ -2202,7 +2210,7 @@ class _ChildRuntime:
         return _ExternalAssignment(
             worker=worker, policy=policy, provider=provider_name, model=model,
             kind=ADAPTER_ANTIGRAVITY, label=_ANTIGRAVITY_LABEL, provenance=PROVENANCE,
-            inherits_settings=bool(getattr(section, "worker_inherits_agy_settings", False)))
+            inherits_settings=config.worker_inherits_agy_settings is True)
 
     async def run(self) -> SubagentOutcome:
         if self._external is not None:
@@ -4922,12 +4930,10 @@ class Runtime:
         if Runtime._adapter_kind(name, section) != ADAPTER_CLAUDE_CODE and any(
                 getattr(section, field, None) is not None for field in _CLAUDE_WORKER_FIELDS):
             raise ConfigError(f"{name}: worker_* fields apply only to kind = claude-code")
-        if getattr(section, "worker_inherits_agy_settings", False):
-            raise ConfigError(f"{name}: worker_inherits_agy_settings applies only to kind = antigravity")
 
     @staticmethod
     def _validate_antigravity_section(name: str, section: Any) -> None:
-        """Only ``executable``, ``timeout_seconds`` and the inheritance opt-in are honoured.
+        """Only ``executable``, ``timeout_seconds`` and the inheritance setting are honoured.
 
         Every other field (Claude ``worker_*`` policy, credentials, endpoints) would be
         silently dropped by the agy worker, so it is refused instead.
@@ -4941,7 +4947,7 @@ class Runtime:
             raise ConfigError(
                 f"{name} is the Antigravity (agy) subagent worker; only "
                 f"{', '.join(sorted(_ANTIGRAVITY_FIELDS - {'kind'}))} are supported, not: {', '.join(stray)}")
-        if not isinstance(getattr(section, "worker_inherits_agy_settings", False), bool):
+        if not isinstance(getattr(section, "worker_inherits_agy_settings", True), bool):
             raise ConfigError(f"{name}: worker_inherits_agy_settings must be true or false")
 
     @staticmethod
@@ -5790,7 +5796,9 @@ class Runtime:
         """The ``claude-code/<model>`` or ``antigravity/<model>`` entry a tier would run on, else ``None``."""
         return Runtime._external_tier_route(self, tier)
 
-    def _external_tier_route(self, tier: str, *, claude: bool = True) -> str | None:
+    def _external_tier_route(
+        self, tier: str, *, claude: bool = True, read_only: bool = False
+    ) -> str | None:
         """The external-worker entry a tier would run on, else ``None``.
 
         Children only: a tier's candidates are walked in order, and the first one
@@ -5800,9 +5808,15 @@ class Runtime:
         reaches a worker. The root's router is untouched: it cannot stream either.
         """
         sections = getattr(getattr(self._config, "v2", None), "providers", None) or {}
+        skipped_antigravity = False
         for reference in self._router.tier_candidates(tier):
             head = reference.split("/", 1)[0]
             kind = Runtime._adapter_kind(head, sections.get(head))
+            # agy's own tools cannot enforce a read-only child. Keep walking
+            # the ordered tier routes rather than selecting a doomed worker.
+            if read_only and kind == ADAPTER_ANTIGRAVITY:
+                skipped_antigravity = True
+                continue
             if kind == ADAPTER_ANTIGRAVITY or (
                 claude and kind == ADAPTER_CLAUDE_CODE
                 and getattr(getattr(getattr(self._config, "v2", None), "models", None),
@@ -5814,6 +5828,15 @@ class Runtime:
             info = self._router._registry_lookup(reference)
             if info is not None and getattr(info, "provider", None) in self._router._providers:
                 return None
+        if skipped_antigravity:
+            raise ConfigError(
+                f"Tier {tier!r} has no runnable route for a read-only child: "
+                "Antigravity cannot enforce read-only tools. Add a Nexus-controlled "
+                f"provider/model to models.tiers.{tier} (Settings → Models), "
+                "or explicitly select a Nexus-controlled provider/model (not Antigravity) "
+                "for this task. Auto mode does not "
+                "enforce a read-only tool restriction."
+            )
         return None
 
     def _build_child_runtime(self, spec: Any) -> _ChildRuntime:

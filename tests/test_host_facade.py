@@ -344,7 +344,6 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionFork(session="s", at_seq=2, new_id="c"),
         p.SessionDelete(session="s", force=True),
         p.SessionRestore(trash_id="t"),
-        p.SessionDashboardPreview(session_id="s", max_rows=5),
         p.SessionRename(session_id="s", title="New name"),
         p.SessionExport(session="s", format="markdown"),
         p.PermissionResolve(session="s", request_id="r", decision="allow_once"),
@@ -457,11 +456,6 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionForkResult(session=summary),
         p.SessionDeleteResult(session="s", trash_id="t", delete_after=2.0),
         p.SessionRestoreResult(session="s"),
-        p.SessionDashboardPreviewResult(
-            session="s", state="needs_input", context_fraction=0.5,
-            rows=[p.PreviewRow(kind="user", text="hi")],
-            pending=[p.PendingInput(kind="question", id="c", text="ok?", options=["a"])],
-        ),
         p.SessionRenameResult(session=summary),
         p.SessionExportResult(session="s", format="json", content="{}"),
         p.PermissionResolveResult(session="s", request_id="r", resolved=True),
@@ -1452,69 +1446,8 @@ async def test_facade_force_delete_then_view_disconnect_no_resurrection(tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Sessions dashboard: bounded preview, durable rename, busy rows stay put
+# Sessions dashboard: durable rename, busy rows stay put
 # ---------------------------------------------------------------------------
-
-
-async def test_dashboard_preview_is_bounded_and_redacted(tmp_path):
-    reply = "\n".join(f"reply line {n} password=hunter2" for n in range(40))
-    runtime = _runtime(tmp_path, ScriptedProvider(text_response(reply)))
-    facade = HostFacade(runtime)
-    facade.open_session("s")
-    await facade.start_turn("s", "first line api_key=sk-abcdef1234567890abcd\n" + "x" * 5000 + "\nthird\nfourth")
-    await facade.wait_idle(timeout=5.0)
-
-    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
-    assert isinstance(result, p.SessionDashboardPreviewResult)
-    assert result.session == "s" and result.state == "idle" and result.last_seq > 0
-    assert 0 < len(result.rows) <= 12
-    assert [r.kind for r in result.rows].count("user") <= 2
-    assert [r.kind for r in result.rows].count("assistant") <= 6
-    assert all(len(r.text) <= 200 and "\n" not in r.text for r in result.rows)
-    joined = "\n".join(r.text for r in result.rows)
-    assert "hunter2" not in joined and "sk-abcdef1234567890abcd" not in joined
-    assert "reply line 0" in joined and result.truncated
-    assert result.pending == []
-    assert "first line" in result.last_user and "sk-abcdef1234567890abcd" not in result.last_user
-    assert "reply line 0" in result.last_agent and "hunter2" not in result.last_agent
-    assert result.activity == ""
-
-    small = await facade.handle(p.SessionDashboardPreview(session_id="s", max_rows=3))
-    assert len(small.rows) == 3 and small.truncated
-    for bad in (0, 51, True):
-        error = await facade.handle(p.SessionDashboardPreview(session_id="s", max_rows=bad))
-        assert isinstance(error, p.ErrorResult)
-    missing = await facade.handle(p.SessionDashboardPreview(session_id="nope"))
-    assert isinstance(missing, p.ErrorResult)
-    # A read-only projection: it must not have created or touched another session.
-    assert [s.id for s in facade.list_sessions()] == ["s"]
-    await runtime.aclose()
-
-
-async def test_dashboard_preview_reports_pending_approval_as_needs_input(tmp_path):
-    provider = ScriptedProvider(
-        tool_response(("c1", "write", {"path": "b.txt", "content": "B"})),
-        text_response("done"),
-    )
-    runtime = _runtime(tmp_path, provider)
-    facade = HostFacade(runtime)
-    facade.open_session("s")
-    viewer = facade.subscribe("s", 0, follow=True, client_id="dashboard")
-    await viewer.__anext__()
-    await facade.start_turn("s", "go")
-    handle = runtime.session("s")
-    await wait_for(lambda: handle.pending_permissions)
-    request_id = handle.pending_permissions[0]
-
-    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
-    assert result.state == "needs_input"
-    assert [(i.kind, i.id) for i in result.pending] == [("permission", request_id)]
-
-    facade.resolve_permission("s", request_id, Decision.ALLOW_ONCE, client_id="a")
-    await facade.wait_idle(timeout=5.0)
-    assert (await facade.handle(p.SessionDashboardPreview(session_id="s"))).state == "idle"
-    await viewer.aclose()
-    await runtime.aclose()
 
 
 async def test_session_rename_persists_across_reopen_and_beats_auto_title(tmp_path):
@@ -1597,7 +1530,6 @@ async def test_working_session_refuses_delete_while_a_turn_streams(tmp_path):
     facade.open_session("s")
     await facade.start_turn("s", "go")
     await wait_for(lambda: runtime.session("s").active)
-    assert (await facade.handle(p.SessionDashboardPreview(session_id="s"))).state == "working"
     refused = await facade.handle(p.SessionDelete(session="s"))
     assert isinstance(refused, p.ErrorResult) and refused.kind == "SessionBusy"
     gate.set()
@@ -1743,6 +1675,52 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
     await runtime.aclose()
 
 
+async def test_project_sessions_bounded_search_does_not_list_or_rehydrate(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    store = runtime.sessions.store
+    store.create("older")
+    store.append_message("older", Message(role="user", content=[Text(text="rare needle 50%")]))
+    for i in range(25):
+        store.create(f"recent-{i}")
+        store.append_message(f"recent-{i}", Message(role="user", content=[Text(text="ordinary")]))
+    facade.open_session("older")
+    expected = runtime.sessions.summary("older")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("dashboard must not list or rehydrate sessions")
+
+    monkeypatch.setattr(facade, "list_sessions", forbidden)
+    monkeypatch.setattr(runtime.sessions, "list", forbidden)
+    monkeypatch.setattr(runtime.sessions, "open", forbidden)
+    calls = []
+    original = store.db.project_sessions
+
+    def bounded(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(store.db, "project_sessions", bounded)
+    try:
+        recent = await facade.handle(p.ProjectSessionsList(limit=20))
+        assert len(recent.sessions) == 20 and recent.truncated
+        assert "older" not in {row.session.id for row in recent.sessions}
+        found = await facade.handle(p.ProjectSessionsList(limit=20, query="NEEDLE 50%"))
+        assert [row.session for row in found.sessions] == [expected]
+        assert not found.truncated
+        assert calls[-1] == {"limit": 21, "query": "NEEDLE 50%"}
+        small = await facade.handle(p.ProjectSessionsList(limit=0))
+        assert len(small.sessions) == 1 and small.truncated
+        await facade.handle(p.ProjectSessionsList(limit=100_000))
+        assert calls[-1]["limit"] == 1001
+        count = len(calls)
+        for command in (p.ProjectSessionsList(query="x" * 257), p.ProjectSessionsList(limit="20")):
+            assert isinstance(await facade.handle(command), p.ErrorResult)
+        assert len(calls) == count
+    finally:
+        await runtime.aclose()
+
+
 # ---------------------------------------------------------------------------
 # GPT Live commands (docs/live.md)
 # ---------------------------------------------------------------------------
@@ -1883,37 +1861,6 @@ async def test_facade_shutdown_persists_live_ended_before_sessions_close(tmp_pat
     assert await facade.shutdown("bye") is True
     ended = [e for e in handle.events if e.type == "live.ended"]
     assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"
-
-
-async def test_dashboard_preview_pending_question_is_redacted_bounded_and_needs_input(tmp_path):
-    runtime = _runtime(tmp_path, ScriptedProvider(
-        tool_response(("q1", "question", {
-            "question": "Choose password=hunter2\x1b\u202e " + "q" * 400,
-            "options": ["api_key=sk-abcdef1234567890abcd\x1b " + "x" * 40, "No"],
-        })),
-        text_response("done"),
-    ))
-    facade = HostFacade(runtime)
-    facade.open_session("s")
-    viewer = facade.subscribe("s", 0, follow=True, client_id="dashboard")
-    await viewer.__anext__()
-    await facade.start_turn("s", "go")
-    await wait_for(lambda: runtime.questions.pending_for("s"))
-    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
-    assert isinstance(result, p.SessionDashboardPreviewResult)
-    assert result.state == "needs_input"
-    assert result.pending[0].kind == "question"
-    assert result.pending[0].id == "q1"
-    import unicodedata
-    strings = [result.pending[0].text, *result.pending[0].options, *(r.text for r in result.rows)]
-    assert all(len(value) <= 200 for value in strings)
-    assert all(not any(unicodedata.category(c).startswith("C") for c in value) for value in strings)
-    assert "hunter2" not in str(result) and "sk-abcdef1234567890abcd" not in str(result)
-    assert (await facade.handle(p.QuestionAnswer(session="s", call_id="q1", answer="2"))).resolved is True
-    await facade.wait_idle(timeout=5.0)
-    assert facade.dashboard_preview("s").state == "idle"
-    await viewer.aclose()
-    await runtime.aclose()
 
 
 def test_dashboard_display_strings_are_redacted_control_free_and_bounded():

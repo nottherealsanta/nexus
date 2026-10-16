@@ -287,10 +287,22 @@ class StateDatabase:
                 (project_id, root, now, now),
             )
 
-    def project_sessions(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+    def project_sessions(self, *, limit: int = 1000, query: str = "") -> list[dict[str, Any]]:
         """Bounded cross-project sidebar index; excludes children, archive and trash."""
         if not 1 <= limit <= _MAX_LIMIT:
             raise ValueError("invalid project session limit")
+        if not isinstance(query, str) or len(query) > 256:
+            raise ValueError("project session query must be at most 256 characters")
+        search = ""
+        params: list[Any] = []
+        if query:
+            pattern = "%" + query.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            search = "AND (" + " OR ".join(
+                f"{column} LIKE ? ESCAPE '!' COLLATE NOCASE"
+                for column in ("s.title", "s.id", "s.last_user", "s.last_agent", "p.root")
+            ) + ") "
+            params.extend([pattern] * 5)
+        params.append(limit)
         return [
             dict(row)
             for row in self._connection().execute(
@@ -298,8 +310,9 @@ class StateDatabase:
                 "JOIN projects p ON p.id=s.project_id "
                 "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
                 f"AND {_has_user_input('s')} "
-                "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?",
-                (limit,),
+                + search
+                + "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?",
+                params,
             )
         ]
 

@@ -99,8 +99,8 @@ class Client:
         """Return the regular session page plus its archived count."""
         return await self._request(p.SessionList())  # type: ignore[return-value]
 
-    async def project_sessions(self) -> p.ProjectSessionsListResult:
-        return await self._request(p.ProjectSessionsList())  # type: ignore[return-value]
+    async def project_sessions(self, *, limit: int = 1000, query: str = "") -> p.ProjectSessionsListResult:
+        return await self._request(p.ProjectSessionsList(limit=limit, query=query))  # type: ignore[return-value]
 
     async def open_project_session(self, workspace: str, session: str, *, browser: bool = False) -> p.ProjectSessionOpenResult:
         return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser))  # type: ignore[return-value]
@@ -122,9 +122,6 @@ class Client:
         return await self._request(
             p.SessionPreview(session=session, max_chars=max_chars)
         )  # type: ignore[return-value]
-
-    async def dashboard_preview(self, session_id: str, *, max_rows: int = 12):
-        return await self._request(p.SessionDashboardPreview(session_id, max_rows))
 
     async def rename_session(self, session_id: str, title: str):
         return await self._request(p.SessionRename(session_id, title))

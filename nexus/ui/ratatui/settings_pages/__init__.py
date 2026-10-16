@@ -51,6 +51,13 @@ async def provider_summary(workflows) -> str:
     return cached[1] if cached else ""
 
 
+def cached_provider_summary(workflows) -> str:
+    """The last Providers count the Providers page stored, however old; never touches the network, so
+    opening Settings stays instant. Empty until the Providers page has been opened once."""
+    cached = getattr(workflows, "provider_count", None)
+    return cached[1] if cached else ""
+
+
 async def build_overview(workflows) -> dict:
     """The root list's inlined rows: each overview area's own rows under its own heading, built by
     that area's builder so every operation is the one its drilled page offers and ``handle`` runs.
@@ -64,6 +71,6 @@ async def build_overview(workflows) -> dict:
         blocks += [block for block in built["blocks"] if block.get("t") == "row"]
     overview = sp.page("overview", "Settings", blocks)
     overview["summaries"] = {"keys": f"{len(SHORTCUTS) + len(LEADER_SHORTCUTS)} shortcuts"}
-    if providers := await provider_summary(workflows):
+    if providers := cached_provider_summary(workflows):
         overview["summaries"]["providers"] = providers
     return overview

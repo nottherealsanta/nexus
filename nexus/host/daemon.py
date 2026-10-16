@@ -100,6 +100,16 @@ TEARDOWN_TIMEOUT = 1.0
 #: Bound on concurrent subscriptions from one client, so a buggy client cannot
 #: open unbounded streams.
 MAX_SUBSCRIPTIONS_PER_CLIENT = 64
+#: Commands that can take seconds on a cold daemon (Doctor scans the whole
+#: SQLite file, the others may fetch the model catalogue or the network). They
+#: run as background tasks so one slow request never holds up the connection's
+#: next frame (a session open right behind the startup Doctor poll).
+SLOW_COMMANDS = tuple(
+    getattr(p, name)
+    for name in ("Doctor", "UpdateStatus", "ModelsRefresh", "ModelsList", "SetupStatus")
+    if hasattr(p, name)
+)
+MAX_SLOW_COMMANDS_PER_CLIENT = 8
 #: The only host the opt-in HTTP/SSE surface may bind (PLAN section 14.12).
 DEFAULT_HTTP_HOST = LOOPBACK_HOST
 
@@ -225,6 +235,7 @@ class _ClientConnection:
         self.client_id = new_id()
         self._subs: dict[str, _Subscription] = {}
         self._write_lock = asyncio.Lock()
+        self._slow: set[asyncio.Task[None]] = set()
         self._closed = False
         self._torn_down = False
 
@@ -296,6 +307,15 @@ class _ClientConnection:
             result = p.WebLaunchResult(url=endpoint)
             await self._send(ResultFrame(id=frame.id, result=result))
             return
+        if (
+            isinstance(frame.command, SLOW_COMMANDS)
+            and len(self._slow) < MAX_SLOW_COMMANDS_PER_CLIENT
+        ):
+            # Results are matched by frame id, so replies may arrive out of order.
+            task = asyncio.ensure_future(self._slow_command(frame))
+            self._slow.add(task)
+            task.add_done_callback(self._slow.discard)
+            return
         result = await self.daemon.facade.handle(frame.command)
         await self._send(ResultFrame(id=frame.id, result=result))
         if isinstance(frame.command, p.SessionSubscribe) and isinstance(
@@ -306,6 +326,12 @@ class _ClientConnection:
             )
         if isinstance(frame.command, p.Shutdown):
             self.daemon.request_stop("client shutdown")
+
+    async def _slow_command(self, frame: CommandFrame) -> None:
+        """Run one slow command off the read loop; ``handle`` never raises."""
+        result = await self.daemon.facade.handle(frame.command)
+        self.daemon.touch()
+        await self._send(ResultFrame(id=frame.id, result=result))
 
     # -- subscriptions -----------------------------------------------------
 
@@ -379,6 +405,8 @@ class _ClientConnection:
             return
         self._torn_down = True
         tasks = [subscription.task for subscription in self._subs.values()]
+        tasks.extend(self._slow)
+        self._slow.clear()
         self._subs.clear()
         for task in tasks:
             task.cancel()

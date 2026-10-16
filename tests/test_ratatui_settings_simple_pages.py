@@ -86,6 +86,31 @@ async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(she
 
 
 @pytest.mark.asyncio
+async def test_root_overview_makes_no_provider_call_but_providers_page_refreshes():
+    from types import SimpleNamespace
+
+    from nexus.ui.ratatui.settings_pages import build_overview, page_module
+
+    calls = []
+
+    class Client:
+        async def providers_status(self):
+            calls.append(1)
+            return SimpleNamespace(providers=[{"id": "a", "name": "A", "connected": True}])
+
+    # Match the real preference defaults used by the peer overview test.
+    prefs = SimpleNamespace(values={"theme": "nexus-dark", "details_sidebar": True, "context_preview": True, "centered_layout": False})
+    workflows = SimpleNamespace(client=Client(), shell=SimpleNamespace(preferences=prefs), page_state={}, login=None)
+    overview = await build_overview(workflows)
+    assert calls == [] and "providers" not in overview["summaries"]
+
+    await page_module("providers").build(workflows)
+    assert len(calls) == 1
+    overview = await build_overview(workflows)
+    assert len(calls) == 1 and overview["summaries"]["providers"] == "1 of 1 connected"
+
+
+@pytest.mark.asyncio
 async def test_overview_inlines_appearance_and_layout_rows_with_their_own_operations(tmp_path, monkeypatch):
     """The root list's rows come from the area builders, so every operation is one the drilled page also offers."""
     from types import SimpleNamespace

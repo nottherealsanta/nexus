@@ -123,7 +123,7 @@ def _pair(store: GatewayStore, args: argparse.Namespace, stdout: TextIO) -> int:
     if "live" in scopes:
         stdout.write(
             "Note: the live scope lets this device start GPT Live calls and record the once-per-machine "
-            "consent to send microphone audio and work summaries to OpenAI. Omit `live` from --scopes to refuse.\n"
+            "consent to send microphone audio, work summaries and a bounded excerpt of the session conversation to OpenAI. Omit `live` from --scopes to refuse.\n"
         )
     return 0
 

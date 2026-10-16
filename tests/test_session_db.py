@@ -495,3 +495,27 @@ def test_project_session_index_keeps_project_identity_and_excludes_hidden_rows(t
     assert len(db.project_sessions(limit=1)) == 1
     with pytest.raises(ValueError):
         db.project_sessions(limit=0)
+
+
+def test_project_session_search_is_bounded_literal_and_filters_before_limit(tmp_path):
+    db = _db(tmp_path)
+    store = SqliteSessionStore(db, "a", root="/workspace/UniqueRoot")
+    store.create("old-id")
+    store.append_message("old-id", _msg("UserNeedle 50% a_b wow!"))
+    store.append_message("old-id", _msg("AgentNeedle", role="assistant"))
+    store.set_auto_title("old-id", "TitleNeedle")
+    for i in range(25):
+        store.create(f"recent-{i}")
+        store.append_message(f"recent-{i}", _msg("unrelated"))
+    assert len(db.project_sessions(limit=20)) == 20
+    assert "old-id" not in {r["id"] for r in db.project_sessions(limit=20)}
+    for query in ("OLD-ID", "titleneedle", "userneedle", "agentneedle", "50%", "a_b", "wow!"):
+        assert [r["id"] for r in db.project_sessions(limit=20, query=query)] == ["old-id"]
+    assert len(db.project_sessions(limit=2, query="uniqueroot")) == 2
+    assert [r["id"] for r in db.project_sessions(query="%", limit=1)] == ["old-id"]
+    assert [r["id"] for r in db.project_sessions(query="_", limit=1)] == ["old-id"]
+    assert db.project_sessions(query="' OR 1=1 --") == []
+    store.archive("old-id", "user")
+    assert db.project_sessions(query="UserNeedle") == []
+    with pytest.raises(ValueError):
+        db.project_sessions(query="x" * 257)

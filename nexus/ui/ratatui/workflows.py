@@ -560,12 +560,12 @@ class Workflows(TierPages, SpeakPages):
                 self.shell.show_styled(escape_controls(tool.name), [escape_controls(line) for line in lines], tones)
         elif kind == "sessions":
             await self.sessions()
-        elif kind == "session_preview":
-            await self.dashboard.select(operation["id"])
         elif kind == "sessions_close":
             self.close_dashboard()
         elif kind == "sessions_refresh":
             await self.dashboard.refresh()
+        elif kind == "sessions_search":
+            await self.dashboard.search(operation["query"])
         elif kind == "session_rename":
             await self.dashboard.rename(operation["id"], operation["title"])
         elif kind == "session_new":

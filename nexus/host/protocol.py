@@ -54,6 +54,9 @@ class SessionList(msgspec.Struct, tag=True, frozen=True):
 class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
     """List saved sessions across projects in this Nexus home."""
 
+    limit: int = 1000
+    query: str = ""
+
 
 class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
     workspace: str
@@ -349,17 +352,6 @@ class SessionDelete(msgspec.Struct, tag=True, frozen=True):
 
 class SessionRestore(msgspec.Struct, tag=True, frozen=True):
     trash_id: str
-
-
-class SessionDashboardPreview(msgspec.Struct, tag=True, frozen=True):
-    """Bounded, redacted mini transcript of one session for the sessions dashboard.
-
-    Distinct from ``SessionPreview`` (archive browser text). ``max_rows`` is
-    1-50. Read-only: it never opens, unarchives or starts the session.
-    """
-
-    session_id: str
-    max_rows: int = 12
 
 
 class SessionRename(msgspec.Struct, tag=True, frozen=True):
@@ -791,8 +783,8 @@ class LiveHelperEvent(msgspec.Struct, tag=True, frozen=True):
 class LiveConsent(msgspec.Struct, tag=True, frozen=True):
     """Read (``None``), record (``True``) or revoke (``False``) the once-per-machine GPT Live consent.
 
-    The consent covers sending microphone audio and summaries of the agent's work
-    to OpenAI through the user's ChatGPT account (docs/security.md).
+    The consent covers sending microphone audio, summaries of the agent's work and a
+    bounded excerpt of the session's conversation to OpenAI through the user's ChatGPT account (docs/security.md).
     """
 
     accept: bool | None = None
@@ -896,7 +888,6 @@ Command = (
     | SessionFork
     | SessionDelete
     | SessionRestore
-    | SessionDashboardPreview
     | SessionRename
     | SessionExport
     | PermissionResolve
@@ -1007,7 +998,6 @@ COMMANDS: tuple[type, ...] = (
     SessionFork,
     SessionDelete,
     SessionRestore,
-    SessionDashboardPreview,
     SessionRename,
     SessionExport,
     PermissionResolve,
@@ -1310,50 +1300,6 @@ class SessionDeleteResult(msgspec.Struct, tag=True, frozen=True):
 
 class SessionRestoreResult(msgspec.Struct, tag=True, frozen=True):
     session: str
-
-
-class PreviewRow(msgspec.Struct, frozen=True):
-    """One redacted display line; ``kind`` is ``user``, ``assistant`` or ``activity``."""
-
-    kind: str
-    text: str
-
-
-class PendingInput(msgspec.Struct, frozen=True):
-    """An open approval (``permission``, ``id`` = request id) or ``question`` (``id`` = call id)."""
-
-    kind: str
-    id: str
-    text: str
-    options: list[str] = msgspec.field(default_factory=list)
-
-
-class SessionDashboardPreviewResult(msgspec.Struct, tag=True, frozen=True):
-    """``state`` is ``idle``, ``working`` or ``needs_input``; ``context_fraction`` is
-    ``None`` when the window or usage is unknown. At most ``max_rows`` rows and 3
-    pending entries; ``truncated`` says anything was cut."""
-
-    session: str
-    title: str = ""
-    state: str = "idle"
-    workspace: str = ""
-    branch: str = ""
-    agent: str = ""
-    model: str = ""
-    context_used: int | None = None
-    context_window: int | None = None
-    context_fraction: float | None = None
-    last_seq: int = 0
-    rows: list[PreviewRow] = msgspec.field(default_factory=list)
-    pending: list[PendingInput] = msgspec.field(default_factory=list)
-    truncated: bool = False
-    #: Latest cleaned user and assistant text, plus the running tool. Empty when unknown.
-    #: Independent of ``rows``, which replaces the reply with activity while a turn works.
-    last_user: str = ""
-    last_agent: str = ""
-    activity: str = ""
-    #: Duration of the last completed agent turn (``13s``); empty when unknown.
-    worked: str = ""
 
 
 class SessionRenameResult(msgspec.Struct, tag=True, frozen=True):
@@ -1874,7 +1820,6 @@ Result = (
     | SessionForkResult
     | SessionDeleteResult
     | SessionRestoreResult
-    | SessionDashboardPreviewResult
     | SessionRenameResult
     | SessionExportResult
     | PermissionResolveResult
@@ -1968,7 +1913,6 @@ RESULTS: tuple[type, ...] = (
     SessionForkResult,
     SessionDeleteResult,
     SessionRestoreResult,
-    SessionDashboardPreviewResult,
     SessionRenameResult,
     SessionExportResult,
     PermissionResolveResult,
@@ -2172,12 +2116,8 @@ __all__ = [
     "SessionPreviewResult",
     "SessionRestore",
     "SessionRestoreResult",
-    "SessionDashboardPreview",
-    "SessionDashboardPreviewResult",
     "SessionRename",
     "SessionRenameResult",
-    "PreviewRow",
-    "PendingInput",
     "SessionSearch",
     "SessionSearchResult",
     "SessionStart",

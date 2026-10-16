@@ -57,7 +57,6 @@ from ..host_support.context_preview import (
 )
 from ..host_support import model_settings
 from ..host_support.auto_title import AutoTitler, set_user_title
-from ..host_support.session_preview import clean_preview_text, project_preview, validate_max_rows
 from ..host_support.user_shell import UserShells
 from ..host_support.doctor import doctor_report
 from ..host_support.update_check import claim_announcement, update_status
@@ -572,48 +571,6 @@ class HostFacade:
         self.supervisor.forget(session_id)
         self._managed.discard(session_id)
         return record
-
-    def dashboard_preview(self, session_id: str, max_rows: int = 12) -> p.SessionDashboardPreviewResult:
-        """A bounded, redacted mini transcript of one session, read without opening it.
-
-        Folds the session's own log through the shared reducer (like the archive
-        preview, so it never unarchives or creates a handle) and returns at most
-        ``max_rows`` display lines plus the pending approval/question summary.
-        """
-        max_rows = validate_max_rows(max_rows)
-        summary = self.runtime.sessions.summary(session_id)
-        view = initial_state(summary.id)
-        for event in self.runtime.sessions._consistent_read(summary.id).events():
-            view = apply(view, event)
-        # Live activity precedes the durable turn.started event. Do not create
-        # a handle here: opening one would unarchive this read-only preview.
-        live = session_id in getattr(self.runtime.sessions, "live_sessions", ())
-        active = live and bool(getattr(self.runtime.sessions._live_handle(session_id), "active", False))
-        data = project_preview(
-            view, max_rows=max_rows,
-            active=bool(active or self.supervisor.running_for(session_id)),
-        )
-        head = git_head(getattr(self.runtime, "workspace", None))
-        return p.SessionDashboardPreviewResult(
-            session=clean_preview_text(summary.id),
-            title=clean_preview_text(summary.title),
-            state=data["state"],
-            workspace=clean_preview_text(getattr(self.runtime, "workspace", "")),
-            branch=clean_preview_text(head.get("branch") or head.get("worktree_name")),
-            agent=data["agent"],
-            model=data["model"],
-            context_used=data["context_used"],
-            context_window=data["context_window"],
-            context_fraction=data["context_fraction"],
-            last_seq=data["last_seq"],
-            rows=[p.PreviewRow(**row) for row in data["rows"]],
-            pending=[p.PendingInput(**item) for item in data["pending"]],
-            truncated=data["truncated"],
-            last_user=data.get("last_user", ""),
-            last_agent=data.get("last_agent", ""),
-            activity=data.get("activity", ""),
-            worked=data.get("worked", ""),
-        )
 
     def rename(self, session_id: str, title: str) -> SessionSummary:
         """Set a session's title durably as a user title (never replaced by auto-titling)."""
@@ -1571,15 +1528,19 @@ class HostFacade:
         )):
             return dispatch_archive_command(command, self.runtime.sessions, self.supervisor)
         if isinstance(command, p.ProjectSessionsList):
-            rows = self.runtime.sessions.store.db.project_sessions(limit=1001)
-            local = {row.id: row for row in self.list_sessions()}
-            # Bounded: one .git read per distinct workspace (rows are capped at 1,001).
-            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in rows[:1000]}}
+            if type(command.limit) is not int:
+                raise ValueError("project session limit must be an integer")
+            if not isinstance(command.query, str) or len(command.query) > 256:
+                raise ValueError("project session query must be at most 256 characters")
+            limit = max(1, min(command.limit, 1000))
+            rows = self.runtime.sessions.store.db.project_sessions(limit=limit + 1, query=command.query)
+            # Only returned rows need live metadata or workspace inspection.
+            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in rows[:limit]}}
             current = str(self.runtime.workspace)
             sessions = []
-            for row in rows[:1000]:
-                if row["workspace"] == current and row["id"] in local:
-                    summary = local[row["id"]]
+            for row in rows[:limit]:
+                if row["workspace"] == current:
+                    summary = self.runtime.sessions._summary_from_row(row)
                 else:
                     summary = SessionSummary(
                         id=row["id"], title=row["title"], last_activity=row["last_activity"],
@@ -1594,7 +1555,7 @@ class HostFacade:
                     last_user=str(row.get("last_user") or "")[:240],
                     last_agent=str(row.get("last_agent") or "")[:240],
                 ))
-            return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=len(rows) > 1000)
+            return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=len(rows) > limit)
         if isinstance(command, p.ProjectSessionOpen):
             # Only recorded project/session pairs may start another workspace host.
             rows = self.runtime.sessions.store.db.project_sessions(limit=10_000)
@@ -1819,8 +1780,6 @@ class HostFacade:
             )
         if isinstance(command, p.SessionRestore):
             return p.SessionRestoreResult(session=self.restore(command.trash_id))
-        if isinstance(command, p.SessionDashboardPreview):
-            return self.dashboard_preview(command.session_id, command.max_rows)
         if isinstance(command, p.SessionRename):
             return p.SessionRenameResult(session=self.rename(command.session_id, command.title))
         if isinstance(command, p.SessionExport):
@@ -1923,14 +1882,18 @@ class HostFacade:
                 await initializer()
             return self._tiers_result()
         if isinstance(command, (p.ModelTierSet, p.ModelTierReset, p.AgentMaxTierSet)):
-            idle = not self.supervisor.running
+            # Tier edits are a cheap in-place swap of the tier table, registry index and
+            # router (Runtime.reload_tier_config); no provider is touched, so they apply
+            # even while a turn runs. Running children keep their chosen model; the next
+            # spawn and turn resolve the new order. Restart is needed only when the
+            # runtime was built with injected routes and cannot reload.
             if isinstance(command, p.ModelTierSet):
-                await model_settings.tier_set(self.runtime, command.tier, list(command.refs), efforts=command.efforts, reload=idle)
+                state = await model_settings.tier_set(self.runtime, command.tier, list(command.refs), efforts=command.efforts, reload=True)
             elif isinstance(command, p.ModelTierReset):
-                await model_settings.tier_reset(self.runtime, command.tier, reload=idle)
+                state = await model_settings.tier_reset(self.runtime, command.tier, reload=True)
             else:
-                await model_settings.agent_max_tier_set(self.runtime, command.tier, reload=idle)
-            return self._tiers_result(restart_required=not idle)
+                state = await model_settings.agent_max_tier_set(self.runtime, command.tier, reload=True)
+            return self._tiers_result(restart_required=bool(state.get("restart_required")))
         if isinstance(command, p.SessionTitleSettings):
             return p.SessionTitleSettingsResult(**model_settings.session_title_settings(self.runtime))
         if isinstance(command, p.SessionTitleSettingsSet):

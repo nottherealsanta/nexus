@@ -413,18 +413,16 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: ``worker_tools`` and file tools confined to the workspace.
     worker_restricted: bool | None = None
     # -- Antigravity external worker (``kind = "antigravity"``, alias ``agy``) --
-    #: Explicit opt-in to agy's own user/global settings, MCP servers and plugins.
-    #: Off by default; Nexus PathGuard never applies inside agy either way.
-    worker_inherits_agy_settings: bool = False
+    #: Inherit agy's own user/global settings, MCP servers and plugins by default.
+    #: Only used for Antigravity; Nexus PathGuard never applies inside agy.
+    #: Keep this aligned with WorkerConfig: schema defaults are materialized
+    #: before from_section sees an omitted setting.
+    worker_inherits_agy_settings: bool = True
 
     def __post_init__(self) -> None:
         self._validate_worker_fields()
         if not isinstance(self.worker_inherits_agy_settings, bool):
             raise ValueError("providers.*.worker_inherits_agy_settings must be a boolean")
-        if self.worker_inherits_agy_settings and self.kind is not None and (
-            not isinstance(self.kind, str) or self.kind.strip().lower() not in ANTIGRAVITY_KINDS
-        ):
-            raise ValueError("providers.*.worker_inherits_agy_settings applies only to kind = antigravity")
         if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
             raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot', 'keychain' or 'xai_oauth'")
         if self.profile is not None and (
