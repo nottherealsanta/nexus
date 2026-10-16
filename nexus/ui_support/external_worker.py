@@ -137,6 +137,10 @@ def footer_rows(external: Mapping[str, Any]) -> list[tuple[str, str]]:
             rows.append((prof["session"], str(external["agy_session"])))
         if external.get("agy_permission_mode"):
             rows.append(("Effective permission mode", str(external["agy_permission_mode"])))
+        if external.get("mode_note"):
+            rows.append(("Mode fallback", str(external["mode_note"])))
+        if _csv(external.get("denied_actions")):
+            rows.append(("Denied by agy", _csv(external["denied_actions"])))
         if _csv(external.get("agy_tools")):
             rows.append(("Tools", _csv(external["agy_tools"])))
         rows.append(("Usage", _token_usage(external.get("usage"))

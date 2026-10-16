@@ -35,6 +35,20 @@ as `needs_attention`, naming the likely soft denial. Nexus does not add allow
 rules, pass `--dangerously-skip-permissions` or answer prompts; edit agy's own
 settings with a narrowly scoped rule and re-run.
 
+agy 1.3.6 makes the denial explicit, and Nexus surfaces all three signals:
+
+- the tool step ends with `state: ERROR` and a `tool_info.error` ("user denied
+  permission to run command …"). Nexus closes the tool row as an error on any
+  ending state (`DONE`, `ERROR`, `CANCELED`), not only `DONE`, so a denied row no
+  longer looks like it is still running;
+- `result.denied_actions` (e.g. `{"action":"command","display_name":"RunCommand"}`)
+  is named in the attention reason and in a "Denied by agy" footer row;
+- on accounts where `--mode auto` is unavailable, agy prints `warning: --mode auto
+  is not available for this account; continuing in the default mode.` on stderr
+  and its `init.permission_mode` is `request-review`. Nexus adds a "Mode fallback"
+  footer row and appends it to the attention reason. In that mode every shell
+  command needs an allow rule (or a mode that works for the account).
+
 ## Settings inheritance and the Nexus child path
 
 `providers.<name>.worker_inherits_agy_settings` defaults to `true`, including when

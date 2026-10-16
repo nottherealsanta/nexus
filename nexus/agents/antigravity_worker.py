@@ -111,6 +111,11 @@ SCHEMA: dict[str, Any] = {
 }
 MAX_TOOLS_LISTED = 200
 MAX_SUBAGENTS = 20
+#: Tool step states that end the step (agy reports a denied or failed tool as ``ERROR``).
+_TOOL_END_STATES = frozenset({"DONE", "ERROR", "CANCELED", "CANCELLED"})
+MAX_DENIED_LISTED = 20
+#: agy's stderr warning when the requested ``--mode`` is unavailable and it falls back silently.
+_MODE_FALLBACK_RE = re.compile(r"--mode (\S+) is not available[^\n]*", re.I)
 _MODES = {"auto": "auto", "accept-edits": "accept-edits", "acceptEdits": "accept-edits", "plan": "plan"}
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
@@ -291,6 +296,10 @@ class _Run:
     init_seen: bool = False
     init_tools: list[str] = field(default_factory=list)
     agy_permission_mode: str | None = None
+    #: ``result.denied_actions`` as "display_name (action permission)" lines.
+    denied: list[str] = field(default_factory=list)
+    #: Set when agy ignored the requested ``--mode`` (stderr warning) and ran in another mode.
+    mode_note: str | None = None
     #: Terminal ``result.usage`` (authoritative); ``None`` if agy reported none.
     usage: dict[str, int] | None = None
     #: step_index -> text accumulated from ``text_delta`` of a not yet DONE agent_response.
@@ -509,7 +518,7 @@ class AntigravityWorker:
             await self._send(run, "external.tool", {
                 "phase": "requested", "input": bounded,
                 **({"clip_note": "; ".join(dict.fromkeys(flags))} if flags else {}), **base})
-        if state != "DONE" or index not in run.announced:
+        if state not in _TOOL_END_STATES or index not in run.announced:
             return
         error = info.get("error")
         parts = [_result_text(info.get("output"))] if info.get("output") is not None else []
@@ -517,6 +526,8 @@ class AntigravityWorker:
             parts.append(f"error {error.get('type') or ''}: {error.get('message') or ''}".strip())
         elif error:
             parts.append(f"error: {error}")
+        elif state != "DONE":
+            parts.append(f"agy ended this tool step as {state}")
         subs = info.get("subagent_info")
         if isinstance(subs, list) and subs:
             parts.append("subagents:\n" + "\n".join(self._subagent_line(s) for s in subs[:MAX_SUBAGENTS]))
@@ -525,7 +536,8 @@ class AntigravityWorker:
             run.clip_notes.append(f"{name or 'tool'} result {note}")
         run.announced.discard(index)
         await self._send(run, "external.tool", {
-            "phase": "completed", "content": [{"type": "text", "text": text}], "is_error": bool(error),
+            "phase": "completed", "content": [{"type": "text", "text": text}],
+            "is_error": bool(error) or state != "DONE",
             **({"clip_note": note} if note else {}), **base})
 
     @staticmethod
@@ -541,6 +553,13 @@ class AntigravityWorker:
         if isinstance(usage, Mapping):
             run.usage = {str(k)[:40]: v for k, v in list(usage.items())[:16]
                          if isinstance(v, int) and not isinstance(v, bool) and v >= 0}
+        denied = result.get("denied_actions")
+        if isinstance(denied, list):
+            for item in denied[:MAX_DENIED_LISTED]:
+                if isinstance(item, Mapping):
+                    name, action = item.get("display_name"), item.get("action")
+                    label = str(name or action or "unknown")[:100]
+                    run.denied.append(f"{label} ({str(action)[:60]} permission)" if action else label)
         answer, status = result.get("response"), result.get("status")
         if run.pending:  # a streamed step that never reported DONE is still the agent's text
             run.texts.append(run.pending[max(run.pending)])
@@ -552,9 +571,15 @@ class AntigravityWorker:
                 return
             # SUCCESS with no answer at all: agy ends this way after soft-denying a tool request in headless
             # mode (shell commands default to Ask), so an empty final is never reported as completed.
-            reason = ("agy reported SUCCESS but returned no answer; a tool request may have been soft-denied "
-                      "because headless mode cannot ask for approval (add scoped `permissions.allow` rules in "
-                      "agy's own settings, docs: antigravity.google/docs/cli/headless) and re-run")
+            if run.denied:
+                reason = (f"agy reported SUCCESS but returned no answer after denying {', '.join(run.denied)}: "
+                          "headless mode cannot ask for approval, so agy auto-denied it (add a scoped "
+                          "`permissions.allow` rule such as `command(<target>)` in agy's own settings.json, "
+                          "docs: antigravity.google/docs/cli/headless) and re-run")
+            else:
+                reason = ("agy reported SUCCESS but returned no answer; a tool request may have been soft-denied "
+                          "because headless mode cannot ask for approval (add scoped `permissions.allow` rules in "
+                          "agy's own settings, docs: antigravity.google/docs/cli/headless) and re-run")
             run.attention = reason
             run.final = ("failed", "", reason)
             return
@@ -694,6 +719,7 @@ class AntigravityWorker:
             "transcript_path": None, "tool_calls": run.tool_calls,
             "usage": run.usage if run.usage is not None else "unknown", "cost": "unknown",
             "agy_permission_mode": run.agy_permission_mode, "agy_tools": list(run.init_tools),
+            "denied_actions": list(run.denied), "mode_note": run.mode_note,
             "error": redact_secrets(result.error)[:500] if result and result.error else None,
             "attention": result.attention if result else None,
             "clip_notes": list(dict.fromkeys(run.clip_notes))[:20],
@@ -776,6 +802,13 @@ class AntigravityWorker:
                     await task
         if failure is not None:
             raise failure
+        if fallback := _MODE_FALLBACK_RE.search(terminal_text(run.stderr)):
+            run.mode_note = (f"agy ignored the requested --mode {run.policy.permission_mode} "
+                             f"({fallback.group(0).strip()[:200]}) and ran in "
+                             f"{run.agy_permission_mode or 'its default mode'}; tools that mode asks about are "
+                             "auto-denied in headless runs")
+            if run.attention:
+                run.attention = f"{run.attention}. {run.mode_note}"
         if cancelled:
             return self._result(run, started, "cancelled", "Antigravity assignment was cancelled." + partial(),
                                 error="cancelled")

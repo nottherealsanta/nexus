@@ -84,6 +84,16 @@ def test_needs_attention_is_exact_and_distinct():
     assert task_note(_external("needs_attention")) == "Needs attention: Antigravity (agy) is waiting for you"
 
 
+def test_footer_names_denied_actions_and_mode_fallback():
+    note = "agy ignored the requested --mode auto (--mode auto is not available for this account)"
+    external = _external("needs_attention", attention=MANUAL, mode_note=note,
+                         denied_actions=["RunCommand (command permission)"])
+    _, (foot,) = external_blocks("a", external)
+    lines = _lines(foot)
+    assert f"Mode fallback: {note}" in lines
+    assert "Denied by agy: RunCommand (command permission)" in lines
+
+
 def test_unsafe_text_is_escaped_single_line_and_clipped_with_announcement():
     external = _external("failed", attention="x\nInjected: row\x1b[31m" + "y" * 5000)
     _, (foot,) = external_blocks("a", external)

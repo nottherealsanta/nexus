@@ -260,6 +260,37 @@ def test_success_with_empty_answer_needs_attention(tmp_path, response):
     assert events[-1][1]["status"] == "needs_attention"
 
 
+def test_denied_tool_step_closes_and_names_the_denial_and_mode_fallback(tmp_path):
+    # Shapes recorded from agy 1.3.6 when --mode auto is unavailable for the account.
+    denial = "permission check failed for unsandboxed \"echo hi\": user denied permission to run command"
+    lines = [INIT,
+             step(2, "ACTIVE", "tool", tool_name="run_command",
+                  tool_info={"name": "run_command", "parameters": {"CommandLine": "echo hi"}}),
+             step(2, "ERROR", "tool", tool_name="run_command",
+                  tool_info={"name": "run_command", "parameters": {"CommandLine": "echo hi"},
+                             "error": {"type": "TOOL_ERROR", "message": denial}}),
+             result("SUCCESS", "", denied_actions=[{"action": "command", "display_name": "RunCommand"}])]
+    stderr = "warning: --mode auto is not available for this account; continuing in the default mode.\n"
+    res, events, _ = run_worker(tmp_path, {"lines": lines, "stderr": stderr})
+    tools = [d for k, d in events if k == "external.tool"]
+    assert [t["phase"] for t in tools] == ["requested", "completed"]
+    assert tools[1]["is_error"] and "user denied permission" in tools[1]["content"][0]["text"]
+    assert res.status == "needs_attention"
+    assert "RunCommand (command permission)" in res.attention and "command(<target>)" in res.attention
+    assert "ignored the requested --mode auto" in res.attention and "request-review" in res.attention
+    finished = events[-1][1]
+    assert finished["denied_actions"] == ["RunCommand (command permission)"]
+    assert "--mode auto is not available" in finished["mode_note"]
+
+
+def test_error_tool_step_without_error_payload_is_marked_failed(tmp_path):
+    lines = [INIT, step(1, "ERROR", "tool", tool_name="view_file", tool_info={"name": "view_file"}), OK]
+    res, events, _ = run_worker(tmp_path, {"lines": lines})
+    done = [d for k, d in events if k == "external.tool" and d["phase"] == "completed"]
+    assert done and done[0]["is_error"] and "ERROR" in done[0]["content"][0]["text"]
+    assert res.status == "completed"
+
+
 def test_success_with_empty_response_uses_finished_agent_text(tmp_path):
     lines = [INIT, step(1, "DONE", "agent_response", text_delta="the sentinel"), result("SUCCESS", "")]
     res, *_ = run_worker(tmp_path, {"lines": lines})
