@@ -66,13 +66,28 @@ SIGNALING_TIMEOUT_S = 30.0
 SIGNALING_5XX_RETRIES = 1
 #: Credential refresh bound, separate from a WebSocket open (DNS/TCP/TLS/HTTP upgrade).
 RECONNECT_TIMEOUT_S = 5.0
-#: The per-call reconnect budget. Receive-detected and send-detected drops share it; it is
-#: never reset or raised after a successful reconnect. Failed opens consume it too.
-MAX_RECONNECTS = 2
+#: Early-join retry (Codex-like, docs/live.md): the sideband of a freshly created call can answer
+#: 404 briefly before the call is active. The INITIAL open retries a 404 at these delays, then fails.
+#: A 404 during recovery is never retried (the call is gone).
+JOIN_404_DELAYS_S = (0.1, 0.3, 0.8)
+#: Recovery after an unclean loss (Codex-like): attempt ``n`` waits ``min(0.2 * 2**(n-1), 5)`` s.
+#: ``n`` counts consecutive failed opens and short-lived connections; a connection that lasted
+#: ``RECONNECT_STABLE_AFTER_S`` resets it. There is no attempt-count limit; only terminal refusals,
+#: a clean close, stop, the call deadline and ``RECOVERY_GIVE_UP_S`` end recovery.
+RECONNECT_BASE_DELAY_S = 0.2
+RECONNECT_MAX_DELAY_S = 5.0
+RECONNECT_STABLE_AFTER_S = 30.0
+#: Total bound on continuous failure (from the first drop of an unstable stretch). Codex retries
+#: forever; Nexus keeps every loop bounded, and the manager's ``max_minutes`` deadline also applies.
+#: 5 minutes outlasts a network change or a sleep/wake while not leaving a dead call "live" for long.
+RECOVERY_GIVE_UP_S = 300.0
 #: One write attempt. A write that raises or times out is delivery-ambiguous and never replayed.
 SEND_TIMEOUT_S = 5.0
-#: How long a send waits (lock, initial connect, reconnect) before failing as "not sent".
-SEND_WAIT_TIMEOUT_S = RECONNECT_TIMEOUT_S
+#: How long a send waits (lock, initial connect, reconnect) before failing as "not sent". A message
+#: that was never written may wait for the sideband to come back (Codex keeps it pending without a
+#: limit); 10 s covers the first backoff steps (0.2+0.4+0.8+1.6+3.2 s) plus one open, yet a caller
+#: (the bridge appends under a per-call lock) is never blocked for long. Ambiguous writes never replay.
+SEND_WAIT_TIMEOUT_S = 10.0
 CLOSE_TIMEOUT_S = 1.0
 MAX_DETAIL_CHARS = 300  # notes §8.2 (OC cuts error bodies to 300 characters)
 MAX_ANSWER_BYTES = 262_144
@@ -174,13 +189,10 @@ def websocket_available() -> bool:
     return importlib.util.find_spec("websockets") is not None
 
 
-# Keepalive pings go out every 20s. A call dropped ~40s in with "no close frame
-# received or sent", which matches ping_interval=20 + ping_timeout=20 but does not
-# prove it (abrupt peer/proxy/network termination fits too). The pong deadline is
-# kept finite at 60s as a diagnostic tolerance: a slow Pong no longer closes the
-# call at ~40s, yet a half-open socket is still detected. Not a verified fix.
-HEARTBEAT_PING_INTERVAL_S = 20
-HEARTBEAT_PING_TIMEOUT_S = 60
+# No client WebSocket pings (``ping_interval=None``), as Codex does: it only answers server
+# pings, which ``websockets`` does automatically. A half-open socket is therefore noticed only by
+# a failed or timed-out write, a read error, or the server closing; see docs/live.md for the
+# trade-off. Not verified against the real service.
 
 
 async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketLike:
@@ -197,8 +209,7 @@ async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketL
     try:
         return await connect(
             url, additional_headers=dict(headers), open_timeout=CONNECT_TIMEOUT_S,
-            max_size=1_048_576, ping_interval=HEARTBEAT_PING_INTERVAL_S,
-            ping_timeout=HEARTBEAT_PING_TIMEOUT_S, user_agent_header=None,
+            max_size=1_048_576, ping_interval=None, user_agent_header=None,
         )
     except InvalidStatus as exc:
         # This module-level connector has no call-local credential scrubber. Do
@@ -224,6 +235,7 @@ class CodexLiveTransport:
         calls_url: str = CALLS_URL,
         sideband_url: str = SIDEBAND_URL,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] | None = None,
         raw_log: Callable[[str, str], None] | None = None,
     ) -> None:
         self._auth = auth
@@ -233,6 +245,7 @@ class CodexLiveTransport:
         self._calls_url = calls_url
         self._sideband_url = sideband_url
         self._sleep = sleep
+        self._clock = clock
         self._raw_log = raw_log
         self._ids = (str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
         self._headers_cache: dict[str, str] | None = None
@@ -259,8 +272,11 @@ class CodexLiveTransport:
         #: Sockets taken out of service (damaged by a write, replaced, or finished) whose close has
         #: not completed. Whoever retires a socket owns closing it; a cancelled close leaves it
         #: here so ``_run``'s cleanup or ``close`` finishes it. Never written to, never reused;
-        #: bounded by the reconnect budget because every drain empties it.
+        #: bounded because every drain empties it.
         self._retired: list[WebSocketLike] = []
+
+    def _now(self) -> float:
+        return self._clock() if self._clock is not None else asyncio.get_running_loop().time()
 
     # -- headers -----------------------------------------------------------
 
@@ -349,19 +365,26 @@ class CodexLiveTransport:
 
     # -- sideband ----------------------------------------------------------
 
-    async def _connect(self, *, attempts: int) -> WebSocketLike:
+    async def _connect(self, *, attempts: int, join: bool = False) -> WebSocketLike:
+        """Open the sideband. ``join`` (initial open only) also retries an early 404 briefly."""
         # One open budget for initial connection and recovery. In particular, the
         # credential-refresh deadline must never be passed to this operation.
         timeout = CONNECT_TIMEOUT_S
         url = self._sideband_url.format(call_id=quote(self._call_id, safe=""))
         headers = {k: v for k, v in (self._headers_cache or {}).items() if k not in ("content-type", "accept")}
         last: Exception | None = None
-        for attempt in range(attempts):
+        attempt = early_404 = 0
+        while True:
             if self._closing:
                 raise LiveError("live_closed", "The call is closing")
             try:
                 return await asyncio.wait_for(self._connector(url, headers), timeout)
             except LiveError as exc:
+                if join and isinstance(exc, LiveHTTPError) and exc.status == 404 and early_404 < len(JOIN_404_DELAYS_S):
+                    last = exc
+                    await self._sleep(JOIN_404_DELAYS_S[early_404])
+                    early_404 += 1
+                    continue
                 if _terminal_open_error(exc):
                     if isinstance(exc, LiveHTTPError):
                         raise LiveHTTPError(exc.status, exc.code, self._clean(exc.message)) from None
@@ -369,8 +392,10 @@ class CodexLiveTransport:
                 last = exc
             except Exception as exc:  # noqa: BLE001
                 last = exc
-            if attempt + 1 < attempts:
-                await self._sleep(CONNECT_BASE_DELAY_S * (2 ** attempt))
+            attempt += 1
+            if attempt >= attempts:
+                break
+            await self._sleep(CONNECT_BASE_DELAY_S * (2 ** (attempt - 1)))
         # wait_for (and some WebSocket open failures) raises a TimeoutError with
         # an empty str(). Keep the type and bound explicit so the terminal error
         # doesn't lose the only useful diagnostic. Scrub before display as usual.
@@ -454,10 +479,13 @@ class CodexLiveTransport:
             await asyncio.gather(recv, dropped, return_exceptions=True)
 
     async def _run(self) -> None:
-        reconnects = 0
+        #: Consecutive failed opens and short-lived connections (Codex's ``n``); 0 after stability.
+        attempts_used = 0
+        failing_since = 0.0
         try:
-            ws = await self._connect(attempts=CONNECT_ATTEMPTS)
+            ws = await self._connect(attempts=CONNECT_ATTEMPTS, join=True)
             drop = self._install(ws)
+            connected_at = self._now()
             self._first_open.set()
             await self._emit(SidebandOpen())
             while True:
@@ -465,7 +493,7 @@ class CodexLiveTransport:
                     return
                 frame, exc = await self._read(ws, drop)
                 if exc is not None:
-                    lost_at = asyncio.get_running_loop().time()
+                    lost_at = self._now()
                     self._invalidate(ws)  # clear readiness/socket before anything else can use it
                     await self._close_retired()
                     if self._closing:
@@ -473,12 +501,18 @@ class CodexLiveTransport:
                     if getattr(exc, "code", None) == 1000 or type(exc).__name__ == "ConnectionClosedOK":
                         await self._notify_closed("remote_closed", None)
                         return
+                    if attempts_used == 0 or lost_at - connected_at >= RECONNECT_STABLE_AFTER_S:
+                        attempts_used, failing_since = 0, lost_at
                     failure = self._clean(exc) or type(exc).__name__
                     recovered = False
-                    while reconnects < MAX_RECONNECTS:
-                        if reconnects:
-                            await self._sleep(CONNECT_BASE_DELAY_S * (2 ** (reconnects - 1)))
-                        reconnects += 1
+                    while True:
+                        if self._now() - failing_since >= RECOVERY_GIVE_UP_S:
+                            failure += f"; gave up after {RECOVERY_GIVE_UP_S:g}s of continuous failure"
+                            break
+                        attempts_used += 1
+                        await self._sleep(min(RECONNECT_BASE_DELAY_S * 2 ** min(attempts_used - 1, 10), RECONNECT_MAX_DELAY_S))
+                        if self._closing:
+                            return
                         try:
                             # Refresh on EVERY attempt; auth refusals never get retried.
                             self._headers_cache = await asyncio.wait_for(self._headers(), RECONNECT_TIMEOUT_S)
@@ -501,8 +535,8 @@ class CodexLiveTransport:
                             recovered = True
                             break
                     if not recovered:
-                        gap = asyncio.get_running_loop().time() - lost_at
-                        detail = f"{failure}; recovery attempts used {reconnects}/{MAX_RECONNECTS}, gap {gap:.1f}s; drop: {self._describe_drop(exc)}"
+                        gap = self._now() - lost_at
+                        detail = f"{failure}; recovery attempts used {attempts_used}, gap {gap:.1f}s; drop: {self._describe_drop(exc)}"
                         await self._notify_closed("sideband_lost", self._clean(detail))
                         return
                     if self._closing:
@@ -510,7 +544,8 @@ class CodexLiveTransport:
                         await self._close_retired(1000, "")
                         return
                     drop = self._install(ws)
-                    await self._emit(SidebandReconnected(gap_s=max(0.0, asyncio.get_running_loop().time() - lost_at)))
+                    connected_at = self._now()
+                    await self._emit(SidebandReconnected(gap_s=max(0.0, connected_at - lost_at)))
                     continue
                 if isinstance(frame, bytes):
                     await self._notify_closed("protocol_error", "Unexpected binary sideband frame")
@@ -592,7 +627,7 @@ class CodexLiveTransport:
         ``live_not_connected`` means *definitely not sent* (closed, or no socket within
         ``SEND_WAIT_TIMEOUT_S``). ``live_send_ambiguous`` means a write was attempted and
         raised or timed out, so delivery is unknown: the message is never replayed and the
-        damaged socket is dropped so the reader recovers (within the call's reconnect budget).
+        damaged socket is dropped so the reader recovers.
         """
         if self._closed or self._terminal.is_set() or self._reader is None:
             raise self._not_sent("closed" if self._closed or self._terminal.is_set() else "not started")

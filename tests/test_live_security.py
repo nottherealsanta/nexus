@@ -64,15 +64,17 @@ async def test_no_credential_reaches_events_results_or_logs(tmp_path, caplog, mo
     async def connector(url, headers):
         return LeakySocket()
 
-    async def sleep(_):
-        return None
+    fake_now = [0.0]
+
+    async def sleep(delay):  # recovery is bounded by elapsed time: advance a fake clock instead of waiting
+        fake_now[0] += delay
 
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": ScriptedProvider(text_response("x"))})
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     runtime.live = LiveManager(
         live_config(log_raw=True),
         transport_factory=lambda raw_log=None: CodexLiveTransport(
-            Auth(), client=client, connector=connector, sleep=sleep, raw_log=raw_log),
+            Auth(), client=client, connector=connector, sleep=sleep, clock=lambda: fake_now[0], raw_log=raw_log),
         home=tmp_path / "home", environ={}, flush_interval=0.0,
     )
     from nexus.host_support.live_consent import write_consent

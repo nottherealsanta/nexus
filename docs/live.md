@@ -215,21 +215,41 @@ with `transport_error`.
 
 Transport timing and credentials:
 
-- Waiting for a connection (the lock, the initial connect or a reconnect) is bounded at 5 s
-  and each write at 5 s; both failures are reported as above and never replayed.
-- At most **2 reconnect open attempts per call**, shared by receive-detected and send-detected
-  drops (failed attempts count too). Each refreshes credentials within 5 s and opens
-  within 15 s, matching the initial WebSocket open and its library `open_timeout`.
-  A transient failed open uses the remaining attempt after 0.2 s backoff; the budget
-  never resets after success. Recovery is thus bounded to 40.2 s per call in total
-  (plus bounded socket cleanup), not an unbounded background reconnect loop.
-  A clean server close (code 1000), whether seen by the reader or by a
-  failed write, ends the call as `remote_closed` without reconnecting.
-- **Heartbeat:** the `websockets` connector pings every 20 s (`ping_interval=20`) with a
-  `ping_timeout=60` (`transport.py`), so dead connections are still detected. The earlier
-  `ping_timeout=20` was **not** the cause of the ~43 s drops; see
-  [Root cause of the ~43 s drop](#root-cause-of-the-43-s-drop). Disconnect reports append the
-  exception type and `rcvd=`/`sent=` close code and reason (`none` when no frame).
+- Waiting for a connection (the lock, the initial connect or a reconnect) is bounded at
+  `SEND_WAIT_TIMEOUT_S = 10` s and each write at 5 s; both failures are reported as above and
+  never replayed. A message that was **never written** may wait for the reconnect inside that
+  window (it covers the first backoff steps plus one open); Codex keeps such a message pending
+  without limit, Nexus bounds it because the bridge appends under a per-call lock. A write that
+  raised or timed out is delivery-ambiguous and is never replayed (Codex replays; Nexus does not).
+- **Join (initial open):** an early `404` on the first sideband open is retried at 100, 300 and
+  800 ms (`JOIN_404_DELAYS_S`, Codex: the call id can be returned before the call is active),
+  then startup fails. Other failures use the existing 5-attempt, 200 ms exponential retry; any
+  other HTTP refusal (401/403/429, 410, 400, ...) fails at once.
+- **Reconnect after an unclean loss is not attempt-limited** (Codex-like). Attempt `n` waits
+  `min(0.2 * 2^(n-1), 5)` s (`RECONNECT_BASE_DELAY_S`, `RECONNECT_MAX_DELAY_S`), then refreshes
+  credentials (5 s) and opens (15 s). `n` counts consecutive failed opens and short-lived
+  connections; a connection that lasted 30 s (`RECONNECT_STABLE_AFTER_S`) resets it. Recovery
+  ends only on: HTTP `404`/`410` on the rejoin (call gone; `id was accepted earlier; no
+  replacement call created`), an auth/forbidden/rate-limit refusal, any other non-retryable HTTP
+  refusal, a credential refresh timeout, a clean server close (code 1000, seen by the reader or
+  by a failed write: `remote_closed`, no reconnect), explicit stop, the call's own deadline
+  (`max_minutes`), or `RECOVERY_GIVE_UP_S = 300` s of continuous failure (measured from the first
+  drop of an unstable stretch, reset by a 30 s stable connection). The 5-minute cap is Nexus's own
+  addition: Codex loops while the call is active, and AGENTS.md requires every loop to be bounded.
+  It outlasts a network change or sleep/wake and still ends a dead call. The terminal detail reads
+  `... recovery attempts used N, gap Xs; drop: <type> rcvd=.. sent=..`, plus `gave up after 300s
+  of continuous failure` for the cap (redacted and bounded as before).
+- **Heartbeat:** Nexus sends **no client WebSocket pings** (`ping_interval=None`), as Codex does.
+  The `websockets` library still answers server pings automatically. Trade-off: a half-open
+  socket (peer vanished with no FIN/RST) is no longer detected by a missed pong. It is noticed
+  only by a read error, a write that fails or exceeds 5 s (`live_send_ambiguous`, then recovery),
+  or the server closing; a write into a dead socket's kernel buffer can still appear to succeed
+  until TCP gives up. Pings were removed because Codex never sends them and they were a
+  candidate for the ~43 s drop (the confirmed cause is the media path, see
+  [Root cause of the ~43 s drop](#root-cause-of-the-43-s-drop)). Disconnect reports append the
+  exception type and `rcvd=`/`sent=` close code and reason (`none` when no frame). **Not verified
+  against the real service**: whether the sideband server needs or tolerates the absence of client
+  pings, and whether TCP keepalive should be added if silent dead sockets are seen.
 - Every reconnect fetches **fresh credentials** from the auth manager first (the access
   token may have rotated); a new token is redacted like the first. An auth failure at
   that point ends the call at once instead of retrying.
@@ -245,7 +265,7 @@ Transport timing and credentials:
   without spending the remaining attempts. Network failures still use bounded
   recovery. A WebSocket refusal is labeled `sideband WebSocket upgrade rejected`,
   not `call creation failed`; bounded response-body detail is credential-redacted.
-  Recovery counters include the one attempt that received the terminal response.
+  Recovery counters include the one attempt that received the terminal response. The initial open alone retries a 404 (see **Join**).
 - A 404 during recovery means the HTTP upgrade was refused, not simply a dropped
   socket. It may mean the call expired/disappeared or that the configured endpoint,
   provider deployment or protocol version no longer supports this route. The
@@ -255,8 +275,8 @@ Transport timing and credentials:
   `no close frame received or sent` describes the original drop, not why HTTP
   returned 404. Confirming the cause needs the service response and deployed
   endpoint/version/configuration; the elapsed time alone cannot establish expiry.
-  Observed report: `Ended sideband_lost · 00:43 … upgrade rejected (404) … recovery
-  attempts used 1/2, gap 6.1s; drop: no close frame received or sent`. The initial
+  Observed report (older build, 2-attempt budget): `Ended sideband_lost · 00:43 … upgrade
+  rejected (404) … recovery attempts used 1/2, gap 6.1s; drop: no close frame received or sent`. The initial
   open had succeeded (the call ran 43 s), so the 404 came from the first reconnect
   with the same call id, URL and freshly fetched headers. Both reference integrations
   reuse that id for every attempt; the documented protocol has no rejoin call or
@@ -265,6 +285,8 @@ Transport timing and credentials:
   during recovery. **Known limitation / not verified**: whether the service ends the
   call when the sideband drops, expires it, or rejects a second sideband for the id
   needs a real-service trace (response body, timing, whether a second WebSocket on a
+  (`sideband_lost` after a recovery is now a 404/410, an auth refusal, the 5-minute cap, or a
+  non-retryable refusal; it no longer means "two attempts failed".)
   live call works). If the call was already torn down by the media-path bug in
   [Root cause](#root-cause-of-the-43-s-drop), the 404 is a consequence, not a separate fault.
   Nexus does not automatically POST a replacement call: that would start a new
@@ -276,8 +298,7 @@ Transport timing and credentials:
   cancellation of in-flight sends, so a send cancelled mid-write cannot start a reconnect.
   `session.close` is attempted (<= 1 s) only on a socket no write was cancelled or failed
   on; otherwise the socket is just closed locally. The server may not see an explicit close.
-- Liveness uses the `websockets` ping (`ping_interval=20`, `ping_timeout=60`), not an
-  application keepalive. Previously, reconnect imposed a 5 s outer deadline on
+- Liveness uses no client ping and no application keepalive (see **Heartbeat** above). Previously, reconnect imposed a 5 s outer deadline on
   the connector despite its 15 s open budget: that cancelled DNS/TCP/TLS/proxy/HTTP
   upgrade work early. The diagnostic is built from `_connect`'s outer
   `asyncio.wait_for` deadline: passing 5 s reproduces exactly

@@ -844,3 +844,17 @@ model. Declaring tools would be a guess against an undocumented endpoint, with a
 double-enqueueing. Known gap: the voice model cannot yet send its own wording; a live spike
 with `[live].log_raw` should test a `tools` array on the session. Details:
 `plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md` "Authorship of delegation text".
+
+## GPT Live: Codex-style sideband (no client pings, unlimited backoff reconnect) (2026-10)
+
+Decision: the sideband sends no client WebSocket pings, retries an early 404 on the initial join
+(100/300/800 ms), and after an unclean loss reconnects with backoff 200 ms doubling to 5 s, the
+counter reset by a 30 s stable connection, until a 404/410, an auth refusal, a clean close, stop or
+the call deadline; our own addition is a 5-minute cap on continuous failure. Sends that never reached
+the socket wait up to 10 s for the reconnect; a write that failed or timed out is still never replayed
+(`live_send_ambiguous`). Reason: this is what OpenAI's Codex does (see
+`plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` section 2: no client pings, `sideband.rs` reconnect loop,
+`methods.rs` early-404 retry), and the old 2-attempt, never-reset budget ended a call on a brief blip.
+Costs: a half-open socket is no longer caught by a pong deadline (only reads, failed writes, server
+close); Codex replays a pending message after reconnect and we deliberately do not, because a replay can
+duplicate a delegation. Tests: `tests/test_live_transport.py`. Not verified against the real service.

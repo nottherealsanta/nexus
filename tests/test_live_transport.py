@@ -70,6 +70,26 @@ async def no_sleep(_):
     return None
 
 
+class Clock:
+    """Fake clock: ``sleep`` advances it (and records the delay), so recovery bounds run instantly."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self):
+        return self.t
+
+    async def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.t += delay
+        await asyncio.sleep(0)
+
+    def transport(self, connector, auth=None, posts=None):
+        return CodexLiveTransport(auth or Auth(), client=signaling_client(ok_handler(posts if posts is not None else [])),
+                                  connector=connector, sleep=self.sleep, clock=self.now)
+
+
 class Sink:
     def __init__(self):
         self.events, self.closed = [], []
@@ -290,7 +310,8 @@ async def test_empty_open_timeout_is_diagnostic_and_bounded(monkeypatch, reconne
         raise TimeoutError()
 
     sink = Sink()
-    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    clock = Clock()
+    transport = clock.transport(connector)
     try:
         await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
         if reconnect:
@@ -300,7 +321,10 @@ async def test_empty_open_timeout_is_diagnostic_and_bounded(monkeypatch, reconne
         reason, error = sink.closed[0]
         assert reason == ("sideband_lost" if reconnect else "startup_failed")
         assert "TimeoutError" in error and "within 0.01s" in error
-        assert attempts == (3 if reconnect else 5)
+        if reconnect:
+            assert attempts > 5 and "gave up after 300s" in error  # bounded by the total cap, not a count
+        else:
+            assert attempts == 5
         assert socket.sent == []  # neither recovery nor failure replays commentary
     finally:
         await transport.close()
@@ -334,13 +358,8 @@ async def test_reconnect_open_has_full_budget_and_retries_without_replay(monkeyp
         await settle(lambda: sink.events)
         sockets[0].inbox.put_nowait(ConnectionResetError("dropped"))
         await settle(lambda: any(isinstance(e, lp.SidebandReconnected) for e in sink.events))
-        assert attempts == 3 and delays == [0.2]
+        assert attempts == 3 and delays == [0.2, 0.4]
         assert not sink.closed and all(not socket.sent for socket in sockets)
-        # The failed attempt consumed the shared lifetime budget as well.
-        sockets[1].inbox.put_nowait(ConnectionResetError("again"))
-        await settle(lambda: sink.closed)
-        assert attempts == 3
-        assert "2/2" in sink.closed[0][1]
     finally:
         await transport.close()
 
@@ -378,18 +397,26 @@ async def test_one_reconnect_after_a_drop_then_continues():
     await transport.close()
 
 
-async def test_repeated_drops_end_the_call_with_sideband_lost():
+async def test_repeated_drops_keep_recovering_until_the_total_bound_then_sideband_lost():
     sockets = iter([FakeSocket([ConnectionResetError("a")]), FakeSocket([ConnectionResetError("b")]),
                     FakeSocket([ConnectionResetError(f"c Bearer {SECRET}")])])
+    opens = 0
 
     async def connector(url, headers):
-        return next(sockets)
+        nonlocal opens
+        opens += 1
+        try:
+            return next(sockets)
+        except StopIteration:
+            raise OSError(f"refused Bearer {SECRET}") from None
 
-    sink = Sink()
-    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    sink, clock = Sink(), Clock()
+    transport = clock.transport(connector)
     await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
     await settle(lambda: sink.closed)
-    assert sink.closed[0][0] == "sideband_lost" and SECRET not in sink.closed[0][1]
+    reason, detail = sink.closed[0]
+    assert reason == "sideband_lost" and SECRET not in detail and "gave up after 300s" in detail
+    assert opens > 3 and clock.t >= 300  # more than the old budget of 2, ended only by the bound
     await transport.close()
 
 
@@ -402,19 +429,21 @@ async def test_drop_diagnostics_include_close_metadata_redacted_and_bounded():
         rcvd = None
         sent = Frame()
 
-    sockets = iter([FakeSocket([Closed("no close frame received or sent")]), FakeSocket([ConnectionResetError("b")]),
-                    FakeSocket([ConnectionResetError("c")])])
+    first = FakeSocket([Closed("no close frame received or sent")])
 
     async def connector(url, headers):
-        return next(sockets)
+        if first.closed is None and not first.sent:
+            first.sent.append("opened")
+            return first
+        raise error_for_status(404, sideband=True)
 
     sink = Sink()
-    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    transport = Clock().transport(connector)
     await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
     await settle(lambda: sink.closed)
     detail = sink.closed[0][1]
-    assert "ConnectionResetError" in detail and "rcvd=none" in detail and "sent=none" in detail
-    assert SECRET not in detail and len(detail) < 600
+    assert "Closed" in detail and "rcvd=none" in detail and "sent=1011" in detail and "used 1" in detail and "gap" in detail
+    assert SECRET not in detail and len(detail) < 800
     await transport.close()
 
 
@@ -441,7 +470,7 @@ async def test_missing_websocket_client_hint_says_reinstall_not_extra_or_cargo(m
     assert "[live]" not in hint and "cargo" not in hint.lower()
 
 
-async def test_default_connector_pings_without_a_pong_deadline(monkeypatch):
+async def test_default_connector_sends_no_client_pings(monkeypatch):
     seen = {}
 
     async def connect(url, **kwargs):
@@ -450,8 +479,8 @@ async def test_default_connector_pings_without_a_pong_deadline(monkeypatch):
 
     monkeypatch.setattr("websockets.asyncio.client.connect", connect)
     await _default_connector("wss://api.openai.com/v1/live/rtc_x", {})
-    assert seen["ping_interval"] == 20
-    assert seen["ping_timeout"] == 60  # finite: a ~40s slow Pong must not close, dead sockets still detected
+    assert seen["ping_interval"] is None  # Codex-like: server pings are answered by the library, ours are off
+    assert "ping_timeout" not in seen
 
 
 class WriteSocket(FakeSocket):
@@ -586,21 +615,16 @@ async def test_failed_or_timed_out_write_is_ambiguous_never_replayed_and_recover
     await transport.close()
 
 
-async def test_ambiguous_drops_share_the_reconnect_budget():
-    sockets = [WriteSocket("raise"), WriteSocket("raise"), WriteSocket("raise")]
+async def test_repeated_ambiguous_drops_keep_reconnecting_and_never_replay():
+    sockets = [WriteSocket("raise"), WriteSocket("raise"), WriteSocket("raise"), WriteSocket("ok")]
     transport, sink = await open_transport(sockets)
-    for index in range(2):
+    for index in range(3):
         with pytest.raises(lp.LiveError) as err:
             await transport.send(msg(f"m{index}"))
         assert err.value.code == "live_send_ambiguous"
         await settle(lambda n=index + 1: sum(isinstance(e, lp.SidebandReconnected) for e in sink.events) == n)
-    with pytest.raises(lp.LiveError):
-        await transport.send(msg("third"))
-    await settle(lambda: sink.closed)  # budget of 2 exhausted: the call ends instead of a 3rd reconnect
-    assert sink.closed[0][0] == "sideband_lost"
-    with pytest.raises(lp.LiveError) as err:
-        await transport.send(msg("after"))
-    assert err.value.code == "live_not_connected"
+    await transport.send(msg("fourth"))  # no per-call attempt limit: the 3rd reconnect also succeeded
+    assert len(sockets[3].sent) == 1 and not any(s.sent for s in sockets[:3]) and sink.closed == []
     await transport.close()
 
 
@@ -784,8 +808,8 @@ async def test_permanent_upgrade_refusal_stops_without_spending_remaining_budget
         raise error_for_status(status, f"missing {SECRET} acct Bearer short-secret", sideband=True)
 
     sink = Sink()
-    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler(posts)),
-                                   connector=connector, sleep=no_sleep)
+    clock = Clock()
+    transport = clock.transport(connector, posts=posts)
     try:
         await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
         if reconnect:
@@ -794,13 +818,16 @@ async def test_permanent_upgrade_refusal_stops_without_spending_remaining_budget
         await settle(lambda: sink.closed)
         reason, error = sink.closed[0]
         assert reason == ("sideband_lost" if reconnect else "startup_failed")
-        assert len(attempts) == (2 if reconnect else 1)
+        # Initial open: only a 404 gets the short early-join retries (3 more attempts); recovery never retries.
+        assert len(attempts) == (2 if reconnect else 4 if status == 404 else 1)
         assert len(posts) == 1  # never silently replace the conversation/call
         assert f"({status})" in error and "sideband WebSocket upgrade rejected" in error
         assert all(secret not in error for secret in (SECRET, "acct", "short-secret"))
         assert not socket.sent
+        if not reconnect and status == 404:
+            assert clock.sleeps == [0.1, 0.3, 0.8]
         if reconnect:
-            assert "1/2" in error
+            assert "attempts used 1," in error
     finally:
         await transport.close()
 
@@ -828,7 +855,7 @@ async def test_reconnect_404_reuses_same_call_url_once_and_never_posts_again():
         assert reason == "sideband_lost"
         assert len(urls) == 2 and urls[0] == urls[1]  # no other URL exists in the protocol
         assert len(posts) == 1  # no replacement call
-        assert "recovery attempts used 1/2" in error and "id was accepted earlier" in error
+        assert "recovery attempts used 1," in error and "id was accepted earlier" in error
         assert "no replacement call created" in error and SECRET not in error
     finally:
         await transport.close()
@@ -877,11 +904,12 @@ async def test_upgrade_refusal_boundary_credentials_never_reach_display(monkeypa
     monkeypatch.setattr("websockets.asyncio.client.connect", connect)
     sink = Sink()
     transport = CodexLiveTransport(BoundaryAuth(), client=signaling_client(ok_handler([])), sleep=no_sleep)
+    # the initial open retries an early 404 (3 more times), then fails
     try:
         await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
         await settle(lambda: sink.closed)
         reason, error = sink.closed[0]
-        assert reason == "startup_failed" and len(attempts) == 1
+        assert reason == "startup_failed" and len(attempts) == 4
         assert "(404)" in error and "not retrying" in error
         assert credential not in error and fragment not in error
         assert len(error) <= 300
@@ -940,6 +968,7 @@ async def test_reconnect_deadlines_and_historical_5s_diagnostic(
         return await real_wait_for(awaitable, timeout * 0.01 if timeout in (5.0, 15.0) else timeout)
 
     monkeypatch.setattr(live_transport, "CONNECT_TIMEOUT_S", open_budget)
+    monkeypatch.setattr(live_transport, "RECOVERY_GIVE_UP_S", 10.0)  # few attempts; real time is scaled
     monkeypatch.setattr(asyncio, "wait_for", accelerated_wait_for)
     sockets = [FakeSocket(), FakeSocket()]
     attempts = 0
@@ -958,12 +987,15 @@ async def test_reconnect_deadlines_and_historical_5s_diagnostic(
             raise
         return sockets[1]
 
+    clock = Clock()
+
     async def backoff(delay):
         delays.append(delay)
+        await clock.sleep(delay)
 
     sink = Sink()
     transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])),
-                                   connector=connector, sleep=backoff)
+                                   connector=connector, sleep=backoff, clock=clock.now)
     try:
         await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
         await settle(lambda: sink.events)
@@ -971,18 +1003,18 @@ async def test_reconnect_deadlines_and_historical_5s_diagnostic(
         sockets[0].inbox.put_nowait(ConnectionResetError("dropped"))
         await settle(lambda: sink.closed or any(isinstance(e, lp.SidebandReconnected) for e in sink.events))
         if recovers:
-            assert not sink.closed and attempts == 2 and cancelled == 0 and delays == []
+            assert not sink.closed and attempts == 2 and cancelled == 0 and delays == [0.2]
             assert deadlines.count(5.0) == 1  # credential refresh only
             assert deadlines.count(15.0) == 1  # open, no nested 5s wait
         else:
-            assert attempts == 3 and cancelled == 2 and delays == [0.2]
+            assert attempts >= 3 and cancelled == attempts - 1 and delays[:2] == [0.2, 0.4]
             reason, error = sink.closed[0]
             assert reason == "sideband_lost"
             assert f"Could not open the sideband connection: TimeoutError: WebSocket open did not complete within {open_budget:g}s" in error
-            assert "2/2" in error
+            assert "gave up after 10s" in error
             if open_budget == 15:
-                assert deadlines.count(5.0) == 2  # one refresh per attempt
-                assert deadlines.count(15.0) == 2
+                assert deadlines.count(5.0) == attempts - 1  # one refresh per attempt
+                assert deadlines.count(15.0) == attempts - 1
         assert all(not socket.sent for socket in sockets)
     finally:
         await transport.close()
@@ -1022,3 +1054,132 @@ async def test_reconnect_credential_timeout_does_not_open_or_retry(monkeypatch):
         assert len(opens) == 1 and socket.sent == []
     finally:
         await transport.close()
+
+
+# -- Codex-like join and recovery ---------------------------------------------
+
+
+async def test_initial_open_retries_an_early_404_then_succeeds():
+    sock, urls = FakeSocket(), []
+
+    async def connector(url, headers):
+        urls.append(url)
+        if len(urls) <= 2:
+            raise error_for_status(404, sideband=True)
+        return sock
+
+    sink, clock, posts = Sink(), Clock(), []
+    transport = clock.transport(connector, posts=posts)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    assert len(urls) == 3 and clock.sleeps == [0.1, 0.3] and sink.closed == [] and len(posts) == 1
+    await transport.close()
+
+
+async def test_recovery_backoff_doubles_from_200ms_and_caps_at_5s_then_410_ends_it():
+    first, opens = FakeSocket(), 0
+
+    async def connector(url, headers):
+        nonlocal opens
+        opens += 1
+        if opens == 1:
+            return first
+        if opens == 10:
+            raise error_for_status(410, sideband=True)
+        raise OSError("network down")
+
+    sink, clock = Sink(), Clock()
+    transport = clock.transport(connector)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    first.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: sink.closed)
+    assert clock.sleeps == [0.2, 0.4, 0.8, 1.6, 3.2, 5.0, 5.0, 5.0, 5.0]
+    reason, error = sink.closed[0]
+    assert reason == "sideband_lost" and "(410)" in error and "no replacement call created" in error
+    await transport.close()
+
+
+async def test_attempt_counter_resets_only_after_a_stable_connection():
+    clock = Clock()
+    sockets = [FakeSocket(), FakeSocket(), FakeSocket(), FakeSocket()]
+    pool = iter(sockets)
+
+    async def connector(url, headers):
+        return next(pool)
+
+    sink = Sink()
+    transport = clock.transport(connector)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+
+    def reconnected(n):
+        return sum(isinstance(e, lp.SidebandReconnected) for e in sink.events) == n
+
+    sockets[0].inbox.put_nowait(ConnectionResetError("d1"))  # short-lived: n = 1
+    await settle(lambda: reconnected(1))
+    sockets[1].inbox.put_nowait(ConnectionResetError("d2"))  # short-lived again: n = 2
+    await settle(lambda: reconnected(2))
+    clock.t += 31  # sockets[2] stays up long enough to count as stable
+    sockets[2].inbox.put_nowait(ConnectionResetError("d3"))  # counter reset: n = 1
+    await settle(lambda: reconnected(3))
+    assert clock.sleeps == [0.2, 0.4, 0.2] and sink.closed == []
+    await transport.close()
+
+
+async def test_recovery_total_bound_is_measured_from_the_start_of_unstable_failure():
+    first, opens = FakeSocket(), 0
+
+    async def connector(url, headers):
+        nonlocal opens
+        opens += 1
+        if opens == 1:
+            return first
+        raise OSError("down")
+
+    sink, clock = Sink(), Clock()
+    transport = clock.transport(connector)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    first.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: sink.closed)
+    assert 300 <= clock.t < 300 + 5.0 + 0.001  # stops at the first check past the bound
+    assert "gave up after 300s of continuous failure" in sink.closed[0][1]
+    await transport.close()
+
+
+async def test_clean_server_close_seen_by_the_reader_is_terminal_without_reconnect():
+    sock, opens = FakeSocket([ConnectionClosedOK("received 1000 (OK)")]), []
+
+    async def connector(url, headers):
+        opens.append(url)
+        return sock
+
+    sink, clock = Sink(), Clock()
+    transport = clock.transport(connector)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.closed)
+    assert sink.closed == [("remote_closed", None)] and len(opens) == 1 and clock.sleeps == []
+    await transport.close()
+
+
+async def test_stop_during_recovery_backoff_ends_without_reporting_a_drop():
+    first, gate = FakeSocket(), asyncio.Event()
+
+    async def connector(url, headers):
+        if not first.sent:
+            first.sent.append("opened")
+            return first
+        raise OSError("down")
+
+    async def sleep(_):  # a real backoff wait that only stop can end
+        await gate.wait()
+
+    sink = Sink()
+    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=sleep)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    first.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: not transport._ready.is_set())
+    await asyncio.wait_for(transport.close(), 5)
+    assert sink.closed == []
