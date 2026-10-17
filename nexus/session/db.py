@@ -75,7 +75,7 @@ def _has_user_input(alias: str = "sessions") -> str:
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
 #: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -159,6 +159,10 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
         "ALTER TABLE sessions ADD COLUMN last_user TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN last_agent TEXT NOT NULL DEFAULT ''",
     ),
+    # v5: timestamp of the latest user prompt (tool results excluded). The
+    # dashboard orders by it, so agent and tool activity, which advance
+    # last_activity, never reshuffle sessions. A Python backfill fills old rows.
+    ("ALTER TABLE sessions ADD COLUMN last_user_at REAL NOT NULL DEFAULT 0",),
 )
 
 #: Every ``kv``/session mutation this module performs is bounded by these; a
@@ -228,6 +232,8 @@ class StateDatabase:
                             conn.execute(statement)
                     if version < 4 <= SCHEMA_VERSION:
                         _backfill_message_snippets(conn)
+                    if version < 5 <= SCHEMA_VERSION:
+                        _backfill_last_user_at(conn)
                     if version < SCHEMA_VERSION:
                         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     conn.execute("COMMIT")
@@ -311,7 +317,9 @@ class StateDatabase:
                 "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
                 f"AND {_has_user_input('s')} "
                 + search
-                + "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?",
+                + "ORDER BY CASE WHEN s.last_user_at > 0 THEN s.last_user_at "
+                "WHEN s.created_at > 0 THEN s.created_at ELSE s.last_activity END DESC, "
+                "s.project_id, s.id LIMIT ?",
                 params,
             )
         ]
@@ -362,6 +370,32 @@ def _backfill_message_snippets(conn: sqlite3.Connection) -> None:
                 "UPDATE sessions SET last_user=?, last_agent=? "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (last_user, last_agent, project_id, namespace, session_id),
+            )
+
+
+def _backfill_last_user_at(conn: sqlite3.Connection) -> None:
+    """Fill ``last_user_at`` from the newest user prompt or queued input. Schema 5 only."""
+    sessions = conn.execute("SELECT project_id, namespace, id FROM sessions").fetchall()
+    for project_id, namespace, session_id in sessions:
+        newest = 0.0
+        rows = conn.execute(
+            "SELECT ts, body FROM records WHERE project_id=? AND namespace=? "
+            "AND session_id=? AND kind IN ('message', 'event') ORDER BY seq ASC",
+            (project_id, namespace, session_id),
+        ).fetchall()
+        for ts, body in rows:
+            try:
+                record = _decode_record(body)
+            except (SessionError, msgspec.DecodeError, msgspec.ValidationError):
+                continue
+            if isinstance(record, MessageRecord) and export_mod.is_user_prompt(record.message):
+                newest = max(newest, ts)
+            elif isinstance(record, EventRecord) and record.event.type == "input.queued":
+                newest = max(newest, ts)
+        if newest:
+            conn.execute(
+                "UPDATE sessions SET last_user_at=? WHERE project_id=? AND namespace=? AND id=?",
+                (newest, project_id, namespace, session_id),
             )
 
 
@@ -503,9 +537,14 @@ class SqliteSessionStore:
         title = ""
         last_user = ""
         last_agent = ""
+        last_user_at = 0.0
         for r in records:
+            if isinstance(r, EventRecord) and r.event.type == "input.queued":
+                last_user_at = max(last_user_at, r.ts)
             if not isinstance(r, MessageRecord):
                 continue
+            if export_mod.is_user_prompt(r.message):
+                last_user_at = max(last_user_at, r.ts)
             if r.message.role == "user" and not title:
                 title = export_mod.derive_title([r.message])
             snippet = export_mod.message_snippet(r.message)
@@ -521,8 +560,8 @@ class SqliteSessionStore:
                     "INSERT INTO sessions"
                     "(project_id, namespace, id, created_at, last_seq, completion_seq, last_activity,"
                     " message_count, title, title_source, parent_id, fork_seq, archived_at, archive_reason,"
-                    " trash_id, trashed_at, trash_expires_at, trash_reason, last_user, last_agent)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " trash_id, trashed_at, trash_expires_at, trash_reason, last_user, last_agent, last_user_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         self.project_id,
                         self.namespace,
@@ -544,6 +583,7 @@ class SqliteSessionStore:
                         trash_reason,
                         last_user,
                         last_agent,
+                        last_user_at,
                     ),
                 )
                 conn.executemany(
@@ -780,7 +820,8 @@ class SqliteSessionStore:
         with self.db.transaction() as conn:
             row = conn.execute(
                 "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
-                "last_user, last_agent FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                "last_user, last_agent, last_user_at FROM sessions "
+                "WHERE project_id=? AND namespace=? AND id=?",
                 (self.project_id, self.namespace, session),
             ).fetchone()
             if row is None:
@@ -794,6 +835,7 @@ class SqliteSessionStore:
                 title_source,
                 last_user,
                 last_agent,
+                last_user_at,
             ) = row
             assigned = requested_seq if requested_seq is not None else last_seq + 1
             payload, encoded = build(assigned)
@@ -822,6 +864,12 @@ class SqliteSessionStore:
             new_title_source = title_source
             new_last_user = last_user
             new_last_agent = last_agent
+            new_last_user_at = last_user_at
+            if (
+                (kind == "message" and isinstance(payload, Message) and export_mod.is_user_prompt(payload))
+                or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
+            ) and ts > 0:
+                new_last_user_at = max(last_user_at, ts)
             if kind == "message" and isinstance(payload, Message) and payload.role == "user":
                 new_message_count += 1
                 snippet = export_mod.message_snippet(payload)
@@ -842,7 +890,7 @@ class SqliteSessionStore:
             new_activity = max(last_activity, ts) if ts > 0 else last_activity
             conn.execute(
                 "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
-                "created_at=?, last_activity=?, last_user=?, last_agent=?, completion_seq=CASE "
+                "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
                 "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (
@@ -854,6 +902,7 @@ class SqliteSessionStore:
                     new_activity,
                     new_last_user,
                     new_last_agent,
+                    new_last_user_at,
                     kind == "event"
                     and isinstance(payload, Event)
                     and payload.type
@@ -897,6 +946,7 @@ class SqliteSessionStore:
                     ),
                     "last_seq": self.next_seq(session) - 1,
                     "message_count": 0,
+                    "last_user_at": 0.0,
                     "completion_seq": 0,
                     "parent_id": fork.get("parent", ""),
                     "fork_seq": fork.get("at_seq", 0),

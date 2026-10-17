@@ -71,6 +71,17 @@ def derive_title(messages: Sequence[Message], *, limit: int = TITLE_LIMIT) -> st
     return ""
 
 
+def is_user_prompt(message: Message) -> bool:
+    """True for something the user sent, not a tool reply.
+
+    Tool results also carry the ``user`` role, so a message made only of
+    ``ToolResult`` blocks (or nothing) is agent activity, not a prompt.
+    """
+    return message.role == "user" and any(
+        not isinstance(block, ToolResult) for block in message.content
+    )
+
+
 def message_snippet(message: Message, *, limit: int = SNIPPET_LIMIT) -> str:
     """Collapsed display text from top-level ``Text`` blocks, or ``""``.
 

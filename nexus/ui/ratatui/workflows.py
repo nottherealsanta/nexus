@@ -1045,6 +1045,7 @@ def _repo_of(entry) -> str:
 
 def _session_row(summary, entry, project, day, tree, current, seen, now):
     from ...host_support.session_preview import clean_preview_text
+    from ...ui_support.session_groups import _order_time
     from ...ui_support.session_status import relative_time, session_status, session_subline
     from ...ui_support.text import escape_controls
     if summary.id not in seen or summary.id == current:
@@ -1055,15 +1056,16 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
     status = session_status(summary, seen, current)
     head = f"{project} › {tree}" if tree else project
     group = f"{head} · {day}" if project else day
-    age = relative_time(getattr(summary, "last_activity", 0.0), now).removesuffix(" ago")
+    ordered = _order_time(summary)
+    age = relative_time(ordered, now).removesuffix(" ago")
     return {"id": summary.id, "title": escape_controls(summary.title or "New Session"),
             "workspace": entry.workspace, "state": summary.state, "group": escape_controls(group),
             "project": escape_controls(project), "day": escape_controls(day),
             "repo": _repo_of(entry), "worktree": escape_controls(tree),
             "status": status, "sub": escape_controls(session_subline(summary, status, now, compact=True)),
             "age": escape_controls(age),
-            "updated": float(getattr(summary, "last_activity", 0.0) or 0.0),
-            "bucket": _time_bucket(getattr(summary, "last_activity", 0.0), now),
+            "updated": float(ordered),
+            "bucket": _time_bucket(ordered, now),
             "last_user": clean_preview_text(getattr(entry, "last_user", "") or "", 240),
             "last_agent": clean_preview_text(getattr(entry, "last_agent", "") or "", 240),
             "active": summary.id == current}

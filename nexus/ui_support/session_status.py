@@ -51,7 +51,13 @@ def session_subline(summary: Any, status: str, now: float | None = None, *, comp
     if words is None:
         count = _int(getattr(summary, "message_count", 0))
         words = f"{count} message{'' if count == 1 else 's'}" if count else "no messages"
-    age = relative_time(getattr(summary, "last_activity", 0.0), now)
+    # Same key the dashboard orders by, so the age agrees with the row's position.
+    stamp = (
+        getattr(summary, "last_user_at", 0.0)
+        or getattr(summary, "created_at", 0.0)
+        or getattr(summary, "last_activity", 0.0)
+    )
+    age = relative_time(stamp, now)
     if compact:
         words = str(_int(getattr(summary, "message_count", 0)))
         age = age.removesuffix(" ago").replace("just now", "now")

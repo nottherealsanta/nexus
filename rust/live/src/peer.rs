@@ -16,6 +16,7 @@ use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -123,6 +124,13 @@ impl Peer {
                 }
                 _ => {}
             }
+            Box::pin(async {})
+        }));
+
+        // State names are useful when diagnosing negotiation failures; avoid logging
+        // SDP, candidates, addresses, credentials, or other call-specific data.
+        pc.on_ice_connection_state_change(Box::new(move |s: RTCIceConnectionState| {
+            eprintln!("nexus-live: ICE connection state {s}");
             Box::pin(async {})
         }));
 

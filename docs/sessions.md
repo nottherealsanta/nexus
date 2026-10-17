@@ -52,6 +52,13 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
   sessions dashboard. They are the latest top-level text of a user prompt and an
   assistant reply (whitespace collapsed, 240 characters). Thinking blocks and
   tool results do not replace them. They are not fields of `SessionSummary`.
+- `last_user_at` (schema 5) is the timestamp of the newest user prompt: a
+  `user` message with at least one non-`ToolResult` block (tool results also carry
+  the `user` role), or an `input.queued` event. It is the dashboard's ordering key
+  and a field of `SessionSummary`, with `SessionSummary.order_time` =
+  `last_user_at`, else `created_at`, else `last_activity`. `last_activity` keeps its
+  meaning (newest record of any kind, used by auto-archive and the archive list),
+  so assistant text, tool results and events never reorder the dashboard.
 - `records.body` is exactly `msgspec.json.encode(record)`: the bytes a JSONL
   export line carries, so the reducer, export, fork and replay read the same data.
 - **Durability:** WAL, `synchronous=FULL`, `busy_timeout=5000`, every write in
@@ -61,13 +68,14 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 - `namespace = "main"` for user sessions, `"agents"` for subagent child sessions
   (their own real, replayable logs; logical id `<parent>/sub/<n>`, stored under a
   sanitised id with a hash suffix).
-- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 4); the record
+- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 5); the record
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
 `StateDatabase.project_sessions` supplies a bounded cross-project sidebar index
 by joining session metadata to recorded project roots; it excludes archive,
-trash and child namespaces and orders by newest activity. Its optional `limit`
+trash and child namespaces and orders by newest user prompt (`last_user_at`, else
+`created_at`, else `last_activity`; ties by project then session id). Its optional `limit`
 (default 1,000) bounds SQL results, and `query` (default empty, at most 256
 characters) filters title, session ID, saved user/agent snippets and workspace
 root before applying the limit. Search is case-insensitive literal substring
@@ -141,7 +149,7 @@ every `session.snapshot_every` (20) completed turns. `records`, `events`,
 | --- | --- |
 | `open(id)` | reuse the live handle; create/recover as asked |
 | `fork(id, at_seq)` | branch into a new log (`parent_id`, `fork_seq`) |
-| `list` / `summary` | `SessionSummary` (state `idle`/`running`/`awaiting_permission`/`awaiting_input`, viewers, title, activity) in one indexed query |
+| `list` / `summary` | `SessionSummary` (state `idle`/`running`/`awaiting_permission`/`awaiting_input`, viewers, title, activity, `last_user_at`) in one indexed query; `list` orders by `order_time` (newest user prompt first), ties by id |
 | `archive` / `unarchive` / `archive_stale` | hide without touching the log; the sweep archives up to 500 idle, unopened sessions older than `sessions.auto_archive_days` |
 | `delete` / `restore` | move to trash in one transaction, never cancelling a turn; `purge_expired` removes rows past retention (default 7 days) |
 | `export(id, format=)` | a consistent prefix as `json`, `markdown` or `jsonl` |
@@ -197,7 +205,9 @@ command. The dashboard has no preview pane and no preview command
 `SessionPreview` remains distinct and unchanged.
 
 The Ratatui sessions page is a full-width list grouped by status (Needs input,
-Working, Idle, Done). Each row shows its age and a one-line tail from the schema 4
+Working, Idle, Done). Within a status group rows are ordered by newest **user** prompt (`order_time`), and
+the age and day bucket use the same time, so agent output never shuffles the list.
+Each row shows its age and a one-line tail from the schema 4
 snippets, refreshed on the list poll. The composer under the list is the normal
 composer. Enter sends to the selected session. `+ New Agent` starts a session, Open
 Previous opens the archived list (`/resume`), and Worktree opens the worktree list.

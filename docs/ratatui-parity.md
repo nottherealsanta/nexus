@@ -739,10 +739,14 @@ failing only when the host has no preview. Rows are menu lines, so there are no 
 token column yet.
 
 The tab row follows `SessionTabs`: sessions toggle, one tab per open session
-(status glyph, title up to 24 columns, `×`; the current tab on the panel colour),
-`+`, details toggle. Overflow scrolls the leftmost tabs out so the current one
-stays visible. Drawing and mouse hit-testing both use `render::tab_cells`; the
-toggles and `×` are clickable. The current tab reads "working" while its turn runs.
+(status glyph, title up to 24 columns, `×`; the current tab bold on the panel colour,
+the others muted), `+`, details toggle. The top tabs are restored and clickable: the
+tab body switches session, `×` closes (hides) the tab, `+` starts a new session.
+Overflow uses a narrow active window: the active tab is always kept, neighbours are
+admitted while they fit at full compact width, and only the active tab is squeezed
+(and loses its `×` below four columns) on very narrow terminals. Drawing and mouse
+hit-testing both use `render::tab_cells`, so targets never overlap; the toggles are
+clickable too. The current tab reads "working" while its turn runs.
 
 ## UI polish verification (2026-10-02)
 

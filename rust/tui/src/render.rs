@@ -3257,7 +3257,10 @@ mod tests {
                 assert!(screen.contains("Allow once"), "{at}");
                 assert!(screen.contains("Build"), "{at}: the runtime row");
                 if width >= 170 {
-                    assert!(screen.contains("Nexus · s1"), "{at}: top-bar title");
+                    assert!(
+                        screen.contains("Fix the parser"),
+                        "{at}: active session tab"
+                    );
                     assert!(!screen.contains('‹'), "{at}: no session arrows");
                     assert!(screen.contains('☰'), "{at}: dashboard button");
                 }

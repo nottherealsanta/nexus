@@ -110,6 +110,14 @@ class SessionSummary(msgspec.Struct, frozen=True):
     created_at: float = 0.0
     parent_id: str = ""
     fork_seq: int = 0
+    #: Time of the newest user prompt (0.0 if none). Unlike ``last_activity`` it
+    #: ignores agent and tool records, so it is the dashboard's ordering key.
+    last_user_at: float = 0.0
+
+    @property
+    def order_time(self) -> float:
+        """Dashboard order key: newest user prompt, else creation, else activity."""
+        return self.last_user_at or self.created_at or self.last_activity
 
     def to_dict(self) -> dict[str, Any]:
         return msgspec.structs.asdict(self)
@@ -515,7 +523,7 @@ class SessionManager:
     # -- list / summary ----------------------------------------------------
 
     def list(self, *, include_archived: bool = False) -> list[SessionSummary]:
-        """Summarize every session, newest activity first.
+        """Summarize every session, newest user prompt first (``order_time``).
 
         One indexed query: the denormalized ``sessions`` row columns (title,
         activity, message count, parent/fork) are kept current inside every
@@ -523,7 +531,7 @@ class SessionManager:
         """
         rows = self.store.list_rows(include_archived=include_archived)
         summaries = [self._summary_from_row(row) for row in rows]
-        summaries.sort(key=lambda item: (-item.last_activity, item.id))
+        summaries.sort(key=lambda item: (-item.order_time, item.id))
         return summaries
 
     def summary(self, session_id: str) -> SessionSummary:
@@ -548,6 +556,7 @@ class SessionManager:
             created_at=row["created_at"] or 0.0,
             parent_id=row["parent_id"] or "",
             fork_seq=row["fork_seq"] or 0,
+            last_user_at=row.get("last_user_at") or 0.0,
         )
 
     # -- export ------------------------------------------------------------

@@ -67,6 +67,9 @@ pub(super) fn control_spans(
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
+    Session(usize),
+    Close(usize),
+    New,
     /// `☰`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
     /// `◫`: toggles the details sidebar.
@@ -80,6 +83,9 @@ pub struct TabCell {
 /// How a top-bar segment is painted.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Seg {
+    Session(usize),
+    Close(usize),
+    New,
     Title,
     Branch,
     Path,
@@ -90,11 +96,6 @@ enum Seg {
     Details,
     Gap,
 }
-/// Grok's in-session top bar, laid out once for drawing and hit-testing. Left:
-/// `Title │ ~/path branch worktree` (path text colour, branch and worktree quiet; the
-/// worktree only inside a linked worktree). Right: update notice, dashboard `☰` and details `◫`,
-/// separated by `│`; the notice drops out before the title is squeezed below 12 columns.
-/// Returns (start column, text, how to paint it).
 /// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
 /// (`prototype._display_breadcrumb`); `path › branch` is accepted too. Git refs cannot
 /// contain `:`, so the last one separates the branch.
@@ -127,10 +128,22 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     if width < size(&right) + 14 {
         right = build(false);
     }
+    // At tiny widths keep room for the active tab and new-session control.
+    // Drop padding, then controls rather than overlap the left-hand content.
+    if !s.tabs.is_empty() && width < size(&right) + 12 {
+        right.retain(|(_, seg)| *seg != Seg::Gap);
+    }
+    while size(&right) > width.saturating_sub(if s.tabs.is_empty() { 0 } else { 8 }) {
+        if right.is_empty() {
+            break;
+        }
+        right.remove(0);
+    }
     let right_width = size(&right);
-    // Left: title, then `~/path branch worktree`.
+    // Left: a window of session tabs, then the workspace breadcrumb.
     let (path, branch) = partition(&s.breadcrumb);
-    let room = width.saturating_sub(right_width + 2 + 1);
+    let margin = if width < 12 { 0 } else { 2 };
+    let room = width.saturating_sub(right_width + margin + usize::from(width >= 12));
     let mut left: Vec<(String, Seg)> = Vec::new();
     let place = |text: &str, seg: Seg, left: &mut Vec<(String, Seg)>, room: &mut usize| {
         if text.is_empty() || *room == 0 {
@@ -146,14 +159,77 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     } else {
         s.title.as_str()
     };
-    // The title keeps at most 40 columns, and leaves space for the path when there is any.
-    let title_cap = if path.is_empty() { 40 } else { room.min(40) };
-    place(
-        &crate::transcript::truncate(title, title_cap.min(room)),
-        Seg::Title,
-        &mut left,
-        &mut room,
-    );
+    if s.tabs.is_empty() {
+        place(
+            &crate::transcript::truncate(title, 40.min(room)),
+            Seg::Title,
+            &mut left,
+            &mut room,
+        );
+    } else {
+        // Keep the active tab in the window. Other tabs retain their full compact
+        // width; only the active tab is squeezed when the terminal is very narrow.
+        let active = s.tabs.iter().position(|tab| tab.active).unwrap_or(0);
+        let labels: Vec<String> = s
+            .tabs
+            .iter()
+            .map(|tab| {
+                let glyph = match tab.status.as_str() {
+                    "working" => "⠋",
+                    "input" => "●",
+                    "done" => "✓",
+                    _ => "·",
+                };
+                let title = if tab.title.is_empty() {
+                    "New session"
+                } else {
+                    &tab.title
+                };
+                format!(" {glyph} {}", crate::transcript::truncate(title, 24))
+            })
+            .collect();
+        // Reserve a short breadcrumb when possible, before admitting neighbours.
+        let breadcrumb = if path.is_empty() {
+            0
+        } else {
+            (path.width() + 3).min(24)
+        };
+        let new_width = if room >= 4 { 3 } else { 0 };
+        let budget = room
+            .saturating_sub(new_width + breadcrumb)
+            .max(room.saturating_sub(new_width).min(12));
+        let tab_width = |i: usize| labels[i].width() + 3;
+        let mut first = active;
+        let mut last = active + 1;
+        let mut used = tab_width(active).min(budget);
+        while first > 0 && used + tab_width(first - 1) <= budget {
+            first -= 1;
+            used += tab_width(first);
+        }
+        while last < labels.len() && used + tab_width(last) <= budget {
+            used += tab_width(last);
+            last += 1;
+        }
+        for (i, label) in labels.iter().enumerate().take(last).skip(first) {
+            let available = tab_width(i).min(budget);
+            if available == 0 {
+                continue;
+            }
+            let close_width = if available >= 4 { 3 } else { 0 };
+            place(
+                &crate::transcript::truncate(label, available - close_width),
+                Seg::Session(i),
+                &mut left,
+                &mut room,
+            );
+            if close_width > 0 {
+                place(" × ", Seg::Close(i), &mut left, &mut room);
+            }
+        }
+    }
+    if !s.tabs.is_empty() {
+        place(" + ", Seg::New, &mut left, &mut room);
+    }
     if !path.is_empty() && room > 8 {
         place(sep, Seg::Sep, &mut left, &mut room);
         place(path, Seg::Path, &mut left, &mut room);
@@ -167,7 +243,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         }
     }
     let mut out = Vec::new();
-    let mut at = 2usize.min(width);
+    let mut at = margin;
     for (text, seg) in left {
         let w = text.width();
         out.push((at, text, seg));
@@ -181,7 +257,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     }
     out
 }
-/// Padded clickable cells of the top bar (`☰` and `◫`). On a sub-agent page the
+/// Clickable session bodies, close buttons, new-session and sidebar controls. On a sub-agent page the
 /// only cell is the details toggle.
 pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     if !s.agent_page.is_empty() {
@@ -194,6 +270,9 @@ pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     top_layout(s, width)
         .into_iter()
         .filter_map(|(start, text, seg)| match seg {
+            Seg::Session(i) => Some((TabHit::Session(i), start, start + text.width())),
+            Seg::Close(i) => Some((TabHit::Close(i), start, start + text.width())),
+            Seg::New => Some((TabHit::New, start, start + text.width())),
             Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
             Seg::Details => Some((TabHit::Details, start, start + text.width())),
             _ => None,
@@ -248,6 +327,17 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         }
         at = start + text.width();
         let style = match seg {
+            Seg::Session(i) | Seg::Close(i) => {
+                if s.tabs[i].active {
+                    background
+                        .bg(p.panel)
+                        .fg(p.text)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    background.fg(p.muted)
+                }
+            }
+            Seg::New => background.fg(p.muted),
             Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
             Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap => background.fg(p.quiet),
             Seg::Path => background.fg(p.text),
@@ -489,6 +579,7 @@ mod chrome_tests {
         (0..count)
             .map(|i| crate::bridge::Session {
                 id: format!("s{i}"),
+                title: format!("Session {i}"),
                 workspace: "/w".into(),
                 active: i == active,
                 ..Default::default()
@@ -520,7 +611,7 @@ mod chrome_tests {
         };
         let text = bar_text(&s, 100);
         assert!(
-            text.contains("Fix the parser │ ~/repo main wt-fix"),
+            text.contains("Session 1") && text.contains("~/repo main wt-fix"),
             "{text}"
         );
         assert!(
@@ -532,8 +623,11 @@ mod chrome_tests {
         assert!(!text.contains('⧠') && !text.contains('◨'), "{text}");
         let cells = tab_cells(&s, 100);
         let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
-        assert_eq!(kinds, [TabHit::Dashboard, TabHit::Details]);
-        let dash = &cells[0];
+        assert!(kinds.contains(&TabHit::Session(1)));
+        assert!(kinds.contains(&TabHit::Close(1)));
+        assert!(kinds.contains(&TabHit::New));
+        let dash = cells.iter().find(|c| c.kind == TabHit::Dashboard).unwrap();
+        let details = cells.iter().find(|c| c.kind == TabHit::Details).unwrap();
         assert_eq!(
             &text
                 .chars()
@@ -543,13 +637,49 @@ mod chrome_tests {
             " ☰ "
         );
         assert!(text.ends_with(" ☰   ◫   "), "{text}");
-        assert_eq!(cells[1].start, dash.end + 1);
-        assert_eq!(cells[1].end, 98);
+        assert_eq!(details.start, dash.end + 1);
+        assert_eq!(details.end, 98);
         let plain = Snapshot {
             worktree: String::new(),
             ..s
         };
-        assert!(bar_text(&plain, 100).contains("Fix the parser │ ~/repo main "));
+        assert!(bar_text(&plain, 100).contains("~/repo main "));
+    }
+
+    #[test]
+    fn session_tabs_keep_active_and_nonoverlapping_targets_at_every_width() {
+        let mut s = Snapshot {
+            tabs: open_tabs(8, 2),
+            breadcrumb: "~/repo:main".into(),
+            ..Default::default()
+        };
+        s.tabs[2].title = "界面 👩‍💻 active session with a long title".into();
+        s.tabs[2].status = "input".into();
+        for width in 1..180 {
+            let layout = top_layout(&s, width);
+            let mut end = 0;
+            for (start, text, _) in &layout {
+                assert!(*start >= end, "overlap at {width}: {layout:?}");
+                end = start + text.width();
+                assert!(end <= width, "overflow at {width}: {layout:?}");
+            }
+            let cells = tab_cells(&s, width);
+            assert!(
+                cells.iter().any(|c| c.kind == TabHit::Session(2)),
+                "{width}: {layout:?}"
+            );
+            if width >= 24 {
+                assert!(cells.iter().any(|c| c.kind == TabHit::Close(2)));
+                assert!(cells.iter().any(|c| c.kind == TabHit::New));
+                assert!(cells.iter().any(|c| c.kind == TabHit::Dashboard));
+                assert!(cells.iter().any(|c| c.kind == TabHit::Details));
+            }
+        }
+        let wide = bar_text(&s, 180);
+        assert!(
+            wide.contains('●') && wide.contains('×') && wide.contains('+'),
+            "{wide}"
+        );
     }
 
     #[test]

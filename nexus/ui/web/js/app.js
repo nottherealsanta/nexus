@@ -181,6 +181,7 @@ function markSeen(id,seq){if(!id)return;const map=seenMap();if((map[id]||0)>=seq
 function sessionStatus(s){if(s.state==='running')return 'working';if(s.state==='awaiting_permission'||s.state==='awaiting_input')return 'input';if(s.id===state.session&&state.view?.phase==='running')return 'working';const seen=seenMap()[s.id];if(s.id!==state.session&&seen!==undefined&&s.last_seq>seen)return 'done';return 'idle';}
 const STATUS_LABEL={working:'Working',input:'Needs input',done:'Done',idle:'',archived:'Archived'};
 const SESSION_WORDS={working:'working now',input:'needs input',done:'finished',archived:'archived'};
+function sessionOrder(s){return s.last_user_at||s.created_at||s.last_activity||0;}
 function sessionSubline(s,status){const count=Number(s.message_count)||0,words=SESSION_WORDS[status]||(count?`${count} message${count===1?'':'s'}`:'no messages'),age=relativeTime(s.last_activity);return age?`${words} · ${age}`:words;}
 function sessionDay(ts){if(!ts)return 'Earlier';const day=new Date(Number(ts)*1000),today=new Date();return day.toDateString()===today.toDateString()?'Today':day.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'}).replaceAll(',','');}
 function renderSessions(){
@@ -188,13 +189,13 @@ function renderSessions(){
   for(const s of state.sessions)if(seen[s.id]===undefined||s.id===state.session&&seen[s.id]<s.last_seq){seen[s.id]=s.last_seq;dirty=true;}
   if(dirty)try{localStorage.setItem(SEEN_KEY(),JSON.stringify(seen));}catch{}
   const foreign=(state.projectSessions||[]).filter(row=>row.workspace!==state.workspace).map(row=>({...row.session,workspace:row.workspace,project_id:row.project_id}));
-  const allRows=[...state.sessions.map(s=>({...s,workspace:state.workspace})),...foreign].filter(s=>!query||`${s.title} ${s.id} ${s.workspace}`.toLowerCase().includes(query)).sort((a,b)=>(b.last_activity||0)-(a.last_activity||0));
+  const allRows=[...state.sessions.map(s=>({...s,workspace:state.workspace})),...foreign].filter(s=>!query||`${s.title} ${s.id} ${s.workspace}`.toLowerCase().includes(query)).sort((a,b)=>sessionOrder(b)-sessionOrder(a));
   const projects=new Map();for(const s of allRows){if(!projects.has(s.workspace))projects.set(s.workspace,[]);projects.get(s.workspace).push(s);}const rows=[...projects.values()].flat();
   const archivedRows=state.archived.filter(s=>!query||`${s.title} ${s.id}`.toLowerCase().includes(query));
   let lastDay=null,lastProject=null;const projectNames=[...projects.keys()].map(path=>path.split('/').filter(Boolean).at(-1)||path);
   for(const [s,archived,target] of [...rows.map(s=>[s,false,frag]),...archivedRows.map(s=>[s,true,archivedFrag])]){
     const foreign=s.workspace&&s.workspace!==state.workspace,active=!foreign&&s.id===state.session;
-    if(!archived){if(s.workspace!==lastProject){const name=s.workspace.split('/').filter(Boolean).at(-1)||s.workspace,heading=el('h3','session-project',projectNames.filter(n=>n===name).length>1?s.workspace:name);heading.title=s.workspace;target.append(heading);lastProject=s.workspace;lastDay=null;}const day=sessionDay(s.last_activity);if(day!==lastDay){target.append(el('h4','session-day',day));lastDay=day;}}
+    if(!archived){if(s.workspace!==lastProject){const name=s.workspace.split('/').filter(Boolean).at(-1)||s.workspace,heading=el('h3','session-project',projectNames.filter(n=>n===name).length>1?s.workspace:name);heading.title=s.workspace;target.append(heading);lastProject=s.workspace;lastDay=null;}const day=sessionDay(sessionOrder(s));if(day!==lastDay){target.append(el('h4','session-day',day));lastDay=day;}}
     const status=archived?'archived':foreign?'idle':sessionStatus(s),title=s.title||'Untitled session',item=el('div','session-item');item.setAttribute('role','listitem');item.dataset.status=status;
     const b=el('button',`session-row ${active?'active':''} ${s.state==='running'?'running':''}`);b.type='button';b.setAttribute('aria-current',active?'page':'false');b.title=`${title} · ${s.workspace||state.workspace} · ${s.id}`;
     const glyph=el('span','session-status');glyph.dataset.status=status;glyph.dataset.glyph=status==='input'?'●':status==='done'?'✓':status==='archived'?'◇':'·';glyph.setAttribute('aria-hidden','true');

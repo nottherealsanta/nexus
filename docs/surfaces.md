@@ -51,7 +51,10 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
   sidebar (`Ctrl+L`). Tabs hold the current session, any opened in this window,
   and any session that is working, needs input or finished unseen; `×` only
   hides a tab (the session keeps running) and a closed tab returns when its
-  status changes. Closing the current tab opens its neighbour. Row 2,
+  status changes. Closing the current tab opens its neighbour. In the Rust TUI
+  the tabs are clickable (body switches, `×` closes, `+` is new); the active tab
+  is bold on the panel colour, others are muted, and on narrow terminals only a
+  window around the active tab is shown. Row 2,
   **breadcrumb**: the workspace directory (`~/…`) `›` linked worktree `›` `⎇`
   branch (from the Doctor report's `git`), and the status in words on the right
   (`Idle`, `Working`, `Needs input`); the glyph is on the tab. Toggles are

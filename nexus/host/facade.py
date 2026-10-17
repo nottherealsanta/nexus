@@ -1547,6 +1547,7 @@ class HostFacade:
                         last_seq=row["last_seq"], completion_seq=row["completion_seq"],
                         message_count=row["message_count"],
                         created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
+                        last_user_at=row["last_user_at"],
                     )
                 repo, worktree = trees[row["workspace"]]
                 sessions.append(p.ProjectSession(

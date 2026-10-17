@@ -2586,7 +2586,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     column >= cell.start && column < cell.end.max(cell.start + 1)
                                 });
                                 match hit.map(|cell| cell.kind) {
-                                    // `[Sessions]` is `/sessions`.
+                                    Some(render::TabHit::Session(index)) => {
+                                        if let Some(tab) = s.tabs.get(index) {
+                                            send(
+                                                json!({"type":"session_open", "workspace":tab.workspace, "text":tab.id}),
+                                            )?;
+                                        }
+                                    }
+                                    Some(render::TabHit::Close(index)) => {
+                                        if let Some(tab) = s.tabs.get(index) {
+                                            send(
+                                                json!({"type":"tab_close", "workspace":tab.workspace, "text":tab.id}),
+                                            )?;
+                                        }
+                                    }
+                                    Some(render::TabHit::New) => action("command", "/new")?,
+                                    // `☰` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
                                         action("command", "/sessions")?
                                     }

@@ -3,7 +3,11 @@
 Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper), M4
 (the native Ratatui client), and M5 (GPUI desktop and headless `nexus live`) are
 implemented and tested offline. Nothing has been exercised against the real service,
-a real microphone or a real call: not verified.** The desktop client draws the call
+a real microphone or a real call: not verified. The cause of a `peer_failed` disconnect cannot be identified from the screenshot alone;
+the helper now logs ICE state names only, without sensitive data. This logging has not
+been verified in a real call. `rust/live/src/peer.rs` uses a different WebRTC API from
+reference `codex-rs/voice-host/src/transport.rs` (`APIBuilder` versus
+`PeerConnectionBuilder`/`SettingEngine`); do not infer equivalent runtime behavior.** The desktop client draws the call
 bar and card and routes `Ctrl+X D` (see [desktop.md](desktop.md#gpt-live-voice-calls));
 a native-harness render check passed, but screenshot review has not run. Plan:
 `plans/in-progress/GPT_LIVE_PLAN.md`; protocol observations and citations:
