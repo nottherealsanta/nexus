@@ -405,7 +405,8 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
     assert len(agent_spawns) == 2
     nested_spawn = next(data for data in agent_spawns if data["depth"] == 2)
     assert nested_spawn["worktree"] is None
-    assert not (set(nested_spawn["tools"]) & {"write", "edit", "multiedit", "bash"})
+    # Read-only is prompt guidance only: the nested explore child inherits write tools.
+    assert {"write", "edit"} <= set(nested_spawn["tools"])
     assert (checkout / "child-output.txt").read_text(encoding="utf-8") == "from child"
     assert not (parent / "parent-write.txt").exists()
     assert (parent / "tracked.txt").read_text(encoding="utf-8") == "parent base\n"
@@ -986,7 +987,7 @@ async def test_research_parent_cannot_write_through_task(tmp_path):
     await runtime.aclose()
 
 
-async def test_advisor_and_legacy_read_only_names_have_no_shell_or_write_path(tmp_path):
+async def test_advisor_and_legacy_read_only_names_keep_write_tools_but_no_extra_authority(tmp_path):
     for role in ("advisor", "explore", "planner"):
         provider = ScriptedProvider(
             tool_response(("t1", "Task", {"prompt": "x", "subagent_type": role})),
@@ -1002,8 +1003,8 @@ async def test_advisor_and_legacy_read_only_names_have_no_shell_or_write_path(tm
         assert spawned, role
         tools = set(spawned[-1].data["tools"])
         assert spawned[-1].data["type"] == "advisor", role
-        assert not (tools & {"write", "edit", "multiedit", "bash", "apply_patch"}), role
-        assert tools <= {"read", "glob", "grep", "todowrite", "question", "skill", "subagent", "webfetch", "websearch"}, role
+        # Read-only is prompt guidance only: the advisor inherits write/edit/patch.
+        assert {"write", "edit", "apply_patch"} <= tools, role
         await runtime.aclose()
 
 

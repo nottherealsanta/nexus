@@ -391,6 +391,29 @@ impl Page {
         }
         find_in(&self.blocks, id)
     }
+    /// For an effort picker's focus id, the focus id of the list item it belongs to.
+    pub fn effort_owner(&self, id: &str) -> Option<String> {
+        fn go(blocks: &[Block], id: &str) -> Option<String> {
+            blocks.iter().find_map(|b| match b {
+                Block::Ordered(o) => o
+                    .controls
+                    .iter()
+                    .take(o.items.len())
+                    .position(|r| row_id(&r.id) == id)
+                    .map(|k| format!("{}:{k}", ord_id(&o.id))),
+                Block::Section(s) => go(&s.blocks, id),
+                _ => None,
+            })
+        }
+        go(&self.blocks, id)
+    }
+    /// For a list item's focus id, the focus id of its effort picker, if it has one.
+    pub fn effort_of(&self, id: &str) -> Option<String> {
+        match self.find(id)? {
+            Target::OrderedItem(o, i) => o.controls.get(i).map(|r| row_id(&r.id)),
+            _ => None,
+        }
+    }
     /// The first tabs block (for Ctrl+PgUp/PgDn).
     pub fn first_tabs(&self) -> Option<&Tabs> {
         fn go(blocks: &[Block]) -> Option<&Tabs> {

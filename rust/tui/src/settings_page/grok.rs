@@ -615,15 +615,13 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
         f.w.saturating_sub(3),
     );
     f.y += 1;
-    // Effort pickers register after the list (focus order is unchanged) and draw at their row.
+    // Effort pickers draw at their row and are focus stops only while shown (the selected or
+    // hovered row); Right on the item reaches one, Left returns.
     for (i, row) in o.controls.iter().take(o.items.len()).enumerate() {
         let id = row_id(&row.id);
-        let Some(x) = eff_at[i] else {
-            ui.focus.register(&id);
-            continue;
-        };
+        // A hidden picker is not a focus stop: Up/Down would otherwise land on it unseen.
+        let Some(x) = eff_at[i] else { continue };
         let Control::Select { value, .. } = &row.control else {
-            ui.focus.register(&id);
             continue;
         };
         let y = ys[i];

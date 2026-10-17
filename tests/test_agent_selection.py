@@ -39,7 +39,7 @@ async def _runtime(path, *, agent="general") -> Runtime:
 
 
 def _write_plan_agent(path) -> None:
-    """A custom root agent named ``plan``; the name keeps it structurally read-only."""
+    """A custom root agent named ``plan``; read-only is prompt guidance, not enforcement."""
     agents = path / ".nexus" / "agents"
     agents.mkdir(parents=True, exist_ok=True)
     (agents / "plan.md").write_text(
@@ -108,7 +108,7 @@ async def test_cli_agent_command_parsing_and_completion():
     assert "Ctrl+S submits" not in commands.help_text()
 
 
-async def test_selected_agent_applies_next_turn_and_plan_is_read_only(tmp_path):
+async def test_selected_agent_applies_next_turn_and_plan_is_not_enforced_read_only(tmp_path):
     provider = ScriptedProvider(text_response("planned"))
     _write_plan_agent(tmp_path)
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
@@ -122,11 +122,9 @@ async def test_selected_agent_applies_next_turn_and_plan_is_read_only(tmp_path):
     started = next(event for event in handle.events if event.type == "turn.started")
     assert started.data["agent"]["name"] == "plan"
     assert started.data["agent"]["source"] == "session"
-    assert started.data["agent"]["read_only"] is True
-    assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
-        "read", "glob", "grep", "subagent", "todowrite", "question", "skill"
-    }
-    assert not ({"write", "edit", "multiedit", "bash", "websearch"} & set(started.data["agent"]["tools"]))
+    assert started.data["agent"]["read_only"] is False
+    assert {"read", "write", "edit"} <= set(started.data["agent"]["tools"])
+    assert {"read", "write", "edit"} <= ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY)
     assert "read-only planning agent" in provider.requests[0].system
     await runtime.aclose()
 
@@ -242,7 +240,7 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     await runtime.aclose()
 
 
-async def test_read_only_explore_cannot_widen_declared_tools(tmp_path):
+async def test_explore_keeps_its_declared_tools_within_the_parent_ceiling(tmp_path):
     from nexus.model.providers.scripted import tool_response
 
     (tmp_path / ".nexus" / "agents").mkdir(parents=True)
@@ -260,8 +258,10 @@ async def test_read_only_explore_cannot_widen_declared_tools(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("explore-ceiling").send("delegate")]
     spawned = next(event for event in runtime.session("explore-ceiling").events if event.type == "agent.spawned")
-    assert set(spawned.data["tools"]) == {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch"}
-    assert {"bash", "write"} <= set(spawned.data["dropped_tools"])
+    # Read-only is prompt guidance only: declared bash/write are kept.
+    assert set(spawned.data["tools"]) == {
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "bash", "write"}
+    assert not ({"bash", "write"} & set(spawned.data["dropped_tools"]))
     assert "websearch" in ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY)
     await runtime.aclose()
 
@@ -286,7 +286,7 @@ async def test_child_and_grandchild_catalogs_inherit_parent_authority(tmp_path):
     runtime = Runtime(tmp_path, config=_config("plan"), providers={"scripted": provider})
     [event async for event in runtime.session("tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "skill"}
+    expected = {"read", "glob", "grep", "edit", "write", "subagent", "todowrite", "question", "skill"}
     catalogs = [
         ({tool.name for tool in request.tools} - CHILD_ONLY)
         for request in provider.requests
@@ -300,7 +300,7 @@ async def test_child_and_grandchild_catalogs_inherit_parent_authority(tmp_path):
     await runtime.aclose()
 
 
-async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path):
+async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
     from nexus.model.providers.scripted import tool_response
 
     agents = tmp_path / ".nexus" / "agents"
@@ -320,8 +320,8 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
         text_response("root report"),
     )
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
-    # The root catalog contains the full coding authority; the read-only role's
-    # own declarations still cannot add bash/write.
+    # The root catalog contains the full coding authority; the role's own
+    # declarations are kept (nothing is stripped) but never add to it.
     [event async for event in runtime.session("readonly-ceiling").send("delegate")]
 
     spawned = next(
@@ -329,9 +329,10 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
         if event.type == "agent.spawned"
     )
     assert set(spawned.data["tools"]) == {
-        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill",
+        "bash", "write",
     }
-    assert not ({"bash", "write", "edit", "multiedit"} & set(spawned.data["tools"]))
+    assert not ({"edit", "multiedit"} & set(spawned.data["tools"]))
     # A skill activation's declared tools are intersected with this iteration's
     # catalog; declarations by a role never create a catalog entry.
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
@@ -370,7 +371,10 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("skill-ceiling").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
+    expected = {
+        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
+    }
     assert len(provider.requests) == 4
     assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == expected
     assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == expected

@@ -74,6 +74,9 @@ verified.** Daemon, helper and call flow: [live.md](live.md).
   dialog on first use, helper spawn, `LiveStart`, `/live stop|pause|resume|mute|new|status|revoke`.
   `Ctrl+X P` (the `LivePause` action) toggles pause (`Ctrl+X F` is Fork); the call bar shows a `PAUSED mm:ss` badge and a resume button.
   There is no Cmd alias: the leader chords carry no Cmd convention in `keymap.rs`.
+- Call bar layout (visual only; the transcript and wire are untouched): identity on the left
+  (dot, bold `Live`, quiet `model · phase · mm:ss`), the mic/speaker meters next, and the
+  controls (PAUSED/MUTED badge, resume, stop) right-aligned; the bar wraps on narrow windows.
 - Wire: the call bar is the snapshot field `live` (`active`, `state`, `phase`, `model`,
   `muted`, `started`, `in`, `out`, `elsewhere`; empty object when no call is open). It has
   its own topic `live` in `nexus/ui/desktop/wire.py` because Python refreshes it about

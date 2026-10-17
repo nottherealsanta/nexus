@@ -157,6 +157,35 @@ def _change_rows(tool) -> tuple[list[list], int, int, list[str]]:
     return [], 0, 0, []
 
 
+def _question_detail(tool, status) -> str:
+    """Compact Question card body: the prompt, its options, and the chosen answer.
+
+    ``●`` marks the option whose label equals the recorded answer, ``○`` the others; an
+    answer that matches no option (free text) is shown as ``✎ answer``. The answer is
+    the label the tool recorded, so a typed reply equal to an option's label cannot be
+    told from choosing it. Empty when the call carries no ``question`` string, so the
+    caller falls back to the labelled details.
+    """
+    data = tool.input if isinstance(tool.input, dict) else {}
+    prompt = data.get("question")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return ""
+    raw = data.get("options")
+    options = [" ".join(item.split()) for item in (raw if isinstance(raw, list) else [])
+               if isinstance(item, str) and item.strip()]
+    answer = ""
+    if status == "completed":
+        recorded = (tool.metrics or {}).get("answer") if isinstance(tool.metrics, dict) else None
+        answer = " ".join(str(recorded if recorded is not None else tool.display or "").split())
+    lines = [" ".join(prompt.split())]
+    lines += [f"  {'●' if answer and option == answer else '○'} {option}" for option in options]
+    if answer and answer not in options:
+        lines.append(f"  ✎ {answer}")
+    elif not answer and status in {"requested", "running"}:
+        lines.append("  … awaiting answer")
+    return "\n".join(lines)
+
+
 def _change_block(tool, shell, local_ui, body):
     """One standalone row per file change or question: ``Edit a.py  +2 −1``.
 
@@ -172,10 +201,14 @@ def _change_block(tool, shell, local_ui, body):
     suffix = ""
     if status == "failed":
         suffix = tool_summary(tool)
-    elif tool.name.casefold() == "question" and status == "completed":
+    is_question = tool.name.casefold() == "question"
+    compact = _question_detail(tool, status) if is_question else ""
+    if is_question and status == "completed":
         suffix = tool_summary(tool)
     op_id, out_id = tool.call_id + ":change", tool.call_id + ":change-output"
     detail = "" if rows else body
+    if compact and not (shell and shell.verbose):  # /verbose and `i` keep the raw labelled details
+        detail = compact
     default_open = tool.name.casefold() == "question"
     block = {"id": tool.call_id, "kind": "change", "status": status, "title": tool.name.title(),
              "text": heading, "heading": suffix, "added": added, "removed": removed,
@@ -217,6 +250,34 @@ def _safe_blocks(blocks):
         safe["rev"] = _revision(safe)
         result.append(safe)
     return result
+
+
+def _agent_card_model(agent) -> tuple[str, str]:
+    """A sub-agent card's model text (with effort) and compact tier letter (`L`/`M`/`H`, `?` unknown)."""
+    from ...ui_support.timeline import _literal, agent_actual_model
+    if agent is None:
+        return "model pending", "?"
+    tier = (agent.tier or agent.requested_tier or "").strip()
+    letter = tier[:1].upper() if tier else "?"
+    actual = agent_actual_model(agent) or agent.selected_model
+    if actual:
+        model = _literal(actual, 120).rsplit("/", 1)[-1]
+    else:
+        model = "model pending" if agent.status in {"spawned", "running"} else "model unavailable"
+    effort = next((t.reasoning_effort for t in agent.body.turns if t.reasoning_effort), None)
+    return (f"{model} ({effort})" if effort else model), letter
+
+
+def _agent_card_metrics(agent) -> str:
+    """Stable `N tool calls · 1.2K tokens`; usage the worker never reported reads `tokens unknown`."""
+    from ...ui_support.context import _compact_tokens
+    calls = sum(len(turn.tools) for turn in agent.body.turns) if agent is not None else 0
+    parts = [f"{calls} tool call{'s' if calls != 1 else ''}"]
+    if agent is None or agent.usage_unknown:
+        parts.append("tokens unknown")
+    else:
+        parts.append(f"{_compact_tokens(agent.usage.total_tokens)} tokens")
+    return " · ".join(parts)
 
 
 def _fold_summary(turn) -> str:
@@ -302,6 +363,10 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                      "number": 0 if numbered else number, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
+            if numbered:
+                # A consumed steer lands after the turn's own prompt (reduce appends it; the
+                # view keeps no per-message mode), so any later user card is a steer.
+                block["status"] = "steer"  # drawn as "steer" beside the card
             numbered = True
             if (message.origin or {}).get("kind") == "live":
                 block["status"] = "live"  # drawn as "via voice" beside the turn number
@@ -367,17 +432,13 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
         # `i` on the row opens the full labelled details (tool_details), which the relevant-only view omits.
         inspect = {"kind": "tool_details", "id": tool.call_id}
         if tool.name.casefold() in {"task", "subagent"}:
-            from ...ui_support.timeline import _agent_metrics, _task_child_activity, _task_children, _task_header, _task_metrics
+            from ...ui_support.timeline import _task_children, _task_header
             child = next(iter(_task_children(tool, agents or {})), None)
-            from ...ui_support.timeline import agent_model_label
             head, running = _task_header(tool, child, 0, with_model=False)
             name, _, phrase = head.partition(" ")[2].partition(" · ")
             phrase = " ".join(phrase.split())[:64]
-            title = f"{name} Subagent — {phrase} · {agent_model_label(child)}"
-            if child is not None:
-                effort = next((t.reasoning_effort for t in child.body.turns if t.reasoning_effort), None)
-                if effort:
-                    title += f" ({effort})"
+            title = f"{name} Subagent — {phrase}"
+            model, tier = _agent_card_model(child)
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
             # Never the tool details: a click opens the subagent page, so only a failure shows inline.
             detail = f"Error: {child.error}" if child is not None and child.error else ""
@@ -388,8 +449,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 detail = "\n".join(part for part in (task_note(child.body.external), detail) if part)
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
-                     "text": (_task_child_activity(child) if child else "Starting…") if running else "",
-                     "metrics": _agent_metrics(child) if child else _task_metrics(tool, None, False),
+                     "model": model, "tier": tier, "metrics": _agent_card_metrics(child),
                      "color": _agent_color(shell, child.type or child.id) if child else "", "operation": operation,
                      "detail": detail, "inspect_operation": inspect}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))

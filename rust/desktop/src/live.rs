@@ -40,20 +40,41 @@ pub fn now_epoch() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// `Live · model · phase · mm:ss[ · in session]`
-pub fn headline(live: &LiveBar, now: f64) -> String {
-    let mut head = String::from("Live");
+/// `model · phase · mm:ss[ · in session]`: the quiet detail after the bold `Live` title.
+pub fn detail(live: &LiveBar, now: f64) -> String {
+    let mut parts = Vec::new();
     if !live.model.is_empty() {
-        head.push_str(&format!(" · {}", live.model));
+        parts.push(live.model.clone());
     }
     if !live.phase.is_empty() {
-        head.push_str(&format!(" · {}", live.phase));
+        parts.push(live.phase.clone());
     }
-    head.push_str(&format!(" · {}", clock(elapsed(live, now))));
+    parts.push(clock(elapsed(live, now)));
     if !live.elsewhere.is_empty() {
-        head.push_str(&format!(" · in {}", live.elsewhere));
+        parts.push(format!("in {}", live.elsewhere));
     }
-    head
+    parts.join(" · ")
+}
+
+/// `Live · model · phase · mm:ss[ · in session]`
+pub fn headline(live: &LiveBar, now: f64) -> String {
+    format!("Live · {}", detail(live, now))
+}
+
+/// `mic ▰▰▱▱▱▱ spk ▱▱▱▱▱▱`
+pub fn meters(live: &LiveBar) -> String {
+    format!("mic {} spk {}", meter(live.level_in), meter(live.level_out))
+}
+
+/// The badge text for a paused or muted call; paused wins (it silences the voice too).
+pub fn badge(live: &LiveBar) -> Option<String> {
+    if live.paused {
+        Some(format!("PAUSED {}", clock(live.pause_left.max(0.0).ceil() as u64)))
+    } else if live.muted {
+        Some("MUTED".to_string())
+    } else {
+        None
+    }
 }
 
 /// One parsed card row: (tone, label, text).
@@ -87,47 +108,55 @@ impl Desktop {
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_3()
+            .gap_x_3()
+            .gap_y_1()
             .text_size(px(crate::theme::size::SMALL))
-            .child(div().text_color(if pulse { t.red } else { t.text_tertiary }).child("●"))
+            // Identity: dot, bold title, then the quiet model/phase/clock detail.
             .child(
                 div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(t.text)
-                    .child(headline(live, now_epoch())),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_color(if pulse { t.red } else { t.text_tertiary }).child("●"))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.text).child("Live"))
+                    .child(div().text_color(t.muted).child(detail(live, now_epoch()))),
             )
             .child(
                 div()
                     .font_family(theme::code_font())
                     .text_color(t.muted)
-                    .child(format!("mic {} spk {}", meter(live.level_in), meter(live.level_out))),
+                    .child(meters(live)),
             )
-            .when(live.muted || live.paused, |d| {
-                d.child(
-                    div()
-                        .px_2()
-                        .rounded(px(crate::theme::radius::CHIP))
-                        .bg(t.amber)
-                        .text_color(t.background)
-                        .font_weight(FontWeight::BOLD)
-                        .child(if live.paused {
-                            format!("PAUSED {}", clock(live.pause_left.max(0.0).ceil() as u64))
-                        } else {
-                            "MUTED".to_string()
-                        }),
-                )
-            })
-            .when(live.paused, |d| {
-                d.child(
-                    self.button("live-resume", "Ctrl+X P resume", json!({"type":"command","text":"/live resume"}), cx)
-                        .px_2()
-                        .text_color(t.text_tertiary),
-                )
-            })
+            // Controls: pushed to the right edge, badge first, then the buttons.
             .child(
-                self.button("live-stop", "/live stop", json!({"type":"command","text":"/live stop"}), cx)
-                    .px_2()
-                    .text_color(t.text_tertiary),
+                div()
+                    .ml_auto()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when_some(badge(live), |d, text| {
+                        d.child(
+                            div()
+                                .px_2()
+                                .rounded(px(crate::theme::radius::CHIP))
+                                .bg(t.amber)
+                                .text_color(t.background)
+                                .font_weight(FontWeight::BOLD)
+                                .child(text),
+                        )
+                    })
+                    .when(live.paused, |d| {
+                        d.child(
+                            self.button("live-resume", "Ctrl+X P resume", json!({"type":"command","text":"/live resume"}), cx)
+                                .px_2()
+                                .text_color(t.text_tertiary),
+                        )
+                    })
+                    .child(
+                        self.button("live-stop", "/live stop", json!({"type":"command","text":"/live stop"}), cx)
+                            .px_2()
+                            .text_color(t.text_tertiary),
+                    ),
             )
             .into_any_element()
     }
@@ -255,6 +284,27 @@ mod tests {
         assert_eq!(headline(&live, 1161.0), "Live · gpt-live-1-codex · listening · 02:41");
         live.elsewhere = "work".into();
         assert!(headline(&live, 1161.0).ends_with("· in work"));
+    }
+    #[test]
+    fn detail_follows_the_bold_title_and_headline_is_unchanged() {
+        let mut live = bar();
+        assert_eq!(detail(&live, 1161.0), "gpt-live-1-codex · listening · 02:41");
+        live.model.clear();
+        live.phase.clear();
+        assert_eq!(detail(&live, 1161.0), "02:41");
+        assert_eq!(headline(&live, 1161.0), "Live · 02:41");
+    }
+    #[test]
+    fn meters_and_badge_for_controls() {
+        let mut live = bar();
+        assert_eq!(meters(&live).matches("▱▱▱▱▱▱").count(), 1);
+        assert!(meters(&live).starts_with("mic ") && meters(&live).contains(" spk "));
+        assert_eq!(badge(&live), None);
+        live.muted = true;
+        assert_eq!(badge(&live).as_deref(), Some("MUTED"));
+        live.paused = true;
+        live.pause_left = 95.0;
+        assert_eq!(badge(&live).as_deref(), Some("PAUSED 01:35"), "paused wins over muted");
     }
     #[test]
     fn card_rows_split_tone_label_text_and_keep_tabs_in_text() {

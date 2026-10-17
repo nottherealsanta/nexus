@@ -75,9 +75,13 @@ fn with(op: &Value, fields: &[(&str, Value)]) -> Value {
     out
 }
 
-fn move_focus(st: &mut PageState, delta: i64) {
+fn move_focus(page: &Page, st: &mut PageState, delta: i64) {
     if st.order.is_empty() {
         return;
+    }
+    // Vertical movement starts from the item an effort picker belongs to.
+    if let Some(owner) = page.effort_owner(&st.focus) {
+        st.focus = owner;
     }
     let at = st.order.iter().position(|i| *i == st.focus).map_or(
         if delta >= 0 {
@@ -105,6 +109,16 @@ fn num(v: f64) -> Value {
 
 /// Apply a Left/Right (`dir` = ∓1) to the focused composite control.
 fn adjust(page: &Page, st: &mut PageState, dir: i64) -> Act {
+    // An effort picker sits on its list item: Left returns to the item, Right on the item enters it.
+    if dir < 0 {
+        if let Some(owner) = page.effort_owner(&st.focus) {
+            st.focus = owner;
+            return Act::Done;
+        }
+    } else if let Some(effort) = page.effort_of(&st.focus) {
+        st.focus = effort;
+        return Act::Done;
+    }
     match page.find(&st.focus) {
         Some(Target::Row(r)) => match &r.control {
             Control::Segmented {
@@ -325,11 +339,11 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
             reorder(page, st, if key.code == KeyCode::Up { -1 } else { 1 })
         }
         KeyCode::Up => {
-            move_focus(st, -1);
+            move_focus(page, st, -1);
             Act::Done
         }
         KeyCode::Down => {
-            move_focus(st, 1);
+            move_focus(page, st, 1);
             Act::Done
         }
         KeyCode::Home => {
@@ -347,11 +361,11 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
         KeyCode::PageUp if ctrl => tab_step(page, -1),
         KeyCode::PageDown if ctrl => tab_step(page, 1),
         KeyCode::PageUp => {
-            move_focus(st, -8);
+            move_focus(page, st, -8);
             Act::Done
         }
         KeyCode::PageDown => {
-            move_focus(st, 8);
+            move_focus(page, st, 8);
             Act::Done
         }
         KeyCode::Tab => {

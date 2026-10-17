@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from ..events import Event
+from ..events import SHUTDOWN_CANCEL_REASON, Event
 from .fold import accumulate, finalize_text, finalize_thinking
 from .model import (
     AgentView,
@@ -413,7 +413,9 @@ def _on_turn_terminal(
     if phase != "completed":
         changes["tools"] = [
             replace(tool, status="failed", is_error=True,
-                    error=tool.error or _as_str(data.get("error")) or _as_str(data.get("reason")) or "Turn ended before this tool finished")
+                    error=tool.error or _as_str(data.get("error"))
+                    or (None if _as_str(data.get("reason")) == SHUTDOWN_CANCEL_REASON else _as_str(data.get("reason")))
+                    or "Turn ended before this tool finished")
             if tool.status in {"requested", "running"} else tool
             for tool in turn.tools
         ]
@@ -425,7 +427,10 @@ def _on_turn_terminal(
     elif phase == "failed":
         changes["error"] = _as_str(data.get("error"))
     else:
-        changes["error"] = _as_str(data.get("reason"))
+        reason = _as_str(data.get("reason"))
+        # A shutdown cancel is expected, not an error: keep the cancelled phase
+        # but leave no error text for views to surface. Other reasons stay.
+        changes["error"] = None if reason == SHUTDOWN_CANCEL_REASON else reason
     turn = replace(turn, **changes)
     state = _put(state, index, turn)
     return _expire_pending(state, set(turn.permission_ids))

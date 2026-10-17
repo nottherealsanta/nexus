@@ -24,6 +24,12 @@ persists them, and a pure reducer turns them into the tree every UI renders.
 Groups live in `EVENT_GROUPS`; `EVENT_TYPES` is their union plus legacy/compat
 names and `agent.selected`.
 
+A `turn.cancelled` whose `reason` is `nexus.events.SHUTDOWN_CANCEL_REASON`
+(`supervisor closing`, emitted when the supervisor cancels every turn at
+shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show no
+`Error:` row for the expected shutdown. Other cancel reasons and every
+`turn.failed` keep their error text.
+
 | Group | Types |
 | --- | --- |
 | session | `session.opened` `session.closed` `session.forked` |

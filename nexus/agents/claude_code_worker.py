@@ -9,13 +9,13 @@ Contract (plans/in-progress/CLAUDE_CODE_ZMX_PLAN.md sections 3-5):
 * Authority is an explicit policy (:class:`WorkerPolicy`) resolved from the
   ``[providers.<name>]`` section before launch. ``bypassPermissions``,
   ``--dangerously-skip-permissions`` are never passed; ``auto`` is passed only
-  when the operator explicitly opts in (and never for a read-only role). Nexus never
+  when the operator explicitly opts in. Nexus never
   writes keystrokes into the terminal other than cursor-position replies; trust,
   authentication, onboarding and permission prompts end the assignment with a
   ``needs_attention`` result that tells the user what to run themselves.
-* A role that Nexus treats as read-only only ever receives Claude's own
-  read-only tool set (``--tools Read,Grep,Glob``). A configuration that would
-  widen it is refused, never silently applied.
+* ``resolve_policy(read_only=True)`` restricts Claude to its own read-only tool
+  set (``--tools Read,Grep,Glob``) and refuses a wider configuration. Nexus
+  callers pass ``read_only=False``: read-only is prompt guidance only.
 * Readback is structured: SessionStart/Stop/StopFailure command hooks (an
   isolated ``python -I`` script, no Nexus imports) write atomic result files, and
   the Claude JSONL transcript is read incrementally by byte offset for assistant

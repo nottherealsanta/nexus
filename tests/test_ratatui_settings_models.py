@@ -75,6 +75,9 @@ async def test_models_is_one_page_with_all_subagent_tiers(shell):
     assert len(low["controls"]) == len(low["items"])
     assert low["controls"][0]["control"]["operation"]["key"] == "effort"
     assert not any(block.get("id", "").startswith("effort:") for block in page["blocks"])
+    notes = [b["text"] for b in page["blocks"] if b.get("t") == "note"]
+    assert not any("Your own list" in text for text in notes), "a user's own list needs no note"
+    assert any("built-in choice" in text for text in notes) and any("sorted into this tier by price" in text for text in notes)
 
 
 @pytest.mark.asyncio

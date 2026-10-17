@@ -34,6 +34,11 @@ class Event(msgspec.Struct, frozen=True):
 
 # Grouped catalogue from the plan. UIs must tolerate unknown types; these
 # constants exist so emitters and tests do not scatter string literals.
+#: ``turn.cancelled`` reason the supervisor uses when it cancels every turn at
+#: shutdown. The cancel is expected, not a failure, so views do not render it as
+#: an error.
+SHUTDOWN_CANCEL_REASON = "supervisor closing"
+
 SESSION_EVENTS = ("session.opened", "session.closed", "session.forked")
 TURN_EVENTS = (
     "turn.started",

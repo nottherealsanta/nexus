@@ -59,7 +59,9 @@ enqueued.
 4. Final spoken turns (`turn.done`) become `live.transcript`; partial text becomes
    a coalesced caption (`live.transcript.delta`).
 5. `delegation.created` goes to the bridge (below). Everything the daemon sends to
-   the voice model is recorded as `live.appended`, text exactly as sent.
+   the voice model is recorded as `live.appended`, text exactly as sent. Spoken turns
+   are bounded at 200,000 characters with a visible omission notice so truncation is
+   never silent; this is a resource cap, not an unlimited request guarantee.
 6. The call ends by `LiveStop`, helper exit, sideband loss, the voice service
    closing it, the deadline, no attached view for 30 s, the session being deleted,
    or daemon shutdown. Every path converges on one guarded `_finish` that sends
@@ -290,15 +292,31 @@ plain-language summary.
   add one. Replay reproduces it, because it is the durable `input.queued` text.
 - A trailing `You:` line equal to the request is dropped (it would repeat it). Speech still in
   progress when the delegation lands is included and is not queued again when it is finalised.
-- Bounds, as in Codex: the request keeps its first 4 KiB, the transcript keeps its last
-  4 KiB; clipping is announced inside the text (`[… N more characters omitted]`,
-  `[… N earlier characters omitted]`). The manager keeps at most 64 turns between delegations.
+- Bounds are resource limits, not a request-length policy; a spoken request is never silently
+  cut. Codex's 4 KiB bounds were too small for long requests, so Nexus uses: the request is
+  delivered whole up to 200,000 characters (`MAX_DELEGATION_CHARS`, inside the 1 MiB sideband
+  frame limit) and 1 MiB in the composed message; the background transcript keeps its last
+  32 KiB. Each spoken turn handed over is bounded at 200,000 characters. Any clipping is
+  announced inside the text (`[… N more characters omitted]`, `[… N earlier characters
+  omitted]`, `[… earlier speech omitted]`), and a clipped request also records a durable
+  `live.error`. A sideband frame over 1 MiB cannot be read at all; that records a `live.error`
+  ("too large to read") instead of being dropped silently. When there is no delegation text,
+  the transcript is the request and gets the request bound. The manager keeps at most 64
+  turns between delegations. The caption/`live.transcript` rows keep their own 16,000-character
+  display bound and set `truncated`; that does not affect what the agent receives.
+- The 200,000-character cap is an assumed default, not a verified service limit. A request
+  beyond it keeps its first 200,000 characters (the tail is what is cut) and ends with
+  `[… N more characters omitted]` with the exact count, so the model knows the request is
+  incomplete and can ask the user to repeat the rest. Exactly 200,000 characters passes whole.
+  The bound is deliberately kept: removing it would let one utterance exceed the sideband frame
+  and memory limits.
 - An empty or whitespace delegation uses the transcript as the request (heading "Voice request
   (taken from the spoken conversation)"). Only if both are empty is the request rejected.
 - A fresh session is titled from the request alone, not from the wrapper.
 - `live.delegated` keeps `text` (the delegation text, or the transcript when it was empty),
   `heard`, `source`, `verbatim`, and adds `transcript` (the transcript lines as sent),
-  `transcript_omitted` and `input_omitted` (characters clipped) and `from_transcript`.
+  `transcript_omitted` and `input_omitted` (characters clipped; `input_omitted` is only the
+  bridge's 1 MiB bound, a manager clip is in the text) and `from_transcript`.
 - Whether the service's `delegation.created` content is ever the voice model's own wording is
   **not verified**. The bundled instructions no longer ask for a rewrite; they tell the model
   the service passes the user's words and the recent conversation on.

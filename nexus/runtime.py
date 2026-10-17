@@ -2014,15 +2014,7 @@ class _ChildRuntime:
         reference = str(getattr(spec, "model", None) or "")
         in_tiers = reference in getattr(getattr(runtime, "_tiers", None), "order", ())
         if in_tiers:
-            from .agents.claude_code_worker import nexus_child_is_read_only
-
-            selection = (getattr(spec, "metadata", None) or {}).get("selection")
-            flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
-            route = runtime._external_tier_route(
-                reference, claude=not sdk_backend,
-                read_only=nexus_child_is_read_only(
-                    tuple(getattr(spec, "tools", ()) or ()), flagged=flagged),
-            )
+            route = runtime._external_tier_route(reference, claude=not sdk_backend)
             reference = route or reference
             in_tiers = route is None
         head, sep, tail = reference.partition("/")
@@ -2129,14 +2121,12 @@ class _ChildRuntime:
     ) -> _ExternalAssignment:
         """Validate and resolve the external authority before anything starts.
 
-        Refusals (token/cost budgets, a configuration wider than a read-only
-        role, a bad worker section) raise :class:`ConfigError`, which the runner
+        Refusals (token/cost budgets, a bad worker section) raise :class:`ConfigError`, which the runner
         reports as a child that failed to start.
         """
         from .agents.claude_code_worker import (
             ClaudeCodeWorker,
             WorkerConfig,
-            nexus_child_is_read_only,
             resolve_policy,
         )
 
@@ -2157,10 +2147,9 @@ class _ChildRuntime:
                 f"refusing to run {getattr(spec, 'agent', 'this child')!r} on Claude Code without an "
                 f"exact model: name {provider_name}/<model id> (for example "
                 f"{provider_name}/claude-haiku-4-5) on the role, tier or Task call")
-        selection = (getattr(spec, "metadata", None) or {}).get("selection")
-        flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
-        read_only = nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged)
-        policy = resolve_policy(WorkerConfig.from_section(section), read_only=read_only)
+        # Read-only is prompt guidance only (docs/decisions.md): no child runs
+        # as a restricted read-only Claude Code worker.
+        policy = resolve_policy(WorkerConfig.from_section(section), read_only=False)
         worker = ClaudeCodeWorker(WorkerConfig.from_section(section), environ=runtime._environ)
         return _ExternalAssignment(
             worker=worker, policy=policy, provider=provider_name, model=model
@@ -2173,7 +2162,7 @@ class _ChildRuntime:
         """Validate and resolve an Antigravity (``agy``) child before anything starts.
 
         agy's own tools are not mediated by Nexus, so every restriction Nexus
-        cannot enforce (budgets, read-only, worktree scope, unsupported worker
+        cannot enforce (budgets, worktree scope, unsupported worker
         fields) is refused here rather than silently dropped.
         """
         from .agents.antigravity_worker import (
@@ -2182,7 +2171,6 @@ class _ChildRuntime:
             WorkerConfig,
             resolve_policy,
         )
-        from .agents.claude_code_worker import nexus_child_is_read_only
 
         agent = getattr(spec, "agent", "this child")
         if getattr(spec, "worktree_scope", False) or getattr(spec, "worktree", None):
@@ -2199,13 +2187,7 @@ class _ChildRuntime:
                 f"refusing to run {agent!r} on Antigravity without an exact model: name "
                 f"{provider_name}/<model id from `agy models`> on the role, tier or Task call")
         Runtime._check_antigravity_model(runtime, provider_name, model)
-        selection = (getattr(spec, "metadata", None) or {}).get("selection")
-        flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
-        if nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged):
-            raise ConfigError(
-                f"antigravity children cannot be read-only ({agent!r} is): agy's own tools cannot "
-                "be restricted to read-only, so use a Nexus provider for read-only work. "
-                "Auto mode does not enforce a read-only tool restriction.")
+        # Read-only is prompt guidance only (docs/decisions.md): never refused here.
         config = WorkerConfig.from_section(section)
         policy = resolve_policy(config, read_only=False)
         worker = AntigravityWorker(config, environ=runtime._environ)
@@ -5804,9 +5786,7 @@ class Runtime:
         """The ``claude-code/<model>`` or ``antigravity/<model>`` entry a tier would run on, else ``None``."""
         return Runtime._external_tier_route(self, tier)
 
-    def _external_tier_route(
-        self, tier: str, *, claude: bool = True, read_only: bool = False
-    ) -> str | None:
+    def _external_tier_route(self, tier: str, *, claude: bool = True) -> str | None:
         """The external-worker entry a tier would run on, else ``None``.
 
         Children only: a tier's candidates are walked in order, and the first one
@@ -5816,15 +5796,9 @@ class Runtime:
         reaches a worker. The root's router is untouched: it cannot stream either.
         """
         sections = getattr(getattr(self._config, "v2", None), "providers", None) or {}
-        skipped_antigravity = False
         for reference in self._router.tier_candidates(tier):
             head = reference.split("/", 1)[0]
             kind = Runtime._adapter_kind(head, sections.get(head))
-            # agy's own tools cannot enforce a read-only child. Keep walking
-            # the ordered tier routes rather than selecting a doomed worker.
-            if read_only and kind == ADAPTER_ANTIGRAVITY:
-                skipped_antigravity = True
-                continue
             if kind == ADAPTER_ANTIGRAVITY or (
                 claude and kind == ADAPTER_CLAUDE_CODE
                 and getattr(getattr(getattr(self._config, "v2", None), "models", None),
@@ -5836,15 +5810,6 @@ class Runtime:
             info = self._router._registry_lookup(reference)
             if info is not None and getattr(info, "provider", None) in self._router._providers:
                 return None
-        if skipped_antigravity:
-            raise ConfigError(
-                f"Tier {tier!r} has no runnable route for a read-only child: "
-                "Antigravity cannot enforce read-only tools. Add a Nexus-controlled "
-                f"provider/model to models.tiers.{tier} (Settings → Models), "
-                "or explicitly select a Nexus-controlled provider/model (not Antigravity) "
-                "for this task. Auto mode does not "
-                "enforce a read-only tool restriction."
-            )
         return None
 
     def _build_child_runtime(self, spec: Any) -> _ChildRuntime:

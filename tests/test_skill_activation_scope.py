@@ -259,7 +259,7 @@ async def test_bundled_skill_tool_candidates_are_not_auto_registered(tmp_path):
     await runtime.aclose()
 
 
-async def test_bundle_declaration_cannot_widen_read_only_child_catalog(tmp_path):
+async def test_bundle_declaration_cannot_widen_explore_child_catalog(tmp_path):
     agents = tmp_path / ".nexus" / "agents"
     agents.mkdir(parents=True)
     (agents / "explore.md").write_text(
@@ -283,12 +283,12 @@ async def test_bundle_declaration_cannot_widen_read_only_child_catalog(tmp_path)
     await drain(session)
 
     child_catalog = {
-        "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"
+        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
     assert len(provider.requests) == 4
     assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == child_catalog
     assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == child_catalog
-    assert "bash" not in ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY)
     await runtime.aclose()
 
 

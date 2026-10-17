@@ -119,9 +119,13 @@ lower layer therefore survives an upper layer that merely omits the option.
 ## Quick Gemini read-only workers
 
 The currently supported agy CLI has no enforceable read-only sandbox or external
-tool allowlist. `--mode plan` is an execution mode, **not** a filesystem security
-boundary; inherited MCP servers/plugins can still have authority. Consequently
-Nexus refuses a read-only Antigravity worker before launching agy. Quick Gemini
-read-only requests must use a backend with enforceable read-only support instead,
-or remain refused. Settings inheritance does not grant permission to bypass
-read-only, restricted mode, tool restrictions or an explicit sandbox request.
+tool-restriction contract: `--mode plan` is not verified to prevent writes.
+
+Nexus does not enforce read-only on any provider (user decision 2026-10-17):
+"read-only" is system-prompt guidance only. A read-only role such as `advisor`, a
+read-only tool list, or a `tools: []` Task call plans and runs on Antigravity like
+any other child, with agy's own tools, and a tier whose first model is Antigravity
+is never skipped for it. Earlier versions refused these with "antigravity
+children cannot be read-only"; that refusal no longer exists. Settings
+inheritance still does not grant permission to bypass restricted mode, tool
+restrictions or an explicit sandbox request, which remain refused.

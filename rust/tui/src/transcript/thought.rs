@@ -1,7 +1,7 @@
 //! Reasoning rows (GROK_BUILD_TUI_PLAN §4.2).
 //!
-//! Running: `⠋ Thinking… (2.4s)` — always that label, never the thought's own title — with a
-//! live tail of the last [`TAIL_ROWS`] wrapped rows behind a heavy `┃` rail. Finished:
+//! Running: `▾ Thinking… (2.4s)` — always that label, never the thought's own title, and
+//! never animated — with a tail of the last [`TAIL_ROWS`] wrapped rows behind a heavy `┃` rail. Finished:
 //! `▸ Thought for 3.2s`; opened, the whole trace sits behind a dim `│` rail. No amber, no
 //! italic title, and no rail before the header.
 use super::{line, look, wrap, Rows};
@@ -70,12 +70,15 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
     let op: &Option<Value> = &b.operation;
     let glyphs = look::glyphs();
     if b.status == "running" {
-        let live = look::live(Style::default().fg(p.text).add_modifier(Modifier::ITALIC));
+        // No spinner or shimmer: thinking is a static, quiet row.
         let mut head = vec![
             Span::raw("    "),
-            Span::styled(look::SLOT, Style::default().fg(p.text)),
+            Span::styled(glyphs.open, Style::default().fg(p.quiet)),
             Span::raw(" "),
-            Span::styled("Thinking…", live),
+            Span::styled(
+                "Thinking…",
+                Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
+            ),
         ];
         if let Some(elapsed) = look::live_elapsed(b.started_ms, now_ms) {
             head.push(Span::styled(
@@ -106,10 +109,7 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64)
         for cells in rows.into_iter().skip(hidden) {
             let lead = vec![
                 Span::raw("    "),
-                Span::styled(
-                    glyphs.rail_heavy,
-                    look::live(Style::default().fg(p.border_strong)),
-                ),
+                Span::styled(glyphs.rail_heavy, Style::default().fg(p.border_strong)),
                 Span::raw(" "),
             ];
             out.push((line(lead, cells, None, Style::default()), op.clone()));
@@ -200,13 +200,15 @@ mod tests {
         let mut rows = Vec::new();
         draw(&mut rows, &block, 60, &p, 12_400);
         let lines = text(&rows);
-        assert_eq!(lines[0], format!("    {} Thinking… (2.4s)", look::SLOT));
+        assert_eq!(lines[0], "    ▾ Thinking… (2.4s)");
         assert!(!lines[0].contains("Thought"));
         assert_eq!(lines[1], "    │ … 7 earlier lines");
         assert_eq!(lines.len(), 2 + TAIL_ROWS);
         assert_eq!(lines.last().unwrap(), "    ┃ step 12");
-        assert!(look::is_live(&rows[0].0.spans[3]));
-        assert!(look::is_live(&rows[2].0.spans[1]), "the rail pulses");
+        assert!(
+            rows.iter().all(|(row, _)| row.spans.iter().all(|s| !look::is_live(s))),
+            "thinking never animates"
+        );
     }
 
     #[test]

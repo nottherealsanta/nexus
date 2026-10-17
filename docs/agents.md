@@ -88,20 +88,20 @@ are never passed (and rejected at config load). `auto` is accepted as an explici
 opt-in: Claude's own classifier then answers approvals (verified live on Haiku
 5.5: writes proceeded without a prompt; a risky action is denied with a "denied by
 the Claude Code auto mode classifier" tool error and the model stops to explain),
-so Nexus no longer decides those approvals. A read-only role is still narrowed to
-`dontAsk`. With the default policy
+so Nexus no longer decides those approvals. With the default policy
 (`dontAsk`, no allow rules, restricted) anything not pre-approved is denied, so
 edits or shell need explicit `worker_allowed_tools` (and `worker_tools` naming
 `Bash`).
 
-**Read-only roles.** A child is read-only when its role is flagged read-only or
-every granted tool is a read-only tool (MCP selectors count as read-only here
-because the worker never forwards them). Claude then gets only
-`--tools Read,Grep,Glob` and the mode is narrowed to `dontAsk` (`plan` is kept).
-A configuration that would widen that (`worker_tools` or `worker_allowed_tools`
-beyond those three, or any `worker_mcp_config` / `worker_setting_sources`, since
-MCP servers, plugins and hooks can act beyond built-ins) is refused with
-`ConfigError` rather than silently applied. Token and cost budgets are also
+**Read-only is prompt guidance only.** No role or child is run as a restricted
+read-only Claude worker: the runtime always resolves the policy with
+`read_only=False`, so `advisor` and the legacy `explore`/`plan`/`planner` get the
+same worker policy as any other child (user decision 2026-10-17, see
+[decisions.md](decisions.md)). The `resolve_policy(read_only=True)` branch
+(`--tools Read,Grep,Glob`, `dontAsk`, refusing wider `worker_tools`) stays in the
+worker module but no Nexus caller uses it. A `worker_mcp_config` or
+`worker_setting_sources` is still refused under the default restricted policy,
+since MCP servers, plugins and hooks can act beyond built-ins. Token and cost budgets are also
 refused; Nexus iteration caps are not mapped. Only the wall clock maps:
 `min(timeout_seconds, [agent] max_turn_seconds)` when the latter is nonzero.
 
@@ -192,7 +192,7 @@ process group, signalled on completion, cancel, deadline and close. The prefligh
 probes `--version` and `--help` (time-bounded, collecting stdout and stderr) and
 refuses a missing flag. `--input-format stream-json` itself selects headless
 streaming (`--print`/`-p` is not passed; its prompt is dropped in this mode). POSIX only. See [startup troubleshooting](antigravity-troubleshooting.md)
-for settings defaults, daemon restarts and read-only refusals.
+for settings defaults and daemon restarts.
 The child environment is the fixed allowlist; agy uses its own cached login.
 
 **Readback.** stdout is NDJSON keyed by `event`: `init` (cwd, tools, permission
@@ -217,16 +217,13 @@ tier); inheriting a parent's `antigravity/...` model is refused, as is any route
 without an exact model ID that `agy models` reported (a refresh hint follows).
 A tier entry such as `low = ["antigravity/<id>"]` routes ordinary child
 subagents only; the root never receives it, and tiers are not ranked by price.
-For read-only children (including read-only `task` audits), tier selection skips
-Antigravity and continues through the ordered routes to a runnable Nexus-controlled
-provider. If none is available, add a Nexus-controlled provider/model to that tier in
-Settings → Models, or explicitly select a Nexus-controlled provider/model (not
-Antigravity) for the task. Selecting Antigravity
-directly still fails closed; auto/plan mode is not a read-only guarantee.
+Read-only is prompt guidance only (user decision 2026-10-17): a read-only role
+(`advisor`, `explore`, `plan`, `planner`), a read-only tool list or an empty
+`tools: []` is never a reason to skip or refuse an Antigravity route, so the first
+runnable tier entry wins and an `advisor` on an `antigravity/...` tier plans on agy.
 Refused with `ConfigError`, never ignored, because agy's own tools are not
 mediated by Nexus and no Nexus control reaches them:
 
-- a read-only role (agy's `--mode plan` is not verified to prevent writes);
 - tool restriction profiles (`worker_tools`, allow/deny lists, MCP config,
   setting sources, `worker_restricted`);
 - worktree children;
@@ -251,7 +248,7 @@ headless soft-denials still end as `needs_attention`.
 
 The bypass is not mediated by Nexus (no `PathGuard`, permission rules or tool
 dispatch), is only a user-level or session/flag override, and does not relax the
-read-only, tool/MCP, worktree or budget refusals. With it enabled and
+tool/MCP, worktree or budget refusals. With it enabled and
 `worker_permission_mode = "auto"` (the default), `--mode accept-edits` is passed
 instead, since `auto` is not a documented agy mode; explicit `accept-edits` and `plan`
 stay as configured, and preflight requires the passed mode and
@@ -269,7 +266,7 @@ yourself), a sandbox request, a browser surface, and a live-verified event schem
 
 | File | Owns |
 | --- | --- |
-| `model.py` | restricted frontmatter grammar, immutable `AgentDef`, limits, read-only role rules |
+| `model.py` | restricted frontmatter grammar, immutable `AgentDef`, limits (`READ_ONLY_ROLES` is empty: no role is enforced read-only) |
 | `manager.py` | `AgentManager`: deterministic discovery, precedence, seeding, tool selection, legacy aliases |
 | `runner.py` | `SubagentRunner`, `ChildSpec`, `SubagentBudget`: bounding rules and event relay |
 | `claude_code_worker.py` | `ClaudeCodeWorker`, `WorkerPolicy`, `resolve_policy`: external Claude Code sessions |
@@ -296,14 +293,14 @@ file tools to `~/.nexus/` and `<workspace>/.agents/`, never widens; credentials,
 sessions, cache, trash and daemon files stay blocked).
 
 **Packaged roles:** roots `build` (default) and `orchestrator`; subagents
-`advisor` (read-only), `task`, `quick`. They are global, not copied into
+`advisor` (advises; read-only is prompt guidance only), `task`, `quick`. They are global, not copied into
 workspaces; editing one in Settings writes an override to `~/.nexus/agents/`.
 Settings presents one shared Agents page, with no global/project selector; model,
 effort, fallback and prompt edits are saved to the user override. File-based
 workspace definitions still follow the discovery precedence below.
 `agents.seed_roles` opts a workspace into seeding `.agents/agents/` (once per
 marker). Legacy names: `general` → `task` (`build` as a root); `explore`,
-`plan`, `planner` → read-only `advisor`.
+`plan`, `planner` → `advisor`.
 
 The packaged root prompts are short (a few hundred tokens): the Nexus identity
 line, then how to work (understand, change only what was asked, verify,
@@ -317,9 +314,11 @@ names a specific tool or role: those come from the tool list and the
 deleting an override resurfaces the lower one. Every skip, shadow, collision and
 forbidden declaration is kept as a diagnostic, never silently dropped.
 
-**Declarations are not grants.** `bundles`/`tools` only narrow. The read-only
-roles (`advisor` and legacy aliases) are structurally denied shell and
-mutating-filesystem tools whatever their file says.
+**Declarations are not grants.** `bundles`/`tools` only narrow. No role is
+structurally read-only: `advisor` and the legacy aliases inherit the parent's
+ceiling like any role (its prompt says to avoid writing unless asked). The
+"read-only" wording is system-prompt guidance only, never enforced (user decision
+2026-10-17).
 
 **Root agent choice** is per session (`AgentSelect`, `AgentReset`, `/agent`) and
 applies from the next turn; locked after the first turn for prompt-cache reasons
@@ -526,12 +525,11 @@ Agent intersections include deferred target names without advertising their
 schemas. `tools: [mcp__github__*]` and individual qualified names select only
 matching targets. The search/call proxies are included when a target survives
 the intersection; search results and preparation enforce that same ceiling.
-Children inherit the root session's frozen modes. Read-only roles strip mutating
-targets, and proxy execution cannot turn a deferred name into new authority.
+Children inherit the root session's frozen modes. Proxy execution cannot turn a deferred name into new authority.
 
 Antigravity defaults to `--mode auto` (the installed CLI advertises this mode);
 explicit `worker_permission_mode` still overrides it. Auto is not a sandbox or
-read-only enforcement: read-only roles/tool selections remain refused. A
+read-only enforcement, and read-only is never enforced on any provider. A
 pre-start refusal durably records `selected_model` separately from
 `resolved_model`, and shows the selected provider/model as **not started** plus
 the redacted configuration/policy error, never a claim that the model ran.

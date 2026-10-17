@@ -26,6 +26,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..events import SHUTDOWN_CANCEL_REASON
 from ..util import new_id, redact_secrets
 
 #: Optional sink for ``daemon.session_*`` lifecycle events.
@@ -290,7 +291,7 @@ class Supervisor:
     async def aclose(self) -> None:
         """Cancel every in-flight turn, drop every queue, await the watchers."""
         for session_id in list(self._sessions):
-            await self.cancel(session_id, reason="supervisor closing", drop_queue=True)
+            await self.cancel(session_id, reason=SHUTDOWN_CANCEL_REASON, drop_queue=True)
         watchers = [task for task in self._watchers.values() if not task.done()]
         for task in watchers:
             task.cancel()

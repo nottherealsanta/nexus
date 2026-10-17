@@ -63,12 +63,11 @@ mapped.
 Enforced at launch: the policy is explicit and resolved before start;
 `bypassPermissions` and `--dangerously-skip-permissions` are never passed, and
 `auto` is passed only when `worker_permission_mode = "auto"` is explicitly
-configured (a read-only role is narrowed to `dontAsk`); the default is `dontAsk` with `--restricted`, no setting sources
+configured; the default is `dontAsk` with `--restricted`, no setting sources
 (user/project/local settings, plugins and their hooks stay unloaded), and no MCP
 servers (`--strict-mcp-config`); Nexus writes nothing to the PTY except cursor
 position replies, so it never answers a trust, login or permission prompt and
-ends such runs as `needs_attention`; a role Nexus treats as read-only receives
-only `Read,Grep,Glob` in `dontAsk`/`plan`, and any wider `worker_tools`,
+ends such runs as `needs_attention`; read-only is never enforced on a role (prompt guidance only), but a wider `worker_tools`,
 `worker_allowed_tools`, `worker_mcp_config` or `worker_setting_sources` is
 refused; the child environment is an allowlist (plus `CLAUDE_CONFIG_DIR`), so
 provider API keys are not inherited; hook scripts and settings live in a private
@@ -102,10 +101,10 @@ sandbox is requested (`--sandbox` is never passed), and agy may edit files or ru
 commands under its own permission mode (`auto` by default; explicit `accept-edits` or `plan` overrides).
 With the opt-in bypass below, agy's tools are not mediated by Nexus at all.
 
-Enforced at launch (refuse, never widen or ignore): read-only roles, tool lists,
+Enforced at launch (refuse, never widen or ignore): tool lists,
 MCP config, setting sources, `worker_restricted`, worktree children, and token or
 cost budgets are all refused with `ConfigError`, because agy's `--mode plan` is not
-verified to prevent writes and Nexus cannot restrict agy's tools. Only
+verified to prevent writes and Nexus cannot restrict agy's tools (read-only roles are not refused: read-only is prompt guidance only). Only
 `auto`, `accept-edits` and `plan` are ever passed as `--mode`. Unless the user opts in
 (below), bypass or "always proceed" is never passed, and an `init` reporting `always-proceed` (for
 example from agy's global settings) ends the run as refused; Nexus also never edits
@@ -130,8 +129,7 @@ a project `nexus.toml`, `.nexus/nexus.toml` or `.agents/nexus.toml` is a load-ti
 provider kind; preflight refuses to start if `agy --help` does not list the flag;
 and every `external.started`/`external.finished` event
 (`skip_permissions`), the authority statement, the result text and the UI header
-(`Permissions: BYPASSED`) say so. It does not relax any other refusal: a read-only
-role is still rejected, as are tool/MCP fields, worktrees and budgets. The opt-in
+(`Permissions: BYPASSED`) say so. It does not relax any other refusal: tool/MCP fields, worktrees and budgets are still refused. The opt-in
 covers only Nexus-managed Antigravity workers; an agy launched directly by an external
 harness's own subagent tool is outside Nexus and governed by that harness's settings.
 

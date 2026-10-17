@@ -112,36 +112,36 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
                 let active =
                     !member.text.is_empty() || member.count > 0 || member.local_preview != "~0";
                 let tone = if active { palette.muted } else { palette.quiet };
-                let tokens = if member.status.starts_with("~") {
-                    member
-                        .status
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("~?")
-                        .to_owned()
-                } else if member.local_preview.starts_with('~') {
-                    member.local_preview.clone()
-                } else if member.text.starts_with('~') {
-                    member.text.clone()
-                } else {
-                    "~?".into()
-                };
+                let tokens = member.token_label().unwrap_or_else(|| "?".into());
                 let mut title = Style::default().fg(tone);
                 if active {
                     title = title.add_modifier(ratatui::style::Modifier::BOLD);
                 }
-                let line = Line::from(vec![
+                let counts = member.counts_label();
+                let mut spans = vec![
                     Span::styled("  │ ", Style::default().fg(tone)),
                     Span::styled(member.title.clone(), title),
-                    Span::styled(
-                        format!("  {tokens}"),
+                ];
+                if !counts.is_empty() {
+                    spans.push(Span::styled(format!(" {counts}"), Style::default().fg(tone)));
+                }
+                // Items are told apart by a blank row, as in the open form.
+                if index > 0 {
+                    rows.push((Line::default(), None));
+                }
+                let line = Line::from(
+                    spans
+                        .into_iter()
+                        .chain([Span::styled(
+                        format!(" {tokens}"),
                         Style::default().fg(if active {
                             palette.quiet
                         } else {
                             palette.border_strong
                         }),
-                    ),
-                ]);
+                    )])
+                        .collect::<Vec<_>>(),
+                );
                 for line in crate::transcript::wrap(&line.spans, width as usize) {
                     let drawn = crate::transcript::line(Vec::new(), line, None, Style::default());
                     let operation = member.operation.as_ref().map(|op| {
@@ -160,6 +160,9 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
             chip.color.clear();
             heading.color.clear();
             heading.members = vec![chip];
+            if index > 0 {
+                rows.push((Line::default(), None));
+            }
             heading.gap = if index == 0 { block.gap } else { 0 };
             rows.extend(crate::transcript::build(&heading, width, palette));
             if matches!(
@@ -214,13 +217,49 @@ mod tests {
             .iter()
             .all(|(line, op)| line.width() <= 16 && op.is_some()));
         let text: String = rows.iter().map(|(line, _)| line.to_string()).collect();
-        assert!(text.contains("~348"));
+        assert!(text.contains("348") && !text.contains('~'));
         assert!(!text.contains("tokens"));
         assert!(rows
             .iter()
             .flat_map(|(line, _)| &line.spans)
             .all(|span| span.style.fg != Some(ratatui::style::Color::Rgb(255, 0, 0))));
     }
+    #[test]
+    fn closed_headers_show_counts_and_plain_tokens_with_a_blank_row_between() {
+        let palette = Palette::new(false);
+        let member = |title: &str, counts: Vec<usize>| Content {
+            title: title.into(),
+            collapsed: true,
+            tokens: "~1.2K".into(),
+            active: true,
+            counts,
+            ..Default::default()
+        };
+        let block = Content {
+            kind: "context_header".into(),
+            members: vec![
+                member("Tools", vec![12]),
+                member("Skills", vec![2, 3]),
+                member("MCP", vec![]),
+            ],
+            ..Default::default()
+        };
+        let lines: Vec<_> = build(&block, 80, &palette)
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "  │ Tools [12] 1.2K",
+                "",
+                "  │ Skills [2 3] 1.2K",
+                "",
+                "  │ MCP 1.2K"
+            ]
+        );
+    }
+
     #[test]
     fn responsive_bounds_and_operations() {
         let palette = Palette::new(false);
@@ -307,7 +346,7 @@ mod tests {
         assert!(line(0).starts_with("  │  System prompt"), "{}", line(0));
         assert!(line(1).starts_with("     You are Nexus"), "{}", line(1));
         assert!(rows[1].1.is_some(), "the preview opens the same dialog");
-        assert!(line(2).starts_with("  │  AGENTS.md"));
+        assert!(line(3).starts_with("  │  AGENTS.md"));
         let narrow = build(&block, 30, &palette);
         assert!(
             narrow.iter().all(|(l, _)| l.width() <= 30),

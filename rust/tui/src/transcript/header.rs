@@ -147,7 +147,8 @@ mod tests {
             .iter()
             .flat_map(|(line, _)| &line.spans)
             .all(|span| span.style.fg != Some(ratatui::style::Color::Rgb(255, 0, 0))));
-        assert!(rows[0].0.to_string().ends_with("Tools  ~4.4K"));
+        assert!(rows[0].0.to_string().ends_with("Tools  4.4K"));
+        assert!(!rows[0].0.to_string().contains('~'));
     }
 
     #[test]

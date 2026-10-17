@@ -152,12 +152,8 @@ the effort prompt for remembered models; `/effort` remains available to change i
   → no cost data reads as `low`. Role/nested-child tier clamps only ever
   narrow.
 - **A tier runs the first runnable model of the user's list.**
-  Read-only child selection skips Antigravity routes, whose own tools cannot
-  enforce read-only access, and continues to a runnable Nexus-controlled route.
-  If only Antigravity is available, selection fails with instructions to add a
-  Nexus-controlled provider/model to the tier or explicitly select a
-  Nexus-controlled provider/model (not Antigravity) for the task. Direct
-  Antigravity selection for a read-only child still fails closed.
+  Read-only is prompt guidance only (user decision 2026-10-17), so no child
+  (including `advisor`) skips an Antigravity route for being read-only.
   `[models.tiers]` lists are ordered; `ModelRouter._first_pinned` walks the list in order and uses
   the first model whose provider can stream, before falling back to the
   catalogue's order. Settings → Models edits these lists (`ModelTierSet`,
@@ -328,8 +324,8 @@ are respected. The host model list exposes these rows labelled **Subagents only*
 explanation, while explicit subagent tier/role/Task references remain supported.
 Worker execution inherits agy's own user/global settings, MCP servers and plugins
 by default, even without a provider section; Nexus PathGuard does not apply inside
-agy. Set `worker_inherits_agy_settings = false` to refuse execution. Read-only
-roles and tool restrictions remain refused.
+agy. Set `worker_inherits_agy_settings = false` to refuse execution. Tool
+restrictions remain refused; read-only roles are not (guidance only).
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
 in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified

@@ -13,7 +13,7 @@ declaration and a system-prompt body. This package exposes:
   :meth:`~nexus.agents.manager.AgentManager.select_tools`, which narrows a
   definition's request to the parent's authority and can only ever restrict;
 * the built-in roles in ``data/``: the root agents ``build`` and ``orchestrator`` and the subagents
-  ``advisor`` (read-only), ``task`` and ``quick``. They are global; edits land in
+  ``advisor`` (advises; read-only is prompt guidance only), ``task`` and ``quick``. They are global; edits land in
   ``~/.nexus/agents``. :func:`~nexus.agents.manager.retire_seeded_roles` retires
   untouched copies older releases seeded into workspaces, and
   :func:`~nexus.agents.manager.seed_workspace_roles` remains as opt-in seeding;

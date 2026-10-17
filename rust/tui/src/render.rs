@@ -1175,10 +1175,12 @@ fn draw_above_card(
         );
     }
 }
-/// Rows above the composer card: the status line and queued messages. They sit directly on
-/// the card; with none of them a single blank margin row separates the card from the transcript.
+/// Rows above the composer card: the status line, queued messages, and a blank margin row.
+/// The final blank row keeps activity/status controls visually separate from the composer.
 fn above_card_rows(s: &Snapshot) -> u16 {
-    u16::from(status_visible(s)) + queue_rows(s)
+    let status = u16::from(status_visible(s));
+    let queue = queue_rows(s);
+    status + queue + u16::from(queue == 0)
 }
 pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     // The Sessions dashboard has no composer; its list takes the rows.
@@ -1200,7 +1202,7 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     // Five fixed rows plus the blank row that always separates the text from the controls.
     let wanted = 5 + rows.clamp(1, 22) as u16 + above_card_rows(s).max(1);
     wanted
-        .min(area.height.saturating_sub(2 + 4 + crate::live_bar::pane_rows(s)))
+        .min(area.height.saturating_sub(3 + 4 + crate::live_bar::pane_rows(s)))
         .min(area.height)
         .max(area.height.min(7))
 }
@@ -1223,7 +1225,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     }
     // The Live pane sits between the transcript and the composer. Expanded, it takes every
     // row the transcript can spare but one, so the conversation never vanishes entirely.
-    let fixed = 1 + 2 * u16::from(!dash) + composer_height;
+    let fixed = 1 + 3 * u16::from(!dash) + composer_height;
     let mut pane = if composer_height > 0 {
         crate::live_bar::pane_rows(s)
     } else {
@@ -1233,9 +1235,10 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         pane = pane.max(middle.height.saturating_sub(fixed + 1));
     }
     // One empty row above the top bar (and the Sessions header) and, in a session, one below.
+    // The bar itself is two rows: the tabs, then the workspace path and branch.
     let center = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(u16::from(!dash)),
+        Constraint::Length(2 * u16::from(!dash)),
         Constraint::Length(u16::from(!dash)),
         Constraint::Min(1),
         Constraint::Length(pane),
@@ -3155,26 +3158,26 @@ mod tests {
         let mut cache = Cache::default();
         let top = screen(0, &mut cache);
         assert!(
-            top[0].trim().is_empty() && top[2].trim().is_empty(),
-            "spacing rows"
+            top[0].trim().is_empty() && top[2].trim().is_empty() && top[3].trim().is_empty(),
+            "spacing rows (row 2 is the empty workspace row)"
         );
         assert!(!top[1].trim().is_empty(), "top bar on row 1");
         assert!(cache.sticky.is_none(), "at the top there is no pin");
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
-        assert_eq!(rect.y, 3, "pinned at the top of the transcript");
-        assert!(mid[4].contains("question number 1"), "{:?}", &mid[..7]);
+        assert_eq!(rect.y, 4, "pinned at the top of the transcript");
+        assert!(mid[5].contains("question number 1"), "{:?}", &mid[..8]);
         assert!(
-            mid[3].chars().take(78).all(|c| c == ' '),
+            mid[4].chars().take(78).all(|c| c == ' '),
             "top padding row of the band"
         );
         assert!(
-            mid[5].contains('·') && !mid[5].contains("question"),
+            mid[6].contains('·') && !mid[6].contains("question"),
             "textured bottom padding row of the pinned band"
         );
         assert_eq!(rect.height, 3, "padding + one text row + padding");
         let band = Palette::new(false).element;
-        for y in 3..6u16 {
+        for y in 4..7u16 {
             assert_eq!(
                 bgs.borrow()[y as usize],
                 band,
@@ -3183,7 +3186,7 @@ mod tests {
         }
         assert_eq!(row, cache.prompt_top("t1").unwrap());
         let later = screen(cache.prompt_top("t2").unwrap() + 3, &mut cache);
-        assert!(later[4].contains("question number 2"), "{:?}", &later[..7]);
+        assert!(later[5].contains("question number 2"), "{:?}", &later[..8]);
         assert_eq!(
             later
                 .iter()
@@ -3340,8 +3343,8 @@ mod tests {
         assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 22);
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
-            8,
-            "the transcript keeps its rows with a single-row top bar"
+            7,
+            "the transcript keeps its rows with a two-row top bar"
         );
         let mut queued = Snapshot::default();
         queued.queue_items = vec![queue_item("q1", "Q", "a"), queue_item("s1", "S", "b")];
@@ -3407,14 +3410,19 @@ mod tests {
                     })
                     .unwrap();
                 if r.tabs.height > 0 {
-                    assert_eq!(r.tabs.height, 1, "top bar has no separator row");
-                    let top: String = (r.tabs.x..r.tabs.right())
-                        .map(|x| terminal.backend().buffer()[(x, r.tabs.y)].symbol())
-                        .collect();
+                    assert_eq!(r.tabs.height, 2, "tab row plus workspace row");
+                    let row = |y: u16| -> String {
+                        (r.tabs.x..r.tabs.right())
+                            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                            .collect()
+                    };
+                    let top = row(r.tabs.y);
                     if r.details.width == 0 {
                         assert!(top.contains('☰'), "dashboard button: {top}");
                     }
-                    assert!(top.contains("/workspace"), "path in the top bar: {top}");
+                    assert!(!top.contains("/workspace"), "path left the tab row: {top}");
+                    let crumbs = row(r.tabs.y + 1);
+                    assert!(crumbs.contains("/workspace"), "path under the tabs: {crumbs}");
                 }
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
@@ -4056,6 +4064,66 @@ mod editor_layout_tests {
         assert!(text(layout.items[0].1.y).contains("#1 held back message"));
         s.slot_wait = None;
         assert!(!status_visible(&s));
+    }
+
+    #[test]
+    fn one_blank_row_separates_the_status_line_from_the_composer() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let now = crate::live_bar::now_epoch();
+        let mut s = Snapshot::default();
+        s.status = "running".into();
+        s.turn_status = Some(crate::bridge::TurnStatus {
+            activity: "Waiting for response".into(),
+            activity_since: now - 2.0,
+            turn_since: now - 5.0,
+            output_tokens: 10,
+            output_estimated: false,
+        });
+        let mut cache = Cache::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut composer = Rect::default();
+        terminal
+            .draw(|frame| {
+                composer = draw(
+                    frame,
+                    &s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    &mut cache,
+                    false,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                )
+                .composer;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = |y: u16| -> String {
+            (composer.x..composer.right())
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let status = above_layout(composer, &s).status.unwrap().y;
+        let card = composer_rows(composer, &s)[1].y;
+        assert!(text(status).contains("Waiting for response"));
+        assert_eq!(card, status + 2, "exactly one row between status and card");
+        assert!(text(status + 1).trim().is_empty(), "blank row");
+        s.turn_status = None;
+        assert_eq!(above_card_rows(&s), 1, "idle keeps the single margin row");
+        s.turn_status = Some(crate::bridge::TurnStatus {
+            activity: "Waiting for response".into(),
+            ..Default::default()
+        });
+        s.queue_items.clear();
+        assert_eq!(above_card_rows(&s), 2, "status has one following blank row");
     }
 
     #[test]

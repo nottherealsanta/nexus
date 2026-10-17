@@ -70,12 +70,8 @@ from ..config.paths import (
 )
 from ..tools.names import canonical_tool_name, canonical_tool_names
 from .model import (
-    FORBIDDEN_ROLE_BUNDLES,
-    FORBIDDEN_ROLE_TOOLS,
     MAX_AGENT_FILE_BYTES,
     MAX_FRONTMATTER_BYTES,
-    READ_ONLY_ROLES,
-    READ_ONLY_TOOLS,
     AgentDef,
     AgentDiagnostic,
     AgentDiagnosticCode,
@@ -768,11 +764,10 @@ class AgentManager:
 
         The effective set is ``(available ∩ profile) ∩ requested`` minus the
         declared exclusions. A definition with no positive ``bundles``/``tools``
-        **inherits** the ceiling rather than requesting nothing. ``explore`` and
-        ``planner`` additionally strip every shell and mutating-filesystem tool --
-        including any passed through ``mutating`` -- no matter what the file
-        declares. A declaration can only ever remove from the ceiling; it can
-        never add to it.
+        **inherits** the ceiling rather than requesting nothing. No role is
+        structurally read-only (that is prompt guidance only, docs/decisions.md).
+        A declaration can only ever remove from the ceiling; it can never add to
+        it.
         """
         resolved = self._coerce_agent(agent)
         available_set = frozenset(canonical_tool_name(str(tool)) for tool in available)
@@ -806,22 +801,6 @@ class AgentManager:
         excluded = frozenset(name for name in ceiling for pattern in resolved.excluded_tools if fnmatchcase(name, pattern))
         selected -= excluded
         stripped = frozenset()
-        if resolved.read_only:
-            forbidden = FORBIDDEN_ROLE_TOOLS | frozenset(
-                str(tool) for tool in mutating
-            )
-            stripped = selected & forbidden
-            selected = selected - forbidden
-            # A planner/explorer must not inherit tools that alter execution
-            # context (for example Skill or extension controls) merely because
-            # their current spec is marked non-mutating. Keep the ceiling to the
-            # pure workspace inspection tools.
-            read_only_tools = READ_ONLY_TOOLS | {name for name in selected if name.startswith("mcp__") or name in {"McpSearch", "McpCall"}}
-            outside_read_only = selected - read_only_tools
-            stripped = stripped | outside_read_only
-            selected = selected & read_only_tools
-        else:
-            forbidden = frozenset()
         if any(name.startswith("mcp__") for name in selected):
             selected |= (ceiling & {"McpSearch", "McpCall"}) - excluded
         else:
@@ -1096,36 +1075,6 @@ class AgentManager:
                             message=(
                                 f"agent {parsed.name!r} declares unknown bundle "
                                 f"{bundle!r}; declarations never expand a profile"
-                            ),
-                            tier=tier,
-                            path=str(path),
-                            name=parsed.name,
-                        )
-                    )
-        if parsed.name.casefold() in READ_ONLY_ROLES:
-            for tool in parsed.tools:
-                if canonical_tool_name(tool) in FORBIDDEN_ROLE_TOOLS:
-                    diagnostics.append(
-                        AgentDiagnostic(
-                            code=AgentDiagnosticCode.FORBIDDEN_TOOL,
-                            message=(
-                                f"read-only agent {parsed.name!r} declares "
-                                f"forbidden tool {tool!r}; it will never hold it"
-                            ),
-                            tier=tier,
-                            path=str(path),
-                            name=parsed.name,
-                        )
-                    )
-            for bundle in parsed.bundles:
-                if bundle in FORBIDDEN_ROLE_BUNDLES:
-                    diagnostics.append(
-                        AgentDiagnostic(
-                            code=AgentDiagnosticCode.FORBIDDEN_BUNDLE,
-                            message=(
-                                f"read-only agent {parsed.name!r} declares "
-                                f"forbidden bundle {bundle!r}; it will never "
-                                "expand to it"
                             ),
                             tier=tier,
                             path=str(path),

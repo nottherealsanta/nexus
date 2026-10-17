@@ -133,6 +133,24 @@ numbers, added rows green on the add tint and removed rows red on the delete tin
 content it wrote as added lines. Only the first 12 rows show until Enter; at most 400
 rows are sent, the rest announced. Calls without a diff (a question, a failed edit)
 show their labelled details instead. Clicking the header folds the block.
+
+A question card is compact instead: the prompt, then one row per option, `●` for the
+option whose label equals the recorded answer (`metrics.answer`) and `○` for the rest;
+an answer matching no option (free text) shows as `✎ answer`, and an unanswered
+call shows `… awaiting answer`. The raw labelled details stay behind `i`
+(`tool_details`) and `/verbose`; answering still goes through the pending-question
+prompt. Limitation: the tool records only the answer label, so a typed reply that
+equals an option label is indistinguishable from choosing it.
+
+Steering in the transcript: pending (not yet consumed) inputs are not transcript
+cards; they live in `input_queue` and show in the boxed list above the composer,
+tagged `Q` queue, `S` steer, `I` interrupt. A consumed steer is appended to its
+turn's messages, so every user card after the turn's first carries
+`status = "steer"` and renders a `steer` tag beside the card (a `live` origin keeps
+`via voice`). `MessageView` stores no per-message mode, so this is derived from
+position, not from a recorded `input.consumed.mode`; a queue-mode message consumed
+into a running turn is not possible (it starts its own turn), so the inference holds
+for current event streams. Covered by `tests/test_ratatui_projection.py`.
 Totals describe the work (`Ran 2 commands · Edited 2 files · Read 2 files ·
 Thought 3 times`) rather than listing tool names or a separate Explored row.
 Older/completed groups collapse by default. The trailing group in an active turn
@@ -187,8 +205,8 @@ The next turn's card pushes the pin up and then
 replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
 
-**Top bar spacing.** One empty row above and one below the in-session top bar (bar on screen
-row 2); the Sessions page header also starts on row 2 so both screens line up (`regions()`).
+**Top bar spacing.** One empty row above and one below the in-session top bar (the bar is two
+rows, tabs then workspace path/branch, starting on screen row 2; see "Two-row top bar"); the Sessions page header also starts on row 2 so both screens line up (`regions()`).
 
 Settings → Layout → **Centered conversation** (`centered_layout`, off by default, saved
 in `tui.json`) caps the conversation column (top bar, transcript, composer) at
@@ -205,13 +223,13 @@ is derived in the reducer from the `thinking.delta`/`thinking.end` event
 timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
 opens beneath its activity member dimmed, with a whole-line `**heading**` shown bold.
 Expanded activity members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
-call is one row, `<spinner|◆> Explore Subagent — short phrase · tier low · provider/model (effort) · time`
-(the `◆` is drawn in the agent-type colour, error colour when the child failed (`Error:` detail); the model is the latest actual one; `model pending`/`model unavailable` until known, never the tier alone),
-with elapsed time after the model/effort only once finished, derived
-from the child's durable spawn/completion timestamps. Running subagents do not
-show a duration. Missing
-timestamps omit the duration rather than inventing one. The tick uses the muted
-tool tone. A subagent page opens with its task as a
+call is a stable two-row card: `<spinner|◆> Explore Subagent — short phrase`, then
+`gpt-6 (high) M · 3 tool calls · 1.2K tokens`
+(the `◆` is drawn in the agent-type colour, error colour when the child failed (`Error:` detail); the model, effort and the bold tier letter `L`/`M`/`H` (`?` when unknown) use the agent colour; the model is the latest actual one without its provider; `model pending`/`model unavailable` until known, never the tier alone).
+The counts are muted: every child tool call and the child's total tokens (`ui/ratatui/prototype.py`
+`_agent_card_metrics`). A child that reports no accounting (an external worker) reads
+`tokens unknown`, never `0 tokens`. The card never shows the latest tool or a duration,
+so it does not change on every tool call. A subagent page opens with its task as a
 prompt card whose rail uses the agent's colour (no context-header strip, so the
 child's context chips are not shown there). The dark background is `#0B0B0B`.
 Covered by Rust transcript tests and `tests/test_ratatui_projection.py`; not
@@ -594,16 +612,10 @@ and schemas. After the first turn switches show LOCKED; inspection remains avail
 (`context_chips` rows, resolved in `main.rs`), so a click opens that chip's section and
 Enter on the strip opens the section menu. Skills and MCP chips show two unlabelled
 counts, project then global (project greyed), enclosed together in square brackets.
-Native context rows have no diamond/dot prefix: labels are immediately followed by
-counts (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`) and a two-space gap before any
-token estimate. The native top bar is one row, with no separator row below it.
+Native context rows have no diamond/dot prefix: labels show counts in square brackets (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`), with readable spacing before any token estimate; token values are shown without a tilde prefix. The native top bar is two rows (tabs, then workspace path/branch), with no separator row below it.
 The workspace/status row no longer repeats the details-sidebar toggle beside
-`idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` marks. A finished
-group with failed calls shows `· N failed` in the dark red `Palette::error_deep` and stays
-collapsed by default, exactly like a group without failures; failed calls are not drawn
-under a folded header, and the user expands the group to see them (the expanded call
-shows the error output). A
-subagent row has a blank row above and below and shows only its latest tool call.
+`idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` marks. A finished group stays collapsed by default, including when it contains failures; folded groups omit failure and thought counts, do not animate, and use subdued headings. Expand a group to see individual tool outcomes, with failures marked on their own rows. A
+subagent row has a blank row above and below and never shows its latest tool call (see the stable card above).
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 terminal); Appearance and Layout use labels and end with `Reset to default`.
 Settings is a Grok-style modal (GROK_TUI_PLAN WS-C): `min(120, width-8)` by `height-4`,
@@ -1118,6 +1130,14 @@ text stays one click away. Skills and MCP counts are one total of enabled entrie
 projection filters disabled tools out of the inventory instead of listing them).
 Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
 
+Spacing, counts and token figures (TODO item 3, Ratatui only): a blank row separates
+every header item, open or closed. The closed one-row form now carries the same bracketed
+counts as the open form after Tools, Skills and MCP (`Tools [12]`, `Skills [2 3]` for
+project then global). The token figure is drawn without the host's `~` prefix
+(`Content::token_label`, `4.4K`, or `?` when unknown); the host still sends `~4.4K`, and
+the figure remains an estimate (`Context total · ~N tokens` footer and the context dialog
+say so). Covered by `render/context.rs`, `transcript/header.rs` and `bridge.rs` tests.
+
 ## Grok chrome: palette, backdrop dim, top bar (no left sessions sidebar)
 
 Plan: `plans/GROK_TUI_PLAN.md` WS-A. The left **Sessions sidebar was removed**
@@ -1142,7 +1162,8 @@ it once, after the page and before any panel/Settings/picker/inspector or
 permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
-Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ ~/path branch worktree`
+Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, two rows; see "Two-row top bar"
+below for the 2026-10 change): row 1 holds the tabs, row 2 `~/path branch worktree`
 (the host's session title only, with `New session` while unavailable; no Nexus prefix
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
@@ -1395,11 +1416,14 @@ and tool signals are implemented and have focused Python test coverage. These
 changes are additive and preserve the existing UI/projection contract; they do
 not imply completion of the Ratatui port or PTY verification.
 
-The Sessions page is a full-width list grouped by last-updated time in local time
+The Sessions page is a compact, centered, rounded-border card like a Settings page (at most
+72 columns wide, only as tall as its content, never full-screen) holding a list grouped by
+last-updated time in local time
 (Today, Yesterday, This week, Earlier; empty groups omitted; the host projects `bucket` and
-`updated` on each row) in the Grok style: `▾ Today 3 ────` group headers, newest first.
-Each session is two rows between a blank padding row above and below: `◇ Title · branch project … age`, then a
-quiet one-line plain-text summary of the last agent message. Status shows in the glyph
+`updated` on each row): `▾ Today 3 ────` group headers, newest first.
+Each session is exactly one row: `◇ Title … age` (status glyph, name, last-used time; the
+selected row shows `[×]` for archive instead of the age). Search, rename, archive, collapse,
+hover and click targets are unchanged. Status shows in the glyph
 (working = animated purple braille, needs input = warning `◆`, idle `◇`); the header
 chips (`⁙ 1 working │ ◇ 3 idle`) stay. The selected row's `element` background fills the
 whole four-row band (1-column inset, no rail, title not bold) and the age becomes a
@@ -1415,7 +1439,9 @@ The Sessions dashboard has no composer: the list takes those rows, typing does n
 a hidden draft, and keys that are not list shortcuts are ignored. Enter opens the selected
 session, where the composer appears as usual.
 `+ New Agent`, Open Previous (`/resume`) and Worktree are the header actions. Keep the
-user-facing title **Sessions** and `/sessions`. The archive `SessionPreview` is unrelated.
+user-facing title **Sessions** and `/sessions`. Render the dashboard as a centered,
+settings-like compact panel rather than stretching it full-screen; each session occupies
+one line with its existing status icon, title, and last-used time. The archive `SessionPreview` is unrelated.
 The Mermaid module is registered and called from `markdown.rs`, with
 an explicit code-block fallback for unsupported or streaming fences.
 
@@ -1442,6 +1468,36 @@ target, with a one-cell gap between controls and two cells of right padding;
 subagent headers use the same padded `◫` target and right margin. Drawing, hover,
 and clicks share the header layout.
 
+### Two-row top bar (TODO item 1)
+
+The in-session top bar is two rows (`Regions.tabs.height == 2`), with the empty rows kept
+above it and below it, so the transcript starts on row 4. Row 1 keeps the session tabs
+(`Seg::Session`/`Close`/`New`) and the right-hand controls; consecutive tabs are separated
+by a straight vertical `│` (`Seg::Divider`, quiet colour, one cell, not clickable, none
+around a lone tab). Row 2 (`crumb_layout`) holds the workspace path, branch and worktree,
+aligned with the first tab label and truncated to the width. Hit-testing still uses row 1
+only (`tab_cells`); the sub-agent page header and the Sessions page are unchanged (the page
+header draws on the first row of its area). Sizing, the pinned-prompt rows and the
+composer cap account for the extra row (`regions()`, `composer_height()`).
+
+### Stale glyphs on the Sessions and sidebar buttons (TODO item 2)
+
+Findings: the Ratatui buffer cannot be the source. `draw()` clears the whole frame first and
+rebuilds every widget, and the Sessions page and the details sidebar `Clear` their own
+area, so each frame's buffer is complete. Stray glyphs left after the sidebar closes can
+therefore only be in the terminal: the diff writes only changed cells, and the `☰`/`◫`/`⧉`
+glyphs are missing from some fonts, where a fallback glyph is drawn wider than its cell and
+spills into a neighbour that is never rewritten. **This was not reproduced** (it needs a real
+terminal and font; the change below was written and checked by reading the code, and the
+automated tests only cover the trigger logic).
+
+Fix: `render::layout_key` / `needs_full_repaint` compare the chrome geometry (top bar and
+details rectangles, transcript column); `main.rs` calls `terminal.clear()` before the next
+frame when it changes (details sidebar toggled, Sessions page opened or closed, resize), so
+every cell is repainted. Ordinary text changes keep the incremental diff. If strays persist
+after this, capture the terminal and font: the next step would be replacing the glyphs
+with ones the font covers.
+
 Transcript image attachment chips display only `▣ Image N`, omitting the filename
 and metadata after ` · `; document chips retain their filenames and metadata.
 Attachment operations and their per-chip hit ranges remain intact.
@@ -1450,3 +1506,6 @@ The running activity row above the composer starts two columns farther inward.
 Only the left edge moves: elapsed/token metrics and `[stop]` keep their right edge
 and click position. Status text uses quiet gray; the spinner retains agent color.
 Regression coverage lives in `render/chrome.rs`, `transcript.rs`, and `render.rs`.
+Exactly one blank row separates the activity row (spinner/waiting text, token counter,
+`[stop]`) from the composer card; with a queue, that blank row is the one above `▾ Queued N`
+(`one_blank_row_separates_the_status_line_from_the_composer`).

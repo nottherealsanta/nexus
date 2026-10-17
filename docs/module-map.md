@@ -78,7 +78,7 @@ here, so add a row when you add a file.
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
 | `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
 | `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
-| `antigravity_worker.py` | **NEW.** External Antigravity (`agy`) worker: one headless `agy --input-format stream-json --output-format stream-json` process per assignment running agy's own tools; stdin user event, NDJSON `init`/`step_update`/`result` readback, refuses read-only, tool/MCP/restriction fields and bypass modes; same duck contract as `claude_code_worker.py` |
+| `antigravity_worker.py` | **NEW.** External Antigravity (`agy`) worker: one headless `agy --input-format stream-json --output-format stream-json` process per assignment running agy's own tools; stdin user event, NDJSON `init`/`step_update`/`result` readback, refuses tool/MCP/restriction fields and bypass modes; same duck contract as `claude_code_worker.py` |
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
@@ -520,7 +520,7 @@ here, so add a row when you add a file.
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
 | `bridge.py` | Sessions dashboard projection and list polling |
-| `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls and thoughts |
+| `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted) |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
 | `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
@@ -576,7 +576,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/mermaid.rs` | Self-contained Mermaid renderer (flowchart, sequence, state) as Unicode art; unsupported or oversized diagrams return `None` for the code-block fallback. Registered and called from `markdown.rs`; behaviour is unverified end to end |
 | `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
 | `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
-| `rust/tui/src/render/sessions.rs` | Full-width Sessions dashboard: status groups, one-line row tails, header actions. The composer below is unchanged |
+| `rust/tui/src/render/sessions.rs` | Compact centered, bordered Sessions page (max 72 columns, content height): time groups, one line per session (status glyph, name, last-used age), header actions |
 | `rust/tui/src/transcript/groups.rs` | Verb-group header, live tail and expanded member boxes |
 | `rust/tui/src/transcript/header.rs` | Context header rows, grey tones, open form and chip |
 | `rust/tui/src/transcript/look.rs` | Shared look of activity rows: glyphs, time format, live-run marker and animation recolouring |

@@ -31,7 +31,7 @@ DEFAULT_VOICE = "sol"
 MAX_APPEND_BYTES = 500
 #: Bounds for what the daemon accepts from the wire.
 MAX_EVENT_BYTES = 1_048_576
-MAX_DELEGATION_CHARS = 16_000
+MAX_DELEGATION_CHARS = 200_000  # one spoken request; beyond it the manager clips and says so
 CHANNELS = ("speakable", "commentary")
 _FATAL_CODES = frozenset({"authentication_error", "invalid_token", "token_expired", "invalid_api_key"})
 
@@ -151,7 +151,7 @@ class ErrorEvent(msgspec.Struct, frozen=True):
 
 
 class Unknown(msgspec.Struct, frozen=True):
-    """Anything unrecognised or malformed; ignored by the manager, never an error."""
+    """Anything unrecognised or malformed; ignored by the manager (``"oversize"`` is reported as a warning)."""
 
     raw_type: str = ""
 

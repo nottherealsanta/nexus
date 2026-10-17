@@ -533,6 +533,63 @@ mod tests {
     }
 
     #[test]
+    fn arrows_walk_tier_lists_once_and_effort_pickers_are_never_hidden_stops() {
+        use crate::settings_page::input::{key, Act};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let tier = |name: &str| {
+            serde_json::json!({"t": "ordered", "id": format!("tier:{name}"), "items": [
+                ["a/one", "in use", ""], ["b/two", "fallback", ""]
+            ], "controls": [
+                {"t": "row", "id": format!("effort:{name}:0"), "control": {"c": "select", "value": "Default", "options": [["Default", null], ["High", "high"]], "operation": {"kind": "effort"}}},
+                {"t": "row", "id": format!("effort:{name}:1"), "control": {"c": "select", "value": "Default", "options": [["Default", null]], "operation": {"kind": "effort"}}}
+            ], "operation": {"kind": "tier"}})
+        };
+        let value = serde_json::json!({"area": "models", "blocks": [tier("low"), tier("high")]});
+        let page = Page::from_value(&value);
+        let mut st = PageState::default();
+        render(&page, &mut st, 100, 30);
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut seen = vec![st.focus.clone()];
+        for _ in 0..12 {
+            key(&page, &mut st, press(KeyCode::Down));
+            render(&page, &mut st, 100, 30);
+            if seen.last() != Some(&st.focus) {
+                seen.push(st.focus.clone());
+            }
+        }
+        assert_eq!(
+            seen,
+            [
+                "ord:tier:low:0",
+                "ord:tier:low:1",
+                "ord:tier:low:add",
+                "ord:tier:high:0",
+                "ord:tier:high:1",
+                "ord:tier:high:add",
+            ],
+            "Down visits each stop once and stops at the end"
+        );
+        // Right on an item enters its (visible) effort picker; Up/Down leave from the item; Left returns.
+        st.focus = "ord:tier:high:0".into();
+        render(&page, &mut st, 100, 30);
+        assert_eq!(key(&page, &mut st, press(KeyCode::Right)), Act::Done);
+        assert_eq!(st.focus, "row:effort:high:0");
+        render(&page, &mut st, 100, 30);
+        assert_eq!(st.focus, "row:effort:high:0");
+        key(&page, &mut st, press(KeyCode::Down));
+        assert_eq!(st.focus, "ord:tier:high:1");
+        render(&page, &mut st, 100, 30);
+        key(&page, &mut st, press(KeyCode::Right));
+        render(&page, &mut st, 100, 30);
+        assert_eq!(key(&page, &mut st, press(KeyCode::Left)), Act::Done);
+        assert_eq!(st.focus, "ord:tier:high:1");
+        // Leaving the item hides its picker again, so it is no longer a stop.
+        key(&page, &mut st, press(KeyCode::Up));
+        render(&page, &mut st, 100, 30);
+        assert!(!st.order.contains(&"row:effort:high:1".to_string()));
+    }
+
+    #[test]
     fn a_closed_section_opens_and_exposes_its_buttons() {
         let page = Page::from_value(&sample());
         let mut st = PageState::default();

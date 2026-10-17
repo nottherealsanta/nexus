@@ -224,8 +224,9 @@ SHELL_TOOLS = frozenset({"bash", "BashOutput", "KillShell"})
 FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS
 #: Bundles the read-only roles are structurally denied.
 FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
-#: Roles with no write path at all, regardless of what their file declares.
-READ_ONLY_ROLES = frozenset({"advisor", "explore", "plan", "planner"})
+#: Empty by design: "read-only" is system-prompt guidance only and is never
+#: enforced on any role (user decision 2026-10-17, docs/decisions.md).
+READ_ONLY_ROLES: frozenset[str] = frozenset()
 #: Tools permitted to structurally read-only roles.
 READ_ONLY_TOOLS = frozenset(
     {"read", "glob", "grep", "subagent", "todowrite", "question", "skill", "webfetch", "websearch"}

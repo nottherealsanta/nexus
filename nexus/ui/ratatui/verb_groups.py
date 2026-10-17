@@ -137,7 +137,9 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
         if member.get("status") == "running":
             running_categories.add(category)
         spans.append(_span_ms(member, tool))
-        counts[category] = counts.get(category, 0) + 1
+        # Thoughts are members but never part of the heading's counts.
+        if category is not THOUGHT:
+            counts[category] = counts.get(category, 0) + 1
         members.append(member)
     running = bool(running_categories)
     failed = [m for m in members if m.get("status") == "failed"]

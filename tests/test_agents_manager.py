@@ -17,7 +17,6 @@ from nexus.agents import (
     DEFAULT_AGENT_COLORS,
     FORBIDDEN_ROLE_TOOLS,
     MAX_FALLBACKS,
-    MUTATING_FS_TOOLS,
     READ_ONLY_ROLES,
     SEED_MARKER_NAME,
     SEED_VERSION,
@@ -705,7 +704,7 @@ def test_builtin_roles_match_the_default_contract(tmp_path):
     assert mgr.require("build").contexts == ("root",)
     assert mgr.require("orchestrator").contexts == ("root",)
     assert all(mgr.require(name).contexts == ("subagent",) for name in ("advisor", "task", "quick"))
-    assert mgr.require("advisor").read_only
+    assert not mgr.require("advisor").read_only  # read-only is prompt guidance only
     assert not mgr.require("task").read_only and not mgr.require("quick").read_only
     # Model, provider, effort and fallbacks are unset by default.
     for agent in mgr.agents:
@@ -1026,8 +1025,8 @@ def test_unknown_declarations_are_diagnosed_but_retained(tmp_path):
     assert agent.bundles == ("fs", "ghost")
 
 
-def test_read_only_roles_strip_shell_and_mutating_tools(tmp_path):
-    # A tampered definition that asks for everything still gets nothing forbidden.
+def test_former_read_only_names_keep_declared_shell_and_write_tools(tmp_path):
+    # Read-only is prompt guidance only: nothing is stripped or diagnosed.
     write_agent(
         tmp_path / "workspace",
         "explore",
@@ -1039,39 +1038,36 @@ def test_read_only_roles_strip_shell_and_mutating_tools(tmp_path):
         known_tools={"Bash", "Write", "Read", "Grep"},
         known_bundles={"shell": ["Bash"], "fs": ["Read", "Write", "Grep"]},
     )
-    assert mgr.require("explore").read_only
+    assert not mgr.require("explore").read_only
     codes = {d.code for d in mgr.security}
-    assert AgentDiagnosticCode.FORBIDDEN_TOOL in codes
-    assert AgentDiagnosticCode.FORBIDDEN_BUNDLE in codes
+    assert AgentDiagnosticCode.FORBIDDEN_TOOL not in codes
+    assert AgentDiagnosticCode.FORBIDDEN_BUNDLE not in codes
 
     selection = mgr.select_tools(
         "explore",
         available={"Bash", "Write", "Read", "Grep", "Edit", "MultiEdit"},
         bundle_map={"shell": ["Bash"], "fs": ["Read", "Write", "Grep"]},
     )
-    assert selection.selected == frozenset({"read"})
-    assert selection.stripped  # the structural strip did real work
-    assert not (selection.selected & FORBIDDEN_ROLE_TOOLS)
-    assert not (selection.selected & MUTATING_FS_TOOLS)
+    assert selection.selected == frozenset({"read", "bash", "write"})
+    assert not selection.stripped
 
 
-def test_read_only_multiedit_legacy_declaration_is_diagnosed(tmp_path):
+def test_multiedit_declaration_on_a_former_read_only_name_is_kept(tmp_path):
     write_agent(tmp_path / "workspace", "explore", tools=["MultiEdit"])
     mgr = manager(tmp_path)
-    assert any(
+    assert not any(
         diagnostic.code is AgentDiagnosticCode.FORBIDDEN_TOOL
-        and "multiedit" in diagnostic.message
         for diagnostic in mgr.security
     )
     selection = mgr.select_tools(
         "explore", available={"multiedit"}, mutating=set()
     )
-    assert selection.selected == frozenset()
+    assert selection.selected == frozenset({"multiedit"})
 
 
-def test_read_only_role_inherits_the_ceiling_without_mutating(tmp_path):
-    # No declaration at all: an ordinary agent inherits everything, but a
-    # read-only role inherits everything *except* the write path.
+def test_former_read_only_role_inherits_the_whole_ceiling(tmp_path):
+    # No declaration at all: every agent, including the former read-only names,
+    # inherits the whole ceiling (read-only is prompt guidance only).
     mgr = manager(tmp_path, known_bundles=seed_bundle_map())
     ordinary = AgentDef(
         name="worker",
@@ -1091,9 +1087,7 @@ def test_read_only_role_inherits_the_ceiling_without_mutating(tmp_path):
     assert worker.selected == frozenset(
         {"read", "write", "edit", "multiedit", "glob", "grep", "ls", "bash"}
     )
-    assert not (scout.selected & FORBIDDEN_ROLE_TOOLS)
-    assert "SomeDynamicWrite" not in scout.selected
-    assert scout.selected == frozenset({"read", "glob", "grep"})
+    assert scout.selected == worker.selected
 
 
 def test_exclusions_can_only_remove_from_the_ceiling(tmp_path):
@@ -1106,9 +1100,8 @@ def test_exclusions_can_only_remove_from_the_ceiling(tmp_path):
     assert "write" in selection.stripped or "write" in selection.dropped
 
 
-def test_declarations_are_not_grants_for_read_only_names(tmp_path):
-    # The read-only contract follows the *name*, so a workspace shadow cannot
-    # escape it: a file at the workspace path still cannot hold Bash.
+def test_declarations_on_former_read_only_names_are_kept(tmp_path):
+    # No name is read-only any more: a declared Bash is kept (within the ceiling).
     mgr = AgentManager(roots=[(AgentSource.WORKSPACE, tmp_path / "workspace")])
     write_agent(
         tmp_path / "workspace",
@@ -1122,8 +1115,8 @@ def test_declarations_are_not_grants_for_read_only_names(tmp_path):
         available={"Bash", "Read"},
         bundle_map={"shell": ["Bash"]},
     )
-    assert selection.selected == frozenset({"read"})
-    assert selection.read_only
+    assert selection.selected == frozenset({"read", "bash"})
+    assert not selection.read_only
 
 
 def _provenance(tmp_path: Path, name: str):
@@ -1140,10 +1133,10 @@ def _provenance(tmp_path: Path, name: str):
     )
 
 
-def test_read_only_roles_constant_covers_shell_and_mutating_fs():
+def test_no_role_is_structurally_read_only():
     assert {"bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
     assert {"write", "edit", "multiedit"} <= FORBIDDEN_ROLE_TOOLS
-    assert READ_ONLY_ROLES == frozenset({"advisor", "explore", "plan", "planner"})
+    assert READ_ONLY_ROLES == frozenset()  # user decision 2026-10-17
 
 
 def test_seed_error_is_an_agent_error(tmp_path, monkeypatch):

@@ -1,16 +1,16 @@
-//! Full-width Sessions dashboard (Grok style). Rows are grouped by last-updated time
-//! (Today, Yesterday, This week, Earlier), two lines each (`◇ Title · branch project … age`,
-//! then a one-line summary) between a blank padding row above and below, all part of the
-//! row's band, hit target and selection background. A `/ Search sessions` row sits
-//! above the first group. Nothing expands inline and there is no preview pane: the list
-//! uses the whole region above the composer. The composer is the normal composer; this
-//! module does not draw one.
+//! Compact, centered Sessions page (a bordered, Settings-like card, at most `PAGE_WIDTH`
+//! wide and as tall as its content). Rows are grouped by last-updated time (Today,
+//! Yesterday, This week, Earlier), one line each: the status glyph, the name, and the
+//! last-used time. A `/ Search sessions` row sits
+//! above the first group. Nothing expands inline and there is no preview pane or composer.
+const PAGE_WIDTH: u16 = 72;
+
 use crate::picker::{section, section_label, text, Dashboard};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Block, BorderType, Clear, Paragraph},
     Frame,
 };
 use serde_json::Value;
@@ -83,56 +83,6 @@ fn age_of(row: &Value) -> &str {
         text(row, "sub")
     } else {
         age
-    }
-}
-
-fn meta_of(row: &Value) -> String {
-    let branch = text(row, "branch");
-    let project = text(row, "project");
-    match (branch.is_empty(), project.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => format!(" · {branch}"),
-        (true, false) => format!(" · {project}"),
-        (false, false) => format!(" · {branch} {project}"),
-    }
-}
-
-/// First line of Markdown source as plain text: markers stripped, cut at the first
-/// sentence end when that leaves a usable summary.
-fn plain_summary(source: &str) -> String {
-    let line = source
-        .lines()
-        .map(|l| l.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']))
-        .find(|l| !l.is_empty() && !l.starts_with("```"))
-        .unwrap_or("");
-    let line = line
-        .trim_start_matches(|c: char| c.is_ascii_digit())
-        .trim_start_matches(". ");
-    let mut out = line
-        .replace("**", "")
-        .replace("__", "")
-        .replace(['`', '*'], "");
-    if let Some(at) = out.find(". ") {
-        if at >= 12 {
-            out.truncate(at + 1);
-        }
-    }
-    out.trim().to_owned()
-}
-
-fn one_line(row: &Value, user: &str, agent: &str, activity: &str) -> String {
-    let (user, agent) = (plain_summary(user), plain_summary(agent));
-    let (user, agent, activity) = (user.as_str(), agent.as_str(), activity);
-    if !activity.is_empty() {
-        return activity.to_owned();
-    }
-    if text(row, "status") == "working" && agent.is_empty() {
-        return "Waiting for response...".to_owned();
-    }
-    if !agent.is_empty() {
-        agent.to_owned()
-    } else {
-        user.to_owned()
     }
 }
 
@@ -223,7 +173,6 @@ pub fn draw(
     colors: &Colors,
     spin: usize,
 ) {
-    let full = area;
     let (bg, fg) = if area.is_empty() {
         (Color::Reset, Color::Reset)
     } else {
@@ -245,17 +194,16 @@ pub fn draw(
         return;
     }
     state.sync(dashboard);
-    // Two-column gutters on both sides; row backgrounds and the rail use `full`.
-    let area = Rect {
-        x: area.x + 2,
-        width: area.width - 4,
-        ..area
-    };
+    // A compact centered page, like a Settings page: the screen shows around it.
+    let screen = area;
+    let page_width = screen.width.min(PAGE_WIDTH).max(12);
     let all = rows_of(dashboard);
     let shown = state.filtered(all);
     let quiet = Style::default().fg(colors.quiet);
     let muted = Style::default().fg(colors.muted);
-    let width = usize::from(area.width);
+    // Inside the border; the header keeps two-column gutters, rows use `list_width`.
+    let list_width = usize::from(page_width.saturating_sub(2));
+    let width = list_width.saturating_sub(4);
 
     let chips = status_chips(&shown, colors, width / 2);
     let chips_w = spans_width(&chips);
@@ -384,8 +332,110 @@ pub fn draw(
         None
     };
 
+    // One line per session: status glyph, name, last-used time. Groups keep a heading.
+    let mut lines: Vec<RowLine> = Vec::new();
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (index, row) in shown.iter().enumerate() {
+        let key = if state.by_project {
+            text(row, "group").to_owned()
+        } else {
+            section_label(section(row)).to_owned()
+        };
+        if groups.last().is_none_or(|(name, _)| name != &key) {
+            groups.push((key, Vec::new()));
+        }
+        groups.last_mut().unwrap().1.push(index);
+    }
+    for (key, members) in &groups {
+        let collapsed = state.collapsed.contains(key);
+        let chevron = if collapsed { "▸" } else { "▾" };
+        let label = format!("{chevron} {key}");
+        let count = format!(" {}", members.len());
+        lines.push((
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(label, muted),
+                Span::styled(count, quiet),
+            ]),
+            None,
+            Some(key.clone()),
+        ));
+        if collapsed {
+            continue;
+        }
+        for index in members {
+            let row = shown[*index];
+            let id = text(row, "id");
+            let is_selected = id == state.selected_id;
+            let is_hover = !is_selected && id == state.hovered_id;
+            let renaming = is_selected.then(|| state.rename.clone()).flatten();
+            let bg = if is_selected {
+                Some(colors.selected)
+            } else if is_hover {
+                Some(colors.hover)
+            } else {
+                None
+            };
+            let (mut title, _close) = title_spans(
+                row,
+                list_width,
+                is_selected,
+                renaming.as_deref(),
+                colors,
+                spin,
+            );
+            title.insert(0, status_glyph(text(row, "status"), colors, spin));
+            title.insert(1, Span::raw(" "));
+                title.insert(0, Span::raw("  "));
+            lines.push((band(title, list_width, bg), Some(*index), None));
+        }
+    }
+    if lines.is_empty() {
+        let empty = if state.query.is_empty() {
+            "No sessions yet · n starts one"
+        } else {
+            "No session matches the filter"
+        };
+        lines.push((
+            Line::from(vec![Span::raw("  "), Span::styled(empty, muted)]),
+            None,
+            None,
+        ));
+    }
+    // Size the page to its content (header bands, list, footer, border), centered on screen
+    // with at least one blank row above and below when the screen is tall enough.
+    let chrome = 5 + u16::from(footer.is_some()) + 2;
+    let margin = if screen.height > chrome + 2 { 1 } else { 0 };
+    let page_height = ((lines.len() + 1).min(usize::from(u16::MAX)) as u16)
+        .saturating_add(chrome)
+        .min(screen.height.saturating_sub(2 * margin))
+        .max(chrome.min(screen.height));
+    let page = Rect {
+        x: screen.x + (screen.width - page_width) / 2,
+        y: screen.y + (screen.height - page_height) / 2,
+        width: page_width,
+        height: page_height,
+    };
+    frame.render_widget(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(colors.border_strong)),
+        page,
+    );
+    let inner = Rect {
+        x: page.x + 1,
+        y: page.y + 1,
+        width: page.width.saturating_sub(2),
+        height: page.height.saturating_sub(2),
+    };
+    let area = Rect {
+        x: inner.x + 2,
+        width: inner.width.saturating_sub(4),
+        height: inner.height,
+        ..inner
+    };
+
     let mut constraints = vec![
-        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -400,6 +450,7 @@ pub fn draw(
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area);
+    let list_band = 5;
     frame.render_widget(Paragraph::new(Line::from(header)), bands[0]);
     frame.render_widget(Paragraph::new(Line::from(actions)), bands[2]);
     if show_hint {
@@ -461,113 +512,18 @@ pub fn draw(
     } else {
         Line::from(Span::styled("/ Search sessions", quiet))
     };
-    frame.render_widget(Paragraph::new(search), bands[4]);
-    state.search_hit = bands[4];
+    frame.render_widget(Paragraph::new(search), bands[3]);
+    state.search_hit = bands[3];
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "─".repeat(usize::from(area.width)),
-            Style::default().fg(colors.border),
-        ))),
-        bands[5],
+        Paragraph::new(Line::from(Span::styled("─".repeat(usize::from(area.width)), Style::default().fg(colors.border)))),
+        bands[4],
     );
 
     let list = Rect {
-        x: full.x,
-        width: full.width,
-        ..bands[6]
+        x: inner.x,
+        width: inner.width,
+        ..bands[list_band]
     };
-    let mut lines: Vec<RowLine> = Vec::new();
-    let mut archive_at: Option<(usize, (usize, usize))> = None;
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for (index, row) in shown.iter().enumerate() {
-        let key = if state.by_project {
-            text(row, "group").to_owned()
-        } else {
-            section_label(section(row)).to_owned()
-        };
-        if groups.last().is_none_or(|(name, _)| name != &key) {
-            groups.push((key, Vec::new()));
-        }
-        groups.last_mut().unwrap().1.push(index);
-    }
-    let list_width = usize::from(list.width);
-    for (key, members) in &groups {
-        if !lines.is_empty() && lines.last().is_some_and(|(_, index, _)| index.is_some()) {
-            lines.push((Line::default(), None, None));
-        }
-        let collapsed = state.collapsed.contains(key);
-        let chevron = if collapsed { "▸" } else { "▾" };
-        let label = format!("{chevron} {key}");
-        let count = format!(" {}", members.len());
-        let used = 2 + label.width() + count.width() + 1;
-        let rule = "─".repeat(list_width.saturating_sub(used + 2));
-        lines.push((
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(label, muted.add_modifier(Modifier::BOLD)),
-                Span::styled(count, quiet),
-                Span::styled(format!(" {rule}"), Style::default().fg(colors.border)),
-            ]),
-            None,
-            Some(key.clone()),
-        ));
-        if collapsed {
-            continue;
-        }
-        lines.push((Line::default(), None, None));
-        for index in members {
-            let row = shown[*index];
-            let summary = one_line(
-                row,
-                text(row, "last_user"),
-                text(row, "last_agent"),
-                text(row, "activity"),
-            );
-            let id = text(row, "id");
-            let is_selected = id == state.selected_id;
-            let is_hover = !is_selected && id == state.hovered_id;
-            let renaming = is_selected.then(|| state.rename.clone()).flatten();
-            let bg = if is_selected {
-                Some(colors.selected)
-            } else if is_hover {
-                Some(colors.hover)
-            } else {
-                None
-            };
-            let (mut title, close) = title_spans(
-                row,
-                list_width,
-                is_selected,
-                renaming.as_deref(),
-                colors,
-                spin,
-            );
-            lines.push((band(Vec::new(), list_width, bg), Some(*index), None));
-            if let Some(close) = close {
-                archive_at = Some((lines.len(), close));
-            }
-            let second = vec![
-                Span::raw("     "),
-                Span::styled(fit(&summary, list_width.saturating_sub(9).max(1)), quiet),
-            ];
-            title.insert(0, Span::raw("  "));
-            lines.push((band(title, list_width, bg), Some(*index), None));
-            lines.push((band(second, list_width, bg), Some(*index), None));
-            lines.push((band(Vec::new(), list_width, bg), Some(*index), None));
-        }
-    }
-    if lines.is_empty() {
-        let empty = if state.query.is_empty() {
-            "No sessions yet · n starts one"
-        } else {
-            "No session matches the filter"
-        };
-        lines.push((
-            Line::from(vec![Span::raw("  "), Span::styled(empty, muted)]),
-            None,
-            None,
-        ));
-    }
     let height = usize::from(list.height).max(1);
     let selected_line = lines
         .iter()
@@ -610,16 +566,6 @@ pub fn draw(
         .collect();
     state.list_area = list;
     state.archive_hit = Rect::default();
-    if let Some((at, (start, len))) = archive_at {
-        if at >= top && at < top + height {
-            state.archive_hit = Rect {
-                x: list.x + start as u16,
-                y: list.y + (at - top) as u16,
-                width: len as u16,
-                height: 1,
-            };
-        }
-    }
     frame.render_widget(
         Paragraph::new(
             visible
@@ -630,12 +576,12 @@ pub fn draw(
         list,
     );
     if let Some(line) = footer {
-        frame.render_widget(Paragraph::new(line), bands[7]);
+        frame.render_widget(Paragraph::new(line), bands[5]);
     }
 }
 
-/// Title row content (after the 2-column indent) and, on the selected row, the `[×]`
-/// archive target as (start column, width) within the list.
+/// One-line session row: status, title, and last-used time. Archive actions remain available
+/// through the existing keyboard command and selected-row controls outside this compact row.
 fn title_spans(
     row: &Value,
     width: usize,
@@ -645,12 +591,7 @@ fn title_spans(
     spin: usize,
 ) -> (Vec<Span<'static>>, Option<(usize, usize)>) {
     let quiet = Style::default().fg(colors.quiet);
-    let tail = if selected {
-        "[×]".to_owned()
-    } else {
-        age_of(row).to_owned()
-    };
-    let meta = meta_of(row);
+    let tail = age_of(row).to_owned();
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
         None => text(row, "title").to_owned(),
@@ -658,25 +599,16 @@ fn title_spans(
     // Inset (1+1), indent (2), glyph and space (2), a gap, and two trailing columns.
     let inner = width.saturating_sub(2);
     let room = inner.saturating_sub(2 + 2 + 1 + 2 + tail.width());
-    let meta = if title.width() + meta.width() > room {
-        String::new()
-    } else {
-        meta
-    };
-    let title = fit(&title, room.saturating_sub(meta.width()).max(1));
-    let pad = inner
-        .saturating_sub(2 + 2 + title.width() + meta.width() + tail.width() + 2)
-        .max(1);
-    let close = selected.then(|| (1 + 2 + 2 + title.width() + meta.width() + pad, tail.width()));
+    let title = fit(&title, room.max(1));
+    let close = None;
     let spans = vec![
         status_glyph(text(row, "status"), colors, spin),
         Span::raw(" "),
         Span::styled(title, Style::default().fg(colors.text)),
-        Span::styled(meta, quiet),
-        Span::raw(" ".repeat(pad)),
+        Span::raw(" "),
         Span::styled(tail, quiet),
-        Span::raw("  "),
     ];
+    let _ = (selected, quiet);
     (spans, close)
 }
 
@@ -734,18 +666,45 @@ mod tests {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
         assert!(
-            screen.contains("Today") && screen.contains("Alpha") && screen.contains("Yesterday")
+            screen.contains("Alpha") && screen.contains("Beta")
         );
         assert!(screen.contains("/ Search sessions"));
         assert!(
-            screen.contains("Python sample: frozen Task"),
-            "second row summary"
+            !screen.contains("Python sample: frozen Task"),
+            "rows are one line: no summary"
         );
         assert!(!screen.contains("Response"), "no preview pane");
         assert!(screen.contains("+ New Agent") && screen.contains("Open Previous"));
         assert!(screen.contains("main") && screen.contains("~/repos/nexus"));
         assert!(state.list_area.width >= 56);
         assert!(state.new_hit.width > 0 && state.resume_hit.width > 0);
+    }
+
+    #[test]
+    fn page_is_compact_and_centered() {
+        let mut state = Dashboard::default();
+        let screen = render(140, 40, &sample(), &mut state);
+        let list = state.list_area;
+        assert!(list.width <= PAGE_WIDTH, "not full width: {}", list.width);
+        let left = list.x;
+        let right = 140 - (list.x + list.width);
+        assert_eq!(left, right,"horizontally centered");
+        assert!(state.new_hit.x > 30 && state.search_hit.x > 30);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert!(lines[0].trim().is_empty(), "not full-screen: top row empty");
+        assert!(lines[39].trim().is_empty(), "not full-screen: bottom row empty");
+        assert!(screen.contains('╭') && screen.contains('╯'), "bordered card");
+    }
+
+    #[test]
+    fn each_session_is_one_line_with_status_icon_name_and_age() {
+        let mut state = Dashboard::default();
+        let screen = render(140, 30, &sample(), &mut state);
+        let beta = screen.lines().find(|l| l.contains("Beta")).unwrap();
+        assert!(beta.contains("◆ Beta") && beta.contains("now"), "{beta}");
+        assert!(!beta.contains("feat/ui"), "no branch on the row: {beta}");
+        let alpha = screen.lines().find(|l| l.contains("Alpha")).unwrap();
+        assert!(alpha.contains("◇ Alpha") && alpha.contains("2m"), "{alpha}");
     }
 
     #[test]
@@ -760,30 +719,12 @@ mod tests {
     fn rows_map_to_click_targets() {
         let mut state = Dashboard::default();
         render(140, 30, &sample(), &mut state);
-        assert_eq!(
-            state.line_rows[..5],
-            [None, None, Some(0), Some(0), Some(0)]
-        );
-        assert_eq!(state.line_rows[5], Some(0), "top and bottom padding");
+        // Each session row maps directly to its displayed row.
+        assert_eq!(state.line_rows.iter().flatten().copied().collect::<Vec<_>>(), [0, 1]);
         state.click(state.list_area.x, state.list_area.y + 2, &sample());
         assert_eq!(state.selected_id, "a");
-        state.click(state.list_area.x, state.list_area.y + 9, &sample());
-        assert_eq!(state.selected_id, "b");
-    }
-
-    #[test]
-    fn each_row_has_a_top_padding_line_inside_its_band() {
-        let mut state = Dashboard::default();
-        render(140, 30, &sample(), &mut state);
-        let rows = &state.line_rows;
-        // heading, spacer, then 4 lines per session: pad, title, summary, pad
-        assert_eq!(rows[..2], [None, None]);
-        assert_eq!(rows[2..6], [Some(0); 4]);
-        // the second session's band starts after any group separator/heading
-        let start = rows.iter().position(|row| *row == Some(1)).unwrap();
-        assert!(start >= 6);
-        assert_eq!(rows[start..start + 4], [Some(1); 4]);
-        assert_eq!(rows.iter().filter(|row| **row == Some(1)).count(), 4);
+        state.click(state.list_area.x, state.list_area.y + 1, &sample());
+        assert_eq!(state.selected_id, "a");
     }
 
     #[test]
@@ -833,15 +774,12 @@ mod tests {
     }
 
     #[test]
-    fn selected_row_shows_a_clickable_close_instead_of_the_age() {
+    fn selected_row_keeps_its_age_and_archive_is_available_from_the_keyboard() {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("[×]") && screen.contains("now"));
-        assert!(!screen.contains("2m"), "selected age is replaced");
-        assert_eq!(state.archive_hit.width, 3);
-        let op = state.click(state.archive_hit.x, state.archive_hit.y, &sample());
-        assert!(op.is_none());
-        assert_eq!(state.confirm_archive.as_deref(), Some("a"));
+        assert!(screen.contains("now") && screen.contains("2m"));
+        assert!(!screen.contains("[×]"), "rows remain compact and single-line");
+        assert_eq!(state.archive_hit.width, 0);
         assert!(state.search_hit.width > 0);
         state.click(state.search_hit.x, state.search_hit.y, &sample());
         assert!(state.searching);
@@ -855,12 +793,4 @@ mod tests {
         assert!(screen.contains("Beta") && !screen.contains("Alpha"));
     }
 
-    #[test]
-    fn plain_summary_is_first_line() {
-        assert_eq!(
-            plain_summary("# Hello **world** from `mock`. More text follows\n- item"),
-            "Hello world from mock."
-        );
-        assert_eq!(plain_summary("```\ncode"), "code");
-    }
 }
