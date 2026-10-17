@@ -155,3 +155,17 @@ The reducer retains it as `AgentView.selected_model`; it is never treated as
 `resolved_model` or counted as a model start. Terminal links label it selected /
 not started and display the redacted configuration error. Replay reproduces
 this disclosure.
+
+## Compact question rendering and expected shutdown cancellation
+
+The Ratatui projection renders a Question Tool call as the prompt plus one line per option,
+marking the recorded answer. Free-text answers render as text, and an unanswered call is
+labelled awaiting answer; full labelled details remain available through the inspector or
+verbose mode. This is a view-only presentation and does not change how the pending-question
+prompt accepts an answer. The projection also suppresses the duplicate generic tool summary
+from a completed compact question card.
+
+A `turn.cancelled` with the supervisor's expected `supervisor closing` reason has
+`phase="cancelled"` but no view error, avoiding a misleading `Error:` row during shutdown.
+Other cancellation reasons and all `turn.failed` errors are retained. See the catalogue
+above and `ratatui-parity.md` for focused test and visual-verification caveats.

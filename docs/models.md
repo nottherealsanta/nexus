@@ -31,7 +31,17 @@ run the [provider-onboarding.md](provider-onboarding.md) stream inventory as wel
 - `Thinking.signature` is opaque, replayed verbatim where the provider needs it
   (Anthropic multi-turn thinking), and never displayed.
 - `ToolResult.content` is a block list (tools return images; MCP returns mixed
-  content).
+  content). On the OpenAI-family adapters, tool-result images reach vision
+  models (`capabilities.vision`): Responses sends labelled `input_image` parts in
+  the `function_call_output.output` array (the documented array form); Chat
+  Completions, whose `tool` role is text-only, appends one labelled synthetic
+  `user` message after the contiguous `tool` messages (Copilot keeps it
+  agent-initiated and sets the vision header). Each image is labelled as
+  untrusted tool output; only inline PNG/JPEG/WebP/GIF data is sent (never a
+  tool-supplied URL), at most 8 images / 20 MB per request, newest kept. Anything
+  not sent (no vision, other type, over budget) leaves an explicit text note.
+  Array-form `function_call_output` on OpenAI-compatible gateways is not verified
+  live. The UI does not yet render tool-result images.
 - Switching provider mid-session is allowed, lossy and visible: each adapter
   declares a degradation policy (`drop`/`to_text`/`error`) and the loop emits
   `context.degraded`.
@@ -47,7 +57,7 @@ with a `base_url`.
 | `anthropic.py` | `anthropic` | Messages API; `count_tokens` endpoint; `usage_input_excludes_cache` |
 | `openai.py` | `openai`, `codex`, any `kind = "openai_compatible"` | Responses and Chat Completions behind one class (`api = "responses"\|"chat"`); `EndpointFallback` remembers the dialect a model accepts when a host serves some models on only one endpoint (GitHub Copilot, OpenCode Go) |
 | `gemini.py` | `google`, `gemini`, `kind = "google"` | `generateContent` streaming; synthetic call ids |
-| `xai.py` | `xai` | xAI Grok preset over `OpenAIProvider`: the Grok CLI subscription proxy `https://cli-chat-proxy.grok.com/v1` (sends `x-xai-token-auth: xai-grok-cli`; authenticated inference there is not yet verified live), `api = "responses"` default (`chat` selectable). **Subscription only:** the section must set `auth = "xai_oauth"` (SuperGrok sign-in); an API key, an env variable, a bare section or any other `kind = "xai"` route is a `ConfigError`. `store: false` on Responses; session id as `x-grok-conv-id`; non-PNG/JPEG/WebP images become a text note; no token counter. Verified live 2026-10-14: SuperGrok device sign-in from Settings (xAI accepted `referrer = nexus`) and grok-4.7 turns over `/responses` with usage and a normal stop (`tests/test_xai_live.py`, `nexus chat`). This is historical verification against `api.x.ai`, before the switch to the Grok CLI proxy; it does not verify current inference through the proxy |
+| `xai.py` | `xai` | xAI Grok preset over `OpenAIProvider`: the Grok CLI subscription proxy `https://cli-chat-proxy.grok.com/v1` (sends `x-xai-token-auth: xai-grok-cli`; authenticated inference there is not yet verified live), `api = "responses"` default (`chat` selectable). **Subscription only:** the section must set `auth = "xai_oauth"` (SuperGrok sign-in); an API key, an env variable, a bare section or any other `kind = "xai"` route is a `ConfigError`. `store: false` on Responses; session id as `x-grok-conv-id`; non-PNG/JPEG/WebP images (including inside tool results) become a text note; no token counter. Verified live 2026-10-14: SuperGrok device sign-in from Settings (xAI accepted `referrer = nexus`) and grok-4.7 turns over `/responses` with usage and a normal stop (`tests/test_xai_live.py`, `nexus chat`). This is historical verification against `api.x.ai`, before the switch to the Grok CLI proxy; it does not verify current inference through the proxy |
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
 | `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |

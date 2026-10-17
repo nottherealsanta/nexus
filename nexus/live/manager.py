@@ -936,10 +936,6 @@ class LiveManager:
                 transcript.append((role, lost + _clip_spoken(partial)))
                 call.sent_partial[role] = partial
         text = event.text
-        if len(text) > MAX_DELEGATION_CHARS:
-            over = len(text) - MAX_DELEGATION_CHARS
-            text = f"{text[:MAX_DELEGATION_CHARS]}\n[… {over} more characters omitted]"
-            self._record_error(call, f"A spoken request was too long and its last {over} characters were not sent")
         task = asyncio.create_task(
             bridge.on_delegation(event.id, text, call.partial.get("user") or call.last_heard, transcript=transcript),
             name="nexus-live-delegation",

@@ -1570,10 +1570,10 @@ mod tests {
         let line =
             |i: usize| -> String { rows[i].0.spans.iter().map(|s| s.content.as_ref()).collect() };
         // Marker-free labels share an inset; bracketed counts follow immediately.
-        assert!(line(0).starts_with("  │  Tools [13]"), "{}", line(0));
-        assert!(line(2).starts_with("  │  Skills [1 3]"), "{}", line(2));
+        assert!(line(0).starts_with("     Tools [13]"), "{}", line(0));
+        assert!(line(2).starts_with("     Skills [1 3]"), "{}", line(2));
         assert!(line(2).contains("Skills [1 3]"), "{}", line(2));
-        assert!(rows[0].0.spans[3]
+        assert!(rows[0].0.spans[1]
             .style
             .add_modifier
             .contains(Modifier::BOLD));

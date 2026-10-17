@@ -124,6 +124,30 @@ async def fixture():
                 {"id": "u", "kind": "markdown", "rev": "1", "text": "Context is listed above; the prompt tail follows."}]
         else:
             raise SystemExit(f"unknown grok scene: {scene}")
+    elif state.startswith("live-"):
+        # live-<phase>[-open]: a canned GPT Live pane, no helper, microphone or network.
+        # Phases: connecting|listening|speaking|working|muted|paused|ended|error.
+        _, phase, *flags = state.split("-")
+        rows = [("dim", "Started", "instructions: bundled · 2 earlier turns carried over"),
+                ("you", "You", "Please fix the parser and run the tests."),
+                ("sent", "Sent to agent (steer)", "Fix the parser and run the tests.  → turn #3"),
+                ("voice", "Voice", "On it, I have asked the agent to start."),
+                ("caption", "You…", "and also check the lint")]
+        if phase == "error":
+            rows.append(("bad", "Error", "Realtime connection dropped; reconnecting"))
+        if phase == "ended":
+            rows.append(("dim", "Ended", "user · 02:14"))
+        opened = "open" in flags
+        if opened:
+            rows[1:1] = [("dim", "", "  You are a voice assistant for the Nexus coding agent."), ("note", "Told voice", "2 progress notes (commentary)")]
+        snapshot["live"] = {
+            "active": True, "state": "stopping" if phase == "ended" else "starting" if phase == "connecting" else "active",
+            "phase": "listening" if phase == "error" else phase, "model": "gpt-realtime", "muted": phase == "muted",
+            "paused": phase == "paused", "pause_left": 95.0 if phase == "paused" else 0.0,
+            "started": __import__("time").time() - 134, "in": 0.0 if phase in {"muted", "paused"} else 0.62,
+            "out": 0.8 if phase == "speaking" else 0.1, "elsewhere": "",
+            "detail": "\n".join(f"{t}\t{label}\t{text}" for t, label, text in rows),
+            "collapsed": not opened, "operation": {"kind": "live_toggle", "id": "demo"}}
     elif state == "subagent":
         from ratatui_fixture import subagent_fixture
         agent, context = subagent_fixture()

@@ -45,7 +45,7 @@ from typing import Any
 import msgspec
 
 from ...errors import ProviderError
-from ..message import Image, Message, Text
+from ..message import Image, Message, Text, ToolResult
 from ..stream import StreamEvent
 from ..request import ModelRequest
 from .openai import API_RESPONSES, OpenAIProvider
@@ -113,13 +113,23 @@ def _supported(block: Image) -> bool:
     return block.media_type.strip().lower() in SUPPORTED_IMAGE_TYPES
 
 
+def _filter_result(block: ToolResult) -> ToolResult:
+    if all(not isinstance(item, Image) or _supported(item) for item in block.content):
+        return block
+    content = [_image_note(item) if isinstance(item, Image) and not _supported(item) else item
+               for item in block.content]
+    return msgspec.structs.replace(block, content=content)
+
+
 def _filter_images(message: Message) -> Message:
-    """Replace unsupported image blocks with a note. Tool-result images never
-    reach the wire (the OpenAI dialects flatten tool results to text)."""
-    if not any(isinstance(block, Image) and not _supported(block) for block in message.content):
-        return message
-    content = [_image_note(block) if isinstance(block, Image) and not _supported(block) else block
+    """Replace unsupported image blocks, including those inside tool results
+    (which the OpenAI dialects forward on vision models), with a note."""
+    content = [_filter_result(block) if isinstance(block, ToolResult)
+               else _image_note(block) if isinstance(block, Image) and not _supported(block)
+               else block
                for block in message.content]
+    if all(new is old for new, old in zip(content, message.content, strict=True)):
+        return message
     return msgspec.structs.replace(message, content=content)
 
 

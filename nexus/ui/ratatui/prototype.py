@@ -57,6 +57,25 @@ def _worktree_name(workspace) -> str:
         return ""
 
 
+async def refresh_branch(shell) -> None:
+    """Re-read the current workspace's branch from ``.git`` off the event loop.
+
+    Sets ``breadcrumb`` (``path › branch``), ``branch`` and ``worktree`` for whichever
+    workspace the active tab shows. A result is dropped when the tab moved on meanwhile.
+    """
+    from ...host_support.git_head import git_head
+    workspace = str(shell.workspace or "")
+    if not workspace:
+        return
+    head, worktree = await asyncio.to_thread(lambda: (git_head(workspace), _worktree_name(workspace)))
+    if str(shell.workspace or "") != workspace:
+        return
+    branch = str(head.get("branch") or "")
+    shell.branch = branch
+    shell.worktree = worktree
+    shell.breadcrumb = workspace + (" › " + branch if branch else "")
+
+
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
     """Abbreviate only the actual home component; show the branch as ``path:branch``."""
     home_text = str(Path.home() if home is None else home).rstrip("/")
@@ -203,8 +222,6 @@ def _change_block(tool, shell, local_ui, body):
         suffix = tool_summary(tool)
     is_question = tool.name.casefold() == "question"
     compact = _question_detail(tool, status) if is_question else ""
-    if is_question and status == "completed":
-        suffix = tool_summary(tool)
     op_id, out_id = tool.call_id + ":change", tool.call_id + ":change-output"
     detail = "" if rows else body
     if compact and not (shell and shell.verbose):  # /verbose and `i` keep the raw labelled details
@@ -451,7 +468,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                      "status": "running" if running else "done",
                      "model": model, "tier": tier, "metrics": _agent_card_metrics(child),
                      "color": _agent_color(shell, child.type or child.id) if child else "", "operation": operation,
-                     "detail": detail, "inspect_operation": inspect}
+                     "text": "", "detail": detail, "inspect_operation": inspect}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
             continue
         if tool.name.casefold() in STANDALONE_TOOLS:
@@ -647,7 +664,7 @@ def _details_panel(controller, view, shell):
             ("Created", stamp(view.turns[0].started_ts) if view.turns else "unavailable"),
             ("Updated", stamp(view.turns[-1].updated_ts) if view.turns else "unavailable"),
             ("Workspace", str(getattr(shell, "workspace", "") or "unavailable")),
-            ("Branch", str((report.get("git") or {}).get("branch") or "unavailable"))]
+            ("Branch", str(getattr(shell, "branch", "") or (report.get("git") or {}).get("branch") or "unavailable"))]
     return {
         "tab": shell.preferences.values["details_tab"] if shell else "Session",
         "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
@@ -751,13 +768,29 @@ def _queue_items(view, slot_wait=None):
 
     Each row carries its durable ``queued_id`` so ↑ ↓ ✕ act on exactly that
     message; the tag is ``S`` (steer), ``Q`` (queue) or ``I`` (interrupt).
+
+    ``can_up``/``can_down`` are true only when the adjacent waiting item in the real queue
+    is in the same group (steering = steer + interrupt, or queued), because a move swaps
+    exactly with that neighbour: swapping across groups would change nothing the user can
+    see (steers are consumed at the next model boundary in queue order, queued items one
+    turn at a time after the turn ends). The first waiting item has no movable neighbour
+    above it: the one before it in the host queue is the turn's own, unlisted input.
     """
     from ...ui_support.text import sanitize
     tags = {"steer": "S", "queue": "Q", "interrupt": "I"}
+    waiting = _waiting_inputs(view, slot_wait)
+
+    def group(item):
+        return "queue" if item.mode not in {"steer", "interrupt"} else "steer"
+
+    def same(index, other):
+        return 0 <= other < len(waiting) and group(waiting[index]) == group(waiting[other])
+
     return [{"id": item.queued_id, "tag": tags.get(item.mode, "Q"), "mode": item.mode,
+             "can_up": same(index, index - 1), "can_down": same(index, index + 1),
              "text": escape_controls(sanitize("".join(
                  block.get("text", "") for block in item.content if isinstance(block, dict)), 160))}
-            for item in _waiting_inputs(view, slot_wait)[:64] if item.queued_id]
+            for index, item in enumerate(waiting[:64]) if item.queued_id]
 
 
 def _tab_rows(controller, shell):
@@ -1221,7 +1254,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         return repr((shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
-                     shell.breadcrumb))
+                     shell.breadcrumb, shell.worktree))
     async def poll():
         preview_cursor = -1
         last_polled = None
@@ -1291,7 +1324,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             async def logs():
                 if shell.logs.open and shell.logs.visible:
                     await shell.logs.poll()
-            for label, work in (("Sessions", sessions), ("Dictation", dictation), ("Health", health), ("Context", context), ("Logs", logs)):
+            for label, work in (("Sessions", sessions), ("Branch", lambda: refresh_branch(shell)), ("Dictation", dictation),
+                                ("Health", health), ("Context", context), ("Logs", logs)):
                 await section(label, work)
             if failures:
                 shell.notice = "; ".join(failures)
@@ -1322,8 +1356,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             """Everything the first paint does not need, concurrently, each repainting when it lands."""
             async def breadcrumb():
                 try:
-                    git = (await client.doctor()).report.get("git", {})
-                    shell.breadcrumb = str(workspace) + (" › " + str(git.get("branch")) if git.get("branch") else "")
+                    await refresh_branch(shell)
                 except Exception:  # noqa: BLE001 - the path alone is enough
                     pass
 
@@ -1384,6 +1417,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     ):
                         process.stdin.close()
                         break
+                    if action["text"].lstrip().startswith("!"):  # a shell command may have switched branch
+                        before = shell.breadcrumb
+                        await refresh_branch(shell)
+                        if shell.breadcrumb != before:
+                            await update(immediate=False)
                 elif action["type"] == "draft_changed":
                     shell.reconcile_attachment_markers(action["text"])
                 elif action["type"] == "cancel":

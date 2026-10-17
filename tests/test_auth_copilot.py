@@ -13,6 +13,7 @@ from nexus.auth.copilot import (
     ACCESS_TOKEN_URL,
     CLIENT_ID,
     DEVICE_CODE_URL,
+    TOOL_IMAGE_FOLLOWUP,
     VERIFY_URL,
     CopilotAuthManager,
     CopilotHeaders,
@@ -309,6 +310,28 @@ def test_copilot_request_headers_mark_follow_ups_as_agent_initiated():
     assert headers.request_headers(follow_up) == {"x-initiator": "agent"}
     image = {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]}
     assert headers.request_headers(image) == {"x-initiator": "user", "copilot-vision-request": "true"}
+
+
+def test_copilot_tool_result_images_set_vision_and_keep_agent_initiator():
+    from nexus.model.message import Image, Message, Text, ToolResult, ToolUse
+    from nexus.model.providers.openai import build_request_body
+    from nexus.model.request import ModelRequest
+
+    headers = CopilotHeaders(CopilotAuthManager(store=MemorySecrets()))
+    shot = ToolResult(tool_use_id="c1", content=[Text(text="s"), Image(media_type="image/png", data=b"png")])
+    history = [
+        Message(role="user", content=[Text(text="go")]),
+        Message(role="assistant", content=[ToolUse(id="c1", name="shot", input={})]),
+        Message(role="user", content=[shot]),
+    ]
+    expected = {"x-initiator": "agent", "copilot-vision-request": "true"}
+    for api in ("responses", "chat"):
+        body = build_request_body(ModelRequest(messages=history), model="m", api=api)
+        assert headers.request_headers(body) == expected
+    marker = {"type": "text", "text": TOOL_IMAGE_FOLLOWUP}
+    # Only the adapter's own follow-up (right after a tool message) is agent-initiated.
+    typed = {"messages": [{"role": "assistant", "content": "x"}, {"role": "user", "content": [marker]}]}
+    assert headers.request_headers(typed) == {"x-initiator": "user"}
 
 
 async def test_stored_api_key_round_trip_never_echoes_value():

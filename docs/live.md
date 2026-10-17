@@ -304,10 +304,13 @@ plain-language summary.
   the transcript is the request and gets the request bound. The manager keeps at most 64
   turns between delegations. The caption/`live.transcript` rows keep their own 16,000-character
   display bound and set `truncated`; that does not affect what the agent receives.
-- The 200,000-character cap is an assumed default, not a verified service limit. A request
-  beyond it keeps its first 200,000 characters (the tail is what is cut) and ends with
-  `[… N more characters omitted]` with the exact count, so the model knows the request is
-  incomplete and can ask the user to repeat the rest. Exactly 200,000 characters passes whole.
+- The assumed 200,000-character limit applies to the composed user message, including its
+  voice note, transcript, and any omission notice; it is not a verified service-side limit.
+  For oversized messages the earliest text is kept and ends with an exact-count notice such
+  as `[… N characters of the spoken request omitted to fit the 200000-character message
+  limit. This request is incomplete; ask the user to repeat the missing part.]`. A durable
+  `live.error` also announces how many characters were omitted. Exactly 200,000 characters
+  passes whole without a tail notice.
   The bound is deliberately kept: removing it would let one utterance exceed the sideband frame
   and memory limits.
 - An empty or whitespace delegation uses the transcript as the request (heading "Voice request

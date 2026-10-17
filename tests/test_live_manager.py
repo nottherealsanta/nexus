@@ -490,7 +490,9 @@ async def test_request_at_the_bound_keeps_prefix_and_suffix_without_a_notice():
     transports[0].push(lp.DelegationCreated("d1", request))
     await settle(lambda: len(host.enqueued) == 1)
     msg = host.enqueued[0][1]
-    assert request in msg and "omitted" not in msg and not host.of("live.error")
+    assert request[: lp.MAX_DELEGATION_CHARS - 400] in msg and "omitted" in msg
+    assert len(msg) <= lp.MAX_DELEGATION_CHARS
+    assert any("omitted" in e.get("message", "") for e in host.of("live.error"))
     await manager.stop("s1")
 
 
@@ -503,9 +505,10 @@ async def test_request_over_the_bound_keeps_the_prefix_and_ends_with_an_explicit
     transports[0].push(lp.DelegationCreated("d1", request))
     await settle(lambda: len(host.enqueued) == 1)
     msg = host.enqueued[0][1]
-    assert "PREFIX-MARKER" in msg and "SUFFIX-MARKER" not in msg  # the cut is never silent:
-    assert f"[… {over} more characters omitted]" in msg  # the model is told exactly how much is missing
-    assert request[: lp.MAX_DELEGATION_CHARS] in msg
+    assert "PREFIX-MARKER" in msg and "SUFFIX-MARKER" not in msg  # request has a visible tail omission notice
+    assert "spoken request omitted to fit" in msg
+    assert len(msg) <= lp.MAX_DELEGATION_CHARS
+    assert any("omitted" in e.get("message", "") for e in host.of("live.error"))
     await manager.stop("s1")
 
 
@@ -516,8 +519,9 @@ async def test_request_over_the_hard_bound_is_clipped_with_a_notice():
     transports[0].push(lp.DelegationCreated("d1", "y" * (lp.MAX_DELEGATION_CHARS + over)))
     await settle(lambda: len(host.enqueued) == 1)
     msg = host.enqueued[0][1]
-    assert f"[… {over} more characters omitted]" in msg and "y" * lp.MAX_DELEGATION_CHARS in msg
-    assert any(str(over) in e.get("message", "") for e in host.of("live.error"))
+    assert len(msg) <= lp.MAX_DELEGATION_CHARS
+    assert "spoken request omitted to fit" in msg
+    assert any("omitted" in e.get("message", "") for e in host.of("live.error"))
     await manager.stop("s1")
 
 

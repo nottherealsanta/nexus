@@ -2616,7 +2616,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     Some(render::TabHit::New) => action("command", "/new")?,
-                                    // `☰` is `/sessions`.
+                                    // `≡` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
                                         action("command", "/sessions")?
                                     }

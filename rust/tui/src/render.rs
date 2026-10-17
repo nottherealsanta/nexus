@@ -873,26 +873,55 @@ fn slot_waiting(s: &Snapshot) -> bool {
 /// Rows of the unboxed Queued section (blank separator under the status line, header,
 /// listed messages, `+N more`).
 pub fn queue_rows(s: &Snapshot) -> u16 {
-    let n = s.queue_items.len();
-    if n == 0 {
+    let groups = queue_groups(s);
+    if groups.is_empty() {
         return 0;
     }
-    let listed = if s.queue_collapsed {
+    let listed: usize = if s.queue_collapsed {
         0
     } else {
-        n.min(QUEUE_VISIBLE) + usize::from(n > QUEUE_VISIBLE)
+        let limit = group_limit(groups.len());
+        groups
+            .iter()
+            .map(|g| g.len().min(limit) + usize::from(g.len() > limit))
+            .sum()
     };
-    (usize::from(status_visible(s)) + 1 + listed) as u16
+    (usize::from(status_visible(s)) + groups.len() + listed) as u16
 }
-/// Where each row above the card sits (top to bottom: status line, blank, `▾ Queued N`,
-/// `#n text` rows, `+N more`), directly on the card.
+/// Steering messages (`steer` / `interrupt`) are delivered into the running turn; everything
+/// else waits for the turn to finish.
+fn is_steering(item: &crate::bridge::QueueItem) -> bool {
+    matches!(item.mode.as_str(), "steer" | "interrupt") || matches!(item.tag.as_str(), "S" | "I")
+}
+/// Queue indices of the Steering section, then of the Queued section (empty ones omitted).
+/// Each keeps the real queue order; `#n` labels are the real queue positions.
+fn queue_groups(s: &Snapshot) -> Vec<Vec<usize>> {
+    let (steer, queued): (Vec<usize>, Vec<usize>) =
+        (0..s.queue_items.len()).partition(|i| is_steering(&s.queue_items[*i]));
+    [steer, queued]
+        .into_iter()
+        .filter(|g| !g.is_empty())
+        .collect()
+}
+/// Messages listed per section; two sections share the room a single one would use.
+fn group_limit(groups: usize) -> usize {
+    if groups > 1 {
+        QUEUE_VISIBLE / 2
+    } else {
+        QUEUE_VISIBLE
+    }
+}
+/// Where each row above the card sits (top to bottom: status line, blank, then per section
+/// `▾ Steering N` / `▾ Queued N`, `#n text` rows, `+N more`), directly on the card.
 #[derive(Default)]
 pub struct AboveLayout {
     pub status: Option<Rect>,
-    pub header: Option<Rect>,
+    /// `(steering, row)` of each section header, Steering first.
+    pub headers: Vec<(bool, Rect)>,
     /// `(queue index, row)` of each listed message.
     pub items: Vec<(usize, Rect)>,
-    pub more: Option<Rect>,
+    /// `(steering, hidden count, row)` of each `+N more`.
+    pub more: Vec<(bool, usize, Rect)>,
 }
 pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     let rows = composer_rows(composer, s);
@@ -900,7 +929,7 @@ pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     let width = rows[1].width.saturating_sub(4);
     let mut y = rows[0].y;
     let end = rows[0].bottom();
-    let mut take = |y: &mut u16| {
+    let take = |y: &mut u16| {
         let row = Rect::new(x, *y, width, 1);
         let fits = *y < end;
         *y += 1;
@@ -913,20 +942,27 @@ pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
             Rect::new(row.x + inset, row.y, row.width - inset, row.height)
         });
     }
-    let n = s.queue_items.len();
-    if n > 0 {
-        if status_visible(s) {
-            y += 1;
+    let groups = queue_groups(s);
+    if !groups.is_empty() && status_visible(s) {
+        y += 1;
+    }
+    let limit = group_limit(groups.len());
+    for group in &groups {
+        let steering = is_steering(&s.queue_items[group[0]]);
+        if let Some(row) = take(&mut y) {
+            out.headers.push((steering, row));
         }
-        out.header = take(&mut y);
-        if !s.queue_collapsed {
-            for index in 0..n.min(QUEUE_VISIBLE) {
-                if let Some(row) = take(&mut y) {
-                    out.items.push((index, row));
-                }
+        if s.queue_collapsed {
+            continue;
+        }
+        for index in group.iter().take(limit) {
+            if let Some(row) = take(&mut y) {
+                out.items.push((*index, row));
             }
-            if n > QUEUE_VISIBLE {
-                out.more = take(&mut y);
+        }
+        if group.len() > limit {
+            if let Some(row) = take(&mut y) {
+                out.more.push((steering, group.len() - limit, row));
             }
         }
     }
@@ -966,15 +1002,25 @@ pub fn queue_control_at(
             cells
                 .iter()
                 .find(|(cell, _)| *cell == x)
+                .filter(|(_, op)| queue_move_enabled(&s.queue_items[*index], op))
                 .map(|(_, op)| (s.queue_items[*index].id.clone(), *op))
         })
 }
-/// True when a click on `(x, y)` hits the Queued header (caret or label): collapse/expand.
+/// Moves that would not change the message's place in its section are disabled (and drawn blank).
+fn queue_move_enabled(item: &crate::bridge::QueueItem, op: &str) -> bool {
+    match op {
+        "up" => item.can_up,
+        "down" => item.can_down,
+        _ => true,
+    }
+}
+/// True when a click on `(x, y)` hits a section header (caret or label): collapse/expand.
 pub fn queue_header_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
     s.agent_page.is_empty()
         && above_layout(composer, s)
-            .header
-            .is_some_and(|row| y == row.y && x >= row.x && x < row.x + 12.min(row.width))
+            .headers
+            .iter()
+            .any(|(_, row)| y == row.y && x >= row.x && x < row.x + 18.min(row.width))
 }
 /// `2.0s` under a minute, then `4m40s`, `1h02m`.
 pub fn fmt_activity(secs: f64) -> String {
@@ -1121,24 +1167,31 @@ fn draw_above_card(
         let hover_stop = pointer.is_some_and(|(x, y)| stop_at(composer, s, x, y));
         draw_status_line(frame, row, s, p, spin, hover_stop);
     }
-    let count = s.queue_items.len();
-    if let Some(row) = layout.header {
+    let groups = queue_groups(s);
+    for (steering, row) in &layout.headers {
+        let count = groups
+            .iter()
+            .find(|g| is_steering(&s.queue_items[g[0]]) == *steering)
+            .map_or(0, Vec::len);
         let caret = if s.queue_collapsed { "▸" } else { "▾" };
+        let label = if *steering { "Steering" } else { "Queued" };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    format!("{caret} Queued"),
-                    Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+                    format!("{caret} {label}"),
+                    Style::default()
+                        .fg(if *steering { p.accent } else { p.muted })
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!(" {count}"), Style::default().fg(p.quiet)),
             ])),
-            row,
+            *row,
         );
     }
     for (index, row) in &layout.items {
         let item = &s.queue_items[*index];
         let hot = over(*row);
-        let tone = if item.tag == "S" { p.accent } else { p.quiet };
+        let tone = if is_steering(item) { p.accent } else { p.quiet };
         let prefix = format!("  #{} ", index + 1);
         let controls = if hot { 7 } else { 0 };
         let room = usize::from(row.width).saturating_sub(prefix.width() + controls + 1);
@@ -1152,9 +1205,13 @@ fn draw_above_card(
             let gap = usize::from(row.width).saturating_sub(used + 6);
             let on = |yes: bool| Style::default().fg(if yes { p.text } else { p.quiet });
             spans.push(Span::raw(" ".repeat(gap)));
-            spans.push(Span::styled("↑", on(*index > 0)));
+            // A disabled move is blank, not a dimmed arrow, so it never looks clickable.
+            let arrow = |glyph: &'static str, enabled: bool| {
+                Span::styled(if enabled { glyph } else { " " }, on(true))
+            };
+            spans.push(arrow("↑", item.can_up));
             spans.push(Span::raw(" "));
-            spans.push(Span::styled("↓", on(index + 1 < count)));
+            spans.push(arrow("↓", item.can_down));
             spans.push(Span::raw(" "));
             spans.push(Span::styled("✕", Style::default().fg(p.error)));
         }
@@ -1165,13 +1222,13 @@ fn draw_above_card(
         };
         frame.render_widget(Paragraph::new(Line::from(spans)).style(style), *row);
     }
-    if let Some(row) = layout.more {
+    for (_, hidden, row) in &layout.more {
         frame.render_widget(
             Paragraph::new(Line::styled(
-                format!("  +{} more", count - QUEUE_VISIBLE),
+                format!("  +{hidden} more"),
                 Style::default().fg(p.quiet),
             )),
-            row,
+            *row,
         );
     }
 }
@@ -1202,7 +1259,7 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     // Five fixed rows plus the blank row that always separates the text from the controls.
     let wanted = 5 + rows.clamp(1, 22) as u16 + above_card_rows(s).max(1);
     wanted
-        .min(area.height.saturating_sub(3 + 4 + crate::live_bar::pane_rows(s)))
+        .min(area.height.saturating_sub(4 + 4 + crate::live_bar::pane_rows(s)))
         .min(area.height)
         .max(area.height.min(7))
 }
@@ -1225,7 +1282,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     }
     // The Live pane sits between the transcript and the composer. Expanded, it takes every
     // row the transcript can spare but one, so the conversation never vanishes entirely.
-    let fixed = 1 + 3 * u16::from(!dash) + composer_height;
+    let fixed = 1 + 4 * u16::from(!dash) + composer_height;
     let mut pane = if composer_height > 0 {
         crate::live_bar::pane_rows(s)
     } else {
@@ -1235,10 +1292,10 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         pane = pane.max(middle.height.saturating_sub(fixed + 1));
     }
     // One empty row above the top bar (and the Sessions header) and, in a session, one below.
-    // The bar itself is two rows: the tabs, then the workspace path and branch.
+    // The bar itself is three rows: the tabs, a blank row, then the workspace path and branch.
     let center = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(2 * u16::from(!dash)),
+        Constraint::Length(3 * u16::from(!dash)),
         Constraint::Length(u16::from(!dash)),
         Constraint::Min(1),
         Constraint::Length(pane),
@@ -3165,19 +3222,19 @@ mod tests {
         assert!(cache.sticky.is_none(), "at the top there is no pin");
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
-        assert_eq!(rect.y, 4, "pinned at the top of the transcript");
-        assert!(mid[5].contains("question number 1"), "{:?}", &mid[..8]);
+        assert_eq!(rect.y, 5, "pinned at the top of the transcript");
+        assert!(mid[6].contains("question number 1"), "{:?}", &mid[..9]);
         assert!(
-            mid[4].chars().take(78).all(|c| c == ' '),
+            mid[5].chars().take(78).all(|c| c == ' '),
             "top padding row of the band"
         );
         assert!(
-            mid[6].contains('·') && !mid[6].contains("question"),
+            mid[7].contains('·') && !mid[7].contains("question"),
             "textured bottom padding row of the pinned band"
         );
         assert_eq!(rect.height, 3, "padding + one text row + padding");
         let band = Palette::new(false).element;
-        for y in 4..7u16 {
+        for y in 5..8u16 {
             assert_eq!(
                 bgs.borrow()[y as usize],
                 band,
@@ -3186,7 +3243,7 @@ mod tests {
         }
         assert_eq!(row, cache.prompt_top("t1").unwrap());
         let later = screen(cache.prompt_top("t2").unwrap() + 3, &mut cache);
-        assert!(later[5].contains("question number 2"), "{:?}", &later[..8]);
+        assert!(later[6].contains("question number 2"), "{:?}", &later[..9]);
         assert_eq!(
             later
                 .iter()
@@ -3265,7 +3322,7 @@ mod tests {
                         "{at}: active session tab"
                     );
                     assert!(!screen.contains('‹'), "{at}: no session arrows");
-                    assert!(screen.contains('☰'), "{at}: dashboard button");
+                    assert!(screen.contains('≡'), "{at}: dashboard button");
                 }
                 assert!(!screen.contains("SESSIONS"), "{at}: no sessions sidebar");
                 if width >= 170 {
@@ -3344,14 +3401,14 @@ mod tests {
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
             7,
-            "the transcript keeps its rows with a two-row top bar"
+            "the transcript keeps its rows with a three-row top bar"
         );
         let mut queued = Snapshot::default();
         queued.queue_items = vec![queue_item("q1", "Q", "a"), queue_item("s1", "S", "b")];
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            7 + 2,
-            "two messages get a header and two rows above the editor"
+            7 + 3,
+            "a steering and a queued message each get a section header and a row"
         );
         queued.turn_status = Some(crate::bridge::TurnStatus {
             activity: "Thinking".into(),
@@ -3359,7 +3416,7 @@ mod tests {
         });
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            7 + 2 + 2,
+            7 + 3 + 2,
             "a running turn adds the status line and a blank separator row"
         );
     }
@@ -3410,7 +3467,7 @@ mod tests {
                     })
                     .unwrap();
                 if r.tabs.height > 0 {
-                    assert_eq!(r.tabs.height, 2, "tab row plus workspace row");
+                    assert_eq!(r.tabs.height, 3, "tab row, blank row, workspace row");
                     let row = |y: u16| -> String {
                         (r.tabs.x..r.tabs.right())
                             .map(|x| terminal.backend().buffer()[(x, y)].symbol())
@@ -3418,10 +3475,16 @@ mod tests {
                     };
                     let top = row(r.tabs.y);
                     if r.details.width == 0 {
-                        assert!(top.contains('☰'), "dashboard button: {top}");
+                        assert!(top.contains('≡'), "dashboard button: {top}");
                     }
                     assert!(!top.contains("/workspace"), "path left the tab row: {top}");
-                    let crumbs = row(r.tabs.y + 1);
+                    assert!(
+                        row(r.tabs.y + 1)
+                            .chars()
+                            .all(|c| c == ' ' || c == '│'),
+                        "blank row under the tabs"
+                    );
+                    let crumbs = row(r.tabs.y + 2);
                     assert!(crumbs.contains("/workspace"), "path under the tabs: {crumbs}");
                 }
                 let buffer = terminal.backend().buffer();
@@ -3913,15 +3976,21 @@ mod editor_layout_tests {
     fn queued_section_is_unboxed_with_hover_controls_and_collapses() {
         use ratatui::{backend::TestBackend, Terminal};
         let mut s = Snapshot::default();
-        s.queue_items = (0..5)
-            .map(|i| {
-                queue_item(
-                    &format!("id{i}"),
-                    if i % 2 == 0 { "S" } else { "Q" },
-                    &format!("msg {i}"),
-                )
-            })
-            .collect();
+        // Real queue order: two steering messages, then three queued ones.
+        s.queue_items = [
+            ("s0", "S", false, true),
+            ("s1", "S", true, false),
+            ("q0", "Q", false, true),
+            ("q1", "Q", true, true),
+            ("q2", "Q", true, false),
+        ]
+        .into_iter()
+        .map(|(id, tag, can_up, can_down)| crate::bridge::QueueItem {
+            can_up,
+            can_down,
+            ..queue_item(id, tag, id)
+        })
+        .collect();
         let mut cache = Cache::default();
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut composer = Rect::default();
@@ -3959,17 +4028,24 @@ mod editor_layout_tests {
         };
         let card = composer_rows(composer, &s)[1].y;
         assert!(text(card - 1).contains("+1 more"), "the queue sits directly on the card");
-        let header = text(card - 6);
-        assert!(header.trim_start().starts_with("▾ Queued 5"), "{header}");
+        let header = text(card - 7);
+        assert!(header.trim_start().starts_with("▾ Steering 2"), "{header}");
         assert!(!header.contains('╭'), "no box");
-        assert!(text(card - 5).contains("#1 msg 0"), "{}", text(card - 5));
-        assert!(text(card - 4).contains("#2 msg 1"));
+        assert!(text(card - 6).contains("#1 s0"), "{}", text(card - 6));
+        assert!(text(card - 5).contains("#2 s1"));
         assert!(
-            !text(card - 4).contains('✕'),
+            text(card - 4).trim_start().starts_with("▾ Queued 3"),
+            "{}",
+            text(card - 4)
+        );
+        assert!(text(card - 3).contains("#3 q0"), "real queue positions");
+        assert!(text(card - 2).contains("#4 q1"));
+        assert!(
+            !text(card - 2).contains('✕'),
             "controls only on the hovered row"
         );
-        // Hovering the second message shows ↑ ↓ ✕ at the right.
-        let row = card - 4;
+        // Hovering a queued message with neighbours on both sides shows ↑ ↓ ✕ at the right.
+        let row = card - 2;
         cache.pointer = Some((composer.x + 6, row));
         let buffer = paint(&s, &mut cache, &mut composer);
         let cells: Vec<u16> = (composer.x..composer.right())
@@ -3983,9 +4059,9 @@ mod editor_layout_tests {
         assert_eq!(
             hits,
             [
-                Some(("id1".into(), "up")),
-                Some(("id1".into(), "down")),
-                Some(("id1".into(), "remove"))
+                Some(("q1".into(), "up")),
+                Some(("q1".into(), "down")),
+                Some(("q1".into(), "remove"))
             ]
         );
         assert_eq!(queue_control_at(composer, &s, cells[0] + 1, row), None);
@@ -3994,17 +4070,41 @@ mod editor_layout_tests {
             None,
             "+N more row"
         );
-        // The caret row collapses the list down to its header.
-        assert!(queue_header_at(composer, &s, composer.x + 2, card - 6));
+        // The first steering message has no steering neighbour above it: no ↑, click ignored.
+        let first = card - 6;
+        cache.pointer = Some((composer.x + 6, first));
+        let buffer = paint(&s, &mut cache, &mut composer);
+        let shown: Vec<&str> = (composer.x..composer.right())
+            .map(|x| buffer[(x, first)].symbol())
+            .filter(|symbol| ["↑", "↓", "✕"].contains(symbol))
+            .collect();
+        assert_eq!(shown, ["↓", "✕"], "disabled up arrow is not drawn");
+        assert_eq!(queue_control_at(composer, &s, cells[0], first), None);
+        assert_eq!(
+            queue_control_at(composer, &s, cells[1], first),
+            Some(("s0".into(), "down"))
+        );
+        // The last steering message cannot move down into the queued section.
+        assert_eq!(queue_control_at(composer, &s, cells[1], card - 5), None);
+        assert_eq!(
+            queue_control_at(composer, &s, cells[0], card - 5),
+            Some(("s1".into(), "up"))
+        );
+        // A section's caret row collapses both lists down to their headers.
+        assert!(queue_header_at(composer, &s, composer.x + 2, card - 7));
+        assert!(queue_header_at(composer, &s, composer.x + 2, card - 4));
         assert!(!queue_header_at(composer, &s, composer.x + 2, card - 5));
         s.queue_collapsed = true;
-        assert_eq!(queue_rows(&s), 1);
+        assert_eq!(queue_rows(&s), 2);
         let buffer = paint(&s, &mut cache, &mut composer);
         let card = composer_rows(composer, &s)[1].y;
-        let line: String = (composer.x..composer.right())
-            .map(|x| buffer[(x, card - 1)].symbol().to_string())
-            .collect();
-        assert!(line.trim_start().starts_with("▸ Queued 5"), "{line}");
+        let line = |y: u16| -> String {
+            (composer.x..composer.right())
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        assert!(line(card - 2).trim_start().starts_with("▸ Steering 2"), "{}", line(card - 2));
+        assert!(line(card - 1).trim_start().starts_with("▸ Queued 3"), "{}", line(card - 1));
     }
 
     #[test]
@@ -4060,7 +4160,7 @@ mod editor_layout_tests {
             text(layout.status.unwrap().y + 1).trim().is_empty(),
             "blank row"
         );
-        assert!(text(layout.header.unwrap().y).contains("▾ Queued 1"));
+        assert!(text(layout.headers[0].1.y).contains("▾ Queued 1"));
         assert!(text(layout.items[0].1.y).contains("#1 held back message"));
         s.slot_wait = None;
         assert!(!status_visible(&s));
@@ -4201,7 +4301,7 @@ mod editor_layout_tests {
             text(layout.status.unwrap().y + 1).trim().is_empty(),
             "blank row"
         );
-        assert!(text(layout.header.unwrap().y).contains("▾ Queued 1"));
+        assert!(text(layout.headers[0].1.y).contains("▾ Queued 1"));
         assert!(text(layout.items[0].1.y).contains("#1 composer should remain"));
         let row = layout.status.unwrap();
         let stop_x = row.right() - 3;
@@ -4868,6 +4968,7 @@ fn queue_item(id: &str, tag: &str, text: &str) -> crate::bridge::QueueItem {
         tag: tag.into(),
         mode: if tag == "S" { "steer" } else { "queue" }.into(),
         text: text.into(),
+        ..Default::default()
     }
 }
 

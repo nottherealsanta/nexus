@@ -79,6 +79,36 @@ def test_shutdown_cancel_renders_no_error_row_but_failures_still_do():
     assert any(b.get("text") == "Error: boom" for b in blocks("turn.failed", {"error": "boom"}))
 
 
+def test_refresh_branch_reads_current_workspace_and_follows_tab_changes(tmp_path):
+    import asyncio
+    from nexus.ui.ratatui.prototype import refresh_branch
+
+    def repo(name, branch):
+        root = tmp_path / name
+        (root / ".git").mkdir(parents=True)
+        (root / ".git" / "HEAD").write_text(f"ref: refs/heads/{branch}\n")
+        return root
+
+    a, b, plain = repo("a", "main"), repo("b", "feature"), tmp_path / "plain"
+    plain.mkdir()
+    shell = SimpleNamespace(workspace=str(a), breadcrumb="", branch="", worktree="x")
+
+    async def scenario():
+        await refresh_branch(shell)
+        assert shell.breadcrumb == f"{a} › main" and shell.branch == "main" and shell.worktree == ""
+        (a / ".git" / "HEAD").write_text("ref: refs/heads/topic\n")  # a shell command switched branch
+        await refresh_branch(shell)
+        assert shell.breadcrumb == f"{a} › topic"
+        shell.workspace = str(b)  # the active tab moved to another workspace
+        await refresh_branch(shell)
+        assert shell.breadcrumb == f"{b} › feature"
+        shell.workspace = str(plain)
+        await refresh_branch(shell)
+        assert shell.breadcrumb == str(plain) and shell.branch == ""
+
+    asyncio.run(scenario())
+
+
 def test_projection_cache_reuses_unchanged_turns_and_invalidates_replacements(tmp_path, monkeypatch):
     from dataclasses import replace
     from unittest.mock import Mock

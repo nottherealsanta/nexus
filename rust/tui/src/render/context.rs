@@ -119,7 +119,7 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
                 }
                 let counts = member.counts_label();
                 let mut spans = vec![
-                    Span::styled("  │ ", Style::default().fg(tone)),
+                    Span::raw("    "),
                     Span::styled(member.title.clone(), title),
                 ];
                 if !counts.is_empty() {
@@ -251,11 +251,11 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "  │ Tools [12] 1.2K",
+                "    Tools [12] 1.2K",
                 "",
-                "  │ Skills [2 3] 1.2K",
+                "    Skills [2 3] 1.2K",
                 "",
-                "  │ MCP 1.2K"
+                "    MCP 1.2K"
             ]
         );
     }
@@ -312,7 +312,7 @@ mod tests {
         };
         let rows = build(&block, 160, &palette);
         assert_eq!(rows.len(), 2);
-        assert!(rows[0].0.to_string().starts_with("  │  Tools [2]"));
+        assert!(rows[0].0.to_string().starts_with("     Tools [2]"));
         assert!(rows[1].0.to_string().starts_with("     read"));
         assert!(rows[1].0.width() <= 105);
         assert!(!rows.iter().any(|row| row.0.to_string().contains("omitted")));
@@ -343,10 +343,10 @@ mod tests {
         };
         let rows = build(&block, 80, &palette);
         let line = |i: usize| rows[i].0.to_string();
-        assert!(line(0).starts_with("  │  System prompt"), "{}", line(0));
+        assert!(line(0).starts_with("     System prompt"), "{}", line(0));
         assert!(line(1).starts_with("     You are Nexus"), "{}", line(1));
         assert!(rows[1].1.is_some(), "the preview opens the same dialog");
-        assert!(line(3).starts_with("  │  AGENTS.md"));
+        assert!(line(3).starts_with("     AGENTS.md"));
         let narrow = build(&block, 30, &palette);
         assert!(
             narrow.iter().all(|(l, _)| l.width() <= 30),

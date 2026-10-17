@@ -43,6 +43,7 @@ log = logging.getLogger("nexus.live")
 PROGRESS_INTERVAL_S = 5.0
 MAX_FINAL_CHARS = 12_000
 MAX_TOOLS_IN_PROGRESS = 5
+MAX_REQUEST_MESSAGE_CHARS = 200_000  # includes headers, transcript, and omission notice
 MAX_TRACKED_TURNS = 32
 MAX_HEARD_CHARS = 2_000
 # Resource bounds only: a sideband frame is already <= 1 MiB, so a real spoken request fits whole.
@@ -216,6 +217,24 @@ class LiveBridge:
             if not message:
                 await self._append("The request was empty, so nothing was sent to the agent.", "notice", delegation_id)
                 return
+            if len(message) > MAX_REQUEST_MESSAGE_CHARS:
+                original_length = len(message)
+                prefix_length = MAX_REQUEST_MESSAGE_CHARS
+                while True:
+                    omitted = original_length - prefix_length
+                    notice = (
+                        f"\n\n[… {omitted} characters of the spoken request omitted to fit the "
+                        f"{MAX_REQUEST_MESSAGE_CHARS}-character message limit. This request is incomplete; "
+                        "ask the user to repeat the missing part.]"
+                    )
+                    next_prefix_length = MAX_REQUEST_MESSAGE_CHARS - len(notice)
+                    if next_prefix_length == prefix_length:
+                        break
+                    prefix_length = next_prefix_length
+                message = message[:prefix_length] + notice
+                self._emit("live.error", {
+                    "message": f"A spoken request exceeded the {MAX_REQUEST_MESSAGE_CHARS}-character message limit; {omitted} characters were omitted."
+                })
             mode = "steer" if self._host.turn_running(self._session) else "queue"
             try:
                 queued_id = await self._host.enqueue(

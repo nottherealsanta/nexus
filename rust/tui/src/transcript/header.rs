@@ -1,8 +1,8 @@
 //! Context header rows (GROK_BUILD_TUI_PLAN §8B/§8C): grey, never the agent colour.
 //!
 //! An active header is `muted` with a bold title and a `quiet` token figure; an inactive
-//! one (nothing to send) is `quiet` with a plain title and a darker figure. The `│` rail
-//! shares the title's tone. The closed one-row form lives in `render/context.rs`; this is
+//! one (nothing to send) is `quiet` with a plain title and a darker figure. There is no
+//! left rail; the title sits in a blank gutter. The closed one-row form lives in `render/context.rs`; this is
 //! the open form and the single-block chip.
 use super::{indented, Rows};
 use crate::{bridge::Content, render::Palette};
@@ -12,7 +12,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-/// Title and rail tone, and the darker tone of the figure beside it.
+/// Title tone, and the darker tone of the figure beside it.
 pub fn tones(active: bool, p: &Palette) -> (ratatui::style::Color, ratatui::style::Color) {
     if active {
         (p.muted, p.quiet)
@@ -21,7 +21,7 @@ pub fn tones(active: bool, p: &Palette) -> (ratatui::style::Color, ratatui::styl
     }
 }
 
-/// An open header strip: one row per member, `│ Title [counts]  ~tokens`, each a click target.
+/// An open header strip: one row per member, `Title [counts]  tokens`, each a click target.
 pub fn draw(out: &mut Rows, b: &Content, viewport_width: usize, p: &Palette) {
     // Counts sit beside their labels; project/global counts keep distinct tones in one bracket.
     let lead = 5usize.min(viewport_width);
@@ -64,14 +64,10 @@ pub fn draw(out: &mut Rows, b: &Content, viewport_width: usize, p: &Palette) {
             {"start":lead,"end":(lead + w).min(viewport_width),"operation":chip.operation}]});
         out.push((
             Line::from(
-                [
-                    Span::raw(" ".repeat(2.min(lead))),
-                    Span::styled("│", Style::default().fg(tone)),
-                    Span::raw(" ".repeat(lead.saturating_sub(3))),
-                ]
-                .into_iter()
-                .chain(parts)
-                .collect::<Vec<_>>(),
+                [Span::raw(" ".repeat(lead))]
+                    .into_iter()
+                    .chain(parts)
+                    .collect::<Vec<_>>(),
             ),
             Some(row),
         ));
@@ -135,14 +131,15 @@ mod tests {
         draw(&mut rows, &block, 80, &p);
         let spans = |i: usize| &rows[i].0.spans;
         // Row 0 is Tools, row 1 the blank spacer, row 2 MCP.
-        assert_eq!(spans(0)[1].style.fg, Some(p.muted), "rail");
-        assert_eq!(spans(0)[3].style.fg, Some(p.muted), "title");
-        assert!(spans(0)[3].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(spans(0)[4].style.fg, Some(p.quiet), "figure");
+        assert_eq!(spans(0)[0].content, "     ", "blank gutter, no rail");
+        assert_eq!(spans(0)[1].style.fg, Some(p.muted), "title");
+        assert!(spans(0)[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans(0)[2].style.fg, Some(p.quiet), "figure");
         assert_eq!(spans(2)[1].style.fg, Some(p.quiet));
-        assert_eq!(spans(2)[3].style.fg, Some(p.quiet));
-        assert!(!spans(2)[3].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(spans(2)[4].style.fg, Some(p.border_strong));
+        assert!(!spans(2)[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(spans(2)[2].style.fg, Some(p.border_strong));
+        assert!(rows.iter().all(|(line, _)| !line.to_string().contains('│')));
+        assert!(rows[0].0.to_string().starts_with("     Tools"));
         assert!(rows
             .iter()
             .flat_map(|(line, _)| &line.spans)

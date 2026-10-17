@@ -153,15 +153,45 @@ pub fn spans(
         }
         head = format!("{cut}…");
     }
-    let mut out = vec![
-        Span::styled("● ", Style::default().fg(dot)),
-        Span::styled(
-            head,
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut out = vec![Span::styled("● ", Style::default().fg(dot))];
+    // `Live` is the title; the rest is graded by role (model and place quiet, phase in the
+    // accent, clock plain) so the call state reads at a glance. The text is unchanged.
+    for (i, part) in head.split(" · ").enumerate() {
+        if i == 0 {
+            out.push(Span::styled(
+                part.to_string(),
+                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            ));
+            continue;
+        }
+        let tone = if part == live.phase {
+            p.accent
+        } else if part.starts_with("in ") || part == live.model {
+            p.quiet
+        } else {
+            p.muted
+        };
+        out.push(Span::styled(" · ", Style::default().fg(p.border_strong)));
+        out.push(Span::styled(part.to_string(), Style::default().fg(tone)));
+    }
     if with_meters {
-        out.push(Span::styled(meters, Style::default().fg(p.muted)));
+        // Labels quiet, level cells lit in success green over dim empty cells.
+        let cells = |level: f64| {
+            let bar = meter(level);
+            let lit = bar.chars().filter(|&c| c == '▰').count();
+            let (on, off) = bar.split_at(bar.char_indices().nth(lit).map_or(bar.len(), |(i, _)| i));
+            [
+                Span::styled(on.to_string(), Style::default().fg(p.success)),
+                Span::styled(off.to_string(), Style::default().fg(p.border_strong)),
+            ]
+            .into_iter()
+            .filter(|span| !span.content.is_empty())
+            .collect::<Vec<_>>()
+        };
+        out.push(Span::styled("   mic ", Style::default().fg(p.quiet)));
+        out.extend(cells(live.level_in));
+        out.push(Span::styled(" spk ", Style::default().fg(p.quiet)));
+        out.extend(cells(live.level_out));
     }
     if with_hint {
         out.push(Span::styled(hint.to_string(), Style::default().fg(p.quiet)));
@@ -315,6 +345,39 @@ mod tests {
             line.contains("gpt-live-1-codex") && line.contains("mic"),
             "{line}"
         );
+    }
+    #[test]
+    fn call_line_grades_its_parts_without_changing_the_text() {
+        let p = Palette::new(false);
+        let out = spans(&bar(), &p, 0, 1161.0, 100);
+        let fg = |needle: &str| {
+            out.iter()
+                .find(|s| s.content.as_ref() == needle)
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(fg("Live"), Some(p.text));
+        assert_eq!(fg("listening"), Some(p.accent));
+        assert_eq!(fg("gpt-live-1-codex"), Some(p.quiet));
+        assert_eq!(fg("02:41"), Some(p.muted));
+        assert_eq!(fg("   mic "), Some(p.quiet));
+        assert_eq!(fg("▰▰▰"), Some(p.success), "lit cells of the 0.25 level");
+        assert_eq!(fg("▱▱▱▱▱▱"), Some(p.border_strong), "silent speaker");
+        assert_eq!(
+            text(&out),
+            "● Live · gpt-live-1-codex · listening · 02:41   mic ▰▰▰▱▱▱ spk ▱▱▱▱▱▱   /live stop"
+        );
+    }
+    #[test]
+    fn meters_emit_no_empty_spans_at_the_extremes() {
+        let p = Palette::new(false);
+        for (input, output) in [(0.0, 1.0), (1.0, 0.0)] {
+            let mut live = bar();
+            live.level_in = input;
+            live.level_out = output;
+            let out = spans(&live, &p, 0, 1161.0, 100);
+            assert!(out.iter().all(|s| !s.content.is_empty()), "{out:?}");
+            assert!(text(&out).contains("mic ") && text(&out).contains(" spk "));
+        }
     }
     #[test]
     fn other_session_is_named() {

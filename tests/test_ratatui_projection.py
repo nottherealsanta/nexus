@@ -110,7 +110,7 @@ def test_parallel_tools_render_without_gutter_markers(tmp_path, monkeypatch):
     assert [b["kind"] for b in blocks] == ["tool_group", "task", "tool_group"]
     assert [b["count"] for b in blocks if b["kind"] == "tool_group"] == [1, 1]
     assert all(not b["text"].startswith(("┌", "│", "└")) for b in blocks)
-    assert blocks[1]["text"].splitlines() == [blocks[1]["text"]]  # one row
+    assert blocks[1]["text"] == ""  # task cards keep the compatible empty body
     assert "Subagent — Scan" in blocks[1]["title"]
     assert blocks[1]["gap"] == blocks[2]["gap"] == 1
 
@@ -582,6 +582,22 @@ def test_queue_items_carry_durable_ids_and_s_q_tags():
     assert all("\x1b" not in item["text"] and item["text"].endswith(str(i)) for i, item in enumerate(items))
 
 
+def test_queue_items_move_flags_only_between_same_group_neighbours():
+    from nexus.ui.ratatui.prototype import _queue_items
+    from nexus.view.model import QueuedInputView
+
+    view = _running_view([])
+    view.input_queue = [QueuedInputView(queued_id=f"id{i}", mode=mode, content=[{"type": "text", "text": str(i)}])
+                        for i, mode in enumerate(["queue", "steer", "interrupt", "queue", "steer", "queue", "queue"])]
+    # The head is the turn's own input (unlisted) in an idle-without-user-message view; use a running
+    # turn with a user message so every item waits.
+    from nexus.view.model import MessageView
+    view.active_turn.messages.append(MessageView(id="m", role="user", event_seq=1))
+    flags = [(i["id"], i["can_up"], i["can_down"]) for i in _queue_items(view)]
+    assert flags == [("id0", False, False), ("id1", False, True), ("id2", True, False), ("id3", False, False),
+                     ("id4", False, False), ("id5", False, True), ("id6", True, False)]
+
+
 def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, monkeypatch):
     from nexus.ui.ratatui.prototype import _queue_lines
     from nexus.view.model import QueuedInputView
@@ -960,6 +976,7 @@ def test_question_card_marks_the_selected_option(tmp_path, monkeypatch):
     block = _question_block(tmp_path, monkeypatch, tool)
     assert block["detail"] == "Which db?\n  ○ SQLite\n  ● Postgres"
     assert not block["collapsed"] and block["inspect_operation"] == {"kind": "tool_details", "id": "q"}
+    assert block["heading"] == "", "no redundant answered summary beside the options"
     raw = _question_block(tmp_path, monkeypatch, tool, verbose=True)
     assert "The user answered" in raw["detail"], "/verbose keeps the labelled details"
 

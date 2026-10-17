@@ -232,6 +232,53 @@ def test_the_wheel_scrolls_the_keyboard_page_past_its_second_section(app):
     assert "Shortcuts" in app.redraw()
 
 
+def _models_focus(screen):
+    """What the focused Models stop shows: the ✕ row of a focused list item, or a focused row's description.
+
+    The focused stop is otherwise only a background fill, so these texts are the visible evidence of where focus is.
+    """
+    item = next((" ".join(line.split()) for line in screen.splitlines() if "✕" in line), "")
+    item = re.sub(r"\s*[↑↓]?\s*[↑↓]?\s*✕.*$", "", item).rstrip("┃│ ")
+    # The title model's description is shown whether or not it is focused (and depends on ambient config), so it is not a focus signal.
+    return (item, "Your first message is sent" in screen, "models known." in screen)
+
+
+def test_models_down_and_up_visit_each_stop_once_and_clamp_at_both_ends(app):
+    """Reported: Up/Down looped through entries. Walking the real page down then up must end at the ends and stay there."""
+    open_settings(app, b"\x1b5", "Default Model")
+    app.key(b"\x1b[C", .2)  # Right: focus moves from the area list into the page
+    for _ in range(40):
+        app.key(b"\x1b[A", .02)  # already at, or clamped to, the first stop
+    top = _models_focus(app.redraw(.4))
+    assert not top[2], "the last stop (Catalogue) must not be focused at the top"
+
+    down = [top]
+    for _ in range(80):
+        app.key(b"\x1b[B", .08)
+        down.append(_models_focus(app.redraw(.3)))
+        if down[-1][2]:
+            break
+    assert down[-1][2], f"Down never reached the Catalogue row: {down}"
+    last = len(down) - 1
+    assert last > 3, f"Down walked only {last} stops: {down}"
+    assert sum(s[1] for s in down) == 1, f"the titles row is a stop once: {down}"
+    assert not down[last][0], "no list item keeps focus at the end"
+
+    for _ in range(25):  # past the end: no wrap to the first stop
+        app.key(b"\x1b[B", .02)
+    assert _models_focus(app.redraw(.4)) == down[last], "Down at the last stop stays on it"
+
+    up = [down[last]]
+    for _ in range(last):
+        app.key(b"\x1b[A", .08)
+        up.append(_models_focus(app.redraw(.3)))
+    assert up == down[::-1], f"Up retraces the same stops in reverse:\n up={up}\n down={down}"
+
+    for _ in range(25):  # past the start: no wrap to the Catalogue row
+        app.key(b"\x1b[A", .02)
+    assert _models_focus(app.redraw(.4)) == top, "Up at the first stop stays on it"
+
+
 def test_the_keyboard_page_also_scrolls_with_the_arrow_keys(app):
     open_settings(app, b"\x1b3", "Shortcuts")
     app.key(b"\x1b[C", .2)  # Right: focus moves from the area list into the page

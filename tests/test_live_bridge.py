@@ -169,6 +169,27 @@ async def test_delegation_mode_follows_whether_a_turn_runs():
     assert phases == ["working", "working"]
 
 
+async def test_long_composed_request_is_capped_inside_message_and_omission_is_announced():
+    from nexus.live.bridge import MAX_REQUEST_MESSAGE_CHARS
+
+    bridge, sent, emitted, _phases, _clock = unit_bridge()
+
+    async def capture(session, message, mode, origin, *, title=None):
+        sent.append((message, mode, title))
+        return "q1"
+
+    bridge._host.enqueue = capture
+    delegation = "x" * (MAX_REQUEST_MESSAGE_CHARS + 100)
+    await bridge.on_delegation("d1", delegation)
+    message = sent[0][0]
+    assert len(message) <= MAX_REQUEST_MESSAGE_CHARS
+    assert "spoken request omitted to fit" in message
+    omitted = int(message.split("[… ", 1)[1].split(" characters", 1)[0])
+    assert "This request is incomplete; ask the user to repeat the missing part." in message
+    errors = [data for kind, data in emitted if kind == "live.error"]
+    assert len(errors) == 1 and str(omitted) in errors[0]["message"]
+
+
 async def test_enqueue_failure_gives_a_speakable_notice_and_a_durable_error():
     bridge, sent, emitted, phases, _c = unit_bridge()
 

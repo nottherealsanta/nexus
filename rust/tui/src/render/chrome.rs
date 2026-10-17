@@ -64,15 +64,20 @@ pub(super) fn control_spans(
     spans
 }
 
+/// Sessions and details buttons. Plain one-cell glyphs without emoji presentation: the earlier
+/// `☰` / `◫` can fall back to a wider font glyph that overflows its cell and leaves residue
+/// after a redraw (see `needs_full_repaint`).
+const DASHBOARD_GLYPH: &str = "≡";
+const DETAILS_GLYPH: &str = "▯";
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
     Session(usize),
     Close(usize),
     New,
-    /// `☰`: opens the Sessions dashboard (`/sessions`).
+    /// `≡`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
-    /// `◫`: toggles the details sidebar.
+    /// `▯`: toggles the details sidebar.
     Details,
 }
 pub struct TabCell {
@@ -107,7 +112,7 @@ fn partition(text: &str) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
-    let dash = " ☰ ".to_string();
+    let dash = format!(" {DASHBOARD_GLYPH} ");
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
     let sep = " │ ";
@@ -121,7 +126,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         }
         out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
-        out.push((" ◫ ".into(), Seg::Details));
+        out.push((format!(" {DETAILS_GLYPH} "), Seg::Details));
         out.push(("  ".into(), Seg::Gap));
         out
     };
@@ -244,7 +249,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     }
     out
 }
-/// The geometry the chrome buttons (`☰`, `◫`, tabs) sit in. When it changes the buttons move
+/// The geometry the chrome buttons (`≡`, `▯`, tabs) sit in. When it changes the buttons move
 /// or disappear, and the next frame must repaint every cell (see `needs_full_repaint`).
 pub type LayoutKey = (Rect, Rect, u16, u16);
 pub fn layout_key(r: &Regions) -> LayoutKey {
@@ -254,7 +259,7 @@ pub fn layout_key(r: &Regions) -> LayoutKey {
 ///
 /// Ratatui rebuilds the whole buffer every frame, so its buffer cannot hold a stale glyph; it
 /// then writes only the cells that differ from the previous frame. Residue after the buttons
-/// move (`☰`, `◫`) can therefore only live in the terminal itself, e.g. a fallback-font glyph
+/// move (`≡`, `▯`) can therefore only live in the terminal itself, e.g. a fallback-font glyph
 /// drawn wider than its cell. This was not reproduced (no terminal was available); repainting
 /// every cell when the layout moves (sidebar toggled, Sessions page opened or closed, resize)
 /// removes any such residue regardless of its source.
@@ -339,7 +344,10 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                     Span::raw(format!("  {title}{} ", " ".repeat(gap))),
                     Span::styled(model, Style::default().fg(p.muted)),
                     Span::raw(format!("{status} ")),
-                    Span::styled(" ◫ ", Style::default().fg(p.border_strong)),
+                    Span::styled(
+                        format!(" {DETAILS_GLYPH} "),
+                        Style::default().fg(p.border_strong),
+                    ),
                     Span::raw("  "),
                 ]),
                 Line::styled(
@@ -391,8 +399,9 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
     };
     let bar = Rect { height: 1, ..area };
     frame.render_widget(Paragraph::new(row(top_layout(s, width))).style(background), bar);
-    if area.height > 1 {
-        let crumbs = Rect { y: area.y + 1, height: 1, ..area };
+    // Row 1 stays blank; the workspace row sits below it.
+    if area.height > 2 {
+        let crumbs = Rect { y: area.y + 2, height: 1, ..area };
         frame.render_widget(
             Paragraph::new(row(crumb_layout(s, width))).style(background),
             crumbs,
@@ -611,17 +620,18 @@ pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
 mod chrome_tests {
     use super::*;
 
-    /// The two top-bar rows: the tabs, then the workspace path and branch.
+    /// The top-bar rows: the tabs, a blank row, then the workspace path and branch. The blank
+    /// row is dropped here so index 1 is the workspace row.
     fn bar_rows(s: &Snapshot, width: u16) -> Vec<String> {
-        let backend = ratatui::backend::TestBackend::new(width, 2);
+        let backend = ratatui::backend::TestBackend::new(width, 3);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| draw_top_bar(frame, s, frame.area(), &Palette::new(false), 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        (0..2)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        let row = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(row(1).trim().is_empty(), "blank row between tabs and workspace: {:?}", row(1));
+        vec![row(0), row(2)]
     }
     /// The tab row.
     fn bar_text(s: &Snapshot, width: u16) -> String {
@@ -675,9 +685,12 @@ mod chrome_tests {
             !text.contains("72K") && !text.contains('‹') && !text.contains('›'),
             "{text}"
         );
-        assert!(text.contains("☰"), "{text}");
-        assert!(text.contains("◫"), "{text}");
-        assert!(!text.contains('⧠') && !text.contains('◨'), "{text}");
+        assert!(text.contains(DASHBOARD_GLYPH), "{text}");
+        assert!(text.contains(DETAILS_GLYPH), "{text}");
+        assert!(
+            !text.contains(['☰', '◫', '⧠', '◨']),
+            "wide/fallback-prone glyphs: {text}"
+        );
         let cells = tab_cells(&s, 100);
         let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
         assert!(kinds.contains(&TabHit::Session(1)));
@@ -691,9 +704,9 @@ mod chrome_tests {
                 .skip(dash.start)
                 .take(dash.end - dash.start)
                 .collect::<String>(),
-            " ☰ "
+            " ≡ "
         );
-        assert!(text.ends_with(" ☰   ◫   "), "{text}");
+        assert!(text.ends_with(" ≡   ▯   "), "{text}");
         assert_eq!(details.start, dash.end + 1);
         assert_eq!(details.end, 98);
         let plain = Snapshot {
@@ -842,7 +855,34 @@ mod chrome_tests {
             );
             let _ = bar_text(&s, width.max(1));
         }
-        assert!(bar_text(&s, 30).contains("☰"));
+        assert!(bar_text(&s, 30).contains(DASHBOARD_GLYPH));
+    }
+
+    #[test]
+    fn chrome_button_glyphs_are_single_cell_text_presentation() {
+        for glyph in [DASHBOARD_GLYPH, DETAILS_GLYPH] {
+            assert_eq!(glyph.chars().count(), 1, "{glyph}");
+            assert_eq!(glyph.width(), 1, "{glyph}");
+            assert!(!glyph.contains(['\u{fe0f}', '\u{200d}']), "{glyph}");
+            let c = glyph.chars().next().unwrap();
+            assert!(
+                ('\u{2190}'..='\u{25ff}').contains(&c),
+                "{glyph} must stay in the arrows/math/box/shape blocks, not emoji ranges"
+            );
+        }
+        for width in 24..160 {
+            for cell in tab_cells(
+                &Snapshot {
+                    tabs: open_tabs(2, 0),
+                    ..Snapshot::default()
+                },
+                width,
+            ) {
+                if matches!(cell.kind, TabHit::Dashboard | TabHit::Details) {
+                    assert_eq!(cell.end - cell.start, 3, "space, glyph, space at {width}");
+                }
+            }
+        }
     }
 
     #[test]

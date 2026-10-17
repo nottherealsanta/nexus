@@ -590,6 +590,27 @@ def test_shutdown_cancel_is_not_an_error_but_other_terminals_keep_theirs():
     assert run("turn.failed", {"error": SHUTDOWN_CANCEL_REASON}).error == SHUTDOWN_CANCEL_REASON
 
 
+def test_shutdown_cancel_of_child_agent_is_not_an_error_but_real_errors_stay():
+    from nexus.events import SHUTDOWN_CANCEL_REASON
+
+    def run(status, error, nested=False):
+        meta = {"id": "s1/sub/1", "parent": "s1", "depth": 1, "type": "general", "task": "t", "index": 0}
+        events = [_ev(1, "agent.spawned", {"agent": meta})]
+        if nested:
+            child = {"id": "s1/sub/1/sub/1", "parent": "s1/sub/1", "parent_agent_id": "s1/sub/1",
+                     "depth": 2, "type": "general", "task": "t", "index": 0}
+            events.append(_ev(2, "agent.spawned", {"agent": child}))
+        target = "s1/sub/1/sub/1" if nested else "s1/sub/1"
+        events.append(_ev(3, "agent.completed", {"agent": {**(child if nested else meta)}, "status": status, "error": error}))
+        agent = fold(events).agents["s1/sub/1"]
+        return agent.body.agents[target] if nested else agent
+
+    assert run("cancelled", SHUTDOWN_CANCEL_REASON).error is None
+    assert run("cancelled", SHUTDOWN_CANCEL_REASON, nested=True).error is None
+    assert run("cancelled", "viewer left").error == "viewer left"
+    assert run("failed", SHUTDOWN_CANCEL_REASON).error == SHUTDOWN_CANCEL_REASON
+
+
 def test_agent_tree_nests_child_conversation():
     meta = {
         "id": "s1/sub/1",

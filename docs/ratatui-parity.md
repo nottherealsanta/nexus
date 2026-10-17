@@ -205,8 +205,10 @@ The next turn's card pushes the pin up and then
 replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
 
-**Top bar spacing.** One empty row above and one below the in-session top bar (the bar is two
-rows, tabs then workspace path/branch, starting on screen row 2; see "Two-row top bar"); the Sessions page header also starts on row 2 so both screens line up (`regions()`).
+**Top bar spacing.** One empty row above and one below the in-session top bar (the bar is
+three rows: tabs, a blank spacer, then workspace path/branch, starting on screen row 2;
+see "Top bar spacer row"); the Sessions page header also starts on row 2 so both screens
+line up (`regions()`).
 
 Settings → Layout → **Centered conversation** (`centered_layout`, off by default, saved
 in `tui.json`) caps the conversation column (top bar, transcript, composer) at
@@ -612,7 +614,7 @@ and schemas. After the first turn switches show LOCKED; inspection remains avail
 (`context_chips` rows, resolved in `main.rs`), so a click opens that chip's section and
 Enter on the strip opens the section menu. Skills and MCP chips show two unlabelled
 counts, project then global (project greyed), enclosed together in square brackets.
-Native context rows have no diamond/dot prefix: labels show counts in square brackets (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`), with readable spacing before any token estimate; token values are shown without a tilde prefix. The native top bar is two rows (tabs, then workspace path/branch), with no separator row below it.
+Native context rows have no diamond/dot prefix: labels show counts in square brackets (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`), with readable spacing before any token estimate; token values are shown without a tilde prefix. The native top bar is three rows (tabs, a blank spacer, then workspace path/branch), with no separator row below it.
 The workspace/status row no longer repeats the details-sidebar toggle beside
 `idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` marks. A finished group stays collapsed by default, including when it contains failures; folded groups omit failure and thought counts, do not animate, and use subdued headings. Expand a group to see individual tool outcomes, with failures marked on their own rows. A
 subagent row has a blank row above and below and never shows its latest tool call (see the stable card above).
@@ -706,13 +708,19 @@ shown only while it exceeds usage, and exact again once usage catches up. Activi
 `cancel` action as Esc Esc and Ctrl+C; hovering exactly those cells (the hit test and
 the highlight share `stop_at`) draws them bold in the error colour on the element
 background (`stop_button_highlights_only_its_cells_on_hover`). The transcript draws no second working row.
-Pending steering, queued and interrupt messages form Grok's unboxed section under it
+Pending steering, queued and interrupt messages form Grok's unboxed sections under it
 (only messages waiting behind a running turn: the head input of an idle send starts its own
 turn and is never listed, `_waiting_inputs` in `prototype.py`)
-after one blank row: `▾ Queued N`, then `#n text` rows (`#n` quiet, accent for steer;
-four rows, then `+N more`). The hovered row shows `↑ ↓ ✕` at the right (move up,
+after one blank row: `▾ Steering N` (`steer` plus `interrupt`) and `▾ Queued N`
+(ordinary queued inputs), then each group's `#n text` rows (`#n` quiet, accent for
+steering; four rows total when there is one group and a shared smaller limit when there
+are both, then per-group `+N more`). Real queue positions are retained across groups.
+Move-up/down controls are available only when the adjacent queue entry belongs to the
+same group; the first/last member of a group cannot be moved across its boundary (including
+the unlisted active-turn input before the waiting list). Disabled arrows are blank and
+their click targets do nothing. The hovered row shows `↑ ↓ ✕` at the right (move up,
 move down, remove, by durable `queued_id` through `SessionQueueMove`/
-`SessionQueueRemove`); a click on the caret or label collapses to `▸ Queued N`
+`SessionQueueRemove`); a click on either group header collapses/expands the displayed groups together
 (client-local, kept across snapshots). The section and the status line sit directly on the
 card, with no blank row (the one-row margin stays only when nothing is drawn there). When the daemon's global concurrent-turn cap holds this session's turn back
 (`slot_wait` in the snapshot, see `docs/host.md`), the status line reads
@@ -1162,8 +1170,8 @@ it once, after the page and before any panel/Settings/picker/inspector or
 permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
-Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, two rows; see "Two-row top bar"
-below for the 2026-10 change): row 1 holds the tabs, row 2 `~/path branch worktree`
+Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, three rows; see "Top bar spacer row"
+below for the 2026-10 change): row 1 holds the tabs, row 2 is blank, row 3 `~/path branch worktree`
 (the host's session title only, with `New session` while unavailable; no Nexus prefix
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
@@ -1256,6 +1264,11 @@ its fix:
 real host (scripted model) under a pseudo-terminal, driven only by keystrokes and read through a
 small screen emulator: Models opens from the host, a tier tab changes the tier, a toggle saves and
 the page shows it, and the Keyboard page scrolls past its second section by wheel and by keys.
+A native traversal test (`test_models_down_and_up_visit_each_stop_once_and_clamp_at_both_ends`)
+walks Models Down then Up through the real bridge: Up retraces Down in reverse, both ends clamp
+without wrapping, and the titles row is a stop once. It deliberately does not assert global
+uniqueness of tier entries, since the same model can legitimately appear in several tiers.
+It passed (parent-verified: `pytest -k models_down` => 1 passed, 5 deselected).
 
 ## External Claude Code workers
 
@@ -1468,17 +1481,40 @@ target, with a one-cell gap between controls and two cells of right padding;
 subagent headers use the same padded `◫` target and right margin. Drawing, hover,
 and clicks share the header layout.
 
-### Two-row top bar (TODO item 1)
+### Top bar spacer row (TODO item 1)
 
-The in-session top bar is two rows (`Regions.tabs.height == 2`), with the empty rows kept
-above it and below it, so the transcript starts on row 4. Row 1 keeps the session tabs
-(`Seg::Session`/`Close`/`New`) and the right-hand controls; consecutive tabs are separated
-by a straight vertical `│` (`Seg::Divider`, quiet colour, one cell, not clickable, none
-around a lone tab). Row 2 (`crumb_layout`) holds the workspace path, branch and worktree,
+The in-session top bar is three rows (`Regions.tabs.height == 3`), with the empty rows kept
+above it and below it. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
+right-hand controls; consecutive tabs are separated by a straight vertical `│`
+(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). Row 2 is
+intentionally blank. Row 3 (`crumb_layout`) holds the workspace path, branch and worktree,
 aligned with the first tab label and truncated to the width. Hit-testing still uses row 1
 only (`tab_cells`); the sub-agent page header and the Sessions page are unchanged (the page
-header draws on the first row of its area). Sizing, the pinned-prompt rows and the
-composer cap account for the extra row (`regions()`, `composer_height()`).
+header draws on the first row of its area). Sizing, pinned-prompt rows and the composer cap
+account for the extra row (`regions()`, `composer_height()`). The workspace branch is
+polled asynchronously about every three seconds; it is not an instantaneous filesystem
+watch, though a shell command submission triggers a refresh. Background refresh results
+are discarded if the selected workspace changed meanwhile. Covered by focused Python and
+Rust tests; not a claim of full visual verification.
+
+### Context-header rail removal (2026-10)
+
+The formerly drawn `│` rail to the left of open context-header rows has been removed. The
+existing indentation remains as an empty gutter, so headings and their previews/counts
+stay aligned without a vertical rule. Rust render tests assert that the rail is absent.
+This is buffer/test coverage, not a claim that the result was visually verified in every
+terminal/font.
+
+### Question Tool compact card and cancellation display
+
+Question Tool calls render the question followed by one row per option. The recorded option
+is marked selected; a free-text answer is shown as entered; an unanswered question says
+`… awaiting answer`. The full labelled details remain inspectable using `i` or `/verbose`,
+and answering still uses the pending-question prompt. The projection intentionally omits
+the generic completed-tool summary from this compact card. Focused projection tests cover
+the compact variants. Expected shutdown cancellation (`supervisor closing`) folds without
+an `Error:` row; other cancellation reasons and failed turns retain their errors (reducer
+tests cover the distinction).
 
 ### Stale glyphs on the Sessions and sidebar buttons (TODO item 2)
 
@@ -1507,5 +1543,30 @@ Only the left edge moves: elapsed/token metrics and `[stop]` keep their right ed
 and click position. Status text uses quiet gray; the spinner retains agent color.
 Regression coverage lives in `render/chrome.rs`, `transcript.rs`, and `render.rs`.
 Exactly one blank row separates the activity row (spinner/waiting text, token counter,
-`[stop]`) from the composer card; with a queue, that blank row is the one above `▾ Queued N`
+`[stop]`) from the composer card; with a queue, that blank row is the one above the queue group headings
 (`one_blank_row_separates_the_status_line_from_the_composer`).
+
+### Remaining visual review and validation status
+
+The parent has verified `cargo test` and `cargo build` (both exit 0) and a broad targeted
+Python run (224 passed). The new native Models traversal e2e test also passed separately
+(`-k models_down`: 1 passed, 5 deselected). Together these establish behavior and terminal-cell
+output; they do not establish visual parity with a reference UI or with every terminal/font,
+and no screenshot visual approval was made. In particular, live-card visual polish remains
+unreviewed and the sidebar-residue issue has not been reproduced or reviewed visually. TODO
+items 2 and 4 stay open for that reason. TODO item 8 is marked done on automated native
+keyboard traversal only; no visual/manual review of Models was performed. TODO item 7 is marked done on the strength of tests that
+establish the stable card structure (name, task, model, `L`/`M`/`H` tier, tool-call and token
+counts, no latest-tool text), explicitly without screenshot visual approval; the behavior
+is preexisting, not newly implemented by this work.
+
+Follow-up MCP attempt: served the native PTY demo with
+`NEXUS_RATATUI_STATE=live-listening-open` through `tests/browser_serve.py` on
+loopback and opened it using browser-use MCP. Navigation and terminal text inspection
+worked, but screenshot responses exposed only metadata (image attachments were omitted
+by the tool transport), so this is **not visual approval**. The existing
+`tests/playwright_ratatui_check.py` capture check exited successfully; the focused
+Live-bar Rust tests (13), Models traversal regression (1), and documentation tests
+(34) also passed. No real-terminal/font sidebar-residue reproduction was obtained.
+Items 2 and 4 remain open pending an image-capable review; a PTY text inspection
+cannot establish pixel cleanup or Live color/spacing quality.

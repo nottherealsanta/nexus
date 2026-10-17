@@ -1464,7 +1464,9 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
         status=status,
         ok=bool(data.get("ok")) if "ok" in data else None,
         is_error=bool(data.get("is_error")) if "is_error" in data else None,
-        error=_as_str(data.get("error")),
+        # A shutdown cancel is expected, not an error (exact reason, cancelled only).
+        error=None if status == "cancelled" and _as_str(data.get("error")) == SHUTDOWN_CANCEL_REASON
+        else _as_str(data.get("error")),
         iterations=_as_int(data.get("iterations"), agent.iterations),
         stop_reason=_as_str(data.get("stop_reason")),
         usage=UsageTotals.from_dict(data.get("usage")) if isinstance(data.get("usage"), Mapping) else agent.usage,

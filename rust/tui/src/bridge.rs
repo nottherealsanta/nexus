@@ -156,6 +156,10 @@ pub struct QueueItem {
     pub tag: String,
     pub mode: String,
     pub text: String,
+    /// The worker sets these only when the immediate queue neighbour has the same mode, so a
+    /// move would visibly change this item's position within its section.
+    pub can_up: bool,
+    pub can_down: bool,
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
