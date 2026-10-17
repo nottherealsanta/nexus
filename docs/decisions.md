@@ -240,6 +240,15 @@ because it would need a call exactly when the limit, budget or provider has alre
 failed. The iteration cap now defaults to unlimited (`max_iterations = 0`); the
 wall-clock and token limits remain the automatic stops.
 
+Subagents have no wall-clock deadline (2026-10-17). A high advisor on an
+external Claude Code worker was killed at the 600 s `timeout_seconds` default.
+The native child runner and both external workers (Claude Code, Antigravity)
+now ignore `timeout_seconds` and `[agent] max_turn_seconds`; the latter applies
+to root turns only. Cancellation, native iteration caps and token budgets remain.
+`timeout_seconds` is still accepted in provider sections (deprecated, ignored)
+so existing configs load. agy's required `--print-timeout` is set to one year.
+Network, shell, MCP and tool timeouts are unchanged.
+
 The wall clock is now unlimited by default too (`max_turn_seconds = 0`,
 2026-10-08). The 30-minute default silently ended long turns right after a
 tool result, without sending that result to the model, and a parent's clock

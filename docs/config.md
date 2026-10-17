@@ -79,7 +79,7 @@ are a `ConfigError`. Unknown values fail at load, not at launch.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `executable` | `claude` | Claude Code binary (>= 2.1.296) |
-| `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds` |
+| `timeout_seconds` | none | Deprecated and ignored: workers have no wall-clock deadline (still accepted so old configs load) |
 | `worker_permission_mode` | `dontAsk` | `default`/`manual` (= manual), `acceptEdits`, `plan`, `dontAsk`, `auto` (Claude's own classifier answers approvals; explicit opt-in); `bypassPermissions` is rejected |
 | `worker_tools` | unset | `--tools` built-ins; an empty list is rejected |
 | `worker_allowed_tools` / `worker_disallowed_tools` | unset | `--allowedTools` / `--disallowedTools` rules (<= 256 entries) |
@@ -116,7 +116,7 @@ worker_inherits_agy_settings = true # default; may be omitted
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `executable` | `agy` | agy binary (`agy` on `PATH`, or an absolute path) |
-| `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds`; passed to agy as `--print-timeout <n>s` plus 5 s slack |
+| `timeout_seconds` | none | Deprecated and ignored: no wall-clock deadline (still accepted so old configs load). agy always gets an unbounded `--print-timeout` (one year) |
 | `worker_inherits_agy_settings` | `true` | agy applies its own user/global settings, MCP servers and plugins; Nexus `PathGuard` does not apply inside agy. Omission allows execution, including without a provider section; explicit `false` refuses every assignment. Only used by Antigravity |
 | `worker_permission_mode` | `auto` | `auto`, `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused. With `worker_dangerously_skip_permissions = true`, `auto` is sent as `accept-edits` |
 | `worker_dangerously_skip_permissions` | `false` | **Opt-in, dangerous.** `true` appends `--dangerously-skip-permissions`, so agy auto-approves ALL its tool actions with no Nexus mediation, and allows an `always-proceed` init. **User-level only:** set it in `~/.nexus/config.toml`; a project `nexus.toml`, `.nexus/nexus.toml` or `.agents/nexus.toml` that mentions it fails to load. Must be a boolean; refused on other provider kinds. See [security.md](security.md#external-antigravity-worker) |

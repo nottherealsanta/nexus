@@ -6,6 +6,7 @@ The stream events reproduce the documented schema (antigravity.google/docs/cli/h
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import stat
@@ -105,7 +106,7 @@ def worker_for(script: Path, tmp_path: Path, **config) -> tuple[AntigravityWorke
     return AntigravityWorker(cfg, environ=env), resolve_policy(cfg, read_only=False)
 
 
-def run_worker(tmp_path: Path, scenario: dict, *, prompt="do it", cancel=None, max_seconds=0.0, **config):
+def run_worker(tmp_path: Path, scenario: dict, *, prompt="do it", cancel=None, **config):
     script = make_fake(tmp_path, **scenario)
     workspace = tmp_path / "ws"
     workspace.mkdir(exist_ok=True)
@@ -116,7 +117,7 @@ def run_worker(tmp_path: Path, scenario: dict, *, prompt="do it", cancel=None, m
         events.append((kind, data))
 
     result = asyncio.run(worker.run(prompt=prompt, model=MODEL, workspace=workspace, policy=policy,
-                                    max_seconds=max_seconds, cancel=cancel, emit=emit))
+                                    cancel=cancel, emit=emit))
     return result, events, tmp_path / "bin"
 
 
@@ -148,12 +149,13 @@ def test_from_section_and_authority_disclosure():
     section = SimpleNamespace(executable=None, timeout_seconds=30, worker_permission_mode="acceptEdits",
                               worker_inherits_agy_settings=True)
     policy = resolve_policy(WorkerConfig.from_section(section), read_only=False)
-    assert (policy.executable, policy.permission_mode, policy.timeout_seconds) == ("agy", "accept-edits", 30.0)
+    assert (policy.executable, policy.permission_mode) == ("agy", "accept-edits")
+    assert not hasattr(policy, "timeout_seconds")  # legacy timeout_seconds is accepted but ignored
     assert resolve_policy(WorkerConfig.from_section(SimpleNamespace()), read_only=False).permission_mode == "auto"
     text = policy.authority("/w")
     assert "did not mediate" in text and "no sandbox requested" in text and "read-only" not in text
-    with pytest.raises(ConfigError):
-        WorkerConfig(timeout_seconds=0)
+    assert WorkerConfig().timeout_seconds is None
+    assert "max_seconds" not in inspect.signature(AntigravityWorker.run).parameters
 
 
 @pytest.mark.parametrize("section", [None, SimpleNamespace(), SimpleNamespace(worker_inherits_agy_settings=None)])
@@ -380,13 +382,26 @@ def test_oversized_line_dropped_and_bounded(tmp_path):
     assert "over-long" in res.text
 
 
-def test_deadline_kills_whole_process_group(tmp_path):
-    started = time.monotonic()
-    res, _, bin_dir = run_worker(tmp_path, {"lines": [INIT], "hang": True}, max_seconds=1.0)
-    assert res.status == "interrupted" and time.monotonic() - started < 15
-    pids = json.loads((bin_dir / "pids.json").read_text())
+def test_no_deadline_passes_unbounded_print_timeout_until_cancelled(tmp_path):
+    cancel = SimpleNamespace(cancelled=False)
+
+    async def go():
+        script = make_fake(tmp_path, lines=[INIT], hang=True)
+        (tmp_path / "ws").mkdir(exist_ok=True)
+        worker, policy = worker_for(script, tmp_path, timeout_seconds=1)  # legacy value, ignored
+        task = asyncio.create_task(worker.run(prompt="p", model=MODEL, workspace=tmp_path / "ws",
+                                              policy=policy, cancel=cancel))
+        await asyncio.sleep(2.5)
+        assert not task.done()  # outlived the legacy 1s timeout
+        cancel.cancelled = True
+        return await asyncio.wait_for(task, 15)
+
+    res = asyncio.run(go())
+    assert res.status == "cancelled"
+    argv = json.loads((tmp_path / "bin" / "record.json").read_text())["argv"]
+    assert argv[argv.index("--print-timeout") + 1] == f"{365 * 24 * 3600}s"
     time.sleep(0.3)
-    for pid in pids:
+    for pid in json.loads((tmp_path / "bin" / "pids.json").read_text()):
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
 

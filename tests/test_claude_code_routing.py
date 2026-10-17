@@ -285,7 +285,7 @@ async def test_end_to_end_success_records_and_reports_external_authority(tmp_pat
 
 
 @pytest.mark.parametrize(("mode", "status", "handoff"), [
-    ("exit", "failed", True), ("hookloss", "interrupted", True), ("trust", "needs_attention", False),
+    ("exit", "failed", True), ("trust", "needs_attention", False),
 ])
 async def test_end_to_end_non_success_is_visible_and_handed_off(tmp_path, mode, status, handoff):
     runtime, _, outcome, relayed, _ = await external_run(tmp_path, mode)
@@ -375,6 +375,23 @@ async def test_no_role_instructions_leave_the_prompt_unchanged_and_say_so(tmp_pa
         await child.run()
         assert worker.calls[0]["prompt"] == "fix the bug"
         assert "No role instructions were sent" in runtime.agent_request("root/sub/1")["system"]
+    finally:
+        await child.aclose()
+        await runtime.aclose()
+
+
+async def test_external_child_gets_no_wall_clock_even_when_parent_has_one(tmp_path):
+    worker = StubWorker()
+    runtime, spec, child, relayed, _ = stub_child(tmp_path, worker)
+    try:
+        spec.config.v2.agent.max_turn_seconds = 5  # a root-turn cap must not leak into the child
+        await child.run()
+        assert "max_seconds" not in worker.calls[0]
+        from nexus.runtime import _child_session_id
+
+        session = runtime._ensure_child_sessions().manager.open(_child_session_id(spec.session_id), recover=False)
+        started = next(e.data for e in session.read().events() if e.type == "turn.started")
+        assert started["limits"]["max_seconds"] == 0
     finally:
         await child.aclose()
         await runtime.aclose()

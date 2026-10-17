@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -40,13 +41,12 @@ def workspace(tmp_path):
 
 
 def worker_for(tmp_path, executable, *, read_only=False, **config):
-    config.setdefault("timeout_seconds", 10)
     cfg = cw.WorkerConfig(executable=executable, config_dir=tmp_path / "claude-home", **config)
     policy = cw.resolve_policy(cfg, read_only=read_only)
     return cw.ClaudeCodeWorker(cfg, environ={"PATH": os.environ["PATH"], "ANTHROPIC_API_KEY": "secret"}), policy
 
 
-async def run(tmp_path, workspace, executable, *, prompt="do it", cancel=None, max_seconds=0.0,
+async def run(tmp_path, workspace, executable, *, prompt="do it", cancel=None,
               read_only=False, **config):
     worker, policy = worker_for(tmp_path, executable, read_only=read_only, **config)
     events: list[tuple[str, dict]] = []
@@ -55,7 +55,7 @@ async def run(tmp_path, workspace, executable, *, prompt="do it", cancel=None, m
         events.append((kind, data))
 
     result = await worker.run(prompt=prompt, model=MODEL, workspace=workspace, policy=policy,
-                              cancel=cancel, emit=emit, max_seconds=max_seconds)
+                              cancel=cancel, emit=emit)
     return result, events
 
 
@@ -230,27 +230,38 @@ async def test_exit_without_stop_is_failed_and_redacted(tmp_path, workspace, fak
     assert next(d for k, d in events if k == "external.finished")["status"] == "failed"
 
 
-async def test_deadline_is_interrupted_with_partial_answer(tmp_path, workspace, fake):
+def test_no_default_deadline_and_legacy_timeout_is_ignored():
+    assert not hasattr(cw, "DEFAULT_TIMEOUT_SECONDS") and not hasattr(cw, "MAX_TIMEOUT_SECONDS")
+    config = cw.WorkerConfig()
+    assert config.timeout_seconds is None
+    assert not hasattr(cw.resolve_policy(config, read_only=False), "timeout_seconds")
+    legacy = cw.WorkerConfig.from_section(SimpleNamespace(timeout_seconds=30))
+    assert not hasattr(cw.resolve_policy(legacy, read_only=False), "timeout_seconds")
+    assert "max_seconds" not in inspect.signature(cw.ClaudeCodeWorker.run).parameters
+
+
+async def test_hung_worker_outlives_legacy_timeout_until_cancelled(tmp_path, workspace, fake):
     directory, exe = fake(mode="hang")
-    started = time.monotonic()
-    result, _ = await run(tmp_path, workspace, exe, timeout_seconds=1)
-    assert time.monotonic() - started < 8
-    assert result.status == "interrupted" and result.is_error
+    cancel = SimpleNamespace(cancelled=False)
+    task = asyncio.create_task(run(tmp_path, workspace, exe, cancel=cancel, timeout_seconds=1))
+    await asyncio.sleep(2.5)  # past the legacy 1s timeout: still running, no deadline
+    assert not task.done()
+    cancel.cancelled = True
+    result, _ = await asyncio.wait_for(task, 10)
+    assert result.status == "cancelled" and result.is_error
     assert "partial answer" in result.text and "working" in result.text
     assert not alive(invocation(directory)["pid"])
 
 
-async def test_nexus_wall_clock_only_shortens_the_deadline(tmp_path, workspace, fake):
-    _, exe = fake(mode="hang")
-    started = time.monotonic()
-    result, _ = await run(tmp_path, workspace, exe, timeout_seconds=60, max_seconds=1)
-    assert result.status == "interrupted" and time.monotonic() - started < 10
-
-
 async def test_hook_loss_is_never_success(tmp_path, workspace, fake):
     directory, exe = fake(mode="hookloss")
-    result, events = await run(tmp_path, workspace, exe, timeout_seconds=1)
-    assert result.status == "interrupted" and result.stop_event is None
+    cancel = SimpleNamespace(cancelled=False)
+    task = asyncio.create_task(run(tmp_path, workspace, exe, cancel=cancel))
+    await asyncio.sleep(1.5)
+    assert not task.done()  # a missing Stop hook is never success
+    cancel.cancelled = True
+    result, events = await asyncio.wait_for(task, 10)
+    assert result.status == "cancelled" and result.stop_event is None
     assert "answer but no hook" in result.text  # the partial answer is still surfaced
     assert next(d for k, d in events if k == "external.finished")["stop_event"] is None
 

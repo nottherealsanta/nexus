@@ -2264,11 +2264,9 @@ class _ChildRuntime:
                 ),
             )
             max_iterations = int(spec.max_iterations or 0)
-            # The wall clock follows ``[agent] max_turn_seconds`` (0 = unlimited)
-            # like a root turn; a hardcoded cap silently ended long children.
-            agent_section = getattr(getattr(config, "v2", None), "agent", None)
-            max_seconds = float(getattr(agent_section, "max_turn_seconds", 0) or 0)
-            limits = TurnLimits(max_iterations=max_iterations, max_seconds=max_seconds)
+            # Subagents have no wall-clock deadline (``[agent] max_turn_seconds``
+            # applies to root turns only); iterations and cancellation still bound them.
+            limits = TurnLimits(max_iterations=max_iterations, max_seconds=0.0)
             lease = session.begin_turn(limits=limits)
             sink = _ChildEventSink(session, spec.emit)
             crash: Exception | None = None
@@ -2417,10 +2415,8 @@ class _ChildRuntime:
         real_id = _child_session_id(spec.session_id)
         session = facade.manager.open(real_id, create=True, recover=False)
         try:
-            agent_section = getattr(getattr(getattr(spec, "config", None), "v2", None), "agent", None)
-            # Only the wall clock maps to Claude; Nexus iteration caps do not.
-            max_seconds = float(getattr(agent_section, "max_turn_seconds", 0) or 0)
-            limits = TurnLimits(max_iterations=0, max_seconds=max_seconds)
+            # External workers have no wall-clock deadline; only cancellation stops them.
+            limits = TurnLimits(max_iterations=0, max_seconds=0.0)
             lease = session.begin_turn(limits=limits)
             sink = _ChildEventSink(session, spec.emit)
 
@@ -2432,7 +2428,7 @@ class _ChildRuntime:
             crash: Exception | None = None
             before = after = None
             try:
-                await emit("turn.started", {"limits": {"max_iterations": 0, "max_seconds": max_seconds}})
+                await emit("turn.started", {"limits": {"max_iterations": 0, "max_seconds": 0.0}})
                 # Claude Code has no system-prompt channel here, so the role's
                 # instructions travel as a labelled prefix of the one prompt it gets.
                 instructions = str(getattr(spec, "system_prompt", "") or "").strip()
@@ -2446,7 +2442,7 @@ class _ChildRuntime:
                 try:
                     result = await external.worker.run(
                         prompt=prompt, model=external.model, workspace=workspace,
-                        policy=external.policy, max_seconds=max_seconds,
+                        policy=external.policy,
                         cancel=getattr(spec, "cancel", None), emit=emit)
                 except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
                     crash = exc

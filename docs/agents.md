@@ -102,8 +102,10 @@ same worker policy as any other child (user decision 2026-10-17, see
 worker module but no Nexus caller uses it. A `worker_mcp_config` or
 `worker_setting_sources` is still refused under the default restricted policy,
 since MCP servers, plugins and hooks can act beyond built-ins. Token and cost budgets are also
-refused; Nexus iteration caps are not mapped. Only the wall clock maps:
-`min(timeout_seconds, [agent] max_turn_seconds)` when the latter is nonzero.
+refused; Nexus iteration caps are not mapped. No wall clock maps either:
+external workers (Claude Code and Antigravity) and native subagents have no
+deadline; `[agent] max_turn_seconds` applies to root turns only. A worker ends
+on its own terminal event, a block, process exit, or user/parent cancellation.
 
 **Readback.** An isolated `python -I` hook script (SessionStart, Stop,
 StopFailure) writes atomic result files and checks the session id; its

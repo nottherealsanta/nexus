@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import re
 import signal
@@ -66,10 +65,8 @@ from .claude_code_worker import (
     MAX_DIAGNOSTIC_CHARS,
     MAX_PROMPT_BYTES,
     MAX_RESULT_CHARS,
-    MAX_TIMEOUT_SECONDS,
     MAX_TOOL_CONTENT_CHARS,
     PROBE_TIMEOUT_SECONDS,
-    DEFAULT_TIMEOUT_SECONDS,
     Emit,
     WorkerResult,
     _bound_input,
@@ -104,8 +101,9 @@ MAX_BLOCKS = 200
 #: How long a finished or terminating child may take to exit before SIGKILL.
 EXIT_GRACE_SECONDS = 3.0
 TERM_GRACE_SECONDS = 2.0
-#: Slack so Nexus' own deadline, not agy's ``--print-timeout``, decides first.
-PRINT_TIMEOUT_SLACK = 5
+#: agy requires ``--print-timeout``; Nexus sets no deadline, so pass an effectively
+#: unbounded duration (one year) rather than agy's own default cap.
+NO_PRINT_TIMEOUT_SECONDS = 365 * 24 * 3600
 #: agy's documented flag that auto-approves every tool action; opt-in only.
 SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 #: ``--mode`` passed instead of ``auto`` when the bypass is on (documented in agy's modes docs).
@@ -168,7 +166,9 @@ class WorkerConfig:
     """Operator configuration of the ``antigravity`` provider section."""
 
     executable: str = "agy"
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    #: Deprecated and ignored: an external worker has no wall-clock deadline.
+    #: Kept so existing ``timeout_seconds`` config keys still load.
+    timeout_seconds: float | None = None
     permission_mode: str = "auto"
     tools: tuple[str, ...] | None = None
     allowed_tools: tuple[str, ...] = ()
@@ -185,10 +185,6 @@ class WorkerConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.skip_permissions, bool):
             raise ConfigError("antigravity worker_dangerously_skip_permissions must be a boolean")
-        timeout = self.timeout_seconds
-        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS):
-            raise ConfigError("antigravity timeout_seconds must be between 0 and 3600")
         if not isinstance(self.executable, str) or not self.executable.strip() or "\x00" in self.executable:
             raise ConfigError("antigravity executable must be a non-empty path or name")
         if self.worker_inherits_agy_settings not in (None, True, False):
@@ -200,12 +196,10 @@ class WorkerConfig:
             value = getattr(section, name, None)
             return None if value is None else tuple(str(item) for item in value)
 
-        timeout = getattr(section, "timeout_seconds", None)
         restricted = getattr(section, "worker_restricted", None)
         sources = getattr(section, "worker_setting_sources", None)
         return cls(
             executable=getattr(section, "executable", None) or "agy",
-            timeout_seconds=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
             permission_mode=getattr(section, "worker_permission_mode", None) or "auto",
             tools=listed("worker_tools"),
             allowed_tools=listed("worker_allowed_tools") or (),
@@ -231,7 +225,6 @@ class WorkerPolicy:
 
     permission_mode: str
     executable: str = "agy"
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     read_only: bool = False
     #: agy's tools cannot be listed or restricted by Nexus.
     tools: tuple[str, ...] | None = None
@@ -288,7 +281,7 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
         raise ConfigError(f"antigravity worker refused: {', '.join(unsupported)} cannot be enforced on agy; "
                           "remove them rather than have them silently ignored")
     return WorkerPolicy(permission_mode=mode, executable=config.executable,
-                        timeout_seconds=float(config.timeout_seconds), read_only=False,
+                        read_only=False,
                         config_dir=config.config_dir, skip_permissions=config.skip_permissions)
 
 
@@ -425,7 +418,8 @@ class AntigravityWorker:
     # -- argv ------------------------------------------------------------
 
     @staticmethod
-    def build_argv(policy: WorkerPolicy, *, model: str, print_timeout: int) -> list[str]:
+    def build_argv(policy: WorkerPolicy, *, model: str,
+                   print_timeout: int = NO_PRINT_TIMEOUT_SECONDS) -> list[str]:
         """The documented streaming argv; stream-json selects headless stdin input.
 
         Do not pass ``--print``/``-p``: those accept a command-line prompt, which
@@ -678,14 +672,13 @@ class AntigravityWorker:
         model: str,
         workspace: Path,
         policy: WorkerPolicy,
-        max_seconds: float = 0.0,
         cancel: object | None = None,
         emit: Emit | None = None,
     ) -> WorkerResult:
         """Run one assignment to a terminal :class:`WorkerResult`.
 
-        ``max_seconds`` (a Nexus wall-clock cap, 0 = none) only ever shortens the
-        configured timeout. Raises :class:`ConfigError`/:class:`ProviderError` for
+        There is no wall-clock deadline; the run ends on agy's terminal event,
+        a block, process exit, or cancellation. Raises :class:`ConfigError`/:class:`ProviderError` for
         refusals and preflight failures; an asyncio cancellation kills the
         process group and re-raises.
         """
@@ -707,9 +700,6 @@ class AntigravityWorker:
         workspace = Path(workspace).resolve()
         if not workspace.is_dir():
             raise ConfigError(f"antigravity workspace is not a directory: {workspace}")
-        timeout = policy.timeout_seconds
-        if max_seconds and max_seconds > 0:
-            timeout = min(timeout, float(max_seconds))
         env = self._env()
         run = _Run(session=str(uuid4()), model=model, workspace=workspace, policy=policy, emit=emit)
         started = time.monotonic()
@@ -717,7 +707,7 @@ class AntigravityWorker:
         result: WorkerResult | None = None
         try:
             await self._preflight(policy, env, tempfile.gettempdir())
-            argv = self.build_argv(policy, model=model, print_timeout=math.ceil(timeout) + PRINT_TIMEOUT_SLACK)
+            argv = self.build_argv(policy, model=model)
             process = await asyncio.create_subprocess_exec(
                 *argv, cwd=str(workspace), env=env, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
@@ -727,10 +717,10 @@ class AntigravityWorker:
                 "permission_mode": policy.permission_mode, "tools": None, "allowed_tools": [],
                 "disallowed_tools": [], "restricted": False, "setting_sources": "", "mcp": "agy-inherited",
                 "read_only": False, "skip_permissions": policy.skip_permissions,
-                "timeout_seconds": timeout, "provenance": PROVENANCE,
+                "provenance": PROVENANCE,
                 "authority": policy.authority(workspace)})
             try:
-                result = await self._supervise(run, process, prompt, started, timeout, cancel)
+                result = await self._supervise(run, process, prompt, started, cancel)
             except Exception as exc:  # unexpected: report it, `finally` cleans up
                 reason = f"supervision failed unexpectedly ({type(exc).__name__}): {redact_secrets(str(exc))[:300]}"
                 result = self._result(run, started, "failed", f"Antigravity {reason}.", error=reason)
@@ -787,7 +777,7 @@ class AntigravityWorker:
             clip_notes=notes, diagnostics=diag, elapsed_seconds=time.monotonic() - started, attention=attention)
 
     async def _supervise(self, run: _Run, process: asyncio.subprocess.Process, prompt: str,
-                         started: float, timeout: float, cancel: object | None) -> WorkerResult:
+                         started: float, cancel: object | None) -> WorkerResult:
         def partial() -> str:
             text = run.partial_text()
             return f"\n[partial answer]\n{text}" if text else ""
@@ -813,8 +803,7 @@ class AntigravityWorker:
             close_stdin()
         out = asyncio.create_task(self._read_stdout(run, process.stdout))
         err = asyncio.create_task(self._read_stderr(run, process.stderr))
-        deadline = started + timeout
-        timed_out = cancelled = False
+        cancelled = False
         process_code: int | None = None
         try:
             while True:
@@ -824,12 +813,9 @@ class AntigravityWorker:
                 done, _ = await asyncio.wait({out}, timeout=0.05)
                 if done:
                     break
-                if time.monotonic() >= deadline:
-                    timed_out = True
-                    break
             failure = out.exception() if out.done() and not out.cancelled() else None
             close_stdin()  # the turn is over (or being stopped): end the session so agy exits
-            if cancelled or timed_out or run.refusal or run.attention or run.final is None:
+            if cancelled or run.refusal or run.attention or run.final is None:
                 await self._stop(process)  # no terminal event: nothing is left running
             else:
                 try:
@@ -875,10 +861,6 @@ class AntigravityWorker:
         if run.final is not None:
             return self._result(run, started, "failed", f"{run.final[2]}." + partial(), error=run.final[2],
                                 stop="result")
-        if timed_out:
-            return self._result(run, started, "interrupted",
-                                f"Antigravity did not finish within {timeout:g}s and was stopped." + partial(),
-                                error=f"deadline of {timeout:g}s exceeded without a terminal result")
         code = process.returncode
         error = (f"agy stream ended (exit code {code}) without a terminal result"
                  if not run.stdout_truncated else "agy stdout exceeded the size limit without a terminal result")

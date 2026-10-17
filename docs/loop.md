@@ -157,7 +157,7 @@ ended right after a tool result had `turn.completed` with `stop_reason: budget`
 about 1800 s after it started. That was the old 30-minute default of
 `max_turn_seconds`. A parent's clock includes time spent waiting on subagents, so
 long subagent work hit it most. The default is now 0 (unlimited), and subagents
-use the configured value instead of a hardcoded 1800.
+have no wall clock at all (2026-10-17; see `docs/decisions.md`).
 
 ## Changing the loop
 

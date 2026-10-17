@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
-import math
 import os
 import re
 import shlex
@@ -95,8 +94,6 @@ MAX_HOOK_FILE = 2 * 1024 * 1024
 RECONCILE_SECONDS = 2.0
 #: Bound on each ``--version``/``--help`` preflight probe.
 PROBE_TIMEOUT_SECONDS = 15.0
-MAX_TIMEOUT_SECONDS = 3600.0
-DEFAULT_TIMEOUT_SECONDS = 600.0
 
 #: A tool result Claude returns when its ``auto`` classifier refuses an action.
 _AUTO_DENIAL_RE = re.compile(r"denied by the Claude Code auto mode classifier\. Reason: \[([^\]]{1,80})\]")
@@ -256,7 +253,9 @@ class WorkerConfig:
     """Operator configuration of the ``claude-code`` provider section."""
 
     executable: str = "claude"
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    #: Deprecated and ignored: an external worker has no wall-clock deadline.
+    #: Kept so existing ``timeout_seconds`` config keys still load.
+    timeout_seconds: float | None = None
     permission_mode: str = "dontAsk"
     tools: tuple[str, ...] | None = None
     allowed_tools: tuple[str, ...] = ()
@@ -269,10 +268,6 @@ class WorkerConfig:
     config_dir: Path | None = None
 
     def __post_init__(self) -> None:
-        timeout = self.timeout_seconds
-        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS):
-            raise ConfigError("claude-code timeout_seconds must be between 0 and 3600")
         if self.permission_mode not in _PERMISSION_MODES:
             raise ConfigError(
                 "claude-code worker_permission_mode must be default/manual, acceptEdits, plan, auto or dontAsk")
@@ -285,12 +280,10 @@ class WorkerConfig:
             value = getattr(section, name, None)
             return None if value is None else tuple(str(item) for item in value)
 
-        timeout = getattr(section, "timeout_seconds", None)
         restricted = getattr(section, "worker_restricted", None)
         sources = getattr(section, "worker_setting_sources", None)
         return cls(
             executable=getattr(section, "executable", None) or "claude",
-            timeout_seconds=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
             permission_mode=getattr(section, "worker_permission_mode", None) or "dontAsk",
             tools=listed("worker_tools"),
             allowed_tools=listed("worker_allowed_tools") or (),
@@ -315,7 +308,6 @@ class WorkerPolicy:
     restricted: bool
     read_only: bool
     executable: str = "claude"
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     config_dir: Path | None = None
 
     def authority(self, workspace: str | Path) -> str:
@@ -391,7 +383,7 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
         allowed_tools=config.allowed_tools, disallowed_tools=disallowed,
         setting_sources=config.setting_sources, mcp_config=config.mcp_config,
         restricted=config.restricted, read_only=read_only, executable=config.executable,
-        timeout_seconds=float(config.timeout_seconds), config_dir=config.config_dir,
+        config_dir=config.config_dir,
     )
 
 
@@ -819,15 +811,14 @@ class ClaudeCodeWorker:
         model: str,
         workspace: Path,
         policy: WorkerPolicy,
-        max_seconds: float = 0.0,
         cancel: object | None = None,
         emit: Emit | None = None,
     ) -> WorkerResult:
         """Run one assignment to a terminal :class:`WorkerResult`.
 
-        ``max_seconds`` (a Nexus wall-clock cap, 0 = none) only ever shortens the
-        configured timeout. Claude-side iteration limits are deliberately not
-        mapped. Raises :class:`ConfigError`/:class:`ProviderError` for refusals
+        There is no wall-clock deadline: the run ends on Claude's Stop hook, a
+        startup/permission block, process exit, or cancellation. Claude-side
+        iteration limits are deliberately not mapped. Raises :class:`ConfigError`/:class:`ProviderError` for refusals
         and preflight failures; an asyncio cancellation kills the process group
         and re-raises.
         """
@@ -844,9 +835,6 @@ class ClaudeCodeWorker:
         workspace = Path(workspace).resolve()
         if not workspace.is_dir():
             raise ConfigError(f"claude-code workspace is not a directory: {workspace}")
-        timeout = policy.timeout_seconds
-        if max_seconds and max_seconds > 0:
-            timeout = min(timeout, float(max_seconds))
         env = self._env()
         state_dir = private_working_directory()
         session = str(uuid4())
@@ -893,10 +881,10 @@ class ClaudeCodeWorker:
                     "disallowed_tools": list(policy.disallowed_tools),
                     "restricted": policy.restricted, "setting_sources": policy.setting_sources,
                     "mcp": "explicit" if policy.mcp_config else "none",
-                    "read_only": policy.read_only, "timeout_seconds": timeout,
+                    "read_only": policy.read_only,
                     "provenance": PROVENANCE, "authority": policy.authority(workspace)})
                 try:
-                    result = await self._supervise(run, process, master, root, derived, started, timeout, cancel)
+                    result = await self._supervise(run, process, master, root, derived, started, cancel)
                 except Exception as exc:  # unexpected: report it, and let `finally` clean up
                     reason = f"supervision failed unexpectedly ({type(exc).__name__}): {redact_secrets(str(exc))[:300]}"
                     result = self._result(run, started, "failed", f"Claude Code {reason}.", error=reason)
@@ -958,11 +946,10 @@ class ClaudeCodeWorker:
 
     async def _supervise(
         self, run: _Run, process: asyncio.subprocess.Process, master: int, root: Path,
-        derived: Path, started: float, timeout: float, cancel: object | None,
+        derived: Path, started: float, cancel: object | None,
     ) -> WorkerResult:
         session, policy = run.session, run.policy
         pending = b""
-        deadline = started + timeout
         confirm_exit = False
 
         def partial() -> str:
@@ -1033,14 +1020,6 @@ class ClaudeCodeWorker:
                 head = "Claude Code reported a turn failure (StopFailure)" + (f": {detail}" if detail else "")
                 body = head + "." + (f"\n[partial answer]\n{message}" if message else partial())
                 return self._result(run, started, "failed", body, error=head, stop="StopFailure")
-
-            # Checked after the hooks, so a Stop that lands at the deadline still counts.
-            if time.monotonic() >= deadline:
-                await self._drain(run, final=True)
-                return self._result(
-                    run, started, "interrupted",
-                    f"Claude Code did not finish within {timeout:g}s and was stopped." + partial(),
-                    error=f"deadline of {timeout:g}s exceeded without a Stop result")
 
             # A started session has passed trust/login/onboarding, so only an
             # unstarted one can be blocked there.
