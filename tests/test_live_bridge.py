@@ -430,15 +430,29 @@ def test_empty_delegation_uses_the_transcript_as_the_request():
 
 
 def test_transcript_and_input_are_bounded_and_clipping_is_announced():
-    long_turns = [("user", f"turn {i} " + "é" * 400) for i in range(40)]
-    message, facts = compose_request("x" * 10_000, long_turns)
-    assert facts["input_omitted"] > 0 and facts["transcript_omitted"] > 0
+    long_turns = [("user", f"turn {i} " + "é" * 1_000) for i in range(60)]
+    message, facts = compose_request("x" * (MAX_INPUT_BYTES + 10), long_turns)
+    assert facts["input_omitted"] == 10 and facts["transcript_omitted"] > 0
     assert "more characters omitted]" in message and "earlier characters omitted]" in message
     body = message.split("Spoken conversation since the previous request\n")[1].split("\n\nNote:")[0]
     kept = body.split("\n", 1)[1]
-    assert len(kept.encode()) <= MAX_TRANSCRIPT_BYTES and kept.rstrip().endswith("é" * 400)  # the end is kept
+    assert len(kept.encode()) <= MAX_TRANSCRIPT_BYTES and kept.rstrip().endswith("é" * 1_000)  # the end is kept
     request = message.split("\n\n")[0].split("\n", 1)[1]
     assert request.startswith("xxx") and len(request.encode()) <= MAX_INPUT_BYTES + 60
+
+
+def test_request_beyond_the_old_4_kib_bound_is_delivered_whole():
+    request = "".join(f"line {i}: please handle item {i}\n" for i in range(3_000)).strip()  # ~100 KB
+    assert len(request.encode()) > 64 * 1024
+    message, facts = compose_request(request, [("user", "hello"), ("assistant", "hi")])
+    assert request in message and facts["input_omitted"] == 0 and "omitted" not in message
+
+
+def test_transcript_only_request_is_not_cut_to_the_context_bound():
+    spoken = "word " * 20_000  # 100 KB spoken, no delegation text
+    message, facts = compose_request("", [("user", spoken)])
+    assert facts["from_transcript"] is True and facts["transcript_omitted"] == 0
+    assert message.count("word") == 20_000 and "omitted" not in message
 
 
 async def test_empty_delegation_and_empty_transcript_is_still_rejected():

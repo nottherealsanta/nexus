@@ -390,6 +390,10 @@ pub struct Content {
     pub count: usize,
     pub failures: usize,
     pub metrics: String,
+    /// `task`: the sub-agent's model (with effort) and compact tier letter (`L`/`M`/`H`), both
+    /// drawn in the agent colour.
+    pub model: String,
+    pub tier: String,
     /// Header chip counts: `[total]`, or `[project, global]` for skills and MCP.
     pub counts: Vec<usize>,
     pub members: Vec<Content>,
@@ -425,17 +429,29 @@ impl Content {
         !self.text.is_empty() || self.count > 0 || self.local_preview != "~0"
     }
 
-    /// The token figure beside a context title: `tokens`, else the first `~figure` the
-    /// older fields carry. `None` when the host sent no figure at all.
+    /// The token figure beside a context title, without the host's `~` estimate prefix
+    /// (`348`, `?`): `tokens`, else the first `~figure` the older fields carry. `None` when
+    /// the host sent no figure at all. The figure is still an estimate; the context dialog says so.
     pub fn token_label(&self) -> Option<String> {
+        let plain = |text: &str| text.trim_start_matches('~').to_owned();
         if !self.tokens.is_empty() {
-            return Some(self.tokens.clone());
+            return Some(plain(&self.tokens));
         }
         [&self.status, &self.local_preview, &self.text]
             .into_iter()
             .find(|text| text.starts_with('~'))
-            .map(|text| text.split_whitespace().next().unwrap_or("~?").to_owned())
-            .or_else(|| (!self.status.is_empty()).then(|| "~?".to_owned()))
+            .map(|text| plain(text.split_whitespace().next().unwrap_or("~?")))
+            .or_else(|| (!self.status.is_empty()).then(|| "?".to_owned()))
+    }
+
+    /// The bracketed counts after a context title: `[2]`, or `[project global]`.
+    /// Empty when the host sent none.
+    pub fn counts_label(&self) -> String {
+        if self.counts.is_empty() {
+            return String::new();
+        }
+        let counts: Vec<_> = self.counts.iter().map(usize::to_string).collect();
+        format!("[{}]", counts.join(" "))
     }
 
     /// Copy the fields a lazily built view (`Disclosure::block`) must keep so the activity
@@ -873,18 +889,24 @@ mod section_tests {
             ..Default::default()
         };
         assert!(!explicit.is_active(), "explicit `active` wins over content");
-        assert_eq!(explicit.token_label().as_deref(), Some("~348"));
+        assert_eq!(explicit.token_label().as_deref(), Some("348"));
         let legacy = Content {
             status: "~2.1k tokens".into(),
             ..Default::default()
         };
         assert!(legacy.is_active());
-        assert_eq!(legacy.token_label().as_deref(), Some("~2.1k"));
+        assert_eq!(legacy.token_label().as_deref(), Some("2.1k"));
         let unknown = Content {
             status: "tokens unknown".into(),
             ..Default::default()
         };
-        assert_eq!(unknown.token_label().as_deref(), Some("~?"));
+        assert_eq!(unknown.token_label().as_deref(), Some("?"));
+        let counted = Content {
+            counts: vec![1, 3],
+            ..Default::default()
+        };
+        assert_eq!(counted.counts_label(), "[1 3]");
+        assert_eq!(Content::default().counts_label(), "");
         assert_eq!(Content::default().token_label(), None);
         let zero = Content {
             local_preview: "~0".into(),

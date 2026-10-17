@@ -114,11 +114,12 @@ async def build(workflows) -> dict:
         blocks.append(sp.ordered(f"tier:{name}", items, sp.op(AREA, "tier", tier=name), "Add model…",
                                  editable=bool(_get(tier, "editable", True)), controls=controls))
         source = _get(tier, "source", "")
-        blocks.append(sp.note({
-            "your list": "Your own list, saved in your global config.",
-            "built-in": "Nexus's built-in choice. Add a model to make your own list.",
-            "by price": "Models are sorted into this tier by price. Add a model to pin your own.",
-        }.get(str(source), str(source))))
+        # "your list" is implied by the Reset button below and the page footer; say nothing.
+        if source != "your list":
+            blocks.append(sp.note({
+                "built-in": "Nexus's built-in choice. Add a model to make your own list.",
+                "by price": "Models are sorted into this tier by price. Add a model to pin your own.",
+            }.get(str(source), str(source))))
         if not _get(tier, "resolved", ""):
             blocks.append(sp.note("No model in this tier can run: connect its provider or add another model.", "warning"))
         if not _get(tier, "editable", True):

@@ -466,6 +466,82 @@ async def test_delegation_gets_the_transcript_since_the_previous_one_and_in_prog
     await manager.stop("s1")
 
 
+async def test_long_spoken_request_reaches_the_session_whole():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    request = "".join(f"item {i}: do the thing\n" for i in range(8_000)).strip()  # ~190 KB, past every old bound
+    assert 16_000 < len(request) < lp.MAX_DELEGATION_CHARS
+    t = transports[0]
+    t.push(lp.TurnDone("user", request))
+    t.push(lp.DelegationCreated("d1", request))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert request in msg and "omitted" not in msg
+    assert not host.of("live.error")
+    await manager.stop("s1")
+
+
+async def test_request_at_the_bound_keeps_prefix_and_suffix_without_a_notice():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    head, tail = "PREFIX-MARKER ", " SUFFIX-MARKER"
+    request = head + "z" * (lp.MAX_DELEGATION_CHARS - len(head) - len(tail)) + tail
+    assert len(request) == lp.MAX_DELEGATION_CHARS
+    transports[0].push(lp.DelegationCreated("d1", request))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert request in msg and "omitted" not in msg and not host.of("live.error")
+    await manager.stop("s1")
+
+
+async def test_request_over_the_bound_keeps_the_prefix_and_ends_with_an_explicit_notice():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    over = 1_000
+    request = "PREFIX-MARKER " + "z" * (lp.MAX_DELEGATION_CHARS + over - 28) + " SUFFIX-MARKER"
+    assert len(request) == lp.MAX_DELEGATION_CHARS + over
+    transports[0].push(lp.DelegationCreated("d1", request))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert "PREFIX-MARKER" in msg and "SUFFIX-MARKER" not in msg  # the cut is never silent:
+    assert f"[… {over} more characters omitted]" in msg  # the model is told exactly how much is missing
+    assert request[: lp.MAX_DELEGATION_CHARS] in msg
+    await manager.stop("s1")
+
+
+async def test_request_over_the_hard_bound_is_clipped_with_a_notice():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    over = 25
+    transports[0].push(lp.DelegationCreated("d1", "y" * (lp.MAX_DELEGATION_CHARS + over)))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert f"[… {over} more characters omitted]" in msg and "y" * lp.MAX_DELEGATION_CHARS in msg
+    assert any(str(over) in e.get("message", "") for e in host.of("live.error"))
+    await manager.stop("s1")
+
+
+async def test_empty_delegation_with_a_long_utterance_uses_it_whole():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    spoken = "please " * 10_000  # 70,000 characters of speech, no delegation text
+    transports[0].push(lp.TurnDone("user", spoken))
+    transports[0].push(lp.DelegationCreated("d1", ""))
+    await settle(lambda: len(host.enqueued) == 1)
+    msg = host.enqueued[0][1]
+    assert msg.count("please") == 10_000 and "omitted" not in msg
+    await manager.stop("s1")
+
+
+async def test_oversize_sideband_frame_is_reported_not_silent():
+    manager, transports = make(flush_interval=0.0)
+    host, _ = await start(manager)
+    transports[0].push(lp.Unknown("oversize"))
+    await settle(lambda: host.of("live.error"))
+    assert "too large" in host.of("live.error")[0]["message"]
+    await manager.stop("s1")
+
+
 async def test_delta_rate_is_bounded_to_four_hertz():
     manager, transports = make(flush_interval=0.25)
     host, _ = await start(manager)

@@ -141,7 +141,7 @@ def test_thought_and_tools_share_one_activity_group(tmp_path, monkeypatch, expan
                        expanded={"thoughtthinking"} if expanded else set())["blocks"]
     transcript = [b for b in blocks if b["kind"] in {"tool_group", "thought"}]
     assert len(transcript) == 1
-    assert transcript[0]["text"] == "Read 2 files, Thought 1 time"
+    assert transcript[0]["text"] == "Read 2 files"
     assert transcript[0]["count"] == 3
     if expanded:
         assert [m["kind"] for m in transcript[0]["members"]] == ["tool", "thought", "tool"]
@@ -221,9 +221,11 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
     card = next(block for block in blocks if block["id"] == "task-1")
     assert card["kind"] == "task"
-    assert card["title"] == "Explore Subagent — Scan · tier unknown · model pending"
+    assert card["title"] == "Explore Subagent — Scan"
+    assert (card["model"], card["tier"]) == ("model pending", "?")
+    assert card["metrics"] == "0 tool calls · 0 tokens"
     assert card["status"] == "running"
-    assert card["text"] == "Starting…"
+    assert card["text"] == ""
     assert card["gap"] == 1
     assert card["operation"] == {"kind": "agent_page", "id": "a1"}
     assert [block["id"] for block in blocks if block["id"] in {"a1", "a2"}] == ["a2"]
@@ -232,6 +234,20 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
 def _agent(**kwargs):
     from nexus.view.model import AgentView
     return AgentView(id="a1", type="explore", description="Scan", **kwargs)
+
+
+def test_agent_card_tier_letter_tokens_and_unknown_usage():
+    from nexus.ui.ratatui.prototype import _agent_card_metrics, _agent_card_model
+    from nexus.view.model import UsageTotals
+    for tier, letter in (("low", "L"), ("medium", "M"), ("high", "H"), (None, "?")):
+        assert _agent_card_model(_agent(tier=tier))[1] == letter
+    assert _agent_card_model(_agent(requested_tier="high"))[1] == "H"
+    agent = _agent(tier="low", usage=UsageTotals(input_tokens=1000, output_tokens=234))
+    agent.body.turns = [TurnView(id="ct", index=0, tools=[ToolCallView(call_id="x", name="read", event_seq=2)])]
+    assert _agent_card_metrics(agent) == "1 tool call · 1.2K tokens"
+    agent.usage_unknown = True  # an external worker reports no accounting: unknown, not zero
+    assert _agent_card_metrics(agent) == "1 tool call · tokens unknown"
+    assert _agent_card_metrics(None) == "0 tool calls · tokens unknown"
 
 
 def test_agent_model_label_prefers_actual_over_tier_and_spawn_reference():
@@ -299,7 +315,8 @@ def test_task_card_and_child_page_disclose_actual_model(tmp_path, monkeypatch):
     shell.preferences.values["context_preview"] = False
     controller = SimpleNamespace(view=view, session="s")
     card = next(b for b in project(controller, 1, shell=shell)["blocks"] if b["id"] == "task-1")
-    assert card["title"] == "Explore Subagent — Scan · tier low · openai/gpt-6 (high)"
+    assert card["title"] == "Explore Subagent — Scan"
+    assert (card["model"], card["tier"]) == ("gpt-6 (high)", "L")
     shell.workflows.agent_page_id = "a1"
     page = project(controller, 2, shell=shell)
     assert page["model"] == "tier low · openai/gpt-6"
@@ -321,17 +338,15 @@ def test_cli_details_and_link_label_disclose_model():
 
 
 @pytest.mark.parametrize(
-    ("status", "spawned", "completed", "suffix"),
+    ("status", "spawned", "completed"),
     [
-        ("completed", 100.0, 165.0, "1m 5s"),
-        ("running", 100.0, None, ""),
-        ("completed", 100.0, 100.25, "0.2s"),
-        ("completed", None, None, ""),
-        ("completed", 100.0, None, ""),
-        ("failed", 100.0, 105.0, "5.0s"),
+        ("completed", 100.0, 165.0),
+        ("running", 100.0, None),
+        ("completed", None, None),
+        ("failed", 100.0, 105.0),
     ],
 )
-def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status, spawned, completed, suffix):
+def test_subagent_card_shows_counts_without_elapsed_time(tmp_path, monkeypatch, status, spawned, completed):
     from nexus.view.model import AgentView
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
@@ -352,12 +367,11 @@ def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status,
     shell = ShellActions(controller)
     shell.preferences.values["context_preview"] = False
     row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "task")
-    assert row["title"].endswith(" · tier low · openai/gpt-x (medium)")
+    assert row["title"] == "Explore Subagent — find code"
+    assert (row["model"], row["tier"]) == ("gpt-x (medium)", "L")
     assert row["status"] == ("running" if status == "running" else "done")
-    assert row["text"] == ("Starting…" if status == "running" else "")
-    assert row["metrics"].startswith("0 tools")
-    if suffix:
-        assert suffix in row["metrics"]
+    assert row["text"] == ""
+    assert row["metrics"] == "0 tool calls · 0 tokens"
 
 
 def test_details_mcp_accepts_doctor_report_dict_not_struct(tmp_path, monkeypatch):
@@ -703,7 +717,7 @@ def test_explored_group_summarises_lookups_and_thought_carries_duration(tmp_path
                        expanded={"t:activity:athinking"})["blocks"]
     group = next(b for b in blocks if b["kind"] == "tool_group")
     assert group["members"][0]["title"] == "Thought for 671ms"
-    assert group["text"] == "Thought 1 time, Searched 1 pattern, Read 1 file"
+    assert group["text"] == "Searched 1 pattern, Read 1 file"
     assert [m["heading"].split(" ")[0] for m in group["members"][1:]] == ["✱", "→"]
 
 
@@ -781,8 +795,8 @@ def test_task_latest_activity_metrics_and_error_detail(tmp_path, monkeypatch):
     shell.preferences.values["context_preview"] = False
     blocks = project(controller, 1, shell=shell)["blocks"]
     card = next(b for b in blocks if b["kind"] == "task")
-    assert card["text"] == activity
-    assert card["metrics"].startswith("1 tool")
+    assert card["text"] == "" and "fresh" not in str(card.values())  # the latest tool is never shown
+    assert card["metrics"] == "2 tool calls · 0 tokens"
     assert card["detail"] == "Error: private failure"  # only the error, never the tool details
     shell.expanded.add("task:detail")
     shell.verbose = True

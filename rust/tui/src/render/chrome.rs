@@ -90,6 +90,8 @@ enum Seg {
     Branch,
     Path,
     Sep,
+    /// Straight vertical rule between two session tabs.
+    Divider,
     Notice,
     Worktree,
     Dashboard,
@@ -140,8 +142,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         right.remove(0);
     }
     let right_width = size(&right);
-    // Left: a window of session tabs, then the workspace breadcrumb.
-    let (path, branch) = partition(&s.breadcrumb);
+    // Left: a window of session tabs. The workspace breadcrumb has its own row below.
     let margin = if width < 12 { 0 } else { 2 };
     let room = width.saturating_sub(right_width + margin + usize::from(width >= 12));
     let mut left: Vec<(String, Seg)> = Vec::new();
@@ -188,17 +189,10 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
                 format!(" {glyph} {}", crate::transcript::truncate(title, 24))
             })
             .collect();
-        // Reserve a short breadcrumb when possible, before admitting neighbours.
-        let breadcrumb = if path.is_empty() {
-            0
-        } else {
-            (path.width() + 3).min(24)
-        };
         let new_width = if room >= 4 { 3 } else { 0 };
-        let budget = room
-            .saturating_sub(new_width + breadcrumb)
-            .max(room.saturating_sub(new_width).min(12));
-        let tab_width = |i: usize| labels[i].width() + 3;
+        let budget = room.saturating_sub(new_width);
+        // Label, close button and the divider that precedes the tab.
+        let tab_width = |i: usize| labels[i].width() + 3 + 1;
         let mut first = active;
         let mut last = active + 1;
         let mut used = tab_width(active).min(budget);
@@ -211,9 +205,14 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
             last += 1;
         }
         for (i, label) in labels.iter().enumerate().take(last).skip(first) {
-            let available = tab_width(i).min(budget);
+            let full = tab_width(i).min(budget);
+            let divider = usize::from(i > first && full > 1);
+            let available = full - divider;
             if available == 0 {
                 continue;
+            }
+            if divider == 1 {
+                place("│", Seg::Divider, &mut left, &mut room);
             }
             let close_width = if available >= 4 { 3 } else { 0 };
             place(
@@ -230,18 +229,6 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     if !s.tabs.is_empty() {
         place(" + ", Seg::New, &mut left, &mut room);
     }
-    if !path.is_empty() && room > 8 {
-        place(sep, Seg::Sep, &mut left, &mut room);
-        place(path, Seg::Path, &mut left, &mut room);
-        if !branch.is_empty() && room > branch.width() + 2 {
-            place(" ", Seg::Gap, &mut left, &mut room);
-            place(branch, Seg::Branch, &mut left, &mut room);
-        }
-        if !s.worktree.is_empty() && room > s.worktree.width() + 2 {
-            place(" ", Seg::Gap, &mut left, &mut room);
-            place(&s.worktree, Seg::Worktree, &mut left, &mut room);
-        }
-    }
     let mut out = Vec::new();
     let mut at = margin;
     for (text, seg) in left {
@@ -254,6 +241,57 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         let w = text.width();
         out.push((at, text, seg));
         at += w;
+    }
+    out
+}
+/// The geometry the chrome buttons (`☰`, `◫`, tabs) sit in. When it changes the buttons move
+/// or disappear, and the next frame must repaint every cell (see `needs_full_repaint`).
+pub type LayoutKey = (Rect, Rect, u16, u16);
+pub fn layout_key(r: &Regions) -> LayoutKey {
+    (r.tabs, r.details, r.transcript.x, r.transcript.width)
+}
+/// Whether moving from the previously painted layout to `next` needs a full repaint.
+///
+/// Ratatui rebuilds the whole buffer every frame, so its buffer cannot hold a stale glyph; it
+/// then writes only the cells that differ from the previous frame. Residue after the buttons
+/// move (`☰`, `◫`) can therefore only live in the terminal itself, e.g. a fallback-font glyph
+/// drawn wider than its cell. This was not reproduced (no terminal was available); repainting
+/// every cell when the layout moves (sidebar toggled, Sessions page opened or closed, resize)
+/// removes any such residue regardless of its source.
+pub fn needs_full_repaint(previous: Option<LayoutKey>, next: LayoutKey) -> bool {
+    previous.is_some_and(|previous| previous != next)
+}
+/// The workspace row under the tabs: `path branch worktree`, aligned with the first tab label.
+fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
+    let (path, branch) = partition(&s.breadcrumb);
+    let at = if width < 12 { 0 } else { 3 };
+    let mut room = width.saturating_sub(at + usize::from(width >= 12));
+    let mut out: Vec<(usize, String, Seg)> = Vec::new();
+    let mut column = at;
+    for (text, seg) in [
+        (path, Seg::Path),
+        (branch, Seg::Branch),
+        (s.worktree.as_str(), Seg::Worktree),
+    ] {
+        if text.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            if room < 2 {
+                break;
+            }
+            out.push((column, " ".into(), Seg::Gap));
+            column += 1;
+            room -= 1;
+        }
+        if room == 0 {
+            break;
+        }
+        let text = crate::transcript::truncate(text, room);
+        let w = text.width();
+        out.push((column, text, seg));
+        column += w;
+        room = room.saturating_sub(w);
     }
     out
 }
@@ -310,7 +348,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 ),
             ])
             .style(Style::default().fg(p.text).bg(p.panel)),
-            area,
+            Rect { height: area.height.min(1), ..area },
         );
         return;
     }
@@ -319,34 +357,47 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
     }
     let width = usize::from(area.width);
     let background = Style::default().bg(p.background);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut at = 0usize;
-    for (start, text, seg) in top_layout(s, width) {
-        if start > at {
-            spans.push(Span::styled(" ".repeat(start - at), background));
-        }
-        at = start + text.width();
-        let style = match seg {
-            Seg::Session(i) | Seg::Close(i) => {
-                if s.tabs[i].active {
-                    background
-                        .bg(p.panel)
-                        .fg(p.text)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    background.fg(p.muted)
-                }
+    let row = |layout: Vec<(usize, String, Seg)>| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut at = 0usize;
+        for (start, text, seg) in layout {
+            if start > at {
+                spans.push(Span::styled(" ".repeat(start - at), background));
             }
-            Seg::New => background.fg(p.muted),
-            Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
-            Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap => background.fg(p.quiet),
-            Seg::Path => background.fg(p.text),
-            Seg::Notice => background.fg(p.accent),
-            Seg::Dashboard | Seg::Details => background.fg(p.muted),
-        };
-        spans.push(Span::styled(text, style));
+            at = start + text.width();
+            let style = match seg {
+                Seg::Session(i) | Seg::Close(i) => {
+                    if s.tabs[i].active {
+                        background
+                            .bg(p.panel)
+                            .fg(p.text)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        background.fg(p.muted)
+                    }
+                }
+                Seg::New => background.fg(p.muted),
+                Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
+                Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap | Seg::Divider => {
+                    background.fg(p.quiet)
+                }
+                Seg::Path => background.fg(p.text),
+                Seg::Notice => background.fg(p.accent),
+                Seg::Dashboard | Seg::Details => background.fg(p.muted),
+            };
+            spans.push(Span::styled(text, style));
+        }
+        Line::from(spans)
+    };
+    let bar = Rect { height: 1, ..area };
+    frame.render_widget(Paragraph::new(row(top_layout(s, width))).style(background), bar);
+    if area.height > 1 {
+        let crumbs = Rect { y: area.y + 1, height: 1, ..area };
+        frame.render_widget(
+            Paragraph::new(row(crumb_layout(s, width))).style(background),
+            crumbs,
+        );
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
 }
 /// Details sidebar rows, and for each row the modified file it toggles (if any).
 pub fn details_rows(
@@ -560,19 +611,21 @@ pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
 mod chrome_tests {
     use super::*;
 
-    fn bar_text(s: &Snapshot, width: u16) -> String {
-        let backend = ratatui::backend::TestBackend::new(width, 1);
+    /// The two top-bar rows: the tabs, then the workspace path and branch.
+    fn bar_rows(s: &Snapshot, width: u16) -> Vec<String> {
+        let backend = ratatui::backend::TestBackend::new(width, 2);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| draw_top_bar(frame, s, frame.area(), &Palette::new(false), 0))
             .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
+        let buffer = terminal.backend().buffer();
+        (0..2)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
             .collect()
+    }
+    /// The tab row.
+    fn bar_text(s: &Snapshot, width: u16) -> String {
+        bar_rows(s, width).remove(0)
     }
 
     fn open_tabs(count: usize, active: usize) -> Vec<crate::bridge::Session> {
@@ -609,11 +662,15 @@ mod chrome_tests {
             tabs: open_tabs(3, 1),
             ..Snapshot::default()
         };
-        let text = bar_text(&s, 100);
+        let rows = bar_rows(&s, 100);
+        let text = rows[0].clone();
+        assert!(text.contains("Session 1"), "{text}");
         assert!(
-            text.contains("Session 1") && text.contains("~/repo main wt-fix"),
-            "{text}"
+            !text.contains("~/repo") && !text.contains("main") && !text.contains("wt-fix"),
+            "workspace info left the tab row: {text}"
         );
+        assert!(rows[1].trim() == "~/repo main wt-fix", "{:?}", rows[1]);
+        assert_eq!(rows[1].find('~'), Some(3), "aligned with the first tab label");
         assert!(
             !text.contains("72K") && !text.contains('‹') && !text.contains('›'),
             "{text}"
@@ -643,7 +700,90 @@ mod chrome_tests {
             worktree: String::new(),
             ..s
         };
-        assert!(bar_text(&plain, 100).contains("~/repo main "));
+        assert_eq!(bar_rows(&plain, 100)[1].trim(), "~/repo main");
+    }
+
+    #[test]
+    fn tabs_are_separated_by_straight_dividers() {
+        let s = Snapshot {
+            tabs: open_tabs(3, 1),
+            breadcrumb: "~/repo:main".into(),
+            ..Snapshot::default()
+        };
+        let layout = top_layout(&s, 120);
+        let dividers: Vec<_> = layout
+            .iter()
+            .filter(|(_, _, seg)| *seg == Seg::Divider)
+            .collect();
+        assert_eq!(dividers.len(), 2, "one between each pair of tabs: {layout:?}");
+        assert!(dividers.iter().all(|(_, text, _)| text == "│"));
+        let text = bar_text(&s, 120);
+        assert_eq!(text.matches('│').count(), 2, "{text}");
+        // Each divider sits directly between one tab's close button and the next tab.
+        let cells = tab_cells(&s, 120);
+        for (start, _, _) in dividers {
+            let before = cells.iter().find(|c| c.end == *start).map(|c| c.kind);
+            let after = cells.iter().find(|c| c.start == start + 1).map(|c| c.kind);
+            assert!(matches!(before, Some(TabHit::Close(_))), "{before:?}");
+            assert!(matches!(after, Some(TabHit::Session(_))), "{after:?}");
+        }
+        // Dividers are not clickable and do not shift the hit targets off their text.
+        for cell in &cells {
+            let drawn: String = text.chars().skip(cell.start).take(cell.end - cell.start).collect();
+            assert!(!drawn.contains('│'), "{:?} covers a divider: {drawn:?}", cell.kind);
+        }
+        let single = Snapshot {
+            tabs: open_tabs(1, 0),
+            ..Snapshot::default()
+        };
+        assert!(!bar_text(&single, 120).contains('│'), "no divider around a lone tab");
+    }
+
+    #[test]
+    fn workspace_row_truncates_and_never_overflows() {
+        let s = Snapshot {
+            breadcrumb: "~/a/very/long/path/to/the/repo › feature/branch".into(),
+            worktree: "feature-wt".into(),
+            tabs: open_tabs(2, 0),
+            ..Snapshot::default()
+        };
+        for width in 1..120u16 {
+            let mut end = 0;
+            for (start, text, _) in crumb_layout(&s, usize::from(width)) {
+                assert!(start >= end, "overlap at {width}");
+                end = start + text.width();
+                assert!(end <= usize::from(width), "overflow at {width}");
+            }
+            let _ = bar_rows(&s, width);
+        }
+        assert!(bar_rows(&s, 100)[1].contains("feature/branch"));
+    }
+
+    #[test]
+    fn moving_the_chrome_buttons_forces_a_full_repaint() {
+        let mut s = Snapshot {
+            tabs: open_tabs(2, 0),
+            details_sidebar: true,
+            ..Snapshot::default()
+        };
+        let area = Rect::new(0, 0, 140, 30);
+        let open = layout_key(&regions(area, &s, 8, false));
+        s.details_sidebar = false;
+        let closed = layout_key(&regions(area, &s, 8, false));
+        assert!(needs_full_repaint(Some(open), closed), "closing the details sidebar");
+        assert!(needs_full_repaint(Some(closed), open), "opening it");
+        assert!(needs_full_repaint(Some(open), layout_key(&regions(Rect::new(0, 0, 120, 30), &s, 8, false))), "resize");
+        s.dashboard = Some(serde_json::json!({"rows": []}));
+        let sessions = layout_key(&regions(area, &s, 0, false));
+        assert!(needs_full_repaint(Some(closed), sessions), "Sessions page");
+        assert!(!needs_full_repaint(None, open), "first frame needs no extra clear");
+        s.dashboard = None;
+        s.title = "Another title".into();
+        s.tabs[1].title = "Renamed".into();
+        assert!(
+            !needs_full_repaint(Some(closed), layout_key(&regions(area, &s, 8, false))),
+            "ordinary text changes keep the incremental diff"
+        );
     }
 
     #[test]

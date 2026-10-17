@@ -53,6 +53,7 @@ from .protocol import (
     TranscriptAdded,
     TranscriptDelta,
     TurnDone,
+    Unknown,
     append_messages,
     resolve_voice,
 )
@@ -64,7 +65,8 @@ MAX_SDP_BYTES = 65_536
 MAX_INSTRUCTIONS_BYTES = 32_768
 MAX_CARRY_BYTES = 8_192
 MAX_SESSION_CONTEXT_BYTES = 8_192
-MAX_TRANSCRIPT_CHARS = 16_000
+MAX_TRANSCRIPT_CHARS = 16_000  # one transcript event/caption row (flagged ``truncated``); not what the agent gets
+MAX_SPOKEN_CHARS = MAX_DELEGATION_CHARS  # one spoken turn handed to the agent as request context
 MAX_CAPTION_CHARS = 4_000
 MAX_APPEND_CHARS = 32_000
 MAX_PENDING_DELEGATIONS = 8
@@ -184,6 +186,7 @@ class _Call:
     # (role, text) finals since the previous delegation; bounded, handed to the bridge (plan 4.1)
     spoken: list[tuple[str, str]] = field(default_factory=list)
     sent_partial: dict[str, str] = field(default_factory=dict)  # role -> partial already handed over
+    partial_clipped: set[str] = field(default_factory=set)  # roles whose in-progress speech lost its start
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # transcripts
     partial: dict[str, str] = field(default_factory=dict)
@@ -854,6 +857,9 @@ class LiveManager:
             self._final_turn(call, event)
         elif isinstance(event, DelegationCreated):
             self._delegate(call, event)
+        elif isinstance(event, Unknown) and event.raw_type == "oversize":
+            # a frame over MAX_EVENT_BYTES cannot be read; it may have carried a spoken request
+            self._record_error(call, "A message from the voice service was too large to read; a spoken request may have been lost")
         elif isinstance(event, ErrorEvent):
             self._note_error(call, event.message)
             if event.fatal or event.status in (401, 403):
@@ -879,7 +885,10 @@ class LiveManager:
             merged = previous
         else:
             merged = previous + text
-        call.partial[role] = merged[-MAX_TRANSCRIPT_CHARS:]
+        if len(merged) > MAX_SPOKEN_CHARS:
+            merged = merged[-MAX_SPOKEN_CHARS:]
+            call.partial_clipped.add(role)  # the start is gone; the delegation says so
+        call.partial[role] = merged
         call.dirty.add(role)
         if role == "assistant" and not (call.muted or call.paused):
             self._set_phase(call, "speaking")
@@ -890,13 +899,14 @@ class LiveManager:
     def _final_turn(self, call: _Call, event: TurnDone) -> None:
         text = event.transcript or call.partial.get(event.role, "")
         call.partial.pop(event.role, None)
+        call.partial_clipped.discard(event.role)
         call.dirty.discard(event.role)
         if text.strip() and event.role == "user":
             call.last_heard = text[:MAX_TRANSCRIPT_CHARS]
         if text.strip() and _alnum(call.sent_partial.pop(event.role, "")) == _alnum(text):
             pass  # this utterance already went to the agent as an in-progress partial
         elif text.strip():
-            call.spoken.append((event.role, text[:MAX_TRANSCRIPT_CHARS]))
+            call.spoken.append((event.role, _clip_spoken(text)))
             del call.spoken[:-MAX_SPOKEN_TURNS]
         if text.strip():
             call.turn_count += 1
@@ -922,13 +932,17 @@ class LiveManager:
         for role in ("user", "assistant"):  # speech still in progress belongs to this request
             partial = call.partial.get(role, "").strip()
             if partial:
-                transcript.append((role, partial[:MAX_TRANSCRIPT_CHARS]))
+                lost = "[… earlier speech omitted] " if role in call.partial_clipped else ""
+                transcript.append((role, lost + _clip_spoken(partial)))
                 call.sent_partial[role] = partial
+        text = event.text
+        if len(text) > MAX_DELEGATION_CHARS:
+            over = len(text) - MAX_DELEGATION_CHARS
+            text = f"{text[:MAX_DELEGATION_CHARS]}\n[… {over} more characters omitted]"
+            self._record_error(call, f"A spoken request was too long and its last {over} characters were not sent")
         task = asyncio.create_task(
-            bridge.on_delegation(
-                event.id, event.text[:MAX_DELEGATION_CHARS], call.partial.get("user") or call.last_heard,
-                transcript=transcript,
-            ), name="nexus-live-delegation"
+            bridge.on_delegation(event.id, text, call.partial.get("user") or call.last_heard, transcript=transcript),
+            name="nexus-live-delegation",
         )
         call.tasks.add(task)
 
@@ -938,6 +952,13 @@ class LiveManager:
                 self._note_error(call, f"delegation failed: {safe_detail(finished.exception())}")
 
         task.add_done_callback(_done)
+
+
+def _clip_spoken(text: str) -> str:
+    """One spoken turn bounded to ``MAX_SPOKEN_CHARS``; the cut is marked in the text itself."""
+    if len(text) <= MAX_SPOKEN_CHARS:
+        return text
+    return f"{text[:MAX_SPOKEN_CHARS]} [… {len(text) - MAX_SPOKEN_CHARS} more characters omitted]"
 
 
 def _alnum(text: str) -> str:

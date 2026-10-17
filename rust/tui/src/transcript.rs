@@ -799,22 +799,11 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         }
         "tool_group" => groups::draw(&mut out, b, width, p, look::now_ms()),
         "task" => {
-            // The host supplies only the latest activity, never arrow-joined history.
+            // A stable summary card: name and task, then model, tier letter and counts. The
+            // latest tool is never shown, so a running card does not change per tool call.
             let running = b.status == "running";
             let room = width.saturating_sub(6);
             let title = truncate(&b.title, room);
-            let metrics = if running
-                && !b.metrics.is_empty()
-                && title.width() + b.metrics.width() + 2 <= room
-            {
-                format!(
-                    "{}{}",
-                    " ".repeat(room - title.width() - b.metrics.width()),
-                    b.metrics
-                )
-            } else {
-                String::new()
-            };
             // The agent colour marks only the subagent's name (`Explore Subagent — …`); the
             // glyph and the rest of the title are neutral.
             let (name, rest) = match title.find(" Subagent") {
@@ -846,26 +835,29 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 ));
             }
             head.push(Span::styled(rest.to_string(), Style::default().fg(p.text)));
-            head.push(Span::styled(metrics.clone(), Style::default().fg(p.muted)));
             out.push((Line::from(head), op.clone()));
-            let activity = if running { &b.text } else { &b.metrics };
-            for text in activity.lines() {
-                out.push((
-                    Line::styled(
-                        format!("      {}", truncate(text, room)),
-                        Style::default().fg(p.muted),
-                    ),
-                    op.clone(),
-                ));
+            // `gpt-6 (high) · M` in the agent colour, then the muted `N tool calls · 1.2K tokens`.
+            let accent = Style::default().fg(color(&b.color, p.blue, p));
+            let pieces = [
+                (b.model.as_str(), " ", accent),
+                (b.tier.as_str(), " ", accent.add_modifier(Modifier::BOLD)),
+                (b.metrics.as_str(), " \u{b7} ", Style::default().fg(p.muted)),
+            ];
+            let mut left = 0;
+            let mut summary = vec![Span::raw("      ")];
+            for (text, gap, style) in pieces {
+                if text.is_empty() {
+                    continue;
+                }
+                let gap = if left > 0 { gap } else { "" };
+                let text = truncate(&format!("{gap}{text}"), room.saturating_sub(left));
+                left += text.width();
+                if !text.is_empty() {
+                    summary.push(Span::styled(text, style));
+                }
             }
-            if running && metrics.is_empty() && !b.metrics.is_empty() {
-                out.push((
-                    Line::styled(
-                        format!("      {}", truncate(&b.metrics, room)),
-                        Style::default().fg(p.muted),
-                    ),
-                    op.clone(),
-                ));
+            if summary.len() > 1 {
+                out.push((Line::from(summary), op.clone()));
             }
             for text in b.detail.lines() {
                 indented(
@@ -1310,14 +1302,17 @@ mod tests {
     }
 
     #[test]
-    fn tasks_show_latest_activity_metrics_and_quiet_completion() {
+    fn tasks_show_model_tier_and_counts_but_never_the_latest_tool() {
         let p = Palette::new(false);
         let mut task = Content {
             kind: "task".into(),
-            title: "Explore map files".into(),
+            title: "Explore Subagent — map files".into(),
             status: "running".into(),
             text: "Read config.json".into(),
-            metrics: "3 calls · 2s".into(),
+            model: "gpt-6 (high)".into(),
+            tier: "M".into(),
+            color: "#ff0000".into(),
+            metrics: "3 tool calls · 1.2K tokens".into(),
             operation: Some(serde_json::json!({"action":"task","key":"t1"})),
             gap: 1,
             ..Default::default()
@@ -1338,13 +1333,30 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert!(rendered.contains("Read config"));
-            assert!(rendered.contains("3 calls · 2s"));
+            assert!(!rendered.contains("Read config"));
             assert!(!rendered.contains('→'));
             if width == 80 {
-                assert_eq!(rows[1].0.width(), 80);
+                assert!(rendered.contains("gpt-6 (high) M · 3 tool calls · 1.2K tokens"));
+                let accent = Some(color("#ff0000", p.blue, &p));
+                let styled = |needle: &str| {
+                    rows.iter()
+                        .flat_map(|(line, _)| line.spans.iter())
+                        .find(|s| s.content.contains(needle))
+                        .map(|s| s.style.fg)
+                };
+                assert_eq!(styled("gpt-6"), Some(accent));
+                assert_eq!(styled("M"), Some(accent));
+                assert_eq!(styled("tokens"), Some(Some(p.muted)));
             }
         }
+        task.metrics = "0 tool calls · tokens unknown".into();
+        let rows = build(&task, 80, &p);
+        let rendered: String = rows
+            .iter()
+            .flat_map(|(line, _)| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("tokens unknown"));
         task.status = "failed".into();
         task.detail = "Error: missing file".into();
         let rows = build(&task, 80, &p);
@@ -1518,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_tool_groups_count_failures_in_red_and_header_chips_own_click_ranges() {
+    fn failed_tool_groups_omit_counts_and_header_chips_own_click_ranges() {
         let p = Palette::new(false);
         let group = Content {
             kind: "tool_group".into(),
@@ -1531,12 +1543,11 @@ mod tests {
         let rows = build(&group, 60, &p);
         let spans = &rows[0].0.spans;
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        // No per-row marks; the header carries the failure count in the darker error colour.
+        // Failure details are not counted in the heading; the group disclosure stays subdued.
         assert!(!text.contains('✗') && !text.contains('✓'), "{text}");
-        assert!(text.ends_with("Grep pattern=x · 2 failed"), "{text}");
-        assert!(spans
-            .iter()
-            .any(|s| s.content.contains("2 failed") && s.style.fg == Some(p.error_deep)));
+        assert!(text.ends_with("Grep pattern=x"), "{text}");
+        assert!(!text.contains("failed"), "{text}");
+        assert_eq!(spans[1].style.fg, None);
         let chip = |title: &str, counts: Vec<usize>, key: &str| Content {
             title: title.into(),
             counts,

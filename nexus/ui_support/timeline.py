@@ -201,7 +201,10 @@ def format_arguments(tool: ToolCallView) -> str:
     if name == "apply_patch":
         return _first_line(_text(", ".join(_patch_paths(args.get("patch"))), 180))
     if name in {"bash", "bashoutput", "killshell"}:
-        return _first_line(_text(args.get("command") or args.get("id") or ""))
+        command = str(args.get("command") or args.get("id") or "").strip()
+        first, more, _ = command.partition("\n")
+        # Only the first command line; the full command stays in the expanded details.
+        return _first_line(_text(first)) + ("…" if more.strip() and not first.endswith("…") else "")
     if name == "task":
         return _first_line(_text(args.get("description") or args.get("task") or args.get("prompt") or ""))
     pairs = [

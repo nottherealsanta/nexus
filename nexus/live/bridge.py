@@ -17,7 +17,7 @@ Contract:
   Codex's ``<realtime_delegation>`` wrapper (codex-rs core/src/context/realtime_delegation.rs).
   It is plain text in the message itself, so the timeline shows exactly what the agent saw;
   Nexus has no hidden-context channel for user messages and must not grow one. Each part is
-  bounded at 4 KiB and clipping is announced. An empty delegation falls back to the transcript.
+  bounded (request 1 MiB, background transcript 32 KiB) and clipping is announced. An empty delegation falls back to the transcript.
 - ``turn.completed`` sends the last visible assistant text as plain speakable text (no label;
   the manager sends it as ``session.context.append``/``speakable``, as Codex's TUI does).
   ``turn.failed`` /
@@ -45,8 +45,9 @@ MAX_FINAL_CHARS = 12_000
 MAX_TOOLS_IN_PROGRESS = 5
 MAX_TRACKED_TURNS = 32
 MAX_HEARD_CHARS = 2_000
-MAX_INPUT_BYTES = 4_096  # delegation text kept (start), as Codex bounds <input>
-MAX_TRANSCRIPT_BYTES = 4_096  # transcript kept (end), as Codex bounds <transcript_delta>
+# Resource bounds only: a sideband frame is already <= 1 MiB, so a real spoken request fits whole.
+MAX_INPUT_BYTES = 1_048_576  # delegation text kept (start); clipping is announced in the text
+MAX_TRANSCRIPT_BYTES = 32_768  # background transcript kept (end); clipping is announced in the text
 SPEECH_NOTE = (
     "Note: this request came from a voice call. The text is speech recognition output and may "
     "contain errors or be unpunctuated; work out what the user meant and say so if unsure. "
@@ -112,7 +113,8 @@ def compose_request(text: str, transcript: list[tuple[str, str]]) -> tuple[str, 
     input_dropped = delta_dropped = 0
     if from_transcript:
         request, body = body, ""
-        request, delta_dropped = _clip_bytes(request, MAX_TRANSCRIPT_BYTES, keep="end")
+        # here the transcript *is* the request, so it gets the request bound, not the context bound
+        request, delta_dropped = _clip_bytes(request, MAX_INPUT_BYTES, keep="end")
         if delta_dropped:
             request = f"[… {delta_dropped} earlier characters omitted]\n{request}"
     else:

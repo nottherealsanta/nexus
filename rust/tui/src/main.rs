@@ -282,6 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cache.animate = cache.appearance.enabled();
     cache.mono = cache.appearance.mono_enabled();
     let mut drawn_regions = render::Regions::default();
+    let mut painted_layout: Option<render::LayoutKey> = None;
     let mut logs_open = false;
     let mut local_ui = local_ui::LocalUi::default();
     let mut details_focus = false;
@@ -620,6 +621,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let drawing_at = Instant::now();
             let mut drawn_at = drawing_at;
             cache.settings_nav_focus = settings_nav_focus;
+            // Moving the chrome buttons leaves their overflowing glyphs behind unless every
+            // cell is repainted (`render::needs_full_repaint`).
+            let size = terminal.size()?;
+            let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+            let layout = render::layout_key(&render::regions(
+                area,
+                &s,
+                render::composer_height(area, &draft, &s),
+                logs_open,
+            ));
+            if render::needs_full_repaint(painted_layout, layout) {
+                terminal.clear()?;
+            }
+            painted_layout = Some(layout);
             terminal.draw(|frame| {
                 let r = render::draw(
                     frame,

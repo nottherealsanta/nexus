@@ -106,8 +106,16 @@ def test_label_joins_categories_with_commas_and_present_tense_is_per_category(tm
              _tool("c", "read", 4, status="running", input={"path": "x"})]
     thought = _thought("th", 5, ms=1200)
     group = _group(tmp_path, monkeypatch, tools, [thought], phase="active")
-    assert group["text"] == "Ran 2 commands, Read 1 file, Thought 1 time"
-    assert group["running_label"] == "Ran 2 commands, Reading 1 file, Thought 1 time"
+    assert group["text"] == "Ran 2 commands, Read 1 file"
+    assert group["running_label"] == "Ran 2 commands, Reading 1 file"
+
+def test_member_summaries_are_concise_first_line_with_an_ellipsis(tmp_path, monkeypatch):
+    tools = [_tool("a", "bash", 2, input={"command": "cd src\nmake all\nmake test"}),
+             _tool("b", "read", 3, input={"path": "a.py", "offset": 10, "limit": 20})]
+    from nexus.ui_support.timeline import tool_heading
+    assert tool_heading(tools[0]) == "$ cd src…"
+    assert tool_heading(tools[1]).endswith("a.py  (offset=10, limit=20)")
+    assert tool_heading(_tool("c", "bash", 4, input={"command": "ls"})) == "$ ls"
 
 
 def test_external_worker_tools_keep_their_owner_label(tmp_path, monkeypatch):
