@@ -96,6 +96,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Explicit `claude-code/<model>` subagents run Claude Code's own agent loop and tools in a PTY, outside Nexus's dispatcher; the earlier text-only PTY model bridge (`model/providers/claude_code.py`) was dropped and deleted.** | A bridge that disables Claude's tools and feeds JSON tool intentions into a Nexus child loop wastes what Claude Code is for and implies Nexus enforcement it cannot give an interactive CLI. Instead the policy is explicit and refuse-don't-widen (read-only roles only get `Read,Grep,Glob`; budgets refused; bypass/auto never passed; no prompt is ever answered), usage is reported as unknown, and file changes are measured by Nexus. Main-agent use stays on the SDK. Live behavior not verified; remaining gaps are listed in [agents.md](agents.md#external-claude-code-workers). | `agents/claude_code_worker.py`, `runtime.py:_ChildRuntime` |
 | **`claude-code` subagents have a backend switch (`[models] claude_code_subagent_backend`: `worker` default, or `sdk`).** | Some users want Claude as a subagent under Nexus's tools, permissions and measured usage rather than Claude's own tools. `sdk` reuses the Agent SDK provider in the normal child loop, built per child so it never makes Claude a selectable main model. No silent default model on either backend. | `runtime.py:_ChildRuntime`, `host_support/model_settings.py` |
 | **Antigravity (`kind = "antigravity"`, alias `agy`) is a subagent-only external worker, run headless over stream-json with agy's own tools; it defaults to `worker_inherits_agy_settings = true` (explicit `false` refuses execution) and refuses what Nexus cannot enforce.** | Same refuse-don't-widen rule as `claude-code`, but agy is driven over pipes (the Claude worker's earlier "ZMX" design used a PTY) so no terminal is emulated. A separate provider kind rather than extending `claude_code_subagent_backend`, which keeps Claude behaviour untouched and lets agy have no Nexus-tools backend. agy applies its own settings, MCP servers and plugins and PathGuard cannot reach it, so read-only roles, tool/MCP/restriction fields, worktrees and token/cost budgets are refused, and only `auto`/`accept-edits`/`plan` are passed. Models are the exact IDs `agy models` reports (no hard-coded catalogue); tiers may name `antigravity/<id>` explicitly, with no price ranking; never the root, title or fallback model. Usage is the terminal `result.usage` or `unknown`; cost is always `unknown`. Implemented offline only (no real model turn, no credentials). | `agents/antigravity_worker.py`, `model/providers/antigravity_cli.py`, `runtime.py:_plan_antigravity` |
+| **Antigravity's permission bypass is an explicit, user-level opt-in (`worker_dangerously_skip_permissions`, default `false`).** | The user accepted agy's `--dangerously-skip-permissions`, but it auto-approves ALL tools outside PathGuard, so it is never default, never written into agy's own settings, rejected at load in project config layers (a cloned repo must not grant itself full authority), refused on other kinds, preflight-checked against `agy --help`, and disclosed in authority text, events, results and the UI. With it on, a configured `auto` mode is passed as the documented `accept-edits` (explicit `accept-edits`/`plan` stay); read-only is still refused. The Claude interactive worker (historical "ZMX") is not a substitute. | `agents/antigravity_worker.py`, `config/layers.py` |
 | **Antigravity sign-in and quota are manual and honest.** | `agy` has no `auth` subcommand, so Nexus can prove only that the CLI exists, never that it is signed in; Settings says to run `agy`. Usage is shown as unavailable (no windows) with a note to run `/usage` in `agy`: its output format is unverified, so `agy -p /usage` is not run and no numbers are invented. | `host_support/provider_auth.py`, `host_support/provider_usage.py` |
 | **Provider usage reuses the credentials Nexus already holds;** Claude's comes from `claude -p /usage`, not the `api/oauth/usage` endpoint CodexBar calls. | Reading Claude Code's OAuth token from its keychain item would break "the CLI owns the credential store"; `/usage` is a local command that costs no tokens. Its text format is unversioned, so a CLI change shows as a row error rather than wrong numbers. | `host_support/provider_usage.py` |
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
@@ -611,12 +612,29 @@ The user asked for the subscription and nothing else, so xAI has one credential
 route: `auth = "xai_oauth"`, a device-code sign-in from Settings → Providers.
 API keys (config, `${env:XAI_API_KEY}`, a pasted key) are refused for xAI, and
 `xai_oauth` is refused on any other section or `base_url`, so the subscription
-token can only ever reach `api.x.ai`. As with Copilot, Nexus has no OAuth app of
+token can only ever reach `cli-chat-proxy.grok.com` (the Grok CLI subscription
+proxy used by the reference clients; `api.x.ai` is the API-key route and is
+refused). Authenticated inference there is unverified live. As with Copilot, Nexus has no OAuth app of
 its own and uses OpenCode's xAI client id and scope (attributed in
 `auth/NOTICE`); it sends `referrer = nexus` rather than claiming to be OpenCode,
 which xAI accepted in a live sign-in on 2026-10-14. Like the ChatGPT route, only
 the refresh token is persisted. Not yet observed live: a token refresh after
 expiry.
+
+The proxy also answers HTTP 426 ("Your Grok CLI version (none) is outdated.
+Please update to version 1.0.13 or later") unless the request carries
+`x-grok-client-version`, `x-grok-client-identifier: grok-shell` and a
+`xai-grok-cli` user agent (public report: can1357/oh-my-pi#5978; the exact
+header set is not verified live by Nexus). Nexus does not pin a version, which
+would claim a client it is not: it reads `version` (else `stable_version`) from
+the user's `~/.grok/version.json` (one bounded 4 KiB file read, no subprocess,
+strict `N.N.N[-tag]` format), unless the explicit `NEXUS_XAI_CLIENT_VERSION`
+override is set (which takes precedence). With neither, the turn fails before any request with a message
+naming both remedies; a 426 is re-reported with the sent version and
+`grok update`. The user agent is exactly `xai-grok-cli`, because that is the
+string the CLI proxy requires; this is a protocol requirement, and Nexus is not
+the official Grok CLI and is not described as such. Authenticated inference on
+the proxy with these headers remains unverified live.
 
 ## Usage reserve is elapsed share minus used share (2026-10)
 

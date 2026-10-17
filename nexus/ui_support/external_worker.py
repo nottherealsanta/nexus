@@ -104,6 +104,8 @@ def header_rows(external: Mapping[str, Any]) -> list[tuple[str, str]]:
     else:
         rows.append(("Settings sources", str(external.get("setting_sources") or "none")))
         rows.append(("MCP", "explicit config" if external.get("mcp") == "explicit" else "none"))
+    if agy and external.get("skip_permissions"):
+        rows.append(("Permissions", "BYPASSED: --dangerously-skip-permissions auto-approves ALL agy tool actions"))
     if external.get("read_only"):
         rows.append(("Role", "read-only role"))
     if external.get("timeout_seconds"):

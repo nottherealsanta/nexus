@@ -8,10 +8,13 @@ use std::time::Instant;
 pub const SAMPLE_RATE: u32 = 48_000;
 /// 20 ms at 48 kHz mono.
 pub const FRAME: usize = 960;
-/// Input ring capacity: about 500 ms.
-pub const INPUT_RING_SAMPLES: usize = SAMPLE_RATE as usize / 2;
-/// Playback buffer capacity: about 1 s (oldest audio is dropped beyond it).
-pub const PLAYBACK_SAMPLES: usize = SAMPLE_RATE as usize;
+/// Input ring capacity: 200 ms. The capture ring keeps the newest audio when
+/// it overflows, so this bounds how stale transmitted mic audio can be.
+pub const INPUT_RING_SAMPLES: usize = SAMPLE_RATE as usize / 5;
+/// Playback buffer capacity: 200 ms (oldest audio is dropped beyond it). Large
+/// enough to ride out normal scheduling jitter, small enough that a backlog
+/// never delays the assistant's voice noticeably.
+pub const PLAYBACK_SAMPLES: usize = 9_600;
 
 /// Milliseconds since the first call in this process (monotonic).
 pub fn now_ms() -> u64 {
@@ -73,8 +76,18 @@ impl SampleRing {
         dropped
     }
 
+    /// Append, discarding the oldest samples to make room (low-latency
+    /// playback and mic capture). Returns the number dropped.
+    pub fn push_keep_latest(&mut self, samples: &[i16]) -> usize {
+        let before = self.dropped_samples;
+        self.push_drop_oldest(samples);
+        (self.dropped_samples - before) as usize
+    }
+
     /// Append, discarding the oldest samples to make room (low-latency playback).
     pub fn push_drop_oldest(&mut self, samples: &[i16]) {
+        // Samples cut from the front of an oversized input count as dropped too.
+        self.dropped_samples += samples.len().saturating_sub(self.cap) as u64;
         let samples = if samples.len() > self.cap { &samples[samples.len() - self.cap..] } else { samples };
         let over = (self.buf.len() + samples.len()).saturating_sub(self.cap);
         for _ in 0..over {
@@ -216,6 +229,34 @@ mod tests {
         assert_eq!(r.pop_frame(FRAME).unwrap(), vec![1; FRAME]);
         assert_eq!(r.len(), INPUT_RING_SAMPLES - FRAME);
         assert!(SampleRing::new(10).pop_frame(11).is_none());
+    }
+
+    #[test]
+    fn capture_overflow_keeps_newest_and_counts_drops() {
+        let mut r = SampleRing::new(INPUT_RING_SAMPLES);
+        assert_eq!(r.push_keep_latest(&vec![1; INPUT_RING_SAMPLES]), 0);
+        assert_eq!(r.push_keep_latest(&vec![2; FRAME]), FRAME);
+        assert_eq!(r.len(), INPUT_RING_SAMPLES);
+        assert_eq!(r.take_dropped_frames(), 1);
+        // The oldest frame was evicted; the newest is at the tail.
+        let all = r.pop_upto(INPUT_RING_SAMPLES);
+        assert!(all[..INPUT_RING_SAMPLES - FRAME].iter().all(|s| *s == 1));
+        assert!(all[INPUT_RING_SAMPLES - FRAME..].iter().all(|s| *s == 2));
+    }
+
+    #[test]
+    fn oversized_push_keeps_only_the_tail_and_counts_everything_cut() {
+        let mut r = SampleRing::new(4);
+        r.push_keep_latest(&[1, 2]);
+        // Cut: incoming [3, 4] (oversized head) plus evicted [1, 2] = 4.
+        assert_eq!(r.push_keep_latest(&[3, 4, 5, 6, 7, 8]), 2 + 2);
+        assert_eq!(r.pop_upto(10), vec![5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn buffer_bounds_stay_low_latency() {
+        assert_eq!(PLAYBACK_SAMPLES, 200 * SAMPLE_RATE as usize / 1000);
+        assert!(INPUT_RING_SAMPLES <= 200 * SAMPLE_RATE as usize / 1000);
     }
 
     #[test]

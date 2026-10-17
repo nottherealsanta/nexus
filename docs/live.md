@@ -230,6 +230,28 @@ and a resume button, `/live status` has a `Paused` row, and `LiveStatusResult` c
 (`tests/test_live_manager.py`, `test_ratatui_live.py`, `test_ui_support_live_helper.py`, Rust `cargo test`);
 no real call: not verified.
 
+## Audio buffers and freshness (`rust/live/src/dsp.rs`, `audio.rs`)
+
+Live is conversational, so stale audio is worse than a small gap. Both rings between the call pipeline and the
+sound devices (mono 48 kHz i16) are therefore short and **keep the newest samples** when they overflow:
+
+| Ring | Bound | On overflow |
+|---|---|---|
+| capture (mic -> pipeline) | `INPUT_RING_SAMPLES` = 200 ms | `push_keep_latest`: oldest samples evicted, counted as drops |
+| playback (decoder -> speaker) | `PLAYBACK_SAMPLES` = 200 ms | `push_drop_oldest`: oldest samples evicted |
+
+- Earlier the capture ring held 500 ms and `push` kept the *oldest* audio, discarding new samples when the pipeline
+  lagged, so a lagging consumer could transmit mic audio up to that old. The playback ring held 1 s. Neither
+  has been measured against a real call (not verified); the bounds follow from the freshness policy.
+- 200 ms is meant to ride out normal scheduling jitter (the pipeline drains the mic in 20 ms frames) without audible
+  chopping, while capping the worst-case added latency. If drops show up in normal use, raise the constants rather
+  than switching policy back.
+- Dropped capture audio is reported to the pipeline in whole 20 ms frames (`take_dropped_frames`).
+- `SampleRing::push` (keep oldest, drop newest) is retained for callers that want it; capture no longer uses it.
+- The speaker callback asks the ring for as many samples as the device requested in that callback (scaled to the
+  device sample rate), so large device buffers are not padded with silence while audio waits. A real underrun still
+  plays silence.
+
 ## Delegation bridge (M2)
 
 A delegation is **untrusted input**, exactly like a typed prompt.

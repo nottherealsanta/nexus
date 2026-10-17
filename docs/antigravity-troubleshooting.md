@@ -15,7 +15,10 @@ The provider's [headless CLI contract](https://antigravity.google/docs/cli/headl
 specifies that `--input-format stream-json` selects streaming operation; `--print`
 and `-p` are not required (their command-line prompts are ignored in this mode).
 The prompt is a newline-terminated `user` JSON event on stdin, never on
-argv. Preflight checks the version and required streaming CLI flags/values before starting
+argv. Nexus keeps stdin open until agy's terminal `result` event and only then
+closes it: the headless docs say the streaming session lasts until stdin closes,
+so closing right after the prompt (the earlier behaviour) could end the session
+before the turn finished, showing as "stream ended without a terminal result". Preflight checks the version and required streaming CLI flags/values before starting
 a turn. Some agy releases (including the locally inspected 1.3.4) write help to
 stderr, so Nexus collects both output streams for the bounded preflight probe.
 A help-on-stderr release can appear to lack every required flag if only stdout
@@ -32,8 +35,17 @@ are auto-allowed). agy can then end with `status: SUCCESS` and an empty
 `response`. Nexus never reports that as `completed`: with no answer text (neither
 the `result.response` nor a finished `agent_response` step) the assignment ends
 as `needs_attention`, naming the likely soft denial. Nexus does not add allow
-rules, pass `--dangerously-skip-permissions` or answer prompts; edit agy's own
-settings with a narrowly scoped rule and re-run.
+rules or answer prompts, and passes `--dangerously-skip-permissions` only when the
+user-level opt-in [below](#opting-in-to---dangerously-skip-permissions) is set; otherwise
+edit agy's own settings with a narrowly scoped rule and re-run.
+
+This applies only to Nexus-managed Antigravity workers started by the Nexus runtime
+(they emit `external.started` events). An Antigravity subagent launched directly by
+an outer coding harness's own subagent tool (for example `--mode auto` with no Nexus
+`external.started` events) is outside Nexus code: `~/.nexus/config.toml` and
+`PathGuard` do not apply to it. If it repeatedly denies `RunCommand` with a harness
+label, Nexus config will not fix it; change that harness's own permission settings or
+pick a different agent backend.
 
 agy 1.3.6 makes the denial explicit, and Nexus surfaces all three signals:
 
@@ -48,6 +60,37 @@ agy 1.3.6 makes the denial explicit, and Nexus surfaces all three signals:
   and its `init.permission_mode` is `request-review`. Nexus adds a "Mode fallback"
   footer row and appends it to the attention reason. In that mode every shell
   command needs an allow rule (or a mode that works for the account).
+
+## Opting in to `--dangerously-skip-permissions`
+
+If you accept that agy will auto-approve **all** tool actions (shell, edits, MCP)
+with no Nexus mediation, add to your user-level `~/.nexus/config.toml` (this affects only
+Nexus-managed Antigravity workers, not external harness or tool integrations that launch
+agy themselves):
+
+```toml
+[providers.antigravity]
+kind = "antigravity"
+worker_dangerously_skip_permissions = true
+```
+
+- It is off by default and is never read from a project file: putting the key in
+  `nexus.toml`, `.nexus/nexus.toml` or `.agents/nexus.toml` fails the config load
+  with "may only be set in the user-level config". Restart a long-running daemon
+  after changing it.
+- It also fixes the `--mode auto` fallback. agy's [modes docs](https://antigravity.google/docs/cli/modes/)
+  list `default`, `accept-edits` and `plan` (not `auto`), and say shell commands are governed by
+  tool permission rules or `--dangerously-skip-permissions` in every mode. So the bypass lets
+  `RunCommand` run whichever mode agy picks. With the opt-in, a configured `worker_permission_mode`
+  of `auto` (the default) is replaced by `accept-edits`, so agy is never asked for the mode that
+  some accounts reject. An explicit `accept-edits` or `plan` is passed unchanged. Preflight then
+  requires `accept-edits` in `agy --help`. Without the opt-in the default stays `auto`.
+- Without it, an `init` with `permission_mode: always-proceed` (e.g. from agy's own
+  global settings) is refused, with a hint naming this key.
+- `agy --help` must list `--dangerously-skip-permissions`; otherwise the run is
+  refused before launch ("lacks required headless flags").
+- Results and the UI header show the bypass (`skip_permissions`, "Permissions:
+  BYPASSED"). Nexus never edits agy's own settings for you.
 
 ## Settings inheritance and the Nexus child path
 

@@ -166,7 +166,7 @@ Say "not verified" for anything not exercised against the real endpoint.
 
 | Finding | Nexus decision |
 | --- | --- |
-| Endpoint `https://api.x.ai/v1`; Responses is the primary route, Chat Completions also served | preset over `OpenAIProvider`, `api = "responses"` by default, `api = "chat"` selectable |
+| Endpoint `https://cli-chat-proxy.grok.com/v1` (Grok CLI subscription proxy), the reference's route. Verified on the API host `api.x.ai` only: Responses (live turns, 2026-10-14) and Chat Completions (route exists). Not verified on the proxy: authenticated inference on either route (only an unauthenticated `OPTIONS` and an invalid-bearer `POST` were checked), so proxy compatibility is unverified live | preset over `OpenAIProvider`, `api = "responses"` by default, `api = "chat"` selectable |
 | Grok streams the standard `response.reasoning_summary_text.*` events | no parser change; the shared Responses decoder handles it |
 | OpenCode sends `store: false` (xAI otherwise keeps responses server-side) and `include: ["reasoning.encrypted_content"]` | `store: false` on every Responses request; encrypted reasoning is not requested because the OpenAI adapter does not replay it |
 | `x-grok-conv-id` routes a conversation to one prompt cache (Chat Completions route) | the Nexus session id is sent as `x-grok-conv-id`; its effect on `/responses` is not verified |

@@ -3,7 +3,7 @@
 Protocol constants (issuer, client id, scope, grant types, polling rules) are
 adapted from OpenCode's xAI plugin, ``packages/core/src/plugin/provider/xai.ts``
 (anomalyco/opencode commit 6a7cedcbf1823eeb1c8dfc4baf5a7951854f578b, MIT; see
-``NOTICE``). The OAuth access token is the Bearer for ``https://api.x.ai/v1``,
+``NOTICE``). The OAuth access token is the Bearer for ``https://cli-chat-proxy.grok.com/v1``,
 exactly as an API key would be (OpenCode's ``model-resolver.ts`` passes it as
 ``apiKey``).
 

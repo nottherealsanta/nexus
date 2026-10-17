@@ -118,7 +118,17 @@ worker_inherits_agy_settings = true # default; may be omitted
 | `executable` | `agy` | agy binary (`agy` on `PATH`, or an absolute path) |
 | `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds`; passed to agy as `--print-timeout <n>s` plus 5 s slack |
 | `worker_inherits_agy_settings` | `true` | agy applies its own user/global settings, MCP servers and plugins; Nexus `PathGuard` does not apply inside agy. Omission allows execution, including without a provider section; explicit `false` refuses every assignment. Only used by Antigravity |
-| `worker_permission_mode` | `auto` | `auto`, `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused |
+| `worker_permission_mode` | `auto` | `auto`, `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused. With `worker_dangerously_skip_permissions = true`, `auto` is sent as `accept-edits` |
+| `worker_dangerously_skip_permissions` | `false` | **Opt-in, dangerous.** `true` appends `--dangerously-skip-permissions`, so agy auto-approves ALL its tool actions with no Nexus mediation, and allows an `always-proceed` init. **User-level only:** set it in `~/.nexus/config.toml`; a project `nexus.toml`, `.nexus/nexus.toml` or `.agents/nexus.toml` that mentions it fails to load. Must be a boolean; refused on other provider kinds. See [security.md](security.md#external-antigravity-worker) |
+
+To opt in, in `~/.nexus/config.toml` (never in a repository):
+
+```toml
+config_version = 2
+[providers.antigravity]
+kind = "antigravity"
+worker_dangerously_skip_permissions = true
+```
 
 The Claude `worker_tools`, `worker_allowed_tools`, `worker_disallowed_tools`,
 `worker_setting_sources`, `worker_mcp_config` and `worker_restricted` keys, and
@@ -226,4 +236,5 @@ legacy tier-valued title settings keep the first-message title until changed.
 
 Antigravity `worker_permission_mode` defaults to `auto`; explicit `accept-edits`
 or `plan` remain supported. The mode does not override an explicit inheritance opt-out,
-read-only/tool restriction checks, or the ban on bypass/always-proceed flags.
+read-only/tool restriction checks, or the ban on bypass/always-proceed flags unless the
+user-level `worker_dangerously_skip_permissions` opt-in is set (then `auto` is sent as `accept-edits`).

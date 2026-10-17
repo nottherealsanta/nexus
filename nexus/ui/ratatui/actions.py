@@ -11,12 +11,18 @@ from ...ui_support.completion import root_agents
 
 import uuid
 import asyncio
+import contextlib
 import time
 from collections import deque
 
 from ..cli.commands import help_text, parse
 from ...ui_support.tool_details import flatten
 from ...ui_support.usage import usage_lines
+
+
+#: ``/restart`` waits at most polls x seconds for the old daemon to exit.
+_RESTART_POLLS = 100
+_RESTART_POLL_SECONDS = 0.1
 
 
 def plain(value):
@@ -35,7 +41,7 @@ def labelled(value) -> list[str]:
     return [f"{row.label}: {row.value}" for row in flatten(plain(value))]
 
 
-_SUCCESS = ("Copied", "Saved", "Theme saved", "Reset", "Deleted", "Reconnected", "Speech model is ready")
+_SUCCESS = ("Copied", "Saved", "Theme saved", "Reset", "Deleted", "Reconnected", "Restarted", "Speech model is ready")
 _WARNING = ("No session matching", "UI background actions busy", "Session changed", "Permission already",
             "Question already", "Context details are unavailable", "Subagent transcript is unavailable", "Usage:",
             "Showing the last successful")
@@ -521,6 +527,45 @@ class ShellActions:
         self.attachments = unmanaged + [item for item, marker in self.marker_attachments.values()
             if marker in text]
 
+    async def restart_daemon(self):
+        """Stop the workspace daemon, start a fresh one and reattach this client.
+
+        Lifecycle stays on the client side (the same steps as ``nexus daemon
+        restart``); the daemon is never asked to restart itself. Running turns
+        end with the old process; durable state replays on the new one.
+        """
+        from pathlib import Path
+        from ...host import daemon as daemon_mod
+        if not self.workspace:
+            raise ValueError("The workspace is unknown; run `nexus daemon restart` and relaunch")
+        workspace = Path(self.workspace)
+        session = self.controller.session
+        # The follow task would auto-reconnect (opening its own client and a new
+        # daemon) while the old one shuts down; hold it until we have reattached.
+        await self.controller.pause()
+        try:
+            report = await daemon_mod.status(workspace)
+            old_pid = report.get("pid") if report.get("running") else None
+            stopped = await daemon_mod.stop(workspace)
+            if old_pid and not stopped:
+                raise RuntimeError("The daemon did not accept the stop request; run `nexus daemon stop` and relaunch")
+            # Shutdown is acknowledged before the process exits, and ``status``
+            # reads "not running" once the socket is gone even while the old
+            # process still holds the lock: wait for the process itself.
+            if not await daemon_mod.wait_stopped(workspace, old_pid, polls=_RESTART_POLLS, interval=_RESTART_POLL_SECONDS):
+                raise RuntimeError("The daemon did not stop; run `nexus daemon stop` and relaunch")
+            from ..cli import open_client
+            client = await (self.reconnect() if self.reconnect else open_client(workspace))
+            previous = self.controller.replace_client(client)
+            with contextlib.suppress(Exception):
+                await previous.aclose()
+            await self.controller.switch_session(session)
+            await self.controller.bootstrap()
+            self.generation += 1
+            self.notice = "Restarted the daemon and reconnected"
+        finally:
+            self.controller.unpause()  # on failure this resumes following (and auto-reconnect) as before
+
     async def command(self, name, args):
         session = self.controller.session
         argument = " ".join(args)
@@ -567,6 +612,10 @@ class ShellActions:
             await self.controller.switch_session(session)
             await self.controller.bootstrap()
             self.notice = ""
+        elif name == "/restart":
+            if args:
+                raise ValueError("Usage: /restart")
+            await self.restart_daemon()
         elif name == "/cancel":
             await self.cancel()
         elif name == "/model":

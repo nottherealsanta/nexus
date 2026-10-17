@@ -13,15 +13,22 @@ Contract (plans/ANTIGRAVITY_PLAN.md sections 3-5), same duck contract as
   inheritance defaults to ``worker_inherits_agy_settings = true``. Any
   configuration Nexus cannot enforce on agy (read-only role, tool lists, MCP
   config, setting sources, ``restricted``, non-agy permission modes) is refused,
-  never silently ignored. Bypass/"always proceed" flags are never passed and
-  Nexus never answers a prompt: login, trust and permission needs end the
-  assignment as ``needs_attention``.
+  never silently ignored. Bypass/"always proceed" is passed ONLY when the
+  user explicitly sets ``worker_dangerously_skip_permissions = true`` in their
+  user-level config (default false; project config cannot enable it): then
+  ``--dangerously-skip-permissions`` is appended, agy's ``always-proceed`` mode
+  is accepted, and every start/finish event, result and authority statement
+  says that agy auto-approved ALL tools outside Nexus mediation. Otherwise
+  ``always-proceed`` is refused. Nexus never answers a prompt: login, trust and
+  permission needs end the assignment as ``needs_attention``.
 * Readback is the NDJSON event stream on stdout. Success requires an explicit
   terminal ``result`` event (see :data:`SCHEMA`); EOF, a non-zero exit or a
   malformed terminal event is never success. stderr is a bounded, ANSI-stripped,
   redacted diagnostic only.
 * The prompt travels on stdin as one documented stream-json user event
-  (``{"event":"user","message":{"content":...}}``; bounded, never argv), then EOF.
+  (``{"event":"user","message":{"content":...}}``; bounded, never argv). stdin stays
+  open until the terminal ``result`` (EOF ends agy's session, so an early EOF can
+  abort the turn), then it is closed so agy exits.
   The child leads its own process group, which is terminated on completion,
   cancel, deadline and close. Token usage is reported only from agy's terminal
   ``result.usage``; cost is never estimated.
@@ -99,6 +106,14 @@ EXIT_GRACE_SECONDS = 3.0
 TERM_GRACE_SECONDS = 2.0
 #: Slack so Nexus' own deadline, not agy's ``--print-timeout``, decides first.
 PRINT_TIMEOUT_SLACK = 5
+#: agy's documented flag that auto-approves every tool action; opt-in only.
+SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
+#: ``--mode`` passed instead of ``auto`` when the bypass is on (documented in agy's modes docs).
+SKIP_PERMISSIONS_MODE = "accept-edits"
+#: Disclosed in every result of a bypassed run.
+SKIP_PERMISSIONS_NOTICE = (
+    f"{SKIP_PERMISSIONS_FLAG} was enabled by the user (worker_dangerously_skip_permissions): agy auto-approved "
+    "ALL of its tool actions without asking; Nexus permissions/PathGuard did not mediate them")
 
 #: Everything the parser matches on lives here (see module docs).
 SCHEMA: dict[str, Any] = {
@@ -164,8 +179,12 @@ class WorkerConfig:
     #: Enabled by default: agy applies its own settings, MCP servers and plugins.
     worker_inherits_agy_settings: bool | None = True
     config_dir: Path | None = None
+    #: Explicit opt-in to ``--dangerously-skip-permissions`` (auto-approves ALL agy tools).
+    skip_permissions: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.skip_permissions, bool):
+            raise ConfigError("antigravity worker_dangerously_skip_permissions must be a boolean")
         timeout = self.timeout_seconds
         if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT_SECONDS):
@@ -201,6 +220,8 @@ class WorkerConfig:
                 else section.worker_inherits_agy_settings
             ),
             config_dir=config_dir,
+            # Only an explicit ``True`` enables it; omission (or None) stays off.
+            skip_permissions=getattr(section, "worker_dangerously_skip_permissions", None) or False,
         )
 
 
@@ -220,10 +241,14 @@ class WorkerPolicy:
     mcp_config: str | None = None
     restricted: bool = False
     config_dir: Path | None = None
+    #: ``--dangerously-skip-permissions`` is passed: agy auto-approves ALL its tools.
+    skip_permissions: bool = False
 
     def authority(self, workspace: str | Path) -> str:
         """The model/user-facing statement of what ran and who mediated it."""
-        return (f"Antigravity ran its own tools (--mode {self.permission_mode}; agy's own user settings, MCP "
+        bypass = (f"; {SKIP_PERMISSIONS_FLAG} passed, so agy auto-approves ALL tool actions without asking"
+                  if self.skip_permissions else "")
+        return (f"Antigravity ran its own tools (--mode {self.permission_mode}{bypass}; agy's own user settings, MCP "
                 f"servers and plugins inherited; no sandbox requested) in {workspace}; Nexus "
                 "permissions/PathGuard did not mediate them")
 
@@ -243,6 +268,10 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
     if mode is None:
         raise ConfigError("antigravity worker_permission_mode must be auto, accept-edits or plan "
                           f"(got {config.permission_mode!r}); bypass and other modes are never passed")
+    if config.skip_permissions and mode == "auto":
+        # agy's documented --mode values are default/accept-edits/plan; `auto` is unavailable on some
+        # accounts and is then ignored. The bypass already approves every tool, so pass a documented mode.
+        mode = SKIP_PERMISSIONS_MODE
     unsupported = []
     if config.tools is not None:
         unsupported.append("worker_tools")
@@ -261,7 +290,7 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
                           "remove them rather than have them silently ignored")
     return WorkerPolicy(permission_mode=mode, executable=config.executable,
                         timeout_seconds=float(config.timeout_seconds), read_only=False,
-                        config_dir=config.config_dir)
+                        config_dir=config.config_dir, skip_permissions=config.skip_permissions)
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +412,8 @@ class AntigravityWorker:
         help_text = await self._probe(policy.executable, "--help", env, cwd)
         required = ["--input-format", "--output-format", "stream-json", "--model", "--mode", "--print-timeout",
                     policy.permission_mode]
+        if policy.skip_permissions:
+            required.append(SKIP_PERMISSIONS_FLAG)
         # Match flag tokens, not prefixes (e.g. --print-timeout is not --print).
         missing = [item for item in required if not re.search(
             rf"(?<![\w-]){re.escape(item)}(?![\w-])", help_text)]
@@ -401,9 +432,13 @@ class AntigravityWorker:
         Do not pass ``--print``/``-p``: those accept a command-line prompt, which
         streaming mode ignores. The prompt is sent only as a user event on stdin.
         ``--print-timeout`` is a Go-style duration (``60s``), never a bare integer.
+        ``--dangerously-skip-permissions`` is appended only for an explicitly opted-in policy.
         """
-        return [policy.executable, "--input-format", "stream-json", "--output-format", "stream-json",
+        argv = [policy.executable, "--input-format", "stream-json", "--output-format", "stream-json",
                 "--model", model, "--mode", policy.permission_mode, "--print-timeout", f"{print_timeout}s"]
+        if policy.skip_permissions:
+            argv.append(SKIP_PERMISSIONS_FLAG)
+        return argv
 
     @staticmethod
     def build_input(prompt: str) -> bytes:
@@ -450,9 +485,10 @@ class AntigravityWorker:
             names = [t.get("name") if isinstance(t, Mapping) else t for t in tools[:MAX_TOOLS_LISTED]]
             run.init_tools = [n[:100] for n in names if isinstance(n, str)]
         cwd, model = init.get("cwd"), init.get("model")
-        if mode == SCHEMA["unsafe_permission_mode"]:
+        if mode == SCHEMA["unsafe_permission_mode"] and not run.policy.skip_permissions:
             run.refusal = ("agy runs with permission_mode 'always-proceed' (possibly from its global settings); "
-                           "Nexus never allows that")
+                           "Nexus refuses that unless the user opts in with worker_dangerously_skip_permissions = true "
+                           "in their user-level config")
         elif cwd is not None and (not isinstance(cwd, str) or Path(cwd).resolve() != run.workspace):
             run.refusal = f"agy reported cwd {str(cwd)[:200]!r}, not the assigned workspace; refusing to continue"
         elif model is not None and model != run.model:
@@ -660,7 +696,8 @@ class AntigravityWorker:
             raise ProviderError("antigravity worker requires POSIX process groups")
         if self._config.worker_inherits_agy_settings is not True or policy.read_only or policy.tools is not None \
                 or policy.mcp_config or policy.allowed_tools or policy.disallowed_tools or policy.restricted \
-                or policy.setting_sources or policy.permission_mode not in ("auto", "accept-edits", "plan"):
+                or policy.setting_sources or policy.permission_mode not in ("auto", "accept-edits", "plan") \
+                or policy.skip_permissions is not (self._config.skip_permissions is True):
             raise ConfigError("antigravity policy is not one resolve_policy() would produce; refusing to start")
         if not _MODEL_RE.fullmatch(model or ""):
             raise ConfigError("antigravity requires an exact model ID from `agy models`")
@@ -690,7 +727,8 @@ class AntigravityWorker:
                 "provider": PROVIDER, "model": model, "session": run.session, "workspace": str(workspace),
                 "permission_mode": policy.permission_mode, "tools": None, "allowed_tools": [],
                 "disallowed_tools": [], "restricted": False, "setting_sources": "", "mcp": "agy-inherited",
-                "read_only": False, "timeout_seconds": timeout, "provenance": PROVENANCE,
+                "read_only": False, "skip_permissions": policy.skip_permissions,
+                "timeout_seconds": timeout, "provenance": PROVENANCE,
                 "authority": policy.authority(workspace)})
             try:
                 result = await self._supervise(run, process, prompt, started, timeout, cancel)
@@ -719,6 +757,7 @@ class AntigravityWorker:
             "transcript_path": None, "tool_calls": run.tool_calls,
             "usage": run.usage if run.usage is not None else "unknown", "cost": "unknown",
             "agy_permission_mode": run.agy_permission_mode, "agy_tools": list(run.init_tools),
+            "skip_permissions": run.policy.skip_permissions,
             "denied_actions": list(run.denied), "mode_note": run.mode_note,
             "error": redact_secrets(result.error)[:500] if result and result.error else None,
             "attention": result.attention if result else None,
@@ -732,6 +771,8 @@ class AntigravityWorker:
         text, note = clip(text, MAX_RESULT_CHARS)
         if note:
             run.clip_notes.append(f"answer {note}")
+        if run.policy.skip_permissions:
+            run.clip_notes.insert(0, SKIP_PERMISSIONS_NOTICE)
         if run.stdout_truncated:
             run.clip_notes.append("stdout limit reached; later activity was not recorded")
         if run.oversized_lines:
@@ -758,13 +799,19 @@ class AntigravityWorker:
                 f"Antigravity needs your attention and was stopped; Nexus approved nothing. {reason}." + partial(),
                 error=reason, attention=reason)
 
-        # One bounded stream-json user event, then EOF: Nexus writes nothing else, so no prompt is answered.
+        def close_stdin() -> None:
+            with suppress(BrokenPipeError, ConnectionResetError, OSError, RuntimeError):
+                process.stdin.close()
+
+        # One bounded stream-json user event; Nexus writes nothing else, so no prompt is answered. In streaming
+        # mode agy treats stdin EOF as "end of session", so stdin stays open until the terminal event (or a
+        # refusal/stop) and is only then closed to let agy exit; closing right after the write can end the
+        # session before the turn runs.
         try:
             process.stdin.write(self.build_input(prompt))
             await asyncio.wait_for(process.stdin.drain(), 10)
-            process.stdin.close()
         except (BrokenPipeError, ConnectionResetError, asyncio.TimeoutError):
-            pass
+            close_stdin()
         out = asyncio.create_task(self._read_stdout(run, process.stdout))
         err = asyncio.create_task(self._read_stderr(run, process.stderr))
         deadline = started + timeout
@@ -782,6 +829,7 @@ class AntigravityWorker:
                     timed_out = True
                     break
             failure = out.exception() if out.done() and not out.cancelled() else None
+            close_stdin()  # the turn is over (or being stopped): end the session so agy exits
             if cancelled or timed_out or run.refusal or run.attention or run.final is None:
                 await self._stop(process)  # no terminal event: nothing is left running
             else:
@@ -795,6 +843,7 @@ class AntigravityWorker:
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(asyncio.shield(err), 1.0)
         finally:
+            close_stdin()
             for task in (out, err):
                 if not task.done():
                     task.cancel()

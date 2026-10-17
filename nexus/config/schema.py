@@ -418,11 +418,18 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Keep this aligned with WorkerConfig: schema defaults are materialized
     #: before from_section sees an omitted setting.
     worker_inherits_agy_settings: bool = True
+    #: Opt-in (default false) to agy's ``--dangerously-skip-permissions``, which
+    #: auto-approves ALL agy tool actions outside Nexus mediation. Only valid
+    #: for Antigravity and only honoured from the user-level config, the session
+    #: or flags; project config layers that set it are rejected at load.
+    worker_dangerously_skip_permissions: bool = False
 
     def __post_init__(self) -> None:
         self._validate_worker_fields()
         if not isinstance(self.worker_inherits_agy_settings, bool):
             raise ValueError("providers.*.worker_inherits_agy_settings must be a boolean")
+        if not isinstance(self.worker_dangerously_skip_permissions, bool):
+            raise ValueError("providers.*.worker_dangerously_skip_permissions must be a boolean")
         if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
             raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot', 'keychain' or 'xai_oauth'")
         if self.profile is not None and (
@@ -439,9 +446,9 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 raise ValueError("chatgpt_oauth is supported only by the codex/OpenAI provider")
         if self.auth == "xai_oauth":
             # SuperGrok sign-in: the token lives in the private credential file
-            # and is only ever sent to xAI's own API.
-            if self.api_key is not None or self.base_url not in (None, "https://api.x.ai/v1"):
-                raise ValueError("xai_oauth cannot use api_key, and its base_url must be https://api.x.ai/v1")
+            # and is only ever sent to xAI's Grok CLI subscription proxy.
+            if self.api_key is not None or self.base_url not in (None, "https://cli-chat-proxy.grok.com/v1"):
+                raise ValueError("xai_oauth cannot use api_key, and its base_url must be https://cli-chat-proxy.grok.com/v1")
             if self.api not in (None, "chat", "responses"):
                 raise ValueError("xai_oauth requires api='chat' or api='responses'")
             if self.kind not in (None, "xai"):
@@ -569,7 +576,8 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             f"worker_setting_sources={self.worker_setting_sources!r}, "
             f"worker_mcp_config={'***' if self.worker_mcp_config else None!r}, "
             f"worker_restricted={self.worker_restricted!r}, "
-            f"worker_inherits_agy_settings={self.worker_inherits_agy_settings!r})"
+            f"worker_inherits_agy_settings={self.worker_inherits_agy_settings!r}, "
+            f"worker_dangerously_skip_permissions={self.worker_dangerously_skip_permissions!r})"
         )
 
 

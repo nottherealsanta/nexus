@@ -57,6 +57,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/details", "Show model, context, queue, approvals, and subagents"),
     CommandSpec("/context", "Show assembled prompt, tools, messages, and accounting"),
     CommandSpec("/reconnect", "Reattach and replay missed events"),
+    CommandSpec("/restart", "Restart the workspace daemon and reconnect (interrupts running turns)"),
     CommandSpec("/cancel", "Cancel the active turn"),
     CommandSpec("/close", "Close the current tab (native TUI)"),
     CommandSpec("/fork", "Branch this session", "[at_seq]"),

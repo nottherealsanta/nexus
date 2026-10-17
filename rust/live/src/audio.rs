@@ -89,7 +89,7 @@ pub use cpal_backend::CpalBackend;
 #[cfg(feature = "audio")]
 mod cpal_backend {
     use super::*;
-    use crate::dsp::{f32_to_i16, i16_to_f32, LinearResampler, FRAME, SAMPLE_RATE};
+    use crate::dsp::{f32_to_i16, i16_to_f32, LinearResampler, SAMPLE_RATE};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, SampleFormat, SizedSample};
     use std::collections::VecDeque;
@@ -186,7 +186,8 @@ mod cpal_backend {
                 rs.process(&mono, &mut out);
                 let pcm: Vec<i16> = out.iter().map(|s| f32_to_i16(*s)).collect();
                 if let Ok(mut r) = ring.lock() {
-                    r.push(&pcm);
+                    // Keep the newest audio if the pipeline lags: stale mic is worse than a gap.
+                    r.push_keep_latest(&pcm);
                 }
             },
             |e| eprintln!("nexus-live: input stream error: {e}"),
@@ -200,6 +201,7 @@ mod cpal_backend {
         T: SizedSample + FromSample<f32>,
     {
         let channels = cfg.channels() as usize;
+        let out_hz = cfg.sample_rate().0 as usize;
         let mut rs = LinearResampler::new(SAMPLE_RATE, cfg.sample_rate().0);
         let ring = pipes.playback.clone();
         let mut pending: VecDeque<f32> = VecDeque::new();
@@ -209,9 +211,12 @@ mod cpal_backend {
             move |data: &mut [T], _| {
                 let want = data.len() / channels;
                 while pending.len() < want {
-                    // Underruns play silence rather than stalling the callback.
-                    let mut chunk: Vec<i16> = ring.lock().map(|mut r| r.pop_upto(FRAME / 2)).unwrap_or_default();
-                    chunk.resize(FRAME / 2, 0);
+                    // Pull what this callback still needs (in 48 kHz samples) rather than a
+                    // fixed 10 ms, so large device buffers are not padded with silence while
+                    // audio waits in the ring. Underruns still play silence, never stall.
+                    let need = ((want - pending.len()) * SAMPLE_RATE as usize).div_ceil(out_hz).max(1);
+                    let mut chunk: Vec<i16> = ring.lock().map(|mut r| r.pop_upto(need)).unwrap_or_default();
+                    chunk.resize(need, 0);
                     let f: Vec<f32> = chunk.iter().map(|s| i16_to_f32(*s)).collect();
                     scratch.clear();
                     rs.process(&f, &mut scratch);

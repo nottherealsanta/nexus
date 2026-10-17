@@ -92,7 +92,7 @@ here, so add a row when you add a file.
 | `api_key.py` | Pasted provider API keys kept in the private credential file (OpenCode Go) |
 | `codex.py` | Experimental ChatGPT OAuth support for the private Codex Responses endpoint |
 | `copilot.py` | GitHub.com device OAuth and short-lived GitHub Copilot credentials |
-| `xai.py` | xAI SuperGrok device OAuth; refresh-token storage and Bearer headers for `api.x.ai` |
+| `xai.py` | xAI SuperGrok device OAuth; refresh-token storage and Bearer headers for `cli-chat-proxy.grok.com` |
 | `store.py` | Owner-only file-backed provider credentials, atomic writes and bounded locks |
 
 ### `nexus/client/`

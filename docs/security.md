@@ -24,7 +24,7 @@ for setup and usage.
 | Untrusted data | MCP descriptions/results, web pages and search results are wrapped with no-authority delimiters and sanitised; results' links are never fetched | `mcp/bridge.py`, `tools/builtin/webfetch.py`, `websearch.py` |
 | Outbound network | public-address-only, resolve once and pin the vetted address, validated redirects (≤ 5), size/time caps, rate limit | `net/outbound.py`, `net/local_search.py` |
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |
-| xAI SuperGrok token | `auth = "xai_oauth"` only on `[providers.xai]` with no `api_key` and no `base_url` but `https://api.x.ai/v1`; the device verification URL must be HTTPS on `x.ai`; only the refresh token is stored, sign-in responses are capped at 64 KiB, and errors never carry a token | `auth/xai.py`, `config/schema.py` |
+| xAI SuperGrok token | `auth = "xai_oauth"` only on `[providers.xai]` with no `api_key` and no `base_url` but `https://cli-chat-proxy.grok.com/v1`; the device verification URL must be HTTPS on `x.ai`; only the refresh token is stored, sign-in responses are capped at 64 KiB, and errors never carry a token; the Grok CLI version header comes from one bounded (4 KiB) read of `~/.grok/version.json` or `NEXUS_XAI_CLIENT_VERSION`, accepted only as `N.N.N[-tag]`, so a corrupt or hostile value can never inject a header; the user agent is the fixed string `xai-grok-cli` the proxy requires (Nexus is not the official client), and authenticated inference with these headers is unverified live | `auth/xai.py`, `model/providers/xai.py`, `config/schema.py` |
 | Provider URLs | http(s) only; plain http only for loopback; userinfo always redacted | `config/schema.py` |
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
@@ -100,20 +100,49 @@ Set it to `false` to refuse every assignment. This does not enable Nexus
 PathGuard inside agy or relax the restrictions below. No
 sandbox is requested (`--sandbox` is never passed), and agy may edit files or run
 commands under its own permission mode (`auto` by default; explicit `accept-edits` or `plan` overrides).
+With the opt-in bypass below, agy's tools are not mediated by Nexus at all.
 
 Enforced at launch (refuse, never widen or ignore): read-only roles, tool lists,
 MCP config, setting sources, `worker_restricted`, worktree children, and token or
 cost budgets are all refused with `ConfigError`, because agy's `--mode plan` is not
 verified to prevent writes and Nexus cannot restrict agy's tools. Only
-`auto`, `accept-edits` and `plan` are ever passed; bypass or "always proceed" flags never
-are, and an `init` reporting `always-proceed` (for example from agy's global
-settings) ends the run as refused. The prompt travels on stdin, never argv, and
+`auto`, `accept-edits` and `plan` are ever passed as `--mode`. Unless the user opts in
+(below), bypass or "always proceed" is never passed, and an `init` reporting `always-proceed` (for
+example from agy's global settings) ends the run as refused; Nexus also never edits
+agy's own settings. The prompt travels on stdin, never argv, and
 Nexus writes nothing else, so it never answers a login, trust or permission prompt:
 those end the run as `needs_attention`. EOF, a non-zero exit or an unknown terminal
 status is never success. The child environment is an allowlist, so provider API keys
 are not inherited; the child leads its own process group, which is terminated on
 completion, cancel and deadline; stderr and tool text are ANSI-stripped, redacted
 and bounded; and file changes are measured by Nexus, not taken from agy's report.
+
+**Opt-in permission bypass.** `worker_dangerously_skip_permissions = true` (default
+`false`) on the Antigravity provider section appends agy's documented
+`--dangerously-skip-permissions` ([headless docs](https://antigravity.google/docs/cli/headless))
+and then accepts an `init` reporting `always-proceed`. It auto-approves **every**
+tool action agy takes (shell, edits, network, MCP), and Nexus `PathGuard` and
+permissions do not mediate any of them, so enable it only for work and workspaces
+you would run unattended with full authority. Safeguards: it is honoured only from
+the user-level `~/.nexus/config.toml` (or a session/flag override); setting the key in
+a project `nexus.toml`, `.nexus/nexus.toml` or `.agents/nexus.toml` is a load-time
+`ConfigError`, so a cloned repository cannot enable it; it is refused on any other
+provider kind; preflight refuses to start if `agy --help` does not list the flag;
+and every `external.started`/`external.finished` event
+(`skip_permissions`), the authority statement, the result text and the UI header
+(`Permissions: BYPASSED`) say so. It does not relax any other refusal: a read-only
+role is still rejected, as are tool/MCP fields, worktrees and budgets. The opt-in
+covers only Nexus-managed Antigravity workers; an agy launched directly by an external
+harness's own subagent tool is outside Nexus and governed by that harness's settings.
+
+With the bypass on and `worker_permission_mode = "auto"` (the default), Nexus passes
+`--mode accept-edits` instead, because `auto` is not among agy's documented modes
+(`default`, `accept-edits`, `plan`) and some accounts reject it; the bypass approves
+every tool regardless. An explicit `accept-edits` or `plan` is passed unchanged, and
+preflight requires the mode actually passed (`accept-edits` in that case) in
+`agy --help`. Without the opt-in, `auto` stays the default. This opt-in is the
+supported way to let agy run commands unattended; the Claude Code interactive worker
+(historically "ZMX") is unrelated and not a substitute.
 
 Credentials: agy owns its login and credential store. Nexus never signs in, reads
 tokens, stores them or signs out; `agy` exposes no token-free sign-in check, so

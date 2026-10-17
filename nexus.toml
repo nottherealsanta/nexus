@@ -2,13 +2,19 @@ config_version = 2
 
 [agent]
 sandbox = "workspace-write"
-instructions_file = "SOUL.md"
 memory_file = "MEMORY.md"
 
 [models]
 default = "codex/gpt-6-luna"
+claude_code_subagent_backend = "worker"
+
+[models.tiers]
+high = ["claude-code/claude-opus-5-5"]
 
 [providers.codex]
 auth = "chatgpt_oauth"
 profile = "default"
 api = "responses"
+
+[providers.claude-code]
+kind = "claude-code"

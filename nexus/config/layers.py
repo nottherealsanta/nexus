@@ -356,6 +356,25 @@ def build_v2(values: Mapping[str, Any]) -> ConfigV2:
         raise ConfigError(f"Invalid v2 configuration: {exc}") from exc
 
 
+#: Provider keys that grant an external CLI unmediated authority. A checked-in
+#: project file must never turn them on (a cloned repo could otherwise approve
+#: every agy tool action), so project layers that mention them are rejected.
+USER_ONLY_PROVIDER_KEYS = ("worker_dangerously_skip_permissions",)
+
+
+def _reject_project_user_only_keys(doc: Mapping[str, Any], source: str) -> None:
+    providers = doc.get("providers")
+    if not isinstance(providers, Mapping):
+        return
+    for name, section in providers.items():
+        if isinstance(section, Mapping):
+            for key in USER_ONLY_PROVIDER_KEYS:
+                if key in section:
+                    raise ConfigError(
+                        f"{source}: providers.{name}.{key} may only be set in the user-level config "
+                        f"(~/.nexus/config.toml), never in a project file")
+
+
 def _read_docs(
     workspace: Path, home: Path
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -363,18 +382,23 @@ def _read_docs(
     user = user_config_path(home)
     if user.exists():
         docs.append((str(user), read_toml(user)))
+    project: list[Path] = []
     workspace_file = workspace_config_path(workspace)
     if workspace_file.exists():
-        docs.append((str(workspace_file), read_toml(workspace_file)))
+        project.append(workspace_file)
     # STATE_PLAN §5.4: the legacy ``.nexus/nexus.toml`` is a read-only
     # fallback, applied before (so it is outranked by) the current
     # ``.agents/nexus.toml``; Settings console writes only ever go there.
     legacy_settings_file = legacy_workspace_settings_config_path(workspace)
     if legacy_settings_file.exists():
-        docs.append((str(legacy_settings_file), read_toml(legacy_settings_file)))
+        project.append(legacy_settings_file)
     settings_file = workspace_settings_config_path(workspace)
     if settings_file.exists():
-        docs.append((str(settings_file), read_toml(settings_file)))
+        project.append(settings_file)
+    for path in project:
+        doc = read_toml(path)
+        _reject_project_user_only_keys(doc, str(path))
+        docs.append((str(path), doc))
     return docs
 
 

@@ -34,7 +34,21 @@ if args == ["--help"]:
     print(scenario.get("help", "--print --input-format --output-format stream-json --model --mode auto|accept-edits|plan --print-timeout"),
           file=sys.stderr if scenario.get("help_stderr") else sys.stdout)
     sys.exit(0)
-stdin = sys.stdin.read()
+if scenario.get("session"):
+    # Real streaming mode: stdin EOF ends the session, aborting a turn that is still running.
+    import select
+    first = sys.stdin.readline()
+    json.dump({{"argv": args, "stdin": first, "cwd": os.getcwd()}}, open(os.path.join(here, "record.json"), "w"))
+    lines = scenario.get("lines", [])
+    sys.stdout.write(json.dumps(lines[0]) + "\n"); sys.stdout.flush()
+    ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+    if ready and sys.stdin.readline() == "":
+        sys.stderr.write("stdin closed mid-turn\n"); sys.exit(1)
+    for line in lines[1:]:
+        sys.stdout.write(json.dumps(line) + "\n"); sys.stdout.flush()
+    sys.stdin.read()  # session stays open until the client closes stdin
+    sys.exit(0)
+stdin = sys.stdin.readline()  # one user event; stdin stays open until the terminal result
 json.dump({{"argv": args, "stdin": stdin, "cwd": os.getcwd()}}, open(os.path.join(here, "record.json"), "w"))
 for line in scenario.get("lines", []):
     sys.stdout.write((line if isinstance(line, str) else json.dumps(line)) + "\n"); sys.stdout.flush()
@@ -178,6 +192,15 @@ def test_preflight_requires_headless_flags(tmp_path, flag):
 
 
 # -- runs ---------------------------------------------------------------------
+
+
+def test_stdin_stays_open_until_result_in_streaming_session(tmp_path):
+    """Regression: closing stdin right after the prompt ends agy's session and aborts the turn."""
+    res, _, bin_dir = run_worker(tmp_path, {"session": True, "lines": [INIT, OK]}, timeout_seconds=20)
+    assert res.status == "completed", (res.status, res.error, res.diagnostics)
+    record = json.loads((bin_dir / "record.json").read_text())
+    assert json.loads(record["stdin"])["message"]["content"] == "do it"
+    assert "--print" not in record["argv"] and "-p" not in record["argv"]
 
 
 def test_success_argv_stdin_events(tmp_path):

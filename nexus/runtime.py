@@ -155,7 +155,8 @@ _CORE_ADAPTERS: dict[str, str] = {
 _ANTIGRAVITY_KINDS = frozenset({ADAPTER_ANTIGRAVITY, "agy"})
 _ANTIGRAVITY_LABEL = "Antigravity (agy)"
 #: Fields an Antigravity section may set; anything else cannot be honoured and is refused.
-_ANTIGRAVITY_FIELDS = frozenset({"kind", "executable", "timeout_seconds", "worker_inherits_agy_settings"})
+_ANTIGRAVITY_FIELDS = frozenset({"kind", "executable", "timeout_seconds", "worker_inherits_agy_settings",
+                                 "worker_dangerously_skip_permissions"})
 
 #: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
 _OPENAI_COMPATIBLE_KINDS = frozenset(
@@ -1983,6 +1984,7 @@ class _ExternalAssignment:
     label: str = "Claude Code"
     #: Antigravity only: the explicit opt-in to agy's own settings, MCP servers and plugins.
     inherits_settings: bool = False
+    skip_permissions: bool = False
     #: The worker's own provenance statement (for example "Antigravity (own tools)").
     provenance: str = ""
 
@@ -2210,7 +2212,8 @@ class _ChildRuntime:
         return _ExternalAssignment(
             worker=worker, policy=policy, provider=provider_name, model=model,
             kind=ADAPTER_ANTIGRAVITY, label=_ANTIGRAVITY_LABEL, provenance=PROVENANCE,
-            inherits_settings=config.worker_inherits_agy_settings is True)
+            inherits_settings=config.worker_inherits_agy_settings is True,
+            skip_permissions=policy.skip_permissions)
 
     async def run(self) -> SubagentOutcome:
         if self._external is not None:
@@ -2366,6 +2369,7 @@ class _ChildRuntime:
         }
         if external.kind == ADAPTER_ANTIGRAVITY:
             metrics["inherits_agy_settings"] = external.inherits_settings
+            metrics["skip_permissions"] = external.skip_permissions
             metrics["provenance"] = external.provenance
         if result is not None:
             session_key = "claude_session" if external.kind == ADAPTER_CLAUDE_CODE else "external_session"
@@ -4930,6 +4934,8 @@ class Runtime:
         if Runtime._adapter_kind(name, section) != ADAPTER_CLAUDE_CODE and any(
                 getattr(section, field, None) is not None for field in _CLAUDE_WORKER_FIELDS):
             raise ConfigError(f"{name}: worker_* fields apply only to kind = claude-code")
+        if getattr(section, "worker_dangerously_skip_permissions", False) is True:
+            raise ConfigError(f"{name}: worker_dangerously_skip_permissions applies only to kind = antigravity")
 
     @staticmethod
     def _validate_antigravity_section(name: str, section: Any) -> None:
@@ -4949,6 +4955,8 @@ class Runtime:
                 f"{', '.join(sorted(_ANTIGRAVITY_FIELDS - {'kind'}))} are supported, not: {', '.join(stray)}")
         if not isinstance(getattr(section, "worker_inherits_agy_settings", True), bool):
             raise ConfigError(f"{name}: worker_inherits_agy_settings must be true or false")
+        if not isinstance(getattr(section, "worker_dangerously_skip_permissions", False), bool):
+            raise ConfigError(f"{name}: worker_dangerously_skip_permissions must be true or false")
 
     @staticmethod
     def _check_antigravity_model(runtime: Any, provider_name: str, model: str) -> None:

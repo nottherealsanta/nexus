@@ -179,17 +179,19 @@ parent session) and local `agy --version`, `--help` and `models` output on agy
 usage URL. Event shapes live in `antigravity_worker.SCHEMA` so a real run can
 correct them in one place.
 
-**Launch.** `agy --print --input-format stream-json --output-format stream-json --model <id>
---mode <auto|accept-edits|plan> --print-timeout <n>s` with `cwd` = the assigned
+**Launch.** `agy --input-format stream-json --output-format stream-json --model <id>
+--mode <auto|accept-edits|plan> --print-timeout <n>s [--dangerously-skip-permissions]` with `cwd` = the assigned
 workspace. There is no `-p` prompt and the prompt is never on argv: it is written to
 stdin as one stream-json user event (`{"event":"user","message":{"content":...}}`,
 64 KiB cap, refused rather than truncated, role instructions as a labelled prefix
-as for Claude), then stdin is closed. `--print-timeout` is a Go-style duration in
+as for Claude). stdin stays open until the terminal `result` event and is then closed
+so agy exits: in streaming mode stdin EOF ends agy's session, so closing it right
+after the prompt can abort the turn. `--print-timeout` is a Go-style duration in
 seconds with 5 s slack so Nexus' own deadline decides first. The child leads its own
 process group, signalled on completion, cancel, deadline and close. The preflight
 probes `--version` and `--help` (time-bounded, collecting stdout and stderr) and
-refuses a missing flag. `--print` selects headless mode without placing the prompt
-on argv. POSIX only. See [startup troubleshooting](antigravity-troubleshooting.md)
+refuses a missing flag. `--input-format stream-json` itself selects headless
+streaming (`--print`/`-p` is not passed; its prompt is dropped in this mode). POSIX only. See [startup troubleshooting](antigravity-troubleshooting.md)
 for settings defaults, daemon restarts and read-only refusals.
 The child environment is the fixed allowlist; agy uses its own cached login.
 
@@ -198,7 +200,7 @@ mode, model), `step_update` (agent text deltas and tool steps) and a terminal
 `result`. Success needs a prior `init` and a `result` whose `status` is exactly
 `SUCCESS` with a response string. EOF, a non-zero exit, a malformed or unknown
 terminal status, or an `init` reporting another cwd or model, or the
-`always-proceed` permission mode, is never success; the partial answer is kept.
+`always-proceed` permission mode (unless the bypass opt-in below is on), is never success; the partial answer is kept.
 Unknown event types are only counted. stderr is a bounded, ANSI-stripped, redacted
 diagnostic. Usage is whatever the terminal `result.usage` carried (`reported`);
 otherwise, and always for cost, it is `unknown`, never estimated or zero.
@@ -235,6 +237,26 @@ mediated by Nexus and no Nexus control reaches them:
 Inheritance defaults to `true`, even without a provider section: agy uses its own
 user/global settings, MCP servers and plugins. Omission allows worker execution;
 set the field to `false` to opt out.
+
+Permission bypass is off by default. A user can set
+`worker_dangerously_skip_permissions = true` in their **user-level** config
+([config.md](config.md)) to pass `--dangerously-skip-permissions`; agy then
+auto-approves all its tools and an `always-proceed` init is accepted instead of
+refused. Project config cannot enable it. It applies only to Nexus-managed Antigravity
+workers started by the Nexus runtime, not to external harness/tool integrations that
+launch agy directly (use that harness's own permission settings or another backend;
+see [antigravity-troubleshooting.md](antigravity-troubleshooting.md)). Every result, the start/finish events
+(`skip_permissions`) and the UI header disclose it. Without the opt-in, agy's
+headless soft-denials still end as `needs_attention`.
+
+The bypass is not mediated by Nexus (no `PathGuard`, permission rules or tool
+dispatch), is only a user-level or session/flag override, and does not relax the
+read-only, tool/MCP, worktree or budget refusals. With it enabled and
+`worker_permission_mode = "auto"` (the default), `--mode accept-edits` is passed
+instead, since `auto` is not a documented agy mode; explicit `accept-edits` and `plan`
+stay as configured, and preflight requires the passed mode and
+`--dangerously-skip-permissions` in `agy --help`. Use this opt-in rather than an
+external ZMX/Claude Code substitution.
 
 There is no `PathGuard`, permission-engine or tool-dispatch mediation of agy's
 tools ([security.md](security.md#external-antigravity-worker)). Antigravity is

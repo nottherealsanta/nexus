@@ -76,6 +76,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/details` | | | model, context, queue, approvals, subagents |
 | `/context` | | | assembled prompt, tools, messages, accounting |
 | `/reconnect` | | | reattach and replay missed events |
+| `/restart` | | | restart the workspace daemon and reconnect (native TUI; see below) |
 | `/cancel` | | | cancel the active turn |
 | `/close` | | | close the current tab (native TUI only; same action as the tab close button) |
 | `/fork` | `[at_seq]` | | branch this session |
@@ -109,6 +110,22 @@ at the same position (or the previous tab if it was last). With just one tab,
 start a new session via `/new` instead; the original session tab is retained.
 Running sessions may appear again through the existing background-tab discovery.
 Use `/cancel` explicitly to stop a turn, or `/exit` (`/quit`) to leave chat.
+
+In the native TUI, `/restart` takes no arguments. The client stops the workspace
+daemon (`nexus.host.daemon.stop`, whose refusal is an error), waits up to 10 s for
+the old process to exit (`daemon.wait_stopped`: the recorded pid, or the daemon lock
+when none was running — `status` is not trusted, it reads "not running" while the
+old process still holds the lock), starts a fresh one through the normal auto-start
+connect, reattaches the same session and replays it, like `/reconnect`. The live
+subscription and its auto-reconnect are paused meanwhile so no second client is
+opened, and resume afterwards (also on failure). The daemon is never asked to
+restart itself, so this is the
+same lifecycle as `nexus daemon restart`. Turns running when it is issued end with
+the old process (durable transcript state replays; it is not resumed). It picks up
+changed core Nexus source and provider connections that need a daemon restart. If
+the daemon will not stop, or the workspace is unknown, the command reports an error
+and the client stays on the old connection (use `nexus daemon stop` and relaunch).
+Other chat clients do not implement `/restart` yet; use `nexus daemon restart`.
 
 ## Adding a command
 

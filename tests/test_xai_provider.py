@@ -32,7 +32,7 @@ from nexus.auth.xai import CLIENT_ID, XAIHeaders, XAIOAuthManager
 from nexus.errors import ConfigError, ProviderError
 from nexus.model.capabilities import Capabilities
 from nexus.model.message import Image, Message, Text
-from nexus.model.providers.xai import XAIProvider
+from nexus.model.providers.xai import VERSION_ENV, XAIProvider, installed_grok_version
 from nexus.model.registry import ADAPTER_XAI, map_provider
 from nexus.model.request import ModelRequest, SamplingParams
 from nexus.model.stream import MessageStart, MessageStop, TextDelta, ThinkingDelta, ThinkingEnd, Usage
@@ -79,7 +79,8 @@ class StaticHeaders:
 def _provider(recorder: Recorder, **kwargs: Any) -> XAIProvider:
     kwargs.setdefault("auth_headers", StaticHeaders())
     kwargs.setdefault("capabilities", Capabilities(thinking=True, tools=True, vision=True))
-    return XAIProvider(model="grok-4.7", environ={}, http_transport=httpx.MockTransport(recorder), **kwargs)
+    kwargs.setdefault("environ", {VERSION_ENV: "1.0.13"})
+    return XAIProvider(model="grok-4.7", http_transport=httpx.MockTransport(recorder), **kwargs)
 
 
 def _request(*blocks: Any, **kwargs: Any) -> ModelRequest:
@@ -100,9 +101,13 @@ async def test_responses_request_targets_xai_with_the_subscription_token_and_no_
     recorder = Recorder()
     events = await _drain(_provider(recorder), _request(metadata={"session_id": "sess-1"}))
     request = recorder.requests[0]
-    assert str(request.url) == "https://api.x.ai/v1/responses"
+    assert str(request.url) == "https://cli-chat-proxy.grok.com/v1/responses"
     assert request.headers["authorization"] == "Bearer sgk-access-token"
+    assert request.headers["x-xai-token-auth"] == "xai-grok-cli"
     assert request.headers["x-grok-conv-id"] == "sess-1"
+    assert request.headers["x-grok-client-version"] == "1.0.13"
+    assert request.headers["x-grok-client-identifier"] == "grok-shell"
+    assert request.headers["user-agent"] == "xai-grok-cli"
     body = recorder.json()
     assert body["store"] is False and body["stream"] is True
     assert body["reasoning"] == {"summary": "auto"}
@@ -131,7 +136,8 @@ async def test_chat_dialect_keeps_cache_header_but_sends_no_store():
     body = b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
     recorder = Recorder(body)
     await _drain(_provider(recorder, api="chat"), _request(metadata={"session_id": "sess-2"}))
-    assert str(recorder.requests[0].url) == "https://api.x.ai/v1/chat/completions"
+    assert str(recorder.requests[0].url) == "https://cli-chat-proxy.grok.com/v1/chat/completions"
+    assert recorder.requests[0].headers["x-xai-token-auth"] == "xai-grok-cli"
     assert recorder.requests[0].headers["x-grok-conv-id"] == "sess-2"
     assert "store" not in recorder.json()
 
@@ -165,6 +171,63 @@ async def test_no_environment_key_is_ever_read():
                            http_transport=httpx.MockTransport(Recorder()))
     with pytest.raises(ProviderError, match="no API key"):
         await _drain(provider, _request())
+
+
+def _version_file(tmp_path: Path, content: str | bytes) -> Path:
+    home = tmp_path / ".grok"
+    home.mkdir()
+    (home / "version.json").write_bytes(content if isinstance(content, bytes) else content.encode())
+    return home
+
+
+def test_installed_version_prefers_version_then_stable_version(tmp_path):
+    assert installed_grok_version(_version_file(tmp_path, '{"version": "1.0.14", "stable_version": "1.0.13"}')) == "1.0.14"
+    (tmp_path / ".grok" / "version.json").write_text('{"stable_version": "1.0.13"}')
+    assert installed_grok_version(tmp_path / ".grok") == "1.0.13"
+
+
+@pytest.mark.parametrize("content", [
+    "", "not json", "[]", '{"version": 1}', '{"version": "1.0"}', '{"version": "latest"}',
+    '{"version": "1.0.13\\r\\nx-evil: 1"}', '{"version": "1.0.13 "}', '{"version": "' + "1" * 5000 + '"}',
+    '{"version": "1.0.13"}' + " " * 5000,
+])
+def test_installed_version_rejects_corrupt_oversized_or_unsafe_files(tmp_path, content):
+    assert installed_grok_version(_version_file(tmp_path, content)) is None
+
+
+def test_installed_version_missing_or_not_a_file(tmp_path):
+    assert installed_grok_version(tmp_path / "absent") is None
+    (tmp_path / "dir" / "version.json").mkdir(parents=True)
+    assert installed_grok_version(tmp_path / "dir") is None
+
+
+async def test_missing_version_is_an_actionable_error_and_sends_nothing(tmp_path):
+    recorder = Recorder()
+    provider = _provider(recorder, environ={}, grok_home=tmp_path / "absent")
+    with pytest.raises(ProviderError, match=r"grok update.*NEXUS_XAI_CLIENT_VERSION"):
+        await _drain(provider, _request())
+    assert recorder.requests == []
+
+
+async def test_version_comes_from_the_installed_cli_and_a_bad_override_is_refused(tmp_path):
+    recorder = Recorder()
+    home = _version_file(tmp_path, '{"version": "1.0.20"}')
+    await _drain(_provider(recorder, environ={}, grok_home=home), _request())
+    assert recorder.requests[0].headers["x-grok-client-version"] == "1.0.20"
+    with pytest.raises(ProviderError, match="not a plain version"):
+        await _drain(_provider(Recorder(), environ={VERSION_ENV: "1.0.13\r\nx: y"}), _request())
+
+
+async def test_http_426_explains_how_to_update():
+    def outdated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(426, text="Your Grok CLI version (1.0.1) is outdated. Please update to 1.0.13")
+
+    provider = XAIProvider(model="grok-4.7", environ={VERSION_ENV: "1.0.1"}, auth_headers=StaticHeaders(),
+                           capabilities=Capabilities(thinking=True, tools=True, vision=True),
+                           http_transport=httpx.MockTransport(outdated))
+    with pytest.raises(ProviderError, match=r"rejected client version 1\.0\.1.*grok update.*1\.0\.13") as caught:
+        await _drain(provider, _request())
+    assert "HTTP 426" in str(caught.value)
 
 
 def test_catalogue_maps_xai_to_its_adapter():
@@ -365,7 +428,7 @@ async def test_runtime_builds_xai_on_the_subscription_sign_in(tmp_path):
     try:
         provider = runtime.providers["xai"]
         assert isinstance(provider, XAIProvider) and isinstance(provider._auth_headers, XAIHeaders)
-        assert provider._base_url == "https://api.x.ai/v1" and provider.api == "responses"
+        assert provider._base_url == "https://cli-chat-proxy.grok.com/v1" and provider.api == "responses"
         with pytest.raises(ProviderError, match="SuperGrok sign-in required"):
             await provider._headers()  # the env key is never used
     finally:
@@ -385,6 +448,7 @@ def test_runtime_refuses_api_key_routes_for_xai(tmp_path, section):
 @pytest.mark.parametrize("section,message", [
     ('[providers.xai]\nauth = "xai_oauth"\napi_key = "sk-inline"\n', "xai_oauth"),
     ('[providers.xai]\nauth = "xai_oauth"\nbase_url = "https://attacker.example/v1"\n', "xai_oauth"),
+    ('[providers.xai]\nauth = "xai_oauth"\nbase_url = "https://api.x.ai/v1"\n', "xai_oauth"),
     ('[providers.other]\nauth = "xai_oauth"\n', "only by providers.xai"),
     ('[providers.xai]\nauth = "keychain"\nbase_url = "https://api.x.ai/v1"\nkind = "xai"\n', "OpenAI-compatible"),
 ])

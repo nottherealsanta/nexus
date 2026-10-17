@@ -1280,6 +1280,50 @@ async def stop(
             await client.close()
 
 
+async def wait_stopped(
+    workspace: str | Path,
+    pid: int | None = None,
+    *,
+    home: str | Path | None = None,
+    polls: int = 100,
+    interval: float = 0.1,
+) -> bool:
+    """Wait until the daemon that was running has exited and released its lock.
+
+    ``status`` is not proof: it reads "not running" as soon as the socket is
+    unlinked, while the process still holds the exclusive lock. With ``pid``
+    (from a prior ``status``) the process itself is the evidence; without it the
+    lock is probed (acquired and dropped at once). A different daemon that took
+    the lock afterwards does not count as the old one, so a known ``pid`` wins.
+    """
+    import fcntl
+
+    lock = default_lock_path(Path(workspace).expanduser().resolve(), home=home)
+
+    def exited() -> bool:
+        if pid:
+            return not _pid_alive(pid)
+        try:
+            fd = os.open(lock, os.O_RDWR)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        finally:
+            os.close(fd)  # closing drops the probe lock
+        return True
+
+    for _ in range(max(1, polls)):
+        if exited():
+            return True
+        await asyncio.sleep(interval)
+    return exited()
+
+
 def _signal_stale(socket: Path) -> bool:
     """Best-effort stop of a daemon whose socket is not answering.
 
@@ -1451,5 +1495,6 @@ __all__ = [
     "read_http_endpoint",
     "status",
     "stop",
+    "wait_stopped",
     "workspace_hash",
 ]

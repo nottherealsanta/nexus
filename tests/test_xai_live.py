@@ -1,4 +1,8 @@
-"""Gated live xAI (Grok) checks over the SuperGrok subscription.
+"""Gated authenticated xAI (Grok) checks against the Grok CLI proxy.
+
+These tests target the SuperGrok subscription through the Grok CLI proxy and
+have not yet been run or verified there; an earlier run predates the endpoint
+switch (it used ``api.x.ai``). Treat them as unverified until they pass.
 
 Marked ``live`` and excluded from the offline suite. Sign in first (Settings →
 Providers → xAI (SuperGrok)), then run::
@@ -10,7 +14,7 @@ reads the existing sign-in from the **real** private credential file (its path
 is captured at import, before ``conftest.py`` gives each test a private
 ``NEXUS_HOME``) through ``XAIOAuthManager``, which may refresh and rotate it,
 and prints nothing secret. Sessions still go to the private test home. The
-provider check streams one bounded request and asserts real inference and
+provider check streams one bounded request and asserts inference and
 termination; the runtime check runs one full turn.
 """
 import os

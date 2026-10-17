@@ -7,6 +7,7 @@ local turns. Closing this subscription never cancels daemon work.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import aclosing
 
 from ...ui_support.session_controller import SessionController
@@ -15,11 +16,30 @@ from ...client.protocol import ClientError
 
 class NativeController(SessionController):
     reconnect = None
+    _paused = False
+    _post_event = None
 
     def resume(self, post_event):
-        if self._closed or (self._task is not None and not self._task.done()):
+        self._post_event = post_event
+        if self._closed or self._paused or (self._task is not None and not self._task.done()):
             return
         self._task = asyncio.create_task(self._follow(self.session, post_event))
+
+    async def pause(self):
+        """Stop following (and its auto-reconnect) until ``unpause``; the caller owns the client."""
+        self._paused = True
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self.running = False
+
+    def unpause(self):
+        """Follow again on whatever client is installed now."""
+        self._paused = False
+        if self._post_event is not None:
+            self.resume(self._post_event)
 
     async def _follow(self, session, post_event):
         delay = .25
@@ -46,7 +66,7 @@ class NativeController(SessionController):
                 delay = min(5, delay * 2)
                 try:
                     replacement = await self.reconnect()
-                    if session != self.session or self._closed:
+                    if session != self.session or self._closed or self._paused:
                         await replacement.aclose()
                         return
                     previous = self.replace_client(replacement)
