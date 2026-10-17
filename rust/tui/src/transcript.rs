@@ -229,6 +229,8 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let mut tags = Vec::new();
     if b.status == "live" {
         tags.push("via voice".to_string());
+    } else if b.status == "steer" {
+        tags.push("steer".to_string());
     }
     if b.number > 0 {
         tags.push(format!("#{}", b.number));

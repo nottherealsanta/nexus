@@ -11,7 +11,7 @@ Contract (plans/ANTIGRAVITY_PLAN.md sections 3-5), same duck contract as
   is requested, so nothing here claims one. That is stated in every result.
 * Authority comes from agy's own user settings, MCP servers and plugins, so the
   inheritance defaults to ``worker_inherits_agy_settings = true``. Any
-  configuration Nexus cannot enforce on agy (read-only role, tool lists, MCP
+  configuration Nexus cannot enforce on agy (tool lists, MCP
   config, setting sources, ``restricted``, non-agy permission modes) is refused,
   never silently ignored. Bypass/"always proceed" is passed ONLY when the
   user explicitly sets ``worker_dangerously_skip_permissions = true`` in their
@@ -260,16 +260,15 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
             "antigravity worker refused: worker_inherits_agy_settings is explicitly disabled; "
             "agy applies its own user/global settings, MCP servers and plugins "
             "and Nexus PathGuard does not apply inside it; set worker_inherits_agy_settings = true to accept that")
-    if read_only:
-        raise ConfigError(
-            "antigravity worker refused: this role is read-only in Nexus, but agy's read-only enforcement "
-            "(--mode plan) is not verified to prevent writes and Nexus cannot restrict agy's tools")
+    # Read-only is prompt guidance only (docs/decisions.md); ``read_only`` is kept
+    # for signature compatibility and never refuses or restricts.
+    del read_only
     mode = _MODES.get(config.permission_mode)
     if mode is None:
         raise ConfigError("antigravity worker_permission_mode must be auto, accept-edits or plan "
                           f"(got {config.permission_mode!r}); bypass and other modes are never passed")
     if config.skip_permissions and mode == "auto":
-        # agy's documented --mode values are default/accept-edits/plan; `auto` is unavailable on some
+        # agy's documented --mode values (agy --help, v1.4.0) are accept-edits/auto/plan; `auto` is unavailable on some
         # accounts and is then ignored. The bypass already approves every tool, so pass a documented mode.
         mode = SKIP_PERMISSIONS_MODE
     unsupported = []

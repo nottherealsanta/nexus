@@ -130,10 +130,11 @@ def test_default_inheritance_and_explicit_opt_out():
             resolve_policy(WorkerConfig(worker_inherits_agy_settings=value), read_only=False)
 
 
-def test_read_only_and_unenforceable_settings_are_refused():
+def test_unenforceable_settings_are_refused_but_read_only_is_not():
     ok = WorkerConfig()
-    with pytest.raises(ConfigError, match="read-only"):
-        resolve_policy(ok, read_only=True)
+    # Read-only is prompt guidance only (2026-10-17): never a refusal or restriction.
+    policy = resolve_policy(ok, read_only=True)
+    assert not policy.read_only and policy.tools is None
     for override in ({"tools": ("Read",)}, {"allowed_tools": ("Bash",)}, {"disallowed_tools": ("Bash",)},
                      {"mcp_config": "{}"}, {"setting_sources": "user"}, {"restricted": True}):
         with pytest.raises(ConfigError, match="cannot be enforced"):

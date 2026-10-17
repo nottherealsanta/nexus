@@ -133,6 +133,24 @@ numbers, added rows green on the add tint and removed rows red on the delete tin
 content it wrote as added lines. Only the first 12 rows show until Enter; at most 400
 rows are sent, the rest announced. Calls without a diff (a question, a failed edit)
 show their labelled details instead. Clicking the header folds the block.
+
+A question card is compact instead: the prompt, then one row per option, `●` for the
+option whose label equals the recorded answer (`metrics.answer`) and `○` for the rest;
+an answer matching no option (free text) shows as `✎ answer`, and an unanswered
+call shows `… awaiting answer`. The raw labelled details stay behind `i`
+(`tool_details`) and `/verbose`; answering still goes through the pending-question
+prompt. Limitation: the tool records only the answer label, so a typed reply that
+equals an option label is indistinguishable from choosing it.
+
+Steering in the transcript: pending (not yet consumed) inputs are not transcript
+cards; they live in `input_queue` and show in the boxed list above the composer,
+tagged `Q` queue, `S` steer, `I` interrupt. A consumed steer is appended to its
+turn's messages, so every user card after the turn's first carries
+`status = "steer"` and renders a `steer` tag beside the card (a `live` origin keeps
+`via voice`). `MessageView` stores no per-message mode, so this is derived from
+position, not from a recorded `input.consumed.mode`; a queue-mode message consumed
+into a running turn is not possible (it starts its own turn), so the inference holds
+for current event streams. Covered by `tests/test_ratatui_projection.py`.
 Totals describe the work (`Ran 2 commands · Edited 2 files · Read 2 files ·
 Thought 3 times`) rather than listing tool names or a separate Explored row.
 Older/completed groups collapse by default. The trailing group in an active turn

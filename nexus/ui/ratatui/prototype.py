@@ -157,6 +157,35 @@ def _change_rows(tool) -> tuple[list[list], int, int, list[str]]:
     return [], 0, 0, []
 
 
+def _question_detail(tool, status) -> str:
+    """Compact Question card body: the prompt, its options, and the chosen answer.
+
+    ``●`` marks the option whose label equals the recorded answer, ``○`` the others; an
+    answer that matches no option (free text) is shown as ``✎ answer``. The answer is
+    the label the tool recorded, so a typed reply equal to an option's label cannot be
+    told from choosing it. Empty when the call carries no ``question`` string, so the
+    caller falls back to the labelled details.
+    """
+    data = tool.input if isinstance(tool.input, dict) else {}
+    prompt = data.get("question")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return ""
+    raw = data.get("options")
+    options = [" ".join(item.split()) for item in (raw if isinstance(raw, list) else [])
+               if isinstance(item, str) and item.strip()]
+    answer = ""
+    if status == "completed":
+        recorded = (tool.metrics or {}).get("answer") if isinstance(tool.metrics, dict) else None
+        answer = " ".join(str(recorded if recorded is not None else tool.display or "").split())
+    lines = [" ".join(prompt.split())]
+    lines += [f"  {'●' if answer and option == answer else '○'} {option}" for option in options]
+    if answer and answer not in options:
+        lines.append(f"  ✎ {answer}")
+    elif not answer and status in {"requested", "running"}:
+        lines.append("  … awaiting answer")
+    return "\n".join(lines)
+
+
 def _change_block(tool, shell, local_ui, body):
     """One standalone row per file change or question: ``Edit a.py  +2 −1``.
 
@@ -172,10 +201,14 @@ def _change_block(tool, shell, local_ui, body):
     suffix = ""
     if status == "failed":
         suffix = tool_summary(tool)
-    elif tool.name.casefold() == "question" and status == "completed":
+    is_question = tool.name.casefold() == "question"
+    compact = _question_detail(tool, status) if is_question else ""
+    if is_question and status == "completed":
         suffix = tool_summary(tool)
     op_id, out_id = tool.call_id + ":change", tool.call_id + ":change-output"
     detail = "" if rows else body
+    if compact and not (shell and shell.verbose):  # /verbose and `i` keep the raw labelled details
+        detail = compact
     default_open = tool.name.casefold() == "question"
     block = {"id": tool.call_id, "kind": "change", "status": status, "title": tool.name.title(),
              "text": heading, "heading": suffix, "added": added, "removed": removed,
@@ -330,6 +363,10 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                      "number": 0 if numbered else number, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
+            if numbered:
+                # A consumed steer lands after the turn's own prompt (reduce appends it; the
+                # view keeps no per-message mode), so any later user card is a steer.
+                block["status"] = "steer"  # drawn as "steer" beside the card
             numbered = True
             if (message.origin or {}).get("kind") == "live":
                 block["status"] = "live"  # drawn as "via voice" beside the turn number

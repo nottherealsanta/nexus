@@ -59,8 +59,8 @@ def test_non_boolean_values_are_rejected():
 
 def test_opt_in_does_not_relax_other_refusals():
     on = WorkerConfig(skip_permissions=True)
-    with pytest.raises(ConfigError, match="read-only"):
-        resolve_policy(on, read_only=True)
+    # Read-only is prompt guidance only: the flag never refuses.
+    assert not resolve_policy(on, read_only=True).read_only
     with pytest.raises(ConfigError, match="worker_inherits_agy_settings"):
         resolve_policy(WorkerConfig(skip_permissions=True, worker_inherits_agy_settings=False), read_only=False)
     with pytest.raises(ConfigError, match="auto, accept-edits or plan"):

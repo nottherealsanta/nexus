@@ -913,6 +913,69 @@ def test_turn_numbers_survive_queue_steer_and_interrupt_and_replay(tmp_path, mon
     replay = apply_many(initial_state("s"), events)
     assert cards(project_state(replay)) == expected, "live and replay agree"
 
+    def statuses(view):
+        return [(b["title"], b.get("status", "")) for b in project_state(view)["blocks"] if b["kind"] == "user"]
+
+    marked = [("first", ""), ("steer", "steer"), ("interrupt", ""), ("queued", "")]
+    assert statuses(state) == marked, "only the consumed steer is tagged"
+    assert statuses(replay) == marked
+
+
+def test_pending_queue_rows_tag_steer_apart_from_queue_and_stay_out_of_the_transcript(tmp_path, monkeypatch):
+    from nexus.events import Event
+    from nexus.view import apply_many
+    from nexus.ui.ratatui.prototype import _queue_items, _queue_lines
+
+    def ev(kind, seq, data, turn):
+        return Event(type=kind, data=data, seq=seq, session="s", turn=turn, ts=1_759_000_000.0 + seq)
+
+    events = [
+        ev("input.queued", 1, {"queued_id": "a", "content": [{"text": "first"}]}, "t1"),
+        ev("turn.started", 2, {}, "t1"),
+        ev("input.consumed", 3, {"queued_id": "a", "turn": "t1"}, "t1"),
+        ev("input.queued", 4, {"queued_id": "q", "content": [{"text": "later"}], "mode": "queue"}, "t1"),
+        ev("input.queued", 5, {"queued_id": "s", "content": [{"text": "nudge"}], "mode": "steer"}, "t1"),
+    ]
+    view = apply_many(initial_state("s"), events)
+    assert [(i["id"], i["tag"], i["text"]) for i in _queue_items(view)] == [("q", "Q", "later"), ("s", "S", "nudge")]
+    assert _queue_lines(view) == ["Queued · later", "Steer · nudge"]
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    shell = ShellActions(SimpleNamespace(view=view, session="s"))
+    shell.preferences.values["context_preview"] = False
+    snapshot = project(SimpleNamespace(view=view, session="s"), 1, shell=shell, literal=False)
+    assert [b["title"] for b in snapshot["blocks"] if b["kind"] == "user"] == ["first"], "pending rows are not transcript cards"
+
+
+def _question_block(tmp_path, monkeypatch, tool, **shell_values):
+    turn = replace(_turn(), tools=[tool])
+    return next(b for b in _snapshot(tmp_path, monkeypatch, [turn], **shell_values)["blocks"] if b["kind"] == "change")
+
+
+def test_question_card_marks_the_selected_option(tmp_path, monkeypatch):
+    tool = ToolCallView(call_id="q", name="question", event_seq=3, status="completed",
+                        input={"question": "Which db?", "options": ["SQLite", "Postgres"]},
+                        result=[{"type": "text", "text": "The user answered: Postgres"}],
+                        display="Postgres", metrics={"answer": "Postgres"})
+    block = _question_block(tmp_path, monkeypatch, tool)
+    assert block["detail"] == "Which db?\n  ○ SQLite\n  ● Postgres"
+    assert not block["collapsed"] and block["inspect_operation"] == {"kind": "tool_details", "id": "q"}
+    raw = _question_block(tmp_path, monkeypatch, tool, verbose=True)
+    assert "The user answered" in raw["detail"], "/verbose keeps the labelled details"
+
+
+def test_question_card_unanswered_and_free_text(tmp_path, monkeypatch):
+    running = ToolCallView(call_id="q", name="question", event_seq=3, status="running",
+                           input={"question": "Which db?", "options": ["SQLite", "Postgres"]})
+    block = _question_block(tmp_path, monkeypatch, running)
+    assert block["detail"] == "Which db?\n  ○ SQLite\n  ○ Postgres\n  … awaiting answer"
+    typed = ToolCallView(call_id="q", name="question", event_seq=3, status="completed",
+                         input={"question": "Which db?", "options": ["SQLite"]}, metrics={"answer": "DuckDB"})
+    assert _question_block(tmp_path, monkeypatch, typed)["detail"] == "Which db?\n  ○ SQLite\n  ✎ DuckDB"
+    free = ToolCallView(call_id="q", name="question", event_seq=3, status="completed",
+                        input={"question": "Name it?"}, metrics={"answer": "nexus"})
+    assert _question_block(tmp_path, monkeypatch, free)["detail"] == "Name it?\n  ✎ nexus"
+
 
 def test_turn_footer_starts_with_the_local_start_time(tmp_path, monkeypatch):
     from datetime import datetime

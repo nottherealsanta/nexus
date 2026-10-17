@@ -133,7 +133,7 @@ not modify files; the parent will act on your report.
 The parent spawns it with `subagent(subagent_type="security-reviewer", prompt="…")`
 or an ad-hoc agent with an explicit `tools=` list. A child never exceeds its
 parent. Naming a definition `advisor` (or legacy `explore`/`plan`/`planner`)
-makes it structurally read-only. A definition with a built-in's name (`build`,
+does not make it read-only: that is prompt guidance only. A definition with a built-in's name (`build`,
 `advisor`, `task`, `quick`, `orchestrator`) overrides it.
 
 ## A custom hook

@@ -315,11 +315,13 @@ impl Desktop {
                                             ))
                                         }),
                                 )
-                                .when(block.number > 0 || block.status == "live", |d| {
-                                    // A turn started by a GPT Live delegation says so.
+                                .when(block.number > 0 || block.status == "live" || block.status == "steer", |d| {
+                                    // A turn started by a GPT Live delegation, or a steer folded in, says so.
                                     let mut tags = Vec::new();
                                     if block.status == "live" {
                                         tags.push("via voice".to_owned());
+                                    } else if block.status == "steer" {
+                                        tags.push("steer".to_owned());
                                     }
                                     if block.number > 0 {
                                         tags.push(format!("#{}", block.number));

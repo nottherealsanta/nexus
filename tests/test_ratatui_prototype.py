@@ -65,6 +65,20 @@ def test_native_blocks_follow_durable_conversation_order():
     assert group["text"] == "Read 1 file"
 
 
+def test_shutdown_cancel_renders_no_error_row_but_failures_still_do():
+    from nexus.events import Event, SHUTDOWN_CANCEL_REASON
+    from nexus.view import fold
+
+    def blocks(kind, data):
+        events = [Event(id=f"e{i}", session="s", seq=i, ts=float(i), type=t, turn="t", data=d)
+                  for i, (t, d) in enumerate([("turn.started", {}), (kind, {**data, "iterations": 1})], 1)]
+        view = fold(events)
+        return project(SimpleNamespace(view=view, session="s"), 1)["blocks"]
+
+    assert not any(b["kind"] == "error" for b in blocks("turn.cancelled", {"reason": SHUTDOWN_CANCEL_REASON}))
+    assert any(b.get("text") == "Error: boom" for b in blocks("turn.failed", {"error": "boom"}))
+
+
 def test_projection_cache_reuses_unchanged_turns_and_invalidates_replacements(tmp_path, monkeypatch):
     from dataclasses import replace
     from unittest.mock import Mock

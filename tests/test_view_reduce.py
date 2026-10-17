@@ -571,6 +571,25 @@ def test_terminal_turn_expires_a_leftover_pending_permission():
     assert view.phase == "idle"
 
 
+def test_shutdown_cancel_is_not_an_error_but_other_terminals_keep_theirs():
+    from nexus.events import SHUTDOWN_CANCEL_REASON
+
+    def run(kind, data):
+        return fold([
+            _ev(1, "turn.started", {}, turn="t"),
+            _ev(2, "tool.requested", {"call_id": "c1", "name": "Bash", "input": {}}, turn="t"),
+            _ev(3, kind, {**data, "iterations": 1}, turn="t"),
+        ]).turns[0]
+
+    closing = run("turn.cancelled", {"reason": SHUTDOWN_CANCEL_REASON})
+    assert closing.phase == "cancelled"
+    assert closing.error is None
+    assert SHUTDOWN_CANCEL_REASON not in (closing.tools[0].error or "")
+    assert run("turn.cancelled", {"reason": "viewer left"}).error == "viewer left"
+    # A real failure whose text mentions the shutdown reason is never hidden.
+    assert run("turn.failed", {"error": SHUTDOWN_CANCEL_REASON}).error == SHUTDOWN_CANCEL_REASON
+
+
 def test_agent_tree_nests_child_conversation():
     meta = {
         "id": "s1/sub/1",

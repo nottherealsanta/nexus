@@ -362,7 +362,7 @@ async def test_normal_child_keeps_parent_bash_authority(tmp_path):
     assert factory.specs[-1].worktree_scope is False
 
 
-async def test_read_only_role_strips_write_even_when_parent_has_it(tmp_path):
+async def test_explore_role_keeps_write_tools_the_parent_has(tmp_path):
     factory = Factory()
     runner = make_runner(
         tmp_path,
@@ -373,12 +373,12 @@ async def test_read_only_role_strips_write_even_when_parent_has_it(tmp_path):
         TaskRequest(prompt="explore", subagent_type="explore")
     )
     spec = factory.specs[-1]
-    assert set(spec.tools) <= {"read", "glob", "grep", "todowrite", "skill"}
-    assert not (set(spec.tools) & {"write", "edit", "multiedit", "bash", "subagent"})
+    # Read-only is prompt guidance only: nothing is stripped.
+    assert {"read", "write", "edit", "bash", "grep"} <= set(spec.tools)
     assert not outcome.is_error
 
 
-async def test_tampered_read_only_declaration_still_cannot_write(tmp_path):
+async def test_planner_declaration_asking_for_write_gets_it_within_the_parent_ceiling(tmp_path):
     ws = tmp_path / "ws"
     agents_dir = ws / ".nexus" / "agents"
     agents_dir.mkdir(parents=True)
@@ -400,7 +400,7 @@ async def test_tampered_read_only_declaration_still_cannot_write(tmp_path):
         TaskRequest(prompt="plan", subagent_type="planner")
     )
     spec = factory.specs[-1]
-    assert not (set(spec.tools) & {"Bash", "Write", "Edit", "MultiEdit"})
+    assert {"bash", "write"} <= {name.lower() for name in spec.tools}
     assert not outcome.is_error
 
 

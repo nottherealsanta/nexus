@@ -155,24 +155,21 @@ def test_default_model_budget_guard_and_alias_section(tmp_path):
     assert child._external.provider == "cli" and child._external.model == "claude-sonnet-4-6"
 
 
-def test_read_only_child_is_limited_or_refused(tmp_path):
+def test_read_only_child_is_never_restricted_or_refused(tmp_path):
+    # Read-only is prompt guidance only (user decision 2026-10-17).
     section = ProviderSection(kind="claude-code", worker_permission_mode="acceptEdits")
     config = Config(v2=ConfigV2(providers={"claude-code": section}))
     read_only = SimpleNamespace(config=config, workspace=tmp_path, model="claude-code/claude-haiku-4-5",
                                 tools=("read", "grep", "glob"), metadata={})
     policy = _ChildRuntime(fake_runtime(), read_only, object())._external.policy
-    assert policy.read_only and policy.tools == ("Read", "Grep", "Glob") and policy.permission_mode == "dontAsk"
+    assert not policy.read_only and policy.tools is None and policy.permission_mode == "acceptEdits"
     flagged = SimpleNamespace(config=config, workspace=tmp_path, model="claude-code/claude-haiku-4-5",
                               tools=("write",), metadata={"selection": {"read_only": True}})
-    assert _ChildRuntime(fake_runtime(), flagged, object())._external.policy.read_only
+    assert not _ChildRuntime(fake_runtime(), flagged, object())._external.policy.read_only
     wide = Config(v2=ConfigV2(providers={"claude-code": ProviderSection(
         kind="claude-code", worker_tools=["Read", "Bash"])}))
-    refused = replace_spec(read_only, config=wide)
-    with pytest.raises(ConfigError, match="read-only"):
-        _ChildRuntime(fake_runtime(), refused, object())
-    # The same wide configuration is fine for a role that holds write/shell tools in Nexus.
-    allowed = replace_spec(read_only, config=wide, tools=("read", "bash"))
-    assert _ChildRuntime(fake_runtime(), allowed, object())._external.policy.tools == ("Read", "Bash")
+    wide_spec = replace_spec(read_only, config=wide)
+    assert _ChildRuntime(fake_runtime(), wide_spec, object())._external.policy.tools == ("Read", "Bash")
 
 
 def replace_spec(spec, **changes):

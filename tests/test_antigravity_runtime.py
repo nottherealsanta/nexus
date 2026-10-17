@@ -243,10 +243,9 @@ def test_refusals_are_explicit(tmp_path):
         build(budget=SimpleNamespace(token_budget=None, cost_budget=1.0))
     with pytest.raises(ConfigError, match="worktree"):
         build(worktree_scope=True)
-    with pytest.raises(ConfigError, match="read-only"):
-        build(tools=("read", "grep", "glob"))
-    with pytest.raises(ConfigError, match="read-only"):
-        build(tools=("write",), metadata={"selection": {"read_only": True}})
+    # Read-only is prompt guidance only (2026-10-17): never a refusal reason.
+    assert build(tools=("read", "grep", "glob"))._external is not None
+    assert build(tools=("write",), metadata={"selection": {"read_only": True}})._external is not None
     with pytest.raises(ConfigError, match="not a valid agy model"):
         build(model="antigravity/bad model;rm")
     with pytest.raises(ConfigError, match="exact model"):
@@ -297,43 +296,29 @@ def test_pinned_tier_routes_to_antigravity_for_children_only(tmp_path):
 @pytest.mark.parametrize("backend", ["worker", "sdk"])
 @pytest.mark.parametrize("flagged", [False, True])
 @pytest.mark.parametrize("agy_provider", ["antigravity", "agy-alias"])
-def test_read_only_tier_skips_antigravity_for_nexus(tmp_path, backend, flagged, agy_provider):
-    from nexus.model.registry import ModelInfo
-    from nexus.model.capabilities import Capabilities
-
+def test_read_only_child_keeps_the_antigravity_tier_route(tmp_path, backend, flagged, agy_provider):
     reference = f"{agy_provider}/{MODEL}"
     config = Config(v2=ConfigV2(
         providers={agy_provider: section()},
         models=ModelsSection(tiers={"low": [reference, "missing/model", "test/safe"]},
                              claude_code_subagent_backend=backend)))
     runtime = Runtime(tmp_path, config=config, home=tmp_path / "home", environ={})
-    info = ModelInfo(id="safe", provider="test")
-    registry = SimpleNamespace(get=lambda ref: info if ref == "test/safe" else None)
-    runtime._router._registry = registry
-    provider = SimpleNamespace(capabilities=lambda model: Capabilities())
-    runtime._router._providers["test"] = provider
-    # Writable tools plus the metadata flag must also trigger read-only routing.
     spec = SimpleNamespace(agent="task", config=config, workspace=tmp_path, model="low",
                            tools=("read", "edit") if flagged else ("read",),
                            metadata={"selection": {"read_only": flagged}})
+    # Read-only is prompt guidance only: the first tier route is never skipped for it.
     child = _ChildRuntime(runtime, spec, object())
-    assert child._external is None
-    assert runtime._router.resolve(ModelRequest(messages=[], model="low")).provider is provider
-    # Writable children retain the ordered Antigravity route.
+    assert child._external is not None and child._external.model == MODEL
     assert runtime._external_tier_route("low") == reference
 
 
-def test_read_only_antigravity_only_tier_has_actionable_resolution(tmp_path):
+def test_read_only_tools_on_an_antigravity_only_tier_plan_normally(tmp_path):
     config = Config(v2=ConfigV2(
         providers={"antigravity": section()}, models=ModelsSection(tiers={"low": [REF]})))
     runtime = Runtime(tmp_path, config=config, home=tmp_path / "home", environ={})
     spec = SimpleNamespace(agent="task", config=config, workspace=tmp_path, model="low",
                            tools=("read",), metadata={})
-    with pytest.raises(ConfigError, match=(
-        r"models.tiers.low.*explicitly select a Nexus-controlled provider/model "
-        r"\(not Antigravity\) for this task"
-    )):
-        _ChildRuntime(runtime, spec, object())
+    assert _ChildRuntime(runtime, spec, object())._external.model == MODEL
 
 
 class FakeCli:
@@ -631,8 +616,37 @@ def test_low_tier_antigravity_refusal_discloses_selected_route(tmp_path):
     runtime = fake_runtime()
     runtime._tiers = SimpleNamespace(order=("low", "medium", "high"))
     runtime._external_tier_route = lambda tier, **kwargs: REF if tier == "low" else None
-    spec = replace_spec(spec_for(tmp_path, model="low"), tools=("glob", "read"))
-    with pytest.raises(ConfigError, match="read-only") as refused:
+    spec = replace_spec(spec_for(tmp_path, model="low"),
+                        budget=SimpleNamespace(token_budget=10, cost_budget=None))
+    with pytest.raises(ConfigError, match="token or cost budgets") as refused:
         _ChildRuntime(runtime, spec, object())
     assert refused.value.selected_model == REF
-    assert "Auto mode does not enforce" in str(refused.value)
+
+
+# -- empty tool lists are not read-only ---------------------------------------
+
+
+def test_empty_tools_non_read_only_child_plans_on_antigravity(tmp_path):
+    # A Task call with ``tools: []`` leaves the child no Nexus tools; that is
+    # not the role being read-only, so agy (with its own tools) may run it.
+    spec = replace_spec(spec_for(tmp_path), tools=(), metadata={"selection": {"read_only": False}})
+    external = _ChildRuntime(fake_runtime(), spec, object())._external
+    assert external is not None and external.model == MODEL and not external.policy.read_only
+
+
+def test_structurally_read_only_role_plans_on_explicit_antigravity(tmp_path):
+    # Read-only is prompt guidance only (user decision 2026-10-17): never refused.
+    spec = replace_spec(spec_for(tmp_path), tools=(), metadata={"selection": {"read_only": True}})
+    external = _ChildRuntime(fake_runtime(), spec, object())._external
+    assert external is not None and external.model == MODEL and not external.policy.read_only
+
+
+@pytest.mark.parametrize("tools", [(), ("read", "grep")])
+def test_advisor_on_antigravity_first_tier_plans_on_agy(tmp_path, tools):
+    config = Config(v2=ConfigV2(
+        providers={"antigravity": section()},
+        models=ModelsSection(tiers={"low": [REF, "test/safe"]})))
+    runtime = Runtime(tmp_path, config=config, home=tmp_path / "home", environ={})
+    spec = SimpleNamespace(agent="advisor", config=config, workspace=tmp_path, model="low",
+                           tools=tools, metadata={"selection": {"read_only": True}})
+    assert _ChildRuntime(runtime, spec, object())._external.model == MODEL

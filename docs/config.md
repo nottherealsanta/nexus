@@ -236,5 +236,5 @@ legacy tier-valued title settings keep the first-message title until changed.
 
 Antigravity `worker_permission_mode` defaults to `auto`; explicit `accept-edits`
 or `plan` remain supported. The mode does not override an explicit inheritance opt-out,
-read-only/tool restriction checks, or the ban on bypass/always-proceed flags unless the
+tool restriction checks, or the ban on bypass/always-proceed flags unless the
 user-level `worker_dangerously_skip_permissions` opt-in is set (then `auto` is sent as `accept-edits`).
