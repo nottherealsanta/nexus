@@ -82,6 +82,10 @@ def handle(message: dict):
     method = message.get("method")
     request_id = message.get("id")
 
+    if method == "notifications/initialized" and MODE == "exit_after_init":
+        # Consume the complete handshake before simulating a server crash.
+        os._exit(3)
+
     if method == "initialize":
         if MODE == "exit_after_init":
             reply(
@@ -93,7 +97,7 @@ def handle(message: dict):
                     "instructions": "fixture",
                 },
             )
-            os._exit(3)
+            return
         reply(
             request_id,
             {
