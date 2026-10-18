@@ -102,9 +102,14 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         # Drafts belong to workspace/session, not to the currently visible tab.
         def session_snapshot(key, generation, revision):
             process.stdin.write((json.dumps({"schema": 1, "revision": revision,
-                "composer_key": key, "generation": generation, "status": "idle"}) + "\n").encode())
+                "composer_key": key, "generation": generation, "status": "idle",
+                "title": chr(65 + generation) * 12}) + "\n").encode())
             process.stdin.flush()
-            time.sleep(.15)
+            deadline = time.monotonic() + 5
+            while (chr(65 + generation) * 12).encode() not in rendered:
+                assert process.poll() is None
+                assert time.monotonic() < deadline, "session snapshot did not render"
+                time.sleep(.01)
         session_snapshot("workspace/a", 1, 1)
         os.write(master, b"keep my draft")
         time.sleep(.15)
