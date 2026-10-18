@@ -51,12 +51,14 @@ def test_native_bridge_keyboard_and_terminal_restoration():
     before = termios.tcgetattr(slave)
     stop_drain = threading.Event()
     bells = []
+    rendered = bytearray()
     def drain_terminal():
         while not stop_drain.is_set():
             try:
                 if select.select([master], [], [], .1)[0]:
                     output = os.read(master, 65536)
                     bells.extend([True] * output.count(b"\x07"))
+                    rendered.extend(output)
             except OSError:
                 return
     drain = threading.Thread(target=drain_terminal, daemon=True)
@@ -189,9 +191,16 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\x1b")
         assert read_action() == {"type": "dismiss", "text": ""}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 10, "status": "idle"}) + "\n").encode())
+        process.stdin.write((json.dumps({"schema": 1, "revision": 11, "status": "idle",
+            "title": "Root page ready"}) + "\n").encode())
         process.stdin.flush()
-        time.sleep(.1)
+        # Snapshot updates and terminal keys arrive on separate channels. Wait
+        # for the root frame, not an assumed 100 ms snapshot-processing window.
+        deadline = time.monotonic() + 5
+        while b"Root page ready" not in rendered:
+            assert process.poll() is None
+            assert time.monotonic() < deadline, "root page did not render"
+            time.sleep(.01)
         os.write(master, b"\r")
         assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "steer", "generation": 0}
         os.write(master, b"\x1b[<0;90;22M")  # controls row: above the half-row padding and the meter row

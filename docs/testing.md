@@ -1,5 +1,11 @@
 # Testing
 
+Offline provider conformance supplies a fixed `NEXUS_XAI_CLIENT_VERSION` in the
+xAI adapter's isolated environment; it needs neither an installed Grok CLI nor
+ambient configuration. The MCP `exit_after_init` fixture consumes the client's
+`notifications/initialized` before exiting, so the crash test exercises
+post-handshake failure rather than racing the initialization write.
+
 Tests need **no network and no credentials**. They use temporary workspaces,
 `ScriptedProvider`, recorded fixtures under `tests/fixtures/`, and a private
 `NEXUS_HOME` per test (`tests/conftest.py`, autouse), so nothing ever touches the

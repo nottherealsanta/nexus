@@ -1,5 +1,9 @@
 # Ratatui implementation and parity ledger
 
+PTY key tests returning from a read-only agent page wait for the root frame to
+render before submitting the draft. Snapshot updates and terminal input use
+separate channels; a fixed sleep cannot establish their processing order.
+
 The session dashboard opens with the 20 most recent sessions. Search queries (up to 256 characters) run on the server across session
 metadata and snippets, with at most 1,000 results. Clearing search restores the
 recent 20; refresh and polling retain the current query and ignore stale results.

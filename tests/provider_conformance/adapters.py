@@ -435,7 +435,7 @@ class XAIResponsesAdapter(OpenAIResponsesAdapter):
             retry=_RETRY,
             sleep=self._sleep,
             jitter=lambda: 0.0,
-            environ={},
+            environ={"NEXUS_XAI_CLIENT_VERSION": "1.0.13"},
             http_transport=httpx.MockTransport(self._handle),
         )
 

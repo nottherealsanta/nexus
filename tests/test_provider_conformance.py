@@ -106,6 +106,21 @@ async def test_run_all_report_is_green_and_complete():
         assert spec.name in rendered
 
 
+async def test_xai_adapter_uses_fixed_client_version(monkeypatch):
+    from provider_conformance.adapters import XAIResponsesAdapter
+
+    monkeypatch.setenv("NEXUS_XAI_CLIENT_VERSION", "ambient-version")
+    adapter = XAIResponsesAdapter()
+    try:
+        adapter.queue(EventsStep(reply_text("ok")))
+        async for _event in adapter.provider.stream(_request()):
+            pass
+        headers = adapter.captured_requests()[0].headers
+        assert headers["x-grok-client-version"] == "1.0.13"
+    finally:
+        await adapter.aclose()
+
+
 async def test_harness_rejects_a_non_conforming_stream():
     # Negative control: the suite must fail when an adapter produces the wrong
     # normalized output, or every green run would be meaningless.
