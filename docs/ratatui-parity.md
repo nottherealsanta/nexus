@@ -1802,6 +1802,10 @@ in a real terminal.
 - **Labels**: above 5 members the nouns drop and verbs merge (`Read 4, Searched 2,
   Ran 1`); at 5 or fewer they stay (`Read 3 files, Searched 1 pattern`). A running
   group sends `running_label: "Working"`.
+- A trailing group remains **Running** while its turn is active, including gaps
+  between completed tool calls. It settles only when a reply, a different group,
+  or the end of the turn closes it; individual tool completion must not trigger
+  a collapse/reopen animation.
 - **Running**: header `▾ Working` (chevron muted, label shimmers as a live span; no
   count, time or spinner). Even folded, the newest 5 members show as a grey tree
   (`├─`/`╰─` in `p.border`, `Verb target` muted, running member shimmering; no icons,

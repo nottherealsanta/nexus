@@ -135,7 +135,7 @@ def _span_ms(member, tool):
     return start_ms, 0
 
 
-def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
+def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui, trailing=False):
     """One ``tool_group`` entry for a run, or the thoughts themselves when it has no tool.
 
     A run of thoughts alone is not a group (Grok's ``RunScan::folds``): the thought
@@ -180,7 +180,7 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
         if category is not THOUGHT:
             counts[category] = counts.get(category, 0) + 1
         members.append(member)
-    running = bool(running_categories)
+    running = bool(running_categories) or (trailing and turn.phase == "active")
     failed = [m for m in members if m.get("status") == "failed"]
     live = next((m for m in reversed(members) if m.get("status") == "running"), None)
     starts = [s for s, _ in spans if s]
@@ -211,9 +211,11 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
 def activity_entries(entries, tools_by_id, diff_members, *, turn, shell, local_ui):
     """``entries`` with each activity run replaced by its group (see :func:`build_run`)."""
     grouped = []
-    for kind, item in split_runs(entries, tools_by_id):
+    runs = list(split_runs(entries, tools_by_id))
+    for index, (kind, item) in enumerate(runs):
         if kind in {"run", "changes"}:
-            grouped.extend(build_run(item, tools_by_id, diff_members, turn=turn, shell=shell, local_ui=local_ui))
+            grouped.extend(build_run(item, tools_by_id, diff_members, turn=turn, shell=shell,
+                local_ui=local_ui, trailing=index == len(runs) - 1))
         elif "_member" in item[2]:  # a lone change call keeps its own row
             grouped.append((*item[:2], {k: v for k, v in item[2].items() if k != "_member"}, *item[3:]))
         else:

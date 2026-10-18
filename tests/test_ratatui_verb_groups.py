@@ -262,3 +262,15 @@ def test_expanded_tool_carries_relevant_only_signal_and_keeps_full_details(tmp_p
     assert member["signal"] == [["code", "$ echo hi"], ["out", "hi"]]
     assert "Call ID: a" in member["local_detail"], "the full labelled details are unchanged"
     assert all("Call ID" not in text for _, text in member["signal"])
+
+@pytest.mark.parametrize("boundary", ["none", "reply", "changes", "completed"])
+def test_completed_tool_keeps_trailing_active_group_working(tmp_path, monkeypatch, boundary):
+    tools = [_tool("r1", "read", 2, input={"path": "a"})]
+    messages = [_reply("rep", 3)] if boundary == "reply" else []
+    if boundary == "changes":
+        tools.append(_tool("e1", "edit", 3, input={"path": "a"}))
+    turn = _turn(tools, messages, phase="completed" if boundary == "completed" else "active")
+    blocks = _snapshot(tmp_path, monkeypatch, turn)["blocks"]
+    group = next(b for b in blocks if b["id"] == "t:activity:r1")
+    assert group["status"] == ("running" if boundary == "none" else "completed")
+    assert group["running_label"] == ("Working" if boundary == "none" else "")
