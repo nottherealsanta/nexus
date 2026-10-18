@@ -409,6 +409,45 @@ async def test_queued_inputs_reorder_and_remove_durably(tmp_path):
     await session.wait_idle()
 
 
+async def test_queued_mode_upgrades_are_durable_ordered_and_replay_identically(tmp_path):
+    from nexus.view import fold
+
+    release = asyncio.Event()
+    provider = ScriptedProvider(parked_script(release), text_response("reply"))
+    session, _ = make_session(tmp_path, provider)
+    await session.start_turn("one")
+    await wait_for(lambda: session.active)
+    s1 = session.enqueue("s1", mode="steer")
+    q1, q2, q3 = session.enqueue("q1"), session.enqueue("q2"), session.enqueue("q3")
+
+    # queue -> steer lands after the last waiting steer, before queued messages
+    assert session.set_queued_mode(q2, "steer") and session.queued_ids == (s1, q2, q1, q3)
+    # steer -> interrupt goes to the head; queue -> interrupt is allowed too
+    assert session.set_queued_mode(q2, "interrupt") and session.queued_ids == (q2, s1, q1, q3)
+    assert session.set_queued_mode(q3, "interrupt") and session.queued_ids == (q3, q2, s1, q1)
+    # only upgrades: downgrades, repeats, unknown modes and gone ids are refused
+    assert not session.set_queued_mode(q2, "steer")
+    assert not session.set_queued_mode(q2, "interrupt")
+    assert not session.set_queued_mode(s1, "queue")
+    assert not session.set_queued_mode(q1, "bogus")
+    assert not session.set_queued_mode("gone", "steer")
+    assert session.queued_content(q1)[0].text == "q1" and session.queued_content("gone") is None
+
+    changed = [event for event in session.events if event.type == "input.mode_changed"]
+    assert [event.data["mode"] for event in changed] == ["steer", "interrupt", "interrupt"]
+    assert changed[0].data == {"queued_id": q2, "mode": "steer", "order": [s1, q2, q1, q3]}
+
+    live = fold(list(session.events))
+    assert [(item.queued_id, item.mode) for item in live.input_queue] == [
+        (q3, "interrupt"), (q2, "interrupt"), (s1, "steer"), (q1, "queue")]
+    before = session.queued_ids
+    session._rehydrate_queue()  # the durable log reproduces the same order and modes
+    assert session.queued_ids == before
+    assert [item.mode for item in session._queue] == ["interrupt", "interrupt", "steer", "queue"]
+    release.set()
+    await session.wait_idle()
+
+
 async def test_cancel_drops_queued_inputs(tmp_path):
     release = asyncio.Event()
     provider = ScriptedProvider(parked_script(release), text_response("unused"))

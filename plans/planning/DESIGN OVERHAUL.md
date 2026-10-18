@@ -1,7 +1,113 @@
 # Design overhaul: the native Ratatui client
 
-Status: proposal (2026-10-18, revised the same day). Not implemented.
-15 steps; three small decisions still open (§2).
+Status: steps 1–12, 14 and 15 are implemented. Verified now: `cargo test` (rust/tui) and
+`cargo build --release` pass, the full Python suite and `ruff check nexus tests` pass (`cargo test` 557 + 38 passed;
+pytest 6687 passed, 336 skipped, 6 deselected), and a PTY run with the splash on opened real sessions from the
+dashboard, typed text and left `~/.nexus/tui-panic.log` empty. Animations-off and Monochrome were
+reviewed for every step (ledger "Review pass"). Not verified: a PTY capture of queue
+promote/restore with a live running turn, the GPUI desktop client, the remaining open decisions
+(§2) and step 13.
+
+Implementation ledger (review):
+- Step 1: implemented; reviewed agent color/optional metrics and fixed names to
+  ten Unicode display cells (including wide/combining text). The color test file
+  exists as an untracked, non-ignored addition; include it when committing.
+- Step 2: implemented; reviewed recording horizontal-rule layout, elapsed slot,
+  and transcribing label. Focused Rust tests pass.
+- Step 3: implemented: durable terminal timestamps, send/completion clocks,
+  completion fallback, hour bands and running-clock spacing; replay fixtures and
+  focused Python/Rust tests pass. PTY/plate and animations-off/monochrome manual
+  review remain outstanding. Later steps are unchanged.
+- Step 4: implemented in source (projection flag, `look::write_head`, builder and
+  draw-loop cooling); written without a compiler or test run available: build and run
+  the Rust and Python suites before relying on it. Differences from the plan: the glow is
+  applied as the row is built (rows rebuild as text arrives), the draw loop only cools it.
+- Step 5: implemented in source on the same terms (grouping, labels, `Working` tree,
+  `· failed`, `transcript/fold.rs` fold transient). PTY capture of the fold and the
+  visual review are outstanding; `animating()` stays snapshot-only and `main.rs` also
+  keeps the clock running while `Cache::folding()`.
+- Steps 6, 7, 11, 14 (STK-3 default): implemented in source with unit tests, **written
+  without a shell, compiler or test run** (no `cargo`/`pytest` was executed): build and run
+  `cargo test -p nexus-tui` and fix any compile slip before relying on them. PTY captures,
+  plate comparison, animations-off and Monochrome review are outstanding. Differences:
+  - 6: `∴` replaces the agent-coloured spinner on the status line. **Decode scramble REPLACED
+    at the user's request by a grey shimmer** (light grey to dark grey, real text always shown):
+    `render.rs::shimmer_spans` / `shimmer_greys`, driven by `cache.activity_frame` (30 Hz), 54-frame
+    sweep, greys are the lighter/darker of `p.text` and `p.quiet`, `∴` in the dark grey, no purple.
+    `decode` / `decode_marks` / `decode_spans` are deleted. Was: scrambled `p.purple` glyphs on `cache.spin`.
+  - 7: **REVERTED at the user's request (bars and grow animation removed; the `total` row stays).** Was: `render/context.rs` bars, `total` row and `context::Anim` (`Cache.ctx`), session key
+    is `Snapshot.composer_key`. `animating(&Snapshot)` cannot see it, so `main.rs` ORs
+    `Cache.ctx.growing(..)` into the folding flag. A window change resets the row cache.
+    `docs/context.md` got a pointer; the detail is in `docs/ratatui-parity.md`. The bridge's
+    `Tokens::Count` makes `Content::token_label()` return "" (not changed here; the header
+    reads `tokens.count()` first).
+  - 11: `live_bar.rs` phase strip + `Mic` ring buffer (`Cache.mic`) + `captions`; the
+    `mic`/`spk` meters and the `Live` title are gone. Word timing and the agent turn number are
+    fallbacks (newest word; `agent running` without a `turn #N` row). ASCII fallbacks are local
+    to the modules, not in `rust/widgets/src/glyphs.rs`. `tests/test_ratatui_pty_live.py`
+    was updated to the new header text but not run.
+  - 14: `sticky::indicator` / `sticky::above` (STK-3). N counts from the card's real last row
+    (`offset - last - 1`), not `offset - first - rows`, which over-counts for a clipped long card.
+    The STK pick itself is still open.
+- Step 8: implemented and verified (`cargo test` 537 + 36 passed; focused pytest 346 passed;
+  PTY capture of the dashboard). Sections Needs you / Working / Idle / Archived (collapsed,
+  newest 20 via `ProjectSessionsList.archived`), `pending` {request_id, kind, summary, ts}
+  on the row, `a`/`d` through `PermissionResolve` without opening, chips, blank row after
+  `+ New Agent`, "Open Previous" and `resume_hit` removed, no composer (keys reach
+  `cache.dashboard` first in `main.rs`). Fixed the doubled status glyph (`draw_at` inserted a
+  glyph that `title_spans` already drew). Not exercised live: Needs you and Archived rows
+  (no such sessions in the dev DB); covered by unit tests only. `ruff check` reports one
+  unrelated F841 in `tests/test_ratatui_pty.py` (`down_up`).
+- Step 9: implemented and verified (`cargo test` 540 + 36 passed; focused pytest 310 passed;
+  PTY permission check in `tests/test_ratatui_pty.py` passes). Python:
+  `nexus/ui/ratatui/permission_prompt.py` adds `title`, `since` (`PermissionView.ts`, which the
+  reducer now sets to the request event time), `what` (targets, else preview; max 12 rows) and
+  `why` (`default_rule`) beside `lines`. Rust: `dialogs.rs` `prompt_rows`/`prompt_body_lines`/
+  `prompt_choice_line`, `prompt_area` clamps the body to 1..10 rows, `animating()` is true while
+  a structured prompt is open. Differences: `what` shows 3 rows then `… N more` (4-row budget);
+  `why` falls back to nothing (no `reason` field exists on `PermissionView`); chips stay one per
+  row to keep click mapping. Not run: `test_tool_single_click_selects_double_click_toggles_locally`
+  in the same PTY file fails (tool-row click, outside this step).
+- Step 10: implemented in source, **never compiled or run** (no shell was available):
+  `render/notifications.rs` (history of 50, counter text, drawer), `TabHit::Notifications`
+  in `chrome.rs`, `/notifications` + `notifications_open_seq`. Differences: the chord is
+  `Ctrl+X Shift+N` because `Ctrl+X n` is `/new`; the pop uses the text colour (no "peak"
+  palette entry); the `◔` glyph's ASCII fallback (`o`) is local, not a `Glyphs` field. The
+  PTY drawer step is added but unrun; the visual review is outstanding.
+- Step 12: implemented in source on the same terms: `splash.rs` state machine, `draw_splash`
+  delegating to it, curtain overlay on the first chat frame, input held until it ends.
+  Differences: the five milestones are client-side observations (not host stages); particle
+  stagger is relative to progress; `NEXUS_SPLASH=off` skips the motion (the pytest suite sets
+  it in `tests/conftest.py`); the splash uses the dark palette. Now built and run. Fix pass:
+  the clock is 8 ms ticks (was 80 ms steps, laggy), flash 160 ms, curtain 500 cells/s, and
+  input is held only until the chat is on screen (it was held ~4 s after load, which is why
+  typing "never worked"; it was not a stuck state). The "crash on opening a session" was a
+  `"tokens": null` task card failing `Tokens` parsing (bridge.rs); a panic/error log
+  (`~/.nexus/tui-panic.log`) was added.
+- Step 15: implemented and verified (`cargo test` 544 + 36 passed, `cargo build --release` ok).
+  Host: `SessionQueueSetMode` (upgrades only), durable `input.mode_changed` `{queued_id, mode,
+  order}` reduced in `_on_input`, `SessionQueueRemove(return_content=True)`; interrupt cancels the
+  turn with `drop_queue=False` and the promoted item runs next. Bridge: `queue_edit` ops
+  `steer`/`interrupt`, steering items carry no `can_up`/`can_down`, steering removal restores via
+  `restore` + `restore_if_empty` + `restore_note`. Rust: per-kind controls in `queue_buttons`
+  (hit-testing shares the cells), `QueueFlash` transient in `Cache` (12 frames, `main.rs` ORs
+  `queue_flash.live` into the animation flag). Differences: no keyboard focus on queue rows exists
+  in the client, so controls show on hover only; the chip "pressed" colours are not drawn (no
+  mouse-down tracking); restored text only, not attachments; queued items are not restored
+  (`docs/decisions.md`). No PTY promote/restore capture was run.
+
+- Step 15 gaps closed: keyboard focus on queue rows (`render::QueueUi`, `queue_key`; Tab/Down
+  enter, Enter/`s` promote, Delete/Backspace/`x` remove, Alt+Up/Down reorder queued only, Esc
+  leaves), pressed chips (`p.muted`, `✕` `p.error`, reversed in Monochrome; release sends), and
+  attachments of a removed steering message restored with the text (`restore_attachments`).
+- Dashboard open failure: `switch_project` toasts `Could not open the session in <ws>: <redacted
+  reason>` (`host_support/errors.py`) and keeps the dashboard open; empty exception messages no
+  longer vanish.
+- Review pass (animations off / Monochrome / ASCII): fixed the voice preview scramble and the
+  activity meter ignoring `animate`, spinners now rest on frame 0 when animations are off, the
+  meter gets `━`/`=` lit cells and the dashboard selected row a focus bar in Monochrome, and
+  ASCII twins for the dashboard status marks, chevrons, permission prompt marks and queue
+  controls. `render::animations_off_tests` compares a busy screen at two ticks.
 
 Source of truth for the look: `design-mockups/variations/index.html`, section
 **Your picks** (plates `P-*`) and section **STK**. Each plate is a cell-accurate
@@ -53,7 +159,7 @@ Python output it also reads; such steps say so.
 | --- | --- | --- |
 | Splash | P-SPL | SPL-2 dots and SPL-5 bar **at the same time**, then SPL-7 curtain |
 | Chat shell & layout | unchanged | SHL-0 stays |
-| Thinking | THK-4 | decode wave |
+| Thinking | THK-4 | ~~decode wave~~ grey shimmer, light to dark grey (user request) |
 | Streaming text | STR-3 | glowing write head (not STR-4) |
 | Tool groups | P-GRP | revised rules in step 5 |
 | Sub-agents | P-AGT | two-line rows: capitalised name in a 10-char field, task from char 11; model-effort (tier) · tools · tokens · time; stable colour; agent-coloured spinner; no page redesign |
@@ -61,7 +167,7 @@ Python output it also reads; such steps say so.
 | GPT Live | P-LIV | LIV-5 bar + LIV-3 captions, chip with no slide; pane stays above the composer |
 | Voice dictation | unchanged + fix | red square and time as two marks on the activity rule |
 | Permission | P-PRM | PRM-3 + PRM-2 timer, neutral key chips |
-| Context header | P-CTX | CTX-3 bars in grey textures, replays per session |
+| Context header | P-CTX | ~~CTX-3 bars in grey textures, replays per session~~ reverted: no bars, no animation; `total` row kept |
 | Composer | CMP-0 | unchanged |
 | Toasts | P-TST | TST-4, opened by click, `/notifications`, or `Ctrl+X N` |
 | Turn times | P-TURN | send time on the user card, completion time in the footer, `1h 4m` |
@@ -318,7 +424,7 @@ Docs: `docs/ratatui-parity.md`, `docs/surfaces.md` (grouping rule is shared
 projection), `docs/decisions.md` (why edits are grouped apart: changes are what a
 reader audits; they must not hide inside a read run).
 
-## Step 6. Thinking line: decode
+## Step 6. Thinking line: decode (superseded: grey shimmer, see the ledger entry for step 6)
 
 Plate: **P-THK** (THK-4).
 
@@ -339,6 +445,8 @@ Tests: pure helper `decode(word, tick)` returns the same width as `word`, equals
 word outside the window, and is deterministic; `stop_at` still hits `[stop]`.
 
 ## Step 7. Context header: grey texture bars, replay per session
+
+**REVERTED.** The user asked for the bars and the grow animation to be removed after review; only the `total` row remains (see `docs/decisions.md`). The text below is kept as history.
 
 Plate: **P-CTX**.
 

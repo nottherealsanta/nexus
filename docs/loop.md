@@ -105,6 +105,16 @@ operation), `interrupt` (cancels the active turn without dropping other queued
 input, then runs first). `input.started` / `input.consumed` / `input.dropped`
 record the lifecycle. See [surfaces.md](surfaces.md#messages-during-a-turn).
 
+A waiting message can be **promoted** but never demoted (`SessionQueueSetMode`,
+`HostFacade.set_queued_mode`): `queue → steer`, `steer → interrupt`, or
+`queue → interrupt`. The session appends `input.mode_changed` `{queued_id, mode, order}`
+with the whole new order, so replay and every view reproduce it. A message promoted to
+`steer` goes to the end of the waiting steering group (after the last steer or interrupt,
+before queued messages), so steers are still consumed in the order shown; an `interrupt`
+goes to the head. The facade then reorders the supervisor's parked turns, and for
+`interrupt` cancels the running turn with `drop_queue=False` (the same behaviour as
+submitting an interrupt), so the promoted message starts the next turn.
+
 ## Context accounting
 
 Two sources reach the UI meter. `context.assembled` carries the assembler's

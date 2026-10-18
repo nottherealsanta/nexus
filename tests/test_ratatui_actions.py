@@ -557,3 +557,33 @@ async def test_submit_reuses_identity_after_lost_reply():
     await shell.submit("hello")
     ids = [call.kwargs["client_request_id"] for call in client.enqueue.await_args_list]
     assert ids[0] == ids[1] and ids[2] != ids[1]
+
+
+async def test_failed_project_open_toasts_the_redacted_reason_and_keeps_the_dashboard():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from nexus.errors import ConfigError
+    from nexus.ui.ratatui.actions import ProjectOpenError, ShellActions
+    from nexus.host_support.errors import error_text
+
+    shell = ShellActions.__new__(ShellActions)
+    shell.workspace = "/here"
+    shell.attachment_draft_key = ("/here", "s")
+    shell.usage_cache = None
+    shell.usage_task = None
+    shell.workflows = SimpleNamespace(close_dashboard=lambda: pytest.fail("dashboard must stay up"))
+    flashed = []
+    shell.flash = lambda text, level=None, **kw: flashed.append((text, level))
+    shell.switch = AsyncMock()
+    shell.controller = SimpleNamespace(session="s", client=SimpleNamespace(open_project_session=AsyncMock(
+        side_effect=ConfigError("unknown key [v2] sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"))))
+
+    with pytest.raises(ProjectOpenError):
+        await shell.switch_project("/other", "s2")
+    assert len(flashed) == 1 and flashed[0][1] == "error"
+    assert "/other" in flashed[0][0] and "unknown key" in flashed[0][0]
+    assert "abcdefghijklmnopqrstuvwxyz0123456789" not in flashed[0][0]
+    shell.switch.assert_not_awaited()
+
+    # An exception without a message (a timeout) still names itself.
+    assert error_text(TimeoutError()) == "TimeoutError"

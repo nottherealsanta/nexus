@@ -15,6 +15,8 @@ mod picker;
 mod render;
 mod session;
 mod settings_page;
+mod panic_log;
+mod splash;
 mod sticky;
 mod trace;
 mod transcript;
@@ -186,6 +188,11 @@ fn completion_candidates(cache: &[(String, Vec<String>)], prefix: &str) -> Vec<S
 struct Cleanup;
 impl Drop for Cleanup {
     fn drop(&mut self) {
+        self.restore();
+    }
+}
+impl Cleanup {
+    fn restore(&self) {
         let _ = disable_raw_mode();
         let _ = execute!(
             io::stderr(),
@@ -198,9 +205,54 @@ impl Drop for Cleanup {
         let _ = write!(io::stderr(), "\x1b[>4;0m");
     }
 }
+/// How often the input loop confirms the terminal still exists.
+const TTY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// False once the terminal has hung up (its PTY master closed, the window gone). Crossterm
+/// reads `/dev/tty` (the `use-dev-tty` feature), which then reports ready forever, so the
+/// main loop would spin at 100% CPU. The probe opens `/dev/tty` (so it works whatever
+/// stdin/stdout are, e.g. the bridge pipes) and checks two things, because platforms
+/// differ: a zero-length write (it moves no bytes and draws nothing, but fails with EIO on a
+/// hung-up tty on macOS, where `tcgetattr` and `poll` still succeed) and `tcgetattr` (fails
+/// with EIO on Linux). Opening `/dev/tty` failing means no controlling terminal is left.
+fn terminal_alive() -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::fd::AsRawFd;
+    let Ok(tty) = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+        .open("/dev/tty")
+    else {
+        return false;
+    };
+    let fd = tty.as_raw_fd();
+    let mut attrs = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: `fd` is open for the duration; the write moves no bytes and the termios
+    // out-pointer is writable.
+    unsafe {
+        if libc::write(fd, std::ptr::null(), 0) < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            if matches!(errno, Some(libc::EIO) | Some(libc::ENXIO)) {
+                return false;
+            }
+        }
+        libc::tcgetattr(fd, attrs.as_mut_ptr()) == 0
+    }
+}
 /// Minimum time between terminal frames (about 60 fps).
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    panic_log::install(|| Cleanup.restore());
+    let result = run();
+    if let Err(error) = &result {
+        if !terminal_alive() {
+            panic_log::record("terminal-lost", &format!("terminal went away: {error}"));
+        } else {
+            panic_log::record("error", &error.to_string());
+        }
+    }
+    result
+}
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
         println!("Nexus Ratatui · bridge 3 (schema 1/2 compatible)");
         return Ok(());
@@ -262,6 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Frames are paced: a wheel fling used to emit hundreds of near-full-screen frames
     // faster than a terminal parses them, so a reversal waited behind the backlog.
     let mut last_draw = Instant::now() - FRAME_INTERVAL;
+    let mut last_tty_check = Instant::now();
     let mut animating = false;
     let mut timings = trace::Trace::new();
     let mut input_received: Option<Instant> = None;
@@ -281,6 +334,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cache.appearance = config::Animations::load();
     cache.animate = cache.appearance.enabled();
     cache.mono = cache.appearance.mono_enabled();
+    // Launch splash (step 12). Its five milestones are what the client can observe: the bridge
+    // pipe is open (`daemon`), a first line arrived (`workspace`), it parsed (`providers`), the
+    // first snapshot was applied (`session`) and the chat state is ready (`ready`).
+    // `NEXUS_SPLASH=off` skips the motion (PTY tests, slow links): static frame, straight cut.
+    let splash_motion =
+        cache.animate && !matches!(std::env::var("NEXUS_SPLASH").as_deref(), Ok("0" | "off"));
+    let mut splash = Some(splash::Splash::new(Instant::now(), splash_motion));
+    if let Some(splash) = splash.as_mut() {
+        splash.reach(1, Instant::now());
+    }
+    let mut splash_frame = u32::MAX;
     let mut drawn_regions = render::Regions::default();
     let mut painted_layout: Option<render::LayoutKey> = None;
     let mut logs_open = false;
@@ -313,6 +377,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        if !queued.is_empty() {
+            if let Some(splash) = splash.as_mut() {
+                splash.reach(2, Instant::now());
+            }
+        }
         let last = queued.len().saturating_sub(1);
         for (index, (line, received_at)) in queued.into_iter().enumerate() {
             if index < last
@@ -334,6 +403,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(value) = block_value {
                 next.blocks = serde_json::from_value(value)?;
             }
+            if let Some(splash) = splash.as_mut() {
+                splash.reach(3, Instant::now());
+            }
             if next.schema == 3 && !next.reset && next.generation != s.generation {
                 return Err("section patch crosses session".into());
             }
@@ -341,6 +413,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             next.merge_missing(&mut s, &fields);
+            // `/notifications` bumps a host counter; the history itself is client-side.
+            if let Some(seq) = fields
+                .get("notifications_open_seq")
+                .and_then(serde_json::Value::as_u64)
+            {
+                dirty |= cache.toasts.notes.observe_seq(seq, Instant::now());
+            }
             if cache.toasts.ingest(&next.toasts) {
                 dirty = true;
             }
@@ -434,7 +513,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 form_changed = None;
                 form_revision = 0;
             }
-            if !next.restore.is_empty() {
+            if !next.restore.is_empty() && next.restore_if_empty {
+                // A cancelled steer message returns only to an empty composer; otherwise the
+                // draft stays and a toast says what was removed, so nothing vanishes silently.
+                let restored = bridge::steer_restore_applies(
+                    draft.text.is_empty(),
+                    next.attachments,
+                    next.restore_attachments,
+                );
+                if restored {
+                    draft.insert(&next.restore);
+                } else if next.restore_attachments > 0 {
+                    // The bridge already re-attached the files; this draft is not empty, so ask
+                    // it to drop those whose `[image N]` marker is not in the text.
+                    send(json!({"type":"draft_changed","text":draft.text,"generation":next.generation}))?;
+                }
+                hint_id += 1;
+                cache.toasts.ingest(&[bridge::ToastWire {
+                    id: hint_id,
+                    level: "info".into(),
+                    title: if restored {
+                        next.restore_note.clone()
+                    } else {
+                        let words = next.restore.split_whitespace().take(6).collect::<Vec<_>>();
+                        format!("Steer message removed: {}", words.join(" "))
+                    },
+                    body: String::new(),
+                    key: "steer_restore".into(),
+                    action: None,
+                }]);
+                dirty = true;
+            } else if !next.restore.is_empty() {
                 draft.cursor = 0;
                 draft.insert(
                     &(next.restore.clone() + if draft.text.is_empty() { "" } else { "\n\n" }),
@@ -536,12 +645,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // made one completion sound twice.
             s = next;
             loaded = true;
+            if let Some(splash) = splash.as_mut() {
+                splash.reach(4, Instant::now());
+            }
+            // A tool group that just finished starts its fold transient (frames follow below).
+            cache.step_folds(&s.blocks);
+            cache
+                .queue_flash
+                .observe(&s.queue_items, Instant::now(), cache.animate);
+            if let Some(splash) = splash.as_mut() {
+                splash.reach(5, Instant::now());
+            }
             // The dashboard's working rows spin.
             animating = render::animating(&s)
                 || s.dashboard.as_ref().is_some_and(|dashboard| {
-                    dashboard["rows"]
-                        .as_array()
-                        .is_some_and(|rows| rows.iter().any(|row| row["status"] == "working"))
+                    dashboard["rows"].as_array().is_some_and(|rows| {
+                        // Working rows spin; a Needs you row's "waiting mm:ss" ticks.
+                        rows.iter()
+                            .any(|row| row["status"] == "working" || picker::pending(row).is_some())
+                    })
                 });
             dirty = true;
         }
@@ -609,10 +731,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         dirty |= cache.toasts.tick(Instant::now(), cache.pointer);
-        if !loaded {
+        dirty |= cache.toasts.notes.tick(Instant::now(), cache.animate);
+        cache
+            .toasts
+            .notes
+            .sync(&mut s, Instant::now(), cache.animate);
+        // The splash runs on 8 ms ticks (drawn at 60 fps); once its curtain has left the screen it is dropped.
+        let term_width = terminal.size()?.width;
+        if loaded
+            && splash
+                .as_ref()
+                .is_some_and(|sp| sp.finished(Instant::now(), term_width))
+        {
+            splash = None;
+            dirty = true;
+        }
+        let splash_active = splash.is_some();
+        if let Some(sp) = splash.as_ref().filter(|sp| sp.animated()) {
+            let frame = sp.frame(Instant::now());
+            if frame != splash_frame {
+                splash_frame = frame;
+                dirty = true;
+            }
+        }
+        let splash_covers = splash
+            .as_ref()
+            .is_some_and(|sp| sp.covers(Instant::now(), term_width));
+        if !loaded || splash_covers {
             if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
                 last_draw = Instant::now();
-                terminal.draw(render::draw_splash)?;
+                if let Some(sp) = splash.as_ref() {
+                    terminal.draw(|frame| render::draw_splash(frame, sp, Instant::now()))?;
+                }
                 dirty = false;
             }
         } else if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
@@ -672,6 +822,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         r.transcript,
                         completion_index,
                         &cache.component_hover,
+                    );
+                }
+                // The curtain wipes from the splash into this first chat frame.
+                if let Some(sp) = splash.as_ref() {
+                    sp.overlay(
+                        frame.buffer_mut(),
+                        Instant::now(),
+                        &render::Palette::new(false),
+                        nexus_widgets::Glyphs::from_env().ascii,
                     );
                 }
                 drawn_at = Instant::now();
@@ -761,7 +920,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The animation clock advances on every pass, not only when input is idle:
         // a continuous wheel or pointer stream keeps `poll` returning true, which
         // used to freeze the spinner and activity bar while scrolling.
-        if animating {
+        // A finished tool group settling is an animation too; it ends by itself.
+        let folding = cache.folding()
+            || cache.queue_flash.live(Instant::now(), cache.animate);
+        if folding {
+            dirty = true;
+        }
+        if animating || folding {
             let elapsed = spin_clock.elapsed();
             let frame = (elapsed.as_nanos() * 30 / 1_000_000_000) as usize;
             if (frame != cache.activity_frame
@@ -782,11 +947,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             FRAME_INTERVAL
                 .saturating_sub(last_draw.elapsed())
                 .max(Duration::from_millis(1))
-        } else if animating {
+        } else if animating || folding || splash_active {
             Duration::from_millis(8)
         } else {
             Duration::from_millis(50)
         };
+        // A hung-up terminal makes `poll` report ready forever; notice within about a second.
+        if last_tty_check.elapsed() >= TTY_CHECK_INTERVAL {
+            last_tty_check = Instant::now();
+            if !terminal_alive() {
+                panic_log::record("terminal-lost", "controlling terminal was lost (hangup); exiting");
+                return Ok(());
+            }
+        }
         if !event::poll(wait.min(Duration::from_millis(if animating || dirty {
             8
         } else {
@@ -806,8 +979,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             else { "input→frame" };
         // Consume the queued burst in order; scrolling accumulates before one draw.
         for queued_event in events {
-            if !loaded {
-                // The session is not here yet: only quit and a resize mean anything.
+            if !loaded
+                || splash
+                    .as_ref()
+                    .is_some_and(|sp| sp.holds_input(Instant::now(), term_width))
+            {
+                // The session is not here yet, or the splash curtain is still wiping (input is
+                // held, not queued): only quit and a resize mean anything.
                 match &queued_event {
                     Event::Key(key)
                         if key.kind != event::KeyEventKind::Release
@@ -828,6 +1006,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && key.modifiers.contains(KeyModifiers::CONTROL))
                     {
                         ctrl_c.disarm();
+                    }
+                    if key.code == KeyCode::Esc && cache.toasts.notes.is_open() {
+                        cache.toasts.notes.close();
+                        dirty = true;
+                        continue;
                     }
                     if s.voice_phase == "transcribing" && key.code == KeyCode::Esc {
                         action("voice_discard", "")?;
@@ -938,6 +1121,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                     }
+                    // Keyboard focus on a waiting (steering/queued) message above the composer.
+                    // Enter/`s` promotes, Delete/Backspace/`x` removes, Alt+Up/Down reorders
+                    // queued rows, Up/Down move, Esc leaves; any other key leaves and acts.
+                    if let Some(focus) = cache.queue_ui.focus.clone() {
+                        if s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none() {
+                            let listed = render::queue_listed(drawn_regions.composer, &s);
+                            match render::queue_key(&s, &listed, &focus, key.code, key.modifiers) {
+                                render::QueueKey::Focus(id) => {
+                                    cache.queue_ui.focus = Some(id);
+                                    dirty = true;
+                                    continue;
+                                }
+                                render::QueueKey::Op(id, op, then) => {
+                                    send(
+                                        json!({"type":"queue_edit","text":id,"key":op,"generation":s.generation}),
+                                    )?;
+                                    cache.queue_ui.focus = then;
+                                    dirty = true;
+                                    continue;
+                                }
+                                render::QueueKey::Prev => {
+                                    cache.queue_ui.focus = None;
+                                    let blocks = render::targets(&cache);
+                                    if !blocks.is_empty() {
+                                        nav = Some(blocks.len() - 1);
+                                    }
+                                    dirty = true;
+                                    continue;
+                                }
+                                render::QueueKey::Leave => {
+                                    cache.queue_ui.focus = None;
+                                    dirty = true;
+                                    continue;
+                                }
+                                render::QueueKey::Stay => continue,
+                                render::QueueKey::Pass => {
+                                    cache.queue_ui.focus = None;
+                                    dirty = true;
+                                }
+                            }
+                        } else {
+                            cache.queue_ui.focus = None;
+                        }
+                    }
                     // Keyboard focus over clickable transcript blocks: Tab (empty draft) enters,
                     // arrows/Tab move, Enter or Space opens what a click would, Escape or any
                     // other key leaves.
@@ -955,6 +1182,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::End => Some(last),
                             _ => None,
                         };
+                        // Down from the last block moves on to the first waiting message.
+                        if index == last
+                            && matches!(key.code, KeyCode::Down | KeyCode::Tab | KeyCode::Char('j'))
+                        {
+                            if let Some(first) =
+                                render::queue_listed(drawn_regions.composer, &s).first()
+                            {
+                                cache.queue_ui.focus = Some(s.queue_items[*first].id.clone());
+                                nav = None;
+                                dirty = true;
+                                continue;
+                            }
+                        }
                         if let Some(next) = next.filter(|_| !blocks.is_empty()) {
                             nav = Some(next);
                             let size = terminal.size()?;
@@ -1030,6 +1270,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if key.code == KeyCode::Char('z') {
                             action("update_help", "")?;
+                            continue;
+                        }
+                        // `Ctrl+X n` is `/new`, so the notifications drawer takes Shift+N.
+                        if key.code == KeyCode::Char('N') {
+                            cache.toasts.notes.toggle(Instant::now());
+                            dirty = true;
                             continue;
                         }
                         if key.code == KeyCode::Char('x') {
@@ -1805,6 +2051,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             nav = Some(render::targets(&cache).len() - 1);
                         }
+                        KeyCode::Tab
+                            if draft.text.is_empty()
+                                && s.panel_title.is_empty()
+                                && s.prompt.is_none()
+                                && !render::queue_listed(drawn_regions.composer, &s).is_empty() =>
+                        {
+                            // No transcript block to focus: Tab goes to the waiting messages.
+                            let listed = render::queue_listed(drawn_regions.composer, &s);
+                            cache.queue_ui.focus = Some(s.queue_items[listed[0]].id.clone());
+                            dirty = true;
+                        }
                         KeyCode::Tab => {
                             let query = draft.text[..draft.cursor]
                                 .rsplit(char::is_whitespace)
@@ -2164,6 +2421,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Up(event::MouseButton::Left)
+                            if cache.queue_ui.press.is_some() =>
+                        {
+                            let held = cache.queue_ui.press.take();
+                            if let Some((id, op)) =
+                                render::queue_control_at(r.composer, &s, mouse.column, mouse.row)
+                                    .filter(|hit| held.as_ref().is_some_and(|(hid, hop)| *hid == hit.0 && *hop == hit.1))
+                            {
+                                send(
+                                    json!({"type":"queue_edit","text":id,"key":op,"generation":s.generation}),
+                                )?;
+                            }
+                            dirty = true;
+                        }
+                        MouseEventKind::Drag(event::MouseButton::Left)
+                            if cache.queue_ui.press.is_some() =>
+                        {
+                            // Dragging off the chip lets go of it (release then does nothing).
+                            let over = render::queue_control_at(r.composer, &s, mouse.column, mouse.row);
+                            if over.as_ref().map(|(id, op)| (id.as_str(), *op))
+                                != cache.queue_ui.press.as_ref().map(|(id, op)| (id.as_str(), *op))
+                            {
+                                cache.queue_ui.press = None;
+                                dirty = true;
+                            }
+                        }
+                        MouseEventKind::Up(event::MouseButton::Left)
                             if composer_press.is_some() =>
                         {
                             composer_press = None;
@@ -2265,6 +2548,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
+                            // The notifications drawer: a click inside is swallowed, a click
+                            // outside closes it (the counter then reopens only on its own click).
+                            if cache.toasts.notes.is_open() {
+                                if !cache.toasts.notes.in_panel(mouse.column, mouse.row) {
+                                    cache.toasts.notes.close();
+                                }
+                                dirty = true;
+                                continue;
+                            }
                             if r.live.contains((mouse.column, mouse.row).into()) {
                                 if cache
                                     .live_button
@@ -2300,9 +2592,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some((id, op)) =
                                 render::queue_control_at(r.composer, &s, mouse.column, mouse.row)
                             {
-                                send(
-                                    json!({"type":"queue_edit","text":id,"key":op,"generation":s.generation}),
-                                )?;
+                                // The chip draws pressed while the button is held; the edit is
+                                // sent on release over the same control.
+                                cache.queue_ui.press = Some((id, op));
+                                dirty = true;
                                 continue;
                             }
                             if render::stop_at(r.composer, &s, mouse.column, mouse.row) {
@@ -2619,6 +2912,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // `≡` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
                                         action("command", "/sessions")?
+                                    }
+                                    Some(render::TabHit::Notifications) => {
+                                        cache.toasts.notes.open(Instant::now());
                                     }
                                     Some(render::TabHit::Details) => {
                                         s.last_opened = "details".into();

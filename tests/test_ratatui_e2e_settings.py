@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from pty_cleanup import kill_group
+
 BINARY = Path(__file__).resolve().parents[1] / "rust/tui/target/debug/nexus-ratatui"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,9 +149,7 @@ class App:
         raise AssertionError(f"{needle!r} never appeared:\n{self.text()[-2500:]}")
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.kill()
-            self.process.wait()
+        kill_group(self.process)
         self.stop.set()
         self.reader.join(timeout=.5)
         os.close(self.master)

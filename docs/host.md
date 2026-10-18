@@ -32,7 +32,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
@@ -287,6 +287,16 @@ ran, was dropped, or sits at the edge. A move also reorders the supervisor's par
 turns (`Supervisor.reorder`), because each parked queued turn consumes the session's
 queue head and is skipped once its own id is gone.
 
+`SessionQueueSetMode(session, queued_id, mode)` promotes one pending message
+(`mode` is `steer` or `interrupt`; only upgrades succeed, anything else returns
+`changed=false`, an unknown `mode` is an error). It is durable (`input.mode_changed`),
+reorders the supervisor like a move, and for `interrupt` cancels the running turn without
+dropping the queue ([loop.md](loop.md#steering-queue-interrupt)). Client method:
+`queue_set_mode`. `SessionQueueRemove(return_content=True)` also returns the removed
+message's full content blocks in `SessionQueueEditResult.content` (the queue view cuts
+text at 160 characters); the native client uses it to return a cancelled steer message to
+the composer (`queue_remove_content`). The gateway does not expose `SessionQueueSetMode`.
+
 `SessionCancel(return_queue=True)` atomically captures pending queued text before
 removing it from scheduling and returns `returned_messages` in queue order.
 The TUI and web Stop actions prepend these messages to the current draft.
@@ -302,7 +312,12 @@ the recent 20 initially and use `query` to find older sessions without loading
 the full index. The optional query defaults to empty, is limited to 256
 characters, and matches literal case-insensitive substrings in title, ID,
 saved user/agent snippets and workspace root before the SQL limit. It
-excludes child, archived and trashed sessions. The active workspace retains live
+excludes child, archived and trashed sessions, unless `archived=N` (0 to 100, default 0,
+ignored when `query` is set) appends the newest N archived sessions with
+`ProjectSession.archived = true`. A session that is `awaiting_permission` in the active
+workspace carries `ProjectSession.pending` = `{request_id, kind, summary, ts}` (the oldest
+unanswered request, redacted and bounded to 160 characters of target) so a dashboard can
+answer it through `PermissionResolve` without opening the session. The active workspace retains live
 status using only cached handles for returned local rows (no full session list
 or log rehydration); other workspaces expose saved activity. When a workspace is a linked Git
 worktree, its rows also carry `repo` (the main checkout, from `git_head`'s

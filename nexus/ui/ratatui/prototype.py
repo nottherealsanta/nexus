@@ -17,12 +17,14 @@ from types import SimpleNamespace
 from ...ui.cli import open_client
 from ...ui_support.prompts import approval_choices, pending_questions
 from .actions import ShellActions, labelled
+from .permission_prompt import permission_fields
 from ...ui_support.context import context_usage, context_measure, price_tier_thresholds
 from ...ui_support.completion import root_agents
 from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
-from .verb_groups import activity_entries, format_time
+from .verb_groups import CHANGE_TOOLS, activity_entries, format_time
 from .turn_status import turn_status
+from ...host_support.errors import error_text
 from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
 from ...ui_support.tool_signal import tool_signal
@@ -269,32 +271,28 @@ def _safe_blocks(blocks):
     return result
 
 
-def _agent_card_model(agent) -> tuple[str, str]:
-    """A sub-agent card's model text (with effort) and compact tier letter (`L`/`M`/`H`, `?` unknown)."""
+def _agent_card_model(agent) -> tuple[str, str, str]:
+    """A sub-agent card's model text, reasoning effort, and full tier name."""
     from ...ui_support.timeline import _literal, agent_actual_model
     if agent is None:
-        return "model pending", "?"
+        return "model pending", "", ""
     tier = (agent.tier or agent.requested_tier or "").strip()
-    letter = tier[:1].upper() if tier else "?"
     actual = agent_actual_model(agent) or agent.selected_model
     if actual:
         model = _literal(actual, 120).rsplit("/", 1)[-1]
     else:
         model = "model pending" if agent.status in {"spawned", "running"} else "model unavailable"
-    effort = next((t.reasoning_effort for t in agent.body.turns if t.reasoning_effort), None)
-    return (f"{model} ({effort})" if effort else model), letter
+    effort = next((t.reasoning_effort for t in agent.body.turns if t.reasoning_effort), "") or ""
+    return model, effort, tier
 
 
-def _agent_card_metrics(agent) -> str:
-    """Stable `N tool calls · 1.2K tokens`; usage the worker never reported reads `tokens unknown`."""
-    from ...ui_support.context import _compact_tokens
-    calls = sum(len(turn.tools) for turn in agent.body.turns) if agent is not None else 0
-    parts = [f"{calls} tool call{'s' if calls != 1 else ''}"]
-    if agent is None or agent.usage_unknown:
-        parts.append("tokens unknown")
-    else:
-        parts.append(f"{_compact_tokens(agent.usage.total_tokens)} tokens")
-    return " · ".join(parts)
+def _agent_card_metrics(agent) -> tuple[int | None, int | None]:
+    """Return reported tool-call and token counts, preserving unknown values."""
+    if agent is None:
+        return None, None
+    calls = None if (agent.body is None or getattr(agent.body, "external", None)) else sum(len(turn.tools) for turn in agent.body.turns)
+    tokens = None if agent.usage_unknown or agent.usage is None else getattr(agent.usage, "total_tokens", None)
+    return calls, tokens
 
 
 def _fold_summary(turn) -> str:
@@ -382,7 +380,8 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             emit(f"user · text\n{message.text}")
             if collapsed and rest:
                 first, rest = first + " …", ""
-            block = {"id": message.id + ":user", "kind": "user", "title": first, "text": rest,
+            from ...ui_support.timeline import _clock
+            block = {"sent_at": _clock(turn.user_ts), "id": message.id + ":user", "kind": "user", "title": first, "text": rest,
                      "number": 0 if numbered else number, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
@@ -423,6 +422,8 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 emit(f"assistant · thinking\n{thinking}")
         if message.text if message.role == "assistant" else _has_message_content(message):
             block = {"id": message.id + "text", "kind": "markdown", "text": message.text}
+            if message.role == "assistant" and not message.done and not turn.terminal:
+                block["streaming"] = True  # the client glows the write head (DESIGN OVERHAUL step 4)
             entries.append((message.event_seq, 2, block, 0, 1, "assistant"))
             emit(f"assistant · text\n{message.text}")
     for tool in turn.tools:
@@ -461,23 +462,39 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             name, _, phrase = head.partition(" ")[2].partition(" · ")
             phrase = " ".join(phrase.split())[:64]
             title = f"{name} Subagent — {phrase}"
-            model, tier = _agent_card_model(child)
+            model, effort, tier = _agent_card_model(child)
+            tool_calls, tokens = _agent_card_metrics(child)
+            args = getattr(tool, "input", None) or getattr(tool, "arguments", None) or {}
+            agent_name = (
+                (child.type if child and child.type else "")
+                or (args.get("subagent_type") if isinstance(args, dict) else "")
+                or (args.get("agent") if isinstance(args, dict) else "")
+                or "task"
+            )
+            started_ms = int(child.spawned_ts * 1000) if child and child.spawned_ts else 0
+            elapsed_ms = int((child.completed_ts - child.spawned_ts) * 1000) if child and child.completed_ts and child.spawned_ts else 0
+            if elapsed_ms < 0:
+                elapsed_ms = 0
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
             # Never the tool details: a click opens the subagent page, so only a failure shows inline.
             detail = f"Error: {child.error}" if child is not None and child.error else ""
             if child is not None and child.body.external:
                 from ...ui_support.external_worker import header_rows, task_note
                 provider = next((v for k, v in header_rows(child.body.external) if k == "Provider"), "")
-                title += f" · {provider.removesuffix(' (external worker)') or 'External worker'} (external, own tools)"
+                ext_note = f" · {provider.removesuffix(' (external worker)') or 'External worker'} (external, own tools)"
+                phrase = f"{phrase}{ext_note}"
+                title += ext_note
                 detail = "\n".join(part for part in (task_note(child.body.external), detail) if part)
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
-                     "model": model, "tier": tier, "metrics": _agent_card_metrics(child),
-                     "color": _agent_color(shell, child.type or child.id) if child else "", "operation": operation,
+                     "model": model, "effort": effort, "tier": tier, "metrics": "",
+                     "agent_name": agent_name, "task": phrase,
+                     "tool_calls": tool_calls, "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
+                     "color": _agent_color(shell, agent_name), "operation": operation,
                      "text": "", "detail": detail, "inspect_operation": inspect}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
             continue
-        if tool.name.casefold() in STANDALONE_TOOLS:
+        if tool.name.casefold() in STANDALONE_TOOLS and tool.name.casefold() not in CHANGE_TOOLS:
             block = _change_block(tool, shell, local_ui, full_body or sections_to_text(sections))
             entries.append((tool.event_seq, 3, block, 1, 1, "change"))
             continue
@@ -498,6 +515,11 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             block["signal"] = tool_signal(tool, getattr(shell, "workspace", "") or None).wire()
         if local_ui:
             block.update(local_ui=True, local_detail=full_body, fold_lines=output_end, local_open=False)
+        if tool.name.casefold() in CHANGE_TOOLS:
+            # Its own row; `activity_entries` swaps in `_member` when consecutive changes group.
+            change = _change_block(tool, shell, local_ui, full_body or sections_to_text(sections))
+            entries.append((tool.event_seq, 3, {**change, "_member": block}, 1, 1, "change"))
+            continue
         # A subagent row stands apart: one blank row above and below.
         entries.append((tool.event_seq, 3, block, 0, 0, "tool"))
         if tool.diff and (local_ui or literal or detail_open):
@@ -522,10 +544,8 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
         if row[5] == "diff" and row[0] == tool.event_seq
         and row[2]["id"].startswith(tool.call_id)] for tool in turn.tools}
     grouped = activity_entries(entries, tools_by_id, diff_members, turn=turn, shell=shell, local_ui=local_ui)
-    # Only the trailing activity of an active turn previews automatically. Replies
-    # close the previous run; explicit local expansion still reveals every item.
-    if grouped and grouped[-1][2]["kind"] == "tool_group" and not turn.terminal:
-        grouped[-1][2]["preview_limit"] = 1
+    # A running group shows its newest members as a tree under `Working` (verb_groups);
+    # the old one-member live preview is gone. Local expansion still reveals every item.
     entries = grouped
     if collapsed:
         entries = [entry for entry in entries if entry[5] == "user"]
@@ -563,8 +583,11 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
 def _agent_color(shell, name):
     from ...ui_support.context_header import agent_color
     identity = getattr(getattr(shell, "preview", None), "agent", None)
-    identity = identity if isinstance(identity, dict) and identity.get("name") == name else getattr(shell, "agent_definitions", {}).get(name, {})
-    return identity.get("color") or agent_color(name)
+    defs = getattr(shell, "agent_definitions", {}) or {}
+    if not (isinstance(identity, dict) and identity.get("name") == name or getattr(identity, "name", None) == name):
+        identity = defs.get(name, {}) if isinstance(defs, dict) else {}
+    color = identity.get("color") if isinstance(identity, dict) else getattr(identity, "color", None)
+    return color or agent_color(name)
 
 
 def _context_blocks(shell, view):
@@ -775,28 +798,115 @@ def _queue_items(view, slot_wait=None):
     Each row carries its durable ``queued_id`` so ↑ ↓ ✕ act on exactly that
     message; the tag is ``S`` (steer), ``Q`` (queue) or ``I`` (interrupt).
 
-    ``can_up``/``can_down`` are true only when the adjacent waiting item in the real queue
-    is in the same group (steering = steer + interrupt, or queued), because a move swaps
-    exactly with that neighbour: swapping across groups would change nothing the user can
-    see (steers are consumed at the next model boundary in queue order, queued items one
-    turn at a time after the turn ends). The first waiting item has no movable neighbour
-    above it: the one before it in the host queue is the turn's own, unlisted input.
+    ``can_up``/``can_down`` exist only for queued items, and only when the adjacent waiting
+    item in the real queue is also queued, because a move swaps exactly with that neighbour:
+    swapping across groups would change nothing the user can see (steers are consumed at the
+    next model boundary, queued items one turn at a time after the turn ends). Steering and
+    interrupt items are never reordered by this client (they are promoted or removed
+    instead). The first waiting item has no movable neighbour above it: the one before it in
+    the host queue is the turn's own, unlisted input.
     """
     from ...ui_support.text import sanitize
     tags = {"steer": "S", "queue": "Q", "interrupt": "I"}
     waiting = _waiting_inputs(view, slot_wait)
 
-    def group(item):
-        return "queue" if item.mode not in {"steer", "interrupt"} else "steer"
+    def queued(item):
+        return item.mode not in {"steer", "interrupt"}
 
-    def same(index, other):
-        return 0 <= other < len(waiting) and group(waiting[index]) == group(waiting[other])
+    def movable(index, other):
+        return queued(waiting[index]) and 0 <= other < len(waiting) and queued(waiting[other])
 
     return [{"id": item.queued_id, "tag": tags.get(item.mode, "Q"), "mode": item.mode,
-             "can_up": same(index, index - 1), "can_down": same(index, index + 1),
+             "can_up": movable(index, index - 1), "can_down": movable(index, index + 1),
              "text": escape_controls(sanitize("".join(
                  block.get("text", "") for block in item.content if isinstance(block, dict)), 160))}
             for index, item in enumerate(waiting[:64]) if item.queued_id]
+
+
+async def queue_edit(shell, controller, queued_id, op):
+    """Apply one ``queue_edit`` action from a waiting-message control.
+
+    ``up``/``down`` reorder queued items, ``steer``/``interrupt`` promote (upgrades
+    only; the host refuses the rest), ``remove`` drops. Removing a steering item
+    (``S``/``I``) also asks the host for its full content and hands the text to the
+    composer's one-shot restore channel with ``restore_if_empty``: Rust owns the
+    draft, so it applies the text only when the draft is still empty.
+    """
+    view = controller.view
+    waiting = _waiting_inputs(view, getattr(controller, "slot_wait", None))
+    index = next((i for i, item in enumerate(waiting) if item.queued_id == queued_id), None)
+    if index is None or op not in {"up", "down", "remove", "steer", "interrupt"}:
+        return
+    item = waiting[index]
+    steering = item.mode in {"steer", "interrupt"}
+    if op in {"up", "down"}:
+        if not steering:
+            await shell.client.queue_move(controller.session, queued_id, -1 if op == "up" else 1)
+    elif op in {"steer", "interrupt"}:
+        await shell.client.queue_set_mode(controller.session, queued_id, op)
+    elif not steering:
+        await shell.client.queue_remove(controller.session, queued_id)
+    else:
+        removed, blocks = await shell.client.queue_remove_content(controller.session, queued_id)
+        text, restored = await _restore_steer_attachments(shell, blocks)
+        if removed and (text or restored):
+            shell.composer_restore = text
+            shell.composer_restore_if_empty = text
+            shell.composer_restore_attachments = restored
+            shell.composer_restore_note = f"restored from steer #{index + 1}"
+
+
+_ATTACHMENT_HEAD = "\n\nAttachment: "
+
+
+async def _restore_steer_attachments(shell, blocks):
+    """Split a removed steering message into draft text and re-prepared attachments.
+
+    The host stored each attachment as a text block starting ``Attachment: <label> · <name>``
+    (images: followed by the image block). When the draft already holds attachments nothing
+    is re-attached (the same "only into an empty draft" rule as the text). Returns
+    ``(text, attached_count)``; the text gets the new ``[image N]`` markers so deleting one
+    drops its attachment (``reconcile_attachment_markers``). Rust applies or drops the whole
+    restore; if it drops it, the next ``draft_changed`` removes the unreferenced attachments.
+    """
+    import base64
+    from pathlib import PurePosixPath
+
+    body, found = [], []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type", "text")
+        if kind == "text" and block.get("text", "").startswith(_ATTACHMENT_HEAD):
+            found.append({"head": block["text"][len(_ATTACHMENT_HEAD):], "image": None})
+        elif kind == "image" and found and found[-1]["image"] is None:
+            found[-1]["image"] = block
+        elif kind == "text" and not found:
+            body.append(block.get("text", ""))
+    text = "".join(body)
+    if not found or getattr(shell, "attachments", None):
+        return text, 0
+    attached = 0
+    for entry in found[:8]:
+        head, _, rest = entry["head"].partition("\n")
+        old_label, _, tail = head.partition(" · ")
+        try:
+            if entry["image"] is not None:
+                name = tail.rsplit(" · ", 2)[0] if tail.count(" · ") >= 2 else tail
+                data = base64.b64decode(entry["image"].get("data") or "")
+                item = await shell.client.prepare_attachment(name=name, data=data)
+            else:
+                name = PurePosixPath(tail or "attachment").stem + ".md"
+                item = await shell.client.prepare_attachment(name=name, data=rest.lstrip("\n").encode())
+        except Exception as exc:  # noqa: BLE001 - the text still restores; say what was lost
+            shell.flash(f"Could not restore {old_label}: {exc}", "warning")
+            continue
+        shell.attachments.append(item)
+        marker = shell.attachment_marker(len(shell.attachments) - 1)
+        old_marker = f"[{old_label}]"
+        text = text.replace(old_marker, marker) if old_marker in text else (text + (" " if text else "") + marker)
+        attached += 1
+    return text, attached
 
 
 def _tab_rows(controller, shell):
@@ -944,6 +1054,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         permission = pending_permissions[0]
         prompt = {"kind": "permission", "id": permission.id,
                   "lines": labelled(permission.to_dict()),
+                  **_guarded(failures, "Permission details", lambda: permission_fields(permission), {}),
                   "choices": [{"label": choice.label, "value": choice.value,
                                "key": choice.key, "disabled": choice.disabled}
                               for choice in approval_choices(permission.to_dict())]}
@@ -996,6 +1107,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "nav": _settings_nav(shell),
             "update_notice": "",  # announced once as a toast, never pinned to the footer
             "toasts": list(shell.toasts) if shell else [],
+            "notifications_open_seq": shell.notifications_open_seq if shell else 0,
             "disconnected": bool(
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
             ),
@@ -1041,6 +1153,12 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                        **({"detail": escape_controls(item["detail"])} if "detail" in item else {})} for item in shell.items] if shell else [],
             "prompt": prompt,
             "restore": shell.composer_restore if shell else "",
+            "restore_if_empty": bool(shell and shell.composer_restore
+                                     and shell.composer_restore == shell.composer_restore_if_empty),
+            "restore_attachments": shell.composer_restore_attachments
+                                   if shell and shell.composer_restore and shell.composer_restore == shell.composer_restore_if_empty else 0,
+            "restore_note": escape_controls(shell.composer_restore_note)
+                            if shell and shell.composer_restore and shell.composer_restore == shell.composer_restore_if_empty else "",
             "agent": getattr(controller, "agent_name", "build"),
             "model": escape_controls(
                 (shell.model_names.get((getattr(controller, "provider", None) or "", getattr(controller, "model", None) or "")) if shell else None)
@@ -1239,6 +1357,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             trace.publish(shell.logs)
             if shell.composer_restore == snapshot.get("restore", ""):
                 shell.composer_restore = ""
+                shell.composer_restore_if_empty = ""
+                shell.composer_restore_attachments = 0
+                shell.composer_restore_note = ""
             sent_insert = snapshot.get("insert", "")
             if sent_insert and shell.composer_insert.startswith(sent_insert):
                 shell.composer_insert = shell.composer_insert[len(sent_insert):]
@@ -1511,12 +1632,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "voice_discard":
                     await shell.voice.discard()
                 elif action["type"] == "queue_edit":
-                    queued_id, op = action.get("text"), action.get("key")
-                    if op in {"up", "down", "remove"} and any(item.queued_id == queued_id for item in controller.view.input_queue):
-                        if op == "remove":
-                            await shell.client.queue_remove(controller.session, queued_id)
-                        else:
-                            await shell.client.queue_move(controller.session, queued_id, -1 if op == "up" else 1)
+                    await queue_edit(shell, controller, action.get("text"), action.get("key"))
                 elif action["type"] == "context_header":
                     key = action.get("key")
                     if key in {"system", "agents", "tools", "skills", "mcp"}:
@@ -1607,7 +1723,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     controller.resume(update)
                 await update()
             except Exception as exc:
-                shell.flash(str(exc), "error")
+                shell.flash(error_text(exc), "error")
                 await update()
         return await process.wait()
     finally:

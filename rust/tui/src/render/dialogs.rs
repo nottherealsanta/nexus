@@ -646,7 +646,12 @@ pub fn dialog_inner(area: Rect) -> Rect {
 }
 /// The bottom of the transcript reserved for a permission or question panel.
 pub fn prompt_area(transcript: Rect, prompt: &crate::bridge::Prompt) -> Rect {
-    let content = prompt.lines.len().clamp(1, 6) as u16;
+    let structured = prompt_rows(prompt);
+    let content = if structured.is_empty() {
+        prompt.lines.len().clamp(1, 6)
+    } else {
+        structured.len().clamp(1, 10)
+    } as u16;
     let extra = if prompt.kind == "question" { 1 } else { 0 };
     let height = (2 + content + prompt.choices.len() as u16 + extra + 1).min(transcript.height);
     Rect {
@@ -656,6 +661,132 @@ pub fn prompt_area(transcript: Rect, prompt: &crate::bridge::Prompt) -> Rect {
         height,
     }
 }
+/// One row of a structured permission prompt body (below the title row).
+#[derive(Debug, PartialEq)]
+pub enum PromptRow {
+    /// `   waiting on you · mm:ss`
+    Waiting,
+    Blank,
+    Heading(&'static str),
+    Text(String),
+    /// `… N more` when `what` is clipped.
+    More(usize),
+}
+
+/// `what` rows shown before the rest clip to `… N more`.
+const PROMPT_WHAT_ROWS: usize = 4;
+
+/// The body of a structured permission prompt, empty for older hosts and questions (which keep
+/// drawing `lines`). Section rows appear only when the request carries them.
+pub fn prompt_rows(prompt: &crate::bridge::Prompt) -> Vec<PromptRow> {
+    if prompt.kind != "permission" || prompt.title.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = vec![PromptRow::Waiting, PromptRow::Blank];
+    if !prompt.what.is_empty() {
+        rows.push(PromptRow::Heading("What happens"));
+        if prompt.what.len() > PROMPT_WHAT_ROWS {
+            rows.extend(
+                prompt.what[..PROMPT_WHAT_ROWS - 1]
+                    .iter()
+                    .cloned()
+                    .map(PromptRow::Text),
+            );
+            rows.push(PromptRow::More(prompt.what.len() - (PROMPT_WHAT_ROWS - 1)));
+        } else {
+            rows.extend(prompt.what.iter().cloned().map(PromptRow::Text));
+        }
+    }
+    if !prompt.why.is_empty() {
+        rows.push(PromptRow::Heading("Why it asked"));
+        rows.push(PromptRow::Text(format!("rule: {}", prompt.why)));
+    }
+    rows.push(PromptRow::Blank);
+    rows
+}
+
+/// `waiting on you · mm:ss`, counting up from `since` (unix seconds); no clock when unknown.
+pub fn waiting_label(since: f64, now: f64) -> String {
+    if since <= 0.0 {
+        return "waiting on you".into();
+    }
+    format!(
+        "waiting on you · {}",
+        crate::picker::clock(crate::picker::waited(since, now))
+    )
+}
+
+/// The title row: `◆ Allow git push origin main?`, glyph in the warning colour, text bold.
+pub fn prompt_title_line(prompt: &crate::bridge::Prompt, p: &Palette) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{} ", crate::transcript::look::glyphs().pending),
+            Style::default().fg(p.warning),
+        ),
+        Span::styled(
+            prompt.title.clone(),
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// The styled body rows of a structured prompt at wall-clock `now`.
+pub fn prompt_body_lines(
+    prompt: &crate::bridge::Prompt,
+    p: &Palette,
+    now: f64,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(p.muted);
+    prompt_rows(prompt)
+        .into_iter()
+        .map(|row| match row {
+            PromptRow::Waiting => {
+                Line::styled(format!("   {}", waiting_label(prompt.since, now)), muted)
+            }
+            PromptRow::Blank => Line::raw(""),
+            PromptRow::Heading(text) => Line::styled(text, muted.add_modifier(Modifier::BOLD)),
+            PromptRow::Text(text) => Line::styled(format!("  {text}"), Style::default().fg(p.text)),
+            PromptRow::More(n) => Line::styled(format!("  … {n} more"), muted),
+        })
+        .collect()
+}
+
+/// A choice row of a structured prompt: a neutral key chip (bold text on `element`, no colour
+/// cue), then the label in `muted`; `▸` marks the keyboard selection.
+pub fn prompt_choice_line(
+    choice: &crate::bridge::Choice,
+    selected: bool,
+    p: &Palette,
+) -> Vec<Span<'static>> {
+    let label = Style::default().fg(if choice.disabled { p.quiet } else { p.muted });
+    vec![
+        Span::raw(if selected {
+            format!(" {} ", crate::transcript::look::glyphs().closed)
+        } else {
+            "   ".into()
+        }),
+        Span::styled(
+            format!(" {} ", choice.key),
+            Style::default()
+                .fg(p.text)
+                .bg(p.element)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " {}{}",
+                choice.label,
+                if choice.disabled {
+                    " (unavailable)"
+                } else {
+                    ""
+                }
+            ),
+            label,
+        ),
+    ]
+}
+
 /// `(content, choices)` inside a prompt panel; the last choice row is the help line.
 pub fn prompt_regions(area: Rect, count: usize) -> (Rect, Rect) {
     let inner = Rect {
@@ -675,6 +806,125 @@ pub fn logs_region(r: &Regions) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn permission(what: usize, choices: &[(&str, &str)]) -> crate::bridge::Prompt {
+        serde_json::from_value(serde_json::json!({
+            "kind": "permission", "id": "p1", "lines": ["Tool: Bash"],
+            "title": "Allow Bash git push origin main?", "since": 1000.0,
+            "what": (0..what).map(|i| format!("write: /w/f{i}.txt")).collect::<Vec<_>>(),
+            "why": "Bash(git push:*)",
+            "choices": choices.iter().map(|(key, label)| serde_json::json!(
+                {"label": label, "value": label, "key": key, "disabled": false})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    }
+
+    const FOUR: [(&str, &str); 4] = [
+        ("y", "Allow once"),
+        ("a", "Allow for session"),
+        ("n", "Deny once"),
+        ("d", "Deny for session"),
+    ];
+
+    #[test]
+    fn permission_prompt_title_timer_and_sections() {
+        let p = Palette::new(false);
+        let prompt = permission(2, &FOUR);
+        let title = prompt_title_line(&prompt, &p);
+        assert_eq!(title.spans[0].content, "◆ ");
+        assert_eq!(title.spans[0].style.fg, Some(p.warning));
+        assert!(title.spans[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(title.spans[1].content, "Allow Bash git push origin main?");
+        // The timer counts up from `since`; `now` is injected.
+        assert_eq!(waiting_label(1000.0, 1065.0), "waiting on you · 01:05");
+        assert_eq!(waiting_label(0.0, 1065.0), "waiting on you");
+        let body = prompt_body_lines(&prompt, &p, 1065.0);
+        let text: Vec<String> = body
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "   waiting on you · 01:05",
+                "",
+                "What happens",
+                "  write: /w/f0.txt",
+                "  write: /w/f1.txt",
+                "Why it asked",
+                "  rule: Bash(git push:*)",
+                "",
+            ]
+        );
+        assert_eq!(body[0].style.fg, Some(p.muted));
+        assert!(body[2].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn permission_prompt_clips_what_rows_and_grows_bounded() {
+        let few = permission(1, &FOUR);
+        let many = permission(9, &FOUR);
+        assert!(prompt_rows(&many).contains(&PromptRow::More(6)));
+        assert_eq!(
+            prompt_rows(&many).len(),
+            2 + 1 + 4 + 2 + 1,
+            "What happens shows 3 rows + `… 6 more`"
+        );
+        let transcript = Rect::new(0, 0, 80, 40);
+        let (small, big) = (
+            prompt_area(transcript, &few),
+            prompt_area(transcript, &many),
+        );
+        assert!(big.height > small.height && big.height <= 2 + 10 + 4 + 1);
+        // A short transcript bounds it.
+        assert!(prompt_area(Rect::new(0, 0, 80, 8), &many).height <= 8);
+        // Older hosts (no `title`) and questions keep the plain `lines` layout.
+        let mut plain = permission(1, &FOUR);
+        plain.title.clear();
+        assert!(prompt_rows(&plain).is_empty());
+        let mut question = permission(1, &FOUR);
+        question.kind = "question".into();
+        assert!(prompt_rows(&question).is_empty());
+    }
+
+    #[test]
+    fn permission_key_chips_are_neutral_and_follow_the_choices() {
+        let p = Palette::new(false);
+        let prompt = permission(1, &FOUR);
+        let loud = [p.success, p.error, p.blue, p.purple];
+        for (i, choice) in prompt.choices.iter().enumerate() {
+            let spans = prompt_choice_line(choice, i == 0, &p);
+            for span in &spans {
+                assert!(!loud
+                    .iter()
+                    .any(|c| Some(*c) == span.style.fg || Some(*c) == span.style.bg));
+            }
+            assert_eq!(spans[1].content, format!(" {} ", choice.key));
+            assert_eq!(spans[1].style.fg, Some(p.text));
+            assert_eq!(spans[1].style.bg, Some(p.element));
+            assert!(spans[1].style.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(spans[2].style.fg, Some(p.muted));
+        }
+        assert_eq!(
+            prompt_choice_line(&prompt.choices[0], true, &p)[0].content,
+            " ▸ "
+        );
+        // No `a` choice from the host, no `a` chip: the lines come from `choices` alone.
+        let once = permission(1, &[("y", "Allow once"), ("n", "Deny once")]);
+        let keys: Vec<_> = once.choices.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys, ["y", "n"]);
+    }
+
+    #[test]
+    fn an_open_permission_prompt_keeps_the_frame_clock_running() {
+        let mut s = Snapshot::default();
+        assert!(!animating(&s));
+        s.prompt = Some(permission(1, &FOUR));
+        assert!(animating(&s), "the waiting timer needs redraws");
+        s.prompt.as_mut().unwrap().title.clear();
+        assert!(!animating(&s));
+    }
+
     #[test]
     fn dim_area_blends_rgb_halfway_and_clears_modifiers() {
         let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));

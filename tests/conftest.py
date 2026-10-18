@@ -13,3 +13,5 @@ def _isolated_nexus_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("NEXUS_HOME", str(tmp_path_factory.mktemp("nexus-home")))
     # PTY harnesses never answer the native client's graphics probe; skip its wait.
     monkeypatch.setenv("NEXUS_IMAGE_PROTOCOL", "halfblocks")
+    # ...and they expect the chat at once: skip the launch splash's flash and curtain (~4 s).
+    monkeypatch.setenv("NEXUS_SPLASH", "off")

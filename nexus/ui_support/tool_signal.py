@@ -1,7 +1,7 @@
 """The relevant-only view of a tool call: what it did and what it produced.
 
 ``tool_details`` shows everything the agent saw, labelled. This module is its
-quiet sibling for the expanded transcript row (plans/in-progress/GROK_BUILD_TUI_PLAN.md
+quiet sibling for the expanded transcript row (plans/done/GROK_BUILD_TUI_PLAN.md
 §5.2): typed body rows with no Call ID, timestamps, status words, bundle,
 iteration, executed flag or parameter dump. Nothing is lost: the full labelled
 sections stay behind the ``inspect_operation`` the projection offers (``i``) and

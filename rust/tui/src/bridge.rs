@@ -51,6 +51,15 @@ pub struct Snapshot {
     pub form: Option<Form>,
     pub controls: Vec<Item>,
     pub restore: String,
+    /// One-shot, beside `restore`: apply the text only when the draft is still empty
+    /// (a cancelled steer message), else drop it and say so.
+    pub restore_if_empty: bool,
+    /// Draft attachments the bridge already re-attached with that text; they count as part of
+    /// the restore, so "the draft is empty" ignores exactly these.
+    #[serde(default)]
+    pub restore_attachments: usize,
+    /// Short label for the toast (`restored from steer #2`).
+    pub restore_note: String,
     pub insert: String,
     pub auto_send_insert: bool,
     pub insert_kind: String,
@@ -91,6 +100,13 @@ pub struct Snapshot {
     /// Dismissible notices from the host (plan §8). Always the newest bounded list;
     /// the client shows each id once and owns timers, dedup and dismissal.
     pub toasts: Vec<ToastWire>,
+    /// Local: unseen notifications for the top-bar counter (`None` draws no counter);
+    /// refreshed from `render::notifications` before every frame.
+    #[serde(skip)]
+    pub notifications: Option<usize>,
+    /// Local: the counter is in its short change pop.
+    #[serde(skip)]
+    pub notifications_pop: bool,
     /// Settings area list: (label, key, is heading), and the selected index (-1 = none).
     pub nav: Option<Nav>,
     pub sessions: Vec<Session>,
@@ -261,6 +277,16 @@ pub struct Prompt {
     pub id: String,
     pub lines: Vec<String>,
     pub choices: Vec<Choice>,
+    /// Structured permission fields beside `lines` (older hosts send only `lines`): the
+    /// `Allow <tool> <target>?` title, when it was asked (unix seconds), what it would do, and why.
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub since: f64,
+    #[serde(default)]
+    pub what: Vec<String>,
+    #[serde(default)]
+    pub why: String,
 }
 #[derive(Deserialize)]
 pub struct Choice {
@@ -351,6 +377,126 @@ pub struct LiveBar {
     /// `live_toggle`: opens or closes the rows (instructions, commentary, long text).
     pub operation: Option<Value>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Tokens {
+    Count(u64),
+    Label(String),
+}
+
+/// Lenient: a task card whose subagent usage is unknown arrives as `null` (`prototype.py`
+/// `_agent_card_metrics`), and a float or negative count must not abort the whole snapshot
+/// (the first version was a plain untagged enum and crashed the client on opening a session
+/// that had such a card). `null` and anything unreadable become the empty label.
+impl<'de> Deserialize<'de> for Tokens {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::String(text) => Tokens::Label(text),
+            Value::Number(n) => match (n.as_u64(), n.as_f64()) {
+                (Some(count), _) => Tokens::Count(count),
+                (None, Some(x)) if x.is_finite() => Tokens::Count(x.max(0.0).round() as u64),
+                _ => Tokens::default(),
+            },
+            _ => Tokens::default(),
+        })
+    }
+}
+
+impl Default for Tokens {
+    fn default() -> Self {
+        Tokens::Label(String::new())
+    }
+}
+
+impl Tokens {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Tokens::Count(_) => false,
+            Tokens::Label(s) => s.is_empty(),
+        }
+    }
+
+    pub fn count(&self) -> Option<u64> {
+        match self {
+            Tokens::Count(n) => Some(*n),
+            Tokens::Label(s) => {
+                let trimmed = s.trim_start_matches('~');
+                trimmed.parse::<u64>().ok()
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Tokens::Count(_) => "",
+            Tokens::Label(s) => s.as_str(),
+        }
+    }
+}
+
+impl std::ops::Deref for Tokens {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl From<&str> for Tokens {
+    fn from(s: &str) -> Self {
+        Tokens::Label(s.to_owned())
+    }
+}
+
+impl From<String> for Tokens {
+    fn from(s: String) -> Self {
+        Tokens::Label(s)
+    }
+}
+
+impl From<u64> for Tokens {
+    fn from(n: u64) -> Self {
+        Tokens::Count(n)
+    }
+}
+
+impl From<Option<u64>> for Tokens {
+    fn from(opt: Option<u64>) -> Self {
+        match opt {
+            Some(n) => Tokens::Count(n),
+            None => Tokens::Label(String::new()),
+        }
+    }
+}
+
+impl PartialEq<str> for Tokens {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Tokens {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<Tokens> for &str {
+    fn eq(&self, other: &Tokens) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<String> for Tokens {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<Tokens> for String {
+    fn eq(&self, other: &Tokens) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Content {
@@ -370,6 +516,8 @@ pub struct Content {
     pub diff_lines: Vec<(String, u32, String)>,
     pub gap: u16,
     pub number: u32,
+    #[serde(default)]
+    pub sent_at: String,
     pub collapsed: bool,
     pub chips: Vec<String>,
     pub chip_operation: Option<Value>,
@@ -395,6 +543,10 @@ pub struct Content {
     pub count: usize,
     pub failures: usize,
     pub metrics: String,
+    pub agent_name: String,
+    pub task: String,
+    pub effort: String,
+    pub tool_calls: Option<u64>,
     /// `task`: the sub-agent's model (with effort) and compact tier letter (`L`/`M`/`H`), both
     /// drawn in the agent colour.
     pub model: String,
@@ -403,8 +555,15 @@ pub struct Content {
     pub counts: Vec<usize>,
     pub members: Vec<Content>,
     pub output_operation: Option<Value>,
-    /// `tool_group`: the present-tense label (`Running 1 command, Read 3 files`) while a member runs.
+    /// `tool_group`: the header while a member runs (`Working`).
     pub running_label: String,
+    /// `tool_group`: members left out of `members` while the group runs folded (`… N earlier`).
+    pub hidden: usize,
+    /// `tool_group`, client-only: how strongly the header flashes the accent (0-100) while a
+    /// finished group's fold settles (`transcript::fold`). The host never sends it.
+    pub flash: u8,
+    /// `markdown`: the assistant message is still streaming; its last graphemes glow.
+    pub streaming: bool,
     /// `tool_group`: the finished wall time as text (`1.8s`); empty while running.
     pub elapsed_label: String,
     /// Epoch milliseconds when a group, tool or thought began (0 = unknown), for the live
@@ -420,7 +579,7 @@ pub struct Content {
     /// A tool's relevant-only body: `[kind, text]` rows (`nexus/ui_support/tool_signal.py`).
     pub signal: Vec<(String, String)>,
     /// Context blocks: the compact figure (`~348`, `~?`) and whether the block contributes anything.
-    pub tokens: String,
+    pub tokens: Tokens,
     pub active: bool,
 }
 
@@ -464,6 +623,8 @@ impl Content {
     /// the row is `open` and not `/verbose`, its relevant-only `signal` rows.
     pub fn carry_presentation(&self, shown: &mut Content, open: bool) {
         shown.running_label = self.running_label.clone();
+        shown.hidden = self.hidden;
+        shown.flash = self.flash;
         shown.elapsed_label = self.elapsed_label.clone();
         shown.started_ms = self.started_ms;
         shown.elapsed_ms = self.elapsed_ms;
@@ -817,6 +978,31 @@ mod redesign_tests {
     }
 }
 
+/// A removed steering message returns to the composer only when the draft is empty: no text and
+/// no attachments other than the `restored` ones the bridge re-attached with that very text.
+pub fn steer_restore_applies(draft_empty: bool, attachments: usize, restored: usize) -> bool {
+    draft_empty && attachments <= restored
+}
+
+#[cfg(test)]
+mod restore_tests {
+    use super::*;
+    #[test]
+    fn steer_restore_counts_its_own_attachments_only() {
+        assert!(steer_restore_applies(true, 0, 0));
+        assert!(steer_restore_applies(true, 2, 2));
+        assert!(!steer_restore_applies(true, 1, 0));
+        assert!(!steer_restore_applies(false, 2, 2));
+    }
+    #[test]
+    fn restore_attachments_is_read_from_the_wire() {
+        let next: Snapshot =
+            serde_json::from_str(r#"{"restore":"t","restore_if_empty":true,"restore_attachments":2}"#)
+                .unwrap();
+        assert_eq!(next.restore_attachments, 2);
+    }
+}
+
 #[cfg(test)]
 mod section_tests {
     use super::*;
@@ -952,5 +1138,33 @@ mod section_tests {
         assert!(item.matches("OpenCode-Go"));
         assert!(item.matches("kimi"));
         assert!(!item.matches("anthropic"));
+    }
+}
+
+#[cfg(test)]
+mod tokens_tests {
+    use super::*;
+
+    #[test]
+    fn tokens_accept_null_floats_negatives_strings_and_counts() {
+        let parse = |json: &str| serde_json::from_str::<Tokens>(json).unwrap();
+        assert_eq!(parse("null"), Tokens::default());
+        assert_eq!(parse("12"), Tokens::Count(12));
+        assert_eq!(parse("12.6"), Tokens::Count(13));
+        assert_eq!(parse("-4"), Tokens::Count(0));
+        assert_eq!(parse("\"~348\""), Tokens::Label("~348".into()));
+        assert_eq!(parse("[1]"), Tokens::default());
+    }
+
+    #[test]
+    fn a_task_card_with_unknown_usage_is_a_valid_content_block() {
+        // Regression: opening a session with a subagent card whose usage is unknown sent
+        // `"tokens": null` and the client exited with "data did not match any variant of
+        // untagged enum Tokens".
+        let block: Content = serde_json::from_str(
+            r#"{"id":"c1","kind":"task","title":"t","tokens":null,"tool_calls":2}"#,
+        )
+        .unwrap();
+        assert!(block.tokens.is_empty() && block.tokens.count().is_none());
     }
 }

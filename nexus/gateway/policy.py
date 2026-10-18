@@ -36,7 +36,7 @@ _READ = (
 )
 _PROMPT = (
     p.SessionOpen, p.SessionStart, p.SessionEnqueue, p.SessionCancel,
-    p.SessionQueueMove, p.SessionQueueRemove, p.ModelSelect,
+    p.SessionQueueMove, p.SessionQueueRemove, p.SessionQueueSetMode, p.ModelSelect,
     p.ReasoningEffortSelect, p.AgentSelect, p.AgentCancel, p.SessionArchive,
     p.SessionUnarchive,
 )
@@ -169,6 +169,11 @@ def _validate(command: p.Command, device_id: str) -> p.Command:  # noqa: C901 - 
         case p.SessionQueueRemove():
             _session(command.session)
             _ident(command.queued_id, "queued id")
+        case p.SessionQueueSetMode():
+            _session(command.session)
+            _ident(command.queued_id, "queued id")
+            if command.mode not in ("steer", "interrupt"):
+                _bad("invalid mode")
         case p.SessionArchive():
             _session(command.session)
             _line(command.reason, 200, "reason")

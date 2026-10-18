@@ -3,9 +3,11 @@
 //!
 //! Pure selection over `(top, rows)` card spans (a card is a padding row, the title and text
 //! rows, a padding row); the draw loop in `render.rs` paints the rows and records the hit
-//! rectangle so a click scrolls back to the real message.
+//! rectangle so a click scrolls back to the real message. Only the pinned copy's bottom padding
+//! row is replaced, by the STK-3 indicator (`indicator`, step 14 of the design overhaul): a
+//! shade with a right-aligned count of the turn's rows above the viewport (`above`).
 use ratatui::{
-    style::Color,
+    style::{Color, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
@@ -85,18 +87,50 @@ pub fn ellipsize(mut line: Line<'static>) -> Line<'static> {
     line
 }
 
-/// A quiet dotted padding row distinguishes a pinned continuation from the real card.
-pub fn continuation_padding(mut line: Line<'static>, colour: Color) -> Line<'static> {
-    let mut column = 0;
-    for span in &mut line.spans {
-        let width = span.content.width();
-        let text: String = (column..column + width)
-            .map(|x| if x % 4 == 2 { '·' } else { ' ' })
-            .collect();
-        *span = Span::styled(text, span.style.fg(colour));
-        column += width;
+/// Rows of the pinned turn that are above the viewport, below its own card: the first row of
+/// the viewport (`offset`) minus the end of the card (`pin.last`). `select` guarantees the
+/// whole card is above the viewport, so this is never negative.
+pub fn above(pin: &Pin, offset: usize) -> usize {
+    offset.saturating_sub(pin.last + 1)
+}
+
+/// `↑ N lines of this turn above` (STK-3), shortened for narrow rows; empty when even the
+/// short form leaves fewer than two cells of shade.
+fn indicator_label(above: usize, width: usize, ascii: bool) -> String {
+    let arrow = if ascii { '^' } else { '↑' };
+    let noun = if above == 1 { "line" } else { "lines" };
+    [
+        format!(" {arrow} {above} {noun} of this turn above "),
+        format!(" {arrow} {above} above "),
+    ]
+    .into_iter()
+    .find(|label| label.width() + 2 <= width)
+    .unwrap_or_default()
+}
+
+/// STK-3: the pinned copy's bottom padding row becomes a shade (`░`, `.` in ASCII) in `shade`
+/// with ` ↑ N lines of this turn above ` right-aligned in `label`. Only this row changes; it
+/// keeps its width and the card's background, so the real card (whose padding is plain) can
+/// never be mistaken for the pin.
+pub fn indicator(
+    line: Line<'static>,
+    above: usize,
+    shade: Color,
+    label: Color,
+    ascii: bool,
+) -> Line<'static> {
+    let width: usize = line.spans.iter().map(|span| span.content.width()).sum();
+    let base = line.spans.first().map_or(Style::default(), |s| s.style);
+    let text = indicator_label(above, width, ascii);
+    let glyph = if ascii { '.' } else { '░' };
+    let mut spans = vec![Span::styled(
+        glyph.to_string().repeat(width - text.width()),
+        base.fg(shade),
+    )];
+    if !text.is_empty() {
+        spans.push(Span::styled(text, base.fg(label)));
     }
-    line
+    Line::from(spans)
 }
 
 #[cfg(test)]
@@ -148,16 +182,73 @@ mod tests {
         assert_eq!((single.body, single.clipped), (1, false));
     }
 
+    fn padding(width: usize) -> Line<'static> {
+        Line::from(Span::styled(
+            " ".repeat(width),
+            Style::default().bg(Color::Black),
+        ))
+    }
+    fn text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
     #[test]
-    fn continuation_padding_keeps_width_and_background() {
-        let line = Line::from(Span::styled(
-            "            ",
-            ratatui::style::Style::default().bg(Color::Black),
-        ));
-        let line = continuation_padding(line, Color::DarkGray);
-        assert_eq!(line.spans[0].content, "  ·   ·   · ");
-        assert_eq!(line.spans[0].style.bg, Some(Color::Black));
+    fn indicator_is_a_shade_with_a_right_aligned_count_and_keeps_width_and_background() {
+        let line = indicator(padding(60), 12, Color::DarkGray, Color::Gray, false);
+        let drawn = text(&line);
+        assert_eq!(drawn.width(), 60);
+        assert!(drawn.starts_with("░░░") && drawn.ends_with(" ↑ 12 lines of this turn above "));
         assert_eq!(line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(line.spans[1].style.fg, Some(Color::Gray));
+        assert!(line.spans.iter().all(|s| s.style.bg == Some(Color::Black)));
+        assert!(
+            text(&indicator(padding(60), 1, Color::Gray, Color::Gray, false))
+                .ends_with(" ↑ 1 line of this turn above ")
+        );
+    }
+
+    #[test]
+    fn indicator_fits_widths_20_to_200_and_degrades_gracefully() {
+        for width in 20..=200 {
+            for above in [0, 1, 7, 12_345] {
+                let drawn = text(&indicator(
+                    padding(width),
+                    above,
+                    Color::Gray,
+                    Color::Gray,
+                    false,
+                ));
+                assert_eq!(drawn.width(), width, "{width} / {above}");
+                assert!(drawn.starts_with("░░"), "{width} / {above}: {drawn:?}");
+            }
+        }
+        let short = text(&indicator(padding(24), 7, Color::Gray, Color::Gray, false));
+        assert!(short.ends_with(" ↑ 7 above "), "{short:?}");
+        let bare = text(&indicator(padding(8), 7, Color::Gray, Color::Gray, false));
+        assert_eq!(bare, "░".repeat(8), "too narrow for any count");
+        assert_eq!(
+            text(&indicator(padding(0), 7, Color::Gray, Color::Gray, false)),
+            ""
+        );
+    }
+
+    #[test]
+    fn indicator_has_an_ascii_form() {
+        let drawn = text(&indicator(padding(50), 3, Color::Gray, Color::Gray, true));
+        assert!(drawn.starts_with("....") && drawn.ends_with(" ^ 3 lines of this turn above "));
+        assert!(drawn.is_ascii());
+    }
+
+    #[test]
+    fn lines_above_count_the_turn_rows_between_the_card_and_the_viewport() {
+        let cards = [(0, 5), (60, 5)];
+        for (offset, expected) in [(5, 0), (6, 1), (12, 7), (40, 35), (58, 53)] {
+            let pin = select(&cards, offset, 100).unwrap();
+            assert_eq!(above(&pin, offset), expected, "offset {offset}");
+        }
+        // A card clipped to three text rows still counts from its real end.
+        let pin = select(&[(0, 12)], 20, 100).unwrap();
+        assert_eq!(above(&pin, 20), 8);
     }
 
     #[test]

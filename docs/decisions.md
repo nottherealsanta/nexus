@@ -133,6 +133,43 @@ that one server, and failures are rows in Settings and the context header. `${VA
 now expands like Claude Code (it used to be literal); bare `$VAR` stays literal.
 Each file is isolated, so a broken project file no longer freezes the global set.
 
+## Waiting messages: promote, never demote; restore only steering
+
+A pending message can be promoted (`queue → steer → interrupt`) through a durable
+`input.mode_changed`, never demoted, so a steer that may already be influencing the user's
+expectations is not silently pushed back. Only queued items are reordered by the native
+client. Cancelling a **steering** message returns its full text to an empty composer;
+queued messages are removed without restoring, because only steering was asked for. The
+draft is never overwritten: a non-empty draft stays and a toast names the removed message.
+The gateway does not expose `SessionQueueSetMode` (its allow-list is a reviewed set).
+Attachments of a removed steering message are re-prepared (the host keeps no copy of the
+prepared bytes) and attached only when the draft has none; the rest of the restore is
+all-or-nothing in Rust, which asks the bridge to drop them again when it declines.
+Keyboard focus on the list follows the transcript's focus keys (Tab/Down/Up) rather than a new
+chord; Enter/`s` promote, Delete/Backspace/`x` remove and Alt+Up/Down reorder because those
+keys have no meaning on a focused row and no existing binding applies there.
+
+## Another project's session that fails to open is a toast, not silence
+
+`switch_project` shows `Could not open the session in <workspace>: <reason>` (an error toast;
+the reason is `host_support.errors.error_text`: redacted, one line, never empty, so a
+`TimeoutError()` names its type) and keeps the Sessions dashboard open on the old session; the
+dashboard closes only when the switch succeeded (`switch` hides it). The failure mode was a
+daemon that would not start for the other workspace (a stale install raising `ConfigError`, or a
+startup timeout whose exception has no message): the generic handler flashed `str(exc)`, which
+is empty for the latter, and `toast` drops empty text.
+
+## Animations off and Monochrome
+
+`cache.animate == false` draws the final state of every overhaul animation immediately, and the
+frame clock may not change a single cell (`render::animations_off_tests` draws a busy screen at
+two ticks and compares): spinners rest on their first frame, the activity meter's working fifth
+rests in the middle, the voice preview is not scrambled, folds, the queue flash,
+notification pop and drawer, the live strip and the splash take their end state. Monochrome drops
+every colour but keeps modifiers, so each state needs a shape: the
+activity meter's lit cells become `━` (`=`), the selected Sessions row gets the focus bar, a
+pressed queue chip is reversed. Spinner frames, status marks and queue controls have ASCII twins.
+
 ## Known gaps and drift (as of this writing)
 
 Stated so nobody builds on a false assumption.
@@ -421,7 +458,15 @@ and shows a splash until the first snapshot. Only the session bootstrap and cont
 gate that snapshot; `doctor`, `list_models` and `setup_status` were each awaited in sequence
 before the process even started (about 0.9 s) and now run in the background. Typing during the
 splash is discarded, not buffered, because a draft would otherwise be submitted against a
-session the host has not opened. Known gap: `doctor` still takes about 0.7 s because it waits on
+session the host has not opened. The splash (step 12 of the design overhaul) is progress-driven,
+not timed: a fixed-length animation would either lie about a slow start or add latency to a fast
+one, so the bar and the particles follow client-observed milestones, with only a ~0.64 s floor
+so a fast start still shows the motion and no ceiling. The milestone names are the plan's; they
+are what the client can see (pipe open, first line, parsed, first snapshot applied), because the
+bridge reports no startup stages and no host change was wanted for a cosmetic. The notifications
+history is client-side for the same reason it is not durable: it is a replay of what the client
+showed, `/notifications` only flips a counter the client watches, and `Ctrl+X Shift+N` is used
+because `Ctrl+X n` is `/new`. Known gap: `doctor` still takes about 0.7 s because it waits on
 `runtime.ensure_started()`, which parses the whole model catalogue; the branch appears late.
 
 ## Settings revamp (native client)
@@ -753,9 +798,22 @@ allow-list); Keyboard stays a drill row. Every framed dialog
 clickable `[×]` top-right (`render::close_rect`), and `element` selection fill. Not verified
 on a light theme.
 
+## Sessions dashboard groups by status, answers permissions in place (2026-10)
+
+Supersedes the time grouping in the next entry. The P-SES design groups by status (Needs
+you, Working, Idle, Archived) so what waits on the user is first; a Needs you row shows the
+pending question and `a`/`d` answer it through `PermissionResolve` without opening the
+session. The host adds `ProjectSessionsList.archived` (newest N archived rows, opt-in, off
+during a search) and `ProjectSession.pending`; the bridge accepts an answer only for the
+`request_id` the listed row carries and only `allow_once`/`deny_once`, so a stale or forged
+operation cannot widen authority. "Open Previous" was removed (`/resume` remains).
+`PermissionView.ts` of a pending request is now the request time, so a prompt can count
+"waiting on you" from it and survive reconnect (the log carries it).
+The permission prompt's key chips stay one per row to reuse the click and hover mapping.
+
 ## Sessions dashboard groups by time and previews only on keyboard selection (2026-10)
 
-Superseded in part: the preview pane (the `Response` box) was removed; see "Sessions dashboard has no preview pane" below.
+Superseded in part: the preview pane (the `Response` box) was removed; see "Sessions dashboard has no preview pane" below. The time grouping was replaced by status groups (above).
 
 The native dashboard groups by last-updated local time (Today, Yesterday, This week,
 Earlier) instead of status: people look for "the thing I did recently", and status is
@@ -825,6 +883,34 @@ row. Only an individual running tool (including the folded live tail) animates. 
 show the first command line plus `…` when more lines follow (`format_arguments`); Read rows
 keep `path  (offset=…, limit=…)`. The full command and arguments stay in the expanded body
 and `tool_details`. Not verified: visually in a real terminal.
+
+### Update: grey running tree, edits grouped apart, no red (design overhaul step 5)
+
+Superseded in part: a running group is `▾ Working` with its newest five members as a
+grey tree even when folded (the single live tail and the one-member live preview are
+gone), a failed member ends in a quiet ` · failed` instead of red, and a finished group
+settles with a short row-by-row fold and header flash. The `· N failed` count stays out
+of the header. File changes (`edit`, `write`, `apply_patch`, …) group only with each
+other: changes are what a reader audits, so they must not hide inside a read run, and a
+lone change keeps its own row. Failure still needs some mark (nothing the agent can see
+may be hidden), hence the quiet word rather than silence. `Palette::error_deep` is no
+longer used by groups. Not verified: visually in a real terminal.
+
+## Design overhaul steps 6, 7, 11, 14: client-only animation lives in the cache (2026-10)
+
+The thinking decode (the `∴` status line), the Live
+phase strip and the pinned-card indicator add no host data and nothing durable: they are
+presentation of existing snapshot fields, so a replay and a live run agree (rule 5). Motion
+state is a short transient in `render::Cache` (`mic: live_bar::Mic`)
+and cached rows stay tick-free: the decode and the phase strip are rebuilt per frame. `animating(&Snapshot)` cannot see a
+cache transient, so `main.rs` also keeps the clock running while folds are live. Pinned card: STK-3
+(the plan's default; the pick is still open) shows how many rows of the turn are above, counted
+from the card's real end rather than the plan's `offset - first - rows`, which over-counts for
+a clipped long message. The Live header dropped the `mic`/`spk` meters and the `Live` title for the
+phase strip, so the output level now only damps the speaking wave; the host sends no playback
+position (not verified), so the word-by-word caption highlights the newest word of the delta.
+New glyphs have ASCII fallbacks chosen in the modules (`#-`, `_.:-=+*#`, `|/-\`, `~`, `.`, `^`,
+`:`) rather than in `rust/widgets/src/glyphs.rs`. Not verified: visually in a real terminal.
 
 ## Slow commands do not block the connection's read loop (2026-10)
 
@@ -898,7 +984,7 @@ runs OpenAI's backend), and OC's `end_call` is a tool of its coding agent, not o
 model. Declaring tools would be a guess against an undocumented endpoint, with a risk of
 double-enqueueing. Known gap: the voice model cannot yet send its own wording; a live spike
 with `[live].log_raw` should test a `tools` array on the session. Details:
-`plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md` "Authorship of delegation text".
+`plans/done/GPT_LIVE_PROTOCOL_NOTES.md` "Authorship of delegation text".
 
 ## GPT Live: Codex-style handoff, transcript context and speakable replies (2026-10)
 
@@ -931,7 +1017,7 @@ counter reset by a 30 s stable connection, until a 404/410, an auth refusal, a c
 the call deadline; our own addition is a 5-minute cap on continuous failure. Sends that never reached
 the socket wait up to 10 s for the reconnect; a write that failed or timed out is still never replayed
 (`live_send_ambiguous`). Reason: this is what OpenAI's Codex does (see
-`plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` section 2: no client pings, `sideband.rs` reconnect loop,
+`plans/done/GPT_LIVE_CODEX_REFERENCE.md` section 2: no client pings, `sideband.rs` reconnect loop,
 `methods.rs` early-404 retry), and the old 2-attempt, never-reset budget ended a call on a brief blip.
 Costs: a half-open socket is no longer caught by a pong deadline (only reads, failed writes, server
 close); Codex replays a pending message after reconnect and we deliberately do not, because a replay can
@@ -949,3 +1035,19 @@ the socket and keep the call (WebRTC media dies with the peer, no resumable call
 same silence-over-RTP behavior. Cost: a pause longer than the window loses the live voice context and is a new
 call (transcript carried over, not the model's hidden state). Not verified: real billing on a ChatGPT-account
 call, and a sideband cancel for a response already being produced. Details: [live.md](live.md#pause-vs-stop).
+
+## Context header: bars and grow animation removed
+
+Design overhaul step 7 gave the context header grey texture bars per block and a grow animation
+replayed whenever a session opened. After review the user asked for both to go: the header now
+draws its final state at once, with the `total ... of the window` row kept (it reads fine without
+bars). `context::Anim`, `Cache.ctx` and the `main.rs` frame-clock hook are gone; the window for
+the share lives in `Cache.context_window`.
+
+## Status line: grey shimmer instead of the decode scramble
+
+Design overhaul step 6 scrambled a window of graphemes in the activity word with random glyphs and
+`p.purple`. At the user's request it is now a shimmer that moves from light grey to dark grey: the word
+always shows its real characters, a highlight sweeps across it every 1.8 s on the 30 Hz motion clock, and
+the `∴` is grey too. The word stays readable at every frame, and only colours change, so the `[stop]`
+geometry is untouched. Animations off: static dark grey; Monochrome: plain text.

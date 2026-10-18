@@ -16,7 +16,32 @@ import threading
 
 import pytest
 
+from pty_cleanup import kill_group
+
 BINARY = Path(__file__).resolve().parents[1] / "rust/tui/target/debug/nexus-ratatui"
+
+
+def _screen_row(probe, text):
+    from ratatui_screen import Screen
+    screen = Screen(40, 140)
+    screen.feed(bytes(probe.output))
+    matches = [i + 1 for i, row in enumerate(screen.text().splitlines()) if text in row]
+    assert matches, screen.text()
+    return matches[0]
+
+
+def _copy_column(probe):
+    from ratatui_screen import Screen
+    screen = Screen(40, 140)
+    screen.feed(bytes(probe.output))
+    row = next(row for row in screen.text().splitlines() if "Copy" in row)
+    return row.index("Copy") + 2
+
+
+def _click_row(probe, text, x=12, double=False):
+    row = _screen_row(probe, text)
+    click = f"\x1b[<0;{x};{row}M\x1b[<0;{x};{row}m".encode()
+    probe.keys(click * (2 if double else 1))
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
@@ -180,9 +205,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         assert read_action() == {"restored": True}
         assert process.wait(timeout=3) == 0
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+        kill_group(process)
         process.stdin.close()
         process.stdout.close()
         stop_drain.set()
@@ -231,8 +254,7 @@ def test_context_dialog_toggle_keyboard_and_lock():
         os.write(master, b"\r")
         assert action()["operation"]["kind"] == "tool_definition"
     finally:
-        process.kill()
-        process.wait(timeout=3)
+        kill_group(process)
         process.stdin.close()
         process.stdout.close()
         stop.set()
@@ -272,10 +294,13 @@ def test_local_disclosure_without_python_reply():
         assert not probe.read_actions()
         assert b"command" in probe.output
         # A double click on the output label opens the rest without a Python snapshot.
-        probe.keys(b"\x1b[<0;12;6M\x1b[<0;12;6m\x1b[<0;12;6M\x1b[<0;12;6m")
+        _click_row(probe, "Result:", double=True)
         time.sleep(.1)
         assert not probe.read_actions()
-        assert b"UNIQUE LOCAL RESULT" in probe.output
+        from ratatui_screen import Screen
+        current = Screen(40, 140)
+        current.feed(bytes(probe.output))
+        assert "UNIQUE LOCAL RESULT" in current, current.text()
         # Ordered patches preserve local expansion state.
         updated = json.loads(json.dumps(block))
         updated["members"][0]["local_detail"] += "\nSTREAMED RESULT"
@@ -300,7 +325,12 @@ def test_tool_single_click_selects_double_click_toggles_locally():
                   "output_operation":{"kind":"block_toggle","id":"c:output"},
                   "inspect_operation":inspect,
                   "fold_lines":2, "local_detail":"  command: ls\nResult:\nUNIQUE LOCAL RESULT"}]}
-    down_up = lambda x: b"\x1b[<0;%d;6M\x1b[<0;%d;6m" % (x, x)
+    def screen_text():
+        from ratatui_screen import Screen
+        current = Screen(40, 140)
+        current.feed(bytes(probe.output))
+        return current.text()
+
     try:
         probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"blocks":[block],"sessions_sidebar":False,"details_sidebar":False})
         deadline=time.monotonic()+4
@@ -311,16 +341,30 @@ def test_tool_single_click_selects_double_click_toggles_locally():
         probe.keys(b"\t\r")
         time.sleep(.1)
         probe.read_actions()
+        assert "command" in screen_text()  # the call is open, folded to its first two rows
         # One click only selects: no toggle, no Python operation.
-        probe.keys(down_up(12))
+        _click_row(probe, "Bash ls")
         time.sleep(.5)  # longer than the 300 ms double-click window
         assert not probe.read_actions()
-        assert b"UNIQUE LOCAL RESULT" not in probe.output
-        # Two clicks on different cells of the same tool within 300 ms toggle it locally.
-        probe.keys(down_up(12) + down_up(14))
+        assert "command" in screen_text()
+        # Two clicks on the heading within 300 ms toggle the call locally (it folds shut)...
+        time.sleep(.35)  # expire the earlier single-click selection
+        _click_row(probe, "Bash ls", double=True)
         time.sleep(.15)
         assert not probe.read_actions()
-        assert b"UNIQUE LOCAL RESULT" in probe.output
+        assert "command" not in screen_text()
+        # ...and again open it. The tool's own result stays folded until the output label opens it.
+        time.sleep(.35)
+        _click_row(probe, "Bash ls", double=True)
+        time.sleep(.15)
+        assert not probe.read_actions()
+        assert "command" in screen_text()
+        assert "UNIQUE LOCAL RESULT" not in screen_text()
+        time.sleep(.35)
+        _click_row(probe, "Result:", double=True)
+        time.sleep(.15)
+        assert not probe.read_actions()
+        assert "UNIQUE LOCAL RESULT" in screen_text(), screen_text()
         # The keyboard `i` inspector is still a Python operation.
         probe.keys(b"i")
         time.sleep(.15)
@@ -346,14 +390,18 @@ def test_hover_copy_buttons_on_user_cards_and_code_fences():
         time.sleep(.1)
         assert b"Copy" not in probe.output  # hidden until the pointer is over a block
         mark = len(probe.output)
-        probe.keys(b"\x1b[<35;100;5M")  # pointer over the card body
+        row = _screen_row(probe, "COPY ME")
+        probe.keys(f"\x1b[<35;100;{row}M".encode())  # pointer over the card body
         time.sleep(.1)
         assert b"Copy" in probe.output[mark:]
-        probe.keys(b"\x1b[<0;138;4M\x1b[<0;138;4m")  # the card's button, top-right
+        _click_row(probe, "Copy", x=_copy_column(probe))  # the card's button, top-right
         time.sleep(.1)
         copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
         assert [a["text"] for a in copied] == ["COPY ME\nsecond"]
-        probe.keys(b"\x1b[<0;136;11M\x1b[<0;136;11m")  # the fence header's button
+        row = _screen_row(probe, "rust")
+        probe.keys(f"\x1b[<35;100;{row}M".encode())
+        time.sleep(.1)
+        _click_row(probe, "Copy", x=_copy_column(probe))  # the fence header's button
         time.sleep(.1)
         copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
         assert [a["text"] for a in copied] == ["let x = 1;"]
@@ -450,7 +498,7 @@ def test_settings_native_focus_reorder_and_loading_guard():
         os.write(master, b"\x1b")  # the root list: Escape closes Settings
         assert action()["type"] == "dismiss"
     finally:
-        process.terminate(); process.wait(timeout=3)
+        kill_group(process)
         stop.set(); thread.join(timeout=1)
         process.stdin.close(); process.stdout.close()
         os.close(master); os.close(slave)

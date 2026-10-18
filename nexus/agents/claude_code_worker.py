@@ -1,6 +1,6 @@
 """External Claude Code worker: one interactive session per delegated assignment.
 
-Contract (plans/in-progress/CLAUDE_CODE_ZMX_PLAN.md sections 3-5):
+Contract (plans/done/CLAUDE_CODE_ZMX_PLAN.md sections 3-5):
 
 * Claude Code runs its OWN agent loop and its OWN tools inside a Nexus-owned
   PTY, with cwd set to the assigned workspace/worktree. Nexus does not translate

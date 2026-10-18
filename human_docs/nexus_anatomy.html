@@ -537,7 +537,7 @@
   margin-bottom: 8px;
 }
 
-/* Flowchart Cards */
+/* Flowchart & Diagram Cards */
 .nx-flow-card {
   background: var(--anatomy-card);
   border: 1px solid var(--anatomy-lo);
@@ -554,50 +554,72 @@
 .nx-flow-card h3 {
   font-size: 18px;
   color: var(--anatomy-strong);
+  margin: 0 0 8px 0;
+}
+.nx-flow-card p {
+  font-size: 13px;
+  color: var(--anatomy-text);
   margin: 0 0 16px 0;
 }
-.nx-flow-diagram {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+.nx-diagram-canvas {
+  position: relative;
   background: var(--anatomy-face);
   border: 1px solid var(--anatomy-faint);
   border-radius: 6px;
-  padding: 18px;
+  padding: 20px;
+  min-height: 180px;
+  box-sizing: border-box;
+  overflow: hidden;
+  --pele-bg: var(--anatomy-card);
+  --pele-fg: var(--anatomy-strong);
+  --pele-muted: var(--anatomy-muted);
+  --pele-line: var(--anatomy-mid);
+  --pele-surface: var(--anatomy-card);
+  --pele-surface-alt: var(--anatomy-shade-2);
+  --pele-border: var(--anatomy-lo);
+  --pele-accent: var(--anatomy-lit);
+  --pele-radius: 6px;
+  --pele-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --pele-font-mono: var(--anatomy-mono);
+  --pele-error: var(--anatomy-red);
+  --pele-zoom-top: 12px;
+  --pele-zoom-right: 12px;
 }
-.nx-flow-step {
-  background: var(--anatomy-card);
-  border: 1px solid var(--anatomy-lo);
-  border-radius: 6px;
-  padding: 14px 16px;
-  min-width: 140px;
-  flex: 1;
-}
-.nx-step-idx {
-  font-family: var(--anatomy-mono);
-  font-size: 10px;
-  color: var(--anatomy-mid);
-  display: block;
-  margin-bottom: 4px;
-}
-.nx-flow-step strong {
-  display: block;
-  font-size: 13px;
-  color: var(--anatomy-strong);
-  margin-bottom: 4px;
-}
-.nx-flow-step p {
-  font-size: 11px;
-  color: var(--anatomy-text);
+pre.mermaid {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 160px;
+  width: 100%;
   margin: 0;
-  line-height: 1.4;
-}
-.nx-flow-arrow {
+  padding: 8px;
+  box-sizing: border-box;
+  background: transparent;
+  color: var(--anatomy-strong);
   font-family: var(--anatomy-mono);
-  font-size: 11px;
-  color: var(--anatomy-mid);
-  white-space: nowrap;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow: hidden;
+}
+svg.pele {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.pele-zoom {
+  --_bg: var(--anatomy-face) !important;
+  --_fg: var(--anatomy-strong) !important;
+  --_b: var(--anatomy-lo) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.pele-zoom button {
+  transition: all .15s ease;
+}
+.pele-zoom button:hover:not([disabled]) {
+  background: var(--anatomy-shade-3) !important;
+  color: var(--anatomy-lit) !important;
 }
 
 .nx-grid {
@@ -727,6 +749,15 @@
 }
 
   </style>
+  <script charset="utf-8" src="./pele.global.js"></script>
+  <script>
+    if (typeof pele === "undefined") {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js";
+      s.charset = "utf-8";
+      document.head.appendChild(s);
+    }
+  </script>
 </head>
 <body class="iso" data-theme="dark">
   <main class="iso-page">
@@ -1000,6 +1031,58 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
         </ol>
       </div>
     </div>
+
+    <!-- Formal State Machine Diagrams rendered via Pele -->
+    <div class="nx-flow-card" style="margin-top: 24px;">
+      <div class="nx-flow-badge">STATE MACHINE 2.1 · CONVERSATION VIEW FSM</div>
+      <h3>Session-Level Lifecycle State Machine</h3>
+      <p>Reduced by <code>nexus/view/reduce.py</code> into immutable <code>ConversationView</code> states across multiple turn leases.</p>
+      <div class="nx-diagram-canvas">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> idle: session.created
+    idle --> running: start_turn (input consumed)
+    running --> awaiting_permission: permission.requested (sensitive tool)
+    awaiting_permission --> running: permission.resolved (approved/denied)
+    running --> idle: turn.completed / turn.failed / turn.cancelled
+    idle --> awaiting_input: queue.input
+    awaiting_input --> running: start_turn (dequeued)
+    idle --> closed: session.closed
+    running --> closed: session.closed
+    closed --> [*]
+        </pre>
+      </div>
+    </div>
+
+    <div class="nx-flow-card" style="margin-top: 24px;">
+      <div class="nx-flow-badge">STATE MACHINE 2.2 · TURN EXECUTION FSM</div>
+      <h3>TurnState Iteration Machine</h3>
+      <p>Governs step-by-step iteration in <code>nexus/core/turn.py</code> with strict transition invariants and terminal freeze.</p>
+      <div class="nx-diagram-canvas">
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> new: TurnState.create()
+    
+    new --> awaiting_model: begin_iteration(0)
+    new --> failed: setup error
+    new --> cancelled: cancel token tripped
+    
+    awaiting_model --> awaiting_tools: model streams tool_use calls
+    awaiting_model --> completed: model emits end_turn (no tools)
+    awaiting_model --> failed: provider exception / overload timeout
+    awaiting_model --> cancelled: cancel token tripped
+    
+    awaiting_tools --> awaiting_model: begin_iteration(N+1) [results persisted]
+    awaiting_tools --> completed: limits exceeded (budget / max_iterations)
+    awaiting_tools --> failed: unrecoverable tool dispatch failure
+    awaiting_tools --> cancelled: cancel token tripped
+    
+    completed --> [*]: Terminal (Lease Released)
+    failed --> [*]: Terminal (Lease Released)
+    cancelled --> [*]: Terminal (Lease Released)
+        </pre>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -1130,161 +1213,151 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
   <div class="nx-section-header">
     <span class="nx-sec-num">05</span>
     <h2>Detailed End-to-End Execution Flowcharts</h2>
-    <p>Follow the exact lifecycle of an instruction through all subsystems, from user keystroke to terminal render.</p>
+    <p>Follow the exact lifecycle of an instruction through all subsystems, from user keystroke to terminal render. Rendered dynamically as theme-adaptive vector SVGs with interactive pan/zoom via Pele.</p>
   </div>
 
-  <!-- Flowchart 1: Request Ingress & Supervision -->
+  <!-- Flowchart 5.1: Request Ingress & Supervision -->
   <div class="nx-flow-card">
-    <div class="nx-flow-badge">FLOWCHART 1 · INGRESS & SUPERVISION</div>
+    <div class="nx-flow-badge">FLOWCHART 5.1 · INGRESS & HOST SUPERVISION</div>
     <h3>Client Ingress to Turn Enqueue</h3>
-    <div class="nx-flow-diagram">
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">1.1</span>
-        <strong>Client Keystroke</strong>
-        <p>User submits prompt in <code>nexus chat</code> (Ratatui TUI) or <code>nexus desktop</code> (GPUI).</p>
-      </div>
-      <div class="nx-flow-arrow">── UDS Socket ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">1.2</span>
-        <strong>Host Daemon Transport</strong>
-        <p><code>nexus/host/daemon.py</code> receives <code>start_turn</code> command over Unix Domain Socket.</p>
-      </div>
-      <div class="nx-flow-arrow">── HostFacade ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">1.3</span>
-        <strong>Supervisor FIFO Queue</strong>
-        <p>Checks global turn cap. Enqueues turn in session FIFO. Blocks overlapping turns.</p>
-      </div>
-      <div class="nx-flow-arrow">── Turn Lease ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">1.4</span>
-        <strong>Loop Invocation</strong>
-        <p>Acquires lease and calls <code>core/loop.py:run_turn</code> with protocol adapters.</p>
-      </div>
+    <p>Traces command delivery from client keystroke across loopback Unix Domain Sockets into host daemon supervisor queues.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["User Keystroke in nexus chat / desktop"] --> B["Unix Domain Socket (~/.nexus/nexus.sock)"]
+    B --> C["nexus/host/daemon.py (Loopback Listener)"]
+    C --> D["nexus/host/facade.py: HostFacade"]
+    D --> E{"Supervisor: Global Turn Cap Exceeded?"}
+    E -- Yes --> F["Wait in Per-Session FIFO Queue"]
+    E -- No --> G["Grant Single Turn Lease to Session"]
+    G --> H["core/loop.py: run_turn(session, protocols)"]
+      </pre>
     </div>
   </div>
 
-  <!-- Flowchart 2: The Core Loop Iteration Engine -->
+  <!-- Flowchart 5.2: The Core Loop Iteration Engine -->
   <div class="nx-flow-card" style="margin-top: 24px;">
-    <div class="nx-flow-badge">FLOWCHART 2 · THE CORE LOOP</div>
+    <div class="nx-flow-badge">FLOWCHART 5.2 · THE CORE LOOP</div>
     <h3>run_turn Step-by-Step Iteration Cycle</h3>
-    <div class="nx-flow-diagram">
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">2.1</span>
-        <strong>Pin Manifest</strong>
-        <p>Locks single extension generation for iteration $N$.</p>
-      </div>
-      <div class="nx-flow-arrow">──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">2.2</span>
-        <strong>Assemble Context</strong>
-        <p>Builds prompt IR, calculates token budget.</p>
-      </div>
-      <div class="nx-flow-arrow">──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">2.3</span>
-        <strong>Stream Provider</strong>
-        <p>Receives tokens & tool calls from model head.</p>
-      </div>
-      <div class="nx-flow-arrow">──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">2.4</span>
-        <strong>Persist Assistant</strong>
-        <p>Writes assistant message to SQLite <em>first</em>.</p>
-      </div>
-      <div class="nx-flow-arrow">──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">2.5</span>
-        <strong>Gate & Dispatch</strong>
-        <p>Evaluates batch permissions, runs tools.</p>
-      </div>
+    <p>The core execution heartbeat: manifest pinning, context assembly, provider streaming, durable message persistence, batch gating, and tool dispatch.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["Begin Iteration N"] --> B["Pin Extension Manifest Generation"]
+    B --> C["Assemble Request Context (PreCompact Gate)"]
+    C --> D["Resolve Model via ModelRouter"]
+    D --> E["Stream Provider (Collect Text & Tool Calls)"]
+    E --> F["DURABLE FIRST: Persist Assistant Message to SQLite"]
+    F --> G{"Any Tool Calls Requested?"}
+    G -- No --> H{"Steering Messages Present?"}
+    H -- Yes --> A
+    H -- No --> I["Complete Turn (stop_reason: end_turn)"]
+    G -- Yes --> J["Evaluate Batch Permissions (PathGuard & Auto-Approve)"]
+    J --> K{"All Tools Approved?"}
+    K -- No / Ask --> L["Halt in awaiting_permission (User Prompt in UI)"]
+    L --> K
+    K -- Approved --> M["Dispatch Approved Tools (Concurrency Planner)"]
+    M --> N["DURABLE: Persist ToolResult Blocks in Call Order"]
+    N --> O["Release Manifest Pin & Advance Loop Iteration N+1"]
+    O --> A
+      </pre>
     </div>
   </div>
 
-  <!-- Flowchart 3: Context Assembly & Budgeting -->
+  <!-- Flowchart 5.3: Context Assembly & Budgeting -->
   <div class="nx-flow-card" style="margin-top: 24px;">
-    <div class="nx-flow-badge">FLOWCHART 3 · CONTEXT ASSEMBLY</div>
+    <div class="nx-flow-badge">FLOWCHART 5.3 · CONTEXT ASSEMBLY</div>
     <h3>Budget Priority Cascade & Compaction</h3>
-    <div class="nx-flow-diagram">
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">3.1 Priority 0 (Mandatory)</span>
-        <strong>Identity, Soul, Tools, User Prompt</strong>
-        <p>Never dropped or truncated. Defines core persona and current request.</p>
-      </div>
-      <div class="nx-flow-arrow">── If Budget Allows ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">3.2 Priority 1 (High)</span>
-        <strong>Environment, AGENTS.md, Skills Index</strong>
-        <p>Git branch, workspace rules, and skill descriptions.</p>
-      </div>
-      <div class="nx-flow-arrow">── If Budget Allows ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">3.3 Priority 2 & 3</span>
-        <strong>MCP Index & History Suffix</strong>
-        <p>History compacts itself (sliding window) to fit remaining budget.</p>
-      </div>
+    <p>Strict deterministic priority hierarchy ensuring identity and tools never drop while history compacts within window limits.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["Trigger Context Assembly"] --> B["Priority 0 (Mandatory): identity, soul, tools, user prompt"]
+    B --> C{"Remaining Token Budget > 0?"}
+    C -- Yes --> D["Priority 1: environment (git, platform), AGENTS.md, skills index, memory"]
+    C -- No --> E["Halt Context Assembly (Priority 0 fits)"]
+    D --> F{"Remaining Token Budget > 0?"}
+    F -- Yes --> G["Priority 2: mcp_index (bounded), attachments"]
+    F -- No --> E
+    G --> H{"Remaining Token Budget > 0?"}
+    H -- Yes --> I["Priority 3: history (Contiguous Suffix with Sliding Compaction)"]
+    H -- No --> E
+    I --> J["Calculate Semantic Cache Breakline (CacheBoundary)"]
+    J --> K["Emit context.assembled Event"]
+      </pre>
     </div>
   </div>
 
-  <!-- Flowchart 4: Gating & Tool Execution -->
+  <!-- Flowchart 5.4: Multi-Model Streaming & Capability Degradation -->
   <div class="nx-flow-card" style="margin-top: 24px;">
-    <div class="nx-flow-badge">FLOWCHART 4 · SECURITY & TOOL EXECUTION</div>
+    <div class="nx-flow-badge">FLOWCHART 5.4 · PROVIDER STREAMING</div>
+    <h3>Multi-Model Streaming & Capability Degradation</h3>
+    <p>Capability inspection, graceful degradation policies, chunk parsing, delta accumulator stitching, and exponential backoff retry.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["Request Dispatched to Provider Adapter"] --> B["Check Adapter Capabilities (tools, vision, reasoning)"]
+    B --> C{"Capability Mismatch?"}
+    C -- Yes --> D["Apply Degradation Policy (drop / to_text / error)"]
+    C -- No --> E["Open HTTP/SSE Stream via HTTPTransport"]
+    D --> E
+    E --> F["Stream StreamEvents (TextDelta, ThinkingDelta, ToolCallDelta)"]
+    F --> G["ToolCallAccumulator Stitches Partial JSON Fragments"]
+    G --> H["Opaque Thinking Signatures Captured for Multi-Turn Replay"]
+    H --> I{"Provider Overloaded / 5xx?"}
+    I -- Yes --> J["Cooperative Jittered Retry (2s, 4s, 8s backoff)"]
+    J --> E
+    I -- No --> K["Emit model.stopped Event with Usage Metrics"]
+      </pre>
+    </div>
+  </div>
+
+  <!-- Flowchart 5.5: Gating & Tool Execution -->
+  <div class="nx-flow-card" style="margin-top: 24px;">
+    <div class="nx-flow-badge">FLOWCHART 5.5 · SECURITY & TOOL EXECUTION</div>
     <h3>Batch Permission Gating & Concurrency Planning</h3>
-    <div class="nx-flow-diagram">
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">4.1</span>
-        <strong>Batch Inspection</strong>
-        <p><code>PathGuard</code> checks path containment inside workspace boundary.</p>
-      </div>
-      <div class="nx-flow-arrow">── Needs Approval? ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">4.2</span>
-        <strong>Approval Barrier</strong>
-        <p>If unapproved, trips <code>awaiting_permission</code>. User confirms in UI.</p>
-      </div>
-      <div class="nx-flow-arrow">── Approved ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">4.3</span>
-        <strong>Concurrency Planner</strong>
-        <p>Runs <code>parallel</code> tools concurrently; runs <code>exclusive</code> tools alone.</p>
-      </div>
-      <div class="nx-flow-arrow">── Subprocess ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">4.4</span>
-        <strong>Sandboxed Execution</strong>
-        <p>Executes tool, captures output into <code>ToolExecutionResult</code>.</p>
-      </div>
+    <p>Two-tier security gating: path containment verification, atomic batch approvals, and parallel vs exclusive subprocess execution.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["Batch of Tool Calls from Assistant Message"] --> B["PreToolUse Hooks Evaluated"]
+    B --> C["PathGuard Validates Absolute Path Containment"]
+    C --> D{"Path Escapes Workspace Boundary?"}
+    D -- Yes --> E["Hard Deny (Violation Recorded in ToolResult)"]
+    D -- No --> F{"Matches Auto-Approve Prefix / Rule?"}
+    F -- Yes --> G["Mark Call as Auto-Approved"]
+    F -- No --> H["Request Human Approval (ApprovalBroker)"]
+    H --> I{"User Approves via Surface UI?"}
+    I -- No --> J["Deny Batch Atomically (All Calls Cancelled)"]
+    I -- Yes --> K["Mark Call as Approved"]
+    G --> L["Concurrency Planner: Group Parallel vs Exclusive Tools"]
+    K --> L
+    L --> M["Run read-only tools concurrently; Run mutating tools exclusively"]
+    M --> N["Subprocess Sandbox (Process Group SIGTERM/SIGKILL handles)"]
+    N --> O["Capture Output into ToolExecutionResult (max 25k tokens capped)"]
+      </pre>
     </div>
   </div>
 
-  <!-- Flowchart 5: Durable Reduction & Surface Projection -->
+  <!-- Flowchart 5.6: Durable Storage & Pure View Reduction Pipeline -->
   <div class="nx-flow-card" style="margin-top: 24px;">
-    <div class="nx-flow-badge">FLOWCHART 5 · DURABILITY & REDUCTION</div>
+    <div class="nx-flow-badge">FLOWCHART 5.6 · DURABILITY & REDUCTION</div>
     <h3>SQLite Persistence to Client Projection</h3>
-    <div class="nx-flow-diagram">
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">5.1</span>
-        <strong>Event Stamped</strong>
-        <p><code>Event(type, data, seq)</code> stamped with monotonic counter.</p>
-      </div>
-      <div class="nx-flow-arrow">── BEGIN IMMEDIATE ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">5.2</span>
-        <strong>SQLite WAL Write</strong>
-        <p>Committed race-free to <code>records</code> table in <code>~/.nexus/nexus.db</code>.</p>
-      </div>
-      <div class="nx-flow-arrow">── Pure Reduction ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">5.3</span>
-        <strong>view/reduce.py</strong>
-        <p>Folds event into immutable <code>ConversationView</code> state model.</p>
-      </div>
-      <div class="nx-flow-arrow">── Delta Projection ──►</div>
-      <div class="nx-flow-step">
-        <span class="nx-step-idx">5.4</span>
-        <strong>Surface Rendering</strong>
-        <p>Ratatui TUI receives schema-3 deltas; GPUI receives snapshots.</p>
-      </div>
+    <p>The monotonic event sequence spine: WAL persistence, pure reducer fold, and zero-drift presentation projection to all 4 surfaces.</p>
+    <div class="nx-diagram-canvas">
+      <pre class="mermaid">
+flowchart TD
+    A["Event Generated in Core Loop"] --> B["Stamped with Monotonic seq Counter"]
+    B --> C["SQLite Transaction: BEGIN IMMEDIATE in ~/.nexus/nexus.db"]
+    C --> D["Write to records table (kind, ts, msgspec body)"]
+    D --> E["Update completion_seq & last_seq in sessions table"]
+    E --> F["Commit SQLite WAL Log (synchronous=FULL)"]
+    F --> G["Pass Event into pure view/reduce.py: apply(view, event)"]
+    G --> H["Produce New Immutable ConversationView"]
+    H --> I["Schema-3 Section Delta & Transcript Suffix Projected to Ratatui TUI"]
+    H --> J["Owned Presentation Snapshot Projected to GPUI Desktop"]
+    H --> K["JSONL Stream Emitted to nexus run CLI"]
+      </pre>
     </div>
   </div>
 </section>
@@ -1409,6 +1482,12 @@ const P = {"origin":[340,210.41762832985097],"scale":1.5934023502413925,"azimuth
 const DIAL = [68,-58];
 const DIAL_R = 18, DIAL_TOP = 80;
 
+const az = (P.azimuth ?? 45) * Math.PI / 180;
+const el = (P.elevation ?? 30) * Math.PI / 180;
+const sinA = Math.sin(az), cosA = Math.cos(az);
+const sinE = Math.sin(el), cosE = Math.cos(el);
+const kScale = P.scale ?? 1;
+
 const STAGES = [
   {
     name: "IDLE",
@@ -1511,10 +1590,10 @@ function renderNeedle(ratio) {
   const x2 = dx + Math.sin(angle) * tipR;
   const y2 = dy - Math.cos(angle) * tipR;
   
-  const p1x = P.origin[0] + (x1 * P.sinA - y1 * P.cosA) * P.k;
-  const p1y = P.origin[1] + ((x1 * P.cosA + y1 * P.sinA) * P.sinE - (DIAL_TOP + 0.3) * P.cosE) * P.k;
-  const p2x = P.origin[0] + (x2 * P.sinA - y2 * P.cosA) * P.k;
-  const p2y = P.origin[1] + ((x2 * P.cosA + y2 * P.sinA) * P.sinE - (DIAL_TOP + 0.3) * P.cosE) * P.k;
+  const p1x = P.origin[0] + (x1 * sinA - y1 * cosA) * kScale;
+  const p1y = P.origin[1] + ((x1 * cosA + y1 * sinA) * sinE - (DIAL_TOP + 0.3) * cosE) * kScale;
+  const p2x = P.origin[0] + (x2 * sinA - y2 * cosA) * kScale;
+  const p2y = P.origin[1] + ((x2 * cosA + y2 * sinA) * sinE - (DIAL_TOP + 0.3) * cosE) * kScale;
   
   if (needleEl) {
     needleEl.setAttribute("d", "M" + p1x.toFixed(1) + " " + p1y.toFixed(1) + "L" + p2x.toFixed(1) + " " + p2y.toFixed(1));
@@ -1539,8 +1618,8 @@ function updateState(idx) {
   
   // Carriage position
   const dy = cur.stroke;
-  const sx = -dy * P.cosA * P.k;
-  const sy = dy * P.sinA * P.sinE * P.k;
+  const sx = -dy * cosA * kScale;
+  const sy = dy * sinA * sinE * kScale;
   if (carriageEl) {
     carriageEl.setAttribute("transform", "translate(" + sx.toFixed(1) + " " + sy.toFixed(1) + ")");
   }
@@ -1649,6 +1728,45 @@ document.querySelector(".iso-plate")?.addEventListener("click", (e) => {
 });
 
 updateState(0);
+
+// Initialize Pele Mermaid diagram rendering with automatic zoom and responsive container adaptation
+function initPeleDiagrams() {
+  if (typeof pele === "undefined") {
+    setTimeout(initPeleDiagrams, 80);
+    return;
+  }
+  const mounted = [];
+  document.querySelectorAll("pre.mermaid").forEach((el) => {
+    const raw = el.textContent.trim();
+    try {
+      const diagram = pele.mount(el, raw, {
+        zoom: "auto",
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontFamilyMono: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+        fontSize: 13,
+        autoDirection: true,
+        directionBreakpoint: 640,
+        onError: (err) => {
+          console.error("Pele diagram error:", err);
+        }
+      });
+      mounted.push(diagram);
+    } catch (err) {
+      if (typeof pele.PeleError !== "undefined" && err instanceof pele.PeleError) {
+        el.textContent = "[Pele Error: " + err.code + "] " + err.message + "\n\n" + (err.snippet || "");
+      } else {
+        el.textContent = "Diagram error: " + err.message;
+      }
+    }
+  });
+  window.nexusDiagrams = mounted;
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initPeleDiagrams);
+} else {
+  initPeleDiagrams();
+}
 
   </script>
 </body>

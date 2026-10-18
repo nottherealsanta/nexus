@@ -24,7 +24,7 @@ class TerminalWire:
             if key in excluded:
                 continue
             prior = self.previous.get(key)
-            if reset or value != prior or key in {"restore", "insert"} and value:
+            if reset or value != prior or key in {"restore", "restore_if_empty", "restore_attachments", "restore_note", "insert"} and value:
                 if key == "history" and not reset and prior is not None and value[:len(prior)] == prior:
                     wire["history_append"] = value[len(prior):]
                 else:

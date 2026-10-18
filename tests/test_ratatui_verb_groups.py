@@ -97,24 +97,84 @@ def test_label_is_past_when_finished_and_present_while_running(tmp_path, monkeyp
     done = _group(tmp_path, monkeypatch, [_tool("c", name, 2, input=args)])
     assert done["text"] == past and done["running_label"] == "" and done["status"] == "completed"
     live = _group(tmp_path, monkeypatch, [_tool("c", name, 2, status="running", input=args)], phase="active")
-    assert live["status"] == "running" and live["running_label"] == present
+    assert live["status"] == "running" and live["running_label"] == "Working"
     assert live["text"] == past, "text is the stable past-tense label"
 
 
-def test_label_joins_categories_with_commas_and_present_tense_is_per_category(tmp_path, monkeypatch):
+def test_label_joins_categories_with_commas_and_a_running_group_says_working(tmp_path, monkeypatch):
     tools = [_tool("a", "bash", 2, input={"command": "ls"}), _tool("b", "bash", 3, input={"command": "pwd"}),
              _tool("c", "read", 4, status="running", input={"path": "x"})]
     thought = _thought("th", 5, ms=1200)
     group = _group(tmp_path, monkeypatch, tools, [thought], phase="active")
     assert group["text"] == "Ran 2 commands, Read 1 file"
-    assert group["running_label"] == "Ran 2 commands, Reading 1 file"
+    assert group["running_label"] == "Working"
+
+
+def _reads(count, **kwargs):
+    return [_tool(f"r{i}", "read", 2 + i, input={"path": f"f{i}"}, **kwargs) for i in range(count)]
+
+
+def test_label_drops_nouns_above_five_members_and_keeps_them_at_five(tmp_path, monkeypatch):
+    five = _reads(3) + [_tool("g1", "grep", 20, input={"pattern": "x"}), _tool("b1", "bash", 21, input={"command": "ls"})]
+    assert _group(tmp_path, monkeypatch, five)["text"] == "Read 3 files, Searched 1 pattern, Ran 1 command"
+    six = _reads(4) + [_tool("g1", "grep", 20, input={"pattern": "x"}), _tool("g2", "glob", 21, input={"pattern": "*"}),
+                       _tool("b1", "bash", 22, input={"command": "ls"})]
+    assert _group(tmp_path, monkeypatch, six)["text"] == "Read 4, Searched 2, Ran 1"
+
+
+def test_change_tools_never_share_a_run_with_other_tools(tmp_path, monkeypatch):
+    tools = [_tool("r1", "read", 2, input={"path": "a"}), _tool("e1", "edit", 3, input={"path": "a"}),
+             _tool("e2", "write", 4, input={"path": "b", "content": "x"}), _tool("e3", "apply_patch", 5, input={}),
+             _tool("g1", "grep", 6, input={"pattern": "x"}), _tool("e4", "edit", 7, input={"path": "c"}),
+             _tool("b1", "bash", 8, input={"command": "ls"})]
+    blocks = _snapshot(tmp_path, monkeypatch, _turn(tools), verbose=True)["blocks"]
+    assert _shape(blocks) == [
+        ("tool_group", "t:activity:r1", 1, ["r1"]),
+        ("tool_group", "t:activity:e1", 3, ["e1", "e2", "e3"]),
+        ("tool_group", "t:activity:g1", 1, ["g1"]),
+        ("change", "e4", None, []),
+        ("tool_group", "t:activity:b1", 1, ["b1"]),
+    ]
+    changes = blocks[2]
+    assert changes["text"] == "Edited 1 file, Wrote 1 file, Applied 1 patch"
+    assert all(m["kind"] == "tool" and "_member" not in m for m in changes["members"])
+    assert not any("_member" in b for b in blocks)
+
+
+def test_a_thought_ends_a_change_run(tmp_path, monkeypatch):
+    tools = [_tool("e1", "edit", 2, input={"path": "a"}), _tool("e2", "edit", 4, input={"path": "b"})]
+    blocks = _snapshot(tmp_path, monkeypatch, _turn(tools, [_thought("th", 3)]))["blocks"]
+    assert [b["kind"] for b in blocks if b["kind"] in {"change", "thought", "tool_group"}] == ["change", "thought", "change"]
+
+
+def test_running_group_sends_the_last_five_members_and_hidden(tmp_path, monkeypatch):
+    tools = _reads(6)
+    tools[-1] = replace(tools[-1], status="running")
+    group = _group(tmp_path, monkeypatch, tools, phase="active")
+    assert [m["id"] for m in group["members"]] == ["r1", "r2", "r3", "r4", "r5"]
+    assert group["hidden"] == 1 and group["count"] == 6 and group["collapsed"]
+    done = _group(tmp_path, monkeypatch, _reads(6))
+    assert done["members"] == [] and done["hidden"] == 0
+    opened = _group(tmp_path, monkeypatch, tools, phase="active", expanded={"t:activity:r0"})
+    assert len(opened["members"]) == 6 and opened["hidden"] == 0
+
+
+def test_streaming_flag_marks_only_an_unfinished_assistant_text(tmp_path, monkeypatch):
+    live = MessageView(id="a", role="assistant", event_seq=2, blocks=[BlockView(text="Hel")])
+    blocks = _snapshot(tmp_path, monkeypatch, _turn([], [live], phase="active"))["blocks"]
+    assert next(b for b in blocks if b["kind"] == "markdown")["streaming"] is True
+    finished = replace(live, done=True)
+    blocks = _snapshot(tmp_path, monkeypatch, _turn([], [finished], phase="active"))["blocks"]
+    assert "streaming" not in next(b for b in blocks if b["kind"] == "markdown")
+    blocks = _snapshot(tmp_path, monkeypatch, _turn([], [live]))["blocks"]
+    assert "streaming" not in next(b for b in blocks if b["kind"] == "markdown")
 
 def test_member_summaries_are_concise_first_line_with_an_ellipsis(tmp_path, monkeypatch):
     tools = [_tool("a", "bash", 2, input={"command": "cd src\nmake all\nmake test"}),
              _tool("b", "read", 3, input={"path": "a.py", "offset": 10, "limit": 20})]
     from nexus.ui_support.timeline import tool_heading
     assert tool_heading(tools[0]) == "$ cd src…"
-    assert tool_heading(tools[1]).endswith("a.py  (offset=10, limit=20)")
+    assert tool_heading(tools[1]).endswith("a.py (offset=10, limit=20)")
     assert tool_heading(_tool("c", "bash", 4, input={"command": "ls"})) == "$ ls"
 
 

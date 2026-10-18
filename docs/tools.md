@@ -106,6 +106,11 @@ Evaluation is first-match in a fixed order: **`deny` → session grants → `all
   `fail_turn`. `PermissionEngine.require_confirmation_for(tools)` forces asks.
 - Child agents inherit the parent's snapshot and grants and never widen them
   ([agents.md](agents.md)).
+- What the native prompt shows: `Allow <tool> <target>?`, how long it has waited, **What
+  happens** (only what the request carries: its targets with their role and reason, else
+  its preview), **Why it asked** (the rule that would be saved) and the decisions as
+  neutral key chips ([ratatui-parity.md](ratatui-parity.md)). No tool supplies a richer
+  preview (commit lists, diffs) today: not verified for every tool.
 
 ## Bundles and profiles (`bundles.py`)
 

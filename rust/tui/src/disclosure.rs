@@ -285,9 +285,17 @@ impl Disclosure {
             }
             _ => {}
         }
-        if (open || preview) && source.kind != "user" {
-            let start = if preview {
+        // A running group folded by the user still shows its newest members as a tree.
+        let tree = source.kind == "tool_group" && source.status == "running" && !open && !preview;
+        let mut start = 0;
+        if (open || preview || tree) && source.kind != "user" {
+            start = if preview {
                 source.members.len().saturating_sub(source.preview_limit)
+            } else if tree {
+                source
+                    .members
+                    .len()
+                    .saturating_sub(crate::transcript::groups::TREE_ROWS)
             } else {
                 0
             };
@@ -300,6 +308,10 @@ impl Disclosure {
         }
         // Signal rows are the relevant-only view of a body, so `/verbose` (full detail) drops them.
         source.carry_presentation(&mut shown, open && !self.verbose);
+        if tree {
+            shown.hidden = source.hidden + start;
+            shown.rev.push_str(":tree");
+        }
         for member in &shown.members {
             shown.rev.push_str(&member.rev);
         }
@@ -559,6 +571,39 @@ mod tests {
         assert!(!ui.toggle(&wrong_id, &blocks));
         assert!(!ui.toggle(&wrong_kind, &blocks));
     }
+    #[test]
+    fn a_running_folded_group_keeps_its_newest_five_members_as_a_tree() {
+        let group = |open: bool| Content {
+            id: "g".into(),
+            kind: "tool_group".into(),
+            status: "running".into(),
+            local_ui: true,
+            local_open: open,
+            collapsed: true,
+            members: (0..7)
+                .map(|i| Content {
+                    id: format!("m{i}"),
+                    kind: "tool".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let ui = Disclosure::default();
+        let folded = ui.block(&group(false)).unwrap().into_owned();
+        assert!(folded.collapsed);
+        let ids: Vec<_> = folded.members.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["m2", "m3", "m4", "m5", "m6"]);
+        assert_eq!(folded.hidden, 2);
+        let opened = ui.block(&group(true)).unwrap().into_owned();
+        assert!(!opened.collapsed);
+        assert_eq!((opened.members.len(), opened.hidden), (7, 0));
+        // A finished group shows no tree.
+        let mut done = group(false);
+        done.status = "completed".into();
+        assert!(ui.block(&done).unwrap().members.is_empty());
+    }
+
     #[test]
     fn local_ui_projection_keeps_presentation_fields() {
         let bad = Content {

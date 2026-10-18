@@ -1,8 +1,11 @@
 """Verb groups: the quiet one-line summary of a run of tool calls and thoughts.
 
-Moved out of ``prototype._project_turn`` (plans/in-progress/GROK_BUILD_TUI_PLAN.md §4.1).
-Membership is unchanged: every tool and thought joins the activity run except
-``task``/``subagent`` rows and standalone ``change`` blocks, and visible replies end a run.
+Moved out of ``prototype._project_turn`` (plans/done/GROK_BUILD_TUI_PLAN.md §4.1).
+Membership (DESIGN OVERHAUL step 5): every tool and thought joins the activity run except
+``task``/``subagent`` rows; visible replies end a run. File-change tools (``CHANGE_TOOLS``)
+never share a run with other tools: consecutive changes form their own group, and a single
+change keeps its standalone ``change`` row. A running group sends its newest members
+(``TREE_ROWS``, plus ``hidden``) even when folded.
 Vocabulary follows Grok Build's verb groups (``xai-grok-pager`` ``verb_group.rs``),
 reimplemented here. The projection holds no clock: every figure derives from durable
 event timestamps, so replay produces the same blocks.
@@ -31,6 +34,15 @@ CATEGORIES = {
 }
 THOUGHT = ("Thought", "Thinking", "time", "times")
 
+#: File-change tools: they group only with each other, never inside a read/run group.
+CHANGE_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch", "notebook_edit"})
+#: Above this many members the label drops its nouns (``Read 4, Searched 2``).
+COMPACT_AFTER = 5
+#: Members shown under a folded, running group (the rest is announced as ``hidden``).
+TREE_ROWS = 5
+#: The literal header of a running group.
+WORKING = "Working"
+
 
 def format_time(ms: int) -> str:
     """Grok's ``format_time``: ``671ms``, ``3.2s``, ``1m20s``."""
@@ -38,29 +50,46 @@ def format_time(ms: int) -> str:
         return f"{ms}ms"
     if ms < 60_000:
         return f"{ms / 1000:.1f}s"
+    if ms >= 3_600_000:
+        return f"{ms // 3_600_000}h {(ms // 60_000) % 60}m"
     return f"{ms // 60_000}m{(ms // 1000) % 60:02d}s"
 
 
 def split_runs(entries, tools_by_id):
-    """Partition sorted entries into ``("run", [entries])`` and ``("entry", entry)`` items.
+    """Partition sorted entries into ``("run" | "changes", [entries])`` and ``("entry", entry)`` items.
 
-    Diff rows ride with their tool and are skipped. A run is a maximal stretch of
-    tool and thought entries; anything else (replies, ``task`` rows, changes) ends it.
+    Diff rows ride with their tool and are skipped. A ``run`` is a maximal stretch of
+    non-change tool and thought entries. A ``changes`` run is a maximal stretch of
+    consecutive change tools (:data:`CHANGE_TOOLS`); the two never mix, since changes are
+    what a reader audits. A lone change call stays an ordinary entry (its own row).
+    Anything else (replies, ``task`` rows, questions) ends either kind.
     """
-    pending = []
+    pending, kind = [], None
+
+    def flush():
+        if kind == "changes" and len(pending) == 1:
+            yield "entry", pending[0]
+        elif pending:
+            yield kind, list(pending)
+
     for entry in entries:
         if entry[5] == "diff":
             continue
-        name = tools_by_id[entry[2]["id"]].name.casefold() if entry[5] == "tool" else ""
-        if entry[5] in {"tool", "thought"} and name not in SUBAGENT_TOOLS:
+        name = tools_by_id[entry[2]["id"]].name.casefold() if entry[5] in {"tool", "change"} else ""
+        if entry[5] == "change" and name in CHANGE_TOOLS:
+            now = "changes"
+        elif entry[5] in {"tool", "thought"} and name not in SUBAGENT_TOOLS:
+            now = "run"
+        else:
+            now = None
+        if now is not None and now == kind:
             pending.append(entry)
             continue
-        if pending:
-            yield "run", pending
-            pending = []
-        yield "entry", entry
-    if pending:
-        yield "run", pending
+        yield from flush()
+        pending, kind = ([entry], now) if now else ([], None)
+        if now is None:
+            yield "entry", entry
+    yield from flush()
 
 
 def _category(tool):
@@ -76,8 +105,16 @@ def _category(tool):
     return (title, title, "call", "calls")
 
 
-def _label(counts, running):
-    """``Ran 2 commands, Read 3 files``; a category with a running member uses its present verb."""
+def _label(counts, running, compact=False):
+    """``Ran 2 commands, Read 3 files``; a category with a running member uses its present verb.
+
+    ``compact`` drops the nouns and merges categories sharing a verb: ``Read 4, Searched 2``.
+    """
+    if compact:
+        verbs = {}
+        for (past, present, *_), count in counts.items():
+            verbs[past] = verbs.get(past, 0) + count
+        return ", ".join(f"{verb} {count}" for verb, count in verbs.items())
     return ", ".join(
         f"{present if category in running else past} {count} {one if count == 1 else many}"
         for category, count in counts.items()
@@ -105,7 +142,7 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
     rows are drawn as they are. Group identity stays ``turn.id + ":activity:" +
     first durable member id`` so streaming additions keep local disclosure.
     """
-    if not any(role == "tool" for *_, role in pending):
+    if not any(role in {"tool", "change"} for *_, role in pending):
         return list(pending)
     from ...ui_support.timeline import diff_sections
     from .transcript_data import tool_presentation
@@ -114,7 +151,9 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
     opened = bool(not local_ui and shell and (shell.verbose or group_id in shell.expanded))
     members, counts, running_categories, spans = [], {}, set(), []
     for _, _, block, _, _, role in pending:
-        member, tool = block, None
+        # A change call arrives as its standalone row; the member is its ordinary tool row.
+        member, tool = block.get("_member", block), None
+        block = member
         if role == "thought":
             category = THOUGHT
         else:
@@ -148,12 +187,19 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui):
     ends = [e for _, e in spans if e]
     started = min(starts) if starts else 0
     elapsed = max(0, max(ends) - started) if started and ends and not running else 0
-    block = {"id": group_id, "kind": "tool_group", "text": _label(counts, set()),
-        "running_label": _label(counts, running_categories) if running else "",
+    # Folded and running: the newest few members show as a tree under `Working`.
+    if opened or local_ui:
+        shown, hidden = members, 0
+    elif running:
+        shown, hidden = members[-TREE_ROWS:], max(0, len(members) - TREE_ROWS)
+    else:
+        shown, hidden = [], 0
+    block = {"id": group_id, "kind": "tool_group", "text": _label(counts, set(), len(members) > COMPACT_AFTER),
+        "running_label": WORKING if running else "",
         "status": "running" if running else "completed", "count": len(members), "collapsed": not opened,
         "failures": len(failed), "started_ms": started, "elapsed_ms": elapsed,
         "elapsed_label": format_time(elapsed) if elapsed else "",
-        "members": members if opened or local_ui else [],
+        "members": shown, "hidden": hidden,
         # A failure is never folded away: Rust draws these under the folded header.
         "failed_members": failed,
         **({"live_member": live} if live is not None else {}),
@@ -166,11 +212,13 @@ def activity_entries(entries, tools_by_id, diff_members, *, turn, shell, local_u
     """``entries`` with each activity run replaced by its group (see :func:`build_run`)."""
     grouped = []
     for kind, item in split_runs(entries, tools_by_id):
-        if kind == "run":
+        if kind in {"run", "changes"}:
             grouped.extend(build_run(item, tools_by_id, diff_members, turn=turn, shell=shell, local_ui=local_ui))
+        elif "_member" in item[2]:  # a lone change call keeps its own row
+            grouped.append((*item[:2], {k: v for k, v in item[2].items() if k != "_member"}, *item[3:]))
         else:
             grouped.append(item)
     return grouped
 
 
-__all__ = ["CATEGORIES", "activity_entries", "build_run", "format_time", "split_runs"]
+__all__ = ["CATEGORIES", "CHANGE_TOOLS", "activity_entries", "build_run", "format_time", "split_runs"]

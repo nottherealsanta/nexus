@@ -246,6 +246,7 @@ here, so add a row when you add a file.
 | `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
 | `session_archive.py` | Bounded host projections for durable session archive metadata |
+| `errors.py` | `error_text(exc)`: the redacted, one-line, never-empty reason clients show in an error toast (a `TimeoutError()` names its type); used when another project's session fails to open |
 | `session_preview.py` | Sessions dashboard text helpers: current-session message tails, the worked label and text cleaning (`message_tails`, `worked_label`, `clean_preview_text`); the dashboard preview projection was removed |
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
@@ -528,7 +529,8 @@ here, so add a row when you add a file.
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
 | `bridge.py` | Sessions dashboard projection and list polling |
-| `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted) |
+| `permission_prompt.py` | Structured permission prompt fields for the native client: `title`, `since`, `what`, `why` |
+| `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted); change tools group apart from other tools; compact labels above 5 members; `Working` and the newest-5 member window while running |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
 | `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
@@ -540,10 +542,10 @@ here, so add a row when you add a file.
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
 handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 `bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
-`render.rs` (palette, layout regions, the draw pass), `render/toasts.rs` (toasts: ingest by id, timers paused on hover, hit targets, drawn by the `rust/widgets` kit), `render/components.rs`
+`render.rs` (palette, layout regions, the draw pass), `render/toasts.rs` (toasts: ingest by id, timers paused on hover, hit targets, drawn by the `rust/widgets` kit), `render/notifications.rs` (client-side toast history of 50, the top-bar counter text and the notifications drawer), `panic_log.rs` (panic hook and bounded `~/.nexus/tui-panic.log` crash log), `splash.rs` (launch splash state machine: converging wordmark, milestone bar, flash, curtain), `render/components.rs`
 (shared button/toggle/section/selectable styles and bounded local hover state;
 composer controls are the first adopters), `render/chrome.rs` (top bar,
-tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations), `render/dialogs.rs` (dialog frames, toned
+tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations; the closed-header `total` row), `render/dialogs.rs` (dialog frames, toned
 panel text, Settings area list, prompt and logs regions, completion popup),
 `settings_page/` (one-page Settings: `model.rs` parses the host's typed page, `input.rs` focus/keys/mouse, `draw.rs` lays the blocks out and `grok.rs` draws them in the Grok row grammar, `root.rs` is the Grok-style root list with search and drill rows), `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `rust/widgets` is the shared component kit (see its crate docs). `main()` is still one long
 loop over local state; splitting it further needs a state struct and is not done.
@@ -578,7 +580,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
 | `rust/tui/src/graphics.rs` | One-shot `/dev/tty` probe choosing the `ratatui-image` protocol (Kitty, Sixel, iTerm2, half blocks) and cell size; `NEXUS_IMAGE_PROTOCOL` override |
-| `rust/tui/src/live_bar.rs` | GPT Live call bar in the composer chrome: `● Live · model · phase · mm:ss`, mic/speaker meters, Muted badge |
+| `rust/tui/src/live_bar.rs` | GPT Live pane header and captions: caps phase + its animation (connecting dots, mic-level history, orbit, speaking wave) + clock, `Mic` ring buffer, chip/word-by-word caption rows |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 | `rust/tui/src/config.rs` | Optional local UI appearance preferences (`tui.json`), including `animate_activity` |
@@ -586,9 +588,10 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
 | `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
 | `rust/tui/src/render/sessions.rs` | Compact centered, bordered Sessions page (max 72 columns, content height): time groups, one line per session (status glyph, name, last-used age), header actions |
-| `rust/tui/src/transcript/groups.rs` | Verb-group header, live tail and expanded member boxes |
+| `rust/tui/src/transcript/groups.rs` | Verb-group header (`▾ Working` while running), the running grey member tree and expanded member boxes |
+| `rust/tui/src/transcript/fold.rs` | Fold transient of a finished tool group: rows leave one per frame, then the header flash (pure over an `Instant`) |
 | `rust/tui/src/transcript/header.rs` | Context header rows, grey tones, open form and chip |
-| `rust/tui/src/transcript/look.rs` | Shared look of activity rows: glyphs, time format, live-run marker and animation recolouring |
+| `rust/tui/src/transcript/look.rs` | Shared look of activity rows: glyphs, time format, live-run marker, animation recolouring and the streaming write head |
 | `rust/tui/src/transcript/signal.rs` | Typed rows of a tool's relevant-only view (`[kind, text]` pairs) |
 | `rust/tui/src/transcript/thought.rs` | Reasoning rows: running `Thinking…` tail and finished `Thought for N` |
 | `rust/tui/src/transcript/tools.rs` | Standalone tool rows and the shared expanded body |

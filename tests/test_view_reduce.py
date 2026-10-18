@@ -145,6 +145,23 @@ def test_queued_input_before_turn_started_attaches_the_prompt():
     assert turn.messages[-1].text == "ok"
 
 
+def test_input_mode_changed_updates_mode_and_order_and_replays_identically():
+    def queued(seq, queued_id, mode="queue"):
+        return _ev(seq, "input.queued", {"queued_id": queued_id, "mode": mode, "queue_depth": seq,
+                                         "content": [{"type": "text", "text": queued_id}]})
+
+    events = [
+        queued(1, "s1", "steer"), queued(2, "q1"), queued(3, "q2"),
+        _ev(4, "input.mode_changed", {"queued_id": "q2", "mode": "steer", "order": ["s1", "q2", "q1"]}),
+        _ev(5, "input.mode_changed", {"queued_id": "q1", "mode": "interrupt", "order": ["q1", "s1", "q2"]}),
+        _ev(6, "input.mode_changed", {"queued_id": "gone", "mode": "steer", "order": ["gone"]}),
+    ]
+    view = fold(events)
+    assert [(i.queued_id, i.mode) for i in view.input_queue] == [("q1", "interrupt"), ("s1", "steer"), ("q2", "steer")]
+    # The mode change on an unknown id is ignored, and the queue ignores a missing order.
+    assert fold(events[:5]).input_queue == view.input_queue
+
+
 def test_input_consumed_before_queued_still_attaches_the_prompt():
     # A live follower attaches mid-turn, so it can observe input.consumed (the
     # turn is started from the cursor) *before* the input.queued event with the
@@ -893,3 +910,12 @@ def test_overload_retry_keeps_interrupted_text_separate_and_replays():
     assert view.turns[0].messages[0].done
     assert view.turns[0].retries[0].delay_seconds == 2
     assert fold(events[4:], fold(events[:4])).to_dict() == view.to_dict()
+
+
+@pytest.mark.parametrize('kind', ['turn.completed', 'turn.failed', 'turn.cancelled'])
+def test_terminal_timestamp_survives_replay(kind):
+    events = [_ev(1, 'turn.started', {}, turn='t', ts=100),
+              _ev(2, kind, {}, turn='t', ts=123)]
+    view = fold(events)
+    assert view.turns[0].completed_ts == 123
+    assert fold(events[1:], fold(events[:1])).to_dict() == view.to_dict()

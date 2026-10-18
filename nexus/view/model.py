@@ -87,7 +87,7 @@ def _dump(value: object) -> Any:
             } and field_value in (None, "", 0, {}, []):
                 continue
             if item.name in {
-                "user_ts", "assistant_ts", "elapsed_ms", "agent", "reasoning_effort",
+                "user_ts", "assistant_ts", "elapsed_ms", "completed_ts", "agent", "reasoning_effort",
             } and field_value is None:
                 continue
             if item.name == "ts" and isinstance(value, MessageView):
@@ -362,6 +362,7 @@ class TurnView(_View):
     usage: UsageTotals = field(default_factory=UsageTotals)
     started_ts: float | None = None
     updated_ts: float | None = None
+    completed_ts: float | None = None
     #: Frozen root-agent metadata carried by this turn's ``turn.started``.
     agent: dict[str, Any] | None = None
     #: Effort on the actual model request, captured from ``model.started``.

@@ -19,6 +19,7 @@ mod dialogs;
 // Reused by later modals (Settings): see `dialogs::dim_backdrop`.
 #[allow(unused_imports)]
 pub use dialogs::{dim_area, dim_backdrop, BACKDROP_BLEND};
+pub mod notifications;
 mod sessions;
 pub mod toasts;
 pub use chrome::*;
@@ -111,6 +112,15 @@ pub struct Indexed<T> {
     offsets: Vec<usize>,
     length: usize,
 }
+impl<T> Clone for Indexed<T> {
+    fn clone(&self) -> Self {
+        Self {
+            parts: self.parts.clone(),
+            offsets: self.offsets.clone(),
+            length: self.length,
+        }
+    }
+}
 impl<T> Default for Indexed<T> {
     fn default() -> Self {
         Self {
@@ -201,6 +211,164 @@ struct Part {
     lines: std::sync::Arc<Vec<Line<'static>>>,
     operations: std::sync::Arc<Vec<Option<serde_json::Value>>>,
 }
+/// Keyboard focus on a waiting message (by id, so it follows a reorder or promotion) and the
+/// control chip the mouse is holding down (`(id, op)`; drawn `p.muted`, `✕` in `p.error`).
+#[derive(Default)]
+pub struct QueueUi {
+    pub focus: Option<String>,
+    pub press: Option<(String, &'static str)>,
+    /// Monochrome drops every colour, so a pressed chip is also reversed (set each frame).
+    pub mono: bool,
+}
+/// `(up, down, remove)` marks of the queue controls; ASCII twins under `NEXUS_ASCII=1`.
+fn queue_marks(ascii: bool) -> (&'static str, &'static str, &'static str) {
+    if ascii {
+        ("^", "v", "x")
+    } else {
+        ("↑", "↓", "✕")
+    }
+}
+impl QueueUi {
+    /// Drops a focus or press whose message is no longer listed (ran, was removed, collapsed).
+    pub fn prune(&mut self, listed: &[String]) {
+        if self.focus.as_ref().is_some_and(|id| !listed.contains(id)) {
+            self.focus = None;
+        }
+        if self.press.as_ref().is_some_and(|(id, _)| !listed.contains(id)) {
+            self.press = None;
+        }
+    }
+}
+/// What a key does while a waiting message has keyboard focus.
+#[derive(Debug, PartialEq, Eq)]
+pub enum QueueKey {
+    /// Move focus to this message.
+    Focus(String),
+    /// Send `queue_edit`; afterwards focus `then` (`None` leaves the list).
+    Op(String, &'static str, Option<String>),
+    /// Up from the first row: hand focus to the transcript blocks (or leave).
+    Prev,
+    /// Consumed and leaves the list.
+    Leave,
+    /// Consumed, nothing to do (a disabled move, an interrupt that is already pending).
+    Stay,
+    /// Not a queue key: drop the focus and let the key do its normal job.
+    Pass,
+}
+/// Queue indices of the rows drawn above the composer, top to bottom.
+pub fn queue_listed(composer: Rect, s: &Snapshot) -> Vec<usize> {
+    if !s.agent_page.is_empty() {
+        return Vec::new();
+    }
+    above_layout(composer, s).items.into_iter().map(|(i, _)| i).collect()
+}
+/// Keys on the focused row (`listed` from [`queue_listed`]): Up/Down/Tab/j/k move; Enter or `s`
+/// promotes (queued -> steer, steer -> interrupt); Delete, Backspace or `x` removes; Alt+Up/Down
+/// reorders queued rows only; Esc leaves.
+pub fn queue_key(
+    s: &Snapshot,
+    listed: &[usize],
+    focus: &str,
+    code: crossterm::event::KeyCode,
+    mods: crossterm::event::KeyModifiers,
+) -> QueueKey {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let Some(at) = listed.iter().position(|i| s.queue_items[*i].id == focus) else {
+        return QueueKey::Pass;
+    };
+    let item = &s.queue_items[listed[at]];
+    let id_at = |pos: usize| s.queue_items[listed[pos]].id.clone();
+    let alt = mods.contains(KeyModifiers::ALT);
+    match code {
+        KeyCode::Up | KeyCode::Down if alt => {
+            let (op, ok) = if code == KeyCode::Up {
+                ("up", item.can_up)
+            } else {
+                ("down", item.can_down)
+            };
+            if !is_steering(item) && ok {
+                QueueKey::Op(item.id.clone(), op, Some(item.id.clone()))
+            } else {
+                QueueKey::Stay
+            }
+        }
+        _ if mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => QueueKey::Pass,
+        KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => {
+            if at == 0 {
+                QueueKey::Prev
+            } else {
+                QueueKey::Focus(id_at(at - 1))
+            }
+        }
+        KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => {
+            if at + 1 < listed.len() {
+                QueueKey::Focus(id_at(at + 1))
+            } else {
+                QueueKey::Leave
+            }
+        }
+        KeyCode::Home => QueueKey::Focus(id_at(0)),
+        KeyCode::End => QueueKey::Focus(id_at(listed.len() - 1)),
+        KeyCode::Enter | KeyCode::Char('s') => {
+            if item.mode == "interrupt" || item.tag == "I" {
+                QueueKey::Stay
+            } else if is_steering(item) {
+                QueueKey::Op(item.id.clone(), "interrupt", Some(item.id.clone()))
+            } else {
+                QueueKey::Op(item.id.clone(), "steer", Some(item.id.clone()))
+            }
+        }
+        KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('x') => {
+            let then = if at + 1 < listed.len() {
+                Some(id_at(at + 1))
+            } else if at > 0 {
+                Some(id_at(at - 1))
+            } else {
+                None
+            };
+            QueueKey::Op(item.id.clone(), "remove", then)
+        }
+        KeyCode::Esc => QueueKey::Leave,
+        _ => QueueKey::Pass,
+    }
+}
+/// A promoted waiting message (queued -> steer -> interrupt) flashes once: `FLASH_FRAMES` frames
+/// of the 30 Hz clock. Client-only and visual; the durable change is `input.mode_changed`.
+#[derive(Default)]
+pub struct QueueFlash {
+    seen: std::collections::HashMap<String, String>,
+    started: std::collections::HashMap<String, std::time::Instant>,
+}
+const FLASH_FRAMES: f32 = 12.0;
+const FLASH_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+impl QueueFlash {
+    /// Notes every item whose mode changed since the last call; new items never flash.
+    pub fn observe(&mut self, items: &[crate::bridge::QueueItem], now: std::time::Instant, animate: bool) {
+        for item in items {
+            if animate && self.seen.get(&item.id).is_some_and(|mode| *mode != item.mode) {
+                self.started.insert(item.id.clone(), now);
+            }
+        }
+        self.seen = items.iter().map(|i| (i.id.clone(), i.mode.clone())).collect();
+        self.started
+            .retain(|id, at| self.seen.contains_key(id) && now.duration_since(*at) < FLASH_FRAME.mul_f32(FLASH_FRAMES));
+    }
+    /// True while a flash is in flight (the frame clock must keep running).
+    pub fn live(&self, now: std::time::Instant, animate: bool) -> bool {
+        animate
+            && self
+                .started
+                .values()
+                .any(|at| now.duration_since(*at) < FLASH_FRAME.mul_f32(FLASH_FRAMES))
+    }
+    /// Remaining strength 1.0 -> 0.0 of one item's flash.
+    fn strength(&self, id: &str, now: std::time::Instant) -> f32 {
+        self.started.get(id).map_or(0.0, |at| {
+            let frames = now.duration_since(*at).as_secs_f32() / FLASH_FRAME.as_secs_f32();
+            (1.0 - frames / FLASH_FRAMES).clamp(0.0, 1.0)
+        })
+    }
+}
 #[derive(Default)]
 pub struct Cache {
     pub disclosure: crate::disclosure::Disclosure,
@@ -214,6 +382,10 @@ pub struct Cache {
     built_verbose: bool,
     hints_index: Option<usize>,
     parts: std::collections::HashMap<String, std::sync::Arc<Part>>,
+    /// Finished tool groups settling: statuses seen and the folds in flight (step 5), and
+    /// the transient look each fold currently gives its group (swapped in by `update_content`).
+    folds: crate::transcript::fold::Folds,
+    fold_overlay: std::collections::HashMap<String, crate::bridge::Content>,
     blocks: Vec<crate::bridge::Content>,
     pub operations: Indexed<Option<serde_json::Value>>,
     pub image_protocol: Option<ratatui_image::protocol::StatefulProtocol>,
@@ -259,6 +431,14 @@ pub struct Cache {
     pub spin: usize,
     /// Independent 30 Hz clock for smooth activity motion.
     pub activity_frame: usize,
+    /// The context window the header's share row was built with (rebuilt when it changes).
+    pub context_window: Option<u64>,
+    /// Promoted waiting messages flashing once in their new section (step 15).
+    pub queue_flash: QueueFlash,
+    /// Keyboard focus on a waiting message and the control held under the mouse (step 15).
+    pub queue_ui: QueueUi,
+    /// The newest microphone levels of the Live header's listening meter (step 11).
+    pub mic: crate::live_bar::Mic,
     /// The draft is non-empty: empty-session hints keep their rows but go blank.
     pub typing: bool,
     pub content_elapsed: std::time::Duration,
@@ -427,16 +607,45 @@ pub fn animating(s: &Snapshot) -> bool {
     s.panel_loading
         || matches!(s.voice_phase.as_str(), "recording" | "transcribing")
         || s.live.active
+        // An open permission prompt counts up "waiting on you · mm:ss".
+        || s.prompt.as_ref().is_some_and(|prompt| !dialogs::prompt_rows(prompt).is_empty())
         || matches!(s.status.as_str(), "running" | "active" | "working")
         || s.blocks.iter().any(|block| {
             block.text.contains(SPINNER_SLOT)
-                || (matches!(block.kind.as_str(), "tool_group" | "change")
+                || (matches!(block.kind.as_str(), "tool_group" | "change" | "task")
                     && block.status == "running")
         })
         || s.sessions
             .iter()
             .chain(s.tabs.iter())
             .any(|row| row.status == "working")
+}
+/// The meter as drawn: with animations off the working fifth rests in the middle instead of
+/// travelling, and in Monochrome (where colour is dropped) the lit cells are heavy `━` (`=` in
+/// ASCII) so the working fifth and the context fill still read by shape.
+fn activity_meter_for(
+    s: &Snapshot,
+    p: &Palette,
+    width: usize,
+    tick: usize,
+    animate: bool,
+    mono: bool,
+) -> Vec<Span<'static>> {
+    let spans = activity_meter(s, p, width, if animate { tick } else { 90 });
+    if !mono {
+        return spans;
+    }
+    let heavy = if crate::transcript::look::glyphs().ascii { "=" } else { "━" };
+    spans
+        .into_iter()
+        .map(|span| {
+            if span.style.fg == Some(p.border) {
+                span
+            } else {
+                Span::styled(heavy, span.style)
+            }
+        })
+        .collect()
 }
 /// Agent-colored moving fifth while working; a quiet rule while idle.
 fn activity_meter(s: &Snapshot, p: &Palette, width: usize, tick: usize) -> Vec<Span<'static>> {
@@ -491,6 +700,69 @@ fn activity_meter(s: &Snapshot, p: &Palette, width: usize, tick: usize) -> Vec<S
         })
         .collect()
 }
+
+/// Overlay voice recording square (cell 2) and elapsed time (cells 4-8) onto activity rule spans.
+pub fn overlay_activity_recording(
+    spans: Vec<Span<'static>>,
+    voice_phase: &str,
+    p: &Palette,
+    spin: usize,
+    elapsed: u64,
+    animate: bool,
+    ascii: bool,
+) -> Vec<Span<'static>> {
+    if voice_phase != "recording" || spans.is_empty() {
+        return spans;
+    }
+    let square_glyph = if ascii { "#" } else { "■" };
+    let square_tone = if !animate || spin % 8 < 4 {
+        p.error
+    } else {
+        nexus_widgets::theme::mix(p.error, p.panel, 0.55)
+    };
+    let mm = (elapsed / 60).min(99);
+    let ss = elapsed % 60;
+    let time_str = format!("{mm:02}:{ss:02}");
+
+    let mut cells: Vec<Span<'static>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        if span.content.chars().count() <= 1 {
+            cells.push(span);
+        } else {
+            let style = span.style;
+            for ch in span.content.chars() {
+                cells.push(Span::styled(ch.to_string(), style));
+            }
+        }
+    }
+
+    if cells.len() > 2 {
+        cells[2] = Span::styled(square_glyph, Style::default().fg(square_tone));
+    }
+    if cells.len() >= 9 {
+        let digit_or_colon = |c: char| -> &'static str {
+            match c {
+                '0' => "0",
+                '1' => "1",
+                '2' => "2",
+                '3' => "3",
+                '4' => "4",
+                '5' => "5",
+                '6' => "6",
+                '7' => "7",
+                '8' => "8",
+                '9' => "9",
+                ':' => ":",
+                _ => " ",
+            }
+        };
+        for (i, ch) in time_str.chars().enumerate() {
+            cells[4 + i] = Span::styled(digit_or_colon(ch), Style::default().fg(p.error));
+        }
+    }
+    cells
+}
+
 fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
     if !line
         .spans
@@ -603,6 +875,30 @@ impl Cache {
                     columns += w;
                 }
                 self.lines.push(Line::styled(current, style));
+            }
+        }
+    }
+    /// Whether a finished tool group is still settling (its rows leave, its header flashes).
+    /// The frame clock must keep running while this is true; it ends by itself.
+    pub fn folding(&self) -> bool {
+        self.folds.is_live()
+    }
+    /// Advance the fold transient of finished tool groups to now (see `transcript::fold`).
+    pub fn step_folds(&mut self, blocks: &[crate::bridge::Content]) {
+        self.step_folds_at(blocks, std::time::Instant::now());
+    }
+    pub fn step_folds_at(&mut self, blocks: &[crate::bridge::Content], now: std::time::Instant) {
+        self.folds.observe(blocks, now, self.animate);
+        let (mut overlay, mut touched) = self.folds.frames(blocks, now);
+        // A group the user opened mid-fold just shows its boxes.
+        overlay.retain(|id, _| !self.disclosure.is_open(id));
+        touched.extend(self.fold_overlay.keys().cloned());
+        self.fold_overlay = overlay;
+        touched.sort();
+        touched.dedup();
+        for id in touched {
+            if let Some(index) = blocks.iter().position(|block| block.id == id) {
+                self.note_patch(Some(index));
             }
         }
     }
@@ -750,6 +1046,9 @@ impl Cache {
             self.hints_index = blocks.iter().position(|block| block.kind == "hints");
         }
         for source in blocks.iter().take(stop).skip(start) {
+            // A finished group mid-fold is drawn through its transient look.
+            let folding = self.fold_overlay.get(&source.id).cloned();
+            let source = folding.as_ref().unwrap_or(source);
             self.part_offsets.push(self.lines.parts.len());
             let part = self.disclosure.block(source).map(|block| {
                 let key = format!("{}|{}", self.disclosure.scope, source.id);
@@ -775,7 +1074,7 @@ impl Cache {
                 } else {
                     block
                 };
-                let mut rows = context::build(&block, width, palette);
+                let mut rows = context::build(&block, width, palette, self.context_window);
                 if source.kind == "user" && !source.turn_id.is_empty() {
                     if let Some((_, op)) = rows.iter_mut().find(|(_, op)| op.is_some()) {
                         if let Some(op) = op.as_mut().and_then(|op| op.as_object_mut()) {
@@ -968,18 +1267,50 @@ pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     }
     out
 }
-/// The ↑ ↓ ✕ cells of each listed message: `(row, [(x, op)])`.
-fn queue_controls(composer: Rect, s: &Snapshot) -> Vec<(u16, [(u16, &'static str); 3])> {
+/// Controls of one pending message, left to right: `(gap before, width, op)`.
+/// Queued: `↑ ↓  [Steer]  ✕`; steering: `[Interrupt]  ✕` (no arrows, only queued items are
+/// reordered); interrupt: `✕`.
+fn queue_buttons(item: &crate::bridge::QueueItem) -> &'static [(u16, u16, &'static str)] {
+    if item.mode == "interrupt" || item.tag == "I" {
+        &[(0, 1, "remove")]
+    } else if is_steering(item) {
+        &[(0, 11, "interrupt"), (2, 1, "remove")]
+    } else {
+        &[
+            (0, 1, "up"),
+            (1, 1, "down"),
+            (2, 7, "steer"),
+            (2, 1, "remove"),
+        ]
+    }
+}
+/// Columns the controls take, so the hovered row's text truncates before them.
+fn queue_buttons_width(item: &crate::bridge::QueueItem) -> u16 {
+    queue_buttons(item).iter().map(|(gap, w, _)| gap + w).sum()
+}
+/// The control cells of each listed message: `(row, queue index, [(x, width, op)])`. `✕` always
+/// sits at `row.right() - 2`; the other buttons are laid out to its left.
+fn queue_controls(
+    composer: Rect,
+    s: &Snapshot,
+) -> Vec<(u16, usize, Vec<(u16, u16, &'static str)>)> {
     above_layout(composer, s)
         .items
         .into_iter()
-        .filter(|(_, row)| row.width >= 12)
-        .map(|(_, row)| {
-            let right = row.right().saturating_sub(2);
-            (
-                row.y,
-                [(right - 4, "up"), (right - 2, "down"), (right, "remove")],
-            )
+        .filter(|(index, row)| row.width >= queue_buttons_width(&s.queue_items[*index]) + 8)
+        .map(|(index, row)| {
+            let item = &s.queue_items[index];
+            let mut x = (row.right().saturating_sub(1)).saturating_sub(queue_buttons_width(item));
+            let cells = queue_buttons(item)
+                .iter()
+                .map(|(gap, width, op)| {
+                    x += gap;
+                    let cell = (x, *width, *op);
+                    x += width;
+                    cell
+                })
+                .collect();
+            (row.y, index, cells)
         })
         .collect()
 }
@@ -993,17 +1324,15 @@ pub fn queue_control_at(
     if !s.agent_page.is_empty() {
         return None;
     }
-    let layout = above_layout(composer, s);
     queue_controls(composer, s)
         .into_iter()
-        .zip(layout.items.iter())
-        .find(|((row, _), _)| *row == y)
-        .and_then(|((_, cells), (index, _))| {
+        .find(|(row, _, _)| *row == y)
+        .and_then(|(_, index, cells)| {
             cells
                 .iter()
-                .find(|(cell, _)| *cell == x)
-                .filter(|(_, op)| queue_move_enabled(&s.queue_items[*index], op))
-                .map(|(_, op)| (s.queue_items[*index].id.clone(), *op))
+                .find(|(cell, width, _)| x >= *cell && x < cell + width)
+                .filter(|(_, _, op)| queue_move_enabled(&s.queue_items[index], op))
+                .map(|(_, _, op)| (s.queue_items[index].id.clone(), *op))
         })
 }
 /// Moves that would not change the message's place in its section are disabled (and drawn blank).
@@ -1034,9 +1363,9 @@ pub fn fmt_activity(secs: f64) -> String {
 pub fn fmt_turn(secs: f64) -> String {
     let total = secs.max(0.0) as u64;
     match total {
-        0..=59 => format!("{total}s"),
-        60..=3599 => format!("{}m{:02}s", total / 60, total % 60),
-        _ => format!("{}h{:02}m", total / 3600, total % 3600 / 60),
+        0..=59 => format!("{:.1}s", secs.max(0.0)),
+        60..=3599 => format!("{}m {}s", total / 60, total % 60),
+        _ => format!("{}h {}m", total / 3600, total % 3600 / 60),
     }
 }
 /// `842`, `1.2k`, `121k`, `1.4M`.
@@ -1075,7 +1404,7 @@ pub fn stop_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
     if slot_waiting(s) && s.slot_wait.is_some() {
         return false; // the waiting line has no button
     }
-    // Same placement as `draw_status_line`: spinner, label, gap, then the right text.
+    // Same placement as `draw_status_line`: `∴`, label, gap, then the right text.
     let label = status_label(s, usize::from(row.width), text.width());
     let used = 2 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + text.width());
@@ -1092,12 +1421,66 @@ fn status_label(s: &Snapshot, row_width: usize, right_width: usize) -> String {
     let left_room = row_width.saturating_sub(right_width + 2);
     crate::transcript::truncate(&format!("{activity}…"), left_room.saturating_sub(10))
 }
+/// Motion-clock frames (30 Hz) one shimmer sweep takes across the activity word: 1.8 s.
+const SHIMMER_FRAMES: usize = 54;
+/// Half-width, in graphemes, of the shimmer's soft falloff.
+const SHIMMER_REACH: f32 = 4.0;
+/// `(light, dark)` greys for the status shimmer: the lighter and darker of `p.text` and
+/// `p.quiet`. Dark theme: text is light grey, quiet dark grey. Light theme: quiet is the
+/// light grey and text the dark grey. Never `p.purple` or `p.accent`.
+fn shimmer_greys(p: &Palette) -> (Color, Color) {
+    let sum = |c: Color| match c {
+        Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+        _ => 0,
+    };
+    if sum(p.text) >= sum(p.quiet) {
+        (p.text, p.quiet)
+    } else {
+        (p.quiet, p.text)
+    }
+}
+/// The activity word as one span per grapheme, always its real characters (THK-4, step 6).
+/// A highlight sweeps left to right once every `SHIMMER_FRAMES` motion frames and each
+/// grapheme blends dark grey (base) to light grey (highlight) by its distance from it, with
+/// a soft `SHIMMER_REACH` falloff. Animation off: the word in the base grey. Monochrome:
+/// plain text.
+fn shimmer_spans(
+    word: &str,
+    frame: usize,
+    animate: bool,
+    mono: bool,
+    p: &Palette,
+) -> Vec<Span<'static>> {
+    if mono {
+        return vec![Span::raw(word.to_owned())];
+    }
+    let (light, dark) = shimmer_greys(p);
+    if !animate {
+        return vec![Span::styled(word.to_owned(), Style::default().fg(dark))];
+    }
+    let count = word.graphemes(true).count() as f32;
+    let travel = count + 2.0 * SHIMMER_REACH;
+    let head = (frame % SHIMMER_FRAMES) as f32 / SHIMMER_FRAMES as f32 * travel - SHIMMER_REACH;
+    word.graphemes(true)
+        .enumerate()
+        .map(|(i, g)| {
+            let near = (1.0 - (i as f32 - head).abs() / SHIMMER_REACH).clamp(0.0, 1.0);
+            let amount = near * near * (3.0 - 2.0 * near); // smoothstep
+            Span::styled(
+                g.to_owned(),
+                Style::default().fg(nexus_widgets::theme::mix(dark, light, amount)),
+            )
+        })
+        .collect()
+}
 fn draw_status_line(
     frame: &mut Frame,
     row: Rect,
     s: &Snapshot,
     p: &Palette,
-    spin: usize,
+    frame_tick: usize,
+    animate: bool,
+    mono: bool,
     hover_stop: bool,
 ) {
     if let Some(w) = s.slot_wait.as_ref().filter(|_| slot_waiting(s)) {
@@ -1123,14 +1506,20 @@ fn draw_status_line(
         return;
     }
     let now = crate::live_bar::now_epoch();
-    let agent = crate::transcript::color(&s.agent_color, p.blue, p);
     let (right, stop) = status_right(s, now).unwrap_or_default();
     let label = status_label(s, usize::from(row.width), right.width());
+    // `∴` and the activity word, shimmering grey on the 30 Hz motion clock (THK-4). Only
+    // colours change, so the label keeps its width and `stop_at` keeps its geometry.
+    let mark = if crate::transcript::look::glyphs().ascii {
+        ":"
+    } else {
+        "∴"
+    };
     let mut spans = vec![
-        Span::styled(SPINNER[spin % SPINNER.len()], Style::default().fg(agent)),
+        Span::styled(mark, Style::default().fg(shimmer_greys(p).1)),
         Span::raw(" "),
-        Span::styled(label.clone(), Style::default().fg(p.quiet)),
     ];
+    spans.extend(shimmer_spans(&label, frame_tick, animate, mono, p));
     // The only elapsed time is the right-hand turn clock.
     let used = 2 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + right.width());
@@ -1157,15 +1546,20 @@ fn draw_above_card(
     composer: Rect,
     s: &Snapshot,
     p: &Palette,
-    spin: usize,
+    frame_tick: usize,
+    animate: bool,
+    mono: bool,
     pointer: Option<(u16, u16)>,
+    flash: &QueueFlash,
+    ui: &QueueUi,
 ) {
     let layout = above_layout(composer, s);
+    let now = std::time::Instant::now();
     let over =
         |row: Rect| pointer.is_some_and(|(x, y)| y == row.y && x >= row.x && x < row.right());
     if let Some(row) = layout.status {
         let hover_stop = pointer.is_some_and(|(x, y)| stop_at(composer, s, x, y));
-        draw_status_line(frame, row, s, p, spin, hover_stop);
+        draw_status_line(frame, row, s, p, frame_tick, animate, mono, hover_stop);
     }
     let groups = queue_groups(s);
     for (steering, row) in &layout.headers {
@@ -1190,10 +1584,16 @@ fn draw_above_card(
     }
     for (index, row) in &layout.items {
         let item = &s.queue_items[*index];
-        let hot = over(*row);
+        let hot = over(*row) || ui.focus.as_deref() == Some(item.id.as_str());
+        let held = |op: &str| {
+            ui.press
+                .as_ref()
+                .is_some_and(|(id, held_op)| *id == item.id && *held_op == op)
+        };
         let tone = if is_steering(item) { p.accent } else { p.quiet };
         let prefix = format!("  #{} ", index + 1);
-        let controls = if hot { 7 } else { 0 };
+        let buttons = usize::from(queue_buttons_width(item));
+        let controls = if hot { buttons + 2 } else { 0 };
         let room = usize::from(row.width).saturating_sub(prefix.width() + controls + 1);
         let text = crate::transcript::truncate(&item.text, room);
         let mut spans = vec![
@@ -1202,21 +1602,50 @@ fn draw_above_card(
         ];
         if hot {
             let used = prefix.width() + text.width();
-            let gap = usize::from(row.width).saturating_sub(used + 6);
-            let on = |yes: bool| Style::default().fg(if yes { p.text } else { p.quiet });
+            let gap = usize::from(row.width).saturating_sub(used + buttons + 1);
             spans.push(Span::raw(" ".repeat(gap)));
-            // A disabled move is blank, not a dimmed arrow, so it never looks clickable.
-            let arrow = |glyph: &'static str, enabled: bool| {
-                Span::styled(if enabled { glyph } else { " " }, on(true))
+            let (up, down, cross) = queue_marks(crate::transcript::look::glyphs().ascii);
+            let reversed = |op: &str| {
+                if ui.mono && held(op) {
+                    Modifier::REVERSED
+                } else {
+                    Modifier::empty()
+                }
             };
-            spans.push(arrow("↑", item.can_up));
-            spans.push(Span::raw(" "));
-            spans.push(arrow("↓", item.can_down));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled("✕", Style::default().fg(p.error)));
+            let chip_for = |op: &str| {
+                Style::default()
+                    .fg(p.text)
+                    .bg(if held(op) { p.muted } else { p.element_hi })
+                    .add_modifier(Modifier::BOLD | reversed(op))
+            };
+            for (before, _, op) in queue_buttons(item) {
+                spans.push(Span::raw(" ".repeat(usize::from(*before))));
+                spans.push(match *op {
+                    // A disabled move is blank, not a dimmed arrow, so it never looks clickable.
+                    "up" => Span::styled(
+                        if item.can_up { up } else { " " },
+                        Style::default().fg(p.text),
+                    ),
+                    "down" => Span::styled(
+                        if item.can_down { down } else { " " },
+                        Style::default().fg(p.text),
+                    ),
+                    "steer" => Span::styled(" Steer ", chip_for("steer")),
+                    "interrupt" => Span::styled(" Interrupt ", chip_for("interrupt")),
+                    _ => Span::styled(
+                        cross,
+                        Style::default()
+                            .fg(if held("remove") { p.error } else { p.muted })
+                            .add_modifier(reversed("remove")),
+                    ),
+                });
+            }
         }
+        let glow = flash.strength(&item.id, now);
         let style = if hot {
             Style::default().bg(p.element)
+        } else if glow > 0.0 {
+            Style::default().bg(nexus_widgets::theme::mix(p.background, p.accent, 0.22 * glow))
         } else {
             Style::default()
         };
@@ -1259,7 +1688,10 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     // Five fixed rows plus the blank row that always separates the text from the controls.
     let wanted = 5 + rows.clamp(1, 22) as u16 + above_card_rows(s).max(1);
     wanted
-        .min(area.height.saturating_sub(4 + 4 + crate::live_bar::pane_rows(s)))
+        .min(
+            area.height
+                .saturating_sub(4 + 4 + crate::live_bar::pane_rows(s)),
+        )
         .min(area.height)
         .max(area.height.min(7))
 }
@@ -1369,27 +1801,10 @@ pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line
     }
     lines
 }
-/// First paint, before the host's first snapshot: the product name on the plain
-/// background, so the terminal answers the launch immediately while the session loads.
-pub fn draw_splash(frame: &mut Frame) {
-    let p = Palette::new(false);
-    let area = frame.area();
-    frame.render_widget(
-        Block::default().style(Style::default().bg(p.background).fg(p.text)),
-        area,
-    );
-    if area.height == 0 {
-        return;
-    }
-    let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "Nexus",
-            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-        )))
-        .alignment(ratatui::layout::Alignment::Center),
-        row,
-    );
+/// The launch splash (`splash.rs`): converging wordmark and milestone bar, drawn on the plain
+/// dark background until the first chat frame, so the terminal answers the launch at once.
+pub fn draw_splash(frame: &mut Frame, splash: &crate::splash::Splash, now: std::time::Instant) {
+    splash.draw(frame, now, &Palette::new(false));
 }
 
 pub fn draw(
@@ -1411,6 +1826,8 @@ pub fn draw(
     details_scroll: usize,
 ) -> Regions {
     let p = Palette::new(s.theme == "nexus-light");
+    // Animations off: spinners rest on their first frame (the clock still runs for counters).
+    let spin = if cache.animate { cache.spin } else { 0 };
     frame.render_widget(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
@@ -1422,14 +1839,29 @@ pub fn draw(
         logs_open,
     );
     if s.dashboard.is_none() {
-        draw_top_bar(frame, s, r.tabs, &p, cache.spin);
+        draw_top_bar(frame, s, r.tabs, &p, spin);
     }
     cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
     cache.page = s.agent_page.clone();
+    let animate = cache.animate;
+    cache
+        .queue_flash
+        .observe(&s.queue_items, std::time::Instant::now(), animate);
+    let listed: Vec<String> = queue_listed(r.composer, s)
+        .into_iter()
+        .map(|i| s.queue_items[i].id.clone())
+        .collect();
+    cache.queue_ui.prune(&listed);
+    cache.queue_ui.mono = cache.mono;
     if s.blocks.is_empty() {
         cache.update(&s.lines, r.transcript.width, &p);
     } else {
+        cache.step_folds(&s.blocks);
+        // A new window rebuilds the header's share row.
+        if std::mem::replace(&mut cache.context_window, s.context_window) != s.context_window {
+            cache.reset();
+        }
         cache.update_content(&[], &s.blocks, r.transcript.width, &p);
     }
     // While scrolled away from the bottom the jump pill owns the transcript's last row, so the
@@ -1502,7 +1934,7 @@ pub fn draw(
                 .range(offset, r.transcript.height as usize)
                 .enumerate()
                 .map(|(row, line)| {
-                    let mut drawn = with_spinner(line, cache.spin);
+                    let mut drawn = with_spinner(line, spin);
                     if cache.animate
                         && line
                             .spans
@@ -1510,14 +1942,14 @@ pub fn draw(
                             .any(|span| span.content.contains(SPINNER_SLOT))
                     {
                         let amount = nexus_widgets::anim::wave(
-                            cache.spin as u64,
+                            spin as u64,
                             row as u16,
                             nexus_widgets::anim::WAVE_ROWS,
                             nexus_widgets::anim::WAVE_SPEED,
                         );
                         let tone = nexus_widgets::theme::mix(p.muted, p.text, amount);
                         for span in &mut drawn.spans {
-                            if span.content.contains(SPINNER[cache.spin % SPINNER.len()]) {
+                            if span.content.contains(SPINNER[spin % SPINNER.len()]) {
                                 span.style.fg = Some(tone);
                             }
                         }
@@ -1531,6 +1963,12 @@ pub fn draw(
                             p.muted,
                             p.text,
                         );
+                    }
+                    // The streaming write head glows only while animating in colour.
+                    if (!cache.animate || cache.mono)
+                        && drawn.spans.iter().any(crate::transcript::look::is_head)
+                    {
+                        drawn = crate::transcript::look::cool_head(&drawn, p.text);
                     }
                     let mut line = drawn;
                     if let Some((_, on)) = copy_hover.filter(|(first, _)| *first == offset + row) {
@@ -1640,7 +2078,13 @@ pub fn draw(
                     };
                     let line = cache.lines.get(at)?.clone();
                     Some(if k + 1 == pin.rows {
-                        crate::sticky::continuation_padding(line, p.border)
+                        crate::sticky::indicator(
+                            line,
+                            crate::sticky::above(&pin, offset),
+                            p.border_strong,
+                            p.muted,
+                            crate::transcript::look::glyphs().ascii,
+                        )
                     } else if pin.clipped && k + 2 == pin.rows {
                         crate::sticky::ellipsize(line)
                     } else {
@@ -1702,17 +2146,13 @@ pub fn draw(
                 border_strong: p.border_strong,
                 purple: p.purple,
                 warning: p.warning,
+                mono: cache.mono,
             },
-            cache.spin,
+            spin,
         );
     }
     if s.dashboard.is_none() {
         let rows = composer_rows(r.composer, s);
-        let inset = |a: Rect, left: u16, right: u16| Rect {
-            x: a.x + left,
-            width: a.width.saturating_sub(left + right),
-            ..a
-        };
         let shell = is_shell_draft(draft);
         // The composer draws on its own background; `panel` stays for other surfaces.
         let cp = Palette {
@@ -1831,7 +2271,18 @@ pub fn draw(
             }
             // Top to bottom above the card: status line, Queued section, a blank margin.
             // Pending attachments are the highlighted `[Image N]` chips inside the editor.
-            draw_above_card(frame, r.composer, s, &cp, cache.spin, cache.pointer);
+            draw_above_card(
+                frame,
+                r.composer,
+                s,
+                &cp,
+                cache.activity_frame,
+                cache.animate,
+                cache.mono,
+                cache.pointer,
+                &cache.queue_flash,
+                &cache.queue_ui,
+            );
             if shell {
                 // The blank row between the text and the controls names the mode.
                 frame.render_widget(
@@ -1872,17 +2323,27 @@ pub fn draw(
                 controls,
             );
             let meter_area = inset(rows[4], 2, 2);
-            frame.render_widget(
-                Paragraph::new(Line::from(activity_meter(
-                    s,
-                    &p,
-                    usize::from(meter_area.width),
-                    cache.activity_frame,
-                ))),
-                meter_area,
+            let spans = activity_meter_for(
+                s,
+                &p,
+                usize::from(meter_area.width),
+                cache.activity_frame,
+                cache.animate,
+                cache.mono,
             );
+            let spans = overlay_activity_recording(
+                spans,
+                &s.voice_phase,
+                &p,
+                spin,
+                cache.voice_elapsed,
+                cache.animate,
+                nexus_widgets::Glyphs::from_env().ascii,
+            );
+            frame.render_widget(Paragraph::new(Line::from(spans)), meter_area);
         }
     }
+    cache.mic.observe(&s.live, cache.spin);
     cache.live_button = None;
     if r.live.height == 1 {
         // No rows to show (connecting, or the call is on another session): the header alone.
@@ -1894,10 +2355,13 @@ pub fn draw(
             Paragraph::new(Line::from(crate::live_bar::spans(
                 &s.live,
                 &p,
-                cache.spin,
+                spin,
                 crate::live_bar::now_epoch(),
                 usize::from(width),
-            ))),
+                cache.animate,
+                cache.mic.levels(),
+            )))
+            .style(Style::default().bg(p.element)),
             Rect::new(x, r.live.y, width, 1),
         );
     } else if r.live.height > 1 {
@@ -1906,10 +2370,9 @@ pub fn draw(
         let rows = composer_rows(r.composer, s);
         let x = rows[1].x + 2;
         let width = rows[1].width.saturating_sub(4);
-        let all = crate::transcript::live_rows(
+        let all = crate::live_bar::captions(
             &s.live.detail,
             p.purple,
-            0,
             usize::from(width),
             &p,
             &s.live.operation,
@@ -1920,7 +2383,11 @@ pub fn draw(
         cache.live_back = back;
         cache.live_max_back = all.len().saturating_sub(usize::from(body.height));
         let header = Rect::new(x, r.live.y, width, 1);
-        let label = if s.live_expanded { "⤡ collapse" } else { "⤢ expand" };
+        let label = if s.live_expanded {
+            "⤡ collapse"
+        } else {
+            "⤢ expand"
+        };
         let bw = (label.width() as u16 + 2).min(header.width);
         let button = Rect::new(header.right() - bw, header.y, bw, 1);
         cache.live_button = Some(button);
@@ -1929,29 +2396,38 @@ pub fn draw(
         } else {
             String::new()
         };
-        // The call's status line (dot, phase, clock, meters, MUTED) takes what the right side leaves.
-        let left_width = usize::from(header.width).saturating_sub(more.width() + usize::from(bw) + 1);
+        // The call's phase strip (phase, animation, clock) takes what the right side leaves.
+        let left_width =
+            usize::from(header.width).saturating_sub(more.width() + usize::from(bw) + 1);
         let mut head = crate::live_bar::spans(
             &s.live,
             &p,
-            cache.spin,
+            spin,
             crate::live_bar::now_epoch(),
             left_width,
+            cache.animate,
+            cache.mic.levels(),
         );
         let used: usize = head.iter().map(|span| span.width()).sum();
         let gap = usize::from(header.width).saturating_sub(used + more.width() + usize::from(bw));
         head.push(Span::raw(" ".repeat(gap)));
         head.push(Span::styled(more, Style::default().fg(p.quiet)));
-        frame.render_widget(Paragraph::new(Line::from(head)), header);
+        frame.render_widget(
+            Paragraph::new(Line::from(head)).style(Style::default().bg(p.element)),
+            header,
+        );
         frame.render_widget(
             Paragraph::new(Span::styled(
                 format!(" {label} "),
-                Style::default().fg(p.muted).bg(p.element),
+                Style::default().fg(p.muted).bg(p.element_hi),
             )),
             button,
         );
         let end = (start + usize::from(body.height)).min(all.len());
-        let lines: Vec<Line> = all[start..end].iter().map(|(line, _)| line.clone()).collect();
+        let lines: Vec<Line> = all[start..end]
+            .iter()
+            .map(|(line, _)| line.clone())
+            .collect();
         frame.render_widget(Paragraph::new(lines), body);
         let below = all.len() - end;
         if below > 0 {
@@ -2085,7 +2561,7 @@ pub fn draw(
         let title = if s.panel_loading {
             format!(
                 "{} {} · refreshing",
-                SPINNER[cache.spin % SPINNER.len()],
+                SPINNER[spin % SPINNER.len()],
                 s.panel_title
             )
         } else {
@@ -2262,34 +2738,50 @@ pub fn draw(
             Block::default().style(Style::default().bg(p.panel).fg(p.text)),
             area,
         );
-        let title = if prompt.kind == "permission" {
-            "Permission requested"
+        // A structured permission (`title`) draws the P-PRM layout; anything else keeps `lines`.
+        let structured = !prompt_rows(prompt).is_empty();
+        let title_rect = Rect {
+            x: area.x + 2,
+            y: area.y,
+            width: area.width.saturating_sub(4),
+            height: 1,
+        };
+        if structured {
+            frame.render_widget(
+                Paragraph::new(prompt_title_line(prompt, &p)).style(Style::default().bg(p.panel)),
+                title_rect,
+            );
         } else {
-            "Question"
+            let title = if prompt.kind == "permission" {
+                "Permission requested"
+            } else {
+                "Question"
+            };
+            frame.render_widget(
+                Paragraph::new(title).style(
+                    Style::default()
+                        .fg(p.accent)
+                        .bg(p.panel)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                title_rect,
+            );
+        }
+        let (content_area, choices_area) = prompt_regions(area, prompt.choices.len());
+        let content_lines: Vec<Line> = if structured {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64());
+            prompt_body_lines(prompt, &p, now)
+        } else {
+            let mut content = Cache::default();
+            content.update(&prompt.lines, content_area.width, &p);
+            content.lines.iter().cloned().collect()
         };
         frame.render_widget(
-            Paragraph::new(title).style(
-                Style::default()
-                    .fg(p.accent)
-                    .bg(p.panel)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Rect {
-                x: area.x + 2,
-                y: area.y,
-                width: area.width.saturating_sub(4),
-                height: 1,
-            },
-        );
-        let (content_area, choices_area) = prompt_regions(area, prompt.choices.len());
-        let mut content = Cache::default();
-        content.update(&prompt.lines, content_area.width, &p);
-        frame.render_widget(
             Paragraph::new(
-                content
-                    .lines
-                    .iter()
-                    .cloned()
+                content_lines
+                    .into_iter()
                     .skip(panel_scroll)
                     .take(content_area.height as usize)
                     .collect::<Vec<_>>(),
@@ -2303,6 +2795,22 @@ pub fn draw(
             .enumerate()
             .map(|(i, c)| {
                 let on = i == selection;
+                if structured {
+                    let chip = prompt_choice_line(c, on, &p);
+                    let style = components::selectable(
+                        &p,
+                        components::State {
+                            disabled: c.disabled,
+                            selected: false,
+                            hover: cache.component_hover.amount_id(
+                                components::HoverId::PromptChoice(i),
+                                std::time::Instant::now(),
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                    return Line::from(chip).style(style);
+                }
                 let text = format!(
                     " {} [{}] {}{}",
                     if on { "▸" } else { " " },
@@ -2342,23 +2850,11 @@ pub fn draw(
             choices_area,
         );
     }
-    if s.voice_phase == "recording" && s.dashboard.is_none() {
-        let rows = composer_rows(r.composer, s);
-        let box_area = Rect {
-            x: rows[1].x + 2,
-            ..rows[1]
-        };
-        let tone = if cache.spin % 8 < 4 {
-            p.accent
-        } else {
-            p.quiet
-        };
-        frame.render_widget(
-            Paragraph::new("■").style(Style::default().fg(tone).bg(p.panel)),
-            Rect::new(box_area.x + 3, rows[4].y, 1, 1),
-        );
-    }
     // Toasts float above everything, including dialogs; they never take layout.
+    cache
+        .toasts
+        .notes
+        .draw(frame, &p, r.tabs, std::time::Instant::now(), cache.animate);
     cache.toasts.draw(frame, s, &p, r.transcript);
     if cache.mono {
         // Monochrome preference: drop every foreground/background colour, keep modifiers.
@@ -2984,7 +3480,10 @@ mod tests {
         .unwrap();
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
         let mut cache = Cache::default();
-        let frame_at = |terminal: &mut Terminal<TestBackend>, cache: &mut Cache, scroll: usize, follow: bool| {
+        let frame_at = |terminal: &mut Terminal<TestBackend>,
+                        cache: &mut Cache,
+                        scroll: usize,
+                        follow: bool| {
             terminal
                 .draw(|frame| {
                     draw(
@@ -3014,7 +3513,10 @@ mod tests {
         for _ in 0..400 {
             (scroll, follow) = crate::session::scroll_down(scroll, 3, cache.live_scroll, follow);
             frame_at(&mut terminal, &mut cache, scroll, follow);
-            assert!(cache.current_offset >= last, "scrolling down never moves up");
+            assert!(
+                cache.current_offset >= last,
+                "scrolling down never moves up"
+            );
             last = cache.current_offset;
             scroll = cache.current_offset;
         }
@@ -3034,7 +3536,10 @@ mod tests {
                 sym == "▐" || sym == " "
             })
             .unwrap();
-        assert!(track_bottom - bottom <= 12, "thumb at {bottom}, track ends {track_bottom}");
+        assert!(
+            track_bottom - bottom <= 12,
+            "thumb at {bottom}, track ends {track_bottom}"
+        );
     }
     #[test]
     fn a_long_transcript_scrolls_exactly_the_buffer_past_the_last_row() {
@@ -3051,8 +3556,22 @@ mod tests {
             terminal
                 .draw(|frame| {
                     draw(
-                        frame, &s, &Editor::default(), &Editor::default(), &Editor::default(),
-                        "", 0, scroll, 0, cache, follow, false, false, false, 0, 0,
+                        frame,
+                        &s,
+                        &Editor::default(),
+                        &Editor::default(),
+                        &Editor::default(),
+                        "",
+                        0,
+                        scroll,
+                        0,
+                        cache,
+                        follow,
+                        false,
+                        false,
+                        false,
+                        0,
+                        0,
                     );
                 })
                 .unwrap();
@@ -3068,14 +3587,25 @@ mod tests {
         let content_bottom = cache.lines.len();
         let viewport = content_bottom - (cache.live_scroll - crate::session::BOTTOM_BUFFER);
         // The offset is exactly BUFFER rows past the offset that shows the last content row.
-        assert_eq!(cache.current_offset, content_bottom - viewport + crate::session::BOTTOM_BUFFER);
+        assert_eq!(
+            cache.current_offset,
+            content_bottom - viewport + crate::session::BOTTOM_BUFFER
+        );
         assert!(follow, "the bottom resumes following");
         assert_eq!(cache.current_offset, cache.live_scroll);
         let buf = frame_at(scroll, follow, &mut cache);
         let x = 79u16;
-        let thumb: Vec<u16> = (0..40u16).filter(|&y| buf[(x, y)].symbol() == "▐").collect();
+        let thumb: Vec<u16> = (0..40u16)
+            .filter(|&y| buf[(x, y)].symbol() == "▐")
+            .collect();
         let area = ratatui::layout::Rect::new(0, 0, 80, 40);
-        let tr = regions(area, &s, composer_height(area, &Editor::default(), &s), false).transcript;
+        let tr = regions(
+            area,
+            &s,
+            composer_height(area, &Editor::default(), &s),
+            false,
+        )
+        .transcript;
         assert_eq!(
             thumb.last().copied().unwrap(),
             tr.bottom() - 1,
@@ -3229,12 +3759,15 @@ mod tests {
             "top padding row of the band"
         );
         assert!(
-            mid[7].contains('·') && !mid[7].contains("question"),
-            "textured bottom padding row of the pinned band"
+            mid[7].starts_with('░')
+                && mid[7].contains("of this turn above")
+                && !mid[7].contains("question"),
+            "shaded bottom padding row of the pinned band, counting the turn rows above: {:?}",
+            mid[7]
         );
         assert_eq!(rect.height, 3, "padding + one text row + padding");
         let band = Palette::new(false).element;
-        for y in 5..8u16 {
+        for y in 5..7u16 {
             assert_eq!(
                 bgs.borrow()[y as usize],
                 band,
@@ -3340,10 +3873,12 @@ mod tests {
         s.voice_phase = "recording".into();
         s.voice_preview = "hello wor".into();
         let mut cache = Cache::default();
+        cache.animate = true;
         cache.voice_levels = vec![0.0, 0.5, 1.0];
         cache.voice_elapsed = 65;
         cache.voice_text = s.voice_preview.clone();
         cache.spin = 3;
+        let p = Palette::new(false);
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal
             .draw(|frame| {
@@ -3367,19 +3902,236 @@ mod tests {
                 );
             })
             .unwrap();
-        let screen: String = (0..24u16)
-            .map(|y| {
-                (0..100u16)
-                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
-                    .collect::<String>()
-                    + "\n"
-            })
-            .collect();
-        assert!(
-            screen.contains("hello wor") && screen.contains("■"),
-            "{screen}"
+
+        let area = Rect::new(0, 0, 100, 24);
+        let r = regions(
+            area,
+            &s,
+            composer_height(area, &Editor::default(), &s),
+            false,
         );
-        assert!(!screen.contains("Recording") && !screen.contains("Esc cancel"));
+        let rows = composer_rows(r.composer, &s);
+        let meter_area = inset(rows[4], 2, 2);
+
+        // (a) no '■' inside the composer card area (rows[0]..=rows[3])
+        for y in r.composer.y..rows[4].y {
+            for x in r.composer.x..r.composer.right() {
+                assert_ne!(
+                    terminal.backend().buffer()[(x, y)].symbol(),
+                    "■",
+                    "composer area must not contain recording square at ({x}, {y})"
+                );
+            }
+        }
+
+        // (b) rule row contains '■' at cell 2 and the time at cells 4-8
+        let rule_cell = |cell_idx: u16| {
+            terminal.backend().buffer()[(meter_area.x + cell_idx, meter_area.y)]
+                .symbol()
+                .to_string()
+        };
+        assert_eq!(rule_cell(2), "■", "cell 2 of rule row must be ■");
+        let time_cells: String = (4..=8).map(rule_cell).collect();
+        assert_eq!(
+            time_cells, "01:05",
+            "cells 4-8 must show mm:ss (65s -> 01:05)"
+        );
+
+        // (c) cell 3 is still a rule glyph
+        assert_eq!(rule_cell(3), "─", "cell 3 must still be a rule glyph");
+
+        // (d) both blink colours are red-family (p.error or its mix)
+        let fg_bright = terminal.backend().buffer()[(meter_area.x + 2, meter_area.y)].fg;
+        assert_eq!(fg_bright, p.error, "spin 3 should be p.error");
+
+        // Spin 4 triggers the dim blink phase
+        cache.spin = 4;
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    &mut cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let fg_dim = terminal.backend().buffer()[(meter_area.x + 2, meter_area.y)].fg;
+        let expected_dim = nexus_widgets::theme::mix(p.error, p.panel, 0.55);
+        assert_eq!(fg_dim, expected_dim, "spin 4 should be mixed red");
+
+        let is_red = |c: Color| match c {
+            Color::Rgb(r, g, b) => r > g && r > b,
+            _ => false,
+        };
+        assert!(
+            is_red(fg_bright),
+            "bright blink must be red-family: {fg_bright:?}"
+        );
+        assert!(is_red(fg_dim), "dim blink must be red-family: {fg_dim:?}");
+        assert_ne!(fg_bright, p.accent, "blink must never be accent");
+        assert_ne!(fg_dim, p.accent, "blink must never be accent");
+        assert_ne!(fg_bright, p.quiet, "blink must never be quiet");
+        assert_ne!(fg_dim, p.quiet, "blink must never be quiet");
+    }
+
+    #[test]
+    fn activity_meter_pure_postpass_recording_and_transcribing() {
+        let p = Palette::new(false);
+        let s = Snapshot {
+            context_used: Some(60),
+            context_window: Some(100),
+            ..Default::default()
+        };
+        let original_spans = activity_meter(&s, &p, 15, 0);
+
+        // While transcribing, neither mark is shown (composer preview already shows it)
+        let transcribing = overlay_activity_recording(
+            original_spans.clone(),
+            "transcribing",
+            &p,
+            0,
+            7,
+            true,
+            false,
+        );
+        assert_eq!(transcribing, original_spans);
+
+        // While idle, neither mark is shown
+        let idle = overlay_activity_recording(original_spans.clone(), "", &p, 0, 7, true, false);
+        assert_eq!(idle, original_spans);
+
+        // While recording: square at cell 2, rule at cell 3, mm:ss at cells 4-8
+        let recording =
+            overlay_activity_recording(original_spans.clone(), "recording", &p, 0, 7, true, false);
+        assert_eq!(recording.len(), 15);
+        assert_eq!(recording[0].content, "─");
+        assert_eq!(recording[1].content, "─");
+        assert_eq!(recording[2].content, "■");
+        assert_eq!(recording[2].style.fg, Some(p.error));
+        assert_eq!(recording[3].content, "─");
+        assert_eq!(
+            recording[3].style.fg, original_spans[3].style.fg,
+            "cell 3 keeps original tone"
+        );
+
+        let time_str: String = recording[4..=8]
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(time_str, "00:07");
+        for span in &recording[4..=8] {
+            assert_eq!(span.style.fg, Some(p.error));
+        }
+
+        // Remaining cells (9..15) keep their original rule glyph and tones
+        for i in 9..15 {
+            assert_eq!(recording[i].content, "─");
+            assert_eq!(recording[i].style.fg, original_spans[i].style.fg);
+        }
+    }
+
+    #[test]
+    fn activity_meter_overlay_animation_off_is_static() {
+        let p = Palette::new(false);
+        let s = Snapshot::default();
+        let spans = activity_meter(&s, &p, 15, 0);
+
+        // With animate=false, even at spin=4 (where it would dim), the square stays p.error
+        let static_spans = overlay_activity_recording(
+            spans,
+            "recording",
+            &p,
+            4,
+            7,
+            false, // animate off
+            false,
+        );
+        assert_eq!(static_spans[2].content, "■");
+        assert_eq!(static_spans[2].style.fg, Some(p.error));
+    }
+
+    #[test]
+    fn activity_meter_overlay_ascii_fallback() {
+        let p = Palette::new(false);
+        let s = Snapshot::default();
+        let spans = activity_meter(&s, &p, 15, 0);
+
+        // With ascii=true, square is '#'
+        let ascii_spans = overlay_activity_recording(
+            spans,
+            "recording",
+            &p,
+            0,
+            7,
+            true,
+            true, // ascii
+        );
+        assert_eq!(ascii_spans[2].content, "#");
+        assert_eq!(ascii_spans[2].style.fg, Some(p.error));
+        assert_eq!(ascii_spans[3].content, "─");
+        let time_str: String = ascii_spans[4..=8]
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(time_str, "00:07");
+    }
+
+    #[test]
+    fn activity_meter_overlay_narrow_widths() {
+        let p = Palette::new(false);
+        let s = Snapshot::default();
+
+        for width in [0usize, 1, 2, 3, 4, 5, 8, 9, 10, 15, 80] {
+            let spans = activity_meter(&s, &p, width, 0);
+            let res = overlay_activity_recording(spans, "recording", &p, 0, 65, true, false);
+            assert_eq!(
+                res.len(),
+                width,
+                "spans count must equal width for width={width}"
+            );
+            let total_chars: usize = res.iter().map(|s| s.content.chars().count()).sum();
+            assert_eq!(
+                total_chars, width,
+                "total chars must equal width for width={width}"
+            );
+
+            if width < 3 {
+                // Not enough room for square at cell 2
+                assert!(res.iter().all(|s| s.content == "─"));
+            } else if width < 4 {
+                // Width 3: cell 2 is square
+                assert_eq!(res[2].content, "■");
+            } else if width < 9 {
+                // Width 4..8: cell 2 is square, cell 3 is rule, remaining cells are rule
+                assert_eq!(res[2].content, "■");
+                assert_eq!(res[3].content, "─");
+                for s in &res[4..] {
+                    assert_eq!(s.content, "─");
+                }
+            } else {
+                // Width >= 9: cell 2 is square, cell 3 is rule, cells 4-8 are mm:ss
+                assert_eq!(res[2].content, "■");
+                assert_eq!(res[3].content, "─");
+                let time_str: String = res[4..=8].iter().map(|s| s.content.as_ref()).collect();
+                assert_eq!(time_str, "01:05");
+                for s in &res[9..] {
+                    assert_eq!(s.content, "─");
+                }
+            }
+        }
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
@@ -3424,76 +4176,97 @@ mod tests {
     fn activity_meter_sits_directly_under_the_composer_card() {
         for width in [60, 120, 180] {
             for details_sidebar in [false, true] {
-                let s = Snapshot {
-                    title: "Test".into(),
-                    breadcrumb: "/workspace · main · worktree".into(),
-                    agent: "Agent".into(),
-                    details_sidebar,
-                    ..Default::default()
-                };
-                let area = Rect::new(0, 0, width, 40);
-                let r = regions(
-                    area,
-                    &s,
-                    composer_height(area, &Editor::default(), &s),
-                    false,
-                );
-                let rows = composer_rows(r.composer, &s);
-                assert_eq!(rows.len(), 5, "no spacer row under the card");
-                assert_eq!(rows[3].bottom(), rows[4].y);
-                assert_eq!(rows[4].bottom(), r.composer.bottom());
-                let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
-                let mut cache = Cache::default();
-                terminal
-                    .draw(|frame| {
-                        draw(
-                            frame,
-                            &s,
-                            &Editor::default(),
-                            &Editor::default(),
-                            &Editor::default(),
-                            "",
-                            0,
-                            0,
-                            0,
-                            &mut cache,
-                            true,
-                            false,
-                            false,
-                            false,
-                            0,
-                            0,
-                        );
-                    })
-                    .unwrap();
-                if r.tabs.height > 0 {
-                    assert_eq!(r.tabs.height, 3, "tab row, blank row, workspace row");
-                    let row = |y: u16| -> String {
-                        (r.tabs.x..r.tabs.right())
-                            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                            .collect()
+                for recording in [false, true] {
+                    let s = Snapshot {
+                        title: "Test".into(),
+                        breadcrumb: "/workspace · main · worktree".into(),
+                        agent: "Agent".into(),
+                        details_sidebar,
+                        voice_phase: if recording {
+                            "recording".into()
+                        } else {
+                            "".into()
+                        },
+                        ..Default::default()
                     };
-                    let top = row(r.tabs.y);
-                    if r.details.width == 0 {
-                        assert!(top.contains('≡'), "dashboard button: {top}");
-                    }
-                    assert!(!top.contains("/workspace"), "path left the tab row: {top}");
-                    assert!(
-                        row(r.tabs.y + 1)
-                            .chars()
-                            .all(|c| c == ' ' || c == '│'),
-                        "blank row under the tabs"
+                    let area = Rect::new(0, 0, width, 40);
+                    let r = regions(
+                        area,
+                        &s,
+                        composer_height(area, &Editor::default(), &s),
+                        false,
                     );
-                    let crumbs = row(r.tabs.y + 2);
-                    assert!(crumbs.contains("/workspace"), "path under the tabs: {crumbs}");
+                    let rows = composer_rows(r.composer, &s);
+                    assert_eq!(rows.len(), 5, "no spacer row under the card");
+                    assert_eq!(rows[3].bottom(), rows[4].y);
+                    assert_eq!(rows[4].bottom(), r.composer.bottom());
+                    let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+                    let mut cache = Cache::default();
+                    cache.voice_elapsed = 7;
+                    terminal
+                        .draw(|frame| {
+                            draw(
+                                frame,
+                                &s,
+                                &Editor::default(),
+                                &Editor::default(),
+                                &Editor::default(),
+                                "",
+                                0,
+                                0,
+                                0,
+                                &mut cache,
+                                true,
+                                false,
+                                false,
+                                false,
+                                0,
+                                0,
+                            );
+                        })
+                        .unwrap();
+                    let meter_area = inset(rows[4], 2, 2);
+                    let buffer = terminal.backend().buffer();
+                    if recording {
+                        assert_eq!(buffer[(meter_area.x + 2, rows[4].y)].symbol(), "■");
+                        assert_eq!(buffer[(meter_area.x + 3, rows[4].y)].symbol(), "─");
+                        let time: String = (4..=8)
+                            .map(|i| buffer[(meter_area.x + i, rows[4].y)].symbol().to_string())
+                            .collect();
+                        assert_eq!(time, "00:07");
+                    } else {
+                        assert_eq!(buffer[(meter_area.x + 2, rows[4].y)].symbol(), "─");
+                        assert_eq!(buffer[(meter_area.x + 3, rows[4].y)].symbol(), "─");
+                    }
+                    if r.tabs.height > 0 {
+                        assert_eq!(r.tabs.height, 3, "tab row, blank row, workspace row");
+                        let row = |y: u16| -> String {
+                            (r.tabs.x..r.tabs.right())
+                                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                                .collect()
+                        };
+                        let top = row(r.tabs.y);
+                        if r.details.width == 0 {
+                            assert!(top.contains('≡'), "dashboard button: {top}");
+                        }
+                        assert!(!top.contains("/workspace"), "path left the tab row: {top}");
+                        assert!(
+                            row(r.tabs.y + 1).chars().all(|c| c == ' ' || c == '│'),
+                            "blank row under the tabs"
+                        );
+                        let crumbs = row(r.tabs.y + 2);
+                        assert!(
+                            crumbs.contains("/workspace"),
+                            "path under the tabs: {crumbs}"
+                        );
+                    }
+                    assert_eq!(
+                        buffer[(rows[2].x + 2, rows[2].y)].symbol(),
+                        " ",
+                        "card has no left colour rail"
+                    );
+                    assert_eq!(buffer[(rows[2].x + 5, rows[2].y)].symbol(), "A");
                 }
-                let buffer = terminal.backend().buffer();
-                assert_eq!(
-                    buffer[(rows[2].x + 2, rows[2].y)].symbol(),
-                    " ",
-                    "card has no left colour rail"
-                );
-                assert_eq!(buffer[(rows[2].x + 5, rows[2].y)].symbol(), "A");
             }
         }
     }
@@ -4027,7 +4800,10 @@ mod editor_layout_tests {
                 .collect()
         };
         let card = composer_rows(composer, &s)[1].y;
-        assert!(text(card - 1).contains("+1 more"), "the queue sits directly on the card");
+        assert!(
+            text(card - 1).contains("+1 more"),
+            "the queue sits directly on the card"
+        );
         let header = text(card - 7);
         assert!(header.trim_start().starts_with("▾ Steering 2"), "{header}");
         assert!(!header.contains('╭'), "no box");
@@ -4070,26 +4846,55 @@ mod editor_layout_tests {
             None,
             "+N more row"
         );
-        // The first steering message has no steering neighbour above it: no ↑, click ignored.
+        // A queued row draws ↑ ↓ [Steer] ✕; the chip is one hit target.
+        let (span_x, span_right) = (composer.x, composer.right());
+        let line_at = move |buffer: &ratatui::buffer::Buffer, y: u16| -> String {
+            (span_x..span_right)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let drawn = line_at(&buffer, row);
+        assert!(drawn.contains("↑ ↓   Steer   ✕"), "{drawn}");
+        let chip = drawn.find("Steer").unwrap();
+        let chip_x = composer.x + drawn[..chip].chars().count() as u16;
+        for dx in 0..5 {
+            assert_eq!(
+                queue_control_at(composer, &s, chip_x + dx, row),
+                Some(("q1".into(), "steer"))
+            );
+        }
+        // Steering rows have no arrows: `Interrupt ✕`, and nothing reorders them.
         let first = card - 6;
         cache.pointer = Some((composer.x + 6, first));
         let buffer = paint(&s, &mut cache, &mut composer);
-        let shown: Vec<&str> = (composer.x..composer.right())
-            .map(|x| buffer[(x, first)].symbol())
-            .filter(|symbol| ["↑", "↓", "✕"].contains(symbol))
-            .collect();
-        assert_eq!(shown, ["↓", "✕"], "disabled up arrow is not drawn");
-        assert_eq!(queue_control_at(composer, &s, cells[0], first), None);
+        let drawn = line_at(&buffer, first);
+        assert!(drawn.contains("Interrupt   ✕"), "{drawn}");
+        assert!(!drawn.contains('↑') && !drawn.contains('↓'), "{drawn}");
+        let chip = drawn.find("Interrupt").unwrap();
+        let chip_x = composer.x + drawn[..chip].chars().count() as u16;
         assert_eq!(
-            queue_control_at(composer, &s, cells[1], first),
-            Some(("s0".into(), "down"))
+            queue_control_at(composer, &s, chip_x, first),
+            Some(("s0".into(), "interrupt"))
         );
-        // The last steering message cannot move down into the queued section.
+        assert_eq!(
+            queue_control_at(composer, &s, cells[2], first),
+            Some(("s0".into(), "remove"))
+        );
+        // An interrupt item that is already pending offers only ✕.
+        s.queue_items[1].mode = "interrupt".into();
+        s.queue_items[1].tag = "I".into();
+        cache.pointer = Some((composer.x + 6, card - 5));
+        let buffer = paint(&s, &mut cache, &mut composer);
+        let drawn = line_at(&buffer, card - 5);
+        assert!(
+            drawn.contains('✕') && !drawn.contains("Interrupt"),
+            "{drawn}"
+        );
+        assert_eq!(
+            queue_control_at(composer, &s, cells[2], card - 5),
+            Some(("s1".into(), "remove"))
+        );
         assert_eq!(queue_control_at(composer, &s, cells[1], card - 5), None);
-        assert_eq!(
-            queue_control_at(composer, &s, cells[0], card - 5),
-            Some(("s1".into(), "up"))
-        );
         // A section's caret row collapses both lists down to their headers.
         assert!(queue_header_at(composer, &s, composer.x + 2, card - 7));
         assert!(queue_header_at(composer, &s, composer.x + 2, card - 4));
@@ -4103,8 +4908,16 @@ mod editor_layout_tests {
                 .map(|x| buffer[(x, y)].symbol().to_string())
                 .collect()
         };
-        assert!(line(card - 2).trim_start().starts_with("▸ Steering 2"), "{}", line(card - 2));
-        assert!(line(card - 1).trim_start().starts_with("▸ Queued 3"), "{}", line(card - 1));
+        assert!(
+            line(card - 2).trim_start().starts_with("▸ Steering 2"),
+            "{}",
+            line(card - 2)
+        );
+        assert!(
+            line(card - 1).trim_start().starts_with("▸ Queued 3"),
+            "{}",
+            line(card - 1)
+        );
     }
 
     #[test]
@@ -4283,18 +5096,22 @@ mod editor_layout_tests {
         );
         assert_eq!(
             buffer[(row.x, row.y)].fg,
-            crate::transcript::color(&s.agent_color, p.blue, &p),
-            "spinner keeps agent color"
+            shimmer_greys(&p).1,
+            "the ∴ mark is the base dark grey"
         );
-        assert_eq!(buffer[(row.x + 2, row.y)].fg, p.quiet, "status is gray");
+        assert_eq!(
+            buffer[(row.x + 2, row.y)].fg,
+            shimmer_greys(&p).1,
+            "animations off: the word in the base grey"
+        );
         let status = text(row.y);
-        assert!(status.contains("⠋ Waiting for response…"), "{status}");
+        assert!(status.contains("∴ Waiting for response…"), "{status}");
         assert!(
             !status.contains("2.0s") && !status.contains("response… 2"),
             "{status}"
         );
         assert!(
-            status.trim_end().ends_with("4m40s ↓121k [stop]"),
+            status.trim_end().ends_with("4m 40s ↓121k [stop]"),
             "{status}"
         );
         assert!(
@@ -4314,7 +5131,7 @@ mod editor_layout_tests {
         s.turn_status = None;
         assert!(above_layout(composer, &s).status.is_none());
         assert_eq!(fmt_activity(2.04), "2.0s");
-        assert_eq!(fmt_turn(3725.0), "1h02m");
+        assert_eq!(fmt_turn(3725.0), "1h 2m");
         assert_eq!(fmt_tokens(1234), "1.2k");
     }
 
@@ -4436,6 +5253,14 @@ pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
     ])
     .split(area)
     .to_vec()
+}
+
+pub fn inset(a: Rect, left: u16, right: u16) -> Rect {
+    Rect {
+        x: a.x + left,
+        width: a.width.saturating_sub(left + right),
+        ..a
+    }
 }
 
 struct ControlLayout {
@@ -4590,6 +5415,10 @@ fn animated_voice_preview(cache: &mut Cache, text: &str) -> String {
         cache.voice_text = text.to_string();
         cache.voice_changed_at = cache.spin;
     }
+    // Animations off: the transcribed words are drawn as they are, never scrambled first.
+    if !cache.animate {
+        return text.to_string();
+    }
     let age = cache.spin.saturating_sub(cache.voice_changed_at);
     text.chars()
         .enumerate()
@@ -4613,6 +5442,7 @@ mod voice_animation_tests {
     #[test]
     fn changed_words_resolve_and_preserve_stable_text() {
         let mut cache = Cache::default();
+        cache.animate = true;
         cache.voice_text = "hello word".into();
         cache.spin = 10;
         let first = animated_voice_preview(&mut cache, "hello world");
@@ -4624,6 +5454,10 @@ mod voice_animation_tests {
             "hello world"
         );
         assert_eq!(animated_voice_preview(&mut cache, "你好 🌍"), "你好 🌍");
+        // Animations off: the new words show at once.
+        cache.animate = false;
+        cache.spin = 20;
+        assert_eq!(animated_voice_preview(&mut cache, "hello wxrld"), "hello wxrld");
     }
 }
 
@@ -4841,6 +5675,61 @@ mod local_cache_regressions {
     }
 
     #[test]
+    fn finished_group_folds_frame_by_frame_then_expires() {
+        use crate::transcript::fold::{FLASH_FRAMES, FRAME};
+        let group = |status: &str, rev: &str, members: usize| Content {
+            id: "g".into(),
+            kind: "tool_group".into(),
+            status: status.into(),
+            collapsed: true,
+            rev: rev.into(),
+            text: "Read 3 files".into(),
+            running_label: "Working".into(),
+            operation: Some(json!({"kind":"block_toggle","id":"g"})),
+            members: (0..members)
+                .map(|i| Content {
+                    id: format!("m{i}"),
+                    kind: "tool".into(),
+                    title: "Read".into(),
+                    text: format!("f{i}"),
+                    status: "completed".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let p = Palette::new(false);
+        let mut cache = Cache::default();
+        cache.animate = true;
+        let now = std::time::Instant::now();
+        let running = vec![group("running", "1", 3)];
+        cache.step_folds_at(&running, now);
+        cache.update_content(&[], &running, 80, &p);
+        assert!(!cache.folding());
+        let full = cache.lines.len();
+        assert_eq!(full, 4, "header and three tree rows");
+        let done = vec![group("completed", "2", 0)];
+        let rows_at = |frames: u32, cache: &mut Cache| {
+            cache.step_folds_at(&done, now + FRAME * frames);
+            cache.update_content(&[], &done, 80, &p);
+            cache.lines.len()
+        };
+        assert_eq!(rows_at(0, &mut cache), 4, "the first frame keeps every row");
+        assert!(cache.folding());
+        assert_eq!(rows_at(1, &mut cache), 3);
+        assert_eq!(rows_at(2, &mut cache), 2);
+        assert_eq!(rows_at(3, &mut cache), 1, "rows gone, the header flashes");
+        assert!(cache.folding());
+        assert_eq!(rows_at(3 + FLASH_FRAMES as u32, &mut cache), 1);
+        assert!(!cache.folding(), "the transient expires on its own");
+        // Animations off: a finished group never folds.
+        let mut still = Cache::default();
+        still.step_folds_at(&running, now);
+        still.step_folds_at(&done, now);
+        assert!(!still.folding());
+    }
+
+    #[test]
     fn a_third_turn_refolds_the_oldest_without_a_patch_over_it() {
         let user = |turn: &str| Content {
             id: format!("{turn}:user"),
@@ -4973,6 +5862,375 @@ fn queue_item(id: &str, tag: &str, text: &str) -> crate::bridge::QueueItem {
 }
 
 #[cfg(test)]
+mod queue_flash_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_promoted_message_flashes_once_and_expires() {
+        let now = Instant::now();
+        let mut flash = QueueFlash::default();
+        flash.observe(&[queue_item("q1", "Q", "a")], now, true);
+        assert!(!flash.live(now, true), "a new item never flashes");
+        flash.observe(&[queue_item("q1", "S", "a")], now, true);
+        assert!(flash.live(now, true), "the promotion starts a flash");
+        assert!(flash.strength("q1", now) > 0.99);
+        let mid = now + FLASH_FRAME * 6;
+        assert!((flash.strength("q1", mid) - 0.5).abs() < 0.05, "fades out");
+        let later = now + FLASH_FRAME * 13;
+        assert!(!flash.live(later, true), "ends by itself");
+        flash.observe(&[queue_item("q1", "S", "a")], later, true);
+        assert!(!flash.live(later, true), "no repeat without another change");
+        assert!(!flash.live(now + Duration::from_millis(1), false), "animations off: no flash");
+    }
+
+    #[test]
+    fn animations_off_never_start_a_flash() {
+        let now = Instant::now();
+        let mut flash = QueueFlash::default();
+        flash.observe(&[queue_item("q1", "Q", "a")], now, false);
+        flash.observe(&[queue_item("q1", "S", "a")], now, false);
+        assert!(!flash.live(now, false) && flash.strength("q1", now) == 0.0);
+    }
+}
+
+#[cfg(test)]
+mod queue_focus_tests {
+    use super::*;
+    use crossterm::event::{KeyCode as K, KeyModifiers as M};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn snapshot() -> Snapshot {
+        let mut s = Snapshot::default();
+        s.queue_items = [
+            ("s0", "S", false, false),
+            ("q0", "Q", false, true),
+            ("q1", "Q", true, false),
+        ]
+        .into_iter()
+        .map(|(id, tag, can_up, can_down)| crate::bridge::QueueItem {
+            can_up,
+            can_down,
+            ..queue_item(id, tag, id)
+        })
+        .collect();
+        s
+    }
+    fn key(s: &Snapshot, focus: &str, code: K, mods: M) -> QueueKey {
+        queue_key(s, &[0, 1, 2], focus, code, mods)
+    }
+    fn op(id: &str, op: &'static str, then: Option<&str>) -> QueueKey {
+        QueueKey::Op(id.into(), op, then.map(String::from))
+    }
+
+    #[test]
+    fn enter_and_s_promote_one_step() {
+        let s = snapshot();
+        for code in [K::Enter, K::Char('s')] {
+            assert_eq!(key(&s, "q0", code, M::NONE), op("q0", "steer", Some("q0")));
+            assert_eq!(key(&s, "s0", code, M::NONE), op("s0", "interrupt", Some("s0")));
+        }
+        let mut s = snapshot();
+        s.queue_items[0].mode = "interrupt".into();
+        s.queue_items[0].tag = "I".into();
+        assert_eq!(key(&s, "s0", K::Enter, M::NONE), QueueKey::Stay, "already pending");
+    }
+
+    #[test]
+    fn delete_backspace_and_x_remove_and_refocus_a_neighbour() {
+        let s = snapshot();
+        for code in [K::Delete, K::Backspace, K::Char('x')] {
+            assert_eq!(key(&s, "q0", code, M::NONE), op("q0", "remove", Some("q1")));
+        }
+        assert_eq!(key(&s, "q1", K::Delete, M::NONE), op("q1", "remove", Some("q0")), "last row: previous");
+        let only = {
+            let mut s = snapshot();
+            s.queue_items.truncate(1);
+            s
+        };
+        assert_eq!(queue_key(&only, &[0], "s0", K::Char('x'), M::NONE), op("s0", "remove", None));
+    }
+
+    #[test]
+    fn alt_arrows_reorder_queued_rows_only() {
+        let s = snapshot();
+        assert_eq!(key(&s, "q0", K::Down, M::ALT), op("q0", "down", Some("q0")));
+        assert_eq!(key(&s, "q1", K::Up, M::ALT), op("q1", "up", Some("q1")));
+        assert_eq!(key(&s, "q0", K::Up, M::ALT), QueueKey::Stay, "edge: disabled move");
+        assert_eq!(key(&s, "s0", K::Down, M::ALT), QueueKey::Stay, "steering never reorders");
+    }
+
+    #[test]
+    fn arrows_move_focus_and_the_edges_hand_it_on() {
+        let s = snapshot();
+        assert_eq!(key(&s, "q0", K::Down, M::NONE), QueueKey::Focus("q1".into()));
+        assert_eq!(key(&s, "q0", K::Char('k'), M::NONE), QueueKey::Focus("s0".into()));
+        assert_eq!(key(&s, "s0", K::Up, M::NONE), QueueKey::Prev);
+        assert_eq!(key(&s, "q1", K::Down, M::NONE), QueueKey::Leave);
+        assert_eq!(key(&s, "q1", K::Esc, M::NONE), QueueKey::Leave);
+        assert_eq!(key(&s, "q1", K::Char('a'), M::NONE), QueueKey::Pass, "typing leaves and types");
+        assert_eq!(key(&s, "q1", K::Char('s'), M::CONTROL), QueueKey::Pass, "Ctrl keys keep their meaning");
+        assert_eq!(key(&s, "gone", K::Enter, M::NONE), QueueKey::Pass);
+    }
+
+    #[test]
+    fn prune_drops_focus_and_press_of_a_message_that_left() {
+        let mut ui = QueueUi {
+            focus: Some("a".into()),
+            press: Some(("b".into(), "remove")),
+            ..Default::default()
+        };
+        ui.prune(&["a".into(), "b".into()]);
+        assert!(ui.focus.is_some() && ui.press.is_some());
+        ui.prune(&["c".into()]);
+        assert!(ui.focus.is_none() && ui.press.is_none());
+    }
+
+    fn paint(s: &Snapshot, cache: &mut Cache) -> (Rect, ratatui::buffer::Buffer) {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut composer = Rect::default();
+        terminal
+            .draw(|frame| {
+                composer = draw(
+                    frame,
+                    s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    cache,
+                    false,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                )
+                .composer;
+            })
+            .unwrap();
+        (composer, terminal.backend().buffer().clone())
+    }
+
+    #[test]
+    fn monochrome_marks_a_pressed_chip_with_a_reversed_cell_and_ascii_has_twins() {
+        let s = snapshot();
+        let mut cache = Cache::default();
+        cache.mono = true;
+        cache.queue_ui.focus = Some("q1".into());
+        let row_of = |buffer: &ratatui::buffer::Buffer, composer: Rect, sym: &str| {
+            let y = composer_rows(composer, &snapshot())[1].y - 1;
+            let x = (composer.x..composer.right()).find(|x| buffer[(*x, y)].symbol() == sym);
+            (x, y)
+        };
+        let (composer, buffer) = paint(&s, &mut cache);
+        let (x, y) = row_of(&buffer, composer, "✕");
+        let x = x.expect("controls on the focused row");
+        assert!(!buffer[(x, y)].modifier.contains(Modifier::REVERSED));
+        cache.queue_ui.press = Some(("q1".into(), "remove"));
+        let (_, buffer) = paint(&s, &mut cache);
+        assert!(
+            buffer[(x, y)].modifier.contains(Modifier::REVERSED),
+            "pressed is visible without colour"
+        );
+        assert_eq!(queue_marks(true), ("^", "v", "x"));
+        assert!(queue_marks(true).0.is_ascii() && queue_marks(true).2.is_ascii());
+        assert_eq!(queue_marks(false), ("↑", "↓", "✕"));
+    }
+
+    #[test]
+    fn focus_shows_the_hover_controls_and_pressed_chips_change_colour() {
+        let s = snapshot();
+        let mut cache = Cache::default();
+        let (composer, buffer) = paint(&s, &mut cache);
+        let card = composer_rows(composer, &s)[1].y;
+        let row = card - 1; // q1, the last listed row
+        let find = |buffer: &ratatui::buffer::Buffer, y: u16, sym: &str| {
+            (composer.x..composer.right()).find(|x| buffer[(*x, y)].symbol() == sym)
+        };
+        assert!(find(&buffer, row, "✕").is_none(), "no pointer, no focus: no controls");
+        cache.queue_ui.focus = Some("q1".into());
+        let (_, buffer) = paint(&s, &mut cache);
+        let x = find(&buffer, row, "✕").expect("a focused row shows the controls");
+        let p = Palette::new(false);
+        assert_eq!(buffer[(x, row)].fg, p.muted);
+        // The chip and the cross while the mouse holds them.
+        cache.queue_ui.press = Some(("q1".into(), "remove"));
+        let (_, buffer) = paint(&s, &mut cache);
+        assert_eq!(buffer[(x, row)].fg, p.error, "pressed cross is p.error");
+        cache.queue_ui.press = Some(("q1".into(), "steer"));
+        let (_, buffer) = paint(&s, &mut cache);
+        let chip = find(&buffer, row, "S").expect("Steer chip");
+        assert_eq!(buffer[(chip, row)].bg, p.muted, "pressed chip is p.muted");
+        assert_eq!(buffer[(x, row)].fg, p.muted, "the cross is not pressed");
+        cache.queue_ui.press = None;
+        let (_, buffer) = paint(&s, &mut cache);
+        assert_eq!(buffer[(chip, row)].bg, p.element_hi);
+    }
+}
+
+#[cfg(test)]
+mod animations_off_tests {
+    use super::*;
+    use crate::bridge::Content;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn rich() -> Snapshot {
+        let mut s = Snapshot::default();
+        s.status = "running".into();
+        s.voice_phase = "recording".into();
+        s.voice_preview = "hello".into();
+        s.live.active = true;
+        s.live.state = "active".into();
+        s.live.phase = "listening".into();
+        s.live.started = 1.0;
+        s.context_window = Some(200_000);
+        s.tabs = vec![crate::bridge::Session {
+            id: "t1".into(),
+            title: "Busy tab".into(),
+            status: "working".into(),
+            active: true,
+            ..Default::default()
+        }];
+        s.queue_items = vec![
+            queue_item("s0", "S", "steer one"),
+            queue_item("q0", "Q", "queued one"),
+        ];
+        s.blocks = vec![
+            Content {
+                id: "m".into(),
+                kind: "markdown".into(),
+                text: "\u{e000} Bash · ls\nan answer that is still streaming".into(),
+                rev: "1".into(),
+                ..Default::default()
+            },
+            Content {
+                id: "g".into(),
+                kind: "tool_group".into(),
+                status: "running".into(),
+                collapsed: true,
+                running_label: "Working".into(),
+                rev: "1".into(),
+                members: vec![Content {
+                    id: "t".into(),
+                    kind: "tool".into(),
+                    title: "Read".into(),
+                    text: "src/main.rs".into(),
+                    status: "running".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+        s
+    }
+    fn screen(s: &Snapshot, cache: &mut Cache, size: (u16, u16)) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..size.1)
+            .map(|y| {
+                (0..size.0)
+                    .map(|x| {
+                        let cell = &buffer[(x, y)];
+                        format!("{}{:?}{:?}", cell.symbol(), cell.fg, cell.bg)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_activity_meter_rests_without_animation_and_reads_by_shape_in_mono() {
+        let mut s = Snapshot::default();
+        s.status = "running".into();
+        let p = Palette::new(false);
+        let at = |tick, animate, mono| {
+            activity_meter_for(&s, &p, 20, tick, animate, mono)
+                .iter()
+                .map(|span| format!("{}{:?}", span.content, span.style.fg))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(at(0, false, false), at(77, false, false), "static when off");
+        assert_ne!(at(0, true, false), at(40, true, false), "moves when on");
+        let shapes: String = activity_meter_for(&s, &p, 20, 0, false, true)
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect();
+        assert!(shapes.contains('━') && shapes.contains('─'), "{shapes}");
+        assert_eq!(shapes.chars().filter(|c| *c == '━').count(), 4, "a fifth of 20");
+    }
+
+    /// With animations off nothing may depend on the frame clock: every row of a busy screen
+    /// (recording mark, activity word and meter, live strip, folding group, write head, queue)
+    /// is the same at tick 0 and a much later tick, apart from the braille spinner itself.
+    #[test]
+    fn the_screen_is_the_same_at_every_tick() {
+        let s = rich();
+        let mut cache = Cache::default();
+        cache.animate = false;
+        cache.voice_levels = vec![0.2, 0.9, 0.4];
+        cache.voice_elapsed = 7;
+        let first = screen(&s, &mut cache, (100, 30));
+        cache.spin = 53;
+        cache.activity_frame = 701;
+        let later = screen(&s, &mut cache, (100, 30));
+        let differing: Vec<usize> = (0..first.len()).filter(|&y| first[y] != later[y]).collect();
+        let strip = |rows: &[String]| {
+            differing
+                .iter()
+                .map(|&y| {
+                    rows[y]
+                        .split('|')
+                        .map(|cell| cell.split("Rgb").next().unwrap_or("").split("Reset").next().unwrap_or(""))
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        // The same two ticks do move the screen with animations on (the test has teeth).
+        cache.animate = true;
+        cache.spin = 0;
+        cache.activity_frame = 0;
+        let on_first = screen(&s, &mut cache, (100, 30));
+        cache.spin = 53;
+        cache.activity_frame = 701;
+        let on_later = screen(&s, &mut cache, (100, 30));
+        assert_ne!(on_first, on_later);
+        assert!(
+            differing.is_empty(),
+            "rows {differing:?} move with the clock while animations are off:\n{:#?}\n{:#?}",
+            strip(&first),
+            strip(&later)
+        );
+    }
+}
+
+#[cfg(test)]
 mod live_pane_tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
@@ -5015,7 +6273,11 @@ mod live_pane_tests {
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let lines = (0..40)
-            .map(|y| (0..100).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
             .collect();
         (regions, lines)
     }
@@ -5054,8 +6316,8 @@ mod live_pane_tests {
         let s = call(12);
         let (r, lines) = paint(&s, &mut cache);
         let at = |y: u16| lines[usize::from(y)].clone();
-        assert!(at(r.live.y).contains("● Live · "), "{}", at(r.live.y));
-        assert!(at(r.live.y).contains("mic ▱"), "{}", at(r.live.y));
+        assert!(at(r.live.y).contains("LISTENING"), "{}", at(r.live.y));
+        assert!(at(r.live.y).contains("▁▁▁▁▁▁▁▁"), "{}", at(r.live.y));
         assert!(at(r.live.y).contains("↑ 7 more"), "{}", at(r.live.y));
         assert!(at(r.live.y).contains("⤢ expand"));
         assert!(at(r.live.bottom() - 1).contains("row number 11"));
@@ -5094,7 +6356,13 @@ mod live_pane_tests {
         s.live.started = crate::live_bar::now_epoch() - 12.0;
         let (r, lines) = paint(&s, &mut cache);
         let head = &lines[usize::from(r.live.y)];
-        assert!(head.contains(" MUTED ") && head.contains("↑ 7 more") && head.contains("⤢ expand"), "{head}");
+        assert!(
+            head.contains("MUTED")
+                && head.contains("00:12")
+                && head.contains("↑ 7 more")
+                && head.contains("⤢ expand"),
+            "{head}"
+        );
     }
 
     #[test]
@@ -5103,7 +6371,11 @@ mod live_pane_tests {
         let (_, lines) = paint(&call(12), &mut cache);
         let r = regions(Rect::new(0, 0, 100, 40), &call(12), 8, false);
         for y in r.composer.y..r.composer.bottom() {
-            assert!(!lines[usize::from(y)].contains("● Live"), "{}", lines[usize::from(y)]);
+            assert!(
+                !lines[usize::from(y)].contains("LISTENING"),
+                "{}",
+                lines[usize::from(y)]
+            );
         }
     }
 
@@ -5117,9 +6389,90 @@ mod live_pane_tests {
         assert_eq!(r.live.height, 1);
         assert_eq!(r.live.bottom(), r.composer.y);
         let head = &lines[usize::from(r.live.y)];
-        assert!(head.contains("● Live") && head.contains("· in work") && head.contains("/live stop"), "{head}");
+        assert!(
+            head.contains("LISTENING") && head.contains("in work") && head.contains("/live stop"),
+            "{head}"
+        );
         assert!(cache.live_button.is_none());
         s.live_expanded = true;
-        assert_eq!(regions(Rect::new(0, 0, 100, 40), &s, 8, false).live.height, 1);
+        assert_eq!(
+            regions(Rect::new(0, 0, 100, 40), &s, 8, false).live.height,
+            1
+        );
+    }
+}
+
+#[cfg(test)]
+mod thinking_shimmer_tests {
+    use super::*;
+
+    fn text_of(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn shimmer_text_is_the_real_word_at_every_tick() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            for word in ["Waiting for response…", "界 wide 👩‍💻 mix…", "a", ""] {
+                for tick in 0..SHIMMER_FRAMES * 2 {
+                    for animate in [true, false] {
+                        let spans = shimmer_spans(word, tick, animate, false, &p);
+                        assert_eq!(text_of(&spans), word);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shimmer_colours_stay_inside_the_grey_pair() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let (hi, lo) = shimmer_greys(&p);
+            assert_ne!(hi, lo);
+            let channel = |c: Color| match c {
+                Color::Rgb(r, _, _) => r,
+                _ => panic!("rgb expected"),
+            };
+            let (min, max) = (channel(hi).min(channel(lo)), channel(hi).max(channel(lo)));
+            for tick in 0..SHIMMER_FRAMES {
+                for span in shimmer_spans("Waiting for response…", tick, true, false, &p) {
+                    let fg = span.style.fg.unwrap();
+                    assert_ne!(fg, p.purple);
+                    assert_ne!(fg, p.accent);
+                    let Color::Rgb(r, g, b) = fg else { panic!() };
+                    assert!(r == g && g == b, "grey: {fg:?}");
+                    assert!((min..=max).contains(&r), "{fg:?} outside {min}..={max}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shimmer_moves_when_animated_and_rests_when_not() {
+        let p = Palette::new(false);
+        let word = "Waiting for response…";
+        let colours = |tick, animate| -> Vec<Option<Color>> {
+            shimmer_spans(word, tick, animate, false, &p)
+                .iter()
+                .map(|s| s.style.fg)
+                .collect()
+        };
+        assert_ne!(colours(10, true), colours(20, true));
+        assert_eq!(colours(10, true), colours(10 + SHIMMER_FRAMES, true));
+        assert_eq!(colours(10, false), colours(20, false));
+        let rest = shimmer_spans(word, 10, false, false, &p);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].style.fg, Some(shimmer_greys(&p).1));
+    }
+
+    #[test]
+    fn shimmer_is_plain_text_in_monochrome() {
+        let p = Palette::new(false);
+        let spans = shimmer_spans("Thinking…", 7, true, true, &p);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "Thinking…");
+        assert_eq!(spans[0].style.fg, None);
     }
 }

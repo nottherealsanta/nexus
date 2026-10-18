@@ -79,6 +79,8 @@ pub enum TabHit {
     Dashboard,
     /// `▯`: toggles the details sidebar.
     Details,
+    /// `◔ N`: opens the notifications drawer.
+    Notifications,
 }
 pub struct TabCell {
     pub kind: TabHit,
@@ -101,6 +103,8 @@ enum Seg {
     Worktree,
     Dashboard,
     Details,
+    /// The notifications counter.
+    Counter,
     Gap,
 }
 /// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
@@ -123,6 +127,13 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
                 out.push((text.clone(), Seg::Notice));
                 out.push((sep.into(), Seg::Sep));
             }
+        }
+        if let Some(count) = s.notifications {
+            out.push((
+                super::notifications::counter_text(count, s.notifications_pop),
+                Seg::Counter,
+            ));
+            out.push((" ".into(), Seg::Gap));
         }
         out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
@@ -318,6 +329,7 @@ pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
             Seg::New => Some((TabHit::New, start, start + text.width())),
             Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
             Seg::Details => Some((TabHit::Details, start, start + text.width())),
+            Seg::Counter => Some((TabHit::Notifications, start, start + text.width())),
             _ => None,
         })
         .filter(|(_, start, end)| start < end && *end <= width)
@@ -356,7 +368,10 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 ),
             ])
             .style(Style::default().fg(p.text).bg(p.panel)),
-            Rect { height: area.height.min(1), ..area },
+            Rect {
+                height: area.height.min(1),
+                ..area
+            },
         );
         return;
     }
@@ -392,16 +407,30 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 Seg::Path => background.fg(p.text),
                 Seg::Notice => background.fg(p.accent),
                 Seg::Dashboard | Seg::Details => background.fg(p.muted),
+                // Warn while something is unread, quiet otherwise; the change pop is bold
+                // in the text colour (the peak of the quiet→text range).
+                Seg::Counter if s.notifications_pop => {
+                    background.fg(p.text).add_modifier(Modifier::BOLD)
+                }
+                Seg::Counter if s.notifications.unwrap_or(0) > 0 => background.fg(p.warning),
+                Seg::Counter => background.fg(p.quiet),
             };
             spans.push(Span::styled(text, style));
         }
         Line::from(spans)
     };
     let bar = Rect { height: 1, ..area };
-    frame.render_widget(Paragraph::new(row(top_layout(s, width))).style(background), bar);
+    frame.render_widget(
+        Paragraph::new(row(top_layout(s, width))).style(background),
+        bar,
+    );
     // Row 1 stays blank; the workspace row sits below it.
     if area.height > 2 {
-        let crumbs = Rect { y: area.y + 2, height: 1, ..area };
+        let crumbs = Rect {
+            y: area.y + 2,
+            height: 1,
+            ..area
+        };
         frame.render_widget(
             Paragraph::new(row(crumb_layout(s, width))).style(background),
             crumbs,
@@ -630,7 +659,11 @@ mod chrome_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
-        assert!(row(1).trim().is_empty(), "blank row between tabs and workspace: {:?}", row(1));
+        assert!(
+            row(1).trim().is_empty(),
+            "blank row between tabs and workspace: {:?}",
+            row(1)
+        );
         vec![row(0), row(2)]
     }
     /// The tab row.
@@ -680,7 +713,11 @@ mod chrome_tests {
             "workspace info left the tab row: {text}"
         );
         assert!(rows[1].trim() == "~/repo main wt-fix", "{:?}", rows[1]);
-        assert_eq!(rows[1].find('~'), Some(3), "aligned with the first tab label");
+        assert_eq!(
+            rows[1].find('~'),
+            Some(3),
+            "aligned with the first tab label"
+        );
         assert!(
             !text.contains("72K") && !text.contains('‹') && !text.contains('›'),
             "{text}"
@@ -728,7 +765,11 @@ mod chrome_tests {
             .iter()
             .filter(|(_, _, seg)| *seg == Seg::Divider)
             .collect();
-        assert_eq!(dividers.len(), 2, "one between each pair of tabs: {layout:?}");
+        assert_eq!(
+            dividers.len(),
+            2,
+            "one between each pair of tabs: {layout:?}"
+        );
         assert!(dividers.iter().all(|(_, text, _)| text == "│"));
         let text = bar_text(&s, 120);
         assert_eq!(text.matches('│').count(), 2, "{text}");
@@ -742,14 +783,25 @@ mod chrome_tests {
         }
         // Dividers are not clickable and do not shift the hit targets off their text.
         for cell in &cells {
-            let drawn: String = text.chars().skip(cell.start).take(cell.end - cell.start).collect();
-            assert!(!drawn.contains('│'), "{:?} covers a divider: {drawn:?}", cell.kind);
+            let drawn: String = text
+                .chars()
+                .skip(cell.start)
+                .take(cell.end - cell.start)
+                .collect();
+            assert!(
+                !drawn.contains('│'),
+                "{:?} covers a divider: {drawn:?}",
+                cell.kind
+            );
         }
         let single = Snapshot {
             tabs: open_tabs(1, 0),
             ..Snapshot::default()
         };
-        assert!(!bar_text(&single, 120).contains('│'), "no divider around a lone tab");
+        assert!(
+            !bar_text(&single, 120).contains('│'),
+            "no divider around a lone tab"
+        );
     }
 
     #[test]
@@ -783,13 +835,25 @@ mod chrome_tests {
         let open = layout_key(&regions(area, &s, 8, false));
         s.details_sidebar = false;
         let closed = layout_key(&regions(area, &s, 8, false));
-        assert!(needs_full_repaint(Some(open), closed), "closing the details sidebar");
+        assert!(
+            needs_full_repaint(Some(open), closed),
+            "closing the details sidebar"
+        );
         assert!(needs_full_repaint(Some(closed), open), "opening it");
-        assert!(needs_full_repaint(Some(open), layout_key(&regions(Rect::new(0, 0, 120, 30), &s, 8, false))), "resize");
+        assert!(
+            needs_full_repaint(
+                Some(open),
+                layout_key(&regions(Rect::new(0, 0, 120, 30), &s, 8, false))
+            ),
+            "resize"
+        );
         s.dashboard = Some(serde_json::json!({"rows": []}));
         let sessions = layout_key(&regions(area, &s, 0, false));
         assert!(needs_full_repaint(Some(closed), sessions), "Sessions page");
-        assert!(!needs_full_repaint(None, open), "first frame needs no extra clear");
+        assert!(
+            !needs_full_repaint(None, open),
+            "first frame needs no extra clear"
+        );
         s.dashboard = None;
         s.title = "Another title".into();
         s.tabs[1].title = "Renamed".into();
@@ -883,6 +947,77 @@ mod chrome_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn notification_counter_is_a_top_bar_button_left_of_the_sessions_button() {
+        let mut s = Snapshot {
+            tabs: open_tabs(2, 0),
+            notifications: Some(3),
+            ..Snapshot::default()
+        };
+        let text = bar_text(&s, 100);
+        assert!(
+            text.contains(" ◔ 3 ") && text.ends_with(" ≡   ▯   "),
+            "{text}"
+        );
+        let cells = tab_cells(&s, 100);
+        let counter = cells
+            .iter()
+            .find(|c| c.kind == TabHit::Notifications)
+            .unwrap();
+        let dash = cells.iter().find(|c| c.kind == TabHit::Dashboard).unwrap();
+        assert_eq!(counter.end + 1, dash.start);
+        assert_eq!(counter.end - counter.start, 5);
+        s.notifications_pop = true;
+        let popped = bar_text(&s, 100);
+        assert!(popped.contains("(◔ 3)"), "{popped}");
+        assert_eq!(popped.width(), text.width(), "the pop never moves anything");
+        s.notifications = None;
+        assert!(!tab_cells(&s, 100)
+            .iter()
+            .any(|c| c.kind == TabHit::Notifications));
+        // The counter is the first thing to go when the bar is narrow.
+        s.notifications = Some(0);
+        s.notifications_pop = false;
+        for width in 1..120usize {
+            let mut end = 0;
+            for (start, text, _) in top_layout(&s, width) {
+                assert!(start >= end && start + text.width() <= width, "{width}");
+                end = start + text.width();
+            }
+        }
+        let narrow = tab_cells(&s, 24);
+        assert!(narrow.iter().any(|c| c.kind == TabHit::Dashboard));
+        assert!(narrow.iter().any(|c| c.kind == TabHit::Details));
+    }
+
+    #[test]
+    fn notification_counter_colours_follow_unread_state() {
+        let p = Palette::new(false);
+        let colour = |count: usize, pop: bool| {
+            let s = Snapshot {
+                notifications: Some(count),
+                notifications_pop: pop,
+                ..Snapshot::default()
+            };
+            let backend = ratatui::backend::TestBackend::new(100, 3);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_top_bar(frame, &s, frame.area(), &p, 0))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let at = (0..100u16)
+                .find(|x| buffer[(*x, 0)].symbol() == "◔")
+                .unwrap();
+            (
+                buffer[(at, 0)].fg,
+                buffer[(at, 0)].modifier.contains(Modifier::BOLD),
+            )
+        };
+        assert_eq!(colour(0, false), (p.quiet, false));
+        assert_eq!(colour(2, false), (p.warning, false));
+        assert_eq!(colour(3, true), (p.text, true));
     }
 
     #[test]

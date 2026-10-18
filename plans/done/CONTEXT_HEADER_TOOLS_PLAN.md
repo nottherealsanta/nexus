@@ -166,10 +166,33 @@ Native workflows call `select_context_extension` for skills/MCP and tools.
 - `docs/decisions.md`: "tool failures are not marked in the timeline: the loop
   recovers on its own; the error stays readable in the expanded detail".
 
-## Not verified
+## Implementation status
 
-- That every skill/MCP row carries `scope` (`runtime.py:2797` builds skill rows
-  and should; MCP rows need checking).
-- How tool toggles interact with tools that a skill or the loop requires
-  (`ReadMcpResource`, `Task`). Proposal: allow all, but refuse to turn off the
-  last tool when the model needs at least one.
+The current implementation supersedes the horizontal-chip sketch above: keep
+its vertical context rows, switch controls, and Tools-last ordering. Scoped
+counts, click targets, durable tool selections, and first-turn locking were
+already present. Tools outside the root agent allowlist stay hidden. No
+last-tool guard was added: the runtime permits an empty tool catalog.
+
+Completed in this pass:
+
+- Respect disabled available web tools when building iteration catalogs; keep
+  MCP search wrappers subject to their own session selection flags.
+- Remove native batch glyphs and result gutters, including expanded results.
+- Project task cards as identity, latest running activity, and separate metrics;
+  omit activity on completion and retain errors in expanded details/agent pages.
+- Preserve native-local disclosure details while respecting Python-side expansion.
+- Document native-only presentation; the deprecated browser is unchanged.
+
+Verification:
+
+- 155 targeted selection/projection/workflow/session/native-PTY tests passed.
+- Rust unit tests and native debug build passed.
+- `tests/playwright_ratatui_check.py` passed (context selection and tool groups).
+- Host facade and layering tests passed; changed Python files passed Ruff;
+  `git diff --check` passed.
+- Docs check: 28 passed, two pre-existing broken plan links failed in
+  `docs/desktop.md` and `docs/ratatui-parity.md`; left unchanged.
+
+Remaining: exhaustive scope coverage across real installed MCP/skill providers
+and live-provider behavior with every tool disabled were not verified.

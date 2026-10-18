@@ -1,7 +1,7 @@
 """Wire shapes for a GPT Live call (undocumented; see ``NOTICE``).
 
 Everything here is re-implemented from observed behaviour recorded in
-``plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md`` (sections cited as ``notes §N``).
+``plans/done/GPT_LIVE_PROTOCOL_NOTES.md`` (sections cited as ``notes §N``).
 No code was copied from the reference integrations. Nothing in this module has
 been exercised against the real service: **not verified**.
 

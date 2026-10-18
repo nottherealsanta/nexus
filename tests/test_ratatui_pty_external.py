@@ -18,6 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from pty_cleanup import kill_group
+
 from nexus.ui.ratatui.actions import ShellActions
 from nexus.ui.ratatui.prototype import project
 from nexus.view import fold
@@ -70,8 +72,7 @@ def _screen_of(snapshot, wanted):
         return plain()
     finally:
         stop.set()
-        process.kill()
-        process.wait()
+        kill_group(process)
         os.close(master)
         os.close(slave)
 

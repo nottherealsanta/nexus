@@ -206,7 +206,8 @@ mod tests {
         assert_eq!(lines.len(), 2 + TAIL_ROWS);
         assert_eq!(lines.last().unwrap(), "    ┃ step 12");
         assert!(
-            rows.iter().all(|(row, _)| row.spans.iter().all(|s| !look::is_live(s))),
+            rows.iter()
+                .all(|(row, _)| row.spans.iter().all(|s| !look::is_live(s))),
             "thinking never animates"
         );
     }

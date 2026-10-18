@@ -24,6 +24,8 @@ const REDRAW: Duration = Duration::from_millis(250);
 #[derive(Default)]
 pub struct Toasts {
     pub stack: ToastStack,
+    /// Everything shown, newest first, for the top-bar counter and its drawer.
+    pub notes: super::notifications::Notifications,
     actions: HashMap<u64, Value>,
     rects: Vec<ToastRect>,
     last_redraw: Option<Instant>,
@@ -83,6 +85,8 @@ impl Toasts {
                 if let Some(op) = t.action.as_ref().and_then(|a| a.operation.clone()) {
                     self.actions.insert(t.id, op);
                 }
+                self.notes
+                    .record(t.id, &t.level, &t.title, &t.body, Instant::now());
                 added = true;
             }
         }
@@ -191,6 +195,23 @@ mod tests {
         t.dismiss(5);
         assert!(!t.ingest(&list), "a dismissed toast does not come back");
         assert_eq!(t.stack.toasts.len(), 1);
+    }
+
+    #[test]
+    fn every_shown_toast_lands_in_the_notification_history_once() {
+        let mut t = Toasts::default();
+        let list = vec![wire(5, "info", "Copied"), wire(6, "error", "Boom")];
+        t.ingest(&list);
+        t.ingest(&list);
+        t.dismiss(6);
+        t.ingest(&list);
+        assert_eq!(
+            t.notes.len(),
+            2,
+            "resent and dismissed toasts are not recorded again"
+        );
+        assert_eq!(t.notes.unseen(), 2);
+        assert_eq!(t.notes.entries().next().unwrap().text, "Boom");
     }
 
     #[test]

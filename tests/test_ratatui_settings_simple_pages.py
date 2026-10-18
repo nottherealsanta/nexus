@@ -63,7 +63,11 @@ async def test_keyboard_lists_every_shortcut_read_only(shell):
     tables = [b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "table"]
     keys = {row[1] for table in tables for row in table["rows"]}
     assert "Ctrl+B" in keys and "Ctrl+X A" in keys and "Ctrl+X X" in keys
-    assert sum(len(t["rows"]) for t in tables[:2]) == len(SHORTCUTS) + len(LEADER_SHORTCUTS) + 2
+    # Three leader keys live only on this page: Ctrl+X X, Ctrl+X A and Ctrl+X Shift+N.
+    assert sum(len(t["rows"]) for t in tables[:2]) == len(SHORTCUTS) + len(LEADER_SHORTCUTS) + 3
+    assert "Ctrl+X Shift+N" in keys
+    listed = [row[1] for table in tables for row in table["rows"]]
+    assert len(listed) == len(set(listed)), "a shortcut is listed twice"
     with pytest.raises(ValueError, match="read-only"):
         await shell.workflows.operate(sp.op("keys", "anything"))
 

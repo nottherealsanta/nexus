@@ -99,8 +99,10 @@ class Client:
         """Return the regular session page plus its archived count."""
         return await self._request(p.SessionList())  # type: ignore[return-value]
 
-    async def project_sessions(self, *, limit: int = 1000, query: str = "") -> p.ProjectSessionsListResult:
-        return await self._request(p.ProjectSessionsList(limit=limit, query=query))  # type: ignore[return-value]
+    async def project_sessions(
+        self, *, limit: int = 1000, query: str = "", archived: int = 0
+    ) -> p.ProjectSessionsListResult:
+        return await self._request(p.ProjectSessionsList(limit=limit, query=query, archived=archived))  # type: ignore[return-value]
 
     async def open_project_session(self, workspace: str, session: str, *, browser: bool = False) -> p.ProjectSessionOpenResult:
         return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser))  # type: ignore[return-value]
@@ -218,6 +220,15 @@ class Client:
 
     async def queue_remove(self, session: str, queued_id: str) -> bool:
         return (await self._request(p.SessionQueueRemove(session=session, queued_id=queued_id))).changed
+
+    async def queue_remove_content(self, session: str, queued_id: str) -> tuple[bool, list[dict]]:
+        """Remove one pending message and return its full content blocks."""
+        result = await self._request(p.SessionQueueRemove(session=session, queued_id=queued_id, return_content=True))
+        return result.changed, list(result.content)  # type: ignore[union-attr]
+
+    async def queue_set_mode(self, session: str, queued_id: str, mode: str) -> bool:
+        """Promote a pending message: ``queue -> steer -> interrupt`` (upgrades only)."""
+        return (await self._request(p.SessionQueueSetMode(session=session, queued_id=queued_id, mode=mode))).changed
 
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:
         result = await self._request(p.SessionCancel(session=session, reason=reason, drop_queue=drop_queue))

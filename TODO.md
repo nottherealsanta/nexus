@@ -96,3 +96,6 @@
      two different tier tables, that `get_tiers_models_info: true` returns the
      roster and does not spawn, and that a spawn still requires `prompt`.
 
+4. Any sub-agent like task quick or advisor should not be able to launch more sub-agents. It should not have the sub-agent tool. Only root or lead-level agents which are build and orchestrator can have it
+
+5. using @ for folder too instead of just files

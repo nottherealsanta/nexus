@@ -231,14 +231,14 @@ command. The dashboard has no preview pane and no preview command
 (`SessionDashboardPreview` and `dashboard_preview` were removed). The archive
 `SessionPreview` remains distinct and unchanged.
 
-The Ratatui sessions page is a full-width list grouped by status (Needs input,
-Working, Idle, Done). Within a status group rows are ordered by newest **user** prompt (`order_time`), and
-the age and day bucket use the same time, so agent output never shuffles the list.
-Each row shows its age and a one-line tail from the schema 4
-snippets, refreshed on the list poll. The composer under the list is the normal
-composer. Enter sends to the selected session. `+ New Agent` starts a session, Open
-Previous opens the archived list (`/resume`), and Worktree opens the worktree list.
-Cross-workspace sends switch to that workspace. Attachments stay on the open session.
+The Ratatui sessions page is a compact list grouped by status: Needs you, Working,
+Idle (idle and finished-since-viewed) and Archived (the newest 20, collapsed). Within a
+status group rows are ordered by newest **user** prompt (`order_time`), and the age uses
+the same time, so agent output never shuffles the list. A Needs you row carries the
+pending permission (`request_id`, summary, `ts`) and can be answered with `a`/`d` without
+opening the session. The page has no composer; typing filters. `+ New Agent` starts a
+session and Worktree opens the worktree list; `/resume` and `/archived` stay chat commands.
+Opening a session in another workspace switches to that workspace.
 
 
 ### Ownership identity and read-only trees

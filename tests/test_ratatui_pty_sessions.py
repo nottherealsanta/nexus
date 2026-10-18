@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from pty_cleanup import kill_group
+
 BINARY = Path(__file__).resolve().parents[1] / "rust/tui/target/debug/nexus-ratatui"
 SETUP = (
     "import os,fcntl,termios; os.setsid(); fcntl.ioctl(2,termios.TIOCSCTTY,0); "
@@ -80,9 +82,7 @@ class Terminal:
         return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.kill()
-            self.process.wait()
+        kill_group(self.process)
         self.process.stdin.close()
         self.process.stdout.close()
         self.stop.set()

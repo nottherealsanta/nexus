@@ -142,8 +142,11 @@ only inserted text. The Ctrl+X leader has no visible shortcut banner. Physical
 microphone latency and real inference remain unverified.
 
 Native dictation now previews directly inside the editable composer, at the capture
-insertion position. Recording shows only a one-cell pulsing orange outline square
-below the agent control; the floating waveform/status strip is removed. Typing
+insertion position. Recording moves out of the composer onto the activity rule directly
+under the composer card: cell 2 is the red recording square (blinking every 4 spin frames
+between error red and a dimmer mixed red; `#` in ASCII), cell 3 is the activity rule, and
+cells 4-8 show the elapsed recording time (`mm:ss`) in red; while transcribing, neither mark
+is shown on the rule. The floating waveform/status strip is removed. Typing
 stops capture and also applies the typed key. Final text replaces the temporary
 preview at the captured position, preserving typed suffix text. Escape stops and
 keeps the final transcript without sending; Enter stops and sends. Both explicit

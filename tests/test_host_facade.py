@@ -413,6 +413,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.UpdateStatus(announce=True),
         p.SessionQueueMove(session="s", queued_id="q", offset=1),
         p.SessionQueueRemove(session="s", queued_id="q"),
+        p.SessionQueueSetMode(session="s", queued_id="q", mode="steer"),
         p.Health(),
         p.MockList(),
         p.MockStart(scenario="hello", speed=0.0, seed=1, session="mock-hello-1"),
@@ -1344,6 +1345,71 @@ async def test_facade_queue_move_and_remove_change_what_runs(tmp_path):
     await runtime.aclose()
 
 
+async def test_facade_queue_set_mode_promotes_and_remove_returns_full_content(tmp_path):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        [MessageStart(model="m", provider="scripted"), TextDelta(text="working"), Wait(gate),
+         MessageStop(stop_reason="stop")],
+        text_response("next"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "one")
+    await wait_for(lambda: runtime.session("s").active)
+    long_text = "steer " + "y" * 400
+    s1, _ = await facade.enqueue("s", long_text, mode="steer")
+    a, _ = await facade.enqueue("s", "a", mode="queue")
+    b, _ = await facade.enqueue("s", "b", mode="queue")
+
+    promoted = await facade.handle(p.SessionQueueSetMode(session="s", queued_id=b, mode="steer"))
+    assert promoted.changed and runtime.session("s").queued_ids == (s1, b, a)
+    refused = await facade.handle(p.SessionQueueSetMode(session="s", queued_id=b, mode="steer"))
+    assert not refused.changed
+    bad = await facade.handle(p.SessionQueueSetMode(session="s", queued_id=b, mode="queue"))
+    assert isinstance(bad, p.ErrorResult) and bad.kind == "ValueError"
+
+    removed = await facade.handle(p.SessionQueueRemove(session="s", queued_id=s1, return_content=True))
+    assert removed.changed and removed.content[0]["text"] == long_text  # not cut
+    plain = await facade.handle(p.SessionQueueRemove(session="s", queued_id=b))
+    assert plain.changed and plain.content == []
+    again = await facade.handle(p.SessionQueueRemove(session="s", queued_id=b, return_content=True))
+    assert not again.changed and again.content == []
+
+    gate.set()
+    await facade.wait_idle(timeout=5.0)
+    await runtime.aclose()
+
+
+async def test_facade_queue_interrupt_cancels_the_turn_keeps_the_queue_and_runs_next(tmp_path):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        [MessageStart(model="m", provider="scripted"), TextDelta(text="working"), Wait(gate),
+         MessageStop(stop_reason="stop")],
+        text_response("first queued"),
+        text_response("second queued"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "one")
+    await wait_for(lambda: runtime.session("s").active)
+    a, _ = await facade.enqueue("s", "a", mode="queue")
+    b, _ = await facade.enqueue("s", "b", mode="queue")
+
+    result = await facade.handle(p.SessionQueueSetMode(session="s", queued_id=b, mode="interrupt"))
+    assert result.changed
+    gate.set()  # a parked provider must not outlive the cancel
+    await facade.wait_idle(timeout=5.0)
+
+    handle = runtime.session("s")
+    consumed = [event.data["queued_id"] for event in handle.events if event.type == "input.consumed"]
+    assert consumed == [b, a]  # the interrupt runs first, the rest of the queue is kept
+    assert any(event.type == "turn.cancelled" for event in handle.events)
+    assert not any(event.type == "input.dropped" for event in handle.events)
+    await runtime.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Delete must refuse scheduled/durable work so a session cannot resurrect
 # ---------------------------------------------------------------------------
@@ -1686,6 +1752,47 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
     assert isinstance(rejected, p.ErrorResult)
     assert not calls
     await runtime.aclose()
+
+
+async def test_project_sessions_returns_bounded_archived_rows_and_pending_request(tmp_path, monkeypatch):
+    import msgspec
+    from nexus.view import ConversationView
+    from nexus.view.model import PermissionView
+
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    store = runtime.sessions.store
+    for name in ("live", "ask", "old1", "old2"):
+        store.create(name)
+        store.append_message(name, Message(role="user", content=[Text(text=name)]))
+    runtime.sessions.archive("old1", "user")
+    runtime.sessions.archive("old2", "user")
+    original = runtime.sessions._summary_from_row
+
+    def summary(row):
+        found = original(row)
+        return msgspec.structs.replace(found, state="awaiting_permission") if row["id"] == "ask" else found
+
+    monkeypatch.setattr(runtime.sessions, "_summary_from_row", summary)
+    view = ConversationView(session_id="ask", permissions=[
+        PermissionView(id="req-1", tool="Bash", preview="git push origin main", ts=77.0)])
+    monkeypatch.setattr(facade, "state", lambda session_id, from_seq=0: (view, 0))
+    try:
+        plain = await facade.handle(p.ProjectSessionsList(limit=20))
+        assert {row.session.id for row in plain.sessions} == {"live", "ask"}, "archived is opt-in"
+        result = await facade.handle(p.ProjectSessionsList(limit=20, archived=1))
+        by_id = {row.session.id: row for row in result.sessions}
+        assert set(by_id) == {"live", "ask", "old2"} or set(by_id) == {"live", "ask", "old1"}
+        archived = [row for row in result.sessions if row.archived]
+        assert len(archived) == 1 and not by_id["live"].archived
+        assert by_id["ask"].pending == {"request_id": "req-1", "kind": "permission",
+                                        "summary": "Allow Bash: git push origin main", "ts": 77.0}
+        assert by_id["live"].pending == {}
+        searched = await facade.handle(p.ProjectSessionsList(limit=20, query="live", archived=5))
+        assert not any(row.archived for row in searched.sessions), "a search skips archived rows"
+        assert isinstance(await facade.handle(p.ProjectSessionsList(archived="1")), p.ErrorResult)
+    finally:
+        await runtime.aclose()
 
 
 async def test_project_sessions_bounded_search_does_not_list_or_rehydrate(tmp_path, monkeypatch):

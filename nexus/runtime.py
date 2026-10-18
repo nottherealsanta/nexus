@@ -1912,6 +1912,7 @@ _CHILD_RELAY_SUPPRESS = frozenset(
         "permission.resolved",
         "input.queued",
         "input.moved",
+        "input.mode_changed",
         "input.consumed",
         "input.dropped",
         "input.started",

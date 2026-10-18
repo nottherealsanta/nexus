@@ -41,6 +41,8 @@ pub fn format_time(ms: u64) -> String {
         format!("{ms}ms")
     } else if ms < 60_000 {
         format!("{:.1}s", ms as f64 / 1000.0)
+    } else if ms >= 3_600_000 {
+        format!("{}h {}m", ms / 3_600_000, (ms / 60_000) % 60)
     } else {
         format!("{}m{:02}s", ms / 60_000, (ms / 1000) % 60)
     }
@@ -110,9 +112,185 @@ pub fn animate_row(
     animated
 }
 
+/// Graphemes of a streaming message that glow (step 4, STR-3).
+pub const HEAD_LEN: usize = 12;
+
+/// Tag a style as "write head". Like [`live`] it is a removed modifier nobody sets
+/// (`RAPID_BLINK`), so a plain `Style` never carries it. The tag lets the draw loop put
+/// the glow back to the base colour when animation is off.
+fn head(style: Style) -> Style {
+    style.remove_modifier(Modifier::RAPID_BLINK)
+}
+
+pub fn is_head(span: &Span<'_>) -> bool {
+    span.style.sub_modifier.contains(Modifier::RAPID_BLINK)
+}
+
+/// Blend the last `count` graphemes of a streaming message from `base` (the `count`-th
+/// from the end) to `peak` (the newest). Rows are visited newest first by the caller:
+/// `skip` leading spans (indent, list marker) are left alone, `seen` is how many
+/// graphemes the later rows already took, and the new total is returned so a short last
+/// row spills into the row above. Only spans coloured `base` (or with no colour) glow, so
+/// inline code and links keep their own colours but still use up their share of the head.
+/// Glowing graphemes are split into single-grapheme spans and tagged for [`is_head`].
+pub fn write_head(
+    line: &mut Line<'static>,
+    skip: usize,
+    mut seen: usize,
+    count: usize,
+    base: Color,
+    peak: Color,
+) -> usize {
+    if seen >= count || skip >= line.spans.len() {
+        return seen;
+    }
+    let body = line.spans.split_off(skip);
+    let mut rebuilt: Vec<Span<'static>> = Vec::new(); // newest first
+    for span in body.into_iter().rev() {
+        let graphemes: Vec<&str> = span.content.graphemes(true).collect();
+        let take = count.saturating_sub(seen).min(graphemes.len());
+        if take == 0 {
+            rebuilt.push(span);
+            continue;
+        }
+        let plain = span.style.fg.is_none() || span.style.fg == Some(base);
+        if !plain {
+            // Code and links keep their colour and stay one span; they still spend their share.
+            seen += take;
+            rebuilt.push(span);
+            continue;
+        }
+        let split = graphemes.len() - take;
+        for (index, grapheme) in graphemes.iter().enumerate().skip(split).rev() {
+            let rank = seen + (graphemes.len() - 1 - index);
+            let amount = if count > 1 {
+                1.0 - rank as f32 / (count - 1) as f32
+            } else {
+                1.0
+            };
+            rebuilt.push(Span::styled(
+                grapheme.to_string(),
+                head(span.style.fg(mix(base, peak, amount))),
+            ));
+        }
+        seen += take;
+        if split > 0 {
+            rebuilt.push(Span::styled(graphemes[..split].concat(), span.style));
+        }
+    }
+    rebuilt.reverse();
+    line.spans.extend(rebuilt);
+    seen
+}
+
+/// Put every [`is_head`] span of a drawn row back to `base` (animation off or monochrome).
+pub fn cool_head(line: &Line<'static>, base: Color) -> Line<'static> {
+    if !line.spans.iter().any(is_head) {
+        return line.clone();
+    }
+    let mut cooled = line.clone();
+    for span in cooled.spans.iter_mut().filter(|span| is_head(span)) {
+        span.style.fg = Some(base);
+    }
+    cooled
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn glowing(text: &str, count: usize) -> Line<'static> {
+        let mut line = Line::from(vec![
+            Span::raw("    "),
+            Span::styled(text.to_string(), Style::default().fg(Color::Rgb(0, 0, 0))),
+        ]);
+        write_head(
+            &mut line,
+            1,
+            0,
+            count,
+            Color::Rgb(0, 0, 0),
+            Color::Rgb(200, 100, 0),
+        );
+        line
+    }
+
+    #[test]
+    fn write_head_blends_from_base_to_peak_and_keeps_the_text() {
+        let line = glowing("hello world, again", 12);
+        assert_eq!(line.to_string(), "    hello world, again");
+        let tail: Vec<_> = line.spans.iter().filter(|s| is_head(s)).collect();
+        assert_eq!(tail.len(), 12);
+        assert_eq!(
+            tail[0].style.fg,
+            Some(Color::Rgb(0, 0, 0)),
+            "12th from the end is base"
+        );
+        assert_eq!(
+            tail[11].style.fg,
+            Some(Color::Rgb(200, 100, 0)),
+            "the newest is peak"
+        );
+        // The prefix stays one calm span.
+        assert_eq!(line.spans[1].content, "hello ");
+        assert!(!is_head(&line.spans[1]));
+    }
+
+    #[test]
+    fn write_head_spills_into_the_row_above_and_stops_at_the_count() {
+        let (base, peak) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        let mut above = Line::from(vec![Span::styled(
+            "one two three",
+            Style::default().fg(base),
+        )]);
+        let mut last = Line::from(vec![Span::styled("four", Style::default().fg(base))]);
+        let seen = write_head(&mut last, 0, 0, 12, base, peak);
+        assert_eq!(seen, 4);
+        let seen = write_head(&mut above, 0, seen, 12, base, peak);
+        assert_eq!(seen, 12);
+        let glow = |line: &Line<'static>| line.spans.iter().filter(|s| is_head(s)).count();
+        assert_eq!((glow(&last), glow(&above)), (4, 8));
+        assert_eq!(above.to_string(), "one two three");
+        // Done: later rows are left untouched.
+        let mut more = Line::from("untouched");
+        assert_eq!(write_head(&mut more, 0, 12, 12, base, peak), 12);
+        assert_eq!(more.spans.len(), 1);
+    }
+
+    #[test]
+    fn write_head_is_grapheme_safe_and_leaves_styled_spans_alone() {
+        let (base, peak) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        let code = Style::default().fg(Color::Rgb(9, 9, 9));
+        let mut line = Line::from(vec![
+            Span::styled("日本語👍🏽e\u{301}", Style::default().fg(base)),
+            Span::styled("code", code),
+        ]);
+        write_head(&mut line, 0, 0, 12, base, peak);
+        assert_eq!(line.to_string(), "日本語👍🏽e\u{301}code");
+        let heads: Vec<_> = line.spans.iter().filter(|s| is_head(s)).collect();
+        // "code" spends 4 of the 12 and keeps its colour; all 5 graphemes before it glow.
+        assert_eq!(heads.len(), 5);
+        assert!(line
+            .spans
+            .iter()
+            .any(|s| s.content == "code" && s.style == code));
+        assert!(heads.iter().all(|s| s.content.graphemes(true).count() == 1));
+    }
+
+    #[test]
+    fn cool_head_restores_the_base_colour() {
+        let base = Color::Rgb(0, 0, 0);
+        let line = glowing("abc", 12);
+        assert!(line.spans.iter().any(is_head));
+        let cooled = cool_head(&line, base);
+        assert!(cooled
+            .spans
+            .iter()
+            .filter(|s| is_head(s))
+            .all(|s| s.style.fg == Some(base)));
+        let plain = Line::from("x");
+        assert_eq!(cool_head(&plain, base), plain);
+    }
 
     #[test]
     fn time_matches_the_projection_format() {

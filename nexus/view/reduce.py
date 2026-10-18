@@ -405,6 +405,7 @@ def _on_turn_terminal(
         for m in turn.messages
     ]
     changes: dict[str, Any] = {
+        "completed_ts": _opt_float(event.ts),
         "phase": phase,
         "iteration": iteration,
         "messages": messages,
@@ -878,7 +879,8 @@ def _permission_view(data: Mapping[str, Any], status: str, *, ts: float | None =
     )
 
 def _on_permission_requested(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
-    permission = _permission_view(data, "pending")
+    # ``ts`` of a pending request is when it was asked: the prompt counts "waiting on you" from it.
+    permission = _permission_view(data, "pending", ts=_opt_float(event.ts))
     state = replace(state, permissions=[*state.permissions, permission])
     turn_index = _turn_index(state, event.turn) if event.turn else (len(state.turns) - 1 if state.turns else -1)
     if turn_index >= 0 and permission.id not in state.turns[turn_index].permission_ids:
@@ -1032,6 +1034,17 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
         ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
         # Unlisted ids (a late follower's newer submissions) keep their place after.
         queue.sort(key=lambda item: ranked.get(item.queued_id, len(ranked)))
+        return replace(state, input_queue=queue)
+    if event.type == "input.mode_changed":
+        mode = _as_str(data.get("mode"))
+        target = _as_str(data.get("queued_id"))
+        if not mode or not any(item.queued_id == target for item in queue):
+            return state
+        queue = [replace(item, mode=mode) if item.queued_id == target else item for item in queue]
+        order = data.get("order")
+        if isinstance(order, list):
+            ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
+            queue.sort(key=lambda item: ranked.get(item.queued_id, len(ranked)))
         return replace(state, input_queue=queue)
     if event.type == "input.started":
         input_id = _as_str(data.get("input_id")) or event.id
@@ -1713,6 +1726,7 @@ _HANDLERS: dict[str, Any] = {
     "presence.changed": _on_presence,
     "input.queued": _on_input,
     "input.moved": _on_input,
+    "input.mode_changed": _on_input,
     "input.started": _on_input,
     "input.consumed": _on_input,
     "input.dropped": _on_input,

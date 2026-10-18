@@ -280,3 +280,27 @@ def test_v5_nested_completed_and_request_evidence_conservative(tmp_path):
     assert store.session_row(physicals[3])["kind"] == ""
     assert store.unattached_count() == 1
     db.close()
+
+
+def _project_roots(manager):
+    return dict(manager.store.db._connection().execute("SELECT id, root FROM projects").fetchall())
+
+
+def test_owner_recovery_keeps_the_recorded_project_root(tmp_path):
+    """Recovery opens child stores without re-registering the project: a bare id in
+    ``projects.root`` made the dashboard open sessions in workspace "<project id>"."""
+    root, agents = managers(tmp_path)
+    parent = root.open("root")
+    parent.append_message(message())
+    abandoned(owned(agents, "child", "main", "root"))
+    before = _project_roots(root)
+    assert before and all(value.startswith("/") for value in before.values())
+    parent.recover_dangling_tool_uses()
+    assert _project_roots(root) == before
+
+
+def test_touch_project_never_replaces_a_root_with_the_bare_id(tmp_path):
+    db = StateDatabase(tmp_path / "nexus.db")
+    SqliteSessionStore(db, "pid", root="/work/tree")
+    SqliteSessionStore(db, "pid")  # no root: must not clobber
+    assert db._connection().execute("SELECT root FROM projects WHERE id='pid'").fetchone()[0] == "/work/tree"

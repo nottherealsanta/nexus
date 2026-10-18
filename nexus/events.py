@@ -106,7 +106,10 @@ MISC_EVENTS = ("provider.raw", "error", *REGISTRY_EVENTS)
 # describe actual queue lifecycle: enqueue, consume at a turn boundary, or drop.
 # Keeping the distinction explicit prevents direct starts appearing as pending
 # queue items in projections.
-INPUT_EVENTS = ("input.started", "input.queued", "input.moved", "input.consumed", "input.dropped")
+INPUT_EVENTS = (
+    "input.started", "input.queued", "input.moved", "input.mode_changed",
+    "input.consumed", "input.dropped",
+)
 
 # Composer ``!`` shell mode: a user-run command. Turn-less and durable; the
 # output is added to model context without starting a turn.

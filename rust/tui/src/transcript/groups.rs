@@ -1,21 +1,30 @@
 //! Verb groups (GROK_BUILD_TUI_PLAN §4): one quiet summary row per run of tool calls.
 //!
-//! Header: `▸ Ran 2 commands, Read 3 files · 1.8s`, in a light weight with no failure or
-//! thought counts and no spinner or animation. While anything runs the label is the
-//! present-tense one (`Running 1 command`) with the live elapsed time; finished, it is
-//! subdued and the seconds are quiet. Failures are shown on their individual member rows.
-//! Folded, only a live tail (`╰─ ⠋ Read path`) shows under the header; a failure does not
-//! expand a group.
+//! Header, finished: `▸ Ran 2 commands, Read 3 files · 1.8s`, in a light weight with no
+//! failure or thought counts; subdued, the seconds quiet. While anything runs it is the
+//! literal `▾ Working` (no count, no time, no spinner) whose text shimmers (a [`look::live`]
+//! span). A running group shows its newest [`TREE_ROWS`] members even when folded, as a
+//! grey tree (`├─ Read path` / `╰─ Read path`, `… N earlier` first when clipped): no icons,
+//! no status colour; a failed member ends in a quiet ` · failed`. Failures never turn red
+//! and never expand a group. When the group finishes, `transcript::fold` removes the rows
+//! one by one and the header flashes (`Content::flash`) before settling to muted.
 //!
 //! An expanded member is a small box: `┌ Read path`, the relevant rows or reasoning behind
 //! a `│` rail, then `╰ 0.8s` in italics. A collapsed member is one row, `▸ Read path  0.8s`.
 use super::{look, thought, tools, truncate, Rows};
 use crate::{bridge::Content, render::Palette};
+use nexus_widgets::theme::mix;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
+
+/// Members a running group shows under its folded header (the rest is `… N earlier`).
+pub const TREE_ROWS: usize = 5;
+
+/// The quiet word a failed member row ends with (never red: decision 2 of the overhaul).
+const FAILED_NOTE: &str = " · failed";
 
 /// `Read` and `rest` of a member row; a thought is `Thought` and `for 3.2s`.
 fn verb_rest(m: &Content) -> (String, String) {
@@ -63,7 +72,8 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
         tools::expanded(m)
     };
     let op = tools::with_inspect(&m.operation, &m.inspect_operation);
-    let tone = tools::tone(&m.status, p);
+    // Grey whatever happened; a failure is only the quiet word at the end of the row.
+    let tone = p.muted;
     let corner = if running {
         look::SLOT
     } else if open {
@@ -71,11 +81,7 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     } else {
         glyphs.closed
     };
-    let corner_tone = if running {
-        p.text
-    } else {
-        p.border_strong
-    };
+    let corner_tone = if running { p.text } else { p.border_strong };
     let time = took(m);
     // A collapsed row ends with its seconds; the text gives way before they do.
     let reserve = match (&time, open) {
@@ -91,9 +97,14 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
             Style::default().fg(tone),
         ),
     ];
-    let shown = truncate(&rest, width.saturating_sub(11 + reserve));
+    let note = (m.status == "failed").then_some(FAILED_NOTE);
+    let note_width = note.map_or(0, |note| note.width());
+    let shown = truncate(&rest, width.saturating_sub(11 + reserve + note_width));
     if !shown.is_empty() {
         head.push(Span::styled(format!(" {shown}"), Style::default().fg(tone)));
+    }
+    if let Some(note) = note {
+        head.push(Span::styled(note, Style::default().fg(p.quiet)));
     }
     if reserve > 0 {
         let used: usize = head.iter().map(|s| s.content.width()).sum();
@@ -137,52 +148,89 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     }
 }
 
-/// The live member under a folded, running header: `╰─ ⠋ Read path`.
-fn tail(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
+/// The newest members of a running, folded group as a grey tree: `├─ Read path`, the last
+/// one `╰─`, and `… N earlier` first when the host clipped or more than [`TREE_ROWS`] came.
+/// No icons, no status colour; the running member's text shimmers.
+fn tree(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let glyphs = look::glyphs();
-    let (verb, rest) = verb_rest(m);
-    let live = |style: Style| look::live(style);
-    let mut row = vec![
-        gutter(),
-        Span::styled(glyphs.tree_end, Style::default().fg(p.border_strong)),
-        Span::raw(" "),
-        Span::styled(look::SLOT, Style::default().fg(p.text)),
-        Span::raw(" "),
-        Span::styled(
-            truncate(&verb, width.saturating_sub(9)),
-            live(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
-        ),
-    ];
-    let shown = truncate(&rest, width.saturating_sub(14));
-    if !shown.is_empty() {
-        row.push(Span::styled(
-            format!(" {shown}"),
-            Style::default().fg(p.muted),
+    let from = b.members.len().saturating_sub(TREE_ROWS);
+    let earlier = b.hidden + from;
+    if earlier > 0 {
+        out.push((
+            Line::from(vec![
+                gutter(),
+                Span::styled(
+                    truncate(&format!("… {earlier} earlier"), width.saturating_sub(4)),
+                    Style::default().fg(p.quiet),
+                ),
+            ]),
+            b.operation.clone(),
         ));
     }
-    out.push((
-        Line::from(row),
-        tools::with_inspect(&m.operation, &m.inspect_operation),
-    ));
+    for (index, m) in b.members[from..].iter().enumerate() {
+        let last = from + index + 1 == b.members.len();
+        let (verb, rest) = verb_rest(m);
+        let text = if rest.is_empty() {
+            verb
+        } else {
+            format!("{verb} {rest}")
+        };
+        let note = (m.status == "failed").then_some(FAILED_NOTE);
+        let note_width = note.map_or(0, |note| note.width());
+        let style = Style::default().fg(p.muted);
+        let style = if m.status == "running" {
+            look::live(style)
+        } else {
+            style
+        };
+        let mut row = vec![
+            gutter(),
+            Span::styled(
+                if last {
+                    glyphs.tree_end
+                } else {
+                    glyphs.tree_mid
+                },
+                Style::default().fg(p.border),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                truncate(&text, width.saturating_sub(7 + note_width + RIGHT_MARGIN)),
+                style,
+            ),
+        ];
+        if let Some(note) = note {
+            row.push(Span::styled(note, Style::default().fg(p.quiet)));
+        }
+        out.push((
+            Line::from(row),
+            tools::with_inspect(&b.operation, &m.inspect_operation),
+        ));
+    }
 }
 
 /// The header row of a group.
-fn header(b: &Content, width: usize, p: &Palette, now_ms: u64) -> Line<'static> {
+fn header(b: &Content, width: usize, p: &Palette) -> Line<'static> {
     let glyphs = look::glyphs();
     let running = b.status == "running";
-    // A group never spins: only an individual tool animates. The disclosure glyph stays.
-    let glyph = if b.collapsed {
-        glyphs.closed
-    } else {
+    // Running, the tree (or boxes) hang open under `Working`; finished and folded it closes.
+    let glyph = if running || !b.collapsed {
         glyphs.open
-    };
-    let label = if running && !b.running_label.is_empty() {
-        &b.running_label
     } else {
-        &b.text
+        glyphs.closed
     };
+    let label = if running {
+        if b.running_label.is_empty() {
+            "Working"
+        } else {
+            b.running_label.as_str()
+        }
+    } else {
+        b.text.as_str()
+    };
+    // Running: no count, no time. The clock appears once the group has finished.
     let seconds = if running {
-        look::live_elapsed(b.started_ms, now_ms)
+        None
     } else if !b.elapsed_label.is_empty() {
         Some(b.elapsed_label.clone())
     } else {
@@ -206,8 +254,16 @@ fn header(b: &Content, width: usize, p: &Palette, now_ms: u64) -> Line<'static> 
     }
     let used: usize = suffix.iter().map(|s| s.content.width()).sum();
     // Light weight, no count: a failed member only tints the glyph; the member row says it.
-    let style = Style::default().fg(if running { p.text } else { p.muted });
-    let glyph_tone = if running { p.text } else { p.quiet };
+    // The fold's flash (accent -> muted) tints the label and the glyph for a few frames.
+    let flash = f32::from(b.flash.min(100)) / 100.0;
+    let style = Style::default().fg(mix(p.muted, p.accent, flash));
+    let glyph_tone = if running {
+        p.muted
+    } else {
+        mix(p.quiet, p.accent, flash)
+    };
+    // The running label shimmers muted -> text on the draw loop's clock.
+    let style = if running { look::live(style) } else { style };
     let mut spans = vec![
         gutter(),
         Span::styled(glyph, Style::default().fg(glyph_tone)),
@@ -218,18 +274,17 @@ fn header(b: &Content, width: usize, p: &Palette, now_ms: u64) -> Line<'static> 
     Line::from(spans)
 }
 
-/// Draw one group at `now_ms` (the live elapsed time).
-pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette, now_ms: u64) {
-    out.push((header(b, width, p, now_ms), b.operation.clone()));
+/// Draw one group: its header, then the member boxes when opened, or the tree of the
+/// newest members while it runs folded.
+pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
+    out.push((header(b, width, p), b.operation.clone()));
     // A failure never opens a group; failure details are shown on the individual member rows.
     if !b.collapsed && !b.members.is_empty() {
         for m in &b.members {
             member(out, m, width, p);
         }
-    } else if b.status == "running" {
-        if let Some(live) = b.live_member.as_deref() {
-            tail(out, live, width, p);
-        }
+    } else if b.status == "running" && !b.members.is_empty() {
+        tree(out, b, width, p);
     }
 }
 
@@ -262,7 +317,7 @@ mod tests {
             id: "g".into(),
             kind: "tool_group".into(),
             text: "Ran 2 commands, Read 3 files".into(),
-            running_label: "Running 1 command, Read 3 files".into(),
+            running_label: "Working".into(),
             status: "completed".into(),
             collapsed: true,
             count: 5,
@@ -279,11 +334,8 @@ mod tests {
         let mut block = group();
         block.failures = 2;
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
-        assert_eq!(
-            plain(&rows),
-            ["    ▸ Ran 2 commands, Read 3 files · 1.8s"]
-        );
+        draw(&mut rows, &block, 80, &p);
+        assert_eq!(plain(&rows), ["    ▸ Ran 2 commands, Read 3 files · 1.8s"]);
         let spans = &rows[0].0.spans;
         assert_eq!(spans[3].style.fg, Some(p.muted));
         assert!(!spans[3].style.add_modifier.contains(Modifier::BOLD));
@@ -294,63 +346,158 @@ mod tests {
         assert_eq!(rows[0].1, block.operation);
         block.failures = 0;
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         assert_eq!(rows[0].0.spans[1].style.fg, Some(p.quiet));
     }
 
-    #[test]
-    fn running_header_is_present_tense_with_live_seconds_but_never_animated() {
-        let p = Palette::new(false);
+    fn running(members: usize) -> Content {
         let mut block = group();
         block.status = "running".into();
         block.started_ms = 4_000;
         block.elapsed_ms = 0;
         block.elapsed_label.clear();
-        let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 6_400);
-        assert_eq!(
-            plain(&rows),
-            ["    ▸ Running 1 command, Read 3 files · 2.4s"]
-        );
-        let label = &rows[0].0.spans[3];
-        assert_eq!(label.style.fg, Some(p.text));
-        assert!(!look::is_live(label));
+        block.members = (0..members)
+            .map(|i| {
+                let mut m = read(&format!("m{i}"), "completed");
+                m.text = format!("src/f{i}.rs");
+                m.heading = format!("→ Read src/f{i}.rs");
+                m
+            })
+            .collect();
+        if let Some(last) = block.members.last_mut() {
+            last.status = "running".into();
+        }
+        block
     }
 
     #[test]
-    fn running_header_keeps_the_disclosure_glyph_folded_or_open() {
+    fn running_header_is_exactly_working_with_no_count_time_or_spinner() {
         let p = Palette::new(false);
-        let mut block = group();
-        block.status = "running".into();
-        for (collapsed, glyph) in [(true, "▸"), (false, "▾")] {
-            block.collapsed = collapsed;
-            let mut rows = Vec::new();
-            draw(&mut rows, &block, 80, &p, 0);
-            assert_eq!(rows[0].0.spans[1].content, glyph);
-            assert!(rows[0].0.spans.iter().all(|s| !look::is_live(s)));
+        let mut block = running(0);
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        assert_eq!(plain(&rows), ["    ▾ Working"]);
+        assert!(!plain(&rows)[0].chars().any(|c| c.is_ascii_digit()));
+        assert!(!plain(&rows)[0].contains(look::SLOT));
+        let label = &rows[0].0.spans[3];
+        assert_eq!(label.style.fg, Some(p.muted));
+        assert!(look::is_live(label), "the label shimmers");
+        assert_eq!(rows[0].0.spans[1].style.fg, Some(p.muted));
+        // The chevron is open whether the user folded the group or not.
+        block.collapsed = false;
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        assert_eq!(rows[0].0.spans[1].content, "▾");
+    }
+
+    #[test]
+    fn running_group_folded_draws_a_grey_tree_of_its_members() {
+        let p = Palette::new(false);
+        let block = running(3);
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        assert_eq!(
+            plain(&rows),
+            [
+                "    ▾ Working",
+                "    ├─ Read src/f0.rs",
+                "    ├─ Read src/f1.rs",
+                "    ╰─ Read src/f2.rs",
+            ]
+        );
+        for (row, _) in &rows[1..] {
+            assert_eq!(row.spans[1].style.fg, Some(p.border));
+            assert_eq!(row.spans[3].style.fg, Some(p.muted));
+        }
+        // Only the running member shimmers; clicking a row still toggles the group.
+        assert!(!look::is_live(&rows[1].0.spans[3]));
+        assert!(look::is_live(&rows[3].0.spans[3]));
+        assert_eq!(rows[2].1.as_ref().unwrap()["id"], "g");
+        assert_eq!(rows[2].1.as_ref().unwrap()["inspect_operation"]["id"], "m1");
+    }
+
+    #[test]
+    fn tree_has_no_icons_or_status_colours() {
+        let p = Palette::new(false);
+        let mut block = running(4);
+        block.members[1].status = "failed".into();
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        let text = plain(&rows).join("\n");
+        for glyph in ["✓", "✗", "✔", "✘", look::SLOT] {
+            assert!(!text.contains(glyph), "{glyph}: {text}");
+        }
+        for (row, _) in &rows {
+            for span in &row.spans {
+                assert_ne!(span.style.fg, Some(p.error));
+                assert_ne!(span.style.fg, Some(p.success));
+            }
         }
     }
 
     #[test]
-    fn folded_running_group_shows_only_the_live_tail() {
+    fn seven_members_show_two_earlier_and_the_newest_five() {
         let p = Palette::new(false);
-        let mut block = group();
-        block.status = "running".into();
-        block.failures = 1;
-        block.failed_members = vec![read("bad", "failed")];
-        block.live_member = Some(Box::new(read("now", "running")));
+        let block = running(7);
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         let lines = plain(&rows);
-        assert_eq!(lines.len(), 2, "{lines:#?}");
-        assert!(!lines[0].contains("failed"));
-        assert_eq!(lines[1], format!("    ╰─ {} Read src/main.rs", look::SLOT));
-        assert!(look::is_live(&rows[1].0.spans[5]));
-        // Finished groups show no tail.
+        assert_eq!(lines.len(), 1 + 1 + TREE_ROWS, "{lines:#?}");
+        assert_eq!(lines[1], "    … 2 earlier");
+        assert_eq!(rows[1].0.spans[1].style.fg, Some(p.quiet));
+        assert_eq!(lines[2], "    ├─ Read src/f2.rs");
+        assert_eq!(lines[6], "    ╰─ Read src/f6.rs");
+        // The host may already have clipped: its count joins ours.
+        let mut clipped = running(5);
+        clipped.hidden = 3;
+        let mut rows = Vec::new();
+        draw(&mut rows, &clipped, 80, &p);
+        assert_eq!(plain(&rows)[1], "    … 3 earlier");
+        clipped.members.truncate(2);
+        clipped.hidden = 0;
+        let mut rows = Vec::new();
+        draw(&mut rows, &clipped, 80, &p);
+        assert!(!plain(&rows).iter().any(|line| line.contains("earlier")));
+    }
+
+    #[test]
+    fn failed_member_row_ends_in_a_quiet_failed_word() {
+        let p = Palette::new(false);
+        let mut block = running(3);
+        block.members[0].status = "failed".into();
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        let lines = plain(&rows);
+        assert_eq!(lines[1], "    ├─ Read src/f0.rs · failed");
+        let note = rows[1].0.spans.last().unwrap();
+        assert_eq!(note.content, " · failed");
+        assert_eq!(note.style.fg, Some(p.quiet));
+        // Narrow panes clip the target, never the note.
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 20, &p);
+        assert!(plain(&rows)[1].ends_with(" · failed"));
+        assert!(rows.iter().all(|(row, _)| row.width() <= 20));
+    }
+
+    #[test]
+    fn finished_group_has_no_tree_and_the_flash_tints_its_header() {
+        let p = Palette::new(false);
+        let mut block = running(3);
         block.status = "completed".into();
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         assert_eq!(rows.len(), 1);
+        assert!(plain(&rows)[0].starts_with("    ▸ Ran 2 commands"));
+        block.flash = 100;
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        assert_eq!(rows[0].0.spans[3].style.fg, Some(p.accent));
+        block.flash = 50;
+        let mut rows = Vec::new();
+        draw(&mut rows, &block, 80, &p);
+        let tone = rows[0].0.spans[3].style.fg;
+        assert_ne!(tone, Some(p.accent));
+        assert_ne!(tone, Some(p.muted));
     }
 
     #[test]
@@ -363,8 +510,8 @@ mod tests {
         failed.members = vec![read("bad", "failed")];
         failed.failed_members = vec![read("bad", "failed")];
         let (mut a, mut b) = (Vec::new(), Vec::new());
-        draw(&mut a, &clean, 80, &p, 0);
-        draw(&mut b, &failed, 80, &p, 0);
+        draw(&mut a, &clean, 80, &p);
+        draw(&mut b, &failed, 80, &p);
         assert_eq!(a.len(), 1);
         assert_eq!(b.len(), 1, "{:?}", plain(&b));
         assert!(plain(&b)[0].starts_with("    ▸ "));
@@ -374,18 +521,21 @@ mod tests {
     }
 
     #[test]
-    fn failed_member_stays_red_inside_the_group() {
+    fn failed_member_inside_an_opened_group_is_grey_with_a_quiet_word() {
         let p = Palette::new(false);
         let mut block = group();
         block.collapsed = false;
         block.failures = 1;
         block.members = vec![read("bad", "failed")];
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         let lines = plain(&rows);
         assert!(!lines[0].contains("failed"));
-        assert!(lines[1].contains("Read src/main.rs"), "{lines:?}");
-        assert!(rows[1].0.spans.iter().any(|s| s.style.fg == Some(p.error)));
+        // The quiet word comes before the seconds a collapsed row always ends with.
+        assert!(lines[1].contains("Read src/main.rs · failed"), "{lines:?}");
+        assert!(lines[1].ends_with(" · failed  0.8s"), "{lines:?}");
+        assert!(rows[1].0.spans.iter().all(|s| s.style.fg != Some(p.error)));
+        assert_eq!(rows[1].0.spans.last().unwrap().style.fg, Some(p.quiet));
     }
 
     #[test]
@@ -401,7 +551,7 @@ mod tests {
         let closed = read("b", "completed");
         block.members = vec![open, closed];
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         assert_eq!(
             plain(&rows),
             [
@@ -438,7 +588,7 @@ mod tests {
             ..Default::default()
         }];
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 80, &p, 0);
+        draw(&mut rows, &block, 80, &p);
         let lines = plain(&rows);
         assert_eq!(lines[1], "    ┌ Thought for 1.1s");
         assert_eq!(lines[2], "    │ Plan");
@@ -454,7 +604,7 @@ mod tests {
         block.failed_members = vec![read("bad", "failed")];
         for width in [50usize, 30] {
             let mut rows = Vec::new();
-            draw(&mut rows, &block, width, &p, 0);
+            draw(&mut rows, &block, width, &p);
             let lines = plain(&rows);
             assert!(!lines[0].contains("failed"), "{width}: {lines:?}");
             assert!(
@@ -464,7 +614,7 @@ mod tests {
             assert_eq!(lines.len(), 1, "{width}: {lines:?}");
         }
         let mut rows = Vec::new();
-        draw(&mut rows, &block, 50, &p, 0);
+        draw(&mut rows, &block, 50, &p);
         assert!(plain(&rows)[0].contains("· 1.8s"));
     }
 
@@ -479,7 +629,7 @@ mod tests {
         block.members = vec![long];
         for width in [12, 20, 40] {
             let mut rows = Vec::new();
-            draw(&mut rows, &block, width, &p, 0);
+            draw(&mut rows, &block, width, &p);
             assert!(
                 rows.iter().all(|(row, _)| row.width() <= width),
                 "{width}: {:?}",

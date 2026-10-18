@@ -121,6 +121,12 @@ footers share the same left inset in both surfaces.
   child's page, laid out like the root (its own context header showing the request
   it actually sent, a grey Task block, a read-only composer, details panel); Esc
   returns. All subagent activity stays inline at the initiating call.
+- **Tool groups** (native projection, `ui/ratatui/verb_groups.py`): a run of tool calls
+  and thoughts is one group, except that file-change tools (edit, write, apply_patch, …)
+  group only with each other and a lone change keeps its own row. The label drops its
+  nouns above five members (`Read 4, Searched 2, Ran 1`). A running group is labelled
+  `Working` and lists its newest five members; a failed member ends in a quiet
+  ` · failed`. The legacy browser keeps its own grouping.
 - Completed Edit/Patch rows show a diff per file (original on the left, updated on the right at every width), from the durable `ToolCallView.diff` only.
 - Errors are plain red lines; each finished turn has a right-aligned footer
   `model · 1.2s · ↑64K ↓3.1K · 81% cached · 800 r` (parts with no data are left

@@ -334,6 +334,13 @@ Selecting that agent in any session, including `AgentReset`, restores the model
 and effort; a model that no longer resolves is skipped and the current one kept.
 A brand-new session that never selects an agent does not restore (not done).
 
+**Identity colour.** An agent's presentation colour is keyed on its definition
+name (`child.type`, the spawning tool's `subagent_type`/`agent` argument, or
+`"task"`), never on run-specific session or task IDs. The colour is
+deterministic across runtimes and sessions (a fixed SHA-256 hash in
+`agent_color`, with packaged semantic colours for `build` and `orchestrator`).
+An explicit `color` in the agent definition frontmatter always wins.
+
 ## Spawning (`subagent` tool)
 
 `subagent(prompt, subagent_type?, tools?, model?, description?, worktree?)` runs a

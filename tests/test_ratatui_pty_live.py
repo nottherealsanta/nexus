@@ -97,15 +97,15 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
     assert not consent.exists()  # asking records nothing
     app.key(b"\x1b[B", .3)  # Down from the notice to "Agree and start the call"
     app.key(b"\r", 1.5)
-    app.wait_for("● Live")
+    app.wait_for("LISTENING")  # the phase strip: caps phase, its animation, the clock (step 11)
     screen = app.redraw()
     assert consent.exists()  # consent survives in a file, not memory
     app.wait_for("⤢ expand")  # the open call's pane above the composer
     screen = app.redraw()
     lines = screen.splitlines()
-    bar = next(line for line in lines if "● Live" in line)  # the pane header carries the call line
-    assert "mic" in bar and "spk" in bar and "00:0" in bar and "listening" in bar and "⤢ expand" in bar, bar
-    assert sum("● Live" in line for line in lines) == 1  # not also in the composer
+    bar = next(line for line in lines if "⤢ expand" in line)  # the pane header carries the call line
+    assert "LISTENING" in bar and "00:0" in bar and "⤢ expand" in bar, bar
+    assert sum("LISTENING" in line for line in lines) == 1  # not also in the composer
     assert "gpt-live-1-codex · sol" not in screen  # no timeline card while the call is open
     app.wait_for("read the readme please")
     screen = app.redraw()
@@ -116,7 +116,7 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
     app.key(b"/live stop", .4)
     app.key(b"\r", 1.5)
     deadline = time.monotonic() + 10
-    while "● Live" in app.redraw(.4):
+    while "MUTED" in app.redraw(.4):
         assert time.monotonic() < deadline, "the call bar never left"
     screen = app.redraw()
     assert "⤢ expand" not in screen  # the pane closes with the call

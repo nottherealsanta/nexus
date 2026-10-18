@@ -16,6 +16,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-p", Palette, Some("Nexus")),
         KeyBinding::new("ctrl-n", NewSession, Some("Nexus")),
         KeyBinding::new("ctrl-o", Sessions, Some("Nexus")),
+        KeyBinding::new("ctrl-k", Sessions, Some("Nexus")),
         KeyBinding::new("ctrl-f", ForkSession, Some("Nexus")),
         KeyBinding::new("ctrl-g", Agents, Some("Nexus")),
         KeyBinding::new("ctrl-b", ToggleSessions, Some("Nexus")),

@@ -45,7 +45,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 | agent | `agent.spawned` `agent.completed` `agent.clamped` (and `agent.selected`) |
 | hook | `hook.fired` `hook.blocked` |
 | external | `external.started` `external.tool` `external.finished` ([below](#external-worker-events)) |
-| input | `input.started` `input.queued` `input.moved` `input.consumed` `input.dropped` |
+| input | `input.started` `input.queued` `input.moved` `input.mode_changed` (`{queued_id, mode, order}`: a promotion, queue→steer→interrupt; the reducer sets the item's mode and applies `order`) `input.consumed` `input.dropped` |
 | shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
 | live | `live.started` `live.transcript` `live.transcript.delta` `live.delegated` `live.appended` `live.phase` `live.levels` `live.error` `live.ended`: a GPT Live voice call, turn-less and durable; reduced into `ConversationView.live_calls` ([live.md](live.md#events-and-view)) |
 | presence | `presence.joined` `presence.left` (count, not identity) |
@@ -112,7 +112,9 @@ and delta accumulation. It imports only `nexus.events`.
 `RetryView`, usage), `permissions`, `presence`, `input_queue`, `agents`,
 `extensions`, `mcp`, `context`, `model`, `registry`, `errors`, `hooks`,
 `diagnostics`, `live_calls` (`LiveCallView`s, oldest first, omitted from the wire when empty); derived `live` (newest call), `messages`, `tools`, `usage`, `pending_permissions`,
-`active_turn`, `root_agents`.
+`active_turn`, `root_agents`. A `PermissionView.ts` is the `permission.requested` event
+time while the request is pending (a prompt counts "waiting" from it) and the resolution
+time once resolved.
 
 A user `MessageView` and a `QueuedInputView` carry an optional `origin`
 (`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is
@@ -177,3 +179,14 @@ flag. The reducer retains it as `ContextView(kind="handoff")`; transcript
 content before it is never deleted. Child handoff markers are suppressed from
 parent relay (the child log retains them). Native projection shows a stable
 “Context handed off” divider with `/handoff read` guidance.
+
+`TurnView.completed_ts` is the terminal event timestamp (`turn.completed`,
+`turn.failed`, or `turn.cancelled`), preserved by replay and snapshots. It is
+omitted when unknown; views must not substitute a last-update or current clock.
+
+The native projection (`nexus/ui/ratatui`, not the reducer) adds three block fields,
+all derived from the view: `markdown.streaming` (true while the assistant message is
+not `done` and its turn is not terminal; absent otherwise), `tool_group.hidden`
+(members left out of `members` while the group runs folded, which then carries only
+the newest five), and `tool_group.running_label` (the literal `Working` while a member
+runs). A group's `text` drops its nouns above five members.

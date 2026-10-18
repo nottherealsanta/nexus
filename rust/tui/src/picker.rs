@@ -37,6 +37,8 @@ pub struct Dashboard {
     pub hovered_id: String,
     /// Heading labels, without the count, whose rows are hidden.
     pub collapsed: HashSet<String>,
+    /// Archived rows are collapsed until the user opens their heading.
+    pub archived_open: bool,
     /// When set, only rows in `workspace` (or its repo) stay in the list.
     pub this_project: bool,
     pub workspace: String,
@@ -44,7 +46,6 @@ pub struct Dashboard {
     pub search_hit: Rect,
     pub archive_hit: Rect,
     pub new_hit: Rect,
-    pub resume_hit: Rect,
     pub worktree_hit: Rect,
     pub choose_hit: Rect,
     last_click: Option<(usize, Instant)>,
@@ -63,22 +64,54 @@ pub fn is_busy(row: &Value) -> bool {
         )
 }
 
-/// Time group of a row (the host's local-time `bucket`): Today, Yesterday, This week, Earlier.
+/// Status section of a row: Needs you (`input`), Working, Idle (`idle` and `done`), Archived.
 pub fn section(row: &Value) -> u8 {
-    match text(row, "bucket") {
-        "Today" => 0,
-        "Yesterday" => 1,
-        "This week" => 2,
-        _ => 3,
+    if row.get("archived").and_then(Value::as_bool) == Some(true)
+        || text(row, "status") == "archived"
+    {
+        return 3;
+    }
+    match text(row, "status") {
+        "input" => 0,
+        "working" => 1,
+        _ => 2,
     }
 }
 
 pub fn section_label(section: u8) -> &'static str {
     match section {
-        0 => "Today",
-        1 => "Yesterday",
-        2 => "This week",
-        _ => "Earlier",
+        0 => "Needs you",
+        1 => "Working",
+        2 => "Idle",
+        _ => "Archived",
+    }
+}
+
+/// The unanswered permission request of a "Needs you" row, if the host sent one.
+pub fn pending(row: &Value) -> Option<&Value> {
+    row.get("pending")
+        .filter(|p| !text(p, "request_id").is_empty())
+}
+
+/// Whole seconds since `since` (unix seconds), clamped at zero; `now` is injected for tests.
+pub fn waited(since: f64, now: f64) -> u64 {
+    if since <= 0.0 {
+        return 0;
+    }
+    (now - since).max(0.0) as u64
+}
+
+/// `mm:ss` (or `h:mm:ss` past an hour).
+pub fn clock(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else {
+        format!("{:02}:{:02}", seconds / 60, seconds % 60)
     }
 }
 
@@ -131,17 +164,22 @@ impl Dashboard {
                 }
             })
             .collect();
-        if !self.by_project {
-            shown.sort_by(|a, b| {
-                let updated =
-                    |row: &Value| row.get("updated").and_then(Value::as_f64).unwrap_or(0.0);
-                section(a).cmp(&section(b)).then(
-                    updated(b)
-                        .partial_cmp(&updated(a))
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-            });
-        }
+        // Status sections always; newest prompt first inside them (the host's newest-archived
+        // order is kept for Archived, and project order for the by-project view).
+        let by_project = self.by_project;
+        shown.sort_by(|a, b| {
+            let updated = |row: &Value| row.get("updated").and_then(Value::as_f64).unwrap_or(0.0);
+            let (sa, sb) = (section(a), section(b));
+            let order = sa.cmp(&sb);
+            if by_project || sa == 3 {
+                return order;
+            }
+            order.then(
+                updated(b)
+                    .partial_cmp(&updated(a))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
         shown
     }
 
@@ -203,11 +241,30 @@ impl Dashboard {
         None
     }
 
-    fn group_key(&self, row: &Value) -> String {
-        if self.by_project {
-            text(row, "group").to_owned()
+    /// Heading a row sits under: its status section, with its project inside when grouped by project.
+    pub fn group_key(&self, row: &Value) -> String {
+        let label = section_label(section(row));
+        if self.by_project && !text(row, "group").is_empty() {
+            format!("{label} · {}", text(row, "group"))
         } else {
-            section_label(section(row)).to_owned()
+            label.to_owned()
+        }
+    }
+
+    /// Archived headings start collapsed; every other heading starts open.
+    pub fn is_collapsed(&self, key: &str) -> bool {
+        if key.starts_with("Archived") {
+            !self.archived_open
+        } else {
+            self.collapsed.contains(key)
+        }
+    }
+
+    fn toggle_heading(&mut self, key: String) {
+        if key.starts_with("Archived") {
+            self.archived_open = !self.archived_open;
+        } else if !self.collapsed.remove(&key) {
+            self.collapsed.insert(key);
         }
     }
 
@@ -215,7 +272,7 @@ impl Dashboard {
         self.filtered(rows_of(dashboard))
             .iter()
             .enumerate()
-            .filter(|(_, row)| !self.collapsed.contains(&self.group_key(row)))
+            .filter(|(_, row)| !self.is_collapsed(&self.group_key(row)))
             .map(|(index, _)| index)
             .collect()
     }
@@ -248,6 +305,10 @@ impl Dashboard {
     }
 
     fn open_op(row: &Value) -> Value {
+        if section(row) == 3 {
+            // An archived session previews first; "Resume" there unarchives and opens it.
+            return json!({"kind":"archived_preview","id":text(row, "id")});
+        }
         let workspace = Some(text(row, "workspace"))
             .filter(|w| !w.is_empty())
             .unwrap_or_else(|| text(row, "repo"));
@@ -416,7 +477,9 @@ impl Dashboard {
             return Some(json!({"kind":"session_new"}));
         }
         if shortcut('t') {
-            return self.selected_row(dashboard).map(|row| json!({"kind":"ownership_tree","id":text(row, "id")}));
+            return self
+                .selected_row(dashboard)
+                .map(|row| json!({"kind":"ownership_tree","id":text(row, "id")}));
         }
         if shortcut('r') {
             let title = self
@@ -425,10 +488,36 @@ impl Dashboard {
             self.rename = title;
             return None;
         }
+        if shortcut('a') {
+            return self.answer_pending(dashboard, "allow_once");
+        }
         if shortcut('d') {
+            if self
+                .selected_row(dashboard)
+                .is_some_and(|row| pending(row).is_some())
+            {
+                return self.answer_pending(dashboard, "deny_once");
+            }
             return self.ask_archive(dashboard);
         }
+        // There is no composer here: any other printable key starts the filter.
+        if let KeyCode::Char(c) = key.code {
+            if plain && !searching && !c.is_control() && !c.is_whitespace() {
+                self.searching = true;
+                self.query.push(c);
+                return self.query_changed(dashboard);
+            }
+        }
         None
+    }
+
+    /// `a` / `d` on a Needs you row: answer its pending permission without opening the session.
+    fn answer_pending(&mut self, dashboard: &Value, decision: &str) -> Option<Value> {
+        let row = self.selected_row(dashboard)?;
+        let request = text(pending(row)?, "request_id");
+        Some(
+            json!({"kind":"session_permission","id":text(row, "id"),"request_id":request,"decision":decision}),
+        )
     }
 
     /// Whether the dashboard consumes this key. A nonempty composer draft keeps letters,
@@ -454,11 +543,10 @@ impl Dashboard {
             KeyCode::Char('c') if control => draft_empty,
             KeyCode::Char('s' | 'n' | 'w') if control => true,
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => true,
-            KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd' | 't')
-                if plain && draft_empty =>
-            {
-                true
-            }
+            // Shortcuts and, with no composer, every other printable key (it starts the filter).
+            KeyCode::Char(c) if draft_empty && !c.is_control() && !c.is_whitespace() => !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT),
             _ => false,
         }
     }
@@ -486,7 +574,9 @@ impl Dashboard {
     /// Archiving asks first, and a working or waiting session cannot be archived.
     fn ask_archive(&mut self, dashboard: &Value) -> Option<Value> {
         let row = self.selected_row(dashboard)?;
-        if is_busy(row) {
+        if section(row) == 3 {
+            self.notice = "Already archived — Enter previews and resumes it".into();
+        } else if is_busy(row) {
             self.notice = "A working session can't be archived — wait for it to finish".into();
         } else {
             self.confirm_archive = Some(text(row, "id").to_owned());
@@ -524,9 +614,6 @@ impl Dashboard {
         if self.new_hit.contains(at) {
             return Some(json!({"kind":"session_new"}));
         }
-        if self.resume_hit.contains(at) {
-            return Some(json!({"kind":"archived","query":""}));
-        }
         if self.worktree_hit.contains(at) {
             return Some(json!({"kind":"worktrees"}));
         }
@@ -545,9 +632,7 @@ impl Dashboard {
         }
         let Some(index) = self.row_at(x, y) else {
             if let Some(heading) = self.heading_at(x, y) {
-                if !self.collapsed.remove(&heading) {
-                    self.collapsed.insert(heading);
-                }
+                self.toggle_heading(heading);
             }
             return None;
         };
@@ -593,8 +678,10 @@ mod tests {
     fn tree_shortcut_is_read_only_and_targets_selected_root() {
         let rows = two();
         let mut picker = Dashboard::default();
-        assert_eq!(picker.key(key(KeyCode::Char('t')), &rows),
-                   Some(json!({"kind":"ownership_tree","id":"a"})));
+        assert_eq!(
+            picker.key(key(KeyCode::Char('t')), &rows),
+            Some(json!({"kind":"ownership_tree","id":"a"}))
+        );
     }
     #[test]
     fn arrows_move_locally_enter_opens() {
@@ -771,19 +858,99 @@ mod tests {
         assert!(!picker.searching && picker.query.is_empty());
     }
     #[test]
-    fn time_groups_sort_newest_first() {
+    fn status_sections_sort_newest_prompt_first() {
         let rows = dash(json!([
-            {"id":"o","title":"Old","bucket":"Earlier","updated":1.0},
-            {"id":"t1","title":"T1","bucket":"Today","updated":5.0},
-            {"id":"t2","title":"T2","bucket":"Today","updated":9.0},
-            {"id":"y","title":"Y","bucket":"Yesterday","updated":3.0},
+            {"id":"x","title":"Gone","status":"archived","archived":true,"updated":9.0},
+            {"id":"i1","title":"I1","status":"idle","updated":1.0},
+            {"id":"d","title":"Done","status":"done","updated":7.0},
+            {"id":"w","title":"Work","status":"working","updated":2.0},
+            {"id":"n2","title":"Ask older","status":"input","updated":3.0},
+            {"id":"n1","title":"Ask newer","status":"input","updated":8.0},
         ]));
-        let ids: Vec<_> = Dashboard::default()
-            .filtered(rows_of(&rows))
-            .iter()
-            .map(|r| text(r, "id").to_owned())
-            .collect();
-        assert_eq!(ids, ["t2", "t1", "y", "o"]);
+        let picker = Dashboard::default();
+        let shown = picker.filtered(rows_of(&rows));
+        let ids: Vec<_> = shown.iter().map(|r| text(r, "id").to_owned()).collect();
+        assert_eq!(ids, ["n1", "n2", "w", "d", "i1", "x"]);
+        let names: Vec<_> = shown.iter().map(|r| picker.group_key(r)).collect();
+        assert_eq!(
+            names,
+            [
+                "Needs you",
+                "Needs you",
+                "Working",
+                "Idle",
+                "Idle",
+                "Archived"
+            ]
+        );
+    }
+    #[test]
+    fn archived_starts_collapsed_and_is_skipped_by_keyboard_moves() {
+        let rows = dash(json!([
+            {"id":"a","title":"Alpha","status":"idle","updated":2.0},
+            {"id":"x","title":"Gone","status":"archived","archived":true},
+        ]));
+        let mut picker = Dashboard::default();
+        assert!(picker.is_collapsed("Archived") && !picker.is_collapsed("Idle"));
+        picker.key(key(KeyCode::End), &rows);
+        assert_eq!(picker.selected_id, "a", "collapsed rows are not selectable");
+        picker.toggle_heading("Archived".into());
+        picker.key(key(KeyCode::End), &rows);
+        assert_eq!(picker.selected_id, "x");
+        assert_eq!(
+            picker.key(key(KeyCode::Enter), &rows),
+            Some(json!({"kind":"archived_preview","id":"x"}))
+        );
+        assert!(picker.key(key(KeyCode::Char('d')), &rows).is_none());
+        assert!(picker.confirm_archive.is_none(), "already archived");
+    }
+    fn needs_you() -> Value {
+        dash(json!([
+            {"id":"a","title":"Ask","status":"input","state":"awaiting_permission","workspace":"/w",
+             "pending":{"request_id":"r1","kind":"permission","summary":"Allow Bash: ls","ts":5.0}},
+            {"id":"b","title":"Quiet","status":"idle","workspace":"/w"},
+        ]))
+    }
+    #[test]
+    fn a_and_d_answer_the_pending_request_without_opening_the_session() {
+        let rows = needs_you();
+        let mut picker = Dashboard::default();
+        assert_eq!(
+            picker.key(key(KeyCode::Char('a')), &rows),
+            Some(
+                json!({"kind":"session_permission","id":"a","request_id":"r1","decision":"allow_once"})
+            )
+        );
+        assert_eq!(
+            picker.key(key(KeyCode::Char('d')), &rows),
+            Some(
+                json!({"kind":"session_permission","id":"a","request_id":"r1","decision":"deny_once"})
+            )
+        );
+        assert!(picker.confirm_archive.is_none() && picker.notice.is_empty());
+        // A row without a pending request ignores `a`.
+        picker.key(key(KeyCode::Down), &rows);
+        assert_eq!(picker.selected_id, "b");
+        assert!(picker.key(key(KeyCode::Char('a')), &rows).is_none());
+    }
+    #[test]
+    fn typing_filters_without_a_composer() {
+        let rows = needs_you();
+        let mut picker = Dashboard::default();
+        // `z` is no shortcut: it starts the filter, and the dashboard owns the key.
+        assert!(picker.owns(&key(KeyCode::Char('z')), true));
+        let op = picker.key(key(KeyCode::Char('z')), &rows).unwrap();
+        assert_eq!(op, json!({"kind":"sessions_search","query":"z"}));
+        assert!(picker.searching);
+        picker.key(key(KeyCode::Char('a')), &rows);
+        assert_eq!(picker.query, "za", "once searching, shortcut letters type");
+    }
+    #[test]
+    fn waiting_clock_is_mm_ss() {
+        assert_eq!(clock(waited(100.0, 165.0)), "01:05");
+        assert_eq!(clock(waited(100.0, 90.0)), "00:00");
+        assert_eq!(clock(waited(0.0, 500.0)), "00:00");
+        assert_eq!(clock(3725), "1:02:05");
     }
     #[test]
     fn this_project_keeps_only_the_current_workspace() {

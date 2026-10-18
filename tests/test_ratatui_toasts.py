@@ -63,6 +63,37 @@ def test_the_same_toast_is_not_repeated_by_a_refresh_loop(tmp_path, monkeypatch)
     assert len(shell.toasts) == 1
 
 
+def test_notifications_is_a_declared_command_that_bumps_the_open_counter(tmp_path, monkeypatch):
+    import asyncio
+
+    from nexus.ui.cli import commands
+
+    parsed = commands.parse("/notifications")
+    assert parsed.name == "/notifications" and parsed.spec is commands.BY_NAME["/notifications"]
+    assert "/notifications" in commands.help_text()
+    shell = _shell(tmp_path, monkeypatch)
+    assert project(shell.controller, 1, shell=shell)["notifications_open_seq"] == 0
+    asyncio.run(shell.command("/notifications", ()))
+    assert project(shell.controller, 2, shell=shell)["notifications_open_seq"] == 1
+    assert not shell.toasts, "opening the drawer is not itself a notification"
+    with pytest.raises(ValueError, match="Usage: /notifications"):
+        asyncio.run(shell.command("/notifications", ("x",)))
+
+
+def test_open_counter_is_sent_on_change_only(tmp_path, monkeypatch):
+    from nexus.ui.ratatui.wire import TerminalWire
+
+    shell = _shell(tmp_path, monkeypatch)
+    wire = TerminalWire()
+    first = wire.encode(project(shell.controller, 1, shell=shell))
+    assert first["notifications_open_seq"] == 0
+    shell.notifications_open_seq += 1
+    changed = wire.encode(project(shell.controller, 2, shell=shell))
+    assert changed is not None and changed["notifications_open_seq"] == 1
+    again = wire.encode(project(shell.controller, 3, shell=shell))
+    assert again is None or "notifications_open_seq" not in again
+
+
 def test_toast_list_is_bounded(tmp_path, monkeypatch):
     shell = _shell(tmp_path, monkeypatch)
     for i in range(60):

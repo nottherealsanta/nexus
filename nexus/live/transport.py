@@ -7,7 +7,7 @@ logs, host results or the audio helper, and every error text passes
 ``redact_secrets`` and is bounded before it leaves this module.
 
 Protocol constants are pinned to two reference integrations (both MIT; see
-``NOTICE``) as recorded in ``plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md``
+``NOTICE``) as recorded in ``plans/done/GPT_LIVE_PROTOCOL_NOTES.md``
 (notes §N below):
 
 - OC: ``malhashemi/opencode-gpt-live`` @ ``c23101cfdeb3feaf03f09aa678135ca01d72ed4e``

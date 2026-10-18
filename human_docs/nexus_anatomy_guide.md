@@ -311,13 +311,15 @@ Nexus supports dynamic, runtime model switching across providers without restart
 
 ---
 
-## 8. Interactive Figure & State Machine Simulator
+## 8. Interactive Figure, State Machine Simulator & Pele Diagrams
 
-The interactive SVG Anatomy figure and State Machine Simulator are available in:
+The interactive SVG Anatomy figure, State Machine Simulator, and high-fidelity execution flowcharts are available in:
 - **Interactive Console & Simulator**: [nexus_anatomy.html](file:///Users/santa/repos/nexus/human_docs/nexus_anatomy.html)
 - **Build Script**: [build_nexus_anatomy.mjs](file:///Users/santa/repos/nexus/human_docs/build_nexus_anatomy.mjs)
+- **Vendor Bundle**: [pele.global.js](file:///Users/santa/repos/nexus/human_docs/pele.global.js)
 
-Open `nexus_anatomy.html` in any browser to interact with both the physical console and the live FSM:
+Open `nexus_anatomy.html` in any browser to interact with both the physical console, the live FSM, and vector flowcharts:
 - Step through the execution cycle to observe the **State Transition Graph** update alongside the mechanical console.
 - Trigger cancellation tokens or simulated harness errors to inspect terminal state invariants.
 - Inspect legal vs forbidden transitions in real time.
+- **Pele Diagram Engine (`pele@1`)**: All Mermaid flowcharts (5.1 – 5.6) and state machine graphs (2.1 – 2.2) are dynamically mounted via **[Pele](https://pele.run)**. In `nexus_anatomy.html`, Pele provides theme-adaptive vector SVGs styled to match the dark/light Anatomy design tokens, automatic viewport width adaptation (`autoDirection: true`, responsive breakpoints), and interactive pan-and-zoom controls (`zoom: 'auto'`).

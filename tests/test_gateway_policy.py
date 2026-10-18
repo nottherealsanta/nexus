@@ -19,7 +19,7 @@ EXPECTED_ALLOWED = {
     },
     "prompt": {
         "SessionOpen", "SessionStart", "SessionEnqueue", "SessionCancel",
-        "SessionQueueMove", "SessionQueueRemove", "ModelSelect",
+        "SessionQueueMove", "SessionQueueRemove", "SessionQueueSetMode", "ModelSelect",
         "ReasoningEffortSelect", "AgentSelect", "AgentCancel", "SessionArchive",
         "SessionUnarchive",
     },
@@ -199,6 +199,8 @@ def test_enqueue_mode_and_queue_operations_are_checked():
     invalid(p.SessionQueueMove(session="s", queued_id="q1", offset=2))
     invalid(p.SessionQueueMove(session="s", queued_id="bad id", offset=1))
     invalid(p.SessionQueueRemove(session="s", queued_id=""))
+    assert policy.authorize(p.SessionQueueSetMode(session="s", queued_id="q1", mode="steer"), ("prompt",), "d")
+    invalid(p.SessionQueueSetMode(session="s", queued_id="q1", mode="queue"))
 
 
 def test_single_line_fields_refuse_newlines_and_oversize():

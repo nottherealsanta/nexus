@@ -718,10 +718,39 @@ class HostFacade:
         self.supervisor.reorder(session_id, handle.queued_ids)
         return True
 
-    def remove_queued(self, session_id: str, queued_id: str) -> bool:
-        """Drop one pending message; its parked turn is skipped once the id is gone."""
+    async def set_queued_mode(self, session_id: str, queued_id: str, mode: str) -> bool:
+        """Promote one pending message (``queue -> steer -> interrupt``).
+
+        The session records the upgrade and the new order durably; the
+        supervisor then follows that order. An interrupt also cancels the
+        running turn without dropping the queue, so the promoted message (now
+        at the head) starts the next turn, as a submitted interrupt does.
+        """
+        if mode not in {"steer", "interrupt"}:
+            raise ValueError("mode must be steer or interrupt")
         handle = self._session(session_id, create=False, recover=False)
-        return handle.remove_queued(queued_id)
+        if not handle.set_queued_mode(queued_id, mode):
+            return False
+        self.supervisor.reorder(session_id, handle.queued_ids)
+        if mode == "interrupt":
+            await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
+        return True
+
+    def remove_queued(
+        self, session_id: str, queued_id: str, *, return_content: bool = False
+    ) -> bool | tuple[bool, list[dict[str, Any]]]:
+        """Drop one pending message; its parked turn is skipped once the id is gone.
+
+        With ``return_content`` the result is ``(removed, content_blocks)`` and
+        the content is read before the drop, so it is the full, uncut message.
+        """
+        handle = self._session(session_id, create=False, recover=False)
+        if not return_content:
+            return handle.remove_queued(queued_id)
+        content = handle.queued_content(queued_id)
+        removed = handle.remove_queued(queued_id)
+        blocks = msgspec.to_builtins(content) if removed and content else []
+        return removed, blocks
 
     async def cancel(
         self, session_id: str, *, reason: str | None = None, drop_queue: bool = True
@@ -1563,14 +1592,27 @@ class HostFacade:
             if not isinstance(command.query, str) or len(command.query) > 256:
                 raise ValueError("project session query must be at most 256 characters")
             limit = max(1, min(command.limit, 1000))
+            if type(command.archived) is not int:
+                raise ValueError("archived session count must be an integer")
             rows = self.runtime.sessions.store.db.project_sessions(limit=limit + 1, query=command.query)
+            archived_rows = []
+            if command.archived > 0 and not command.query:
+                archived_rows = self.runtime.sessions.store.db.archived_project_sessions(limit=min(command.archived, 100))
             # Only returned rows need live metadata or workspace inspection.
-            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in rows[:limit]}}
+            shown = [*rows[:limit], *archived_rows]
+            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in shown}}
             current = str(self.runtime.workspace)
             sessions = []
-            for row in rows[:limit]:
+            for row in shown:
+                pending = {}
                 if row["workspace"] == current:
                     summary = self.runtime.sessions._summary_from_row(row)
+                    if summary.state == "awaiting_permission":
+                        from ..host_support.session_preview import pending_request
+                        try:
+                            pending = pending_request(self.state(summary.id)[0])
+                        except Exception:  # a dashboard poll never fails on one session
+                            pending = {}
                 else:
                     summary = SessionSummary(
                         id=row["id"], title=row["title"], last_activity=row["last_activity"],
@@ -1585,6 +1627,7 @@ class HostFacade:
                     repo=repo, worktree=worktree,
                     last_user=str(row.get("last_user") or "")[:240],
                     last_agent=str(row.get("last_agent") or "")[:240],
+                    archived=row.get("archived_at") is not None, pending=pending,
                 ))
             return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=len(rows) > limit)
         if isinstance(command, p.ProjectSessionOpen):
@@ -1803,7 +1846,15 @@ class HostFacade:
             changed = self.move_queued(command.session, command.queued_id, command.offset)
             return p.SessionQueueEditResult(session=command.session, changed=changed)
         if isinstance(command, p.SessionQueueRemove):
+            if command.return_content:
+                changed, content = self.remove_queued(
+                    command.session, command.queued_id, return_content=True)
+                return p.SessionQueueEditResult(
+                    session=command.session, changed=changed, content=content)
             changed = self.remove_queued(command.session, command.queued_id)
+            return p.SessionQueueEditResult(session=command.session, changed=changed)
+        if isinstance(command, p.SessionQueueSetMode):
+            changed = await self.set_queued_mode(command.session, command.queued_id, command.mode)
             return p.SessionQueueEditResult(session=command.session, changed=changed)
         if isinstance(command, p.SessionSubscribe):
             return p.SessionSubscribeResult(

@@ -57,7 +57,9 @@ closed; oversized files are a named error, `max_file_bytes` default from `[ext]`
 The context header and `/context` picker expose System prompt, Environment,
 AGENTS.md, MEMORY.md, Skills, Tools and MCP, in that order. A populated
 Environment block uses the agent color like other included context; empty blocks
-remain neutral. The shared
+remain neutral. The native terminal client also draws a `total` row with the share of the context window
+(presentation only, no bars or animation; see [ratatui-parity.md](ratatui-parity.md),
+"Context header"). The shared
 projection recognises legacy identity/soul parts and named `core_prompt` parts;
 `instructions` wrappers with a `memory` scope appear in MEMORY.md rather than
 System prompt. AGENTS.md remains separately inspectable.

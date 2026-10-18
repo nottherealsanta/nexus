@@ -50,7 +50,17 @@ The context header ends with a right-aligned `Context total · ~N tokens` footer
 using the same subdued summary styling as per-turn usage. It sums the shared
 header section estimates (not conversation history or future output), and shows
 `tokens unavailable` until a context preview is available. Child-agent headers
-use their own preview in the same way.
+use their own preview in the same way. (Not verified: no `Context total ·` string exists in
+the Rust client; the native header's total is the `total` row below.)
+
+**Context header (design overhaul step 7, P-CTX; bars and animation reverted).**
+`rust/tui/src/render/context.rs` draws each closed block as `Title [counts] tokens`, with no bar
+column and no animation: the header draws its final state at once on every tick and stays
+row-cacheable. A blank row and `total  17,580 tok · 8.8% of the window` close the list (the
+share is left out while the snapshot has no `context_window`; a changed window resets the row
+cache via `Cache.context_window`). Token counts come from the host's `tokens` (number or
+`~1.2K` label). The grey texture bars (`█ ▓ ▒ ░ ▚`), their ASCII twins and the per-session grow
+animation were removed at the user's request after review.
 
 User-message borders use the turn's recorded agent color, falling back to the
 active agent color when the turn has no recorded color.
@@ -200,7 +210,12 @@ rows with the last ending in `…` when longer, padding row; `#N` included) is p
 than the title row, keeping the bottom padding even for long clipped messages. While any
 part of the real card remains visible, no pinned copy overlays it: this prevents attachment
 chips from appearing as a detached second band beneath a truncated sticky message. The pinned
-copy's bottom padding has a quiet dotted texture, unlike the full card's plain padding.
+copy's bottom padding row is the STK-3 indicator (design overhaul step 14), unlike the full card's
+plain padding: a `░` shade (`p.border_strong`, `.` in ASCII) with ` ↑ N lines of this turn above `
+right-aligned in `p.muted` (` ↑ N above ` when narrow, no count below ~14 cells). `N` is the rows of
+the turn between the end of its card and the top of the viewport (`sticky::above`; the plan's
+`offset - first - rows` over-counts for a clipped long message, so it counts from the card's real
+last row). Only that row changes; the top padding and text rows are the card's own.
 The next turn's card pushes the pin up and then
 replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
@@ -225,16 +240,12 @@ is derived in the reducer from the `thinking.delta`/`thinking.end` event
 timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
 opens beneath its activity member dimmed, with a whole-line `**heading**` shown bold.
 Expanded activity members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
-call is a stable two-row card: `<spinner|◆> Explore Subagent — short phrase`, then
-`gpt-6 (high) M · 3 tool calls · 1.2K tokens`
-(the `◆` is drawn in the agent-type colour, error colour when the child failed (`Error:` detail); the model, effort and the bold tier letter `L`/`M`/`H` (`?` when unknown) use the agent colour; the model is the latest actual one without its provider; `model pending`/`model unavailable` until known, never the tier alone).
-The counts are muted: every child tool call and the child's total tokens (`ui/ratatui/prototype.py`
-`_agent_card_metrics`). A child that reports no accounting (an external worker) reads
-`tokens unknown`, never `0 tokens`. The card never shows the latest tool or a duration,
-so it does not change on every tool call. A subagent page opens with its task as a
-prompt card whose rail uses the agent's colour (no context-header strip, so the
-child's context chips are not shown there). The dark background is `#0B0B0B`.
-Covered by Rust transcript tests and `tests/test_ratatui_projection.py`; not
+call renders as a stable two-line row (P-AGT) with a blank row between agents:
+- **Line 1:** mark (running spinner in agent colour; `›` in `p.muted` when done; `◆` in `p.error` on failure), one space, then the capitalised agent name in the agent colour in a fixed 10-character field (cut to 9 plus `…` when longer, padded when shorter). The task phrase always begins at character 11 of that field in `p.text` while running and `p.muted` when done (`· <provider> (external, own tools)` for external workers).
+- **Line 2:** indented to the name column (column 5) in `p.quiet`, joined by ` · `: `model-effort (tier)` (effort and full tier name omitted when unknown), `N tools` (omitted when not reported), compact `N tokens` (omitted when unknown), and duration (`p.muted` live ticking duration while running, `p.quiet` total duration when done).
+The agent presentation colour is stable across runtimes and sessions, keyed on the definition name (or explicit definition `color`), never run IDs.
+A subagent page opens with its task as a prompt card whose rail uses the agent's colour (no context-header strip, so the child's context chips are not shown there). The dark background is `#0B0B0B`.
+Covered by Rust transcript tests, `tests/test_ratatui_projection.py`, and `tests/test_ratatui_agent_color.py`; not
 verified in a real terminal or against a live provider. The bottom
 Subagents/Shell/Terminals panel from the reference screenshots is not ported.
 
@@ -287,14 +298,63 @@ The periodic doctor is cheap because `host_support/doctor.py` caches the SQLite
 `quick_check` and the session-tail scan per store for 10 minutes, so a doctor
 report (including `/doctor`) may show those two results up to 10 minutes old.
 
+Terminal loss: a hung-up terminal (PTY master closed, window gone) makes crossterm's
+`poll` report ready forever, which once left a client at 100% CPU for 19.5 hours. About
+once a second the input loop probes `/dev/tty` (a zero-length write, which fails with EIO
+on a hung-up tty on macOS, plus `tcgetattr`, which fails on Linux); on failure, or when
+an input/output error ends the loop on a dead terminal, the client restores the terminal,
+appends a `terminal-lost` entry to `~/.nexus/tui-panic.log` and exits. The probe moves no
+bytes and reads no input, so stdin/stdout being bridge pipes does not affect it.
+`tests/test_ratatui_pty_hangup.py` covers it; PTY tests kill the wrapper's whole process
+group in teardown (`tests/pty_cleanup.py`) so no client outlives a failed test.
+
 Launch order: `nexus chat` starts the native client first (`ui/ratatui/run.py:spawn`), then
-connects to the daemon. Until the first snapshot arrives the client draws a splash (the word
-"Nexus", centred) and ignores input except Ctrl-Q and resize (`loaded` in `rust/tui/src/main.rs`).
+connects to the daemon. Until the first snapshot arrives the client draws a splash (see
+"Splash" below) and ignores input except Ctrl-Q and resize (`loaded` in `rust/tui/src/main.rs`).
 The first snapshot needs only the session bootstrap and the context preview. The git branch
 (`doctor`), catalogue display names (`list_models`) and first-run `setup_status` run
 concurrently afterwards (`finish_startup` in `prototype.py`) and each repaints when it lands, so
 the breadcrumb first shows the bare workspace path. Measured with a warm daemon over a PTY:
 splash about 0.2 s, full UI about 0.3 s (was about 1.0 s); cold daemon start not measured.
+
+**Splash (design overhaul, step 12).** `rust/tui/src/splash.rs` replaces the plain word.
+The small half-block wordmark is made of particles that start at deterministic pseudo-random
+cells and ease (`1-(1-p)^3`) to their places, drawn `·` then `•` and blended quiet → accent,
+while a 30-segment `▰▱` bar with a percentage and the current step name fills under it. Then
+the wordmark flashes once (160 ms), and a 3-cell `▓▒░` curtain wipes left to right at 4
+cells per 8 ms tick (500 cells/s, ~0.3 s at 140 columns) from the splash into the first chat frame (the chat is drawn, then cells
+right of the curtain are copied from the splash; the last frame is exactly the chat). Input
+is held (dropped, as before) only while the chat is not on screen (loading and flash); it
+reaches the composer during the wipe, and Ctrl-Q and resize always work. The first version
+stepped every 80 ms and held input until the 36-frame wipe ended (~4 s after the session had
+loaded), so the splash looked laggy and typed keys vanished. Now it is a pure function of 8 ms
+"frames" since launch (fake clock in the tests; the draw loop paces redraws at 60 fps, so motion
+is continuous). Progress is milestone-driven, not timed: particle progress is `min(bar, elapsed /
+60 frames)`, so they arrive when the bar completes, never sooner than ~0.48 s, with no maximum;
+start times are staggered over the first 60% of that progress range. After `ready` the whole
+sequence takes under 1.1 s at 140 columns (`the_whole_sequence_after_ready_is_short`).
+The five milestones are **client-side** observations, not host startup stages (the bridge
+reports none): `daemon` = the bridge pipe is open, `workspace` = a first line arrived,
+`providers` = it parsed, `session` = the first snapshot was applied, `ready` = chat state
+ready. The names are the plan's; they do not mean the daemon, workspace or providers were
+checked. Each fills a fifth over 25 frames (200 ms). With animations off (Settings → Appearance) or
+`NEXUS_SPLASH=off` the wordmark and bar are drawn in their final state and the chat follows
+the first snapshot with a straight cut. ASCII glyph set: `#` wordmark, `.`/`o` particles,
+`#-` bar, `#=-` curtain. The splash always uses the dark palette (the theme arrives with the
+first snapshot). The test suite sets `NEXUS_SPLASH=off` (`tests/conftest.py`) because the
+animated sequence still delays input slightly; `tests/test_ratatui_pty_splash.py` runs it
+animated and checks that typed text appears after the wipe. Verified by unit tests and PTY runs
+against real sessions; the visual review is outstanding.
+
+**Crash log.** `rust/tui/src/panic_log.rs` installs a panic hook that restores the terminal and
+appends the panic plus a backtrace to `~/.nexus/tui-panic.log` (`$NEXUS_HOME` overrides the
+directory; bounded at 256 KiB, the oldest half dropped). A fatal `Err` returned from the event
+loop (a snapshot that does not parse, for example) is logged there too, as `error`. This
+exists because the alternate screen swallowed both. Root cause of the "crash when opening a
+session" report: `Tokens` (bridge.rs) was an untagged `u64 | String` enum, and task cards of
+subagents with unknown usage send `"tokens": null` (`prototype.py::_agent_card_metrics`), so
+the whole snapshot failed to parse and the client exited. `Tokens` now accepts null, floats and
+negatives (`tokens_tests` in bridge.rs).
 
 There is no row between the composer card and the activity meter: the path, branch and
 worktree live in the top bar, and the old blank spacer row under the card was removed, so the
@@ -401,7 +461,7 @@ key 17.392 → 17.544 ms, wheel 17.507 → 17.423 ms, snapshot 17.931 → 17.502
 so no absolute max < 50 ms claim; streaming CPU medians (6.89% vs 6.56%) are noisy.
 The fixture exercises old warm static blocks, not the animate-only idle scenario, so
 idle-animation acceptance is not proven. See
-`plans/in-progress/GROK_BUILD_TUI_PLAN.md`.
+`plans/done/GROK_BUILD_TUI_PLAN.md`.
 
 `PYTHONPATH=. python tests/playwright_ratatui_check.py` captures native terminal
 screens with deterministic events, draft input and narrow resizing through a
@@ -696,8 +756,15 @@ typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
 models and the live `Thinking · …` summary). While a turn runs, one status line sits above the
-composer (`render.rs::above_layout`): `⠋ Waiting for response…` on the left
-(agent-coloured spinner and activity, no time of its own) and `4m40s ↓121k [stop]`
+composer (`render.rs::above_layout`): `∴ Waiting for response…` on the left
+(the host's activity word, no time of its own; design overhaul step 6, THK-4: the word always shows
+its real characters and a soft grey shimmer sweeps left to right once every 54 motion frames (1.8 s at
+30 Hz, `cache.activity_frame`, not the 125 ms `cache.spin`), each grapheme blending dark grey to light
+grey over about four graphemes either side of the highlight; `render.rs::shimmer_spans`. The greys are the
+darker and lighter of `p.quiet` and `p.text` (dark theme: `p.quiet` dark, `p.text` light; light theme:
+`p.text` dark, `p.quiet` light), and the `∴` is the dark base grey; no purple or accent. Only colours change,
+so the label keeps its width and `stop_at` its geometry; animations off draw the word in the dark base
+grey, Monochrome plain text) and `4m40s ↓121k [stop]`
 right-aligned (turn time, output tokens when known, `[stop]`). The fields come from
 `turn_status` in the snapshot (`ui/ratatui/turn_status.py`, epoch seconds from
 durable event timestamps; the client computes elapsed against its own clock and
@@ -715,12 +782,35 @@ after one blank row: `▾ Steering N` (`steer` plus `interrupt`) and `▾ Queued
 (ordinary queued inputs), then each group's `#n text` rows (`#n` quiet, accent for
 steering; four rows total when there is one group and a shared smaller limit when there
 are both, then per-group `+N more`). Real queue positions are retained across groups.
-Move-up/down controls are available only when the adjacent queue entry belongs to the
-same group; the first/last member of a group cannot be moved across its boundary (including
-the unlisted active-turn input before the waiting list). Disabled arrows are blank and
-their click targets do nothing. The hovered row shows `↑ ↓ ✕` at the right (move up,
-move down, remove, by durable `queued_id` through `SessionQueueMove`/
-`SessionQueueRemove`); a click on either group header collapses/expands the displayed groups together
+Only queued items are reordered: ↑/↓ are available when the adjacent queue entry is also
+queued (the first member cannot move above the unlisted active-turn input), disabled arrows
+are blank and their click targets do nothing, and steering/interrupt items have no arrows.
+The hovered row shows its controls at the right, by durable `queued_id`: queued `↑ ↓ [Steer] ✕`
+(`SessionQueueMove`, promote through `SessionQueueSetMode`, `SessionQueueRemove`), steering
+`[Interrupt] ✕`, interrupt `✕`; buttons are neutral chips (`p.text` on `p.element_hi`),
+`✕` is `p.muted` (`p.error` while held). A chip under a held mouse button is drawn `p.muted`
+(`✕` `p.error`; in Monochrome also reversed): the press is tracked in `Cache.queue_ui`, the
+`queue_edit` is sent on release over the same control, and dragging off the chip lets go.
+The controls also show on the row with keyboard focus (`QueueUi.focus`, by `queued_id`).
+Keys (`render::queue_key`; reached with Tab on an empty draft when the transcript has no
+focusable block, or with Down from the last transcript block; Up from the first row returns
+to the transcript blocks, Down from the last row to the composer): Up/Down/Tab/`j`/`k`/Home/End
+move, **Enter or `s` promotes** (queued to steer, steer to interrupt), **Delete, Backspace or `x`
+removes** (focus moves to the neighbour), **Alt+Up/Alt+Down reorder queued rows only**, Esc
+leaves; any other key leaves the list and does its normal job. Removing a steering item asks the host for its full text
+(`return_content`) and the bridge sends it through the one-shot `restore` channel with
+`restore_if_empty` and `restore_note`: Rust applies it (cursor at the end) only when the draft
+and attachments are empty, with an info toast `restored from steer #n`; otherwise the draft is
+kept and the toast reads `Steer message removed: <first words>`. Attachments of that message
+(`Attachment: <label> · <name>` text blocks plus image blocks) are re-prepared through
+`AttachmentPrepare` and attached as draft attachments with fresh `[image N]` markers in the
+restored text, but only when the draft holds no attachments; the snapshot's `restore_attachments`
+tells Rust to count exactly those as part of the restore (`bridge::steer_restore_applies`), and
+when Rust declines (non-empty text) it sends `draft_changed` so the bridge drops the unreferenced
+attachments again. Queued items are removed without restoring. A promoted message flashes once (`render::QueueFlash` in `Cache`: row background
+`mix(background, accent, 0.22)` fading over 12 frames of the 30 Hz clock, skipped when
+animations are off, kept alive by `main.rs` ORing `queue_flash.live`).
+A click on either group header collapses/expands the displayed groups together
 (client-local, kept across snapshots). The section and the status line sit directly on the
 card, with no blank row (the one-row margin stays only when nothing is drawn there). When the daemon's global concurrent-turn cap holds this session's turn back
 (`slot_wait` in the snapshot, see `docs/host.md`), the status line reads
@@ -813,8 +903,11 @@ only inserted text. The Ctrl+X leader has no visible shortcut banner. Physical
 microphone latency and real inference remain unverified.
 
 Native dictation now previews directly inside the editable composer, at the capture
-insertion position. Recording shows only a one-cell pulsing orange outline square
-below the agent control; the floating waveform/status strip is removed. Typing
+insertion position. Recording moves out of the composer onto the activity rule directly
+under the composer card: cell 2 is the red recording square (blinking every 4 spin frames
+between `p.error` and a dimmer panel mix; `#` in ASCII), cell 3 is the activity rule, and
+cells 4-8 display the elapsed recording time (`mm:ss`) in `p.error`; transcription shows
+neither mark on the rule. The floating waveform/status strip is removed. Typing
 stops capture and also applies the typed key. Final text replaces the temporary
 preview at the captured position, preserving typed suffix text. Escape keeps the
 final transcript without sending; Enter sends it. These explicit stops override
@@ -1118,13 +1211,46 @@ deliberately faint. Click `×` to dismiss, click the action to run its operation
 `Ctrl+X x` dismisses all, `Ctrl+X a` runs the newest toast's action (`Ctrl+X t` stays "cycle reasoning effort"). Esc does not
 dismiss toasts (it already means stop/close). Every toast is also a `client · toast`
 line in the Logs tab (warnings and errors always, info and success with the routine
-entries), so a dismissed toast is never lost. Not done yet: the notifications list
-(`Ctrl+X n` is already `/new`; a different key is needed), toasts for the remaining
+entries), so a dismissed toast is never lost. Not done yet: toasts for the remaining
 direct `shell.notice` call sites beyond the classifier, and the composer, activity
 and dictation indicators are intentionally unchanged.
 Covered by `tests/test_ratatui_toasts.py`, `tests/test_ratatui_pty_toasts.py` (real
 controlling PTY, full-redraw absence checks) and `render/toasts.rs` unit tests.
 Not verified against a live provider.
+
+### Notifications drawer (design overhaul, step 10)
+
+`render/notifications.rs` keeps a client-side history of every toast the client showed
+(bounded to 50, newest first, with level, text and time; each host id once, so resent and
+dismissed toasts are not recorded twice). It is visual state, not durable: it starts empty
+after a restart of the client. Events that are not toasts today (sub-agent finished, tests
+passed) are not added.
+
+- **Counter** in the top bar, left of `≡`: ` ◔ N ` in the warning colour while N > 0, quiet
+  at 0 (`o N` with `NEXUS_ASCII=1`; `99+` caps the label). N counts toasts recorded since the
+  drawer was last opened. When it changes it pops for 4 frames (320 ms) as `(◔ N)`, bold, in
+  the text colour (the plan's "peak colour" has no separate palette entry); the width never
+  changes. The counter is a `TabHit::Notifications` cell, so layout and click share one table
+  (`chrome.rs`); it is the first thing dropped when the bar is too narrow.
+- **Drawer** under the top bar's right edge, 46 cells wide, a bordered panel with the header
+  `Notifications  N · Esc closes` and rows `glyph text  age` (`now`, `12s`, `4m`, `3h`, `2d`;
+  the glyph and colour follow the level: info/success/warning/error). Rows drop in one per
+  2 frames (160 ms) when it opens; with animations off all rows appear at once. Ages redraw
+  about once a second while open. Opening resets N. Esc or a click outside closes it; a click
+  inside is swallowed. It is drawn under the toast stack and over everything else.
+- **Three ways to open:** click the counter; `/notifications` (declared in
+  `ui/cli/commands.py`; the shell bumps `notifications_open_seq` in the snapshot and the
+  client opens its own drawer when the value *changes*, the first value after a start or
+  reconnect is only a baseline, so there is no host round trip for the history); and
+  `Ctrl+X Shift+N` (toggles). The plan's `Ctrl+X N` could not be used: `Ctrl+X n` is `/new`.
+  The Keyboard page lists the new chord (once: `Ctrl+K`, Search sessions, comes from the shared
+  `SHORTCUTS` table and is not repeated in the page's extra leader rows).
+- The web client does not get the drawer or the command (deprecated).
+
+Covered by `render/notifications.rs`, `render/toasts.rs` and `render/chrome.rs` unit tests,
+`tests/test_ratatui_toasts.py` and an added drawer step in `tests/test_ratatui_pty_toasts.py`.
+Not verified: none of the Rust or the PTY test has been compiled or run (no shell was
+available when this was written); the top-bar visual review (pop, drop) is outstanding.
 
 ## Context header always shows its contents (2026-10 overhaul, step 2)
 
@@ -1356,10 +1482,11 @@ no Antigravity-specific feature.
 `LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
 `nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
 `active state phase model muted paused pause_left started in out elsewhere detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
-`● Live · phase · mm:ss` plus `mic`/`spk` meters and a `MUTED` badge (model name when there is room) as the
-Live pane's header row; the composer no longer shows it; the clock is computed in Rust from the
+the phase strip (`LISTENING   ▁▃▅█▆▃▂▁ … 02:41`: caps phase, its animation, the clock; design
+overhaul step 11, see `docs/live.md`) as the Live pane's header row and the pane's captions; the
+composer no longer shows it; the clock is computed in Rust from the
 call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the
-snapshot every 250 ms while a call is open so the meters move. Covered by Python tests
+snapshot every 250 ms while a call is open so the mic levels move (the client keeps the last eight). Covered by Python tests
 (`tests/test_ratatui_live.py`, fake helper and fake transport) and Rust unit tests; real terminal,
 microphone and call behavior are not verified. The desktop route for `Ctrl+X D` lands with M5
 (`tests/test_desktop_keymap_parity.py` lists it as pending).
@@ -1431,9 +1558,25 @@ not imply completion of the Ratatui port or PTY verification.
 
 The Sessions page is a compact, centered, rounded-border card like a Settings page (at most
 72 columns wide, only as tall as its content, never full-screen) holding a list grouped by
-last-updated time in local time
-(Today, Yesterday, This week, Earlier; empty groups omitted; the host projects `bucket` and
-`updated` on each row): `▾ Today 3 ────` group headers, newest first.
+status (P-SES): **Needs you** (`input`), **Working**, **Idle** (`idle` and `done`, which
+keeps its `●` "finished since viewed" glyph) and **Archived**; empty groups are omitted and
+each is a collapsible `▾ Needs you 1` heading. Rows inside a group stay newest user prompt
+first (`updated`). With `g` (group by project) the project is appended to the status
+heading (`Idle · nexus › main · Today`), which can be noisy: not verified in a PTY capture.
+Each row draws its status glyph once (`title_spans` owns it; `draw_at` only indents; a unit test counts it).
+**Archived** rows come with the dashboard payload (the newest 20, `archived: true`,
+`status: "archived"`) and the group is collapsed until its heading is opened; Enter on one
+opens the existing archived preview, whose **Resume** unarchives it. A **Needs you** row
+has two more lines under the title: the pending question (`Allow Bash: git push origin
+main`) with `waiting mm:ss` (counted from the request's `ts`, one redraw per second via
+`main.rs` `animating`), and the keys `Enter open  a allow once  d deny`. `a`/`d` send
+`session_permission` (`id`, `request_id`, `decision` = `allow_once`|`deny_once`), which
+the bridge accepts only for the `request_id` the row lists and answers through
+`PermissionResolve`, without opening the session. The page is one blank row below
+`+ New Agent`, then the search row. Header chips follow the group order:
+`◆ N needs you │ ⠋ N working │ ◇ N idle │ ● N archived` (counts only when the page is
+too narrow for labels). Typing with no composer: any printable key that is not a shortcut
+starts the filter (`/` is optional).
 Each session is exactly one row: `◇ Title … age` (status glyph, name, last-used time; the
 selected row shows `[×]` for archive instead of the age). Search, rename, archive, collapse,
 hover and click targets are unchanged. Status shows in the glyph
@@ -1448,13 +1591,35 @@ owns all keys, Down or Enter moves into the results, Esc clears and leaves. Noth
 expands inline, and the dashboard has no preview pane: there is no `Response`
 box, no hover expansion and no `Worked for Xs` line. `SessionDashboardPreview` was removed
 (see [decisions.md](decisions.md#sessions-dashboard-has-no-preview-pane-2026-10)).
+
+Opening a row sends `session_open` with the row's `workspace`, which the host takes from
+`projects.root`. Session recovery (`Session.recover_dangling_tool_uses`) opens child stores
+with `register_project=False`; before that fix it re-registered the project with its bare id
+as the root, so the dashboard asked the daemon to open workspace `<project id>` and the new
+session showed `FileNotFoundError`. `StateDatabase.touch_project` also no longer replaces a
+recorded root with the bare id (tests: `tests/test_session_ownership.py`). A session whose
+project lives in another workspace starts that workspace's own daemon, which must run a
+compatible Nexus version.
 The Sessions dashboard has no composer: the list takes those rows, typing does not feed
 a hidden draft, and keys that are not list shortcuts are ignored. Enter opens the selected
 session, where the composer appears as usual.
-`+ New Agent`, Open Previous (`/resume`) and Worktree are the header actions. Keep the
+`+ New Agent` and `Worktree Ctrl+w` are the header actions ("Open Previous" was removed;
+`/resume` and `/archived` stay chat commands). Keep the
 user-facing title **Sessions** and `/sessions`. Render the dashboard as a centered,
 settings-like compact panel rather than stretching it full-screen; each session occupies
 one line with its existing status icon, title, and last-used time. The archive `SessionPreview` is unrelated.
+The permission prompt (P-PRM) sends structured fields beside `lines` (kept for older
+clients): `title` (`Allow <tool> <target>?`), `since` (`PermissionView.ts`, now set to the
+request event's time while pending), `what` (the request's targets, else its preview) and
+`why` (`default_rule`), built by `nexus/ui/ratatui/permission_prompt.py`. The panel reads
+`◆ Allow git push origin main?` (glyph warning, text bold), `   waiting on you · mm:ss` in
+`muted` (counting up; `animating()` stays true while the prompt is open), a blank row,
+**What happens** (muted bold, at most 3 rows then `… N more`), **Why it asked** with
+`rule: …`, a blank row, then one neutral key chip per host choice (` y ` bold `text` on
+`element`, label `muted`, no colour; `▸` marks the keyboard selection, so it still reads
+in Monochrome). Chips come from `choices[]`, so `a` appears only when the host offers it.
+They stay one per row so the existing click and hover mapping is unchanged. Not verified:
+a PTY capture of the new panel (no shell was available when it was written).
 The Mermaid module is registered and called from `markdown.rs`, with
 an explicit code-block fallback for unsupported or streaming fences.
 
@@ -1540,7 +1705,8 @@ Attachment operations and their per-chip hit ranges remain intact.
 
 The running activity row above the composer starts two columns farther inward.
 Only the left edge moves: elapsed/token metrics and `[stop]` keep their right edge
-and click position. Status text uses quiet gray; the spinner retains agent color.
+and click position. Status text is the grey shimmer with a grey `∴` (design overhaul step 6 replaced the
+agent-coloured spinner and the quiet gray label).
 Regression coverage lives in `render/chrome.rs`, `transcript.rs`, and `render.rs`.
 Exactly one blank row separates the activity row (spinner/waiting text, token counter,
 `[stop]`) from the composer card; with a queue, that blank row is the one above the queue group headings
@@ -1595,3 +1761,57 @@ transcript projection renders a stable divider; earlier cards stay readable.
 The desktop NativeShell bridge uses the same command/projection and host codec.
 No web feature expansion is required. Terminal skill service was unavailable;
 this document remains the native implementation/parity guidance.
+
+### Turn clocks and durations
+
+User-card tags show the send-event local short clock after the turn number
+(number quiet, time muted). Completed footers use the durable terminal-event
+`completed_ts`, or `started_ts + elapsed_ms/1000` for older snapshots; absent
+facts omit the clock rather than using the current time. Failed and cancelled
+turns also retain their terminal timestamp on replay. Turn durations and the
+running status clock use `11.6s`, `11m 40s`, and `1h 4m` bands. Tool/agent run
+clocks retain their compact sub-hour form but use `1h 4m` above an hour.
+Agent names occupy ten display cells, not ten Unicode code points.
+
+### Streaming write head (design overhaul step 4)
+
+The projection marks the unfinished assistant message (`not done`, turn not
+terminal) with `"streaming": true` on its `markdown` block. The Rust builder
+(`transcript.rs`) blends the last 12 graphemes of its trailing **prose** rows from
+`p.text` (12th from the end) to `p.accent` (newest) with `look::write_head`; the
+head spills into the row above when the last row is short, blank rows are
+skipped, and a code block or table ends it. Spans with their own colour (inline
+code, links) keep it but still use up their share. Rows are rebuilt as text
+arrives, so the glow moves with the head; on completion the flag drops and the
+rows are rebuilt without it. Glowing graphemes carry a `RAPID_BLINK` removal tag
+(`look::is_head`); the draw loop puts them back to `p.text` when Settings →
+Appearance animation is off or Monochrome is on (`look::cool_head`). Not verified
+in a real terminal.
+
+### Tool groups (design overhaul step 5)
+
+- **Grouping** (`verb_groups.split_runs`, shared projection): change tools
+  (`CHANGE_TOOLS`: edit, multiedit, write, apply_patch, patch, notebook_edit)
+  never share a run with other tools. Consecutive changes form their own group; a
+  lone change keeps its standalone `change` row; a thought ends a change run and
+  never joins one. Group identity is unchanged (`turn.id:activity:first member`).
+- **Labels**: above 5 members the nouns drop and verbs merge (`Read 4, Searched 2,
+  Ran 1`); at 5 or fewer they stay (`Read 3 files, Searched 1 pattern`). A running
+  group sends `running_label: "Working"`.
+- **Running**: header `▾ Working` (chevron muted, label shimmers as a live span; no
+  count, time or spinner). Even folded, the newest 5 members show as a grey tree
+  (`├─`/`╰─` in `p.border`, `Verb target` muted, running member shimmering; no icons,
+  ✓/✗ or status colour) with `… N earlier` first when clipped. Python sends the last
+  5 members and `hidden` while running folded (Rust windows it again in local mode).
+  The old one-member `preview_limit` and `╰─ ⠋` live tail are gone.
+- **Failure** (default for open decision 2): a failed member row ends in a quiet
+  ` · failed`, no red; failures never open a group and stay in `failed_members`,
+  the expanded member and `i` inspect.
+- **Fold on completion** (`transcript/fold.rs`, `Cache::step_folds`): when a folded
+  group goes `running` → finished, its tree rows leave one per 80 ms frame from the
+  bottom, then the header flashes (`Content::flash`, accent → muted over 6 frames)
+  and settles to `▸ <past summary> · 4.6s` (decision 3 default: duration kept). The
+  group is swapped for an overlay block while the fold lives (`Cache::fold_overlay`);
+  `main.rs` keeps the frame clock running while `Cache::folding()`. Animation off:
+  no fold. A group first seen finished (reload, reconnect) never folds; one the user
+  opened mid-fold shows its boxes.

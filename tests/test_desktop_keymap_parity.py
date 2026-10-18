@@ -37,6 +37,7 @@ ACTIONS = {
 }
 #: Rows without an id in SHORTCUTS, keyed by the key string.
 UNNAMED = {
+    "ctrl+k": "Sessions",  # scoped session search opens the desktop session picker
     "ctrl+t": "CycleEffort",
     "ctrl+e": "ToggleLogs",
     "shift+tab": "CycleAgent",

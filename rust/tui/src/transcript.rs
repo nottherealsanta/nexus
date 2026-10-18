@@ -6,7 +6,8 @@
 //! `signal` (a tool's relevant-only rows), `header` (context headers) and `look` (glyphs,
 //! time format and the live-run marker the draw loop animates).
 use crate::{bridge::Content, markdown, render::Palette};
-mod groups;
+pub(crate) mod fold;
+pub(crate) mod groups;
 mod header;
 pub mod look;
 mod signal;
@@ -235,6 +236,9 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     if b.number > 0 {
         tags.push(format!("#{}", b.number));
     }
+    if !b.sent_at.is_empty() {
+        tags.push(b.sent_at.clone());
+    }
     let tag = if tags.is_empty() {
         String::new()
     } else {
@@ -269,10 +273,18 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         );
         if i == 0 && !tag.is_empty() {
             row.spans.push(Span::styled(" ", base));
-            row.spans.push(Span::styled(
-                tag.clone(),
-                Style::default().fg(p.quiet).bg(p.element),
-            ));
+            let (quiet, clock) = if b.sent_at.is_empty() {
+                (tag.as_str(), "")
+            } else {
+                let split = tag.len() - b.sent_at.len() - 1;
+                (&tag[..split], &tag[split..])
+            };
+            row.spans
+                .push(Span::styled(quiet.to_string(), base.fg(p.quiet)));
+            if !clock.is_empty() {
+                row.spans
+                    .push(Span::styled(clock.to_string(), base.fg(p.muted)));
+            }
             let used: usize = row.spans.iter().map(|s| s.content.width()).sum();
             if used < width {
                 row.spans.push(Span::styled(" ".repeat(width - used), base));
@@ -772,11 +784,23 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         "thought" => thought::draw(&mut out, b, width, p, look::now_ms()),
         "markdown" => {
             let total = width.saturating_sub(2);
+            // Per pushed row: leading spans to skip when it is prose (the write head only
+            // glows prose; code and tables keep their colours), `None` otherwise.
+            let mut prose: Vec<Option<usize>> = Vec::new();
+            let first_row = out.len();
             for row in markdown::lines(&b.text, p, total.saturating_sub(4)) {
                 if row.blank {
                     out.push((Line::default(), op.clone()));
+                    prose.push(None);
                     continue;
                 }
+                let is_prose = row.fence.is_none()
+                    && row.bg.is_none()
+                    && !row
+                        .spans
+                        .first()
+                        .and_then(|span| span.content.chars().next())
+                        .is_some_and(|c| ('\u{2500}'..='\u{257f}').contains(&c));
                 let prefix_width: usize = row.prefix.iter().map(|span| span.content.width()).sum();
                 let room = total.saturating_sub(4 + prefix_width).max(1);
                 let base = row.bg.map(|bg| Style::default().bg(bg)).unwrap_or_default();
@@ -792,80 +816,196 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                         // Hanging indent: wrapped rows line up under the first row's text.
                         lead.push(Span::styled(" ".repeat(prefix_width), base));
                     }
+                    prose.push(is_prose.then_some(lead.len()));
                     out.push((
                         line(lead, cells, row.bg.map(|_| total), base),
                         row_op.clone(),
                     ));
                 }
             }
+            if b.streaming {
+                // The glow is part of the row (rows are rebuilt as text arrives); the draw loop
+                // cools it when animation is off. Only the trailing prose glows: blank rows
+                // are skipped, a code block or table ends the head.
+                let mut seen = 0;
+                for (index, skip) in prose.iter().enumerate().rev() {
+                    let row = &mut out[first_row + index].0;
+                    match skip {
+                        Some(skip) => {
+                            seen = look::write_head(
+                                row,
+                                *skip,
+                                seen,
+                                look::HEAD_LEN,
+                                p.text,
+                                p.accent,
+                            );
+                            if seen >= look::HEAD_LEN {
+                                break;
+                            }
+                        }
+                        None if row.spans.is_empty() => {}
+                        None => break,
+                    }
+                }
+            }
         }
-        "tool_group" => groups::draw(&mut out, b, width, p, look::now_ms()),
+        "tool_group" => groups::draw(&mut out, b, width, p),
         "task" => {
-            // A stable summary card: name and task, then model, tier letter and counts. The
-            // latest tool is never shown, so a running card does not change per tool call.
             let running = b.status == "running";
-            let room = width.saturating_sub(6);
-            let title = truncate(&b.title, room);
-            // The agent colour marks only the subagent's name (`Explore Subagent — …`); the
-            // glyph and the rest of the title are neutral.
-            let (name, rest) = match title.find(" Subagent") {
-                Some(at) => title.split_at(at),
-                None => ("", title.as_str()),
-            };
-            // A finished subagent gets a filled diamond in its agent colour (error colour
-            // when it failed); running ones keep the spinner slot.
+            let failed = b.status == "failed" || b.detail.starts_with("Error:");
+            let agent_color = color(&b.color, p.blue, p);
+            let glyphs = nexus_widgets::Glyphs::from_env();
             let (mark, mark_color) = if running {
-                (look::SLOT, p.text)
-            } else if b.status == "failed" || b.detail.starts_with("Error:") {
-                ("\u{25c6}", p.error)
-            } else if matches!(b.status.as_str(), "completed" | "done") {
-                ("\u{25c6}", color(&b.color, p.blue, p))
+                (look::SLOT, agent_color)
+            } else if failed {
+                (if glyphs.ascii { "*" } else { "\u{25c6}" }, p.error)
             } else {
-                (" ", p.text)
+                (if glyphs.ascii { ">" } else { "\u{203a}" }, p.muted)
             };
+
+            let raw_name = if !b.agent_name.is_empty() {
+                b.agent_name.as_str()
+            } else {
+                let title = &b.title;
+                match title.find(" Subagent") {
+                    Some(at) => &title[..at],
+                    None => "task",
+                }
+            };
+            let name_field = format_agent_name(raw_name);
+
+            let raw_task = if !b.task.is_empty() {
+                b.task.as_str()
+            } else {
+                match b.title.find(" — ") {
+                    Some(at) => &b.title[at + 4..],
+                    None => b.title.as_str(),
+                }
+            };
+
             let mut head = vec![
-                Span::raw("    "),
+                Span::raw("  "),
                 Span::styled(mark, Style::default().fg(mark_color)),
                 Span::raw(" "),
+                Span::styled(name_field, Style::default().fg(agent_color)),
             ];
-            if !name.is_empty() {
-                head.push(Span::styled(
-                    name.to_string(),
-                    Style::default()
-                        .fg(color(&b.color, p.blue, p))
-                        .add_modifier(Modifier::BOLD),
-                ));
+
+            let prefix_width = 3 + 1 + 1 + 10;
+            let room1 = width.saturating_sub(prefix_width);
+            if !raw_task.is_empty() && room1 > 0 {
+                let task_text = truncate(raw_task, room1);
+                let task_style = if running {
+                    Style::default().fg(p.text)
+                } else {
+                    Style::default().fg(p.muted)
+                };
+                head.push(Span::styled(task_text, task_style));
             }
-            head.push(Span::styled(rest.to_string(), Style::default().fg(p.text)));
             out.push((Line::from(head), op.clone()));
-            // `gpt-6 (high) · M` in the agent colour, then the muted `N tool calls · 1.2K tokens`.
-            let accent = Style::default().fg(color(&b.color, p.blue, p));
-            let pieces = [
-                (b.model.as_str(), " ", accent),
-                (b.tier.as_str(), " ", accent.add_modifier(Modifier::BOLD)),
-                (b.metrics.as_str(), " \u{b7} ", Style::default().fg(p.muted)),
-            ];
-            let mut left = 0;
-            let mut summary = vec![Span::raw("      ")];
-            for (text, gap, style) in pieces {
-                if text.is_empty() {
-                    continue;
+
+            let mut model_part = String::new();
+            let model = b.model.trim();
+            let effort = b.effort.trim();
+            let tier = b.tier.trim();
+            if !model.is_empty() {
+                model_part.push_str(model);
+                if !effort.is_empty() {
+                    model_part.push('-');
+                    model_part.push_str(effort);
                 }
-                let gap = if left > 0 { gap } else { "" };
-                let text = truncate(&format!("{gap}{text}"), room.saturating_sub(left));
-                left += text.width();
-                if !text.is_empty() {
-                    summary.push(Span::styled(text, style));
+                if !tier.is_empty() {
+                    model_part.push_str(&format!(" ({tier})"));
+                }
+            } else if !tier.is_empty() {
+                if !effort.is_empty() {
+                    model_part.push_str(&format!("{effort} ({tier})"));
+                } else {
+                    model_part.push_str(&format!("({tier})"));
                 }
             }
-            if summary.len() > 1 {
-                out.push((Line::from(summary), op.clone()));
+
+            let tools_part = b.tool_calls.map(|calls| {
+                if calls == 1 {
+                    "1 tool".to_string()
+                } else {
+                    format!("{calls} tools")
+                }
+            });
+
+            let tokens_part = b
+                .tokens
+                .count()
+                .map(|tok| format!("{} tokens", compact_tokens(tok)));
+
+            let time_part = if running {
+                if b.started_ms > 0 {
+                    let now = look::now_ms();
+                    if now >= b.started_ms {
+                        Some(format_duration(now - b.started_ms))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else if b.elapsed_ms > 0 {
+                Some(format_duration(b.elapsed_ms))
+            } else {
+                None
+            };
+
+            let mut pieces: Vec<(String, Style)> = Vec::new();
+            if !model_part.is_empty() {
+                pieces.push((model_part, Style::default().fg(p.quiet)));
             }
+            if let Some(tools) = tools_part {
+                pieces.push((tools, Style::default().fg(p.quiet)));
+            }
+            if let Some(tokens) = tokens_part {
+                pieces.push((tokens, Style::default().fg(p.quiet)));
+            }
+            if let Some(time_str) = time_part {
+                let time_style = if running {
+                    Style::default().fg(p.muted)
+                } else {
+                    Style::default().fg(p.quiet)
+                };
+                pieces.push((time_str, time_style));
+            }
+
+            let mut line2_spans = vec![Span::raw("    ")];
+            let sep = " \u{b7} ";
+            let mut total_width = 0;
+            let room2 = width.saturating_sub(5);
+            for (i, (text, style)) in pieces.into_iter().enumerate() {
+                let prefix = if i > 0 { sep } else { "" };
+                let full = format!("{prefix}{text}");
+                if total_width + full.width() > room2 {
+                    let remaining = room2.saturating_sub(total_width);
+                    if remaining > 0 {
+                        let truncated = truncate(&full, remaining);
+                        if !truncated.is_empty() {
+                            line2_spans.push(Span::styled(truncated, style));
+                        }
+                    }
+                    break;
+                }
+                total_width += full.width();
+                if i > 0 {
+                    line2_spans.push(Span::styled(sep, Style::default().fg(p.quiet)));
+                }
+                line2_spans.push(Span::styled(text, style));
+            }
+            if line2_spans.len() > 1 {
+                out.push((Line::from(line2_spans), op.clone()));
+            }
+
             for text in b.detail.lines() {
                 indented(
                     &mut out,
                     vec![Span::styled(text.to_string(), Style::default().fg(p.muted))],
-                    6,
+                    5,
                     width,
                     op,
                 );
@@ -972,6 +1112,56 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         }
     }
     out
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+pub fn format_agent_name(raw: &str) -> String {
+    let cap = capitalize(raw);
+    let count = cap.width();
+    if count > 10 {
+        let mut prefix = String::new();
+        for g in cap.graphemes(true) {
+            if prefix.width() + g.width() > 9 {
+                break;
+            }
+            prefix.push_str(g);
+        }
+        format!("{}{}…", prefix, " ".repeat(9 - prefix.width()))
+    } else {
+        let pad = 10 - count;
+        format!("{}{}", cap, " ".repeat(pad))
+    }
+}
+
+pub fn compact_tokens(value: u64) -> String {
+    if value >= 1_000_000 {
+        let val = value as f64 / 1_000_000.0;
+        let s = format!("{val:.1}M");
+        s.replace(".0M", "M")
+    } else if value >= 1_000 {
+        let val = value as f64 / 1_000.0;
+        let s = format!("{val:.1}K");
+        s.replace(".0K", "K")
+    } else {
+        value.to_string()
+    }
+}
+
+pub fn format_duration(ms: u64) -> String {
+    if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else if ms < 3_600_000 {
+        format!("{}m {}s", ms / 60_000, (ms / 1000) % 60)
+    } else {
+        format!("{}h {}m", ms / 3_600_000, (ms / 60_000) % 60)
+    }
 }
 
 #[cfg(test)]
@@ -1150,6 +1340,39 @@ mod tests {
     }
 
     #[test]
+    fn agent_names_are_ten_display_cells() {
+        for name in ["猫猫猫猫猫猫", "e\u{301}clair", "alexanderthegreat", "li"] {
+            assert_eq!(format_agent_name(name).width(), 10);
+        }
+    }
+
+    #[test]
+    fn user_card_clock_is_muted_after_quiet_number() {
+        let p = Palette::new(false);
+        let b = Content {
+            kind: "user".into(),
+            title: "hello".into(),
+            number: 3,
+            sent_at: "12:36 AM".into(),
+            ..Default::default()
+        };
+        let rows = build(&b, 60, &p);
+        let header = &rows[1].0;
+        let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("#3 · 12:36 AM"));
+        assert_eq!(
+            header
+                .spans
+                .iter()
+                .find(|s| s.content.contains("12:36 AM"))
+                .unwrap()
+                .style
+                .fg,
+            Some(p.muted)
+        );
+    }
+
+    #[test]
     fn user_card_fills_width_and_right_aligns_number() {
         let p = Palette::new(false);
         let block = Content {
@@ -1275,108 +1498,142 @@ mod tests {
     }
 
     #[test]
-    fn finished_subagents_get_a_coloured_diamond() {
+    fn subagent_marks_and_durations_running_vs_done() {
         let p = Palette::new(false);
-        let mut task = Content {
+        let agent_col = color("#ff0000", p.blue, &p);
+
+        // Running: spinner span has agent colour, time is live in p.muted
+        let running_task = Content {
             kind: "task".into(),
-            title: "Explore Subagent — map files".into(),
+            agent_name: "explorer".into(),
+            task: "search".into(),
+            model: "gpt-6".into(),
+            status: "running".into(),
+            color: "#ff0000".into(),
+            started_ms: look::now_ms().saturating_sub(4500),
+            ..Default::default()
+        };
+        let rows = build(&running_task, 80, &p);
+        let line1 = &rows[0].0;
+        let spinner_span = &line1.spans[2];
+        assert_eq!(spinner_span.content, look::SLOT);
+        assert_eq!(spinner_span.style.fg, Some(agent_col));
+        let line2 = &rows[1].0;
+        let time_span = line2.spans.last().unwrap();
+        assert!(time_span.content.ends_with('s'));
+        assert_eq!(time_span.style.fg, Some(p.muted));
+
+        // Done: mark is › in p.muted, time is total in p.quiet
+        let done_task = Content {
+            kind: "task".into(),
+            agent_name: "explorer".into(),
+            task: "search".into(),
+            model: "gpt-6".into(),
             status: "completed".into(),
+            color: "#ff0000".into(),
+            elapsed_ms: 3200,
+            ..Default::default()
+        };
+        let rows = build(&done_task, 80, &p);
+        let line1 = &rows[0].0;
+        let mark_span = &line1.spans[2];
+        assert_eq!(mark_span.content, "\u{203a}");
+        assert_eq!(mark_span.style.fg, Some(p.muted));
+        let line2 = &rows[1].0;
+        let time_span = line2.spans.last().unwrap();
+        assert_eq!(time_span.content, "3.2s");
+        assert_eq!(time_span.style.fg, Some(p.quiet));
+
+        // Failed: mark is ◆ in p.error
+        let failed_task = Content {
+            kind: "task".into(),
+            agent_name: "explorer".into(),
+            status: "failed".into(),
             color: "#ff0000".into(),
             ..Default::default()
         };
-        let mark = |task: &Content| {
-            let rows = build(task, 80, &p);
-            let span = rows[0]
-                .0
-                .spans
-                .iter()
-                .find(|s| s.content == "\u{25c6}")
-                .cloned();
-            span.map(|s| s.style.fg)
-        };
-        assert_eq!(mark(&task), Some(Some(color("#ff0000", p.blue, &p))));
-        task.status = "done".into();
-        assert_eq!(mark(&task), Some(Some(color("#ff0000", p.blue, &p))));
-        task.detail = "Error: boom".into();
-        assert_eq!(mark(&task), Some(Some(p.error)));
-        task.status = "running".into();
-        assert_eq!(mark(&task), None);
+        let rows = build(&failed_task, 80, &p);
+        let mark_span = &rows[0].0.spans[2];
+        assert_eq!(mark_span.content, "\u{25c6}");
+        assert_eq!(mark_span.style.fg, Some(p.error));
     }
 
     #[test]
-    fn tasks_show_model_tier_and_counts_but_never_the_latest_tool() {
+    fn subagent_row_layout_two_lines_and_alignment() {
+        let p = Palette::new(false);
+        // Test names of length 3, 10, and 21
+        for (raw_name, expected_name_field) in [
+            ("bob", "Bob       "),
+            ("researcher", "Researcher"),
+            ("reallylongsubagentnam", "Reallylon…"),
+        ] {
+            let task = Content {
+                kind: "task".into(),
+                agent_name: raw_name.into(),
+                task: "find all calls".into(),
+                status: "running".into(),
+                color: "#ff0000".into(),
+                ..Default::default()
+            };
+            let rows = build(&task, 80, &p);
+            let line1 = &rows[0].0;
+            assert_eq!(line1.spans[4].content, expected_name_field);
+            assert_eq!(expected_name_field.chars().count(), 10);
+            assert_eq!(line1.spans[5].content, "find all calls");
+            let chars: Vec<char> = line1.spans.iter().flat_map(|s| s.content.chars()).collect();
+            let prefix: String = chars[0..3].iter().collect();
+            assert_eq!(prefix, "   ");
+            let name_chars: String = chars[5..15].iter().collect();
+            assert_eq!(name_chars, expected_name_field);
+            let task_chars: String = chars[15..].iter().collect();
+            assert_eq!(task_chars, "find all calls");
+        }
+    }
+
+    #[test]
+    fn subagent_line2_omits_tools_and_tokens_when_absent() {
         let p = Palette::new(false);
         let mut task = Content {
             kind: "task".into(),
-            title: "Explore Subagent — map files".into(),
-            status: "running".into(),
-            text: "Read config.json".into(),
-            model: "gpt-6 (high)".into(),
-            tier: "M".into(),
+            agent_name: "explorer".into(),
+            task: "search".into(),
+            model: "gpt-6-mini".into(),
+            effort: "medium".into(),
+            tier: "low".into(),
+            elapsed_ms: 3200,
+            status: "done".into(),
             color: "#ff0000".into(),
-            metrics: "3 tool calls · 1.2K tokens".into(),
-            operation: Some(serde_json::json!({"action":"task","key":"t1"})),
-            gap: 1,
             ..Default::default()
         };
-        for width in [20, 80] {
-            let rows = build(&task, width, &p);
-            assert_eq!(rows[0].0.width(), 1); // shared transcript inset on the gap
-            assert!(rows[1..]
-                .iter()
-                .all(|(line, op)| line.width() <= width as usize && op == &task.operation));
-            let rendered = rows
-                .iter()
-                .map(|(line, _)| {
-                    line.spans
-                        .iter()
-                        .map(|span| span.content.as_ref())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(!rendered.contains("Read config"));
-            assert!(!rendered.contains('→'));
-            if width == 80 {
-                assert!(rendered.contains("gpt-6 (high) M · 3 tool calls · 1.2K tokens"));
-                let accent = Some(color("#ff0000", p.blue, &p));
-                let styled = |needle: &str| {
-                    rows.iter()
-                        .flat_map(|(line, _)| line.spans.iter())
-                        .find(|s| s.content.contains(needle))
-                        .map(|s| s.style.fg)
-                };
-                assert_eq!(styled("gpt-6"), Some(accent));
-                assert_eq!(styled("M"), Some(accent));
-                assert_eq!(styled("tokens"), Some(Some(p.muted)));
-            }
-        }
-        task.metrics = "0 tool calls · tokens unknown".into();
+        // Absent tools and tokens
         let rows = build(&task, 80, &p);
-        let rendered: String = rows
-            .iter()
-            .flat_map(|(line, _)| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert!(rendered.contains("tokens unknown"));
-        task.status = "failed".into();
-        task.detail = "Error: missing file".into();
+        assert_eq!(rows.len(), 2);
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(line2, "     gpt-6-mini-medium (low) · 3.2s");
+        assert!(!line2.contains("tool"));
+        assert!(!line2.contains("token"));
+
+        // With tools only
+        task.tool_calls = Some(4);
         let rows = build(&task, 80, &p);
-        let rendered = rows
-            .iter()
-            .map(|(line, _)| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !rendered.contains('✓') && !rendered.contains('✗') && !rendered.contains('\u{e000}')
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(line2, "     gpt-6-mini-medium (low) · 4 tools · 3.2s");
+
+        // With tokens only (10K tokens)
+        task.tool_calls = None;
+        task.tokens = 10_000.into();
+        let rows = build(&task, 80, &p);
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(line2, "     gpt-6-mini-medium (low) · 10K tokens · 3.2s");
+
+        // With both tools and tokens
+        task.tool_calls = Some(4);
+        let rows = build(&task, 80, &p);
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            line2,
+            "     gpt-6-mini-medium (low) · 4 tools · 10K tokens · 3.2s"
         );
-        assert!(!rendered.contains("Read config"));
-        assert!(rendered.contains("Error: missing file"));
     }
 
     #[test]

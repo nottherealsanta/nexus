@@ -15,6 +15,10 @@ import time
 
 import pytest
 
+from pty_cleanup import kill_group
+
+from ratatui_screen import Screen
+
 BINARY = Path(__file__).resolve().parents[1] / "rust/tui/target/debug/nexus-ratatui"
 SETUP = (
     "import os,fcntl,termios; os.setsid(); fcntl.ioctl(2,termios.TIOCSCTTY,0); "
@@ -26,14 +30,14 @@ SETUP = (
 def test_toast_shows_runs_its_action_and_closes_by_click_or_chord():
     master, slave = pty.openpty()
     termios.tcsetwinsize(slave, (30, 120))
-    screen = bytearray()
+    screen = Screen(30, 120)
     stop = threading.Event()
 
     def drain():
         while not stop.is_set():
             try:
                 if select.select([master], [], [], .05)[0]:
-                    screen.extend(os.read(master, 65536))
+                    screen.feed(os.read(master, 65536))
             except OSError:
                 return
 
@@ -59,15 +63,15 @@ def test_toast_shows_runs_its_action_and_closes_by_click_or_chord():
 
     def full_redraw():
         """A resize repaints every cell, so absence afterwards is a real absence."""
-        screen.clear()
         rows[0] += 1
+        screen.resize(rows[0], 120)
         termios.tcsetwinsize(slave, (rows[0], 120))
         time.sleep(.5)
 
     def wait_for(text, present=True):
         deadline = time.monotonic() + 3
-        while (text.encode() in bytes(screen)) != present:
-            assert time.monotonic() < deadline, f"{text!r} {'never appeared' if present else 'never left'}"
+        while (text in screen) != present:
+            assert time.monotonic() < deadline, f"{text!r} {'never appeared' if present else 'never left'}; screen:\n{screen.text()}"
             time.sleep(.02)
 
     try:
@@ -82,24 +86,30 @@ def test_toast_shows_runs_its_action_and_closes_by_click_or_chord():
         # The same list in the next snapshot must not bring a dismissed toast back.
         send(2, toasts=[{"id": 7, "level": "warning", "title": "Removed haiku-4-5", "body": "from the Low tier"}])
         full_redraw()
-        assert b"Removed haiku-4-5" not in bytes(screen), "an acted-on toast stays dismissed"
+        assert "Removed haiku-4-5" not in screen, "an acted-on toast stays dismissed"
         # New toasts: Ctrl+X X dismisses them all.
         send(3, toasts=[{"id": 8, "level": "success", "title": "Saved to nexus.toml"}, {"id": 9, "level": "error", "title": "Could not reach OpenAI"}])
         wait_for("Could not reach OpenAI")
         full_redraw()
-        assert b"Could not reach OpenAI" in bytes(screen), "control: a full redraw repaints a live toast"
+        assert "Could not reach OpenAI" in screen, "control: a full redraw repaints a live toast"
         os.write(master, b"\x18x")
         time.sleep(.3)
         send(4, toasts=[{"id": 8, "level": "success", "title": "Saved to nexus.toml"}, {"id": 9, "level": "error", "title": "Could not reach OpenAI"}])
         full_redraw()
-        assert b"Could not reach OpenAI" not in bytes(screen) and b"Saved to nexus.toml" not in bytes(screen)
+        assert "Could not reach OpenAI" not in screen and "Saved to nexus.toml" not in screen
+        # The dismissed toasts are still in the history: Ctrl+X Shift+N opens the drawer, Esc closes it.
+        os.write(master, b"\x18N")
+        wait_for("Notifications")
+        wait_for("Could not reach OpenAI")
+        os.write(master, b"\x1b")
+        time.sleep(.3)
+        full_redraw()
+        assert "Notifications" not in screen, "Esc closes the drawer"
         os.write(master, b"\x11")
         assert read_action()["type"] == "quit"
         assert process.wait(timeout=3) == 0
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+        kill_group(process)
         process.stdin.close()
         process.stdout.close()
         stop.set()

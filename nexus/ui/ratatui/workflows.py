@@ -622,6 +622,8 @@ class Workflows(TierPages, SpeakPages):
             await self.dashboard.search(operation["query"])
         elif kind == "session_rename":
             await self.dashboard.rename(operation["id"], operation["title"])
+        elif kind == "session_permission":
+            await self.dashboard.resolve_permission(operation["id"], operation["request_id"], operation["decision"])
         elif kind == "session_new":
             text = operation.get("text") if isinstance(operation.get("text"), str) else ""
             self.close_dashboard()
@@ -629,7 +631,8 @@ class Workflows(TierPages, SpeakPages):
             if text.strip():
                 await self.shell.submit(text)
         elif kind == "session_open":
-            self.close_dashboard()
+            # The dashboard stays up until the switch succeeds, so a failed open leaves it (and the
+            # error toast) in place; `switch` hides it.
             await self.shell.switch_project(operation["workspace"], operation["id"])
         elif kind == "session_archive":
             dashboard = getattr(self, "dashboard", None)
@@ -1115,7 +1118,13 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
             seen.get(summary.id, 0),
             getattr(summary, "completion_seq", getattr(summary, "last_seq", 0)),
         )
-    status = session_status(summary, seen, current)
+    archived = bool(getattr(entry, "archived", False))
+    status = "archived" if archived else session_status(summary, seen, current)
+    pending = getattr(entry, "pending", None) or {}
+    pending = {"request_id": escape_controls(str(pending.get("request_id") or "")),
+               "kind": escape_controls(str(pending.get("kind") or "permission")),
+               "summary": escape_controls(str(pending.get("summary") or ""))[:200],
+               "ts": float(pending.get("ts") or 0.0)} if pending.get("request_id") else {}
     head = f"{project} › {tree}" if tree else project
     group = f"{head} · {day}" if project else day
     ordered = _order_time(summary)
@@ -1132,4 +1141,5 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
             "bucket": _time_bucket(ordered, now),
             "last_user": clean_preview_text(getattr(entry, "last_user", "") or "", 240),
             "last_agent": clean_preview_text(getattr(entry, "last_agent", "") or "", 240),
+            "archived": archived, "pending": pending,
             "active": summary.id == current}

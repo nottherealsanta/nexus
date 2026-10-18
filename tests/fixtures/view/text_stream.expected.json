@@ -106,6 +106,7 @@
       "stop_reason": "end_turn",
       "tools": [],
       "updated_ts": 11.0,
+      "completed_ts": 11.0,
       "usage": {
         "cache_read_tokens": 10,
         "cache_write_tokens": 2,

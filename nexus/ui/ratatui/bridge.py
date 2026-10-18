@@ -18,6 +18,8 @@ BUSY_STATE = {"running", "awaiting_input", "awaiting_permission"}
 TITLE_LIMIT = 200
 QUERY_LIMIT = 256
 POLL_SECONDS = 0.5
+ARCHIVED_LIMIT = 20  # newest archived sessions on the dashboard
+PERMISSION_DECISIONS = {"allow_once", "deny_once"}  # what a "Needs you" row may answer
 
 
 def _plain(value):
@@ -96,12 +98,14 @@ class SessionDashboard:
         epoch, query = self.epoch, self.query
         self.list_generation += 1
         generation = self.list_generation
-        result = await self.shell.client.project_sessions(limit=1000 if query else 20, query=query)
+        # Newest archived sessions ride along (collapsed "Archived" section); a search skips them.
+        extra = {} if query else {"archived": ARCHIVED_LIMIT}
+        result = await self.shell.client.project_sessions(limit=1000 if query else 20, query=query, **extra)
         if not self.visible or epoch != self.epoch or query != self.query or generation != self.list_generation:
             return
         self.rows = _plain(session_rows(result, self.shell.controller.session, self.shell.seen_seq))
         self.rows_query = query
-        self.shell.refresh_session_tabs(self.rows)
+        self.shell.refresh_session_tabs([row for row in self.rows if not row.get("archived")])
         self.shell.sessions_truncated = bool(result.truncated)
         ids = [row["id"] for row in self.rows if row.get("id")]
         if self.selected not in ids:
@@ -155,6 +159,12 @@ class SessionDashboard:
             return False
         if kind in {"session_archive", "ownership_tree"}:
             return True
+        if kind == "archived_preview":
+            return bool(row.get("archived"))
+        if kind == "session_permission":
+            pending = row.get("pending") or {}
+            return bool(pending.get("request_id")) and pending["request_id"] == operation.get("request_id") \
+                and operation.get("decision") in PERMISSION_DECISIONS
         if kind == "session_rename":
             title = operation.get("title")
             return isinstance(title, str) and bool(title.strip())
@@ -178,6 +188,14 @@ class SessionDashboard:
         if self.visible:
             await self.refresh()
             self.shell.toast("Session archived", "success")
+
+    async def resolve_permission(self, session_id, request_id, decision):
+        """Answer a "Needs you" row's permission without opening the session."""
+        resolved = await self.shell.client.resolve_permission(session_id, request_id, decision)
+        if not resolved:
+            self.shell.flash("Permission already resolved by another client", "warning")
+        if self.visible:
+            await self.refresh()
 
     def snapshot(self):
         if not self.visible:

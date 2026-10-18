@@ -252,6 +252,7 @@
         }
       ],
       "updated_ts": 22.0,
+      "completed_ts": 22.0,
       "usage": {
         "cache_read_tokens": 5,
         "cache_write_tokens": 0,
@@ -299,6 +300,7 @@
       "stop_reason": "end_turn",
       "tools": [],
       "updated_ts": 27.0,
+      "completed_ts": 27.0,
       "usage": {
         "cache_read_tokens": 0,
         "cache_write_tokens": 0,

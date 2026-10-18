@@ -70,6 +70,9 @@ class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
 
     limit: int = 1000
     query: str = ""
+    #: Also return up to this many of the newest archived sessions (``archived=True``
+    #: rows after the regular ones); 0 returns none. Bounded at 100 by the host.
+    archived: int = 0
 
 
 class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
@@ -90,6 +93,11 @@ class ProjectSession(msgspec.Struct, frozen=True):
     #: Bounded display snippets from the session row. Not part of ``SessionSummary``.
     last_user: str = ""
     last_agent: str = ""
+    #: An archived session returned for ``ProjectSessionsList.archived``.
+    archived: bool = False
+    #: The unanswered permission request of a session in ``awaiting_permission``:
+    #: ``{request_id, kind, summary, ts}`` (bounded, redacted), else empty.
+    pending: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
 class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
@@ -338,10 +346,23 @@ class SessionQueueMove(msgspec.Struct, tag=True, frozen=True):
 
 
 class SessionQueueRemove(msgspec.Struct, tag=True, frozen=True):
-    """Drop one pending queued/steering message (durable ``input.dropped``)."""
+    """Drop one pending queued/steering message (durable ``input.dropped``).
+
+    ``return_content`` also returns the removed message's full content blocks
+    (the queue view cuts text), so a client can restore it to the composer.
+    """
 
     session: str
     queued_id: str
+    return_content: bool = False
+
+
+class SessionQueueSetMode(msgspec.Struct, tag=True, frozen=True):
+    """Promote one pending message: ``queue -> steer -> interrupt`` (durable ``input.mode_changed``)."""
+
+    session: str
+    queued_id: str
+    mode: str  # steer | interrupt
 
 
 class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
@@ -936,6 +957,7 @@ Command = (
     | SessionCancel
     | SessionQueueMove
     | SessionQueueRemove
+    | SessionQueueSetMode
     | SessionSubscribe
     | SessionState
     | LogsRead
@@ -1051,6 +1073,7 @@ COMMANDS: tuple[type, ...] = (
     SessionCancel,
     SessionQueueMove,
     SessionQueueRemove,
+    SessionQueueSetMode,
     SessionSubscribe,
     SessionState,
     LogsRead,
@@ -1291,6 +1314,8 @@ class SessionQueueEditResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     #: False when the message already ran, was dropped, or sits at the edge.
     changed: bool = False
+    #: Content blocks of a removed message (``SessionQueueRemove.return_content``).
+    content: list[dict[str, Any]] = msgspec.field(default_factory=list)
 
 
 class SessionSubscribeResult(msgspec.Struct, tag=True, frozen=True):
@@ -2170,6 +2195,7 @@ __all__ = [
     "SessionQueueEditResult",
     "SessionQueueMove",
     "SessionQueueRemove",
+    "SessionQueueSetMode",
     "SessionDelete",
     "SessionDeleteResult",
     "SessionEnqueue",

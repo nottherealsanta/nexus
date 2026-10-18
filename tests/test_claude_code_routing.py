@@ -329,13 +329,14 @@ class StubWorker:
         pass
 
 
-def stub_child(tmp_path, worker, **overrides):
+def stub_child(tmp_path, worker, *, max_turn_seconds=0, **overrides):
     from nexus.agents import AgentManager
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
     section = ProviderSection(kind="claude-code", worker_allowed_tools=["Edit"])
-    config = Config(model="standard", v2=ConfigV2(providers={"claude-code": section}))
+    from nexus.config.schema import AgentSection
+    config = Config(model="standard", v2=ConfigV2(providers={"claude-code": section}, agent=AgentSection(max_turn_seconds=max_turn_seconds)))
     runtime = Runtime(workspace, config=config, home=tmp_path / "home", environ={"PATH": os.environ["PATH"]},
                       agents=AgentManager.for_workspace(workspace, seed=False))
     relayed = []
@@ -382,9 +383,8 @@ async def test_no_role_instructions_leave_the_prompt_unchanged_and_say_so(tmp_pa
 
 async def test_external_child_gets_no_wall_clock_even_when_parent_has_one(tmp_path):
     worker = StubWorker()
-    runtime, spec, child, relayed, _ = stub_child(tmp_path, worker)
+    runtime, spec, child, relayed, _ = stub_child(tmp_path, worker, max_turn_seconds=5)
     try:
-        spec.config.v2.agent.max_turn_seconds = 5  # a root-turn cap must not leak into the child
         await child.run()
         assert "max_seconds" not in worker.calls[0]
         from nexus.runtime import _child_session_id

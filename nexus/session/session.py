@@ -124,9 +124,14 @@ _UNATTENDED_FAIL_REASON = "unattended policy fails the turn"
 _QUEUED_EVENT = "input.queued"
 #: A user reorder of the pending FIFO; ``order`` lists every pending id.
 _MOVED_EVENT = "input.moved"
+#: A user promotion of a pending submission (queue -> steer -> interrupt);
+#: carries the new ``mode`` and the whole new ``order``.
+_MODE_CHANGED_EVENT = "input.mode_changed"
 _INPUT_EVENT_TYPES = frozenset(
-    {_QUEUED_EVENT, _MOVED_EVENT, "input.consumed", "input.dropped"}
+    {_QUEUED_EVENT, _MOVED_EVENT, _MODE_CHANGED_EVENT, "input.consumed", "input.dropped"}
 )
+#: Promotion order: a message may only move to a higher rank.
+_MODE_RANK = {"queue": 0, "steer": 1, "interrupt": 2}
 
 #: Tag for raw bytes in a queued-input payload. Makes the representation
 #: self-describing and JSON-safe independent of the encoder.
@@ -1401,6 +1406,40 @@ class Session:
         self._emit(_MOVED_EVENT, {"queued_id": queued_id, "order": list(self.queued_ids)})
         return True
 
+    def set_queued_mode(self, queued_id: str, mode: str) -> bool:
+        """Promote a pending submission (``queue -> steer -> interrupt``).
+
+        Only upgrades are allowed; ``False`` when the id is gone, the mode is
+        unknown, or it is not higher than the current one. A steer goes to the
+        end of the waiting steering group (after the last steer/interrupt,
+        before queued messages); an interrupt goes to the head. Emits
+        ``input.mode_changed`` with the new mode and the whole new order.
+        """
+        self._ensure_writable()
+        item = next((item for item in self._queue if item.queued_id == queued_id), None)
+        if item is None or _MODE_RANK.get(mode, -1) <= _MODE_RANK.get(item.mode, 0):
+            return False
+        rest = [other for other in self._queue if other is not item]
+        item.mode = mode
+        if mode == "interrupt":
+            position = 0
+        else:
+            position = 1 + max(
+                (i for i, other in enumerate(rest) if other.mode in ("steer", "interrupt")),
+                default=-1,
+            )
+        rest.insert(position, item)
+        self._queue = deque(rest)
+        self._emit(_MODE_CHANGED_EVENT, {
+            "queued_id": queued_id, "mode": mode, "order": list(self.queued_ids),
+        })
+        return True
+
+    def queued_content(self, queued_id: str) -> list[ContentBlock] | None:
+        """The full content of a pending submission, or ``None`` when gone."""
+        item = next((item for item in self._queue if item.queued_id == queued_id), None)
+        return None if item is None else list(item.content)
+
     def remove_queued(self, queued_id: str, reason: str = "removed by user") -> bool:
         """Drop one pending submission (``input.dropped``); ``False`` when gone."""
         self._ensure_writable()
@@ -1442,6 +1481,15 @@ class Session:
             if not isinstance(queued_id, str) or not queued_id:
                 continue
             if event.type == _MOVED_EVENT:
+                order = data.get("order")
+                if isinstance(order, list):
+                    ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
+                    pending = dict(sorted(pending.items(), key=lambda pair: ranked.get(pair[0], len(ranked))))
+                continue
+            if event.type == _MODE_CHANGED_EVENT:
+                promoted = pending.get(queued_id)
+                if promoted is not None:
+                    promoted.mode = str(data.get("mode", promoted.mode))
                 order = data.get("order")
                 if isinstance(order, list):
                     ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
@@ -1600,7 +1648,7 @@ class Session:
                 break
             store = SqliteSessionStore(
                 self._store.db, self._store.project_id, row["namespace"],
-                lock_dir=self._store.lock_dir,
+                lock_dir=self._store.lock_dir, register_project=False,
             )
             child = Session(row["id"], store=store)
             child.recover_dangling_tool_uses(_visited=visited)

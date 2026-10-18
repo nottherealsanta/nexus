@@ -202,7 +202,7 @@ def format_arguments(tool: ToolCallView) -> str:
         return _first_line(_text(", ".join(_patch_paths(args.get("patch"))), 180))
     if name in {"bash", "bashoutput", "killshell"}:
         command = str(args.get("command") or args.get("id") or "").strip()
-        first, more, _ = command.partition("\n")
+        first, _, more = command.partition("\n")
         # Only the first command line; the full command stays in the expanded details.
         return _first_line(_text(first)) + ("…" if more.strip() and not first.endswith("…") else "")
     if name == "task":
@@ -686,6 +686,8 @@ def _turn_duration(turn: TurnView) -> str | None:
     elapsed_ms = turn.elapsed_ms
     if isinstance(elapsed_ms, bool) or not isinstance(elapsed_ms, int) or elapsed_ms < 0:
         return None
+    if elapsed_ms >= 3_600_000:
+        return f"{elapsed_ms // 3_600_000}h {(elapsed_ms // 60_000) % 60}m"
     return f"{elapsed_ms / 1000:.1f}s" if elapsed_ms < 60_000 else f"{elapsed_ms // 60_000}m {(elapsed_ms // 1000) % 60}s"
 
 
@@ -726,6 +728,11 @@ def _turn_summary(turn: TurnView) -> str:
 def _turn_clock(turn: TurnView) -> str:
     """The turn's start time in local short form (``1:04 PM``); empty when unknown."""
     ts = turn.user_ts if turn.user_ts is not None else turn.started_ts
+    return _clock(ts)
+
+
+def _clock(ts: float | None) -> str:
+    """Local short clock for a known, valid event timestamp."""
     if not isinstance(ts, (int, float)) or isinstance(ts, bool) or not math.isfinite(ts) or ts <= 0:
         return ""
     try:
@@ -750,7 +757,10 @@ def turn_footer_text(turn: TurnView) -> str:
     # A configured limit ended the turn, not the model: say so, or the turn
     # looks like it simply stopped after its last tool result.
     stopped = _LIMIT_STOPS.get(turn.stop_reason or "", "") if turn.phase == "completed" else ""
-    return " · ".join(part for part in (_turn_clock(turn), stopped, model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
+    completed = turn.completed_ts
+    if completed is None and turn.started_ts is not None and _turn_duration(turn) is not None:
+        completed = turn.started_ts + turn.elapsed_ms / 1000
+    return " · ".join(part for part in (_clock(completed), stopped, model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
 
 
 _LIMIT_STOPS = {

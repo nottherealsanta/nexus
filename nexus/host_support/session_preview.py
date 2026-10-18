@@ -19,6 +19,7 @@ from ..view import ConversationView
 
 __all__ = [
     "message_tails",
+    "pending_request",
     "worked_label",
     "clean_multiline",
     "clean_preview_text",
@@ -55,6 +56,27 @@ def worked_label(view: ConversationView) -> str:
             seconds = max(1, round(elapsed / 1000))
             return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60:02d}s"
     return ""
+
+
+def pending_request(view: ConversationView, *, depth: int = 0) -> dict[str, Any]:
+    """The oldest unanswered permission request as ``{request_id, kind, summary, ts}``, else ``{}``.
+
+    The sessions dashboard shows it on a "Needs you" row and answers it without opening
+    the session. Root first, then nested agents; the summary is redacted and bounded.
+    """
+    pending = [item for item in getattr(view, "permissions", ()) if getattr(item, "status", "") == "pending" and item.id]
+    if pending:
+        item = pending[0]
+        what = clean_preview_text(item.preview or item.key or "", 160).strip()
+        tool = clean_preview_text(item.tool or "tool", 40)
+        return {"request_id": item.id[:128], "kind": "permission",
+                "summary": f"Allow {tool}: {what}" if what else f"Allow {tool}", "ts": float(item.ts or 0.0)}
+    if depth < 8:
+        for agent in getattr(view, "agents", {}).values():
+            found = pending_request(agent.body, depth=depth + 1)
+            if found:
+                return found
+    return {}
 
 
 def message_tails(view: ConversationView, *, limit: int = 400) -> dict[str, str]:

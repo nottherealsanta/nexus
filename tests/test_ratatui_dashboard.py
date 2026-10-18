@@ -52,7 +52,7 @@ async def test_snapshot_has_no_preview_and_poll_never_requests_one(monkeypatch):
     calls = {"list": 0}
 
     class Client:
-        async def project_sessions(self, *, limit=1000, query=""):
+        async def project_sessions(self, *, limit=1000, query="", archived=0):
             calls["list"] += 1
             return SimpleNamespace(sessions=[], truncated=False)
 
@@ -181,7 +181,7 @@ def test_snapshot_is_hidden_while_a_panel_or_prompt_owns_input():
 async def test_stale_list_refresh_cannot_publish_after_close():
     future = asyncio.get_running_loop().create_future()
     class Client:
-        async def project_sessions(self, *, limit=1000, query=""):
+        async def project_sessions(self, *, limit=1000, query="", archived=0):
             return await future
     dashboard = SessionDashboard(SimpleNamespace(client=Client(), controller=SimpleNamespace(session="s"), seen_seq={}))
     dashboard.visible = True
@@ -208,7 +208,7 @@ async def test_replacement_overlay_closes_dashboard_stops_polling_and_ignores_in
     list_gate = asyncio.Event()
 
     class Client:
-        async def project_sessions(self, *, limit=1000, query=""):
+        async def project_sessions(self, *, limit=1000, query="", archived=0):
             await list_gate.wait()
             return SimpleNamespace(sessions=[], truncated=False)
 
@@ -329,6 +329,75 @@ def test_rows_carry_local_time_buckets():
     assert _time_bucket(now - 9 * day, now) == "Earlier"
     assert _time_bucket(0.0, now) == "Earlier"
 
+def _project_session(session_id, state="idle", *, archived=False, pending=None):
+    from nexus.host.protocol import ProjectSession
+    from nexus.session.manager import SessionSummary
+    return ProjectSession(
+        workspace="/w", project_id="p",
+        session=SessionSummary(id=session_id, title=session_id, state=state, last_user_at=100.0, message_count=1),
+        archived=archived, pending=pending or {})
+
+
+def test_session_rows_carry_archived_status_and_pending_request():
+    from nexus.host.protocol import ProjectSessionsListResult
+    from nexus.ui.ratatui.workflows import session_rows
+
+    pending = {"request_id": "req-1", "kind": "permission", "summary": "Allow Bash: git push\x1b[31m", "ts": 12.5}
+    result = ProjectSessionsListResult(sessions=[
+        _project_session("ask", "awaiting_permission", pending=pending),
+        _project_session("old", archived=True),
+        _project_session("plain"),
+    ])
+    rows = {row["id"]: row for row in session_rows(result, now=1000.0)}
+    assert rows["ask"]["status"] == "input" and rows["ask"]["pending"]["request_id"] == "req-1"
+    assert "\x1b" not in rows["ask"]["pending"]["summary"] and rows["ask"]["pending"]["ts"] == 12.5
+    assert rows["old"]["status"] == "archived" and rows["old"]["archived"] is True
+    assert rows["plain"]["pending"] == {} and rows["plain"]["archived"] is False
+
+
+def test_dashboard_answers_only_the_pending_request_it_lists():
+    pending = {"request_id": "req-1", "kind": "permission", "summary": "Allow Bash", "ts": 1.0}
+    dashboard = _visible([
+        {"id": "ask", "workspace": "/w", "status": "input", "state": "awaiting_permission", "pending": pending},
+        {"id": "old", "workspace": "/w", "status": "archived", "state": "idle", "archived": True},
+    ])
+    ask = {"kind": "session_permission", "id": "ask", "request_id": "req-1", "decision": "allow_once"}
+    assert dashboard.accepts(ask)
+    assert dashboard.accepts({**ask, "decision": "deny_once"})
+    assert not dashboard.accepts({**ask, "decision": "allow_always"}), "only once-decisions from the dashboard"
+    assert not dashboard.accepts({**ask, "request_id": "req-2"})
+    assert not dashboard.accepts({**ask, "id": "old"})
+    assert dashboard.accepts({"kind": "archived_preview", "id": "old"})
+    assert not dashboard.accepts({"kind": "archived_preview", "id": "ask"})
+
+
+@pytest.mark.asyncio
+async def test_permission_answer_goes_through_the_host_without_opening_the_session():
+    dashboard = _visible([])
+    resolve = AsyncMock(return_value=True)
+    dashboard.shell.client = SimpleNamespace(resolve_permission=resolve)
+    dashboard.refresh = AsyncMock()
+    await dashboard.resolve_permission("ask", "req-1", "allow_once")
+    resolve.assert_awaited_once_with("ask", "req-1", "allow_once")
+    dashboard.refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_requests_archived_rows_outside_search_and_keeps_them_out_of_tabs():
+    from nexus.host.protocol import ProjectSessionsListResult
+    shell = _search_shell()
+    shell.client.project_sessions = AsyncMock(return_value=ProjectSessionsListResult(
+        workspace="/w", sessions=[_project_session("live"), _project_session("old", archived=True)]))
+    dash = SessionDashboard(shell)
+    dash.visible = True
+    await dash.refresh()
+    shell.client.project_sessions.assert_awaited_with(limit=20, query="", archived=20)
+    assert [row["id"] for row in dash.rows] == ["live", "old"]
+    assert [row["id"] for row in shell.refresh_session_tabs.call_args.args[0]] == ["live"]
+    assert dash.snapshot()["rows"][1]["status"] == "archived"
+    dash.close()
+
+
 def _search_shell():
     return SimpleNamespace(
         client=SimpleNamespace(project_sessions=AsyncMock(return_value=SimpleNamespace(sessions=[], truncated=False))),
@@ -352,7 +421,7 @@ async def test_remote_search_limits_clear_refresh_and_validation():
         await dash.refresh()
         shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle")
         await dash.search("")
-        shell.client.project_sessions.assert_awaited_with(limit=20, query="")
+        shell.client.project_sessions.assert_awaited_with(limit=20, query="", archived=20)
         assert dash.snapshot()["query"] == ""
     finally:
         dash.close()

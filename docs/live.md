@@ -10,8 +10,8 @@ reference `codex-rs/voice-host/src/transport.rs` (`APIBuilder` versus
 `PeerConnectionBuilder`/`SettingEngine`); do not infer equivalent runtime behavior.** The desktop client draws the call
 bar and card and routes `Ctrl+X D` (see [desktop.md](desktop.md#gpt-live-voice-calls));
 a native-harness render check passed, but screenshot review has not run. Plan:
-`plans/in-progress/GPT_LIVE_PLAN.md`; protocol observations and citations:
-`plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md`.
+`plans/done/GPT_LIVE_PLAN.md`; protocol observations and citations:
+`plans/done/GPT_LIVE_PROTOCOL_NOTES.md`.
 
 A real-time spoken conversation with OpenAI's `gpt-live-1-codex` model. The voice
 model only talks. **The Nexus session the user already has open does the work**
@@ -120,16 +120,33 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 | `/live status` | availability, state, consent, helper installed, last error |
 | `/live revoke` | withdraw the data-sharing consent |
 
-**Call line.** The composer carries nothing of the call. The call's status line is the
-header row of the Live pane (below): `● Live · <phase> · mm:ss   mic ▰▰▱▱▱▱ spk ▱▱▱▱▱▱   /live stop`
-with a `MUTED` badge, then `↑ N more` and the expand button at the right. Pieces drop by
-width, in this order: the `/live stop` hint, the model name (`● Live · <model> · <phase>`, shown
-only when there is room), the meters; the dot, clock, phase and `MUTED` badge stay, and the
-phase is truncated last. Typing during a call is ordinary steering.
+**Call line (design overhaul step 11, P-LIV).** The composer carries nothing of the call. The
+call's status line is the header row of the Live pane (below), drawn on `p.element`:
+`LISTENING   ▁▃▅█▆▃▂▁  gpt-live-1-codex  /live stop      02:41`, then `↑ N more` and the expand
+button at the right. The phase is in caps, bold and padded to 12 cells (`CONNECTING` muted,
+`LISTENING` blue, `WORKING` purple, `SPEAKING` accent, `MUTED`/`PAUSED`/`ENDED` quiet), followed
+by that phase's animation and the clock right-aligned:
+- connecting: `●○○ ●●○ ●●● ○●● ○○● ○○○`, one step per two frames;
+- listening: eight cells `▁…█` in blue, the newest microphone levels (the snapshot carries only the
+  current `in` level, so the client keeps a ring buffer of eight samples, one per frame, in
+  `Cache.mic`; it is emptied when the call closes);
+- working: the braille orbit `⣾⣽⣻⢿⡿⣟⣯⣷` in purple and `agent turn #N running` (`N` from the newest
+  `Sent to agent … → turn #N` row; `agent running` when no row names a turn);
+- speaking: `∿` × 8 faded accent→background by a travelling wave, its depth damped by the output
+  level (silence is a flat line);
+- muted / paused: static (`mic off`, `ends in mm:ss`), no animation.
+
+With Settings → Appearance animations off every phase is drawn in its final state (dots `●●●`,
+orbit `⣾`, flat wave); the mic history is data and still shows. ASCII terminals use `#-`, `_.:-=+*#`,
+`|/-\` and `~`. Pieces drop by width, in this order: the `/live stop` (`Ctrl+X P resume` while
+paused) hint, the model name, the `in <session>` note, the animation, the clock; the phase is
+truncated last. Typing during a call is ordinary steering.
 When the call is on another session or has no rows yet (still connecting) there is no row
 list, but the microphone must stay visible: the pane is then the header alone, one row above
-the composer, `● Live · listening · 00:12 · in <session>   /live stop` (a connecting call reads
-`● Live · connecting · 00:00`). No expand button, no scrolling.
+the composer, `LISTENING   ▁▁▁▁▁▁▁▁  in <session>  /live stop    00:12` (a connecting call reads
+`CONNECTING  ●○○ … 00:00`). No expand button, no scrolling. Tested in `rust/tui/src/live_bar.rs`
+and the `live_pane_tests` of `render.rs`; the earlier `● Live · phase · mm:ss   mic/spk` meters
+are gone (not verified in a real terminal or call).
 
 **Live pane (terminal).** The native terminal draws the open call's card rows in a pane
 between the timeline and the composer, not in the timeline (`Live.pane`; `bar()["detail"]`,
@@ -138,7 +155,13 @@ over it scrolls. Clicking a row opens or closes the card (the `live_toggle` oper
 same as the card). A button at the header's right (` ⤢ expand ` / ` ⤡ collapse `, beside the `↑ N more` notice) expands it to nearly full screen, up to
 just below the top bar (the timeline keeps one row), so the transcript can be read; the same button collapses it again.
 The expanded state is local to the terminal client and resets when the call ends. Hidden
-rows are announced as `↑ N more` or `↓ N newer`; clipping is never silent. The pane appears as
+rows are announced as `↑ N more` or `↓ N newer`; clipping is never silent. Captions (`live_bar::captions`):
+a partial `You…` caption is italic `p.muted` and final `you` text is `p.text`; the `Voice…` caption in
+progress reads word by word, spoken words `p.text` and the newest word `p.accent` bold underlined;
+`Sent to agent (mode)` is a chip, ` → sent to agent ` (bold, `p.background` on `p.warning`) then
+` turn #N · mode ` (`p.text` on `p.element`) followed by the text, drawn in place with no slide. The
+host sends no playback position (not verified), so the newest word of the delta stands for the
+current one and upcoming words are not dimmed ahead of time. Other rows keep their look. The pane appears as
 soon as the daemon has recorded `live.started`, even before this client has the start result:
 `Live._view_call()` then matches the newest non-ended call of the shown session that began after
 this start, so the old timeline card never flashes. After the call ends the card joins the timeline.
@@ -177,7 +200,7 @@ during the call and has no pane.
 **What Codex does.** Nothing named pause. Its voice mode has `toggle_voice` and `toggle_voice_mute`
 (`tui/src/keymap.rs`), and mute only keeps the WebRTC/RTP track alive with generated silence: "Muted capture
 sends generated silence to keep the peer alive" (`voice-host/src/audio_track.rs`, see
-`plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` sections 1.5 and 6). So Codex's closest thing is mute with the
+`plans/done/GPT_LIVE_CODEX_REFERENCE.md` sections 1.5 and 6). So Codex's closest thing is mute with the
 socket and session open. Nexus's `mute` is the same and stays as it was.
 
 **Billing (the reason pause is bounded).** Source: OpenAI's Realtime costs guide,
@@ -225,8 +248,8 @@ The trade-off: a short pause (a phone call, a cough) resumes instantly with the 
 the seconds it lasts; a long one costs at most `pause_seconds` of idle time and then behaves like stop plus start.
 Setting `pause_seconds = 5` makes pause almost a stop; `3600` keeps a quiet call open for an hour at full price.
 
-**Where it shows.** The Live pane header reads `● Live · paused · mm:ss  ... PAUSED mm:ss` (the badge counts down to
-the end of the pause; `Ctrl+X P resume` replaces the `/live stop` hint), the desktop call bar shows `PAUSED mm:ss`
+**Where it shows.** The Live pane header reads `PAUSED      ends in mm:ss  Ctrl+X P resume   mm:ss` (the
+countdown is the time to the end of the pause; `Ctrl+X P resume` replaces the `/live stop` hint), the desktop call bar shows `PAUSED mm:ss`
 and a resume button, `/live status` has a `Paused` row, and `LiveStatusResult` carries `paused` and
 `pause_remaining_s`. State is the daemon's, so every view agrees and a reconnect sees it. Tested offline
 (`tests/test_live_manager.py`, `test_ratatui_live.py`, `test_ui_support_live_helper.py`, Rust `cargo test`);
@@ -266,7 +289,7 @@ author its own wording for the agent: in the recorded call `session-1ce5e575` ev
 GPT-Live docs go further and say a client delegation event carries no task text at all, and
 Codex has the same shape (no tools; the delegation content is the user's input). So Nexus
 follows Codex's handoff instead of asking the voice model to rewrite requests (see
-[decisions.md](decisions.md) and `plans/in-progress/GPT_LIVE_CODEX_REFERENCE.md` section 3).
+[decisions.md](decisions.md) and `plans/done/GPT_LIVE_CODEX_REFERENCE.md` section 3).
 
 **What the agent receives.** One ordinary user message, plain text, with the request, a
 labelled transcript of both speakers since the previous delegation of the call (or call

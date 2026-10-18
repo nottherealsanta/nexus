@@ -73,6 +73,10 @@ def split_toast(text: str) -> tuple[str, str]:
     return text[:cut], text[cut:].strip()
 
 
+class ProjectOpenError(RuntimeError):
+    """Another project's session could not be opened; the toast already said why."""
+
+
 class ShellActions:
     """Session-scoped commands, attachments and transient inspection panels."""
 
@@ -109,7 +113,13 @@ class ShellActions:
         self.toasts = deque(maxlen=20)  # newest bounded list, sent in every snapshot
         self._toast_id = int(time.time() * 1000)  # monotonic across restarts: the client shows each id once
         self._last_toast = ("", "", 0.0)
+        self.notifications_open_seq = 0  # bumped by /notifications; the native client opens its drawer on change
         self.composer_restore = ""
+        # The restore text that applies only to an empty draft (a cancelled steer message),
+        # with its status-row note; any other restore text prepends as before.
+        self.composer_restore_if_empty = ""
+        self.composer_restore_note = ""
+        self.composer_restore_attachments = 0  # draft attachments restored with that text
         self.composer_insert = ""
         self.composer_auto_send = False
         self.composer_insert_kind = ""
@@ -276,16 +286,28 @@ class ShellActions:
         self.usage_task = asyncio.create_task(refresh())
 
     async def switch_project(self, workspace, session):
-        self.workflows.close_dashboard()
+        """Open ``session`` in ``workspace``, starting that project's daemon when needed.
+
+        A failed start (a stale install's ``ConfigError``, a daemon that never became ready, a
+        timeout) is shown as an error toast with the redacted reason and the Sessions dashboard
+        stays open on the old session; the dashboard closes only once the switch succeeded
+        (``switch`` hides it). The error is re-raised so callers can restore a submitted draft.
+        """
         if self.attachment_draft_key is None:
             self.attachment_draft_key = (self.workspace, self.controller.session)
         if workspace != self.workspace:
             self.usage_cache = None
             if self.usage_task:
                 self.usage_task.cancel()
-            result = await self.client.open_project_session(workspace, session)
-            from ..cli import open_client
-            client = await open_client(workspace, socket_path=result.socket_path)
+            try:
+                result = await self.client.open_project_session(workspace, session)
+                from ..cli import open_client
+                client = await open_client(workspace, socket_path=result.socket_path)
+            except Exception as exc:
+                from ...host_support.errors import error_text
+                reason = error_text(exc)
+                self.flash(f"Could not open the session in {workspace}: {reason}", "error")
+                raise ProjectOpenError(reason) from exc
             previous = self.controller.replace_client(client)
             self.workspace = workspace
             from pathlib import Path
@@ -589,6 +611,11 @@ class ShellActions:
                 self.items.append({"label": label, "command": command})
         elif name == "/hotkeys":
             await self.workflows.open_page("keys")  # the same page as Settings → Keyboard
+        elif name == "/notifications":
+            if args:
+                raise ValueError("Usage: /notifications")
+            # The history is client-side (the Rust drawer): a changed counter asks it to open.
+            self.notifications_open_seq += 1
         elif name == "/close":
             if args:
                 raise ValueError("Usage: /close")

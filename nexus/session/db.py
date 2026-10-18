@@ -458,6 +458,15 @@ class StateDatabase:
     def touch_project(self, project_id: str, root: str) -> None:
         now = time.time()
         with self.transaction() as conn:
+            if root == project_id:
+                # A bare id is never a real root: it must not overwrite a recorded path
+                # (the dashboard opens sessions by ``projects.root``).
+                conn.execute(
+                    "INSERT INTO projects(id, root, created_at, last_opened) VALUES (?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET last_opened=excluded.last_opened",
+                    (project_id, root, now, now),
+                )
+                return
             conn.execute(
                 "INSERT INTO projects(id, root, created_at, last_opened) "
                 "VALUES (?,?,?,?) "
@@ -494,6 +503,22 @@ class StateDatabase:
                 "WHEN s.created_at > 0 THEN s.created_at ELSE s.last_activity END DESC, "
                 "s.project_id, s.id LIMIT ?",
                 params,
+            )
+        ]
+
+    def archived_project_sessions(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """The newest archived sessions across projects (same row shape as ``project_sessions``)."""
+        if not 1 <= limit <= _MAX_LIMIT:
+            raise ValueError("invalid project session limit")
+        return [
+            dict(row)
+            for row in self._connection().execute(
+                "SELECT s.*, p.root AS workspace FROM sessions s "
+                "JOIN projects p ON p.id=s.project_id "
+                "WHERE s.namespace='main' AND s.archived_at IS NOT NULL AND s.trash_id IS NULL "
+                f"AND {_has_user_input('s')} "
+                "ORDER BY s.archived_at DESC, s.project_id, s.id LIMIT ?",
+                [limit],
             )
         ]
 

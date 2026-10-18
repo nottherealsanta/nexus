@@ -90,7 +90,7 @@ def test_user_prompt_announces_display_limits(tmp_path, monkeypatch, prompt, pre
     assert turn.messages[0].text == prompt
 
 
-def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypatch):
+def test_live_activity_has_no_preview_window_the_running_tree_replaced_it(tmp_path, monkeypatch):
     tools = [ToolCallView(call_id=f"read-{i}", name="read", event_seq=i + 2,
                          status="completed", input={"path": f"{i}.py"}) for i in range(8)]
     turn = replace(_turn(), phase="active", messages=[_turn().messages[0]], tools=tools)
@@ -98,14 +98,10 @@ def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypa
         return next(b for b in _snapshot(tmp_path, monkeypatch, [value],
                     local_transcript=True)["blocks"] if b["kind"] == "tool_group")
     live = activity(turn)
-    assert live["preview_limit"] == 1
-    assert live["text"] == "Read 8 files"
-    assert len(live["members"]) == 8  # Rust bounds the preview, never the full payload.
-    completed = activity(replace(turn, phase="completed"))
-    assert "preview_limit" not in completed
-    reply = MessageView(id="reply", role="assistant", event_seq=20,
-                        blocks=[BlockView(text="The files look good.")])
-    assert "preview_limit" not in activity(replace(turn, messages=turn.messages + [reply]))
+    assert "preview_limit" not in live
+    assert live["text"] == "Read 8", "more than five members drop their nouns"
+    assert len(live["members"]) == 8  # Rust bounds the running tree, never the full payload.
+    assert "preview_limit" not in activity(replace(turn, phase="completed"))
     assert activity(replace(turn, tools=tools[:2]))["id"] == live["id"]
 
 
@@ -235,8 +231,8 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     card = next(block for block in blocks if block["id"] == "task-1")
     assert card["kind"] == "task"
     assert card["title"] == "Explore Subagent — Scan"
-    assert (card["model"], card["tier"]) == ("model pending", "?")
-    assert card["metrics"] == "0 tool calls · 0 tokens"
+    assert (card["model"], card["tier"]) == ("model pending", "")
+    assert (card["tool_calls"], card["tokens"]) == (0, 0)
     assert card["status"] == "running"
     assert card["text"] == ""
     assert card["gap"] == 1
@@ -252,15 +248,15 @@ def _agent(**kwargs):
 def test_agent_card_tier_letter_tokens_and_unknown_usage():
     from nexus.ui.ratatui.prototype import _agent_card_metrics, _agent_card_model
     from nexus.view.model import UsageTotals
-    for tier, letter in (("low", "L"), ("medium", "M"), ("high", "H"), (None, "?")):
-        assert _agent_card_model(_agent(tier=tier))[1] == letter
-    assert _agent_card_model(_agent(requested_tier="high"))[1] == "H"
+    for tier in ("low", "medium", "high", None):
+        assert _agent_card_model(_agent(tier=tier))[2] == (tier or "")
+    assert _agent_card_model(_agent(requested_tier="high"))[2] == "high"
     agent = _agent(tier="low", usage=UsageTotals(input_tokens=1000, output_tokens=234))
     agent.body.turns = [TurnView(id="ct", index=0, tools=[ToolCallView(call_id="x", name="read", event_seq=2)])]
-    assert _agent_card_metrics(agent) == "1 tool call · 1.2K tokens"
+    assert _agent_card_metrics(agent) == (1, 1234)
     agent.usage_unknown = True  # an external worker reports no accounting: unknown, not zero
-    assert _agent_card_metrics(agent) == "1 tool call · tokens unknown"
-    assert _agent_card_metrics(None) == "0 tool calls · tokens unknown"
+    assert _agent_card_metrics(agent) == (1, None)
+    assert _agent_card_metrics(None) == (None, None)
 
 
 def test_agent_model_label_prefers_actual_over_tier_and_spawn_reference():
@@ -329,7 +325,7 @@ def test_task_card_and_child_page_disclose_actual_model(tmp_path, monkeypatch):
     controller = SimpleNamespace(view=view, session="s")
     card = next(b for b in project(controller, 1, shell=shell)["blocks"] if b["id"] == "task-1")
     assert card["title"] == "Explore Subagent — Scan"
-    assert (card["model"], card["tier"]) == ("gpt-6 (high)", "L")
+    assert (card["model"], card["effort"], card["tier"]) == ("gpt-6", "high", "low")
     shell.workflows.agent_page_id = "a1"
     page = project(controller, 2, shell=shell)
     assert page["model"] == "tier low · openai/gpt-6"
@@ -381,10 +377,10 @@ def test_subagent_card_shows_counts_without_elapsed_time(tmp_path, monkeypatch, 
     shell.preferences.values["context_preview"] = False
     row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "task")
     assert row["title"] == "Explore Subagent — find code"
-    assert (row["model"], row["tier"]) == ("gpt-x (medium)", "L")
+    assert (row["model"], row["effort"], row["tier"]) == ("gpt-x", "medium", "low")
     assert row["status"] == ("running" if status == "running" else "done")
     assert row["text"] == ""
-    assert row["metrics"] == "0 tool calls · 0 tokens"
+    assert (row["tool_calls"], row["tokens"]) == (0, 0)
 
 
 def test_details_mcp_accepts_doctor_report_dict_not_struct(tmp_path, monkeypatch):
@@ -595,7 +591,7 @@ def test_queue_items_carry_durable_ids_and_s_q_tags():
     assert all("\x1b" not in item["text"] and item["text"].endswith(str(i)) for i, item in enumerate(items))
 
 
-def test_queue_items_move_flags_only_between_same_group_neighbours():
+def test_queue_items_move_flags_only_for_queued_items_between_queued_neighbours():
     from nexus.ui.ratatui.prototype import _queue_items
     from nexus.view.model import QueuedInputView
 
@@ -607,8 +603,56 @@ def test_queue_items_move_flags_only_between_same_group_neighbours():
     from nexus.view.model import MessageView
     view.active_turn.messages.append(MessageView(id="m", role="user", event_seq=1))
     flags = [(i["id"], i["can_up"], i["can_down"]) for i in _queue_items(view)]
-    assert flags == [("id0", False, False), ("id1", False, True), ("id2", True, False), ("id3", False, False),
+    # Steering and interrupt items are never reordered by this client: no arrows at all.
+    assert flags == [("id0", False, False), ("id1", False, False), ("id2", False, False), ("id3", False, False),
                      ("id4", False, False), ("id5", False, True), ("id6", True, False)]
+
+
+async def test_queue_edit_promotes_and_restores_only_steering_content():
+    from types import SimpleNamespace
+    from nexus.ui.ratatui.prototype import queue_edit
+    from nexus.view.model import MessageView, QueuedInputView
+
+    calls = []
+
+    class Client:
+        async def queue_move(self, session, queued_id, offset):
+            calls.append(("move", queued_id, offset))
+
+        async def queue_remove(self, session, queued_id):
+            calls.append(("remove", queued_id))
+
+        async def queue_remove_content(self, session, queued_id):
+            calls.append(("remove_content", queued_id))
+            return True, [{"type": "text", "text": "full " + "x" * 300}]
+
+        async def queue_set_mode(self, session, queued_id, mode):
+            calls.append(("mode", queued_id, mode))
+            return True
+
+    view = _running_view([])
+    view.active_turn.messages.append(MessageView(id="m", role="user", event_seq=1))
+    view.input_queue = [QueuedInputView(queued_id=f"id{i}", mode=mode, content=[{"type": "text", "text": str(i)}])
+                        for i, mode in enumerate(["steer", "queue", "queue"])]
+    controller = SimpleNamespace(view=view, session="s", slot_wait=None)
+    shell = SimpleNamespace(client=Client(), composer_restore="", composer_restore_if_empty="", composer_restore_note="")
+
+    await queue_edit(shell, controller, "id1", "steer")
+    await queue_edit(shell, controller, "id0", "interrupt")
+    await queue_edit(shell, controller, "id1", "down")
+    await queue_edit(shell, controller, "id0", "down")  # steering rows are never reordered
+    await queue_edit(shell, controller, "gone", "remove")
+    await queue_edit(shell, controller, "id1", "bogus")
+    assert calls == [("mode", "id1", "steer"), ("mode", "id0", "interrupt"), ("move", "id1", 1)]
+
+    calls.clear()
+    await queue_edit(shell, controller, "id2", "remove")  # queued: removed, not restored
+    assert calls == [("remove", "id2")] and shell.composer_restore == ""
+    await queue_edit(shell, controller, "id0", "remove")
+    assert calls[-1] == ("remove_content", "id0")
+    assert shell.composer_restore == "full " + "x" * 300  # full text, not the 160-char cut
+    assert shell.composer_restore_if_empty == shell.composer_restore
+    assert shell.composer_restore_note == "restored from steer #1"
 
 
 def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, monkeypatch):
@@ -825,7 +869,7 @@ def test_task_latest_activity_metrics_and_error_detail(tmp_path, monkeypatch):
     blocks = project(controller, 1, shell=shell)["blocks"]
     card = next(b for b in blocks if b["kind"] == "task")
     assert card["text"] == "" and "fresh" not in str(card.values())  # the latest tool is never shown
-    assert card["metrics"] == "2 tool calls · 0 tokens"
+    assert (card["tool_calls"], card["tokens"]) == (2, 0)
     assert card["detail"] == "Error: private failure"  # only the error, never the tool details
     shell.expanded.add("task:detail")
     shell.verbose = True
@@ -847,19 +891,32 @@ def test_edits_stand_alone_with_line_counts(tmp_path, monkeypatch):
         ToolCallView(call_id="r1", name="Read", event_seq=2, status="completed", input={"path": "a.py"}),
         ToolCallView(call_id="e", name="Edit", event_seq=3, status="completed", input={"path": "a.py"},
                      diff={"path": "a.py", "hunk": hunk}),
-        ToolCallView(call_id="e2", name="Edit", event_seq=4, status="completed", input={"path": "a.py"},
-                     diff={"path": "a.py", "hunk": hunk}),
         ToolCallView(call_id="r2", name="Read", event_seq=5, status="completed", input={"path": "b.py"}),
         ToolCallView(call_id="r3", name="Grep", event_seq=6, status="completed", input={"pattern": "x"}),
     ]
     turn = replace(_turn(), tools=tools)
     blocks = [b for b in _snapshot(tmp_path, monkeypatch, [turn], local_transcript=True)["blocks"] if b["kind"] in {"tool_group", "change"}]
-    assert [b["kind"] for b in blocks] == ["tool_group", "change", "change", "tool_group"], "each edit is its own row"
+    assert [b["kind"] for b in blocks] == ["tool_group", "change", "tool_group"], "a lone edit is its own row"
     edit = blocks[1]
     assert edit["text"] == "Edit a.py" and edit["path"] == "a.py" and "members" not in edit
     assert (edit["added"], edit["removed"]) == (2, 1)
     assert edit["diff_lines"] == [["del", 1, "old"], ["add", 1, "new"], ["add", 2, "more"], ["ctx", 3, "keep"]]
     assert edit["local_open"] is False and edit["local_detail"] == "", "changes start closed"
+    assert "_member" not in edit
+
+
+def test_consecutive_edits_form_one_change_group(tmp_path, monkeypatch):
+    hunk = "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new"
+    tools = [ToolCallView(call_id=f"e{i}", name="Edit", event_seq=4 + i, status="completed", input={"path": "a.py"},
+                          diff={"path": "a.py", "hunk": hunk}) for i in range(3)]
+    blocks = [b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=tools)], local_transcript=True)["blocks"]
+              if b["kind"] in {"tool_group", "change"}]
+    assert [b["kind"] for b in blocks] == ["tool_group"]
+    group = blocks[0]
+    assert group["id"].endswith(":activity:e0")
+    assert group["text"] == "Edited 3 files" and group["count"] == 3
+    assert [m["id"] for m in group["members"]] == ["e0", "e1", "e2"]
+    assert all(m["kind"] == "tool" for m in group["members"])
 
 
 def test_write_and_question_stand_alone(tmp_path, monkeypatch):
@@ -1014,3 +1071,67 @@ def test_turn_footer_starts_with_the_local_start_time(tmp_path, monkeypatch):
     footer = next(b for b in snapshot["blocks"] if b["kind"] == "summary")["text"]
     clock = datetime.fromtimestamp(1_759_000_000.0).strftime("%I:%M %p").lstrip("0")
     assert footer.startswith(f"{clock} · ")
+
+
+async def test_steer_removal_restores_attachments_into_an_empty_draft():
+    import base64
+    from types import SimpleNamespace
+    from nexus.ui.ratatui.actions import ShellActions
+    from nexus.ui.ratatui.prototype import queue_edit
+    from nexus.view.model import MessageView, QueuedInputView
+
+    prepared = []
+
+    class Client:
+        async def queue_remove_content(self, session, queued_id):
+            return True, [
+                {"type": "text", "text": "look [image 1] and [document 1]"},
+                {"type": "text", "text": "\n\nAttachment: image 1 · a b.png · image/png · 3 bytes\n"},
+                {"type": "image", "media_type": "image/png", "data": base64.b64encode(b"\x89PN").decode()},
+                {"type": "text", "text": "\n\nAttachment: document 1 · notes.pdf\n\n# Notes"},
+            ]
+
+        async def prepare_attachment(self, path="", *, name="", data=b""):
+            prepared.append((name, data))
+            return SimpleNamespace(attachment_id=f"tok{len(prepared)}", name=name,
+                                   kind="image" if name.endswith(".png") else "markdown")
+
+    view = _running_view([])
+    view.active_turn.messages.append(MessageView(id="m", role="user", event_seq=1))
+    view.input_queue = [QueuedInputView(queued_id="id0", mode="steer", content=[{"type": "text", "text": "x"}])]
+    controller = SimpleNamespace(view=view, session="s", slot_wait=None)
+    shell = SimpleNamespace(
+        client=Client(), composer_restore="", composer_restore_if_empty="", composer_restore_note="",
+        composer_restore_attachments=0, attachments=[], flash=lambda *a, **k: None)
+    for name in ("attachment_label", "attachment_marker", "reconcile_attachment_markers"):
+        setattr(shell, name, getattr(ShellActions, name).__get__(shell))
+    shell.attachment_labels, shell.marker_attachments = {}, {}
+    shell.attachment_label_counters = {"image": 0, "document": 0}
+
+    await queue_edit(shell, controller, "id0", "remove")
+    assert prepared == [("a b.png", b"\x89PN"), ("notes.md", b"# Notes")]
+    assert shell.composer_restore == "look [image 1] and [document 1]"
+    assert shell.composer_restore_attachments == 2 and len(shell.attachments) == 2
+    # Dropping a marker (the Rust side declined the restore) removes its attachment again.
+    shell.reconcile_attachment_markers("")
+    assert shell.attachments == []
+
+    # A draft that already holds attachments keeps them; nothing is re-attached.
+    prepared.clear()
+    shell.attachments = [SimpleNamespace(attachment_id="mine", name="m", kind="image")]
+    shell.composer_restore = shell.composer_restore_if_empty = ""
+    shell.composer_restore_attachments = 0
+    await queue_edit(shell, controller, "id0", "remove")
+    assert prepared == [] and shell.composer_restore_attachments == 0
+    assert [a.attachment_id for a in shell.attachments] == ["mine"]
+
+
+def test_wire_sends_restore_attachments_with_the_one_shot_restore():
+    from nexus.ui.ratatui.wire import TerminalWire
+
+    wire = TerminalWire()
+    base = {"revision": 1, "generation": 1, "blocks": [], "restore": "t", "restore_if_empty": True,
+            "restore_attachments": 2}
+    assert wire.encode(base)["restore_attachments"] == 2
+    again = wire.encode({**base, "revision": 2})
+    assert again is not None and again["restore_attachments"] == 2

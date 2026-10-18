@@ -5,7 +5,7 @@
 //! above the first group. Nothing expands inline and there is no preview pane or composer.
 const PAGE_WIDTH: u16 = 72;
 
-use crate::picker::{section, section_label, text, Dashboard};
+use crate::picker::{clock, pending, section, text, waited, Dashboard};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -29,6 +29,8 @@ pub struct Colors {
     pub border_strong: Color,
     pub purple: Color,
     pub warning: Color,
+    /// Monochrome drops every colour, so the selected row is also marked by a leading bar.
+    pub mono: bool,
 }
 
 impl Default for Colors {
@@ -44,6 +46,7 @@ impl Default for Colors {
             border_strong: Color::Gray,
             purple: Color::Magenta,
             warning: Color::Yellow,
+            mono: false,
         }
     }
 }
@@ -86,6 +89,17 @@ fn age_of(row: &Value) -> &str {
     }
 }
 
+/// Replaces the leading inset column with the focus bar (`>` in ASCII): the selection survives
+/// Monochrome, where the row background is dropped.
+fn mark_selected(line: &mut Line<'static>) {
+    if let Some(first) = line.spans.first_mut() {
+        *first = Span::styled(
+            nexus_widgets::Glyphs::from_env().focus_bar,
+            Style::default().add_modifier(Modifier::BOLD),
+        );
+    }
+}
+
 /// One band line: a one-column inset on both sides, `bg` filling between when given.
 fn band(spans: Vec<Span<'static>>, width: usize, bg: Option<Color>) -> Line<'static> {
     let inner = width.saturating_sub(2);
@@ -105,33 +119,50 @@ fn band(spans: Vec<Span<'static>>, width: usize, bg: Option<Color>) -> Line<'sta
 
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-fn status_glyph(status: &str, colors: &Colors, spin: usize) -> Span<'static> {
-    match status {
-        "working" => Span::styled(SPIN[spin % SPIN.len()], Style::default().fg(colors.purple)),
-        "input" => Span::styled("◆", Style::default().fg(colors.warning)),
-        "done" => Span::styled("●", Style::default().fg(colors.muted)),
-        _ => Span::styled("◇", Style::default().fg(colors.quiet)),
+/// The status marks: `(needs you, working frame, idle, archived)`; ASCII under `NEXUS_ASCII=1`.
+fn marks(spin: usize) -> (&'static str, &'static str, &'static str, &'static str) {
+    marks_for(nexus_widgets::Glyphs::from_env().ascii, spin)
+}
+
+fn marks_for(
+    ascii: bool,
+    spin: usize,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    if ascii {
+        let frames = nexus_widgets::Glyphs::ascii().spinner;
+        ("!", frames[spin % frames.len()], "o", "*")
+    } else {
+        ("◆", SPIN[spin % SPIN.len()], "◇", "●")
     }
 }
 
-fn status_chips(shown: &[&Value], colors: &Colors, width: usize) -> Vec<Span<'static>> {
-    let mut working = 0usize;
-    let mut input = 0usize;
-    let mut idle = 0usize;
-    let mut done = 0usize;
-    for row in shown {
-        match text(row, "status") {
-            "working" => working += 1,
-            "input" => input += 1,
-            "done" => done += 1,
-            _ => idle += 1,
-        }
+fn status_glyph(status: &str, colors: &Colors, spin: usize) -> Span<'static> {
+    let (input, working, idle, done) = marks(spin);
+    match status {
+        "working" => Span::styled(working, Style::default().fg(colors.purple)),
+        "input" => Span::styled(input, Style::default().fg(colors.warning)),
+        "done" => Span::styled(done, Style::default().fg(colors.muted)),
+        _ => Span::styled(idle, Style::default().fg(colors.quiet)),
     }
+}
+
+/// `◆ N needs you | ⠋ N working | ◇ N idle | ● N archived`, in the dashboard's section order.
+fn status_chips(
+    shown: &[&Value],
+    colors: &Colors,
+    width: usize,
+    spin: usize,
+) -> Vec<Span<'static>> {
+    let mut counts = [0usize; 4];
+    for row in shown {
+        counts[usize::from(section(row))] += 1;
+    }
+    let (input, working, idle, done) = marks(spin);
     let items = [
-        (working, "⁙", "working", colors.purple),
-        (input, "◆", "needs input", colors.warning),
-        (idle, "◇", "idle", colors.quiet),
-        (done, "●", "done", colors.muted),
+        (counts[0], input, "needs you", colors.warning),
+        (counts[1], working, "working", colors.purple),
+        (counts[2], idle, "idle", colors.quiet),
+        (counts[3], done, "archived", colors.muted),
     ];
     let present: Vec<_> = items.into_iter().filter(|(count, ..)| *count > 0).collect();
     if present.is_empty() || width == 0 {
@@ -173,6 +204,22 @@ pub fn draw(
     colors: &Colors,
     spin: usize,
 ) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64());
+    draw_at(frame, area, dashboard, state, colors, spin, now);
+}
+
+/// `draw` with the wall clock injected (unix seconds), for the "waiting mm:ss" on Needs you rows.
+pub fn draw_at(
+    frame: &mut Frame,
+    area: Rect,
+    dashboard: &Value,
+    state: &mut Dashboard,
+    colors: &Colors,
+    spin: usize,
+    now: f64,
+) {
     let (bg, fg) = if area.is_empty() {
         (Color::Reset, Color::Reset)
     } else {
@@ -187,7 +234,6 @@ pub fn draw(
     state.line_rows.clear();
     state.line_headings.clear();
     state.new_hit = Rect::default();
-    state.resume_hit = Rect::default();
     state.worktree_hit = Rect::default();
     state.choose_hit = Rect::default();
     if area.height < 4 || area.width < 12 {
@@ -205,7 +251,7 @@ pub fn draw(
     let list_width = usize::from(page_width.saturating_sub(2));
     let width = list_width.saturating_sub(4);
 
-    let chips = status_chips(&shown, colors, width / 2);
+    let chips = status_chips(&shown, colors, width / 2, spin);
     let chips_w = spans_width(&chips);
     let hint = "[t Tree]";
     let branch = text(dashboard, "branch");
@@ -258,22 +304,10 @@ pub fn draw(
     }
     header.extend(chips);
 
-    let (resume, work_key) = if width > 76 {
-        ("Open Previous /resume", true)
-    } else if width > 48 {
-        ("Open Previous", false)
-    } else {
-        ("", false)
-    };
     let show_work = width > 48;
+    let work_key = show_work; // `Worktree Ctrl+w`: the shortcut is always shown with the button
     let mut right: Vec<Span> = Vec::new();
-    if !resume.is_empty() {
-        right.push(Span::styled(resume, quiet));
-    }
     if show_work {
-        if !right.is_empty() {
-            right.push(Span::styled(" | ", quiet));
-        }
         right.push(Span::styled("Worktree", Style::default().fg(colors.purple)));
         if work_key {
             right.push(Span::styled(" Ctrl+w", quiet));
@@ -336,19 +370,16 @@ pub fn draw(
     let mut lines: Vec<RowLine> = Vec::new();
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     for (index, row) in shown.iter().enumerate() {
-        let key = if state.by_project {
-            text(row, "group").to_owned()
-        } else {
-            section_label(section(row)).to_owned()
-        };
+        let key = state.group_key(row);
         if groups.last().is_none_or(|(name, _)| name != &key) {
             groups.push((key, Vec::new()));
         }
         groups.last_mut().unwrap().1.push(index);
     }
     for (key, members) in &groups {
-        let collapsed = state.collapsed.contains(key);
-        let chevron = if collapsed { "▸" } else { "▾" };
+        let collapsed = state.is_collapsed(key);
+        let glyphs = nexus_widgets::Glyphs::from_env();
+        let chevron = if collapsed { glyphs.closed } else { glyphs.open };
         let label = format!("{chevron} {key}");
         let count = format!(" {}", members.len());
         lines.push((
@@ -384,10 +415,53 @@ pub fn draw(
                 colors,
                 spin,
             );
-            title.insert(0, status_glyph(text(row, "status"), colors, spin));
-            title.insert(1, Span::raw(" "));
-                title.insert(0, Span::raw("  "));
-            lines.push((band(title, list_width, bg), Some(*index), None));
+            // `title_spans` already leads with the status glyph: only indent it here.
+            title.insert(0, Span::raw("  "));
+            let mut line = band(title, list_width, bg);
+            if colors.mono && is_selected {
+                mark_selected(&mut line);
+            }
+            lines.push((line, Some(*index), None));
+            if let Some(request) = pending(row).filter(|_| section(row) == 0) {
+                // Needs you: the question with its wait, then the keys that answer it.
+                let inner = list_width.saturating_sub(2);
+                let wait = format!(
+                    "waiting {}",
+                    clock(waited(
+                        request.get("ts").and_then(Value::as_f64).unwrap_or(0.0),
+                        now
+                    ))
+                );
+                let room = inner.saturating_sub(4 + 1 + wait.width() + 2);
+                let ask = fit(text(request, "summary"), room.max(1));
+                let gap = inner.saturating_sub(4 + ask.width() + wait.width() + 2);
+                lines.push((
+                    band(
+                        vec![
+                            Span::raw("    "),
+                            Span::styled(ask, Style::default().fg(colors.text)),
+                            Span::raw(" ".repeat(gap.max(1))),
+                            Span::styled(wait, quiet),
+                        ],
+                        list_width,
+                        bg,
+                    ),
+                    Some(*index),
+                    None,
+                ));
+                lines.push((
+                    band(
+                        vec![
+                            Span::raw("    "),
+                            Span::styled("Enter open  a allow once  d deny", quiet),
+                        ],
+                        list_width,
+                        bg,
+                    ),
+                    Some(*index),
+                    None,
+                ));
+            }
         }
     }
     if lines.is_empty() {
@@ -404,7 +478,7 @@ pub fn draw(
     }
     // Size the page to its content (header bands, list, footer, border), centered on screen
     // with at least one blank row above and below when the screen is tall enough.
-    let chrome = 5 + u16::from(footer.is_some()) + 2;
+    let chrome = 6 + u16::from(footer.is_some()) + 2;
     let margin = if screen.height > chrome + 2 { 1 } else { 0 };
     let page_height = ((lines.len() + 1).min(usize::from(u16::MAX)) as u16)
         .saturating_add(chrome)
@@ -435,7 +509,9 @@ pub fn draw(
         ..inner
     };
 
+    // header, blank, New Agent, blank, search, rule, list.
     let mut constraints = vec![
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -450,7 +526,7 @@ pub fn draw(
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area);
-    let list_band = 5;
+    let list_band = 6;
     frame.render_widget(Paragraph::new(Line::from(header)), bands[0]);
     frame.render_widget(Paragraph::new(Line::from(actions)), bands[2]);
     if show_hint {
@@ -472,20 +548,8 @@ pub fn draw(
     }
     if right_w > 0 && (show_new && actions_w + right_w < width || !show_new) {
         let start = area.x + area.width - right_w as u16;
-        if !resume.is_empty() {
-            state.resume_hit = Rect {
-                x: start,
-                y: bands[2].y,
-                width: resume.width() as u16,
-                height: 1,
-            };
-        }
         if show_work {
-            let work_x = if resume.is_empty() {
-                start
-            } else {
-                start + resume.width() as u16 + 3
-            };
+            let work_x = start;
             let work_w = "Worktree".width() + usize::from(work_key) * " Ctrl+w".width();
             state.worktree_hit = Rect {
                 x: work_x,
@@ -512,11 +576,14 @@ pub fn draw(
     } else {
         Line::from(Span::styled("/ Search sessions", quiet))
     };
-    frame.render_widget(Paragraph::new(search), bands[3]);
-    state.search_hit = bands[3];
+    frame.render_widget(Paragraph::new(search), bands[4]);
+    state.search_hit = bands[4];
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled("─".repeat(usize::from(area.width)), Style::default().fg(colors.border)))),
-        bands[4],
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(usize::from(area.width)),
+            Style::default().fg(colors.border),
+        ))),
+        bands[5],
     );
 
     let list = Rect {
@@ -576,7 +643,7 @@ pub fn draw(
         list,
     );
     if let Some(line) = footer {
-        frame.render_widget(Paragraph::new(line), bands[5]);
+        frame.render_widget(Paragraph::new(line), bands[7]);
     }
 }
 
@@ -591,11 +658,21 @@ fn title_spans(
     spin: usize,
 ) -> (Vec<Span<'static>>, Option<(usize, usize)>) {
     let quiet = Style::default().fg(colors.quiet);
-    let children = row.get("running_children").and_then(Value::as_u64).unwrap_or(0);
-    let handoffs = row.get("handoff_count").and_then(Value::as_u64).unwrap_or(0);
+    let children = row
+        .get("running_children")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let handoffs = row
+        .get("handoff_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut tail = age_of(row).to_owned();
-    if children > 0 { tail = format!("{children} running · {tail}"); }
-    if handoffs > 0 { tail = format!("{handoffs} handoffs · {tail}"); }
+    if children > 0 {
+        tail = format!("{children} running · {tail}");
+    }
+    if handoffs > 0 {
+        tail = format!("{handoffs} handoffs · {tail}");
+    }
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
         None => text(row, "title").to_owned(),
@@ -608,7 +685,14 @@ fn title_spans(
     let spans = vec![
         status_glyph(text(row, "status"), colors, spin),
         Span::raw(" "),
-        Span::styled(title, Style::default().fg(colors.text)),
+        Span::styled(
+            title,
+            Style::default().fg(if section(row) == 3 {
+                colors.muted
+            } else {
+                colors.text
+            }),
+        ),
         Span::raw(" "),
         Span::styled(tail, quiet),
     ];
@@ -669,19 +753,21 @@ mod tests {
     fn wide_layout_is_a_full_width_list() {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(
-            screen.contains("Alpha") && screen.contains("Beta")
-        );
+        assert!(screen.contains("Alpha") && screen.contains("Beta"));
         assert!(screen.contains("/ Search sessions"));
         assert!(
             !screen.contains("Python sample: frozen Task"),
             "rows are one line: no summary"
         );
         assert!(!screen.contains("Response"), "no preview pane");
-        assert!(screen.contains("+ New Agent") && screen.contains("Open Previous"));
+        assert!(screen.contains("+ New Agent") && screen.contains("Worktree Ctrl+w"));
+        assert!(
+            !screen.contains("Open Previous") && !screen.contains("/resume"),
+            "Open Previous is gone: /resume stays a chat command"
+        );
         assert!(screen.contains("main") && screen.contains("~/repos/nexus"));
         assert!(state.list_area.width >= 56);
-        assert!(state.new_hit.width > 0 && state.resume_hit.width > 0);
+        assert!(state.new_hit.width > 0 && state.worktree_hit.width > 0);
     }
 
     #[test]
@@ -692,12 +778,18 @@ mod tests {
         assert!(list.width <= PAGE_WIDTH, "not full width: {}", list.width);
         let left = list.x;
         let right = 140 - (list.x + list.width);
-        assert_eq!(left, right,"horizontally centered");
+        assert_eq!(left, right, "horizontally centered");
         assert!(state.new_hit.x > 30 && state.search_hit.x > 30);
         let lines: Vec<&str> = screen.lines().collect();
         assert!(lines[0].trim().is_empty(), "not full-screen: top row empty");
-        assert!(lines[39].trim().is_empty(), "not full-screen: bottom row empty");
-        assert!(screen.contains('╭') && screen.contains('╯'), "bordered card");
+        assert!(
+            lines[39].trim().is_empty(),
+            "not full-screen: bottom row empty"
+        );
+        assert!(
+            screen.contains('╭') && screen.contains('╯'),
+            "bordered card"
+        );
     }
 
     #[test]
@@ -709,6 +801,8 @@ mod tests {
         assert!(!beta.contains("feat/ui"), "no branch on the row: {beta}");
         let alpha = screen.lines().find(|l| l.contains("Alpha")).unwrap();
         assert!(alpha.contains("◇ Alpha") && alpha.contains("2m"), "{alpha}");
+        assert_eq!(alpha.matches('◇').count(), 1, "one status glyph per row: {alpha}");
+        assert_eq!(beta.matches('◆').count(), 1, "one status glyph per row: {beta}");
     }
 
     #[test]
@@ -724,11 +818,195 @@ mod tests {
         let mut state = Dashboard::default();
         render(140, 30, &sample(), &mut state);
         // Each session row maps directly to its displayed row.
-        assert_eq!(state.line_rows.iter().flatten().copied().collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(
+            state
+                .line_rows
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        // Lines: "Needs you" heading, Beta, "Idle" heading, Alpha.
         state.click(state.list_area.x, state.list_area.y + 2, &sample());
-        assert_eq!(state.selected_id, "a");
+        assert_eq!(state.selected_id, "a", "a heading click selects nothing");
         state.click(state.list_area.x, state.list_area.y + 1, &sample());
+        assert_eq!(state.selected_id, "b");
+        state.click(state.list_area.x, state.list_area.y + 3, &sample());
         assert_eq!(state.selected_id, "a");
+    }
+
+    fn lines_of(screen: &str) -> Vec<&str> {
+        screen.lines().collect()
+    }
+
+    fn at(lines: &[&str], needle: &str) -> usize {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}"))
+    }
+
+    fn mixed() -> Value {
+        json!({
+            "selected": "w", "path": "~/repos/nexus", "branch": "main", "workspace": "/w",
+            "rows": [
+                {"id":"i","title":"Quiet","status":"idle","updated":3.0,"age":"3h"},
+                {"id":"d","title":"Finished","status":"done","updated":8.0,"age":"1h"},
+                {"id":"w","title":"Busy","status":"working","updated":5.0,"age":"now"},
+                {"id":"n","title":"Ask","status":"input","state":"awaiting_permission","updated":4.0,"age":"2m",
+                 "pending":{"request_id":"r1","kind":"permission","summary":"Allow Bash: git push origin main","ts":1000.0}},
+                {"id":"x","title":"Gone","status":"archived","archived":true,"updated":1.0,"age":"9d"},
+            ],
+        })
+    }
+
+    fn render_at(
+        width: u16,
+        height: u16,
+        dashboard: &Value,
+        state: &mut Dashboard,
+        now: f64,
+    ) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_at(
+                    frame,
+                    frame.area(),
+                    dashboard,
+                    state,
+                    &Colors::default(),
+                    0,
+                    now,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn sections_are_status_ordered_and_archived_starts_collapsed() {
+        let mut state = Dashboard::default();
+        let screen = render_at(100, 40, &mixed(), &mut state, 1065.0);
+        let l = lines_of(&screen);
+        let (needs, working, idle, archived) = (
+            at(&l, "▾ Needs you"),
+            at(&l, "▾ Working"),
+            at(&l, "▾ Idle"),
+            at(&l, "▸ Archived"),
+        );
+        assert!(
+            needs < working && working < idle && idle < archived,
+            "{screen}"
+        );
+        // Idle holds idle and done rows, newest prompt first.
+        assert!(at(&l, "Finished") < at(&l, "Quiet") && idle < at(&l, "Finished"));
+        assert!(
+            !screen.contains("Gone"),
+            "archived rows are collapsed by default"
+        );
+        state.archived_open = true;
+        let open = render_at(100, 40, &mixed(), &mut state, 1065.0);
+        assert!(open.contains("▾ Archived") && open.contains("Gone"));
+    }
+
+    #[test]
+    fn needs_you_rows_show_the_question_the_wait_and_the_keys() {
+        let mut state = Dashboard::default();
+        let screen = render_at(100, 40, &mixed(), &mut state, 1065.0);
+        let l = lines_of(&screen);
+        let ask = at(&l, "◆ Ask");
+        assert!(
+            l[ask + 1].contains("Allow Bash: git push origin main")
+                && l[ask + 1].contains("waiting 01:05"),
+            "{screen}"
+        );
+        assert!(
+            l[ask + 2].contains("Enter open  a allow once  d deny"),
+            "{screen}"
+        );
+        // The three lines are one row for clicks.
+        assert_eq!(
+            state
+                .line_rows
+                .iter()
+                .filter(|r| **r == state.line_rows[ask - usize::from(state.list_area.y)])
+                .count(),
+            3
+        );
+        // Other rows stay one line.
+        assert!(!l[at(&l, "Busy") + 1].contains("Enter open"));
+    }
+
+    #[test]
+    fn chips_follow_section_order() {
+        let mut state = Dashboard::default();
+        let screen = render_at(100, 40, &mixed(), &mut state, 1065.0);
+        // The narrow page keeps counts only (`◆ 1 │ ⠋ 1 │ ◇ 2 │ ● 1`); labels return when they fit.
+        let header = screen.lines().find(|l| l.contains("◆ 1")).expect("chips");
+        let (a, b, c, d) = (
+            header.find("◆ 1").unwrap(),
+            header.find("⠋ 1").unwrap(),
+            header.find("◇ 2").unwrap(),
+            header.find("● 1").unwrap(),
+        );
+        assert!(a < b && b < c && c < d, "{header}");
+        let wide = status_chips(&[&mixed()["rows"][3]], &Colors::default(), 80, 0);
+        let text: String = wide.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "◆ 1 needs you");
+    }
+
+    #[test]
+    fn one_blank_row_separates_new_agent_from_the_rest() {
+        let mut state = Dashboard::default();
+        let screen = render_at(100, 40, &sample(), &mut state, 0.0);
+        let l = lines_of(&screen);
+        let new = at(&l, "+ New Agent");
+        assert!(
+            l[new + 1]
+                .trim()
+                .trim_matches(|c| c == '│')
+                .trim()
+                .is_empty(),
+            "{screen}"
+        );
+        assert!(l[new + 2].contains("/ Search sessions"), "{screen}");
+    }
+
+    #[test]
+    fn archived_heading_click_opens_the_section_and_enter_previews() {
+        let mut state = Dashboard::default();
+        render_at(100, 40, &mixed(), &mut state, 0.0);
+        let heading = state
+            .line_headings
+            .iter()
+            .position(|h| h.as_deref() == Some("Archived"))
+            .unwrap();
+        state.click(
+            state.list_area.x,
+            state.list_area.y + heading as u16,
+            &mixed(),
+        );
+        assert!(state.archived_open);
+        state.selected_id = "x".into();
+        let op = state.key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &mixed(),
+        );
+        assert_eq!(op, Some(json!({"kind":"archived_preview","id":"x"})));
     }
 
     #[test]
@@ -770,9 +1048,9 @@ mod tests {
     #[test]
     fn collapsed_heading_hides_its_rows() {
         let mut state = Dashboard::default();
-        state.collapsed.insert("Today".into());
+        state.collapsed.insert("Idle".into());
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("Today"));
+        assert!(screen.contains("Idle"));
         assert!(!screen.contains("Alpha"));
         assert!(screen.contains("Beta"));
     }
@@ -782,7 +1060,10 @@ mod tests {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
         assert!(screen.contains("now") && screen.contains("2m"));
-        assert!(!screen.contains("[×]"), "rows remain compact and single-line");
+        assert!(
+            !screen.contains("[×]"),
+            "rows remain compact and single-line"
+        );
         assert_eq!(state.archive_hit.width, 0);
         assert!(state.search_hit.width > 0);
         state.click(state.search_hit.x, state.search_hit.y, &sample());
@@ -797,4 +1078,55 @@ mod tests {
         assert!(screen.contains("Beta") && !screen.contains("Alpha"));
     }
 
+    #[test]
+    fn status_marks_have_ascii_twins_and_unicode_is_unchanged() {
+        assert_eq!(marks_for(false, 0), ("◆", "⠋", "◇", "●"));
+        let (input, working, idle, done) = marks_for(true, 5);
+        for mark in [input, working, idle, done] {
+            assert!(mark.is_ascii() && mark.chars().count() == 1, "{mark:?}");
+        }
+        assert_ne!(
+            [input, idle, done].len(),
+            0,
+            "kept distinct: {input} {idle} {done}"
+        );
+        assert!(input != idle && idle != done && input != done);
+    }
+
+    #[test]
+    fn monochrome_marks_the_selected_row_with_a_bar() {
+        let draw_with = |mono: bool| {
+            let mut state = Dashboard::default();
+            let backend = ratatui::backend::TestBackend::new(100, 30);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        frame.area(),
+                        &sample(),
+                        &mut state,
+                        &Colors {
+                            mono,
+                            ..Colors::default()
+                        },
+                        0,
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let id = state.selected_id.clone();
+            let bar = nexus_widgets::Glyphs::from_env().focus_bar;
+            let rows: Vec<String> = (0..30)
+                .map(|y| (0..100).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+                .collect();
+            (id, bar, rows)
+        };
+        let (id, bar, rows) = draw_with(true);
+        assert!(!id.is_empty(), "a row is selected");
+        let marked = rows.iter().filter(|r| r.contains(bar)).count();
+        assert_eq!(marked, 1, "exactly the selected row: {rows:#?}");
+        let (_, _, rows) = draw_with(false);
+        assert!(rows.iter().all(|r| !r.contains(bar)));
+    }
 }

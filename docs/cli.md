@@ -82,6 +82,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/fork` | `[at_seq]` | | branch this session |
 | `/export` | `[json\|markdown\|jsonl]` | | export |
 | `/help`, `/hotkeys` | | | help; `/hotkeys` opens Settings → Keyboard (native TUI) |
+| `/notifications` | | | open the recent-notifications drawer (native TUI only; the history is client-side, also `Ctrl+X Shift+N` or a click on the top-bar `◔ N`) |
 | `/exit` | | `/quit` | leave |
 | `/worktrees` | | | review and manage child worktrees |
 | `/copy` | | | copy assembled context as JSON |
@@ -144,3 +145,10 @@ Other chat clients do not implement `/restart` yet; use `nexus daemon restart`.
 Installed native wheels include `nexus-ratatui`; source checkouts build it with
 `cargo build --locked --manifest-path rust/tui/Cargo.toml`.
 `NEXUS_TUI_BINARY` overrides executable discovery. See [ratatui-parity.md](ratatui-parity.md).
+
+Keys on the waiting messages above the composer (Tab on an empty draft with no focusable
+transcript block, or Down from the last transcript block, focuses the list): Up/Down move;
+**Enter or `s`** promote (queued to steer, steer to interrupt); **Delete, Backspace or `x`**
+remove (a removed steering message returns, with its attachments, to an empty draft);
+**Alt+Up / Alt+Down** reorder queued rows; **Esc** leaves. The same controls show on the focused
+row as on the hovered one.
