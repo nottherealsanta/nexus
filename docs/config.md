@@ -152,6 +152,7 @@ reports. The section cannot be the main, plan, fast, fallback or title model.
 | `~/.nexus/projects/<project-hash>/` | per-project machine state: cache, logs (incl. `logs/mcp/`), `stage/`, extension trash |
 | `~/.nexus/cache/` | shared models.dev cache, `agy-models.json` (last good `agy models` list), `update-check.json` |
 | `~/.nexus/models/voice/` | downloaded dictation model ([voice.md](voice.md)) |
+| `~/.nexus/logs/chat-stderr.log` | native-library stderr from the `nexus chat` controller while the TUI owns the terminal (bounded, 1 MB) |
 | `~/.nexus/dev/` | isolated home in dev mode ([devtools.md](devtools.md)) |
 | `<workspace>/nexus.toml` | project config |
 | `<workspace>/.agents/` | project extensions and Settings writes: `nexus.toml`, `agents/`, `skills/`, `tools/`, `providers/`, `hooks/`, `hooks.toml`, `mcp.json`, `SOUL.md` |

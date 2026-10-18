@@ -855,14 +855,8 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             let running = b.status == "running";
             let failed = b.status == "failed" || b.detail.starts_with("Error:");
             let agent_color = color(&b.color, p.blue, p);
-            let glyphs = nexus_widgets::Glyphs::from_env();
-            let (mark, mark_color) = if running {
-                (look::SLOT, agent_color)
-            } else if failed {
-                (if glyphs.ascii { "*" } else { "\u{25c6}" }, p.error)
-            } else {
-                (if glyphs.ascii { ">" } else { "\u{203a}" }, p.muted)
-            };
+            // Not expandable, so no disclosure mark: a failure tints the name instead.
+            let name_color = if failed { p.error } else { agent_color };
 
             let raw_name = if !b.agent_name.is_empty() {
                 b.agent_name.as_str()
@@ -873,7 +867,11 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                     None => "task",
                 }
             };
-            let name_field = format_agent_name(raw_name);
+            // Tool-group rows start with a 4-column gutter and a two-column "▸ " slot; the
+            // task row keeps the gutter and puts two plain spaces where the slot is, so
+            // its name lands on the column where a group's verb text starts.
+            const LEAD: &str = "      ";
+            let name_field = truncate(&capitalize(raw_name), width.saturating_sub(LEAD.len()));
 
             let raw_task = if !b.task.is_empty() {
                 b.task.as_str()
@@ -884,16 +882,15 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
             };
 
+            let prefix_width = LEAD.len() + name_field.width() + 2;
             let mut head = vec![
-                Span::raw("  "),
-                Span::styled(mark, Style::default().fg(mark_color)),
-                Span::raw(" "),
-                Span::styled(name_field, Style::default().fg(agent_color)),
+                Span::raw(LEAD),
+                Span::styled(name_field, Style::default().fg(name_color)),
             ];
 
-            let prefix_width = 3 + 1 + 1 + 10;
             let room1 = width.saturating_sub(prefix_width);
             if !raw_task.is_empty() && room1 > 0 {
+                head.push(Span::raw("  "));
                 let task_text = truncate(raw_task, room1);
                 let task_style = if running {
                     Style::default().fg(p.text)
@@ -965,6 +962,22 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             if let Some(tokens) = tokens_part {
                 pieces.push((tokens, Style::default().fg(p.quiet)));
             }
+            // An external worker runs its own tools: its count is a darker gray than the rest.
+            // ANSI DarkGray is no darker than `quiet` on the night theme, so scale `quiet`.
+            if let Some(calls) = b.external_tool_calls {
+                let noun = if calls == 1 { "tool" } else { "tools" };
+                let darker = match p.quiet {
+                    Color::Rgb(r, g, b) => {
+                        let dim = |c: u8| (u16::from(c) * 3 / 4) as u8;
+                        Color::Rgb(dim(r), dim(g), dim(b))
+                    }
+                    _ => Color::DarkGray,
+                };
+                pieces.push((
+                    format!("{calls} external {noun}"),
+                    Style::default().fg(darker),
+                ));
+            }
             if let Some(time_str) = time_part {
                 let time_style = if running {
                     Style::default().fg(p.muted)
@@ -974,10 +987,10 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 pieces.push((time_str, time_style));
             }
 
-            let mut line2_spans = vec![Span::raw("    ")];
+            let mut line2_spans = vec![Span::raw(LEAD)];
             let sep = " \u{b7} ";
             let mut total_width = 0;
-            let room2 = width.saturating_sub(5);
+            let room2 = width.saturating_sub(LEAD.len() + 1);
             for (i, (text, style)) in pieces.into_iter().enumerate() {
                 let prefix = if i > 0 { sep } else { "" };
                 let full = format!("{prefix}{text}");
@@ -1119,24 +1132,6 @@ fn capitalize(s: &str) -> String {
     match chars.next() {
         None => String::new(),
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    }
-}
-
-pub fn format_agent_name(raw: &str) -> String {
-    let cap = capitalize(raw);
-    let count = cap.width();
-    if count > 10 {
-        let mut prefix = String::new();
-        for g in cap.graphemes(true) {
-            if prefix.width() + g.width() > 9 {
-                break;
-            }
-            prefix.push_str(g);
-        }
-        format!("{}{}…", prefix, " ".repeat(9 - prefix.width()))
-    } else {
-        let pad = 10 - count;
-        format!("{}{}", cap, " ".repeat(pad))
     }
 }
 
@@ -1340,13 +1335,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_names_are_ten_display_cells() {
-        for name in ["猫猫猫猫猫猫", "e\u{301}clair", "alexanderthegreat", "li"] {
-            assert_eq!(format_agent_name(name).width(), 10);
-        }
-    }
-
-    #[test]
     fn user_card_clock_is_muted_after_quiet_number() {
         let p = Palette::new(false);
         let b = Content {
@@ -1515,15 +1503,15 @@ mod tests {
         };
         let rows = build(&running_task, 80, &p);
         let line1 = &rows[0].0;
-        let spinner_span = &line1.spans[2];
-        assert_eq!(spinner_span.content, look::SLOT);
-        assert_eq!(spinner_span.style.fg, Some(agent_col));
+        let name_span = &line1.spans[2];
+        assert_eq!(name_span.content, "Explorer");
+        assert_eq!(name_span.style.fg, Some(agent_col));
         let line2 = &rows[1].0;
         let time_span = line2.spans.last().unwrap();
         assert!(time_span.content.ends_with('s'));
         assert_eq!(time_span.style.fg, Some(p.muted));
 
-        // Done: mark is › in p.muted, time is total in p.quiet
+        // Done: no mark, time is total in p.quiet
         let done_task = Content {
             kind: "task".into(),
             agent_name: "explorer".into(),
@@ -1536,15 +1524,13 @@ mod tests {
         };
         let rows = build(&done_task, 80, &p);
         let line1 = &rows[0].0;
-        let mark_span = &line1.spans[2];
-        assert_eq!(mark_span.content, "\u{203a}");
-        assert_eq!(mark_span.style.fg, Some(p.muted));
+        assert_eq!(line1.spans[2].content, "Explorer");
         let line2 = &rows[1].0;
         let time_span = line2.spans.last().unwrap();
         assert_eq!(time_span.content, "3.2s");
         assert_eq!(time_span.style.fg, Some(p.quiet));
 
-        // Failed: mark is ◆ in p.error
+        // Failed: the name turns p.error
         let failed_task = Content {
             kind: "task".into(),
             agent_name: "explorer".into(),
@@ -1553,41 +1539,103 @@ mod tests {
             ..Default::default()
         };
         let rows = build(&failed_task, 80, &p);
-        let mark_span = &rows[0].0.spans[2];
-        assert_eq!(mark_span.content, "\u{25c6}");
-        assert_eq!(mark_span.style.fg, Some(p.error));
+        let name_span = &rows[0].0.spans[2];
+        assert_eq!(name_span.content, "Explorer");
+        assert_eq!(name_span.style.fg, Some(p.error));
     }
 
     #[test]
     fn subagent_row_layout_two_lines_and_alignment() {
         let p = Palette::new(false);
-        // Test names of length 3, 10, and 21
-        for (raw_name, expected_name_field) in [
-            ("bob", "Bob       "),
+        // Short, ten-character and long names are all shown whole, never padded or cut at ten.
+        for (raw_name, shown) in [
+            ("bob", "Bob"),
             ("researcher", "Researcher"),
-            ("reallylongsubagentnam", "Reallylon…"),
+            ("reallylongsubagentname", "Reallylongsubagentname"),
         ] {
-            let task = Content {
-                kind: "task".into(),
-                agent_name: raw_name.into(),
-                task: "find all calls".into(),
-                status: "running".into(),
-                color: "#ff0000".into(),
-                ..Default::default()
-            };
-            let rows = build(&task, 80, &p);
-            let line1 = &rows[0].0;
-            assert_eq!(line1.spans[4].content, expected_name_field);
-            assert_eq!(expected_name_field.chars().count(), 10);
-            assert_eq!(line1.spans[5].content, "find all calls");
-            let chars: Vec<char> = line1.spans.iter().flat_map(|s| s.content.chars()).collect();
-            let prefix: String = chars[0..3].iter().collect();
-            assert_eq!(prefix, "   ");
-            let name_chars: String = chars[5..15].iter().collect();
-            assert_eq!(name_chars, expected_name_field);
-            let task_chars: String = chars[15..].iter().collect();
-            assert_eq!(task_chars, "find all calls");
+            for status in ["running", "done", "failed"] {
+                let task = Content {
+                    kind: "task".into(),
+                    agent_name: raw_name.into(),
+                    task: "find all calls".into(),
+                    status: status.into(),
+                    color: "#ff0000".into(),
+                    ..Default::default()
+                };
+                let rows = build(&task, 80, &p);
+                let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
+                // Transcript pad (1) + group gutter (4) + two spaces: the name starts at
+                // column 7, where a tool group's verb text starts after "▸ ".
+                assert_eq!(text, format!("       {shown}  find all calls"));
+                for glyph in ["\u{203a}", "\u{25c6}", ">", "*", look::SLOT] {
+                    assert!(!text.contains(glyph), "no chevron or mark: {text:?}");
+                }
+                assert!(!text.contains('…'));
+            }
         }
+    }
+
+    #[test]
+    fn subagent_long_name_clips_to_the_terminal_width() {
+        let p = Palette::new(false);
+        let task = Content {
+            kind: "task".into(),
+            agent_name: "reallylongsubagentname".into(),
+            task: "find all calls".into(),
+            status: "running".into(),
+            ..Default::default()
+        };
+        let rows = build(&task, 14, &p);
+        let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.width() <= 14, "{text:?}");
+        assert_eq!(text, "       Really…");
+        assert!(text.ends_with('…'), "{text:?}");
+
+        // Widening the terminal shows more characters up to the width rather than capping at 10.
+        let rows = build(&task, 20, &p);
+        let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.width() <= 20, "{text:?}");
+        assert_eq!(text, "       Reallylongsu…");
+        assert!(text.ends_with('…'), "{text:?}");
+    }
+
+    #[test]
+    fn subagent_external_tool_count_sits_on_row_two_in_dark_gray() {
+        let p = Palette::new(false);
+        let task = Content {
+            kind: "task".into(),
+            agent_name: "claude".into(),
+            task: "review".into(),
+            elapsed_ms: 3200,
+            status: "done".into(),
+            external_tool_calls: Some(7),
+            ..Default::default()
+        };
+        let rows = build(&task, 80, &p);
+        assert_eq!(rows.len(), 2);
+        let row1: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(!row1.contains("external"));
+        let row2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(row2, "       7 external tools · 3.2s");
+        let count = rows[1].0.spans.iter().find(|s| s.content.contains("external")).unwrap();
+        let luma = |c: Option<Color>| match c {
+            Some(Color::Rgb(r, g, b)) => u32::from(r) + u32::from(g) + u32::from(b),
+            other => panic!("expected rgb, got {other:?}"),
+        };
+        // Darker than the other row-two text, on both themes.
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let rows = build(&task, 80, &p);
+            let count = rows[1].0.spans.iter().find(|s| s.content.contains("external")).unwrap();
+            assert!(luma(count.style.fg) < luma(Some(p.quiet)));
+        }
+        assert_ne!(count.style.fg, Some(p.quiet));
+        assert_ne!(count.style.fg, Some(p.muted));
+
+        let one = Content { external_tool_calls: Some(1), ..task };
+        let rows = build(&one, 80, &p);
+        let row2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(row2.contains("1 external tool "), "{row2:?}");
     }
 
     #[test]
@@ -1609,7 +1657,7 @@ mod tests {
         let rows = build(&task, 80, &p);
         assert_eq!(rows.len(), 2);
         let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line2, "     gpt-6-mini-medium (low) · 3.2s");
+        assert_eq!(line2, "       gpt-6-mini-medium (low) · 3.2s");
         assert!(!line2.contains("tool"));
         assert!(!line2.contains("token"));
 
@@ -1617,14 +1665,14 @@ mod tests {
         task.tool_calls = Some(4);
         let rows = build(&task, 80, &p);
         let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line2, "     gpt-6-mini-medium (low) · 4 tools · 3.2s");
+        assert_eq!(line2, "       gpt-6-mini-medium (low) · 4 tools · 3.2s");
 
         // With tokens only (10K tokens)
         task.tool_calls = None;
         task.tokens = 10_000.into();
         let rows = build(&task, 80, &p);
         let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line2, "     gpt-6-mini-medium (low) · 10K tokens · 3.2s");
+        assert_eq!(line2, "       gpt-6-mini-medium (low) · 10K tokens · 3.2s");
 
         // With both tools and tokens
         task.tool_calls = Some(4);
@@ -1632,7 +1680,7 @@ mod tests {
         let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(
             line2,
-            "     gpt-6-mini-medium (low) · 4 tools · 10K tokens · 3.2s"
+            "       gpt-6-mini-medium (low) · 4 tools · 10K tokens · 3.2s"
         );
     }
 

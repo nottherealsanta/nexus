@@ -147,22 +147,26 @@ async def _mock(workspace: Path, args: argparse.Namespace, stdout: TextIO, stder
 
 async def _chat(workspace: Path, *, session: str, renderer: str = "ratatui") -> int:
     """Launch the only interactive chat shell over the host client."""
+    from .config.paths import nexus_home
     from .ui.cli import open_client
-    from .ui.ratatui.run import release, run, spawn
+    from .ui.ratatui.run import progress, release, run, spawn, stderr_to
 
     # The native client starts first and shows its splash while the daemon connects.
     process = await spawn()
-    try:
-        client = await open_client(workspace)
+    # It keeps the real terminal as stderr; the controller's native-library noise goes to a log.
+    with stderr_to(nexus_home() / "logs" / "chat-stderr.log"):
         try:
-            async def reconnect():
-                return await open_client(workspace)
+            client = await open_client(workspace)
+            try:
+                await progress(process, 2)  # host connected: the splash bar moves past the client
+                async def reconnect():
+                    return await open_client(workspace)
 
-            return await run(client, session=session, reconnect=reconnect, workspace=workspace, process=process)
+                return await run(client, session=session, reconnect=reconnect, workspace=workspace, process=process)
+            finally:
+                await client.aclose()
         finally:
-            await client.aclose()
-    finally:
-        await release(process)
+            await release(process)
 
 
 async def _web(workspace: Path, *, open_browser: bool) -> int:

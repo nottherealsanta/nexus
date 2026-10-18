@@ -84,7 +84,10 @@ result arriving before its request); the tool-details panel shows a
 merge into `ConversationView.external` (a dict, `finished: true` after the end).
 `AgentView.usage_unknown` marks usage that is unknown rather than zero. All three
 fields are omitted from the wire shape when unset, so ordinary sessions are
-unchanged. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
+unchanged. The subagent task row's `external_tool_calls` (separate from native
+`tool_calls`, which stays unreported for external workers) is derived from the
+child's unique `external.tool` rows, raised to `external.finished.tool_calls`
+when that is larger, so live and replayed sessions agree. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
 a web port is not planned (the web client is being deprecated).
 
 ## The reducer (`view/`)
@@ -120,6 +123,13 @@ A user `MessageView` and a `QueuedInputView` carry an optional `origin`
 (`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is
 recorded on `input.queued` only, so the prompt text and the turn are unchanged
 (omitted from the wire when absent).
+
+A user `MessageView` and a `QueuedInputView` also carry `sent_ts`: the `input.queued`
+event time (a consumed queued item keeps it, not the later consume time), or the
+`input.started` time for a direct send. It is optional (`None`, omitted from the wire,
+for older recordings; the first card then falls back to `TurnView.user_ts`) and is
+durable: replay and live fold to the same value, including a consume seen before its
+queued event.
 
 `ToolCallView.diff` (bounded, durable) is the only source for an Edit/Patch diff
 in any UI; a surface never reads files to render one.

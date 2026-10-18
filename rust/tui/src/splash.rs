@@ -14,9 +14,10 @@
 //! The state machine is a pure function of "frames", which are 8 ms ticks since it was
 //! created (continuous enough that motion is not stepped; the draw loop paces redraws at
 //! 60 fps), so tests drive it with a fake clock. The first version stepped every 80 ms and
-//! held input for ~4 s after the session loaded, which looked laggy and swallowed typing. The milestones are *client-side*: the bridge reports
-//! no startup progress today (`main.rs` only knows "no snapshot yet"), so they map what the
-//! client can observe to the five names (see `STEPS`, and docs/ratatui-parity.md). With
+//! held input for ~4 s after the session loaded, which looked laggy and swallowed typing. The first milestones are *client-side*; the launcher
+//! also sends `{"startup":N}` lines (N up to 3, see `startup_step`) before the first snapshot.
+//! While waiting the splash idles (sway and scan pulse) without moving the percentage (see
+//! `STEPS`, and docs/ratatui-parity.md). With
 //! animations off the wordmark and bar are drawn in their final state and the chat follows
 //! the first snapshot with a straight cut.
 use crate::render::Palette;
@@ -46,6 +47,10 @@ const CURTAIN_STEP: u32 = 4;
 const CURTAIN_WIDTH: u32 = 3;
 /// Share of the progress range over which particle start times are staggered.
 const STAGGER: f32 = 0.6;
+/// Radians per frame of the idle sway while waiting (one turn in about 2.5 s).
+const IDLE_RATE: f32 = 0.02;
+/// Frames per cell step of the scanning pulse on the unfilled bar while waiting.
+const SCAN_FRAMES: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -89,6 +94,19 @@ fn put(buf: &mut Buffer, area: Rect, x: i32, y: i32, symbol: &str, style: Style)
     if let Some(cell) = buf.cell_mut((x as u16, y as u16)) {
         cell.set_symbol(symbol).set_style(style);
     }
+}
+
+/// The milestone a host startup line reports: `{"startup":N}` before the first snapshot, sent
+/// by the launcher as the host connects and the session loads. Only the first three
+/// milestones can be reported this way; `session` and `ready` stay client-observed, so a
+/// line can never claim the chat is ready. `None` for anything else (a snapshot).
+pub fn startup_step(line: &str) -> Option<usize> {
+    if !line.starts_with("{\"startup\":") || line.len() > 64 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let step = value.as_object()?.get("startup")?.as_u64()?;
+    Some((step as usize).clamp(1, 3))
 }
 
 impl Splash {
@@ -209,6 +227,28 @@ impl Splash {
         STEPS[self.reached().min(STEPS.len() - 1)]
     }
 
+    /// Still waiting on the milestones (animated, `ready` not reached): the sequence idles
+    /// instead of freezing. This is motion only; the percentage never moves for it.
+    fn waiting(&self) -> bool {
+        self.animate && self.marks[4].is_none()
+    }
+
+    /// Idle sway of a particle in flight, in cells: a slow orbit around its path position,
+    /// fading out as it nears its target. Zero once `ready` is reached, so the arrival and
+    /// the flash are exactly the milestone-driven motion.
+    fn drift(&self, frame: u32, h: u64, e: f32) -> (i32, i32) {
+        if !self.waiting() {
+            return (0, 0);
+        }
+        let phase = (h % 628) as f32 / 100.0;
+        let angle = frame as f32 * IDLE_RATE + phase;
+        let reach = (1.0 - e) * 2.0;
+        (
+            (angle.sin() * reach * 1.5).round() as i32,
+            (angle.cos() * reach * 0.75).round() as i32,
+        )
+    }
+
     /// Draw wordmark, particles and bar into `buf` (the whole `area`).
     pub fn render(&self, buf: &mut Buffer, area: Rect, frame: u32, p: &Palette, ascii: bool) {
         buf.set_style(area, Style::default().bg(p.background).fg(p.text));
@@ -255,8 +295,9 @@ impl Splash {
                 continue;
             }
             let e = ease(t);
-            let x = sx + ((*tx - sx) as f32 * e).round() as i32;
-            let y = sy + ((*ty - sy) as f32 * e).round() as i32;
+            let (dx, dy) = self.drift(frame, h, e);
+            let x = sx + ((*tx - sx) as f32 * e).round() as i32 + dx;
+            let y = sy + ((*ty - sy) as f32 * e).round() as i32 + dy;
             let glyph = match (t < 0.5, ascii) {
                 (true, false) => "·",
                 (false, false) => "•",
@@ -286,6 +327,10 @@ impl Splash {
         let total = segments as i32 + label.width() as i32;
         let mut x = i32::from(area.x) + (i32::from(area.width) - total).max(0) / 2;
         let y = top + WORDMARK.len() as i32 + 1;
+        // Waiting: a pulse sweeps the unfilled track (colour only, the fill is unchanged).
+        let scan = (self.waiting() && segments > filled).then(|| {
+            filled + (frame / SCAN_FRAMES) as usize % (segments - filled)
+        });
         for i in 0..segments {
             let (symbol, color) = match (i < filled, ascii) {
                 (true, false) => ("▰", p.accent),
@@ -293,6 +338,7 @@ impl Splash {
                 (true, true) => ("#", p.accent),
                 (false, true) => ("-", p.border_strong),
             };
+            let color = if scan == Some(i) { p.muted } else { color };
             put(buf, area, x, y, symbol, bg.fg(color));
             x += 1;
         }
@@ -403,6 +449,32 @@ mod tests {
     }
 
     #[test]
+    fn startup_lines_report_only_host_milestones() {
+        assert_eq!(startup_step("{\"startup\":2}"), Some(2));
+        assert_eq!(startup_step("{\"startup\":3}"), Some(3));
+        assert_eq!(startup_step("{\"startup\":5}"), Some(3), "never claims ready");
+        assert_eq!(startup_step("{\"startup\":0}"), Some(1));
+        assert_eq!(startup_step("{\"schema\":3,\"startup\":2}"), None);
+        assert_eq!(startup_step("{\"startup\":\"x\"}"), None);
+        assert_eq!(startup_step("{\"startup\":2,\"blocks\":[]}x"), None);
+    }
+
+    #[test]
+    fn host_progress_moves_the_bar_before_any_snapshot() {
+        // The bar used to sit at 20% (client only) until the first snapshot, however far the
+        // host had got.
+        let t0 = Instant::now();
+        let mut s = Splash::new(t0, true);
+        s.reach(1, t0);
+        assert!((s.bar(200) - 0.2).abs() < 1e-6);
+        s.reach(startup_step("{\"startup\":2}").unwrap(), at(t0, 200));
+        assert!((s.bar(200 + FILL_FRAMES) - 0.4).abs() < 1e-6);
+        s.reach(startup_step("{\"startup\":3}").unwrap(), at(t0, 300));
+        assert!((s.bar(300 + FILL_FRAMES) - 0.6).abs() < 1e-6);
+        assert_eq!(s.phase(10_000, 80), Phase::Loading, "ready still needs a snapshot");
+    }
+
+    #[test]
     fn bar_text_shows_percentage_and_step() {
         let t0 = Instant::now();
         let mut s = Splash::new(t0, true);
@@ -461,6 +533,57 @@ mod tests {
         );
         assert_eq!(s.phase(1000, 80), Phase::Loading);
         assert!(s.covers(at(t0, 1000), 80));
+    }
+
+    #[test]
+    fn waiting_at_twenty_percent_keeps_moving_without_inventing_progress() {
+        let t0 = Instant::now();
+        let mut s = Splash::new(t0, true);
+        s.reach(1, at(t0, 0));
+        // Long after the bar settled at 20%, the daemon is still connecting.
+        let (a, b) = (rendered(&s, 400, 80, 12), rendered(&s, 430, 80, 12));
+        assert_ne!(a, b, "particles and the scan pulse keep animating");
+        let pct = |buf: &Buffer| {
+            let row = (0..12)
+                .map(|y| text(buf, y))
+                .find(|row| row.contains('%'))
+                .unwrap();
+            let bar_start = row.find(|c: char| c == '▰' || c == '▱').unwrap();
+            let pct_pos = row.find('%').unwrap();
+            let after_pct = &row[pct_pos + 1..];
+            let step_start = pct_pos + 1 + after_pct.find(|c: char| c.is_alphabetic()).unwrap();
+            let step_end = step_start
+                + row[step_start..]
+                    .find(|c: char| !c.is_alphabetic())
+                    .unwrap_or(row.len() - step_start);
+            let bar_and_label = &row[bar_start..step_end];
+            format!("{}:{}", row.matches('▰').count(), bar_and_label)
+        };
+        assert_eq!(pct(&a), pct(&b), "same fill, same percentage and step");
+        assert!(pct(&a).contains("20%") && pct(&a).contains("workspace"));
+        assert!((s.bar(430) - 0.2).abs() < 1e-6 && s.progress(430) < 1.0);
+        // The motion is idle only: once ready, frames are a pure function of the milestones.
+        s.reach(5, at(t0, 500));
+        assert_eq!(s.drift(520, 12345, 0.0), (0, 0));
+        assert_eq!(rendered(&s, 600, 80, 12), rendered(&s, 610, 80, 12));
+    }
+
+    #[test]
+    fn idle_sway_is_bounded_and_fades_near_the_target() {
+        let t0 = Instant::now();
+        let s = Splash::new(t0, true);
+        for frame in 0..400 {
+            for h in [1u64, 77, 31_337, u64::MAX] {
+                let (dx, dy) = s.drift(frame, h, 0.0);
+                assert!(dx.abs() <= 3 && dy.abs() <= 2, "{dx},{dy}");
+                assert_eq!(s.drift(frame, h, 1.0), (0, 0), "settled particles do not sway");
+            }
+        }
+        assert_eq!(
+            Splash::new(t0, false).drift(10, 5, 0.0),
+            (0, 0),
+            "no animation, no sway"
+        );
     }
 
     #[test]

@@ -188,6 +188,7 @@ impl Disclosure {
             operation: source.operation.clone(),
             gap: source.gap,
             number: source.number,
+            sent_at: source.sent_at.clone(),
             collapsed: source.collapsed,
             chips: source.chips.clone(),
             chip_operation: source.chip_operation.clone(),
@@ -602,6 +603,38 @@ mod tests {
         let mut done = group(false);
         done.status = "completed".into();
         assert!(ui.block(&done).unwrap().members.is_empty());
+    }
+
+    #[test]
+    fn a_projected_user_card_keeps_its_send_time() {
+        // The copying projection (folded turns, local-ui blocks) once dropped `sent_at`, so
+        // the ordinary first user message of a completed turn showed no time.
+        let user = Content {
+            id: "u".into(),
+            kind: "user".into(),
+            turn_id: "t".into(),
+            number: 1,
+            sent_at: "12:36 AM".into(),
+            local_ui: true,
+            ..Default::default()
+        };
+        let ui = Disclosure::default();
+        assert_eq!(ui.block(&user).unwrap().sent_at, "12:36 AM");
+        // Folded: an old turn outside the recent window, on a block without `local_ui`.
+        let later = |turn: &str| Content {
+            id: format!("{turn}-u"),
+            kind: "user".into(),
+            turn_id: turn.into(),
+            local_ui: true,
+            ..Default::default()
+        };
+        let mut folded_ui = Disclosure::default();
+        folded_ui.sync_window(&[user.clone(), later("t2"), later("t3")]);
+        let mut plain = user.clone();
+        plain.local_ui = false;
+        let shown = folded_ui.block(&plain).unwrap();
+        assert!(matches!(shown, Cow::Owned(_)), "the folded path copies");
+        assert_eq!(shown.sent_at, "12:36 AM");
     }
 
     #[test]

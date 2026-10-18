@@ -245,8 +245,8 @@ timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
 opens beneath its activity member dimmed, with a whole-line `**heading**` shown bold.
 Expanded activity members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
 call renders as a stable two-line row (P-AGT) with a blank row between agents:
-- **Line 1:** mark (running spinner in agent colour; `›` in `p.muted` when done; `◆` in `p.error` on failure), one space, then the capitalised agent name in the agent colour in a fixed 10-character field (cut to 9 plus `…` when longer, padded when shorter). The task phrase always begins at character 11 of that field in `p.text` while running and `p.muted` when done (`· <provider> (external, own tools)` for external workers).
-- **Line 2:** indented to the name column (column 5) in `p.quiet`, joined by ` · `: `model-effort (tier)` (effort and full tier name omitted when unknown), `N tools` (omitted when not reported), compact `N tokens` (omitted when unknown), and duration (`p.muted` live ticking duration while running, `p.quiet` total duration when done).
+- **Line 1:** the tool-group gutter (4 columns) plus two plain spaces where a group shows `▸ `, so the name starts at screen column 7 (after the 1-column transcript pad), exactly where a group's verb text starts; then the capitalised agent name in the agent colour (`p.error` on failure), two spaces, and the task phrase in `p.text` while running and `p.muted` when done (`· <provider> (external, own tools)` for external workers). A subagent row is not expandable, so there is no chevron or other mark. The name is never shortened to a fixed width; it is only clipped by the terminal width.
+- **Line 2:** the same indent (under the name, column 7) in `p.quiet`, joined by ` · `: `model-effort (tier)` (effort and full tier name omitted when unknown), `N tools` (omitted when not reported), compact `N tokens` (omitted when unknown), `N external tools` (Claude Code/Antigravity activity; `Content.external_tool_calls`, omitted when absent) in `p.quiet` scaled to 75% (darker than `p.quiet` on both themes; ANSI `DarkGray` is not darker on the night theme), and duration (`p.muted` live ticking duration while running, `p.quiet` total duration when done).
 The agent presentation colour is stable across runtimes and sessions, keyed on the definition name (or explicit definition `color`), never run IDs.
 A subagent page opens with its task as a prompt card whose rail uses the agent's colour (no context-header strip, so the child's context chips are not shown there). The dark background is `#0B0B0B`.
 Covered by Rust transcript tests, `tests/test_ratatui_projection.py`, and `tests/test_ratatui_agent_color.py`; not
@@ -321,6 +321,14 @@ concurrently afterwards (`finish_startup` in `prototype.py`) and each repaints w
 the breadcrumb first shows the bare workspace path. Measured with a warm daemon over a PTY:
 splash about 0.2 s, full UI about 0.3 s (was about 1.0 s); cold daemon start not measured.
 
+Stray stderr: the client renders on stderr, which it inherits from `nexus chat` at spawn. After
+the spawn, `_chat` points the Python controller's own fd 2 at `~/.nexus/logs/chat-stderr.log`
+(`run.py:stderr_to`; it starts over past 1 MB) and restores it on exit. Without this, native
+libraries such as PortAudio (voice cues, the completion sound, dictation) printed warnings like
+`||PaMacCore (AUHAL)|| Warning ...` over the frame. Startup progress lines (`{"startup":N}`)
+need a client built from the same source; an older binary rejects them with
+`unsupported bridge schema`, so rebuild it (`cargo build --release --manifest-path rust/tui/Cargo.toml`).
+
 **Splash (design overhaul, step 12).** `rust/tui/src/splash.rs` replaces the plain word.
 The small half-block wordmark is made of particles that start at deterministic pseudo-random
 cells and ease (`1-(1-p)^3`) to their places, drawn `·` then `•` and blended quiet → accent,
@@ -337,11 +345,21 @@ is continuous). Progress is milestone-driven, not timed: particle progress is `m
 60 frames)`, so they arrive when the bar completes, never sooner than ~0.48 s, with no maximum;
 start times are staggered over the first 60% of that progress range. After `ready` the whole
 sequence takes under 1.1 s at 140 columns (`the_whole_sequence_after_ready_is_short`).
-The five milestones are **client-side** observations, not host startup stages (the bridge
-reports none): `daemon` = the bridge pipe is open, `workspace` = a first line arrived,
-`providers` = it parsed, `session` = the first snapshot was applied, `ready` = chat state
-ready. The names are the plan's; they do not mean the daemon, workspace or providers were
-checked. Each fills a fifth over 25 frames (200 ms). With animations off (Settings → Appearance) or
+The five milestones are mostly **client-side** observations: `daemon` = the bridge pipe is
+open, `workspace` = a first line arrived, `providers` = it parsed, `session` = the first
+snapshot was applied, `ready` = chat state ready. The launcher additionally writes
+pre-snapshot **startup lines** to the client's stdin, `{"startup":N}\n`: 2 when the host
+connected (`cli._chat`), 3 once the session bootstrapped, before the first update
+(`prototype.run`, via `run.progress`). The client clamps N to 1..3, so a startup line can
+never claim `session` or `ready`; those still need a real snapshot. Startup lines are not
+snapshots (snapshots start `{"schema":`; the client matches the exact `{"startup":` prefix,
+max 64 bytes, and drops them before the parser), so a snapshot stream without them behaves
+as before, and they are idempotent and order-independent. The names do not mean the
+workspace or providers were checked. While waiting (animated, `ready` not reached) the
+splash idles instead of freezing at the last milestone: particles in flight sway on a
+slow orbit (`drift`, 2.5 s per turn, fading as they near their targets) and a pulse
+scans the unfilled bar. This is motion only; the percentage and fill never move for it,
+and after `ready` it is zero so arrival and flash are purely milestone-driven. Each fills a fifth over 25 frames (200 ms). With animations off (Settings → Appearance) or
 `NEXUS_SPLASH=off` the wordmark and bar are drawn in their final state and the chat follows
 the first snapshot with a straight cut. ASCII glyph set: `#` wordmark, `.`/`o` particles,
 `#-` bar, `#=-` curtain. The splash always uses the dark palette (the theme arrives with the
@@ -1768,8 +1786,17 @@ this document remains the native implementation/parity guidance.
 
 ### Turn clocks and durations
 
-User-card tags show the send-event local short clock after the turn number
-(number quiet, time muted). Completed footers use the durable terminal-event
+User-card tags show the message's own send time (local short clock) after the turn
+number (number quiet, time muted). `MessageView.sent_ts` is the `input.queued` event
+time carried through `QueuedInputView.sent_ts` to the consume (not the consume time,
+which can be much later for a queued prompt), or the `input.started` event time for a
+direct send; a consume seen before its queued event is backfilled, so live and replay
+agree. A steer shows its own time and never borrows the turn's. Only a turn's first
+card falls back to `user_ts` for recordings without `sent_ts`. The wire block field is
+`sent_at` (empty omits the tag); Rust must copy it in every projection of a user block
+(`disclosure.rs` copies only listed fields for folded turns, and once dropped it, so the
+first message of any folded/completed turn showed no time; regression test
+`a_projected_user_card_keeps_its_send_time`). Completed footers use the durable terminal-event
 `completed_ts`, or `started_ts + elapsed_ms/1000` for older snapshots; absent
 facts omit the clock rather than using the current time. Failed and cancelled
 turns also retain their terminal timestamp on replay. Turn durations and the

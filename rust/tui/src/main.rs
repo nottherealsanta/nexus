@@ -377,6 +377,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        // Startup progress lines move the splash bar while the host is still loading; they
+        // are not snapshots and never reach the parser below.
+        queued.retain(|(line, _)| match splash::startup_step(line) {
+            Some(step) => {
+                if let Some(splash) = splash.as_mut() {
+                    splash.reach(step, Instant::now());
+                }
+                dirty = true;
+                false
+            }
+            None => true,
+        });
         if !queued.is_empty() {
             if let Some(splash) = splash.as_mut() {
                 splash.reach(2, Instant::now());

@@ -56,6 +56,53 @@ async def spawn():
         limit=16 * 1024 * 1024)
 
 
+async def progress(process, step: int) -> None:
+    """Tell the splash how far host startup got (``{"startup": N}``, milestones 2 and 3).
+
+    Without it the bar waits at the client-only first milestone until the first snapshot,
+    however far the host is. Best effort: a client that already left is not an error.
+    """
+    if process is None or process.returncode is not None:
+        return
+    with contextlib.suppress(Exception):
+        process.stdin.write(f'{{"startup":{step}}}\n'.encode())
+        await process.stdin.drain()
+
+
+#: Bound on the stray-stderr log: past this size it starts over on the next launch.
+_STDERR_LOG_LIMIT = 1024 * 1024
+
+
+@contextlib.contextmanager
+def stderr_to(path: Path):
+    """Point this process's fd 2 at ``path`` while the native client owns the terminal.
+
+    Native libraries (PortAudio for voice cues and dictation) write warnings straight to
+    fd 2, which would print over the Ratatui frame. The client was spawned with the real
+    terminal as its stderr, so only the controller's writes move. Restored on exit, so a
+    final error still reaches the user. Best effort: an unwritable log leaves fd 2 alone.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "w" if path.is_file() and path.stat().st_size > _STDERR_LOG_LIMIT else "a"
+        log = open(path, mode, encoding="utf-8")  # noqa: SIM115 - closed in the finally below
+    except OSError:
+        yield
+        return
+    with contextlib.suppress(Exception):
+        sys.stderr.flush()
+    saved = os.dup(2)
+    try:
+        os.dup2(log.fileno(), 2)
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(saved)
+        log.close()
+
+
 async def release(process) -> None:
     """Stop a spawned client that never reached (or already left) the bridge loop.
 

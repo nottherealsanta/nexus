@@ -547,6 +547,9 @@ pub struct Content {
     pub task: String,
     pub effort: String,
     pub tool_calls: Option<u64>,
+    /// `task`: tools an external worker (Claude Code/Antigravity) ran itself, on the second row
+    /// in dark grey; `None` hides it.
+    pub external_tool_calls: Option<u64>,
     /// `task`: the sub-agent's model (with effort) and compact tier letter (`L`/`M`/`H`), both
     /// drawn in the agent colour.
     pub model: String,

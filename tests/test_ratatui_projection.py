@@ -259,6 +259,66 @@ def test_agent_card_tier_letter_tokens_and_unknown_usage():
     assert _agent_card_metrics(None) == (None, None)
 
 
+def _external_agent_events(provider, *, finish):
+    from nexus.events import Event
+    meta = {"id": "s1/sub/1", "parent": "s1", "depth": 1, "type": provider, "task": "task-1", "session": "s1/sub/1"}
+    prov = f"{provider} (own tools)"
+    child = "s1/sub/1"
+    rows = [("agent.spawned", {"agent": meta, **meta}, "s1"),
+            ("external.started", {"agent": meta, "provider": provider}, child)]
+    for call in ("a", "b"):
+        for phase in ("requested", "completed"):
+            rows.append(("external.tool", {"agent": meta, "phase": phase, "call_id": call, "tool": "Read",
+                                           "provenance": prov, **({"is_error": False, "content": []} if phase == "completed" else {})}, child))
+    if finish:
+        rows.append(("external.finished", {"agent": meta, "status": "completed", "tool_calls": 2, "usage": "unknown"}, child))
+        rows.append(("agent.completed", {"agent": meta, **meta, "status": "completed", "ok": True, "is_error": False,
+                                         "usage": {}, "usage_unknown": True}, "s1"))
+    return [Event(type=t, data=d, seq=i + 1, ts=float(i + 1), session=s, turn="t1", id=f"e{i:03d}")
+            for i, (t, d, s) in enumerate(rows)]
+
+
+def test_external_agent_card_counts_own_tools_separately_for_both_providers():
+    from nexus.ui.ratatui.prototype import _agent_card_external_tools, _agent_card_metrics
+    from nexus.view import fold
+    for provider in ("claude-code", "antigravity"):
+        for finish in (False, True):
+            events = _external_agent_events(provider, finish=finish)
+            for log in (events, events + events):  # replay is idempotent: no double counting
+                agent = fold(log).agents["s1/sub/1"]
+                assert _agent_card_external_tools(agent) == 2
+                assert _agent_card_metrics(agent)[0] is None  # native count stays unreported
+    assert _agent_card_external_tools(_agent()) is None  # native agents keep `tool_calls`
+    assert _agent_card_external_tools(None) is None
+    started_only = fold(_external_agent_events("claude-code", finish=False)[:2]).agents["s1/sub/1"]
+    assert _agent_card_external_tools(started_only) is None
+
+
+def test_project_task_card_carries_external_tool_calls_for_external_workers(tmp_path, monkeypatch):
+    from nexus.view import fold
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    for provider in ("claude-code", "antigravity"):
+        view = fold(_external_agent_events(provider, finish=True))
+        task = ToolCallView(call_id="task-1", name="Task", event_seq=2, status="completed",
+                            input={"subagent_type": provider, "description": "Review"},
+                            child_agent_ids=["s1/sub/1"])
+        view.turns = [TurnView(id="t", index=0, phase="completed", messages=[
+            MessageView(id="u", role="user", event_seq=1, blocks=[BlockView(text="go")])], tools=[task])]
+        controller = SimpleNamespace(view=view, session="s1")
+        shell = ShellActions(controller)
+        shell.preferences.values["context_preview"] = False
+        blocks = project(controller, 1, shell=shell)["blocks"]
+        card = next(block for block in blocks if block["id"] == "task-1")
+        assert card["kind"] == "task"
+        assert card["external_tool_calls"] == 2
+        assert card["tool_calls"] is None  # native count stays unreported
+
+    # A native agent keeps `tool_calls` and reports no external count.
+    native = _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"]
+    assert all(block.get("external_tool_calls") is None for block in native)
+
+
 def test_agent_model_label_prefers_actual_over_tier_and_spawn_reference():
     from nexus.ui_support.timeline import agent_model_label
     actual = _agent(tier="low", model="openai/spawn-ref", resolved_model="anthropic/claude-x")
@@ -1005,6 +1065,55 @@ def test_turn_numbers_survive_queue_steer_and_interrupt_and_replay(tmp_path, mon
     marked = [("first", ""), ("steer", "steer"), ("interrupt", ""), ("queued", "")]
     assert statuses(state) == marked, "only the consumed steer is tagged"
     assert statuses(replay) == marked
+
+
+def test_user_card_shows_its_own_send_time_live_and_on_replay(tmp_path, monkeypatch):
+    """Send time is the queued event's time, not the consume time, per message (steers too)."""
+    from datetime import datetime
+    from nexus.events import Event
+    from nexus.view import apply, apply_many
+
+    base = 1_759_000_000.0
+
+    def ev(kind, seq, data, turn, at):
+        return Event(type=kind, data=data, seq=seq, session="s", turn=turn, ts=base + at)
+
+    def clock(at):
+        return datetime.fromtimestamp(base + at).strftime("%I:%M %p").lstrip("0")
+
+    events = [
+        ev("input.queued", 1, {"queued_id": "a", "content": [{"text": "first"}]}, "t1", 0),
+        ev("turn.started", 2, {}, "t1", 7200),
+        ev("input.consumed", 3, {"queued_id": "a", "turn": "t1"}, "t1", 7200),
+        ev("input.queued", 4, {"queued_id": "s", "content": [{"text": "steer"}], "mode": "steer"}, "t1", 10800),
+        ev("input.consumed", 5, {"queued_id": "s", "turn": "t1", "mode": "steer"}, "t1", 14400),
+        ev("input.started", 6, {"input_id": "d", "content": [{"text": "direct"}]}, "t2", 18000),
+    ]
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    def sent(view):
+        controller = SimpleNamespace(view=view, session="s")
+        shell = ShellActions(controller)
+        shell.preferences.values["context_preview"] = False
+        blocks = project(controller, 1, shell=shell, literal=False)["blocks"]
+        return [(b["title"], b["sent_at"]) for b in blocks if b["kind"] == "user"]
+
+    expected = [("first", clock(0)), ("steer", clock(10800)), ("direct", clock(18000))]
+    live = initial_state("s")
+    for event in events:
+        live = apply(live, event)
+    assert sent(live) == expected
+    assert sent(apply_many(initial_state("s"), events)) == expected
+
+    from msgspec.structs import replace as msg_replace
+
+    late = [
+        msg_replace(events[2], seq=1),
+        msg_replace(events[0], seq=2),
+    ]  # a follower sees the consume before the queued event in its stream
+    view = apply_many(initial_state("s"), late)
+    assert view.turns[0].messages[0].sent_ts == base
 
 
 def test_pending_queue_rows_tag_steer_apart_from_queue_and_stay_out_of_the_transcript(tmp_path, monkeypatch):

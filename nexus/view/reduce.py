@@ -1061,6 +1061,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             blocks=_user_blocks(content),
             iteration=turn.iteration,
             done=True,
+            sent_ts=_opt_float(event.ts),
         )
         user_ts = _opt_float(event.ts)
         return _put(
@@ -1091,17 +1092,23 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             for position, message in enumerate(turn.messages):
                 if message.id != message_id:
                     continue
+                backfilled = replace(
+                    message,
+                    # The queued event is the true send time; a consume seen first only guessed.
+                    sent_ts=_opt_float(event.ts) if _opt_float(event.ts) is not None else message.sent_ts,
+                )
                 if not message.text:
+                    backfilled = replace(
+                        backfilled, blocks=_user_blocks(content),
+                        origin=message.origin or _origin(data.get("origin")),
+                    )
+                if backfilled != message:
                     state = _put(
                         state,
                         index,
                         replace(
                             turn,
-                            messages=_replace_at(
-                                turn.messages, position,
-                                replace(message, blocks=_user_blocks(content),
-                                        origin=message.origin or _origin(data.get("origin"))),
-                            ),
+                            messages=_replace_at(turn.messages, position, backfilled),
                             updated_ts=event.ts,
                         ),
                     )
@@ -1113,6 +1120,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             depth=_as_int(data.get("queue_depth"), len(queue) + 1),
             mode=_as_str(data.get("mode")) or "queue",
             origin=origin,
+            sent_ts=_opt_float(event.ts),
         )
         if item.mode == "interrupt":
             queue.insert(0, item)
@@ -1125,6 +1133,9 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     )
     pending_origin = next(
         (item.origin for item in queue if item.queued_id == queued_id), None
+    )
+    pending_sent_ts = next(
+        (item.sent_ts for item in queue if item.queued_id == queued_id), None
     )
     state = replace(state, input_queue=[item for item in queue if item.queued_id != queued_id])
     if event.type == "input.consumed":
@@ -1147,6 +1158,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                 iteration=turn.iteration,
                 done=True,
                 origin=_origin(data.get("origin")) or pending_origin,
+                sent_ts=pending_sent_ts if pending_sent_ts is not None else _opt_float(event.ts),
             )
             state = _put(
                 state,

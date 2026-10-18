@@ -1,12 +1,25 @@
 # Design overhaul: the native Ratatui client
 
-Status: steps 1–12, 14 and 15 are implemented. Verified now: `cargo test` (rust/tui) and
-`cargo build --release` pass, the full Python suite and `ruff check nexus tests` pass (`cargo test` 557 + 38 passed;
-pytest 6687 passed, 336 skipped, 6 deselected), and a PTY run with the splash on opened real sessions from the
-dashboard, typed text and left `~/.nexus/tui-panic.log` empty. Animations-off and Monochrome were
-reviewed for every step (ledger "Review pass"). Not verified: a PTY capture of queue
-promote/restore with a live running turn, the GPUI desktop client, the remaining open decisions
-(§2) and step 13.
+Status: complete (steps 1–12, 14 and 15 implemented and verified; step 13 is no-op CMP-0/SHL-0; user confirmed timestamp and restart splash fixes work; moved to `plans/done/`). Companion verification ledger: [DESIGN_OVERHAUL_VERIFICATION.md](DESIGN_OVERHAUL_VERIFICATION.md).
+Verified: `cargo test` (rust/tui) and `cargo build --release` pass, the full Python suite and `ruff check nexus tests` pass (`cargo test` 557 + 38 passed; pytest 6687 passed, 336 skipped, 6 deselected), and a PTY run with the splash on opened real sessions from the dashboard, typed text and left `~/.nexus/tui-panic.log` empty. Animations-off and Monochrome were reviewed for every step (ledger "Review pass"). User verified timestamps and restart splash live. Remaining non-blockers: PTY capture of queue promote/restore with a live running turn, the GPUI desktop client, remaining open decisions (§2).
+
+Honest fix ledger (post-review; user confirmed timestamp and restart splash fixes work):
+- User cards lacked the time. Root cause was `rust/tui/src/disclosure.rs`: the projection
+  that copies a user block for folded turns/local-ui listed fields explicitly and omitted
+  `sent_at`, so the card renderer (which was correct) never saw it. The earlier
+  `sent_ts` work in the view/projection was real but did not touch this. Fixed by copying
+  `sent_at`; regression test `a_projected_user_card_keeps_its_send_time`.
+- Splash step 3 (`{"startup":3}`) is now sent after `controller.bootstrap()` and the
+  client spawn, before the first update (`prototype.run`).
+- Waiting at 20% used to freeze (particle progress clamps to the bar). Now an idle sway
+  and a scan pulse run while `ready` is unreached; the percentage is not advanced
+  (tests `waiting_at_twenty_percent_keeps_moving_without_inventing_progress`,
+  `idle_sway_is_bounded_and_fades_near_the_target`).
+- Startup wire compatibility: lines are separate from snapshots, clamped to milestones
+  1..3, and ignored by a splash-less client path; an old client binary would try to parse
+  them as snapshots, which is acceptable only because the binary ships with the package.
+- User confirmation: timestamp and restart splash fixes confirmed working in live usage;
+  plan moved to `plans/done/`.
 
 Implementation ledger (review):
 - Step 1: implemented; reviewed agent color/optional metrics and fixed names to

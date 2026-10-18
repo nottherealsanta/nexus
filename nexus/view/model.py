@@ -88,6 +88,7 @@ def _dump(value: object) -> Any:
                 continue
             if item.name in {
                 "user_ts", "assistant_ts", "elapsed_ms", "completed_ts", "agent", "reasoning_effort",
+                "sent_ts",
             } and field_value is None:
                 continue
             if item.name == "ts" and isinstance(value, MessageView):
@@ -215,6 +216,9 @@ class MessageView(_View):
     done: bool = False
     #: Event timestamp used as the completed assistant message's durable bound.
     ts: float | None = None
+    #: When the user sent this message: the ``input.queued`` event time for a queued
+    #: submission, else the event that opened it. Absent for older recordings.
+    sent_ts: float | None = None
     #: Where a user message came from when not typed, e.g. ``{"kind": "live",
     #: "delegation_id": ...}`` for a GPT Live delegation (docs/live.md).
     origin: dict[str, Any] | None = None
@@ -391,6 +395,8 @@ class QueuedInputView(_View):
     content: list[Any] = field(default_factory=list)
     depth: int = 0
     origin: dict[str, Any] | None = None
+    #: The ``input.queued`` event time, carried onto the user message on consume.
+    sent_ts: float | None = None
 
 @dataclass
 class LiveTurnView(_View):

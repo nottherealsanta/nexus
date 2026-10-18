@@ -295,6 +295,24 @@ def _agent_card_metrics(agent) -> tuple[int | None, int | None]:
     return calls, tokens
 
 
+def _agent_card_external_tools(agent) -> int | None:
+    """Tools an external worker (Claude Code/Antigravity) ran in its own session.
+
+    Counted from the child's reduced ``external.tool`` rows (unique by ``call_id``, so
+    requested+completed never double count and replay matches live); a larger
+    ``external.finished.tool_calls`` wins when the transcript clipped rows. ``None`` for
+    native agents, which keep ``tool_calls``, and while nothing has been seen.
+    """
+    external = getattr(getattr(agent, "body", None), "external", None)
+    if not external:
+        return None
+    seen = sum(len(turn.tools) for turn in agent.body.turns)
+    reported = external.get("tool_calls")
+    if isinstance(reported, int) and not isinstance(reported, bool):
+        seen = max(seen, reported)
+    return seen or None
+
+
 def _fold_summary(turn) -> str:
     """The muted line under a folded turn's prompt: tool calls, tokens, model."""
     from ...ui_support.context import _compact_tokens
@@ -381,7 +399,10 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             if collapsed and rest:
                 first, rest = first + " …", ""
             from ...ui_support.timeline import _clock
-            block = {"sent_at": _clock(turn.user_ts), "id": message.id + ":user", "kind": "user", "title": first, "text": rest,
+            # Each message's own send time; only the turn's first card may fall back to the
+            # turn clock (older recordings), a steer never borrows it.
+            sent = message.sent_ts if message.sent_ts is not None else (None if numbered else turn.user_ts)
+            block = {"sent_at": _clock(sent), "id": message.id + ":user", "kind": "user", "title": first, "text": rest,
                      "number": 0 if numbered else number, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
@@ -489,7 +510,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                      "status": "running" if running else "done",
                      "model": model, "effort": effort, "tier": tier, "metrics": "",
                      "agent_name": agent_name, "task": phrase,
-                     "tool_calls": tool_calls, "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
+                     "tool_calls": tool_calls, "external_tool_calls": _agent_card_external_tools(child), "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
                      "color": _agent_color(shell, agent_name), "operation": operation,
                      "text": "", "detail": detail, "inspect_operation": inspect}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
@@ -1480,6 +1501,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             process = await asyncio.create_subprocess_exec(
                 str(binary), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024)
+        from .run import progress
+        await progress(process, 3)  # the session loaded: milestone 3, before the first snapshot
         shell.worktree = _worktree_name(workspace)
         shell.breadcrumb = str(workspace)  # the branch joins it when the doctor report arrives
         await update()

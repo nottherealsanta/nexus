@@ -1,5 +1,7 @@
 # Design overhaul integration verification
 
+Companion verification ledger for [DESIGN_OVERHAUL_PLAN.md](DESIGN_OVERHAUL_PLAN.md).
+
 Implementation pass for steps 4–15 (terminal and host/shared only) preserved pre-existing dirty changes. No commits or browser visual verification were performed.
 
 ## Executed checks
@@ -11,6 +13,10 @@ Implementation pass for steps 4–15 (terminal and host/shared only) preserved p
 - Native build: `cargo build` in `rust/tui` passed.
 - Native PTY Live test passed. Native splash and notifications PTY checks currently fail: splash raw ANSI stream does not contain contiguous `100%`; notifications drawer raw stream does not contain contiguous historical title. These need investigation with an ANSI screen emulator before calling them visual failures or verified successes. Tests have not been disabled.
 - Full Python suite was attempted with a 200-second process limit; it reached roughly 49% and was terminated by the limit, with two failures observed before final fixes. It is NOT a completed full-suite pass.
+
+## User acceptance
+
+- User confirmed timestamp and restart splash fixes work in live client usage.
 
 ## Remaining verification
 

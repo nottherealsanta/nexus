@@ -54,8 +54,17 @@ def test_splash_shows_wordmark_and_bar_then_wipes_into_the_chat(monkeypatch):
 
     try:
         # No snapshot yet: the loading bar answers the launch (the particles have not converged).
-        wait_for("%")
+        wait_for("20%")
         assert "Splash title" not in screen
+        # Regression: the bar sat at 20% until the first snapshot. Host progress lines move it
+        # without being parsed as snapshots (no chat, no error).
+        process.stdin.write(b'{"startup":2}\n')
+        process.stdin.flush()
+        wait_for("40%")
+        process.stdin.write(b'{"startup":3}\n')
+        process.stdin.flush()
+        wait_for("60%")
+        assert "Splash title" not in screen and process.poll() is None
         process.stdin.write((json.dumps({"schema": 1, "revision": 1, "status": "idle", "title": "Splash title"}) + "\n").encode())
         process.stdin.flush()
         # Bar completes, the particles settle into the wordmark, it flashes, the curtain wipes the chat in.
