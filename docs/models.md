@@ -114,7 +114,22 @@ Root route/effort metadata and context assembly expose these defaults.
 
 `ModelRouter.fallbacks` only *lists* the agent, tier, then global
 `model.fallback` chains; the loop decides when to try one
-([loop.md](loop.md#failure-handling)). Per-session `/model` and effort choices
+([loop.md](loop.md#failure-handling)).
+
+**Pinned model policy** (the manager session, [manager.md](manager.md)). A
+request whose metadata carries `model_policy = "pinned"` and `pinned_model =
+"provider/model"` resolves to exactly that route: no alias, tier, default or
+registry substitution, and `fallbacks` returns `[]` (agent, tier and
+`model.fallback` are all ignored). A request naming any other route, an
+unregistered provider or a missing model raises `ManagerModelUnavailable`; the
+provider is wrapped so a sign-in, quota or provider error also surfaces as
+`ManagerModelUnavailable` naming the exact `provider/model` and the sign-in hint,
+and the loop records it as a failed turn. Transient overload, malformed tool
+calls and capability rejections pass through unchanged, so the same-model
+retries and the `EndpointFallback` dialect retry still work. Effort stays the
+provider default. The manager is `github-copilot/gpt-6-luna` (a concrete
+reference, never a tier). The manager context also has no summarizer, so
+compaction and handoff never call a second model. Per-session `/model` and effort choices
 are durable (`model.selected`, `reasoning_effort.selected`).
 Explicit effort choices (including Default) are also remembered per concrete
 provider/model in bounded, best-effort machine state at
@@ -293,7 +308,7 @@ Subagent tier requests use these ordered model preferences. An explicitly config
 
 | Tier | Ordered route | Default reasoning effort |
 | --- | --- | --- |
-| `low` | `github-copilot/gpt-6-luna` → `openai-codex/gpt-6-luna` → `opencode-go/deepseek-v4.1-flash` | provider default |
+| `low` | `github-copilot/gpt-6-luna` → `codex/gpt-6-luna` → `opencode-go/deepseek-v4.1-flash` | provider default |
 | `medium` | `openai-codex/gpt-6.1-sol` → `opencode-go/deepseek-v4.1-flash` | `low` on Codex; `max` on DeepSeek |
 | `high` | `openai-codex/gpt-6.1-sol` → `claude-agent/claude-sonnet-5.5` | `low` on Codex; provider default on Claude |
 

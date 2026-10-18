@@ -1532,6 +1532,52 @@ tests and `tests/test_ratatui_pty_live.py` (real bridge, real binary, fake trans
 consent dialog, pane header, mute, card, hang up). No `live-call` mock scenario was added: mock scenarios
 script model responses, not `live.*` events. Real microphone and OpenAI behavior: not verified.
 
+## Manager entry (plan 02, native UI)
+
+Status: implemented and tested offline (Python, Rust unit tests, PTY); **the feature stays off by
+default (`[manager] enabled = false`) and is not soaked against real Copilot or GPT Live.** Backend
+and rules: [manager.md](manager.md). The terminal and the desktop client share one Python bridge
+(`nexus/ui/ratatui/manager.py`, presentation in `nexus/ui_support/manager.py`).
+
+- **Pinned entry.** The Sessions page (`≡`, `Ctrl+B`, `/sessions`) draws a Manager block between
+  the search rule and the roots, closed by a rule of its own: status glyph, `Manager`, `pinned · m opens`
+  (`pinned · open now` while it is the open session), a purple `Voice M` button, one status line
+  (`Ready · 2 sessions launched`, `Working`, `Needs you`, `Not signed in · sign in to GitHub Copilot under
+  Settings > Providers`, or `Off · [manager] enabled = false`), the pinned model with Live readiness
+  (`github-copilot/gpt-6-luna · Voice ready`; while off, how to enable it) and the cross-session
+  privacy line. It is never a row: it does not sort, filter, count in the chips or archive. A click on any
+  of its rows or `m` sends `manager_open`; the button or `M` sends `manager_live`. Older hosts send no
+  entry and `m` stays a filter letter. The snapshot field `manager` (and `dashboard.manager`) comes from
+  `ManagerState`, read at start, when the page opens and about every 30 s while it is open or the client
+  polls; a failed read (an older daemon) is shown as the entry's text, not hidden.
+- **Open.** `manager_open` / `/manager [open]` call `ManagerOpen` (idempotent), switch to the returned session
+  (tab titled `Manager`) and re-read the state. While off, nothing is created: a panel explains
+  `[manager] enabled = true` and the daemon restart. Signed out of Copilot still opens (the log is readable)
+  and warns with the exact fix. `/manager status` lists every `ManagerState` fact.
+- **Dedicated session.** While the manager is the open session (`manager.active`) the composer shows
+  `Manager · <model>` with no `/agent`, `/model` or `/effort` hit targets; `Shift+Tab`, `Ctrl+T` and the
+  leader `M/G/F` keys, `/model`, `/effort`, `/agent`, `/fork`, `/handoff` and `!` shell mode answer with a one-line
+  reason (the host refuses them too). The title and details sidebar read `Manager`, show `Kind` and the
+  pinned model, and drop the Agent/Effort rows.
+- **Live.** `manager_live` / `/manager live` open the manager, then run the ordinary `/live` bridge
+  (`LiveStart(manager id)`). The manager asks its **own** consent through `LiveConsent(scope="manager")`: a dialog
+  `Use GPT Live with the Manager?` that carries the base notice and the explicit cross-session text (titles, status,
+  final reports of other sessions, launch instructions go to OpenAI; confirmation stays on screen). The base notice
+  is asked first when missing; the daemon's `live_consent_required` reopens the dialog. `/live revoke manager` withdraws
+  only the cross-session notice. Ordinary sessions never ask it.
+- **Confirmation.** A manager `session_launch` / `session_cancel` permission request is drawn by
+  `ui_support/manager.py`: title `Launch a new session?` / `Stop a session the manager launched?`, the whole
+  instruction wrapped (up to 40 rows, a cut announced with the characters not shown), two choices only
+  (`y` launch / `n` do not launch; `y` stop / `n` keep running) and `Asked every time · this answer is never
+  remembered`. There is no always-allow, always-deny or `a`/`d` key, and answers outside the displayed choices are
+  rejected by the bridge. The prompt field `what_rows` (8) tells Rust to show more rows than the usual three; its
+  `why` is then a sentence, not `rule: …`. The line CLI prompt (`ui/cli/approve.py`) drops `[a]`/`never` for these
+  tools. Ordinary tools keep the four-way prompt.
+- Tests: `tests/test_manager_ui.py`, `tests/test_ratatui_manager.py`, `tests/test_ratatui_pty_manager.py`
+  (real binary: pinned block, `m`/`M`, disabled state, two-choice confirmation), Rust unit tests in
+  `render/sessions.rs`, `picker.rs`, `render/dialogs.rs`, `render.rs` and `bridge.rs`. Real terminals were not
+  inspected by eye.
+
 ### Antigravity visibility and safe discovery
 
 An installed `agy` is discovered without a handwritten provider section using a
@@ -1850,3 +1896,16 @@ in a real terminal.
   `main.rs` keeps the frame clock running while `Cache::folding()`. Animation off:
   no fold. A group first seen finished (reload, reconnect) never folds; one the user
   opened mid-fold shows its boxes.
+
+### Manager entry (Plan 02)
+
+`nexus manager` (or `nexus manager open`) opens the pinned workspace Manager in
+ratatui; `nexus manager status` is the non-interactive status command. These use
+HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
+pin Manager above ordinary sessions: press `m` in the terminal picker to jump
+back, or select Manager in the desktop picker. The active header says `◇ Manager`.
+Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+ask “What finished in the last two hours?” to find sessions, then use `/sessions`
+(or the desktop session picker) to open a result and return to Manager. Entry
+notes show launch/find guidance and provider/voice readiness. Live real-provider
+verification remains outstanding; offline UI tests do not establish it.

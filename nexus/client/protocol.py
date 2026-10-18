@@ -317,8 +317,14 @@ class Client:
             p.LiveHelperEvent(session=session, kind=kind, detail=detail)
         )  # type: ignore[return-value]
 
-    async def live_consent(self, accept: bool | None = None) -> p.LiveConsentResult:
-        return await self._request(p.LiveConsent(accept=accept))  # type: ignore[return-value]
+    async def live_consent(self, accept: bool | None = None, *, scope: str = "") -> p.LiveConsentResult:
+        return await self._request(p.LiveConsent(accept=accept, scope=scope))  # type: ignore[arg-type,return-value]
+
+    async def manager_open(self) -> p.ManagerOpenResult:
+        return await self._request(p.ManagerOpen())  # type: ignore[return-value]
+
+    async def manager_state(self) -> p.ManagerStateResult:
+        return await self._request(p.ManagerState())  # type: ignore[return-value]
 
     async def session_tree(self, session: str, namespace: str = "main") -> dict[str, Any]:
         result = await self._request(p.SessionTree(session=session, namespace=namespace))

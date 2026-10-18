@@ -2378,6 +2378,11 @@ mod native_tests {
                                 id: kind.into(),
                                 lines: vec![],
                                 choices: vec![],
+                                title: String::new(),
+                                since: 0.0,
+                                what: vec![],
+                                why: String::new(),
+                                what_rows: 0,
                             }),
                             ..Default::default()
                         },

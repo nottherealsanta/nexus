@@ -142,6 +142,9 @@ pub struct Snapshot {
     pub voice_level: f64,
     /// GPT Live call bar (empty object when no call is open).
     pub live: LiveBar,
+    /// The pinned Manager entry beside the sessions list (empty before the first host read);
+    /// `manager.active` is true while the open session is the manager.
+    pub manager: ManagerEntry,
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
@@ -287,6 +290,11 @@ pub struct Prompt {
     pub what: Vec<String>,
     #[serde(default)]
     pub why: String,
+    /// Rows of `what` to show before `… N more` (0 = the default four). A manager launch asks for
+    /// more so the whole instruction can be read before it is approved; its `why` is then a plain
+    /// sentence, not a rule.
+    #[serde(default)]
+    pub what_rows: usize,
 }
 #[derive(Deserialize)]
 pub struct Choice {
@@ -346,6 +354,42 @@ pub struct Session {
     pub repo: String,
     #[serde(default)]
     pub worktree: String,
+}
+
+/// The pinned Manager entry (docs/manager.md): a separate row above the ordinary roots in both
+/// native sidebars. Python writes every word; the clients only place and paint it.
+#[derive(Clone, Default, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct ManagerEntry {
+    /// The host answered `ManagerState`; false while it is still unread or the read failed.
+    pub known: bool,
+    pub enabled: bool,
+    /// The open session is the manager (the composer drops role/model/effort controls).
+    pub active: bool,
+    pub session: String,
+    /// `working`, `input` or `idle`: the glyph of the row.
+    pub status: String,
+    /// `ok`, `warn` or `off`: how the status line is toned.
+    pub tone: String,
+    pub model: String,
+    /// One line: `Ready · 2 sessions launched`, `Not signed in · …`, `Off · [manager] enabled = false`.
+    pub summary: String,
+    /// Detail lines under the summary (pinned model, sign-in fix, Live readiness).
+    pub notes: Vec<String>,
+    /// Whether a Live call on the manager can start now, and the line that says why not.
+    pub live: String,
+    pub live_ready: bool,
+    pub managed: u64,
+    pub can_open: bool,
+    /// The cross-session privacy line shown beside the Live button.
+    pub privacy: String,
+}
+
+impl ManagerEntry {
+    /// Whether the host reported anything: an unread entry draws no pinned row.
+    pub fn shown(&self) -> bool {
+        self.known || !self.summary.is_empty()
+    }
 }
 
 /// The GPT Live call bar: state of the call this client holds open.
@@ -867,6 +911,9 @@ impl Snapshot {
         if !present.contains_key("live") {
             self.live = std::mem::take(&mut previous.live);
         }
+        if !present.contains_key("manager") {
+            self.manager = std::mem::take(&mut previous.manager);
+        }
         if !present.contains_key("voice_level") {
             self.voice_level = std::mem::take(&mut previous.voice_level);
         }
@@ -1003,6 +1050,46 @@ mod restore_tests {
             serde_json::from_str(r#"{"restore":"t","restore_if_empty":true,"restore_attachments":2}"#)
                 .unwrap();
         assert_eq!(next.restore_attachments, 2);
+    }
+}
+
+#[cfg(test)]
+mod manager_tests {
+    use super::*;
+
+    #[test]
+    fn manager_entry_is_read_from_the_wire_and_retained_by_omission() {
+        let wire = r#"{"schema":3,"manager":{"known":true,"enabled":true,"active":true,
+            "session":"nexus-manager","status":"working","tone":"ok","summary":"Working",
+            "model":"github-copilot/gpt-6-luna","notes":["a","b"],"live":"Voice ready",
+            "live_ready":true,"managed":2,"can_open":true}}"#;
+        let first: Snapshot = serde_json::from_str(wire).unwrap();
+        assert!(first.manager.shown() && first.manager.active && first.manager.live_ready);
+        assert_eq!(first.manager.notes, ["a", "b"]);
+        assert_eq!(first.manager.managed, 2);
+        // A delta without the field keeps it; an empty object clears it.
+        let mut previous = first;
+        let omitted: serde_json::Map<String, Value> =
+            serde_json::from_str(r#"{"schema":3,"revision":2}"#).unwrap();
+        let mut next: Snapshot = serde_json::from_value(Value::Object(omitted.clone())).unwrap();
+        next.merge_missing(&mut previous, &omitted);
+        assert!(next.manager.active && next.manager.enabled);
+        let cleared: serde_json::Map<String, Value> =
+            serde_json::from_str(r#"{"schema":3,"revision":3,"manager":{}}"#).unwrap();
+        let mut gone: Snapshot = serde_json::from_value(Value::Object(cleared.clone())).unwrap();
+        gone.merge_missing(&mut next, &cleared);
+        assert!(!gone.manager.shown() && !gone.manager.active);
+        // Older hosts send no entry at all.
+        assert!(!Snapshot::default().manager.shown());
+    }
+
+    #[test]
+    fn prompt_what_rows_defaults_to_the_ordinary_layout() {
+        let prompt: Prompt = serde_json::from_str(
+            r#"{"kind":"permission","id":"p","lines":[],"choices":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(prompt.what_rows, 0);
     }
 }
 

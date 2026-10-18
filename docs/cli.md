@@ -152,3 +152,16 @@ transcript block, or Down from the last transcript block, focuses the list): Up/
 remove (a removed steering message returns, with its attachments, to an empty draft);
 **Alt+Up / Alt+Down** reorder queued rows; **Esc** leaves. The same controls show on the focused
 row as on the hovered one.
+
+### Manager entry (Plan 02)
+
+`nexus manager` (or `nexus manager open`) opens the pinned workspace Manager in
+ratatui; `nexus manager status` is the non-interactive status command. These use
+HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
+pin Manager above ordinary sessions: press `m` in the terminal picker to jump
+back, or select Manager in the desktop picker. The active header says `◇ Manager`.
+Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+ask “What finished in the last two hours?” to find sessions, then use `/sessions`
+(or the desktop session picker) to open a result and return to Manager. Entry
+notes show launch/find guidance and provider/voice readiness. Live real-provider
+verification remains outstanding; offline UI tests do not establish it.

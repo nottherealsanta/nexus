@@ -858,9 +858,27 @@ class LiveConsent(msgspec.Struct, tag=True, frozen=True):
 
     The consent covers sending microphone audio, summaries of the agent's work and a
     bounded excerpt of the session's conversation to OpenAI through the user's ChatGPT account (docs/security.md).
+
+    ``scope="manager"`` is the additional cross-session notice: a call on the manager
+    session also sends what the manager reads of *other* sessions (titles, status, final
+    reports). It needs the base consent too; recording it records both, revoking it
+    keeps the base. An empty scope is the base consent.
     """
 
     accept: bool | None = None
+    scope: Literal["", "manager"] = ""
+
+
+class ManagerOpen(msgspec.Struct, tag=True, frozen=True):
+    """Open or create the workspace's manager session (idempotent; docs/manager.md).
+
+    Refused unless ``[manager] enabled`` is true. The manager is a singleton of kind
+    ``manager`` in the main namespace; ``SessionList`` and the project index never list it.
+    """
+
+
+class ManagerState(msgspec.Struct, tag=True, frozen=True):
+    """Read the manager's id, pinned model, sign-in state and managed sessions (read-only)."""
 
 
 class Doctor(msgspec.Struct, tag=True, frozen=True):
@@ -1025,6 +1043,8 @@ Command = (
     | LiveStop
     | LiveHelperEvent
     | LiveConsent
+    | ManagerOpen
+    | ManagerState
     | Doctor
     | UpdateStatus
     | Health
@@ -1141,6 +1161,8 @@ COMMANDS: tuple[type, ...] = (
     LiveStop,
     LiveHelperEvent,
     LiveConsent,
+    ManagerOpen,
+    ManagerState,
     Doctor,
     UpdateStatus,
     Health,
@@ -1793,8 +1815,43 @@ class LiveStatusResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class LiveConsentResult(msgspec.Struct, tag=True, frozen=True):
+    """``accepted``/``accepted_at`` answer for the requested ``scope`` (the manager scope needs both)."""
+
     accepted: bool = False
     accepted_at: str = ""
+    scope: str = ""
+
+
+class ManagerOpenResult(msgspec.Struct, tag=True, frozen=True):
+    session: SessionSummary
+    #: True only for the call that created the session; every later call is False.
+    created: bool = False
+
+
+class ManagerStateResult(msgspec.Struct, tag=True, frozen=True):
+    """The manager's state. Never an error for a disabled or not-yet-created manager.
+
+    ``session`` is ``""`` until ``ManagerOpen`` created it. ``model`` is the pinned
+    route (no fallback of any kind). ``signed_in`` says whether GitHub Copilot, which
+    runs the manager, is connected; ``sign_in`` then names the exact fix. ``live_ready``
+    is the GPT Live side: Codex connected and the base and cross-session consents given.
+    """
+
+    enabled: bool = False
+    session: str = ""
+    state: str = ""
+    model: str = ""
+    provider: str = ""
+    signed_in: bool = False
+    sign_in: str = ""
+    codex_signed_in: bool = False
+    live_consent: bool = False
+    live_manager_consent: bool = False
+    live_ready: bool = False
+    #: Ids of the roots this manager launched (newest last), bounded.
+    managed: list[str] = msgspec.field(default_factory=list)
+    max_launches_per_turn: int = 3
+    max_live_managed: int = 8
 
 
 class LiveStartResult(msgspec.Struct, tag=True, frozen=True):
@@ -1960,6 +2017,8 @@ Result = (
     | LiveStartResult
     | LiveHelperEventResult
     | LiveConsentResult
+    | ManagerOpenResult
+    | ManagerStateResult
     | UpdateStatusResult
     | HealthResult
     | MockListResult
@@ -2056,6 +2115,8 @@ RESULTS: tuple[type, ...] = (
     LiveStartResult,
     LiveHelperEventResult,
     LiveConsentResult,
+    ManagerOpenResult,
+    ManagerStateResult,
     UpdateStatusResult,
     HealthResult,
     MockListResult,
@@ -2138,6 +2199,10 @@ __all__ = [
     "LogEntry",
     "LogsRead",
     "LogsReadResult",
+    "ManagerOpen",
+    "ManagerOpenResult",
+    "ManagerState",
+    "ManagerStateResult",
     "MockClean",
     "MockCleanResult",
     "MockList",

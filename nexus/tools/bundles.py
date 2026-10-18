@@ -23,6 +23,11 @@ __all__ = [
     "BUNDLES",
     "BUNDLE_NAMES",
     "DEFAULT_PROFILE",
+    "MANAGER_BUNDLE",
+    "MANAGER_PROFILE",
+    "MANAGER_TOOL_NAMES",
+    "RESERVED_BUNDLES",
+    "RESERVED_PROFILES",
     "PROFILES",
     "PROFILE_NAMES",
     "Bundle",
@@ -36,6 +41,22 @@ __all__ = [
     "profile_names",
     "profile_tools",
 ]
+
+
+#: The manager session's six tools, in model-facing order (plan 02 section 3.2).
+MANAGER_TOOL_NAMES: tuple[str, ...] = (
+    "sessions_find",
+    "session_launch",
+    "session_status",
+    "session_wait",
+    "session_result",
+    "session_cancel",
+)
+MANAGER_BUNDLE = "manager"
+MANAGER_PROFILE = "manager"
+#: Bundles and profiles that only the packaged manager session may use.
+RESERVED_BUNDLES = frozenset({MANAGER_BUNDLE})
+RESERVED_PROFILES = frozenset({MANAGER_PROFILE})
 
 
 class UnknownBundleError(ConfigError):
@@ -127,6 +148,13 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
             name="mcp",
             tools=(),
         ),
+        # Plan 02: the manager session's whole catalog. Reserved: no profile a
+        # user can select, no role and no extension may include this bundle;
+        # the runtime builds the manager catalog structurally from it.
+        "manager": Bundle(
+            name="manager",
+            tools=MANAGER_TOOL_NAMES,
+        ),
     }
 )
 
@@ -161,6 +189,9 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         ),
         "chat": Profile(name="chat", bundles=()),
         "ops": Profile(name="ops", bundles=("shell", "mcp")),
+        # Dedicated manager profile (reserved, see RESERVED_PROFILES): exactly
+        # the six manager tools; no MCP, skills, shell, fs or task bundle.
+        "manager": Profile(name=MANAGER_PROFILE, bundles=(MANAGER_BUNDLE,)),
     }
 )
 
@@ -196,7 +227,8 @@ def get_profile(name: str) -> Profile:
 
 
 def profile_names() -> tuple[str, ...]:
-    return tuple(PROFILES)
+    """The user-selectable profiles (reserved profiles are not listed)."""
+    return tuple(name for name in PROFILES if name not in RESERVED_PROFILES)
 
 
 def profile_tools(name: str) -> frozenset[str]:

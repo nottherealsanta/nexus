@@ -47,9 +47,16 @@ inward-only exceptions. Errors are
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
-| Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` ([live.md](live.md#host-commands)) |
+| Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
+| Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Copilot/Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
+
+The manager session (kind `manager`, id `nexus-manager`) is never listed by
+`SessionList`, `ProjectSessionsList` or the archive commands; `ManagerState` returns its id.
+`archive`, `delete`, `fork`, `SessionShell`, `ModelSelect`, `ReasoningEffortSelect`,
+`AgentSelect`/`AgentReset`, `SessionHandoff` and the skill/MCP selectors refuse it, and every
+operation on it fails while `[manager] enabled = false`.
 
 The browser may send any command except `Shutdown` and `WebLaunch`.
 Streaming is the one verb a request/response cannot model: `SessionSubscribe`
@@ -179,6 +186,12 @@ is cancelled and as the first frame of every follow subscription, so a reconnect
 client learns the state from supervisor state rather than only from past events.
 `SessionController.slot_wait` mirrors it. No new command: it is derived, never durable.
 
+**`lent_slot`.** `Supervisor.lent_slot(session)` is an async context manager for a turn that
+only waits on other sessions (the manager's `session_wait`, [manager.md](manager.md)). Inside
+it the session stays active but does not count in `slots_used`, and parked turns start at
+once; on exit it takes the slot back without queueing, so it may exceed the cap by one turn
+until another turn ends, and nothing new starts while `slots_used` is at or over the cap.
+
 `Presence`: a subscriber *count*, not identity. `attended` = any view attached;
 a view that disconnects mid-turn applies the session's unattended policy instead
 of blocking forever. `claim`/`release` implement first-responder leases for
@@ -254,7 +267,8 @@ Read-only projections and helpers kept out of `host/`:
 | `setup.py`, `provider_auth.py` | first-run setup and provider sign-in ([models.md](models.md#authentication)) |
 | `doctor.py` | redacted, bounded-output health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session; the largest-logs rows aggregate all of the project's records (output bounded, scan cost not); the `quick_check`, tail scan and aggregate are cached per store for 10 min (`HEAVY_TTL`) and can be costly on a large store |
 | `voice.py` | voice dispatch and Doctor projection ([voice.md](voice.md)) |
-| `live.py` | `Live*` dispatch and `FacadeLiveHost`, the manager's per-call seam ([live.md](live.md)) |
+| `live.py`, `live_consent.py` | `Live*` dispatch and `FacadeLiveHost`, the call manager's per-call seam ([live.md](live.md)); the once-per-machine consent with its separate cross-session `manager` scope |
+| `manager_port.py` | `HostManagerPort` (the workspace-manager session's tool seam) and `FacadeManagerHost` (starts and cancels its roots through the facade) ([manager.md](manager.md)) |
 | `mock.py` | `Mock*` dispatch (dev mode) |
 | `update_check.py` | "X.Y.Z available" notice, cached daily in `~/.nexus/cache/update-check.json`; off with `NEXUS_NO_UPDATE_CHECK=1`, `[updates] check = false`, `CI` or an editable install ([release.md](release.md)) |
 | `install.py` | install method detection, `uv` lookup, daemon hygiene for `nexus update` |

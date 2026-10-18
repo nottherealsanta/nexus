@@ -196,6 +196,122 @@ fn status_chips(
 
 type RowLine = (Line<'static>, Option<usize>, Option<String>);
 
+/// Word-wrap `text` to at most `max` rows of `width` columns; a cut is announced with `…`.
+fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split_whitespace() {
+        let word = if word.width() > width {
+            fit(word, width)
+        } else {
+            word.to_owned()
+        };
+        if !row.is_empty() && row.width() + 1 + word.width() > width {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(&word);
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    if rows.len() > max {
+        rows.truncate(max);
+        if let Some(last) = rows.last_mut() {
+            let marked = format!("{last} …");
+            *last = fit(&marked, width);
+        }
+    }
+    rows
+}
+
+/// The pinned Manager entry above the roots (docs/manager.md): title row with the `Voice M`
+/// button, the one-line status (off / not signed in / ready), the pinned model with Live
+/// readiness, the cross-session privacy line, then a closing rule. Empty when the host sent no
+/// entry. Returns the rows and the `(column, width)` of the `Voice M` button within them.
+fn manager_band(
+    dashboard: &Value,
+    colors: &Colors,
+    width: usize,
+    spin: usize,
+) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
+    if !crate::picker::has_manager(dashboard) {
+        return (Vec::new(), None);
+    }
+    let Some(entry) = dashboard
+        .get("manager")
+        .and_then(|value| serde_json::from_value::<crate::bridge::ManagerEntry>(value.clone()).ok())
+    else {
+        return (Vec::new(), None);
+    };
+    let quiet = Style::default().fg(colors.quiet);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut title = vec![
+        status_glyph(&entry.status, colors, spin),
+        Span::raw(" "),
+        Span::styled(
+            "Manager",
+            Style::default()
+                .fg(colors.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if entry.active {
+                "  pinned · open now"
+            } else {
+                "  pinned · m opens"
+            },
+            quiet,
+        ),
+    ];
+    let mut voice = None;
+    let label = "Voice M";
+    let used = spans_width(&title);
+    if entry.enabled && width > used + label.width() + 1 {
+        title.push(Span::raw(" ".repeat(width - used - label.width())));
+        title.push(Span::styled(label, Style::default().fg(colors.purple)));
+        voice = Some((width - label.width(), label.width()));
+    }
+    lines.push(Line::from(title));
+    let tone = match entry.tone.as_str() {
+        "warn" => colors.warning,
+        "off" => colors.quiet,
+        _ => colors.muted,
+    };
+    for row in wrap(&entry.summary, width.saturating_sub(2), 2) {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(row, Style::default().fg(tone)),
+        ]));
+    }
+    let detail = if entry.enabled {
+        let mut parts = vec![entry.model.clone()];
+        if !entry.live.is_empty() {
+            parts.push(entry.live.clone());
+        }
+        parts.join(" · ")
+    } else {
+        entry.notes.first().cloned().unwrap_or_default()
+    };
+    let mut rest = vec![detail];
+    if entry.enabled && !entry.privacy.is_empty() {
+        rest.push(entry.privacy.clone());
+    }
+    for text in rest {
+        for row in wrap(&text, width.saturating_sub(2), 2) {
+            lines.push(Line::from(vec![Span::raw("  "), Span::styled(row, quiet)]));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(colors.border),
+    )));
+    (lines, voice)
+}
+
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
@@ -236,6 +352,8 @@ pub fn draw_at(
     state.new_hit = Rect::default();
     state.worktree_hit = Rect::default();
     state.choose_hit = Rect::default();
+    state.manager_hit = Rect::default();
+    state.manager_live_hit = Rect::default();
     if area.height < 4 || area.width < 12 {
         return;
     }
@@ -476,9 +594,13 @@ pub fn draw_at(
             None,
         ));
     }
+    // The pinned Manager sits between the search rule and the roots, with a rule of its own, so
+    // it is never mistaken for (or sorted among) an ordinary session.
+    let (manager_lines, manager_voice) = manager_band(dashboard, colors, width, spin);
+    let manager_h = manager_lines.len() as u16;
     // Size the page to its content (header bands, list, footer, border), centered on screen
     // with at least one blank row above and below when the screen is tall enough.
-    let chrome = 6 + u16::from(footer.is_some()) + 2;
+    let chrome = 6 + manager_h + u16::from(footer.is_some()) + 2;
     let margin = if screen.height > chrome + 2 { 1 } else { 0 };
     let page_height = ((lines.len() + 1).min(usize::from(u16::MAX)) as u16)
         .saturating_add(chrome)
@@ -517,8 +639,11 @@ pub fn draw_at(
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Min(1),
     ];
+    if manager_h > 0 {
+        constraints.push(Constraint::Length(manager_h));
+    }
+    constraints.push(Constraint::Min(1));
     if footer.is_some() {
         constraints.push(Constraint::Length(1));
     }
@@ -526,7 +651,24 @@ pub fn draw_at(
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area);
-    let list_band = 6;
+    let list_band = 6 + usize::from(manager_h > 0);
+    if manager_h > 0 {
+        let band = bands[6];
+        frame.render_widget(Paragraph::new(manager_lines), band);
+        // Every row but the closing rule opens the Manager; `Voice M` starts a call there.
+        state.manager_hit = Rect {
+            height: band.height.min(manager_h.saturating_sub(1)),
+            ..band
+        };
+        if let Some((offset, voice_width)) = manager_voice {
+            state.manager_live_hit = Rect {
+                x: band.x + offset as u16,
+                y: band.y,
+                width: voice_width as u16,
+                height: band.height.min(1),
+            };
+        }
+    }
     frame.render_widget(Paragraph::new(Line::from(header)), bands[0]);
     frame.render_widget(Paragraph::new(Line::from(actions)), bands[2]);
     if show_hint {
@@ -643,7 +785,7 @@ pub fn draw_at(
         list,
     );
     if let Some(line) = footer {
-        frame.render_widget(Paragraph::new(line), bands[7]);
+        frame.render_widget(Paragraph::new(line), bands[list_band + 1]);
     }
 }
 
@@ -946,6 +1088,132 @@ mod tests {
         );
         // Other rows stay one line.
         assert!(!l[at(&l, "Busy") + 1].contains("Enter open"));
+    }
+
+    fn with_manager(entry: Value) -> Value {
+        let mut dashboard = sample();
+        dashboard["manager"] = entry;
+        dashboard
+    }
+
+    fn ready_manager() -> Value {
+        json!({
+            "known": true, "enabled": true, "tone": "ok", "status": "idle",
+            "session": "nexus-manager", "model": "github-copilot/gpt-6-luna",
+            "summary": "Ready · 2 sessions launched", "live": "Voice ready", "live_ready": true,
+            "privacy": "Voice calls also share other sessions' titles, status and reports with OpenAI",
+        })
+    }
+
+    #[test]
+    fn pinned_manager_sits_between_the_search_and_the_roots_and_is_not_a_row() {
+        let mut state = Dashboard::default();
+        let screen = render(100, 40, &with_manager(ready_manager()), &mut state);
+        let l = lines_of(&screen);
+        let (search, manager, first_group) = (
+            at(&l, "/ Search sessions"),
+            at(&l, "◇ Manager"),
+            at(&l, "▾ Needs you"),
+        );
+        assert!(search < manager && manager < first_group, "{screen}");
+        assert!(
+            l[manager].contains("pinned · m opens") && l[manager].contains("Voice M"),
+            "{}",
+            l[manager]
+        );
+        assert!(screen.contains("Ready · 2 sessions launched"), "{screen}");
+        assert!(
+            screen.contains("github-copilot/gpt-6-luna") && screen.contains("Voice ready"),
+            "model and Live readiness are visible: {screen}"
+        );
+        assert!(
+            screen.contains("share other sessions' titles"),
+            "the cross-session privacy line is visible: {screen}"
+        );
+        // A rule of its own closes the pinned entry before the first group.
+        assert!(
+            l[manager + 1..first_group].iter().any(|row| row.contains("────")),
+            "{screen}"
+        );
+        // Ordinary roots keep their own rows; the manager is never one of them.
+        assert_eq!(
+            state.line_rows.iter().flatten().copied().collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(state.manager_hit.width > 0 && state.manager_live_hit.width > 0);
+        assert_eq!(state.manager_live_hit.y, state.manager_hit.y);
+        let (x, y) = (state.manager_hit.x + 2, state.manager_hit.y);
+        assert_eq!(
+            state.click(x, y, &with_manager(ready_manager())),
+            Some(json!({"kind":"manager_open"}))
+        );
+        let (x, y) = (state.manager_live_hit.x, state.manager_live_hit.y);
+        assert_eq!(
+            state.click(x, y, &with_manager(ready_manager())),
+            Some(json!({"kind":"manager_live"}))
+        );
+    }
+
+    #[test]
+    fn a_disabled_manager_says_so_and_how_to_turn_it_on_without_a_voice_button() {
+        let mut state = Dashboard::default();
+        let entry = json!({
+            "known": true, "enabled": false, "tone": "off", "status": "idle",
+            "summary": "Off · [manager] enabled = false",
+            "notes": ["Turn it on with [manager] enabled = true in nexus.toml, then restart the daemon."],
+        });
+        let screen = render(100, 40, &with_manager(entry.clone()), &mut state);
+        assert!(screen.contains("◇ Manager"), "{screen}");
+        assert!(screen.contains("Off · [manager] enabled = false"), "{screen}");
+        assert!(screen.contains("enabled = true in nexus.toml"), "{screen}");
+        assert!(!screen.contains("Voice M"), "no voice while off: {screen}");
+        assert_eq!(state.manager_live_hit.width, 0);
+        // The row still answers: opening it explains why it is off.
+        let (x, y) = (state.manager_hit.x, state.manager_hit.y);
+        assert_eq!(
+            state.click(x, y, &with_manager(entry)),
+            Some(json!({"kind":"manager_open"}))
+        );
+    }
+
+    #[test]
+    fn a_manager_without_copilot_shows_the_exact_sign_in_fix() {
+        let mut state = Dashboard::default();
+        let entry = json!({
+            "known": true, "enabled": true, "tone": "warn", "status": "idle",
+            "model": "github-copilot/gpt-6-luna", "live": "Voice ready",
+            "summary": "Not signed in · sign in to GitHub Copilot under Settings > Providers",
+        });
+        let screen = render(100, 40, &with_manager(entry), &mut state);
+        assert!(screen.contains("Not signed in"), "{screen}");
+        assert!(screen.contains("Providers"), "{screen}");
+        assert!(screen.contains("github-copilot/gpt-6-luna"), "{screen}");
+    }
+
+    #[test]
+    fn no_manager_entry_draws_no_pinned_row() {
+        let mut state = Dashboard::default();
+        let screen = render(100, 40, &sample(), &mut state);
+        assert!(!screen.contains("Manager") && !screen.contains("Voice M"));
+        assert_eq!(state.manager_hit.width, 0);
+        // An unread entry (no `known`, no summary) draws nothing either.
+        let screen = render(100, 40, &with_manager(json!({})), &mut state);
+        assert!(!screen.contains("Manager"));
+    }
+
+    #[test]
+    fn the_pinned_manager_survives_a_small_terminal() {
+        let mut state = Dashboard::default();
+        let screen = render(50, 16, &with_manager(ready_manager()), &mut state);
+        assert!(screen.contains("Manager"), "{screen}");
+    }
+
+    #[test]
+    fn wrap_announces_a_cut() {
+        assert_eq!(wrap("one two three", 7, 5), ["one two", "three"]);
+        let cut = wrap("one two three four five six", 7, 2);
+        assert_eq!(cut.len(), 2);
+        assert!(cut[1].ends_with('…') && cut[1].width() <= 7, "{cut:?}");
     }
 
     #[test]

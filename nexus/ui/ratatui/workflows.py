@@ -630,6 +630,13 @@ class Workflows(TierPages, SpeakPages):
             await self.shell.command("/new", ())
             if text.strip():
                 await self.shell.submit(text)
+        elif kind in {"manager_open", "manager_live"}:
+            # The pinned Manager entry: `ManagerOpen` through the shared manager bridge. The dashboard
+            # stays up until the switch succeeded (or says why the manager is off).
+            if kind == "manager_live":
+                await self.shell.manager.live()
+            else:
+                await self.shell.manager.open()
         elif kind == "session_open":
             # The dashboard stays up until the switch succeeds, so a failed open leaves it (and the
             # error toast) in place; `switch` hides it.

@@ -126,12 +126,41 @@ Evaluation is first-match in a fixed order: **`deny` → session grants → `all
 | `mcp` | bridged MCP tools (names `mcp__<server>__<tool>`) |
 | `legacy_fs` | `ls` `multiedit` (opt-in) |
 | `legacy_shell` | `BashOutput` `KillShell` (opt-in) |
+| `manager` | `sessions_find` `session_launch` `session_status` `session_wait` `session_result` `session_cancel` (reserved, see below) |
 
 Profiles: `coding` (default: fs, patch, shell, task, web, ext, mcp),
 `coding_meta` (+ meta), `research` (read-only: drops every `mutates` tool,
 including dynamic MCP ones), `chat` (none), `ops` (shell, mcp). An unknown
 profile **fails closed** with an error. Permission `Bundle:shell` / `Bundle:fs`
 also cover their legacy twins (historical rules).
+
+### Manager bundle and profile (reserved)
+
+`manager` is both a bundle and a profile (`MANAGER_PROFILE`, in `PROFILES` but
+not in `profile_names()`), used only by the packaged manager session
+([manager.md](manager.md)). Roles cannot name the bundle, the `manager` profile
+or the `manager` context (the frontmatter grammar rejects them), and
+`config.agent.profile = "manager"` would select a profile whose tools no ordinary
+catalog contains.
+
+The six tools live in `manager_tools.py` and are bound to a `ManagerPort` by
+`build_manager_catalog(port)`. The runtime builds that catalog **structurally**
+(`Runtime._make_manager_tool_turn`): nothing from the manifest, MCP, skills,
+extensions, hooks or the built-in catalog is merged in, and an injected
+`tool_factory`, `ToolManager` or `PermissionEngine` never serves a manager
+session. Bounds enforced in the tools: `session_launch` instruction ≤ 16 KiB
+(UTF-8), required `origin_message_id` (a user message id; the host port checks
+provenance), optional `agent` ≤ 64 and `title` ≤ 160 chars, **no model
+override**; `session_wait` ≤ 20 ids and ≤ 600 s; `session_cancel` reason ≤ 256
+chars. The host port enforces visibility, provenance, launch caps and
+cancel-only-what-it-launched.
+
+Permissions are a fresh `PermissionEngine` per manager turn: mode `deny`, the
+four read tools allowed by name, `session_launch` and `session_cancel` forced to
+ask ahead of any grant or rule (the approval key is the exact instruction /
+target), `on_unattended = "deny"`, and the session's own unattended fallback is
+pinned to deny for the turn. Session grants and `[permissions]` rules are never
+read, so nothing pre-approves a launch.
 
 ## Built-in tools
 

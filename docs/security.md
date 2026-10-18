@@ -182,6 +182,14 @@ widened what leaves the machine, the consent notice version was raised to 2: a
 version 1 record counts as not given and the notice is shown again. Whether the
 real service accepts or truncates instructions of this size is **not verified**.
 
+A call on the **manager session** ([manager.md](manager.md)) widens that again: the excerpt then
+holds what the manager read of *other* sessions (titles, status, final reports, up to 16 KiB per
+result). That is a second consent, recorded in the same file with its own version
+(`LiveConsent` with `scope="manager"`, needs the base record; revoking the base removes both).
+The daemon refuses `LiveStart` on the manager without it (`live_consent_required`) and refuses
+it while `[manager] enabled = false` (`manager_disabled`). Existing base consent stays valid
+for ordinary calls. Not verified against the real service.
+
 ## Outbound HTTP (`net/`)
 
 `SafeOutboundHTTPService` validates the URL, resolves the host **once** per socket,

@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ...ui.cli import open_client
+from ...ui_support import manager as manager_ui
+from ...ui_support.manager import MANAGER_MODEL_REF
 from ...ui_support.prompts import approval_choices, pending_questions
 from .actions import ShellActions, labelled
 from .permission_prompt import permission_fields
@@ -707,6 +709,13 @@ def _details_panel(controller, view, shell):
         except (TypeError, ValueError, OverflowError, OSError):
             return "unavailable"
     selected = next((row for row in getattr(shell, "sessions", []) if row["id"] == getattr(controller, "session", view.session_id)), {})
+    manager = getattr(shell, "manager", None)
+    if manager is not None and manager.is_active(getattr(controller, "session", view.session_id)):
+        # The manager has no role or effort and a pinned model: say so instead of showing the ordinary defaults.
+        selected = {"title": "Manager"}
+        rows = [("Kind", "Manager · pinned model, no role, shell or fork"),
+                *[(label, MANAGER_MODEL_REF if label == "Model" else value)
+                  for label, value in rows if label not in {"Agent", "Effort"}]]
     rows = [("ID", str(getattr(controller, "session", view.session_id))),
             ("Title", selected.get("title") or getattr(controller, "title", None) or "Untitled"), *rows,
             ("Provider", getattr(controller, "provider", None) or "unavailable"),
@@ -982,6 +991,9 @@ def _child_turn_blocks(shell, agent, turn, flags):
 
 def _session_title(session_id: str, shell=None) -> str:
     """Use the host's session summary, never the opaque session identifier."""
+    manager = getattr(shell, "manager", None)
+    if manager is not None and manager.is_active(session_id):
+        return "Manager"
     for row in getattr(shell, "sessions", ()):
         if row.get("id") == session_id:
             return escape_controls(row.get("title") or "New session")
@@ -1073,12 +1085,17 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     pending_permissions = _guarded(failures, "Permission prompt", lambda: permissions(view), [])
     if pending_permissions:
         permission = pending_permissions[0]
+        data = permission.to_dict()
+        # A manager launch/cancel is confirmed unconditionally: Allow/Deny once only, never "always",
+        # and the whole instruction is shown (nothing is remembered for it).
+        confirmed = manager_ui.is_confirmed(data)
         prompt = {"kind": "permission", "id": permission.id,
-                  "lines": labelled(permission.to_dict()),
+                  "lines": labelled(data),
                   **_guarded(failures, "Permission details", lambda: permission_fields(permission), {}),
+                  **(manager_ui.confirmation(data) if confirmed else {}),
                   "choices": [{"label": choice.label, "value": choice.value,
                                "key": choice.key, "disabled": choice.disabled}
-                              for choice in approval_choices(permission.to_dict())]}
+                              for choice in (manager_ui.approval_choices if confirmed else approval_choices)(data)]}
     elif questions := pending_questions(view):
         question = questions[0]
         prompt = {"kind": "question", "id": question.call_id,
@@ -1098,6 +1115,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         blocks.append({"id": "notice", "title": "Notice", "text": escape_controls(notice), "kind": "literal"})
     display_view = _context_display_view(view, shell)
     used, window, _measured = context_measure(display_view)
+    manager_entry = _guarded(failures, "Manager", lambda: shell.manager.entry(), {}) if shell and getattr(shell, "manager", None) else {}
     snapshot = {"schema": 1, "revision": revision, "title": _session_title(view.session_id, shell),
             "status": view.phase,
             "panel_layout": shell.panel_layout if shell else "modal",
@@ -1133,7 +1151,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
             ),
             "provider": getattr(controller, "provider", None) or "",
-            "effort": getattr(controller, "reasoning_effort", None) or "default",
+            "effort": "" if manager_entry.get("active") else getattr(controller, "reasoning_effort", None) or "default",
             "theme": shell.preferences.values["theme"] if shell else "nexus-dark",
             "sessions_sidebar": shell.preferences.values["sessions_sidebar"] if shell else True,
             "details_sidebar": shell.preferences.values["details_sidebar"] if shell else True,
@@ -1180,10 +1198,11 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                                    if shell and shell.composer_restore and shell.composer_restore == shell.composer_restore_if_empty else 0,
             "restore_note": escape_controls(shell.composer_restore_note)
                             if shell and shell.composer_restore and shell.composer_restore == shell.composer_restore_if_empty else "",
-            "agent": getattr(controller, "agent_name", "build"),
+            "agent": "manager" if manager_entry.get("active") else getattr(controller, "agent_name", "build"),
             "model": escape_controls(
                 (shell.model_names.get((getattr(controller, "provider", None) or "", getattr(controller, "model", None) or "")) if shell else None)
                 or getattr(controller, "model", None) or "default"),
+            "manager": manager_entry,
             "attachments": len(shell.attachments) if shell else 0,
             "lines": lines}
     if shell and shell.workflows.agent_page_id:
@@ -1404,7 +1423,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     startup_task = None
     def polled_state():
         """Everything one poll cycle can change, as a comparable text; unchanged means no repaint."""
-        return repr((shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
+        return repr((shell.manager.state, shell.manager.error,
+                     shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
                      shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines))
@@ -1478,8 +1498,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             async def logs():
                 if shell.logs.open and shell.logs.visible:
                     await shell.logs.poll()
+            async def manager():
+                if shell.manager.due():
+                    await shell.manager.refresh()  # failures are kept as the entry's text, never raised
             for label, work in (("Sessions", sessions), ("Branch", lambda: refresh_branch(shell)), ("Dictation", dictation),
-                                ("Health", health), ("Context", context), ("Logs", logs)):
+                                ("Health", health), ("Context", context), ("Logs", logs), ("Manager", manager)):
                 await section(label, work)
             if failures:
                 shell.notice = "; ".join(failures)
@@ -1535,7 +1558,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await work()
                 await update(immediate=False)
 
-            await asyncio.gather(step(breadcrumb), step(model_names), step(setup), return_exceptions=True)
+            async def manager():
+                await shell.manager.refresh()  # the pinned entry and the manager chat chrome
+
+            await asyncio.gather(step(breadcrumb), step(model_names), step(setup), step(manager), return_exceptions=True)
 
         startup_task = asyncio.create_task(finish_startup())
         poll_task = asyncio.create_task(poll())
@@ -1715,6 +1741,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         else: favorites.append(ref)
                         shell.preferences.set("model_favorites", favorites)
                         await shell.command("/model", ())
+                elif action["type"] in {"cycle_effort", "cycle_agent"} and shell.manager.is_active():
+                    raise ValueError(manager_ui.REFUSED_COMMANDS["/effort" if action["type"] == "cycle_effort" else "/agent"])
+                elif action["type"] in {"manager_open", "manager_live"}:
+                    await (shell.manager.live() if action["type"] == "manager_live" else shell.manager.open())
                 elif action["type"] == "cycle_effort":
                     levels = [None, *controller.supported_levels]
                     index = levels.index(controller.reasoning_effort) if controller.reasoning_effort in levels else 0

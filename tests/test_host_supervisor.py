@@ -621,3 +621,56 @@ async def test_cancelling_a_parked_session_announces_the_wait_is_over():
     last = [data for kind, data in events if data.get("session") == "b"][-1]
     assert last["slot_wait"] is None
     await drive(sup, a, b)
+
+
+async def test_waiting_turn_lends_its_slot_so_the_child_runs_at_cap_one():
+    """The manager's session_wait must not starve the session it waits for (plan 02)."""
+    sup = Supervisor(max_concurrent=1)
+    clock = _Clock()
+    manager, child = _FakeSession("manager", clock), _FakeSession("child", clock)
+    await sup.submit("manager", manager, "start work")
+    await sup.submit("child", child, "the launched work")
+    assert child.started == [] and sup.slots_used == 1  # parked behind the waiting manager
+
+    async with sup.lent_slot("manager"):
+        assert child.active  # the lent slot let it start
+        assert sup.slots_used == 1 and sup.running == 2
+        child.finish()
+        await wait_for(lambda: not child.active)
+        assert sup.slots_used == 0
+    assert manager.active and sup.slots_used == 1  # the manager resumes without queueing
+    await drive(sup, manager, child)
+    assert clock.order == ["+manager", "+child", "-child", "-manager"]
+
+
+async def test_resumed_turn_may_exceed_the_cap_by_one_but_nothing_else_starts():
+    sup = Supervisor(max_concurrent=1)
+    clock = _Clock()
+    manager, child, other = (_FakeSession(n, clock) for n in ("manager", "child", "other"))
+    await sup.submit("manager", manager, "go")
+    await sup.submit("child", child, "work")
+    await sup.submit("other", other, "later")
+    async with sup.lent_slot("manager"):
+        assert child.active and not other.active
+    assert sup.slots_used == 2 and not other.active  # over the cap by the resumed turn only
+    child.finish()
+    await wait_for(lambda: not child.active)
+    assert not other.active  # still at the cap: the manager's turn holds the slot again
+    manager.finish()
+    await wait_for(lambda: other.active)
+    await drive(sup, manager, child, other)
+
+
+async def test_lent_slot_is_a_noop_without_an_active_turn_and_is_released_on_error():
+    sup = Supervisor(max_concurrent=1)
+    clock = _Clock()
+    async with sup.lent_slot("ghost"):
+        assert sup.slots_used == 0
+    manager = _FakeSession("manager", clock)
+    await sup.submit("manager", manager, "go")
+    with pytest.raises(RuntimeError):
+        async with sup.lent_slot("manager"):
+            assert sup.slots_used == 0
+            raise RuntimeError("wait failed")
+    assert sup.slots_used == 1
+    await drive(sup, manager)

@@ -537,6 +537,17 @@ Records are authenticated and held under a service-root lock.
 CLI: `nexus worktrees list|inspect|review|acknowledge|integrate|discard`; chat:
 `/worktrees`. Both UIs share one confirmation flow.
 
+## The manager is not a role
+
+The workspace manager ([manager.md](manager.md)) is deliberately **not** a role
+file. Its prompt (`agents/manager_prompt.py`, `MANAGER_PROMPT`), pinned model
+(`github-copilot/gpt-6-luna`) and six-tool catalog are packaged constants, so
+no user, project or extension file can extend or replace it. The grammar
+rejects `contexts: [manager]`, `bundles: [manager]` and `profile: manager`
+(reserved), and a session of kind `manager` ignores root-agent selection
+(`select_session_agent` and `select_session_model` refuse it). Agent
+`fallback`, `tiers` and `model` are never applied to it.
+
 ## Changing agents
 
 - Adding a packaged role: add `data/<name>.md`, list it in `SEEDED_ROLES`, and

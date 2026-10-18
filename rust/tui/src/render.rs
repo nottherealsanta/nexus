@@ -5271,8 +5271,15 @@ struct ControlLayout {
     context_start: usize,
 }
 fn control_layout(s: &Snapshot, width: usize) -> ControlLayout {
-    let mut provider = !s.provider.is_empty();
-    let mut effort = !s.effort.is_empty();
+    // The manager session has no role, model choice or effort: its labels are shown, not clickable.
+    let manager = s.manager.active;
+    let (agent_command, model_command) = if manager {
+        ("", "")
+    } else {
+        ("/agent", "/model")
+    };
+    let mut provider = !s.provider.is_empty() && !manager;
+    let mut effort = !s.effort.is_empty() && !manager;
     let mut numbers: Vec<&str> = s
         .context_label
         .split(" · ")
@@ -5287,7 +5294,7 @@ fn control_layout(s: &Snapshot, width: usize) -> ControlLayout {
         if let Some(first) = agent.get_mut(0..1) {
             first.make_ascii_uppercase();
         }
-        let mut left = vec![(agent, "/agent"), (s.model.clone(), "/model")];
+        let mut left = vec![(agent, agent_command), (s.model.clone(), model_command)];
         if provider {
             left[1].0 += &format!(" {}", s.provider);
         }
@@ -5359,7 +5366,7 @@ pub fn composer_control_at(area: Rect, s: &Snapshot, x: u16, y: u16) -> Option<&
     for (text, command) in layout.left {
         let end = start.saturating_add(text.width() as u16);
         if x >= start && x < end {
-            return Some(command);
+            return (!command.is_empty()).then_some(command);
         }
         start = end + 3;
     }
@@ -5391,6 +5398,25 @@ mod composer_control_tests {
                 assert_eq!(composer_control_at(area, &s, x, y), Some(command));
                 assert_eq!(composer_control_at(area, &s, x, y + 1), None);
             }
+        }
+    }
+
+    #[test]
+    fn manager_session_has_no_role_model_or_effort_controls() {
+        let mut s = Snapshot::default();
+        s.agent = "manager".into();
+        s.model = "gpt-6-luna".into();
+        s.provider = "github-copilot".into();
+        s.effort = "high".into();
+        s.manager.active = true;
+        let area = Rect::new(0, 15, 100, 12);
+        let y = composer_rows(area, &s)[2].y;
+        // The label and model are still drawn, but nothing opens /agent, /model or /effort.
+        let layout = control_layout(&s, area.width.saturating_sub(9) as usize);
+        let texts: Vec<_> = layout.left.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(texts, ["Manager", "gpt-6-luna"]);
+        for x in 0..area.width {
+            assert_eq!(composer_control_at(area, &s, x, y), None, "x={x}");
         }
     }
 }

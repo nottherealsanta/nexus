@@ -21,6 +21,19 @@ class ProviderOverloaded(ProviderError):
     """An explicit transient service overload, eligible for a bounded retry."""
 
 
+class ManagerModelUnavailable(ProviderError):
+    """The manager's pinned model cannot run; there is no fallback.
+
+    Raised instead of routing a manager turn to any other model. The message
+    always names the exact ``provider/model`` so the failed turn shows it.
+    """
+
+    def __init__(self, model: str, reason: str):
+        super().__init__(f"manager model {model} is unavailable (no fallback): {reason}")
+        self.model = model
+        self.reason = reason
+
+
 class MalformedToolCall(ProviderError):
     """A provider stream produced tool-call arguments that are not valid JSON.
 

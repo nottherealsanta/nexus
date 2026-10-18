@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TextIO
 
 from .render import sanitize
+from ...ui_support.manager import ASKED_EVERY_TIME, is_confirmed
 from ...host_support.approval import (  # noqa: F401  (re-exported for callers and tests)
     MAX_PERMISSION_TARGETS,
     MAX_PERMISSION_TARGET_REQUEST_CHARS,
@@ -26,6 +27,8 @@ from ...host_support.approval import (  # noqa: F401  (re-exported for callers a
 Reader = Callable[[str], Awaitable[str]]
 
 PROMPT = "approve? [y] once / [a] always / [n] deny once / never: "
+#: A manager launch/cancel is asked every time and never remembered: no "always" exists.
+PROMPT_ONCE = "approve this once? [y] yes / [n] no: "
 
 #: Accepted answers, lower-cased. An unrecognized answer re-prompts, and
 #: exhaustion falls back to deny-once: input exhaustion never auto-allows.
@@ -56,6 +59,11 @@ def describe(data: Mapping[str, Any], index: int = 0) -> str:
     tool = sanitize(data.get("tool") or "?", 80)
     header = f"Permission requested: {tool}"
     lines = [header]
+    if is_confirmed(data):
+        # A manager launch/cancel: the whole text, and nothing to remember (docs/manager.md).
+        lines.append(f"  {_complete(str(data.get('key') or data.get('preview') or ''))}")
+        lines.append(f"  {ASKED_EVERY_TIME}")
+        return "\n".join(lines)
     if data.get("_targets_unavailable"):
         lines.append("  targets: unavailable (incomplete or oversized target list)")
     elif data.get("_display_targets"):
@@ -106,15 +114,18 @@ class Approver:
     async def ask(self, data: Mapping[str, Any], index: int = 0) -> str:
         data = approval_data(data)
         self._write(describe(data, index) + "\n")
+        once_only = is_confirmed(data)
         for _ in range(self.max_attempts):
             try:
-                raw = await self.reader(PROMPT)
+                raw = await self.reader(PROMPT_ONCE if once_only else PROMPT)
             except EOFError:
                 self._write("  input closed; denying this request once\n")
                 return DENY_ONCE
             decision = parse_decision(raw)
             if decision is not None:
-                if data.get("_targets_unavailable") and decision in {
+                if once_only and decision in {"allow_always", "deny_always"}:
+                    decision = "allow_once" if decision == "allow_always" else "deny_once"
+                elif data.get("_targets_unavailable") and decision in {
                     "allow_once", "allow_always"
                 }:
                     self._write("  target details unavailable; refusing approval\n")

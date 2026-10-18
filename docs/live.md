@@ -570,6 +570,14 @@ with a stable `kind`: `live_disabled`, `live_consent_required`, `live_busy`, `li
 `detail` is bounded to 2 KiB. Client methods: `live_status`, `live_start`,
 `live_mute`, `live_pause`, `live_stop`, `live_helper_event` in `client/protocol.py`.
 
+**Calling the manager session.** A client opens it with `ManagerOpen`, then `LiveStart(session = <manager id>)`
+([manager.md](manager.md#gpt-live)). The daemon refuses that call with `manager_disabled` while `[manager] enabled`
+is false, and with `live_consent_required` until `LiveConsent(accept=True, scope="manager")` is recorded: the
+manager reads other sessions' titles, status and final reports, and the call carries them to OpenAI, which the base
+notice does not cover. The scope is versioned separately (the base consent stays valid for ordinary calls),
+recording it records the base too, and revoking the base removes both. For authorising a result read, a delegation
+counts only by its request text; the `Voice:` lines of the transcript it carries never do.
+
 `LiveStatusResult.reason` is `disabled`, `unsupported` (the `websockets`
 client is missing from a broken install), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)
 or `busy`.

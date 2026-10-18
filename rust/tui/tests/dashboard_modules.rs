@@ -1,4 +1,6 @@
 // Compile and test the dashboard modules on their own, away from the large application.
+#[path = "../src/bridge.rs"]
+mod bridge;
 #[path = "../src/picker.rs"]
 mod picker;
 #[path = "../src/render/sessions.rs"]

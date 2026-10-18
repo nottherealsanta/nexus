@@ -48,6 +48,9 @@ pub struct Dashboard {
     pub new_hit: Rect,
     pub worktree_hit: Rect,
     pub choose_hit: Rect,
+    /// The pinned Manager entry (its rows open it) and its `Voice` button; empty when not drawn.
+    pub manager_hit: Rect,
+    pub manager_live_hit: Rect,
     last_click: Option<(usize, Instant)>,
 }
 
@@ -140,6 +143,13 @@ fn rows_of(dashboard: &Value) -> &[Value] {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[])
+}
+
+/// Whether the host sent a Manager entry to pin above the sessions (older hosts send none).
+pub fn has_manager(dashboard: &Value) -> bool {
+    dashboard.get("manager").is_some_and(|entry| {
+        entry.get("known").and_then(Value::as_bool) == Some(true) || !text(entry, "summary").is_empty()
+    })
 }
 
 impl Dashboard {
@@ -476,6 +486,15 @@ impl Dashboard {
         if shortcut('n') {
             return Some(json!({"kind":"session_new"}));
         }
+        // The pinned Manager: `m` opens it, `M` opens it and starts a voice call there.
+        if has_manager(dashboard) {
+            if shortcut('m') {
+                return Some(json!({"kind":"manager_open"}));
+            }
+            if shortcut('M') {
+                return Some(json!({"kind":"manager_live"}));
+            }
+        }
         if shortcut('t') {
             return self
                 .selected_row(dashboard)
@@ -616,6 +635,12 @@ impl Dashboard {
         }
         if self.worktree_hit.contains(at) {
             return Some(json!({"kind":"worktrees"}));
+        }
+        if self.manager_live_hit.contains(at) {
+            return Some(json!({"kind":"manager_live"}));
+        }
+        if self.manager_hit.contains(at) {
+            return Some(json!({"kind":"manager_open"}));
         }
         if self.search_hit.contains(at) {
             self.searching = true;
@@ -944,6 +969,52 @@ mod tests {
         assert!(picker.searching);
         picker.key(key(KeyCode::Char('a')), &rows);
         assert_eq!(picker.query, "za", "once searching, shortcut letters type");
+    }
+    fn with_manager(mut rows: Value) -> Value {
+        rows["manager"] = json!({"known": true, "enabled": true, "summary": "Ready"});
+        rows
+    }
+    #[test]
+    fn m_opens_the_manager_and_shift_m_starts_voice_only_when_the_host_sent_one() {
+        let mut picker = Dashboard::default();
+        // Older hosts send no entry: `m` is just the start of a filter.
+        assert_eq!(
+            picker.key(key(KeyCode::Char('m')), &two()),
+            Some(json!({"kind":"sessions_search","query":"m"}))
+        );
+        let rows = with_manager(two());
+        let mut picker = Dashboard::default();
+        assert_eq!(
+            picker.key(key(KeyCode::Char('m')), &rows),
+            Some(json!({"kind":"manager_open"}))
+        );
+        assert_eq!(
+            picker.key(
+                KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT),
+                &rows
+            ),
+            Some(json!({"kind":"manager_live"}))
+        );
+        // While searching, the letter types.
+        picker.key(key(KeyCode::Char('/')), &rows);
+        picker.key(key(KeyCode::Char('m')), &rows);
+        assert_eq!(picker.query, "m");
+    }
+    #[test]
+    fn clicking_the_pinned_manager_opens_it_and_its_voice_button_starts_a_call() {
+        let rows = with_manager(two());
+        let mut picker = Dashboard::default();
+        picker.manager_hit = Rect::new(2, 3, 40, 3);
+        picker.manager_live_hit = Rect::new(34, 3, 8, 1);
+        assert_eq!(
+            picker.click(5, 4, &rows),
+            Some(json!({"kind":"manager_open"}))
+        );
+        assert_eq!(
+            picker.click(36, 3, &rows),
+            Some(json!({"kind":"manager_live"})),
+            "the button wins over the row it sits on"
+        );
     }
     #[test]
     fn waiting_clock_is_mm_ss() {

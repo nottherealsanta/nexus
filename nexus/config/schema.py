@@ -947,6 +947,25 @@ class LiveSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("live.instructions must be a path of at most 4096 characters")
 
 
+class ManagerSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """The workspace manager session (docs/manager.md, plan 02). Off by default.
+
+    ``enabled`` gates ``ManagerOpen`` and every operation on an existing manager
+    session. The caps bound ``session_launch``: launches in one manager turn, and
+    managed roots that are still running or waiting at once.
+    """
+
+    enabled: bool = False
+    max_launches_per_turn: int = 3
+    max_live_managed: int = 8
+
+    def __post_init__(self) -> None:
+        if type(self.max_launches_per_turn) is not int or not 1 <= self.max_launches_per_turn <= 20:
+            raise ValueError("manager.max_launches_per_turn must be an integer from 1 to 20")
+        if type(self.max_live_managed) is not int or not 1 <= self.max_live_managed <= 50:
+            raise ValueError("manager.max_live_managed must be an integer from 1 to 50")
+
+
 class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Ask PyPI once a day whether a newer release exists (never installs one).
     check: bool = True
@@ -971,6 +990,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
     voice: VoiceSection = msgspec.field(default_factory=VoiceSection)
     live: LiveSection = msgspec.field(default_factory=LiveSection)
+    manager: ManagerSection = msgspec.field(default_factory=ManagerSection)
     updates: UpdatesSection = msgspec.field(default_factory=UpdatesSection)
 
     def __post_init__(self) -> None:
@@ -1046,4 +1066,5 @@ __all__ = [
     "WebSection",
     "VoiceSection",
     "LiveSection",
+    "ManagerSection",
 ]

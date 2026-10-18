@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from ..events import SHUTDOWN_CANCEL_REASON, Event
+from ..events import EVENT_GROUPS, SHUTDOWN_CANCEL_REASON, Event
 from .fold import accumulate, finalize_text, finalize_thinking
 from .model import (
     AgentView,
@@ -1013,7 +1013,12 @@ def _user_blocks(content: object) -> list[BlockView]:
     return blocks
 
 def _origin(value: object) -> dict[str, Any] | None:
-    """A bounded ``{"kind", "delegation_id"}`` label for a non-typed user message."""
+    """A bounded label for a non-typed user message.
+
+    ``{"kind", "delegation_id"}`` for a GPT Live delegation; a root launched by the
+    manager adds ``manager`` (the launching session) and ``origin_message_id`` so
+    a dashboard can say "launched by manager".
+    """
     if not isinstance(value, Mapping):
         return None
     kind = _as_str(value.get("kind"))
@@ -1023,6 +1028,11 @@ def _origin(value: object) -> dict[str, Any] | None:
     delegation = _as_str(value.get("delegation_id"))
     if delegation:
         origin["delegation_id"] = delegation[:200]
+    if kind == "manager":
+        for key in ("manager", "origin_message_id"):
+            text = _as_str(value.get(key))
+            if text:
+                origin[key] = text[:200]
     return origin
 
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -1774,6 +1784,10 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
 
     if event_type in {"todo.updated", "handoff.created", "handoff.accepted", "handoff.dismissed"}:
         # Session metadata is not conversation content, including mirrored events.
+        return state
+    if event_type == "session.linked" or event_type in EVENT_GROUPS["manager"]:
+        # Manager bookkeeping (supervision edges, refused launches, waits) is audit
+        # metadata in the manager's log; the tool calls already tell the story.
         return state
 
     if event_type == "agent.spawned":

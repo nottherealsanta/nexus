@@ -39,6 +39,7 @@ Update the matching doc in the same change as the code.
 | Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](skills/gpui-nexus/SKILL.md), [native screenshot skill](skills/native-app-review/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | GPT Live voice calls (experimental) | [docs/live.md](docs/live.md) |
+| The workspace manager session (implemented, unverified, off by default) | [docs/manager.md](docs/manager.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
 | Tests, fakes, browser checks | [docs/testing.md](docs/testing.md) |
 | Dev mode, mock scenarios, benchmark, examples | [docs/devtools.md](docs/devtools.md) |

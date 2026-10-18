@@ -116,6 +116,9 @@ class AutoTitler:
             summary = None  # not created yet: the first message creates it
         if summary is not None and (summary.message_count > 0 or summary.parent_id):
             return None
+        # The manager never makes a second model call, not even for its title.
+        if summary is not None and getattr(summary, "kind", "root") == "manager":
+            return None
         parts = [text.strip(), *(f"@{label}" for label in (labels or []) if label)]
         joined = " ".join(part for part in parts if part)
         return joined or None

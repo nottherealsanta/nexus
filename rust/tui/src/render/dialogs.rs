@@ -650,7 +650,8 @@ pub fn prompt_area(transcript: Rect, prompt: &crate::bridge::Prompt) -> Rect {
     let content = if structured.is_empty() {
         prompt.lines.len().clamp(1, 6)
     } else {
-        structured.len().clamp(1, 10)
+        // A manager launch asks for more `what` rows so its instruction can be read in full.
+        structured.len().clamp(1, if prompt.what_rows > 0 { 16 } else { 10 })
     } as u16;
     let extra = if prompt.kind == "question" { 1 } else { 0 };
     let height = (2 + content + prompt.choices.len() as u16 + extra + 1).min(transcript.height);
@@ -683,23 +684,28 @@ pub fn prompt_rows(prompt: &crate::bridge::Prompt) -> Vec<PromptRow> {
         return Vec::new();
     }
     let mut rows = vec![PromptRow::Waiting, PromptRow::Blank];
+    let limit = if prompt.what_rows > 0 {
+        prompt.what_rows
+    } else {
+        PROMPT_WHAT_ROWS
+    };
     if !prompt.what.is_empty() {
         rows.push(PromptRow::Heading("What happens"));
-        if prompt.what.len() > PROMPT_WHAT_ROWS {
-            rows.extend(
-                prompt.what[..PROMPT_WHAT_ROWS - 1]
-                    .iter()
-                    .cloned()
-                    .map(PromptRow::Text),
-            );
-            rows.push(PromptRow::More(prompt.what.len() - (PROMPT_WHAT_ROWS - 1)));
+        if prompt.what.len() > limit {
+            rows.extend(prompt.what[..limit - 1].iter().cloned().map(PromptRow::Text));
+            rows.push(PromptRow::More(prompt.what.len() - (limit - 1)));
         } else {
             rows.extend(prompt.what.iter().cloned().map(PromptRow::Text));
         }
     }
     if !prompt.why.is_empty() {
         rows.push(PromptRow::Heading("Why it asked"));
-        rows.push(PromptRow::Text(format!("rule: {}", prompt.why)));
+        // A manager confirmation has no rule behind it: its `why` is a sentence.
+        rows.push(PromptRow::Text(if prompt.what_rows > 0 {
+            prompt.why.clone()
+        } else {
+            format!("rule: {}", prompt.why)
+        }));
     }
     rows.push(PromptRow::Blank);
     rows
@@ -885,6 +891,39 @@ mod tests {
         let mut question = permission(1, &FOUR);
         question.kind = "question".into();
         assert!(prompt_rows(&question).is_empty());
+    }
+
+    #[test]
+    fn manager_launch_confirmation_shows_the_instruction_and_never_offers_always() {
+        let mut prompt: crate::bridge::Prompt = serde_json::from_value(serde_json::json!({
+            "kind": "permission", "id": "p1", "lines": ["Launch a new session?"],
+            "title": "Launch a new session?", "since": 1000.0,
+            "what": ["Starts a root session with this instruction ([role] first if named):",
+                     "fix the flaky sync test", "then run the suite", "and report back"],
+            "why": "Asked every time · this answer is never remembered", "what_rows": 8,
+            "choices": [
+                {"label": "Launch this session", "value": "allow_once", "key": "y", "disabled": false},
+                {"label": "Do not launch", "value": "deny_once", "key": "n", "disabled": false}],
+        }))
+        .unwrap();
+        let rows = prompt_rows(&prompt);
+        // Four what rows are all shown (the default limit would clip them to three + `… 1 more`).
+        for line in ["fix the flaky sync test", "then run the suite", "and report back"] {
+            assert!(rows.contains(&PromptRow::Text(line.into())), "{line}");
+        }
+        assert!(!rows.iter().any(|row| matches!(row, PromptRow::More(_))));
+        // The reason is a sentence, not `rule: …`.
+        assert!(rows.contains(&PromptRow::Text(
+            "Asked every time · this answer is never remembered".into()
+        )));
+        let values: Vec<_> = prompt.choices.iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(values, ["allow_once", "deny_once"]);
+        assert!(!prompt.choices.iter().any(|c| c.key == "a" || c.key == "d"));
+        // A long instruction still clips with an announced `… N more`.
+        prompt.what = (0..20).map(|i| format!("row {i}")).collect();
+        assert!(prompt_rows(&prompt).contains(&PromptRow::More(20 - 7)));
+        let area = prompt_area(Rect::new(0, 0, 100, 60), &prompt);
+        assert!(area.height <= 2 + 16 + 2 + 1 + 1);
     }
 
     #[test]

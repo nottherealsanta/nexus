@@ -63,6 +63,30 @@ at 16 MiB per snapshot and a 32-message channel. Reconnect and session changes u
 the existing generation checks and durable replay. Each session keeps a local
 unsent draft; durable queued messages stay in the daemon.
 
+## Manager entry
+
+Status: implemented and tested offline (Python bridge tests, Rust card-model tests); **the manager is off by
+default (`[manager] enabled = false`), and the card, Voice button and confirmation sheet have not been looked at
+in a running window.** Rules and backend: [manager.md](manager.md); terminal behavior and the shared bridge:
+[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui).
+
+- **Pinned card** at the top of the sessions sidebar (below the search, above the list, with a rule between):
+  status dot, `Manager`, `PINNED` (`PINNED · OPEN` while it is the open session), a `Voice` button, the status
+  line (ready / working / needs you / `Not signed in · …` with the exact fix / `Off · [manager] enabled = false`),
+  the pinned model with Live readiness (while off, how to turn it on) and the cross-session privacy line. It is
+  not a session row: it is not searched, grouped or archived. The card dispatches `manager_open`; `Voice` dispatches
+  `manager_live`. Both run the shared Python `Manager` (`ManagerOpen`, then the ordinary Live flow with the separate
+  `LiveConsent(scope="manager")` dialog).
+- **Wire.** The card is the snapshot field `manager`, carried in the `sessions` topic of
+  `nexus/ui/desktop/wire.py` (so it never invalidates the header topic); `rust/tui/src/bridge.rs::ManagerEntry`
+  is shared with the terminal. The presentation (`panels.rs::manager_card_rows`) is a pure function.
+- **Manager chat.** While the manager is open the composer row reads `Manager · model provider · fixed model · no
+  role, shell or fork` and is not clickable; `/model`, `/effort`, `/agent`, `/fork`, `/handoff`, the cycle keys and
+  shell mode are refused by the bridge with a reason.
+- **Confirmation.** The approval sheet shows `prompt.lines` (the whole launch instruction or cancel target and
+  `Asked every time · this answer is never remembered`) and exactly two choices (launch or do not launch; stop or
+  keep running). There is no always-allow row; the bridge rejects any value that was not offered.
+
 ## GPT Live (voice calls)
 
 Status: implemented and unit/native-harness tested offline; **not exercised against the
@@ -499,3 +523,16 @@ The shared native command bridge supports `/handoff` and `/handoff read` with
 same-tab identity preservation and the same bounded host read/write contracts
 as terminal. Shared transcript projection renders the handoff divider without
 removing earlier cards. No separate desktop compaction engine is introduced.
+
+### Manager entry (Plan 02)
+
+`nexus manager` (or `nexus manager open`) opens the pinned workspace Manager in
+ratatui; `nexus manager status` is the non-interactive status command. These use
+HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
+pin Manager above ordinary sessions: press `m` in the terminal picker to jump
+back, or select Manager in the desktop picker. The active header says `◇ Manager`.
+Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+ask “What finished in the last two hours?” to find sessions, then use `/sessions`
+(or the desktop session picker) to open a result and return to Manager. Entry
+notes show launch/find guidance and provider/voice readiness. Live real-provider
+verification remains outstanding; offline UI tests do not establish it.

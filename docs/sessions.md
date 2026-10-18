@@ -181,6 +181,7 @@ every `session.snapshot_every` (20) completed turns. `records`, `events`,
 | `delete` / `restore` | move to trash in one transaction, never cancelling a turn; `purge_expired` removes rows past retention (default 7 days) |
 | `export(id, format=)` | a consistent prefix as `json`, `markdown` or `jsonl` |
 | `replay` | yield persisted events in order, read-only |
+| `kind_of` / `manager_summary` | the row's kind; the singleton workspace manager (`kind = "manager"`, id `nexus-manager`), which `list`, the project index and the stale sweep never include and `archive`, `delete` and `fork` refuse ([manager.md](manager.md)) |
 
 Host-side archive projections (`SessionListArchived`, `SessionSearch`,
 `SessionPreview`) are bounded: pages ≤ 200, searches ≤ 50 sessions, tail reads

@@ -16,6 +16,7 @@ import time
 from collections import deque
 
 from ..cli.commands import help_text, parse
+from ...ui_support.manager import SHELL_REFUSED
 from ...ui_support.tool_details import flatten
 from ...ui_support.usage import usage_lines
 
@@ -152,10 +153,12 @@ class ShellActions:
         from .voice import Voice
         from .live import Live
         from .logs import Logs
+        from .manager import Manager
         self.preferences = Preferences()
         self.workflows = Workflows(self)
         self.voice = Voice(self)
         self.live = Live(self)
+        self.manager = Manager(self)
         self.logs = Logs(self)
         self.logs.open = self.preferences.values["details_sidebar"] and self.preferences.values["details_tab"] == "Logs"
 
@@ -475,6 +478,9 @@ class ShellActions:
             self.flash("Open that session to send attachments", "warning")
             return True
         if text.startswith("!"):
+            if self.manager.is_active(target):
+                self.composer_restore = text
+                raise ValueError(SHELL_REFUSED)
             if target == self.controller.session:
                 return await self.run_shell(text)
             command_text = text[1:].strip()
@@ -600,7 +606,11 @@ class ShellActions:
         argument = " ".join(args)
         if name == "/exit":
             return False
-        if name == "/help":
+        if (reason := self.manager.refusal(name)):
+            raise ValueError(reason)
+        if name == "/manager":
+            await self.manager.command(args)
+        elif name == "/help":
             from ..cli.commands import SPECS
             self.items = []
             self.workflows.menu("Commands", [(spec.name + " · " + spec.summary, {"kind": "chat_command", "command": spec.name}) for spec in SPECS], help_text().splitlines())

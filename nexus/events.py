@@ -39,7 +39,9 @@ class Event(msgspec.Struct, frozen=True):
 #: an error.
 SHUTDOWN_CANCEL_REASON = "supervisor closing"
 
-SESSION_EVENTS = ("session.opened", "session.closed", "session.forked")
+#: ``session.linked`` is a supervision edge recorded in the *manager's* log
+#: (``kind: "managed"``, ``child``, ``origin_message_id``, ``instruction_digest``).
+SESSION_EVENTS = ("session.opened", "session.closed", "session.forked", "session.linked")
 TURN_EVENTS = (
     "turn.started",
     "turn.completed",
@@ -132,6 +134,16 @@ LIVE_EVENTS = (
     "live.ended",
 )
 
+# The workspace manager session (docs/manager.md). Durable, turn-less records in the
+# manager's own log: a refused launch, a result read, a bounded wait, a cancel.
+# They carry ids, counts and reason codes only, never instruction or result text.
+MANAGER_EVENTS = (
+    "manager.launch_refused",
+    "manager.result_read",
+    "manager.wait",
+    "manager.cancelled",
+)
+
 # Presence is a subscriber count, not identity (single user, many views).
 # Section 14.10 adds only the join/leave transitions; the derived
 # ``presence.changed`` event is retained as a compatibility alias below so
@@ -188,6 +200,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "input": INPUT_EVENTS,
     "shell": SHELL_EVENTS,
     "live": LIVE_EVENTS,
+    "manager": MANAGER_EVENTS,
     "presence": PRESENCE_EVENTS,
     "daemon": DAEMON_EVENTS,
     "misc": MISC_EVENTS,
@@ -210,6 +223,7 @@ __all__ = [
     "INPUT_EVENTS",
     "LEGACY_EVENTS",
     "LIVE_EVENTS",
+    "MANAGER_EVENTS",
     "MCP_EVENTS",
     "MISC_EVENTS",
     "MODEL_EVENTS",

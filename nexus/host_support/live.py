@@ -26,6 +26,11 @@ CONSENT_REQUIRED_MESSAGE = (
     "conversation of the current session go to OpenAI. "
     "Accept the notice with /live in a Nexus chat, or run `nexus live`."
 )
+MANAGER_CONSENT_REQUIRED_MESSAGE = (
+    "A call with the manager also sends what the manager reads of your other sessions (titles, status and "
+    "final reports) to OpenAI. Accept that notice first: record the consent with scope \"manager\"."
+)
+MANAGER_DISABLED_MESSAGE = "The manager is turned off. Set [manager] enabled = true to use it."
 _COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LivePause, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
 _MAX_SESSION_ID = 200
 
@@ -84,6 +89,11 @@ class FacadeLiveHost:
         return int(self._facade.presence.viewers(session_id))
 
     def agent_name(self, session_id: str) -> str:
+        try:
+            if self._facade.runtime.sessions.kind_of(session_id) == "manager":
+                return "Manager"
+        except Exception:  # noqa: BLE001
+            pass
         try:
             return str(self._facade.current_agent(session_id)[0]) or "Nexus"
         except Exception:  # noqa: BLE001
@@ -156,12 +166,12 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
     if isinstance(command, p.LiveConsent):  # a file, not the call: it needs no manager
         try:
             if command.accept is not None:
-                stamp = write_consent(command.accept, home)
+                stamp = write_consent(command.accept, home, command.scope)
             else:
-                stamp = read_consent(home)
+                stamp = read_consent(home, command.scope)
         except OSError:
             return p.ErrorResult(kind="live_consent", message="Could not save the GPT Live consent")
-        return p.LiveConsentResult(accepted=bool(stamp), accepted_at=stamp)
+        return p.LiveConsentResult(accepted=bool(stamp), accepted_at=stamp, scope=command.scope)
     manager: LiveManager | None = getattr(facade.runtime, "live", None)
     if manager is None:
         return p.ErrorResult(kind="live_unavailable", message="GPT Live is unavailable")
@@ -176,6 +186,9 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
             _refresh(facade, manager)
             if not read_consent(home):  # the daemon, not only the clients, enforces the notice
                 return p.ErrorResult(kind="live_consent_required", message=CONSENT_REQUIRED_MESSAGE)
+            refusal = _manager_refusal(facade, command.session, home)
+            if refusal is not None:
+                return refusal
             result = await manager.start(
                 command.session, command.offer_sdp, host=FacadeLiveHost(facade),
                 voice=command.voice, new_conversation=command.new_conversation,
@@ -194,6 +207,25 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
         return p.LiveHelperEventResult(ok=True, state=info.state)
     except Exception as exc:  # noqa: BLE001 - the wire never raises a traceback
         return _error(exc)
+
+
+def _manager_refusal(facade: Any, session: str, home: Any) -> p.ErrorResult | None:
+    """A GPT Live call on the manager session needs the manager enabled and the cross-session consent.
+
+    The call then carries what the manager read of other sessions to OpenAI, which the
+    base notice does not cover (docs/manager.md). Any other session is unaffected.
+    """
+    try:
+        kind = facade.runtime.sessions.kind_of(session)
+    except Exception:  # noqa: BLE001 - a bad id is rejected later, by the live manager
+        return None
+    if kind != "manager":
+        return None
+    if not facade.manager_config().enabled:
+        return p.ErrorResult(kind="manager_disabled", message=MANAGER_DISABLED_MESSAGE)
+    if not read_consent(home, "manager"):
+        return p.ErrorResult(kind="live_consent_required", message=MANAGER_CONSENT_REQUIRED_MESSAGE)
+    return None
 
 
 def _refresh(facade: Any, manager: LiveManager) -> None:

@@ -22,7 +22,7 @@ from nexus.tools.bundles import (
 
 
 def test_the_bundles_are_defined():
-    assert BUNDLE_NAMES == frozenset({"fs", "patch", "shell", "legacy_shell", "legacy_fs", "task", "web", "meta", "ext", "mcp"})
+    assert BUNDLE_NAMES == frozenset({"fs", "patch", "shell", "legacy_shell", "legacy_fs", "task", "web", "meta", "ext", "mcp", "manager"})
     assert all_bundles() is BUNDLES
 
 
@@ -45,7 +45,8 @@ def test_bundle_contents_match_the_plan():
 
 
 def test_profile_table():
-    assert PROFILE_NAMES == frozenset({"coding", "coding_meta", "research", "chat", "ops"})
+    # ``manager`` is reserved: defined, but never offered to users.
+    assert PROFILE_NAMES == frozenset({"coding", "coding_meta", "research", "chat", "ops", "manager"})
     assert DEFAULT_PROFILE == "coding"
     assert profile_names() == (
         "coding", "coding_meta", "research", "chat", "ops"

@@ -34,6 +34,7 @@ STATIC_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "/export": ("json", "markdown", "jsonl"),
     "/voice": ("status", "download", "on", "off"),
     "/speak": ("download",),
+    "/manager": ("open", "live", "status"),
     "/attach": ("clear",),
     "/diff": ("--staged",),
 }

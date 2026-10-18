@@ -61,6 +61,7 @@ V2_SECTION_KEYS = frozenset(
         "telemetry",
         "voice",
         "live",
+        "manager",
         "updates",
     }
 )
@@ -124,6 +125,8 @@ _V2_NUMERIC = {
     "live.max_minutes": int,
     "live.carry_turns": int,
     "live.pause_seconds": int,
+    "manager.max_launches_per_turn": int,
+    "manager.max_live_managed": int,
 }
 _V2_BOOL = frozenset(
     {
@@ -142,6 +145,7 @@ _V2_BOOL = frozenset(
         "live.enabled",
         "live.progress",
         "live.log_raw",
+        "manager.enabled",
     }
 )
 

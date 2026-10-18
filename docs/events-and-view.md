@@ -32,7 +32,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 
 | Group | Types |
 | --- | --- |
-| session | `session.opened` `session.closed` `session.forked` |
+| session | `session.opened` `session.closed` `session.forked` `session.linked` (a supervision edge in the **manager's** log: `{kind: "managed", child, turn, origin_message_id, instruction_digest, agent}`; a root the manager launched also gets `session.opened {id, launched_by: {manager, origin_message_id}}`) |
 | turn | `turn.started` `turn.completed` `turn.failed` `turn.cancelled` |
 | context | `context.assembled` `context.compacted` `context.degraded` |
 | model | `model.selected` `reasoning_effort.selected` `model.started` `text.delta` `text` `thinking.delta` `thinking.end` `thinking` `model.usage` `model.stopped` `model.retrying` |
@@ -48,6 +48,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 | input | `input.started` `input.queued` `input.moved` `input.mode_changed` (`{queued_id, mode, order}`: a promotion, queue→steer→interrupt; the reducer sets the item's mode and applies `order`) `input.consumed` `input.dropped` |
 | shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
 | live | `live.started` `live.transcript` `live.transcript.delta` `live.delegated` `live.appended` `live.phase` `live.levels` `live.error` `live.ended`: a GPT Live voice call, turn-less and durable; reduced into `ConversationView.live_calls` ([live.md](live.md#events-and-view)) |
+| manager | `manager.launch_refused {reason, turn}` `manager.result_read {session, bytes, clipped, turn}` `manager.wait {ids, outcome, waited_seconds, turn}` `manager.cancelled {session, cancelled, turn}`: audit records in the workspace manager's own log, turn-less and durable, ids/counts/reason codes only, never instruction or result text ([manager.md](manager.md#events)) |
 | presence | `presence.joined` `presence.left` (count, not identity) |
 | daemon | `daemon.started` `daemon.stopping` `daemon.session_scheduled` `daemon.session_queued` |
 | misc | `provider.raw` `error` `registry.refreshed` `registry.stale` `registry.failed` `registry.mismatch` |
@@ -122,7 +123,11 @@ time once resolved.
 A user `MessageView` and a `QueuedInputView` carry an optional `origin`
 (`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is
 recorded on `input.queued` only, so the prompt text and the turn are unchanged
-(omitted from the wire when absent).
+(omitted from the wire when absent). A root launched by the manager carries
+`{"kind": "manager", "manager": <manager id>, "origin_message_id": ...}` (the reducer keeps those two
+extra keys for that kind only), so a client can say "launched by manager". `session.linked` and every
+`manager.*` event fold to nothing in the view: they are audit metadata, not conversation, so they
+add no diagnostic row. `LogsRead` projects each with a fixed summary and no event data.
 
 A user `MessageView` and a `QueuedInputView` also carry `sent_ts`: the `input.queued`
 event time (a consumed queued item keeps it, not the later consume time), or the

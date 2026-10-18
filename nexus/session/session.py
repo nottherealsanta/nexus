@@ -391,6 +391,7 @@ class Session:
     ):
         self._id = validate_session_id(session_id)
         self._store = store
+        self._kind: str | None = None
         self._lock = lock if lock is not None else SessionLock(store.lock_path(self._id))
         self._read: ReadResult | None = None
         self._active: TurnLease | None = None
@@ -878,6 +879,28 @@ class Session:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def kind(self) -> str:
+        """The session row's kind: ``root``, ``manager`` (plan 02), ``child``...
+
+        Fixed at creation (a draft's creation metadata, then the row), so it is
+        read once and cached. An unreadable or missing row answers ``root`` for
+        the main namespace without caching, so a draft that has no metadata yet
+        is not mislabelled for good.
+        """
+        if self._kind is not None:
+            return self._kind
+        namespace = getattr(self._store, "namespace", "main")
+        default = "root" if namespace == "main" else ""
+        try:
+            row = self._store.session_row(self._id)
+        except Exception:  # noqa: BLE001 - a store without rows (a test double) has plain roots
+            return default
+        if row is None:
+            return default
+        self._kind = str(row.get("kind") or default)
+        return self._kind
 
     @property
     def active(self) -> bool:
@@ -1892,6 +1915,11 @@ class Session:
         """The current manifest's hook runner, or ``None`` when hooks are off."""
         provider = self._hooks_for_session
         if provider is None:
+            return None
+        if self.kind == "manager":
+            # The manager runs no hooks at all (SessionStart, UserPromptSubmit,
+            # SessionEnd): a hook command is an arbitrary process and the manager's
+            # whole safety argument is its six structural tools.
             return None
         try:
             return provider()

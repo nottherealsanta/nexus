@@ -38,6 +38,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
 | `context.py` | `context_groups`, `tool_groups`, `context_summary`, `context_measure` (the one source for the context meter), `context_usage`, `thinking_status` | `ui/web/js/context-view.js` |
 | `timeline.py` | tool headings/summaries, batch glyphs, diff splitting (`split_diff_files`, `diff_sections`), thought titles | `renderTool`, `diffFiles`, `splitDiff` |
 | `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
+| `manager.py` | the pinned Manager entry (status, pinned model, sign-in fix, Live readiness), cross-session Live notice, commands a manager chat refuses, unconditional launch/cancel confirmation rows | none (no web) |
 | `text.py` | control-safe text | `el(tag, cls, text)` |
 | `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
 | `usage.py` | provider usage wording: thin `bar` (`━` used, `─` left, `┃` even pace), `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `reserve` / `reserve_phrase`, `summary` (`38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)`), `heading` | `ui/web/js/usage.js` |
@@ -111,16 +112,20 @@ footers share the same left inset in both surfaces.
   Activating a call opens its full parameters/result in a modal, never inline.
   A **running shell** (Bash) additionally shows its latest four output lines
   under the call (`⎿`) with the earlier lines counted, until it completes.
-- **Subagent calls** in native Ratatui have a colored `◆` identity/description
-  header, the latest child tool activity while running, and a muted metrics row.
-  Completed calls retain the header and metrics, not the activity preview. A
-  running header animates the diamond color; there is no checkmark or result
-  gutter. A blank line separates each card from adjacent transcript blocks.
-  The legacy browser keeps its existing recent-tool preview.
-  Subagent metrics elsewhere also omit duration while the child is working. Clicking opens the
-  child's page, laid out like the root (its own context header showing the request
-  it actually sent, a grey Task block, a read-only composer, details panel); Esc
-  returns. All subagent activity stays inline at the initiating call.
+- **Subagent calls**: in native Ratatui, the header's left icon is the braille
+  spinner while running and a full `⣿` once done, tinted to half the agent
+  color against the background (the error color for a failed child); the name
+  column does not move, and inline child activity previews are omitted. In the
+  legacy browser, calls have a colored `◆` identity/description header whose
+  diamond color animates while running without a checkmark or result gutter,
+  retaining its existing recent-tool activity preview. Completed calls retain
+  the header and muted metrics row, not the activity preview. A blank line
+  separates each card from adjacent transcript blocks. Subagent metrics
+  elsewhere also omit duration while the child is working. Clicking opens the
+  child's page, laid out like the root (its own context header showing the
+  request it actually sent, a grey Task block, a read-only composer, details
+  panel); Esc returns. All subagent activity stays inline at the initiating
+  call.
 - **Tool groups** (native projection, `ui/ratatui/verb_groups.py`): a run of tool calls
   and thoughts is one group, except that file-change tools (edit, write, apply_patch, …)
   group only with each other and a lone change keeps its own row. The label drops its
@@ -217,6 +222,12 @@ Shown as list prompts docked above the composer (TUI `PermissionScreen` /
 While an approval is pending the background is inert. Arbitration is daemon-side
 (first responder wins); with no viewer attached `on_unattended` applies.
 
+**Manager launch and cancel are the exception** (native Ratatui and desktop, [manager.md](manager.md)): a
+`session_launch` / `session_cancel` request offers only *launch* / *do not launch* (or *stop* / *keep running*),
+`y` and `n`, and says `Asked every time · this answer is never remembered`. No "for session" row, `a` or `d` key
+exists, the whole instruction is shown (a cut is announced), and the line CLI prompt drops `[a]`/`never` for them.
+Rows come from `ui_support/manager.py`.
+
 ## Settings
 
 Settings is a full-screen page (TUI) or dialog (web) with the same sections:
@@ -302,6 +313,18 @@ OpenAI through the ChatGPT account); errors show the host's redacted message wit
 labelled **Live** card per call (captions, `Sent to agent`, `Told voice`, commentary collapsed
 with a count, start and end rows) and marks delegated user messages `via voice`. The web client has no
 Live support. Real microphone behavior: not verified.
+
+## Manager (native Ratatui and desktop)
+
+`/manager [open|live|status]` and the pinned **Manager** entry open the workspace manager session (off by default,
+`[manager] enabled = false`; [manager.md](manager.md)). Both native sidebars show it as its own block above the
+roots, never as a row: status, `github-copilot/gpt-6-luna`, the exact Copilot sign-in fix when missing, the way to
+enable it when off, and Live readiness. Opening calls `ManagerOpen`; the manager chat has no role, model, effort,
+fork, handoff or shell controls (the clients answer with the reason, the host refuses too), and its title reads
+`Manager`. `Voice` / `/manager live` open it and start the ordinary Live call there; the call asks a **separate**
+cross-session consent (`LiveConsent(scope="manager")`) that says titles, status, reports of other sessions and launch
+instructions go to OpenAI, and `/live revoke manager` withdraws only that. Details: [ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui),
+[desktop.md](desktop.md#manager-entry). The web client has no Manager.
 
 ## Dev mode
 
@@ -391,3 +414,16 @@ host lock/handle evidence, with interrupted/unknown/legacy ownership states kept
 explicit. Root status rolls up running descendants and sublines show running
 child/handoff counts. This is inspection only: handoff accept/dismiss UI is P6,
 not implemented by P3.
+
+### Manager entry (Plan 02)
+
+`nexus manager` (or `nexus manager open`) opens the pinned workspace Manager in
+ratatui; `nexus manager status` is the non-interactive status command. These use
+HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
+pin Manager above ordinary sessions: press `m` in the terminal picker to jump
+back, or select Manager in the desktop picker. The active header says `◇ Manager`.
+Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+ask “What finished in the last two hours?” to find sessions, then use `/sessions`
+(or the desktop session picker) to open a result and return to Manager. Entry
+notes show launch/find guidance and provider/voice readiness. Live real-provider
+verification remains outstanding; offline UI tests do not establish it.

@@ -232,6 +232,12 @@ READ_ONLY_TOOLS = frozenset(
     {"read", "glob", "grep", "subagent", "todowrite", "question", "skill", "webfetch", "websearch"}
 )
 AGENT_CONTEXTS = frozenset({"root", "subagent"})
+#: The manager session's role, tool catalog and prompt are packaged constants
+#: (``nexus/agents/manager_prompt.py``). No role file may declare the
+#: ``manager`` context or the ``manager`` bundle, so the manager is not
+#: extensible by user, project or extension files (plan 02, docs/manager.md).
+RESERVED_MANAGER_CONTEXT = "manager"
+RESERVED_MANAGER_BUNDLE = "manager"
 
 _NAME_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_NAME_CHARS - 1}}}\Z")
 _BUNDLE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -730,6 +736,14 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         if "contexts" in fields
         else ("subagent",)
     )
+    if RESERVED_MANAGER_CONTEXT in contexts:
+        raise AgentParseError(
+            "the 'manager' context is reserved: the manager role is packaged and cannot be declared in a role file"
+        )
+    if RESERVED_MANAGER_BUNDLE in bundles:
+        raise AgentParseError(
+            "the 'manager' bundle is reserved for the packaged manager session and cannot be used by a role"
+        )
     if not contexts or len(set(contexts)) != len(contexts) or set(contexts) - AGENT_CONTEXTS:
         invalid = sorted(set(contexts) - AGENT_CONTEXTS)
         raise AgentParseError(
@@ -741,6 +755,8 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         if "profile" in fields
         else None
     )
+    if profile == RESERVED_MANAGER_BUNDLE:
+        raise AgentParseError("the 'manager' profile is reserved for the packaged manager session")
     write_roots = (
         _parse_list(fields["write_roots"], "write_roots", re.compile(r"(?:global|project)\Z"), "settings root")
         if "write_roots" in fields

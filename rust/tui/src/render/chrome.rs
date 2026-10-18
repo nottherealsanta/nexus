@@ -171,11 +171,16 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         left.push((text, seg));
     };
     let mut room = room;
-    let title = if s.title.is_empty() {
+    let title = if s.manager.active {
+        "◇ Manager"
+    } else if s.title.is_empty() {
         "New session"
     } else {
         s.title.as_str()
     };
+    if s.manager.active && !s.tabs.is_empty() {
+        place("◇ Manager · ", Seg::Title, &mut left, &mut room);
+    }
     if s.tabs.is_empty() {
         place(
             &crate::transcript::truncate(title, 40.min(room)),
@@ -681,6 +686,16 @@ mod chrome_tests {
                 ..Default::default()
             })
             .collect()
+    }
+
+    #[test]
+    fn manager_header_survives_open_tabs() {
+        let mut s = Snapshot::default();
+        s.manager.active = true;
+        s.tabs = open_tabs(2, 0);
+        assert!(bar_text(&s, 100).contains("◇ Manager"));
+        s.tabs.clear();
+        assert!(bar_text(&s, 100).contains("◇ Manager"));
     }
 
     #[test]

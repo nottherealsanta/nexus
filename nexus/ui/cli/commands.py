@@ -85,6 +85,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/voice", "Dictate into the composer", "[status|download|on|off]"),
     CommandSpec("/live", "Talk to the agent in a spoken GPT Live call (again to hang up)", "[stop|pause|resume|mute|new|status|revoke]"),
     CommandSpec("/speak", "Speak the latest answer aloud (local Paradee)", "[download]"),
+    CommandSpec("/manager", "Open the workspace Manager session (when enabled)", "[open|live|status]"),
 )
 
 #: ``/mock`` exists only in dev mode (``NEXUS_DEV=1``; MOCK_PLAN §3.2).

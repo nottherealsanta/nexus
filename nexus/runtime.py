@@ -71,6 +71,14 @@ from .core.bus import DROP_OLDEST, Bus
 from .core.cancel import CancelToken
 from .core.loop import run_turn
 from .core.turn import TurnLimits
+from .agents.manager_prompt import (
+    MANAGER_KIND,
+    MANAGER_MODEL,
+    MANAGER_MODEL_REF,
+    MANAGER_PROMPT,
+    MANAGER_PROVIDER,
+    MANAGER_SIGN_IN_HINT,
+)
 from .errors import ConfigError, OperationCancelled
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
@@ -108,10 +116,14 @@ from .net.local_search import LocalSearchHTTPService
 from .session import Session, SessionManager
 from .session.agent_selection import AgentSelection
 from .session.db import StateDatabase
+from .session.export import is_user_prompt
+from .session.records import MessageRecord
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
 from .tools.builtin.todo import TodoStore
+from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES
 from .tools.manager import ToolManager
+from .tools.manager_tools import build_manager_catalog
 from .tools.permissions import (
     ApprovalBroker,
     Decision,
@@ -190,6 +202,92 @@ def _grants_from_events(events: Any) -> tuple[Grant, ...]:
         return collect_grants(records)
     except Exception:  # noqa: BLE001 - a corrupt audit line must not break a turn
         return ()
+
+
+def _is_manager_session(session: Any) -> bool:
+    """Whether ``session`` is the workspace manager (``session.kind == "manager"``)."""
+    return getattr(session, "kind", None) == MANAGER_KIND
+
+
+def _manager_model_metadata() -> dict[str, str]:
+    """Request metadata that pins a manager turn to exactly one model (no fallback)."""
+    return {
+        "model_policy": "pinned",
+        "pinned_model": MANAGER_MODEL_REF,
+        "pinned_hint": MANAGER_SIGN_IN_HINT,
+    }
+
+
+class _ManagerAssembler:
+    """A manager turn's assembler: stamps every request with the pinned-model policy.
+
+    Wraps the context snapshot built from the packaged prompt only (no system
+    files, skills, MCP index or role body). The wrapper makes the request name
+    the pinned route and carry ``model_policy = "pinned"``, which the router
+    turns into "no agent, tier or workspace fallback" and a visible
+    :class:`~nexus.errors.ManagerModelUnavailable` on failure.
+    """
+
+    session_aware = False
+
+    def __init__(self, inner: Any) -> None:
+        object.__setattr__(self, "_inner", inner)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._inner, name, value)
+
+    def assemble(self, session: Any) -> Any:
+        inner = getattr(self._inner, "assemble", None)
+        built = inner(session) if callable(inner) else self._inner(session)
+        if inspect.isawaitable(built):
+            async def finish() -> Any:
+                return self._stamp(await built, session)
+
+            return finish()
+        return self._stamp(built, session)
+
+    @staticmethod
+    def _stamp(request: Any, session: Any = None) -> Any:
+        metadata = {
+            key: value
+            for key, value in dict(getattr(request, "metadata", None) or {}).items()
+            if key not in ("agent_fallback", "tier", "reasoning_effort_explicit")
+        }
+        metadata.update(_manager_model_metadata())
+        changes: dict[str, Any] = {}
+        message_id = _latest_user_message_id(session)
+        system = getattr(request, "system", None)
+        if message_id and isinstance(system, str):
+            # The id the launch port validates; the model cannot guess it. Id only, no log text.
+            changes["system"] = (
+                f"{system}\n\nCurrent user message id (pass as origin_message_id): {message_id}"
+            )
+        return msgspec.structs.replace(
+            request, model=MANAGER_MODEL, provider=MANAGER_PROVIDER, metadata=metadata, **changes
+        )
+
+
+def _latest_user_message_id(session: Any) -> str:
+    """``m<seq>`` of the newest real user prompt in the session's log, or ``""``.
+
+    The same id scheme the manager host port checks ``origin_message_id`` against.
+    Best effort: an unreadable log yields no line, and a launch is then refused by
+    the port with the id it expects.
+    """
+    reader = getattr(session, "read", None)
+    if not callable(reader):
+        return ""
+    try:
+        records = reader().records
+    except Exception:  # noqa: BLE001 - a prompt hint never fails a turn
+        return ""
+    for record in reversed(records):
+        if isinstance(record, MessageRecord) and is_user_prompt(record.message):
+            return f"m{record.seq}"
+    return ""
 
 
 class _ToolDispatcherAdapter:
@@ -783,6 +881,8 @@ class _ContextCoordinator:
         This query only performs local route resolution; it never calls a
         provider or performs network I/O.
         """
+        if _is_manager_session(session):
+            return {"provider": MANAGER_PROVIDER, "model": MANAGER_MODEL}
         config = self.effective_config()
         agent_definition = self._root_agent_definition(session, config)
         provider, model, _resolved = self._root_route(
@@ -906,6 +1006,9 @@ class _ContextCoordinator:
         metadata yields no choices; a stored unsupported override is reported
         as dormant and is never replaced by the agent default.
         """
+        if _is_manager_session(session):
+            # The pinned manager model runs at the provider default effort.
+            return {"supported_levels": (), "stored_override": None, "effective_effort": None, "source": None}
         config = self.effective_config()
         agent_definition = getattr(session, "_turn_agent_definition", None)
         if agent_definition is None:
@@ -943,7 +1046,12 @@ class _ContextCoordinator:
         turn never re-reads it. If the override can no longer resolve (the
         provider was removed from config), the configured default is used
         instead, so a stale selection cannot wedge a turn.
+
+        A manager session never reaches that logic: it gets the explicit
+        pinned branch below (packaged prompt, one model, no fallback).
         """
+        if _is_manager_session(session):
+            return self._manager_for_turn(session)
         manager = self._context
         for_turn = getattr(manager, "for_turn", None)
         if not callable(for_turn):
@@ -1069,6 +1177,69 @@ class _ContextCoordinator:
             assembler._requested_agent_effort = None
             assembler._agent_effort_supported = False
         return assembler
+
+    def _manager_for_turn(self, session: Any) -> Any:
+        """The manager turn's assembler: packaged prompt, pinned model, nothing else.
+
+        Built from an empty system-file/skills/MCP snapshot (the live files are
+        never read), with the packaged prompt as the whole system text, no
+        summarizer (so no second model is ever called), no role body and no
+        agent fallback. Route resolution failure is not raised here: the
+        request still names the pinned route and the loop turns the router's
+        :class:`~nexus.errors.ManagerModelUnavailable` into a visible failed turn.
+        """
+        if session is not None:
+            session._turn_agent_definition = None
+        resolved = None
+        resolve = getattr(self._resolver, "resolve", None)
+        if resolve is not None:
+            try:
+                resolved = resolve(
+                    ModelRequest(
+                        messages=[], provider=MANAGER_PROVIDER, model=MANAGER_MODEL,
+                        metadata=_manager_model_metadata(),
+                    )
+                )
+            except Exception:  # noqa: BLE001 - reported by the router at call time
+                resolved = None
+        capabilities = getattr(resolved, "capabilities", None)
+        request_counter = (
+            RequestTokenCounter(resolved.provider, cache=self._token_cache, provider_name=MANAGER_PROVIDER)
+            if resolved is not None
+            else None
+        )
+        config = self.effective_config()
+        for_iteration = getattr(self._context, "for_iteration", None)
+        if config is None or not callable(for_iteration):
+            return _ManagerAssembler(self._context)
+        assembler = for_iteration(
+            config=config,
+            soul_text="",
+            memory_text="",
+            agents_text="",
+            capabilities=capabilities,
+            request_counter=request_counter,
+            model=MANAGER_MODEL,
+            provider=MANAGER_PROVIDER,
+            skills_index=(),
+            mcp_index={},
+            reasoning_effort=None,
+        )
+        env = getattr(assembler, "_env", None)
+        if env is not None:
+            assembler._env = replace(
+                env,
+                soul_text="",
+                memory_text="",
+                agents_text="",
+                system_override=MANAGER_PROMPT,
+                summarizer=None,
+                summarizer_async=False,
+            )
+        assembler._summarizer = None
+        assembler.agent_definition = None
+        assembler.agent_selection_source = "manager"
+        return _ManagerAssembler(assembler)
 
     def assemble(self, session: Any) -> Any:
         for_turn = getattr(self._context, "for_turn", None)
@@ -1278,6 +1449,12 @@ class _ManifestEnvironmentFactory:
         self, session: Any, lease: Any, iteration: int, *, cancel: Any = None
     ) -> _IterationEnv:
         runtime = self._runtime
+        if _is_manager_session(self._session) or _is_manager_session(session):
+            # Second builder of the structural manager catalog: a manager turn
+            # never merges a manifest (MCP, skills, extensions, hooks) into its
+            # six tools. ``_make_tool_turn`` returns no environment factory for
+            # it, so reaching this is a wiring bug, not a fallback to extend.
+            raise ConfigError("manager sessions do not use the extension manifest")
         manifest = runtime._selected_manifest(lease.manifest, session)
         config = getattr(manifest, "config", None)
         if config is None:
@@ -2670,8 +2847,14 @@ class Runtime:
         api_key_auth_factory: Callable[..., Any] | None = None,
         voice_engine_factory: Callable[..., Any] | None = None,
         voice_store: Any | None = None,
+        manager_port_factory: Callable[[Session], Any | None] | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
+        #: ``callable(Session) -> ManagerPort | None``, injected by the host. A
+        #: manager session's six tools talk to the port it returns; ``None``
+        #: (no factory or no port) fails the manager turn visibly. Assignable
+        #: after construction because the host builds the port from the runtime.
+        self.manager_port_factory = manager_port_factory
         self._home = Path(home) if home is not None else None
         self._agent_choices = AgentChoiceStore(nexus_home(self._home) / "agent_models.json")
         self._model_efforts = ModelEffortStore(nexus_home(self._home) / "model_efforts.json")
@@ -3767,6 +3950,8 @@ class Runtime:
         """
         selection = self._validate_model_selection(reference)
         handle = self._sessions.open(session_id, create=create, recover=True)
+        if _is_manager_session(handle):
+            raise ConfigError(f"the manager model is pinned to {MANAGER_MODEL_REF} and cannot be changed")
         handle.select_model(selection)
         remembered = self._model_efforts.get(f"{selection.provider}/{selection.model}")
         if remembered is not None:
@@ -3902,6 +4087,8 @@ class Runtime:
         else:
             definition = None
         handle = self._sessions.open(session_id, create=create, recover=True)
+        if _is_manager_session(handle):
+            raise ConfigError("the manager session has a packaged role that cannot be changed")
         if handle.context_locked:
             raise ConfigError("Agents are locked after the first turn to preserve the prompt cache. Start a new session to change agents.")
         if name is None:
@@ -4141,6 +4328,13 @@ class Runtime:
         # Reconcile again at the actual turn boundary; TodoStore.replay only
         # applies log revisions newer than memory and is therefore safe during
         # an active runtime.
+        if _is_manager_session(session):
+            # Explicit manager branch, before any injected factory, manager or
+            # engine: a manager turn gets its own six-tool catalog and a fresh
+            # permission engine, never the runtime's shared ones.
+            return self._make_manager_tool_turn(
+                config=config, session=session, turn_id=turn_id, attended=attended
+            )
         self._restore_todos(session)
         if self._tool_factory is not None:
             return self._tool_factory(
@@ -4431,6 +4625,69 @@ class Runtime:
             manifest_ref=manifest_ref,
             environment_for=environment_for,
             hooks=hooks_service,
+        )
+
+    def _make_manager_tool_turn(
+        self,
+        *,
+        config: Config | None,
+        session: Session,
+        turn_id: str,
+        attended: bool,
+    ) -> ToolTurn:
+        """Build the manager turn's tool environment (plan 02 M3, docs/manager.md).
+
+        Structural: the catalog is :func:`build_manager_catalog` and nothing
+        else, so no built-in, MCP, skill, extension or role tool and no hook can
+        reach a manager turn. The permission engine is built fresh for the turn
+        (mode ``deny``; only the read tools allowed by name; launch and cancel
+        always ask, ahead of any grant or rule; unattended means deny). Session
+        grants are never read, so an earlier approval cannot pre-approve a
+        launch, and the session's own unattended fallback is pinned to deny for
+        this turn regardless of ``permissions.on_unattended``.
+        """
+        if config is None:
+            config = self._load_config()
+        factory = self.manager_port_factory
+        port = factory(session) if factory is not None else None
+        if port is None:
+            raise ConfigError("the manager session is unavailable: no manager port is configured")
+        manager = ToolManager(
+            config,
+            workspace=self.workspace,
+            profile=MANAGER_PROFILE,
+            tools=build_manager_catalog(port),
+            restrict=MANAGER_TOOL_NAMES,
+            job_registry=self._job_registry,
+            todo_store=self._effective_todo_store(),
+        )
+        self._track_tool_manager(manager)
+        engine = PermissionEngine(
+            mode="deny",
+            allow=("sessions_find", "session_status", "session_wait", "session_result"),
+            on_unattended="deny",
+            workspace=self.workspace,
+            home=self._home,
+        )
+        engine.require_confirmation_for(("session_launch", "session_cancel"))
+        # Frozen at turn start (after the session froze the configured policy):
+        # a viewer dropping with a launch pending resolves to deny, never allow.
+        session._turn_unattended = "deny"
+        gate = _PermissionGateAdapter(engine, manager=manager, grants=(), attended=attended)
+        dispatcher = _ToolDispatcherAdapter(
+            manager,
+            workspace=self.workspace,
+            session_id=session.id,
+            turn_id=turn_id,
+            config=config,
+            agent_id="root",
+        )
+        return ToolTurn(
+            manager=manager,
+            engine=engine,
+            dispatcher=dispatcher,
+            gate=gate,
+            schemas=tuple(manager.schemas()),
         )
 
     def _settings_agent_guard(

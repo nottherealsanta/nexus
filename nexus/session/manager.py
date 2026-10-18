@@ -72,6 +72,11 @@ from .lock import SessionLock
 from .records import EventRecord, ReadResult
 from .session import DEFAULT_EVENT_BUFFER, Session
 
+#: ``kind`` of the workspace manager row (plan 02). Kept literal here so the session
+#: layer imports nothing from ``agents``; ``nexus.agents.manager_prompt.MANAGER_KIND``
+#: is the same value.
+MANAGER_KIND = "manager"
+
 #: Length of the random suffix appended to a fork's generated child id.
 _FORK_TOKEN_BYTES = 6
 
@@ -427,6 +432,7 @@ class SessionManager:
             raise ValueError("archive reason must be 'auto' or 'user'")
         if not self.store.exists(session_id):
             raise SessionError(f"Session {session_id!r} does not exist")
+        self._refuse_manager(session_id, "archived")
         if self._has_pending_work(session_id):
             raise SessionBusy(f"Session {session_id!r} has running or pending work")
         lock = SessionLock(self.store.lock_path(session_id))
@@ -540,12 +546,30 @@ class SessionManager:
             raise ValueError("Tree depth must be an integer between 0 and 64")
         return project_tree(self, session_id, namespace=namespace, max_depth=max_depth)
 
+    def kind_of(self, session_id: str) -> str:
+        """The row's kind (``root``, ``manager``, ``child``...), or ``""`` for an unknown id."""
+        session_id = validate_session_id(session_id)
+        row = self.store.session_row(session_id)
+        if row is None:
+            return ""
+        return row.get("kind") or ("root" if self.store.namespace == "main" else "")
+
+    def manager_summary(self) -> SessionSummary | None:
+        """The workspace's singleton manager session, or ``None`` before ``ManagerOpen``."""
+        row = self.store.manager_row()
+        return self._summary_from_row(row) if row is not None else None
+
+    def _refuse_manager(self, session_id: str, action: str) -> None:
+        if self.kind_of(session_id) == MANAGER_KIND:
+            raise SessionError(f"The manager session cannot be {action}")
+
     def list(self, *, include_archived: bool = False, include_children: bool = False) -> list[SessionSummary]:
-        """Summarize every session, newest user prompt first (``order_time``).
+        """Summarize every regular session, newest user prompt first (``order_time``).
 
         One indexed query: the denormalized ``sessions`` row columns (title,
         activity, message count, parent/fork) are kept current inside every
-        append transaction, so no session log is read here.
+        append transaction, so no session log is read here. The manager session
+        (``kind == "manager"``) is never listed; ``manager_summary`` returns it.
         """
         rows = self.store.list_rows(include_archived=include_archived)
         summaries = [self._summary_from_row(row) for row in rows]
@@ -625,6 +649,7 @@ class SessionManager:
         another process is refused too.
         """
         session_id = validate_session_id(session_id)
+        self._refuse_manager(session_id, "deleted")
         handle = self._live_handle(session_id)
         self._check_deletable(session_id, handle, force=force)
         if handle is None and not self.store.exists(session_id):
@@ -761,6 +786,7 @@ class SessionManager:
         self.unarchive(source_id)
         if not self.store.exists(source_id):
             raise SessionError(f"Session {source_id!r} does not exist")
+        self._refuse_manager(source_id, "forked")
         read = self._consistent_read(source_id)
         boundary = read.next_seq if at_seq is None else _check_boundary(at_seq, read)
         prefix = [record for record in read.records if record.seq <= boundary]
@@ -844,6 +870,7 @@ def _check_boundary(at_seq: object, read: ReadResult) -> int:
 
 __all__ = [
     "DEFAULT_RETENTION_SECONDS",
+    "MANAGER_KIND",
     "TRASH_VERSION",
     "SessionManager",
     "SessionState",

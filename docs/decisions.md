@@ -1044,6 +1044,38 @@ draws its final state at once, with the `total ... of the window` row kept (it r
 bars). `context::Anim`, `Cache.ctx` and the `main.rs` frame-clock hook are gone; the window for
 the share lives in `Cache.context_window`.
 
+## The workspace manager session: a pinned, six-tool session in the main namespace (2026-10)
+
+Plan 02 ([manager.md](manager.md)) adds one durable session per workspace that starts, watches and reads
+the user's root sessions. What we decided, and why:
+
+- **Kind `manager` in the main namespace, fixed id `nexus-manager`, no schema change.** The `sessions.kind`
+  column already exists; the kind is written with the row at its first input. A new namespace would have hidden it
+  from `LiveStart` and `SessionEnqueue`; lists exclude it by kind instead. The id is reserved so `ManagerOpen` is a
+  true singleton, and `[manager] enabled = false` (default) makes every operation on it fail, so rollback is the flag.
+- **Managed links are `session.linked` records in the manager's log**, not columns on the child. The edge is
+  written before the root starts, so no started root lacks its link; the manager's authority to read or cancel is
+  derived from that log, never from model text.
+- **A launch needs a real user prompt in the current turn, named by id, the manager attended, and passes caps**
+  (3 per turn, 8 live). Confirmation is unconditional and fresh each time (no pre-approval; unattended means deny); the
+  port re-checks attendance as a second line. A launched root is an ordinary root: workspace default model, normal
+  root permissions, nothing inherited from the manager.
+- **No model override on launch.** The Live transcript carries model-authored `Voice:` lines, so "the human named
+  this model" cannot be checked literally; launched roots use the workspace default.
+- **Result reads need a reason**: the manager launched the session, or the user named it in their latest message.
+  For GPT Live only the delegated request counts, never the `Voice:` lines of the transcript it carries.
+- **`session_wait` ends on new user input and never cancels a target.** While it waits it lends the manager's
+  supervisor slot back (`Supervisor.lent_slot`) so launched roots can run at a cap of 1; the manager resumes
+  without queueing, so the cap may be exceeded by that single turn until another turn ends.
+- **No hooks, no auto title, no summary call** for the manager: a hook is an arbitrary process, and a second model call
+  breaks "pinned, no fallback of any kind". The model is `github-copilot/gpt-6-luna` as a concrete reference, never
+  a tier.
+- **GPT Live on the manager needs a second, separate consent.** The call carries what the manager reads of other
+  sessions to OpenAI, which the base notice does not cover. It is versioned on its own so existing consent stays
+  valid for ordinary calls.
+- **Off by default, no real-provider soak.** The backend is tested offline only; native UI and a soak against real
+  Copilot and GPT Live come before the default flips.
+
 ## Status line: grey shimmer instead of the decode scramble
 
 Design overhaul step 6 scrambled a window of graphemes in the activity word with random glyphs and

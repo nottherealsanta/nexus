@@ -19,9 +19,10 @@ from ...ui_support import live_helper
 from ...ui_support.live_card import card_rows, card_status, card_title
 from ...ui_support.live_card import encode as card_encode
 from ...ui_support.live_helper import CONSENT_LINES, LiveCall, describe_failure
+from ...ui_support.manager import CONSENT_LINES as MANAGER_CONSENT_LINES
 from ...ui_support.voice_capture import play_cue
 
-USAGE = "Use /live [stop|pause|resume|mute|new|status|revoke]"
+USAGE = "Use /live [stop|pause|resume|mute|new|status|revoke [manager]]"
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
                 "working": "working", "muted": "muted", "paused": "paused", "ended": "ended"}
 
@@ -108,7 +109,8 @@ class Live:
 
     async def command(self, args: tuple[str, ...]) -> None:
         action = args[0].casefold() if args else ""
-        if len(args) > 1 or action not in {"", "stop", "pause", "resume", "mute", "new", "status", "revoke"}:
+        scope = "manager" if action == "revoke" and len(args) == 2 and args[1].casefold() == "manager" else ""
+        if not scope and (len(args) > 1 or action not in {"", "stop", "pause", "resume", "mute", "new", "status", "revoke"}):
             raise ValueError(USAGE)
         if action == "":
             if self.active:
@@ -127,6 +129,9 @@ class Live:
             await self.start(new_conversation=True)
         elif action == "status":
             await self.status()
+        elif scope:
+            await self.shell.client.live_consent(False, scope=scope)
+            self.shell.notice = "Manager cross-session consent withdrawn · the notice will be shown again for the Manager"
         else:
             await self.shell.client.live_consent(False)
             self.shell.notice = "GPT Live consent withdrawn · the notice will be shown again"
@@ -134,7 +139,8 @@ class Live:
     async def operate(self, operation: dict) -> None:
         kind = operation.get("kind")
         if kind == "live_consent":
-            await self.shell.client.live_consent(True)
+            scope = "manager" if operation.get("scope") == "manager" else ""
+            await self.shell.client.live_consent(True, **({"scope": scope} if scope else {}))
             self._close_panel()
             await self.start(new_conversation=bool(operation.get("new")), consented=True)
         elif kind == "live_toggle":
@@ -157,20 +163,27 @@ class Live:
         except live_helper.LiveHelperError as exc:
             self.fail("GPT Live is not available", exc)
             return
-        if not (status.consent or consented):
-            self._consent_dialog(new_conversation)
+        manager = self.shell.manager.is_active(session)
+        agreed = status.consent
+        if agreed and manager and not consented:
+            # A call on the manager also sends what it reads of other sessions: its own notice.
+            agreed = bool((await self.shell.client.live_consent(None, scope="manager")).accepted)
+        if not (agreed or consented):
+            self._consent_dialog(new_conversation, manager)
             return
         await self._connect(session, new_conversation)
 
-    def _consent_dialog(self, new_conversation: bool) -> None:
+    def _consent_dialog(self, new_conversation: bool, manager: bool = False) -> None:
         # The notice is the first row's body (list dialogs show item lines, not panel lines);
         # Enter on it closes, so agreeing is always a deliberate second step.
+        lines = [*CONSENT_LINES, "", *MANAGER_CONSENT_LINES] if manager else list(CONSENT_LINES)
+        agree = {"kind": "live_consent", "new": new_conversation, **({"scope": "manager"} if manager else {})}
         self.shell.workflows.menu(
-            "Use GPT Live voice?",
-            [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
-             ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
+            "Use GPT Live with the Manager?" if manager else "Use GPT Live voice?",
+            [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": lines}}),
+             ("Agree and start the call", agree),
              ("Cancel", {"kind": "back"})],
-            CONSENT_LINES, layout="context")
+            lines, layout="context")
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
@@ -187,7 +200,7 @@ class Live:
             await self._release()
             if getattr(exc, "kind", "") == "live_consent_required":  # the daemon's refusal is the consent dialog
                 self.shell.notice = "GPT Live needs your consent first"
-                self._consent_dialog(new_conversation)
+                self._consent_dialog(new_conversation, self.shell.manager.is_active(session))
                 return
             self.fail("GPT Live could not start", exc)
             return

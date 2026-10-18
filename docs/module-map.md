@@ -75,6 +75,7 @@ here, so add a row when you add a file.
 | `__init__.py` | Agents: restricted `*.md` subagent definitions |
 | `last_choice.py` | `AgentChoiceStore`: last model and effort per root agent (`~/.nexus/agent_models.json`) |
 | `manager.py` | AgentManager: deterministic subagent discovery, seeding, and tool selection |
+| `manager_prompt.py` | Packaged constants of the workspace manager session: kind, the pinned `github-copilot/gpt-6-luna` route, sign-in hint and system prompt; code, not a role file, so nothing user-supplied can extend it ([manager.md](manager.md)) |
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
 | `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
 | `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
@@ -204,7 +205,7 @@ here, so add a row when you add a file.
 | `daemon.py` | Daemon lifecycle, socket, handshake, and shutdown |
 | `diagnostics.py` | Compatibility module path for the daemon diagnostics implementation |
 | `doctor.py` | Compatibility exports for the bounded doctor projection |
-| `facade.py` | The single surface API: `HostFacade` over one :class:`Runtime` |
+| `facade.py` | The single surface API: `HostFacade` over one :class:`Runtime`; also opens the manager session (`ManagerOpen`/`ManagerState`) and injects its tool port |
 | `presence.py` | Host-level presence: client attachment and first-responder permission leases |
 | `protocol.py` | Transport-neutral wire contract for the host facade |
 | `session_diagnostics.py` | Compatibility module path for the session diagnostics implementation |
@@ -229,7 +230,7 @@ here, so add a row when you add a file.
 | `session_handoff.py` | Read-only indexed active handoff brief projection |
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
-| `auto_title.py` | Starts, bounds and cancels the background session-title call for a new root session |
+| `auto_title.py` | Starts, bounds and cancels the background session-title call for a new root session (never for the manager session) |
 | `user_shell.py` | Composer `!` shell mode: runs the command with bash, records `shell.*` events, adds the output to context without a turn |
 | `archive_protocol.py` | Wire records for the bounded session archive commands |
 | `attachments.py` | Bounded attachment preparation (images stay image blocks, documents via the isolated AnyDoc worker); drafts expire |
@@ -254,8 +255,9 @@ here, so add a row when you add a file.
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
-| `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses |
-| `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command |
+| `manager_port.py` | The workspace-manager session's host side: `HostManagerPort` (visibility, provenance from the manager's own log, launch caps, `session.linked`, wait, cancel, redaction, clipping), `FacadeManagerHost` (starts and cancels roots through `HostFacade`), `scan_manager_log` / `delegated_request` (Live provenance); injected via `Runtime.manager_port_factory` ([manager.md](manager.md)) |
+| `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses; a call on the manager session also needs the cross-session consent |
+| `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command; separate `manager` scope for the cross-session notice |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |
@@ -330,16 +332,16 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Session layer: shared SQLite state database, cross-process lock, handle |
 | `agent_selection.py` | Durable descriptive root-agent selection for one session |
-| `db.py` | Shared SQLite state, atomic child reservations, ownership queries and conservative evidence migration |
+| `db.py` | Shared SQLite state, atomic child reservations, ownership queries and conservative evidence migration; lists and the stale-archive sweep exclude the `manager` kind |
 | `child_ids.py` | Stable legacy-compatible logical-to-stored child id mapping; no ownership inference |
 | `handoff.py` | Atomic same-session summary, head, marker and continuation admission transaction |
 | `tree.py` | Bounded read-only, redacted ownership tree and OS-lock liveness projection |
 | `export.py` | Structured, transport-neutral SQLite session export |
 | `ids.py` | Session ID validation shared by SQLite session rows and lock paths |
 | `lock.py` | Cross-process session locking |
-| `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export |
+| `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export; `kind_of`, `manager_summary`, and the manager session's archive/delete/fork refusal |
 | `records.py` | Versioned records persisted by the SQLite session store |
-| `session.py` | The public session handle over SQLite records |
+| `session.py` | The public session handle over SQLite records; `Session.kind`, and no hooks for a `manager` session |
 | `title.py` | Automatic session titles: the small side call to a cheap model, the title prompt and reply cleaning |
 | `snapshot.py` | Versioned, derived snapshots for fast session resume |
 | `submissions.py` | Request-id validation and canonical admission digests; no scheduling or effect replay |
@@ -365,6 +367,8 @@ here, so add a row when you add a file.
 | `bundles.py` | Built-in bundle and profile definitions |
 | `loader.py` | Hot-load `.py` tool modules under version-stamped, generation-unique names |
 | `manager.py` | ToolManager: selected registry, validation, scheduling, and dispatch |
+| `manager_port.py` | `ManagerPort` protocol (`find` `status` `result` `launch` `wait` `cancel`) and bounded value types for the workspace manager session ([manager.md](manager.md)) |
+| `manager_tools.py` | The six manager tools over an injected `ManagerPort` and `build_manager_catalog`, the manager's whole catalog ([manager.md](manager.md)) |
 | `names.py` | Exact, one-way compatibility mapping for public tool names |
 | `permissions.py` | Permission grammar, evaluation, path security, and approval primitives |
 | `questions.py` | Session-scoped question requests for tools and agents |
@@ -457,6 +461,7 @@ here, so add a row when you add a file.
 | `external_worker.py` | Labelled authority/outcome blocks for an external Claude Code worker (`ConversationView.external`): launch authority, attention state with the manual instruction, transcript path, usage unknown |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
+| `manager.py` | Toolkit-free presentation of the workspace manager session from `ManagerState`: pinned sidebar entry, cross-session Live notice, refused chat commands, and the always-confirmed launch/cancel approval rows; mirrors (never imports) the facade and prompt constants ([manager.md](manager.md)) |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |
 | `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
@@ -529,6 +534,7 @@ here, so add a row when you add a file.
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
 | `bridge.py` | Sessions dashboard projection and list polling |
+| `manager.py` | Native Manager entry: reads `ManagerState` for the pinned row, `ManagerOpen`, and the manager's Live route through the ordinary Live bridge; host-side rules stay authoritative ([manager.md](manager.md)) |
 | `permission_prompt.py` | Structured permission prompt fields for the native client: `title`, `since`, `what`, `why` |
 | `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted); change tools group apart from other tools; compact labels above 5 members; `Working` and the newest-5 member window while running |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |

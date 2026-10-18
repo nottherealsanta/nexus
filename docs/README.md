@@ -35,6 +35,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |
 | GPT Live voice calls (experimental) | [live.md](live.md) | `nexus/live/` |
+| The workspace manager session (implemented, unverified, off by default) | [manager.md](manager.md) | `nexus/tools/manager_*.py`, `nexus/host_support/manager_port.py`, `nexus/agents/manager_prompt.py` |
 | Network, credentials, sandboxing, trust boundaries | [security.md](security.md) | |
 | Write or run tests; fakes; browser checks | [testing.md](testing.md) | `tests/` |
 | Dev mode, mock scenarios, benchmark, examples | [devtools.md](devtools.md) | `nexus/devtools/`, `benchmark/` |

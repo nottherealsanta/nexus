@@ -496,7 +496,8 @@ class StateDatabase:
             for row in self._connection().execute(
                 "SELECT s.*, p.root AS workspace FROM sessions s "
                 "JOIN projects p ON p.id=s.project_id "
-                "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
+                "WHERE s.namespace='main' AND s.kind<>'manager' "
+                "AND s.archived_at IS NULL AND s.trash_id IS NULL "
                 f"AND {_has_user_input('s')} "
                 + search
                 + "ORDER BY CASE WHEN s.last_user_at > 0 THEN s.last_user_at "
@@ -515,7 +516,8 @@ class StateDatabase:
             for row in self._connection().execute(
                 "SELECT s.*, p.root AS workspace FROM sessions s "
                 "JOIN projects p ON p.id=s.project_id "
-                "WHERE s.namespace='main' AND s.archived_at IS NOT NULL AND s.trash_id IS NULL "
+                "WHERE s.namespace='main' AND s.kind<>'manager' "
+                "AND s.archived_at IS NOT NULL AND s.trash_id IS NULL "
                 f"AND {_has_user_input('s')} "
                 "ORDER BY s.archived_at DESC, s.project_id, s.id LIMIT ?",
                 [limit],
@@ -1535,11 +1537,37 @@ class SqliteSessionStore:
             result.update({row[0]: row[1] for row in rows})
         return result
 
+    def manager_row(self) -> dict[str, Any] | None:
+        """The workspace's singleton manager row (main namespace), live or draft, else ``None``."""
+        if self.namespace != "main":
+            return None
+        with self._draft_lock:
+            for session, metadata in self._draft_metadata.items():
+                if session in self._drafts and metadata.get("kind") == "manager":
+                    return self.session_row(session)
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT * FROM sessions WHERE project_id=? AND namespace='main' "
+                "AND kind='manager' AND trash_id IS NULL ORDER BY created_at, id LIMIT 1",
+                (self.project_id,),
+            )
+            .fetchone()
+        )
+        return dict(row) if row is not None else None
+
     def list_rows(
-        self, *, include_trashed: bool = False, include_archived: bool = True
+        self,
+        *,
+        include_trashed: bool = False,
+        include_archived: bool = True,
+        include_manager: bool = False,
     ) -> list[dict[str, Any]]:
+        """Session rows with user input. The manager session is excluded unless asked for."""
         clauses = ["project_id=?", "namespace=?", _has_user_input()]
         params: list[Any] = [self.project_id, self.namespace]
+        if not include_manager:
+            clauses.append("kind<>'manager'")
         if not include_trashed:
             clauses.append("trash_id IS NULL")
         if not include_archived:
@@ -1632,8 +1660,8 @@ class SqliteSessionStore:
             self.db._connection()
             .execute(
                 "SELECT id FROM sessions WHERE project_id=? AND namespace=? AND "
-                "trash_id IS NULL AND archived_at IS NULL AND last_activity <= ? "
-                "ORDER BY last_activity ASC LIMIT ?",
+                "kind<>'manager' AND trash_id IS NULL AND archived_at IS NULL "
+                "AND last_activity <= ? ORDER BY last_activity ASC LIMIT ?",
                 (self.project_id, self.namespace, threshold, min(limit, _MAX_LIMIT)),
             )
             .fetchall()

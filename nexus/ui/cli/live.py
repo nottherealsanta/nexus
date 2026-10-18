@@ -19,6 +19,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TextIO
 
 from ...ui_support import live_helper
+from ...ui_support.manager import CONSENT_LINES as MANAGER_CONSENT_LINES
+from ...ui_support.manager import MANAGER_SESSION_ID
 from ...ui_support.text import escape_controls
 
 #: The stop reason sent to the daemon when the user hangs up (Ctrl+C or end of input).
@@ -141,21 +143,27 @@ async def run_live(
             stderr.write(f"Fix: {exc.hint}\n")
         return 1
 
-    if not status.consent:
+    # A call on the manager also sends what it reads of other sessions: its own, separate notice.
+    manager = session == MANAGER_SESSION_ID
+    agreed = bool(status.consent)
+    if agreed and manager:
+        agreed = bool((await client.live_consent(None, scope="manager")).accepted)
+    if not agreed:
         if not interactive:
             stderr.write(
                 "Error: GPT Live consent is not recorded on this machine, and stdin is not a terminal, "
                 "so nothing was started. Run `nexus live` in a terminal to read the notice and agree.\n"
             )
             return 1
-        stdout.write("\n".join(live_helper.CONSENT_LINES) + "\n\n")
+        lines = [*live_helper.CONSENT_LINES, "", *MANAGER_CONSENT_LINES] if manager else live_helper.CONSENT_LINES
+        stdout.write("\n".join(lines) + "\n\n")
         stderr.write("Agree and start the call? [y/N] ")
         stderr.flush()
         answer = (await ask() or "").strip().lower()
         if answer not in ("y", "yes"):
             stderr.write("Not started. Nothing was recorded.\n")
             return 1
-        await client.live_consent(True)
+        await client.live_consent(True, **({"scope": "manager"} if manager else {}))
 
     summary = await client.open_session(session)
     from_seq = int(getattr(summary, "last_seq", 0) or 0)

@@ -29,16 +29,89 @@ never falls back, and there is no mid-stream rerouting.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
-from ..errors import ConfigError
-from .capabilities import Capabilities
+from ..errors import (
+    ConfigError,
+    MalformedToolCall,
+    ManagerModelUnavailable,
+    ProviderError,
+    ProviderOverloaded,
+)
+from .capabilities import Capabilities, CapabilityRejected
+from .http import redact_secrets
 from .provider import Provider, ResolvedModel
 from .request import ModelRequest
+from .stream import StreamEvent
 from .tiers import DEFAULT_TIER_EFFORTS, DEFAULT_TIER_MODELS
 
-__all__ = ["ModelRouter"]
+__all__ = ["MODEL_POLICY_PINNED", "ModelRouter", "pinned_reference"]
+
+#: ``request.metadata["model_policy"]`` value that disables every fallback and
+#: every substitution (plan 02): the request resolves to exactly
+#: ``metadata["pinned_model"]`` or fails with :class:`ManagerModelUnavailable`.
+MODEL_POLICY_PINNED = "pinned"
+
+
+def pinned_reference(request: ModelRequest) -> str | None:
+    """The exact ``provider/model`` a pinned request must run on, else ``None``."""
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if metadata.get("model_policy") != MODEL_POLICY_PINNED:
+        return None
+    reference = metadata.get("pinned_model")
+    if not isinstance(reference, str) or "/" not in reference:
+        # A pinned policy with no usable pin must fail, never route elsewhere.
+        return ""
+    return reference
+
+
+class _PinnedProvider:
+    """Delegates to the real provider and names the pinned model on failure.
+
+    Transient overload, malformed tool calls and capability rejections pass
+    through untouched because the loop retries or degrades those on the *same*
+    model; every other provider failure (sign-in, quota, unknown model)
+    surfaces as :class:`ManagerModelUnavailable` naming the exact route.
+    """
+
+    def __init__(self, inner: Provider, reference: str, hint: str = "") -> None:
+        self._inner = inner
+        self._reference = reference
+        self._hint = hint
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    @property
+    def name(self) -> str:
+        return self._inner.name
+
+    def capabilities(self, model: str) -> Capabilities:
+        return self._inner.capabilities(model)
+
+    async def count_tokens(self, req: ModelRequest) -> int | None:
+        return await self._inner.count_tokens(req)
+
+    async def aclose(self) -> None:
+        """No-op: the router's provider is shared and closed by its owner."""
+
+    async def stream(self, req: ModelRequest) -> AsyncIterator[StreamEvent]:
+        inner = self._inner.stream(req)
+        try:
+            async for event in inner:
+                yield event
+        except (ProviderOverloaded, MalformedToolCall, CapabilityRejected, ManagerModelUnavailable):
+            raise
+        except ProviderError as exc:
+            reason = redact_secrets(str(exc))
+            raise ManagerModelUnavailable(
+                self._reference, f"{reason}; {self._hint}" if self._hint else reason
+            ) from exc
+        finally:
+            close = getattr(inner, "aclose", None)
+            if close is not None:
+                await close()
 
 
 class ModelRouter:
@@ -115,6 +188,9 @@ class ModelRouter:
         malformed reference, an alias cycle, an unregistered provider, or a
         tier with no selectable model.
         """
+        pinned = pinned_reference(request)
+        if pinned is not None:
+            return self._resolve_pinned(request, pinned)
         ref = self._resolve_alias(self._reference(request))
 
         tier = self._as_tier(ref)
@@ -135,8 +211,11 @@ class ModelRouter:
         the chain: the primary failure is the actionable error, and a broken
         fallback must not mask it. The returned list is *candidates*, not a
         commitment -- the loop only tries one after a provider-level failure
-        that produced no output (plan section 8).
+        that produced no output (plan section 8). A pinned request has none:
+        agent, tier and workspace fallbacks are all ignored.
         """
+        if pinned_reference(request) is not None:
+            return []
         agent_refs = _agent_fallback(request)
         seen: set[tuple[str, str]] = set()
         try:
@@ -163,6 +242,34 @@ class ModelRouter:
         return candidates
 
     # -- internals ---------------------------------------------------------
+
+    def _resolve_pinned(self, request: ModelRequest, pinned: str) -> ResolvedModel:
+        """Resolve exactly ``pinned``: no alias, tier, default or fallback.
+
+        The request may name the same route (``provider`` + ``model``) but never
+        a different one; a mismatch or any resolution failure raises
+        :class:`ManagerModelUnavailable` naming the pinned route.
+        """
+        if not pinned:
+            raise ManagerModelUnavailable("(unset)", "the pinned model policy has no model")
+        hint = request.metadata.get("pinned_hint") if isinstance(request.metadata, dict) else None
+        hint = hint if isinstance(hint, str) and len(hint) <= 200 else ""
+        requested = f"{request.provider}/{request.model}" if request.provider and request.model else request.model
+        if requested != pinned:
+            raise ManagerModelUnavailable(pinned, f"request named {requested!r} instead")
+        try:
+            info = self._registry_lookup(pinned)
+            if info is not None:
+                resolved = self._resolve_info(info, pinned)
+            else:
+                resolved = self._resolve_legacy(pinned)
+        except ConfigError as exc:
+            raise ManagerModelUnavailable(pinned, f"{exc}; {hint}" if hint else str(exc)) from exc
+        if resolved.model != pinned.partition("/")[2]:
+            raise ManagerModelUnavailable(pinned, "resolved to a different route")
+        return ResolvedModel(
+            _PinnedProvider(resolved.provider, pinned, hint), resolved.model, resolved.capabilities
+        )
 
     def _reference(self, request: ModelRequest) -> str:
         if request.provider and request.model:
@@ -280,6 +387,8 @@ class ModelRouter:
 
     def tier_effort(self, request: ModelRequest, candidate: ResolvedModel) -> str | None:
         """Apply per-route defaults only when no explicit effort was selected."""
+        if pinned_reference(request) is not None:
+            return request.params.reasoning_effort  # provider default (plan 02 U4)
         tier = request.metadata.get("tier") or self._resolve_alias(self._reference(request))
         if (
             request.metadata.get("reasoning_effort_explicit")

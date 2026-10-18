@@ -31,6 +31,11 @@ _PROJECTIONS: dict[str, tuple[str, str, str]] = {
         "info", "permission.resolved", "A permission request was resolved."
     ),
     "model.retrying": ("warning", "model.retrying", "A model request is being retried."),
+    "session.linked": ("info", "session.linked", "A session was launched by the manager."),
+    "manager.launch_refused": ("warning", "manager.launch_refused", "A manager launch was refused."),
+    "manager.result_read": ("info", "manager.result_read", "The manager read a session result."),
+    "manager.wait": ("info", "manager.wait", "The manager waited for sessions."),
+    "manager.cancelled": ("info", "manager.cancelled", "The manager cancelled a session."),
     "error": ("error", "error", "An operation failed."),
 }
 

@@ -50,6 +50,8 @@ _TOPIC_FIELDS = {
         "sessions_sidebar",
         "tabs",
         "panel_layout",
+        # The pinned Manager entry sits above the roots in the same sidebar.
+        "manager",
     },
     "details": {"details_panel", "details_sidebar"},
     # GPT Live call bar: refreshed ~4x/s while a call is open, so it must not

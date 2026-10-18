@@ -40,9 +40,11 @@ from typing import Any
 
 import msgspec
 
+from ..agents.manager_prompt import MANAGER_KIND, MANAGER_MODEL_REF, MANAGER_PROVIDER, MANAGER_SIGN_IN_HINT
 from ..agents.runner import cancel_child
+from ..config.schema import ManagerSection
 from ..devtools import dev_enabled
-from ..errors import ExtensionTrashError, SessionBusy
+from ..errors import ConfigError, ExtensionTrashError, SessionBusy, SessionError
 from ..events import Event
 from ..ext.quarantine import sanitize_text
 from ..host_support.attachments import AttachmentStore
@@ -72,6 +74,9 @@ from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
 from ..host_support.live import dispatch_live
+from ..host_support.live_consent import read_consent
+from ..host_support.manager_port import FacadeManagerHost, HostManagerPort, scan_manager_log
+from ..host_support.provider_auth import connected as provider_connected
 from ..host_support.voice import dispatch_voice, doctor_voice
 from ..host_support.worktree_projection import review_hex
 from ..host_support.worktree_projection import (
@@ -115,6 +120,15 @@ _MAX_FILE_SEARCH_ENTRIES = 50_000
 #: Default global cap when the caller does not supply one.
 DEFAULT_MAX_CONCURRENT_TURNS = 4
 
+#: The workspace manager's fixed session id (plan 02, docs/manager.md). Reserved: no
+#: other session may be created under it, so ``ManagerOpen`` is a true singleton.
+MANAGER_SESSION_ID = "nexus-manager"
+MANAGER_DISABLED_MESSAGE = (
+    "The manager is turned off. Set [manager] enabled = true in the Nexus config to use it."
+)
+#: Newest managed ids ``ManagerState`` lists.
+_MAX_MANAGED_LISTED = 50
+
 
 class HostFacade:
     """Wrap one runtime as the complete, transport-neutral surface API."""
@@ -144,6 +158,15 @@ class HostFacade:
         self._worktree_lock = threading.Lock()
         self._worktree_confirmation_lock = threading.Lock()
         self._worktree_used_tokens: dict[str, int] = {}
+        # The manager's six tools reach the host only through the port this builds
+        # (docs/manager.md). A runtime that already has a factory (tests) keeps it.
+        if getattr(runtime, "manager_port_factory", False) is None:
+            runtime.manager_port_factory = self._manager_port
+
+    def _manager_port(self, session: Any) -> HostManagerPort:
+        return HostManagerPort(
+            self.runtime.sessions, handle=session, host=FacadeManagerHost(self),
+        )
 
     @property
     def max_concurrent_turns(self) -> int:
@@ -158,6 +181,81 @@ class HostFacade:
     def list_sessions(self, *, include_children: bool = False) -> list[SessionSummary]:
         """Every session, newest activity first (PLAN §14.4)."""
         return list(self.runtime.sessions.list(include_children=True) if include_children else self.runtime.sessions.list())
+
+    # -- the manager session (plan 02, docs/manager.md) -------------------
+
+    def manager_config(self) -> ManagerSection:
+        """The effective ``[manager]`` section; the defaults (disabled) when unreadable."""
+        loader = getattr(self.runtime, "_load_config", None)
+        try:
+            config = loader() if callable(loader) else None
+        except (ConfigError, OSError):
+            config = None
+        section = getattr(getattr(config, "v2", None), "manager", None)
+        return section if isinstance(section, ManagerSection) else ManagerSection()
+
+    def open_manager(self) -> tuple[SessionSummary, bool]:
+        """Open or create the workspace's singleton manager session; ``(summary, created)``.
+
+        Idempotent: later calls return the same session with ``created`` false. The
+        row's kind is ``manager`` from its first record, so no other path can make a
+        regular session out of it or the reverse. Needs ``[manager] enabled``.
+        """
+        if not self.manager_config().enabled:
+            raise ConfigError(MANAGER_DISABLED_MESSAGE)
+        sessions = self.runtime.sessions
+        created = sessions.manager_summary() is None
+        if created:
+            if sessions.store.row_exists(MANAGER_SESSION_ID):
+                raise SessionError(
+                    f"session id {MANAGER_SESSION_ID!r} is already used by a regular session; "
+                    "rename or delete it to use the manager"
+                )
+            sessions.open(
+                MANAGER_SESSION_ID, create=True, recover=False, ownership={"kind": MANAGER_KIND}
+            )
+        self._session(MANAGER_SESSION_ID)
+        return sessions.summary(MANAGER_SESSION_ID), created
+
+    async def manager_state(self) -> p.ManagerStateResult:
+        """The manager's id, pinned model, sign-in state and managed roots (read-only, never raises for 'off')."""
+        section = self.manager_config()
+        sessions = self.runtime.sessions
+        summary = sessions.manager_summary() if section.enabled else None
+        home = getattr(self.runtime, "_home", None)
+        copilot = await provider_connected(self.runtime, MANAGER_PROVIDER)
+        codex = await provider_connected(self.runtime, "codex")
+        base = bool(read_consent(home))
+        cross = bool(read_consent(home, "manager"))
+        managed: list[str] = []
+        if summary is not None:
+            try:
+                records = await asyncio.to_thread(lambda: sessions.store.read(summary.id).records)
+                managed = list(dict.fromkeys(link.child for link in scan_manager_log(records).links))
+            except Exception:  # noqa: BLE001 - state is informational; an unreadable log lists nothing
+                managed = []
+        return p.ManagerStateResult(
+            enabled=section.enabled,
+            session=summary.id if summary is not None else "",
+            state=summary.state if summary is not None else "",
+            model=MANAGER_MODEL_REF,
+            provider=MANAGER_PROVIDER,
+            signed_in=copilot,
+            sign_in="" if copilot else MANAGER_SIGN_IN_HINT,
+            codex_signed_in=codex,
+            live_consent=base,
+            live_manager_consent=cross,
+            live_ready=codex and base and cross,
+            managed=managed[-_MAX_MANAGED_LISTED:],
+            max_launches_per_turn=section.max_launches_per_turn,
+            max_live_managed=section.max_live_managed,
+        )
+
+    def _refuse_manager(self, session_id: str, what: str) -> None:
+        """Refuse ``what`` for the manager session (it is structural, not configurable)."""
+        kind_of = getattr(self.runtime.sessions, "kind_of", None)
+        if callable(kind_of) and kind_of(session_id) == MANAGER_KIND:
+            raise ConfigError(f"the manager session does not support {what}")
 
     def search_files(self, query: str, limit: int = 30) -> list[str]:
         """Return bounded, visible workspace-relative file path matches."""
@@ -535,6 +633,8 @@ class HostFacade:
         new_id: str | None = None,
     ) -> SessionSummary:
         """Branch a session at ``at_seq`` into a new one."""
+        if new_id == MANAGER_SESSION_ID:
+            raise ValueError(f"session id {MANAGER_SESSION_ID!r} is reserved for the manager")
         child = self.runtime.sessions.fork(session_id, at_seq, new_id=new_id)
         return self.runtime.sessions.summary(child.id)
 
@@ -1558,6 +1658,11 @@ class HostFacade:
             return result
         if result := await dispatch_live(command, self):
             return result
+        if isinstance(command, p.ManagerOpen):
+            summary, created = self.open_manager()
+            return p.ManagerOpenResult(session=summary, created=created)
+        if isinstance(command, p.ManagerState):
+            return await self.manager_state()
         if isinstance(command, (p.SpeechStatus, p.SpeechPrepare)):
             from ..host_support.speech import dispatch_speech  # lazy: it imports host.protocol
 
@@ -1666,6 +1771,7 @@ class HostFacade:
                 **inspect_session(self.runtime.sessions, command.session, command.namespace),
             )
         if isinstance(command, p.SessionHandoff):
+            self._refuse_manager(command.session, "manual handoff")
             handle = self._session(command.session, create=False, recover=False)
             result = handle.handoff(summary=command.summary,
                 continuation=command.continuation, request_id=command.request_id,
@@ -1811,6 +1917,7 @@ class HostFacade:
                 turn_id=turn_id,
             )
         if isinstance(command, p.SessionShell):
+            self._refuse_manager(command.session, "shell commands")
             handle = self._session(command.session)
             return p.SessionShellResult(
                 session=command.session, shell_id=self.shells.start(handle, command.command)
@@ -2057,6 +2164,7 @@ class HostFacade:
                 )
             )
         if isinstance(command, p.ModelSelect):
+            self._refuse_manager(command.session, "model selection")
             selection = self.select_model(command.session, command.ref)
             return p.ModelSelectResult(
                 session=command.session,
@@ -2072,6 +2180,7 @@ class HostFacade:
                 apply_next_turn=True,
             )
         if isinstance(command, p.ReasoningEffortSelect):
+            self._refuse_manager(command.session, "reasoning effort selection")
             handle = self._session(command.session)
             metadata = self._root_reasoning_effort_metadata(handle)
             if command.effort is not None:
@@ -2111,15 +2220,18 @@ class HostFacade:
             metadata = self.current_agent_metadata(command.session)
             return p.AgentCurrentResult(session=command.session, **metadata)
         if isinstance(command, p.AgentSelect):
+            self._refuse_manager(command.session, "role selection")
             name, source = self.select_agent(command.session, command.name)
             return p.AgentSelectResult(session=command.session, name=name, source=source)
         if isinstance(command, p.AgentReset):
+            self._refuse_manager(command.session, "role selection")
             name, source = self.select_agent(command.session, None)
             return p.AgentSelectResult(session=command.session, name=name, source=source)
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
         if isinstance(command, p.ContextMcpLoadingSelect):
+            self._refuse_manager(command.session, "MCP, skills or extensions")
             session = self._session(command.session, create=False, recover=False)
             context = await self.inspect_context(command.session)
             if not any(row.get("name") == command.server for row in context["mcp_servers"]):
@@ -2127,6 +2239,7 @@ class HostFacade:
             session.select_mcp_loading(command.server, command.mode)
             return p.ContextInspectResult(session=command.session, **await self.inspect_context(command.session))
         if isinstance(command, p.ContextExtensionSelect):
+            self._refuse_manager(command.session, "MCP, skills or extensions")
             session = self._session(command.session, create=False, recover=False)
             if session.context_locked or session.active:
                 raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
@@ -2252,7 +2365,17 @@ class HostFacade:
         self, session_id: str, *, create: bool = True, recover: bool = True
     ) -> Any:
         """Open a session and take over its queue scheduling exactly once."""
+        if (
+            create
+            and session_id == MANAGER_SESSION_ID
+            and not self.runtime.sessions.exists(session_id)
+        ):
+            raise ValueError(
+                f"session id {MANAGER_SESSION_ID!r} is reserved for the manager; use ManagerOpen"
+            )
         handle = self.runtime.session(session_id, create=create, recover=recover)
+        if getattr(handle, "kind", None) == MANAGER_KIND and not self.manager_config().enabled:
+            raise ConfigError(MANAGER_DISABLED_MESSAGE)
         if session_id not in self._managed:
             bind = getattr(handle, "bind", None)
             if callable(bind):

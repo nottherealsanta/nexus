@@ -224,6 +224,22 @@ async def _session_command(
         await client.aclose()
 
 
+async def _manager_command(workspace: Path, args: argparse.Namespace, stdout: TextIO) -> str:
+    """Use the same host contract as the native Manager entry; never read session storage."""
+    from .ui.cli import open_client
+    from .ui_support.manager import status_lines
+
+    client = await open_client(workspace)
+    try:
+        if args.manager_action == "status":
+            for label, value in status_lines(await client.manager_state()).items():
+                stdout.write(f"{label}: {value}\n")
+            return ""
+        return (await client.manager_open()).session.id
+    finally:
+        await client.aclose()
+
+
 async def _dispatch_sessions(
     client: Any, args: argparse.Namespace, stdout: TextIO
 ) -> int:
@@ -1581,6 +1597,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create nexus.toml, SOUL.md, and MEMORY.md without overwriting",
     )
 
+    manager = sub.add_parser("manager", help="Open the workspace Manager (launch, find and review sessions)")
+    manager.add_argument("manager_action", nargs="?", choices=("open", "status"), default="open")
+
     claude = sub.add_parser("claude", help="Claude Pro/Max subscription provider")
     claude_sub = claude.add_subparsers(dest="claude_action", required=True)
     claude_init = claude_sub.add_parser(
@@ -1855,6 +1874,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init":
             initialize(workspace)
             return 0
+        if args.command == "manager":
+            if args.manager_action == "status":
+                asyncio.run(_manager_command(workspace, args, stdout))
+                return 0
+            if not (sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb"):
+                stderr.write("Error: `nexus manager` requires an interactive terminal. Use `nexus manager status` for status.\n")
+                return 2
+            session = asyncio.run(_manager_command(workspace, args, stdout))
+            return _chat_entry(workspace, session=session, renderer="ratatui")
         if args.command == "run":
             message = sys.stdin.read() if args.message == "-" else args.message
             approver = None

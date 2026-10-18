@@ -81,6 +81,9 @@ class SessionDashboard:
         self.query = ""
         self.rows_query = ""
         self.rows = []
+        manager = getattr(self.shell, "manager", None)
+        if manager is not None:
+            await manager.refresh()  # the pinned entry shows the current status the moment the page opens
         await self.refresh()
         if self.visible:
             self.task = asyncio.create_task(self._poll())
@@ -129,7 +132,10 @@ class SessionDashboard:
                 return
             before = repr(self.snapshot())
             epoch, query = self.epoch, self.query
+            manager = getattr(self.shell, "manager", None)
             try:
+                if manager is not None and manager.due():
+                    await manager.refresh()
                 await self.refresh()
             except asyncio.CancelledError:
                 raise
@@ -152,7 +158,8 @@ class SessionDashboard:
         if kind == "sessions_search":
             query = operation.get("query")
             return isinstance(query, str) and len(query) <= QUERY_LIMIT
-        if kind in {"sessions_close", "sessions_refresh", "session_new", "worktrees", "archived"}:
+        if kind in {"sessions_close", "sessions_refresh", "session_new", "worktrees", "archived",
+                    "manager_open", "manager_live"}:
             return True
         row = self.row(operation.get("id"))
         if row is None:
@@ -228,7 +235,7 @@ class SessionDashboard:
                         item[key] = escape_controls(value)
                 item["activity"] = escape_controls(tails.get("activity") or "")
                 break
-        return {
+        snapshot = {
             "kind": "sessions", "rows": rows, "selected": self.selected, "query": self.rows_query,
             "error": self.error,
             "truncated": bool(self.shell.sessions_truncated),
@@ -236,3 +243,7 @@ class SessionDashboard:
             "worktree": escape_controls(str(getattr(self.shell, "worktree", "") or ""))[:80],
             "workspace": escape_controls(workspace),
         }
+        manager = getattr(self.shell, "manager", None)
+        if manager is not None:  # pinned above the roots, never one of the rows
+            snapshot["manager"] = manager.entry()
+        return snapshot

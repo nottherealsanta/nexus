@@ -74,6 +74,11 @@ class Supervisor:
         #: submissions already removed at cancel time; the durable FIFO is
         #: dropped when the lease exists and the *actual* count reconciled then.
         self._cancel_requested: dict[str, tuple[str, bool, int]] = {}
+        #: Active sessions whose turn only waits on other sessions (the manager in
+        #: ``session_wait``) and has lent its global slot back. They stay in
+        #: ``_active`` (one turn per session, cancel, idle) but do not count
+        #: against the cap, so the sessions they wait for can run at cap 1.
+        self._lent: set[str] = set()
         self._rotation: deque[str] = deque()
         self._watchers: dict[str, asyncio.Task] = {}
         self._idle = asyncio.Event()
@@ -113,8 +118,37 @@ class Supervisor:
         """Number of turns currently in flight across every session."""
         return len(self._active)
 
+    @property
+    def slots_used(self) -> int:
+        """Turns holding a global slot: in flight, minus those that lent theirs."""
+        return len(self._active - self._lent)
+
     def running_for(self, session: str) -> int:
         return 1 if session in self._active else 0
+
+    @contextlib.asynccontextmanager
+    async def lent_slot(self, session_id: str):
+        """Give ``session_id``'s global slot back while its turn only waits.
+
+        For a turn that blocks on *other* sessions' progress (the manager's
+        ``session_wait``): without this, at ``max_concurrent=1`` the waiter holds
+        the only slot and the session it waits for is parked forever. Parked
+        turns start at once if a slot is now free. On exit the turn takes its
+        slot back **without queueing**, so it is never stuck behind the sessions
+        it was waiting for (they may need the user); the cap may then be
+        exceeded by this one turn until another turn ends, and no new turn
+        starts while ``slots_used`` is at or over the cap. A session with no
+        active turn, or one already lending, is left alone.
+        """
+        if session_id not in self._active or session_id in self._lent:
+            yield
+            return
+        self._lent.add(session_id)
+        try:
+            await self._pump()
+            yield
+        finally:
+            self._lent.discard(session_id)
 
     def queued_for(self, session: str) -> int:
         queue = self._queues.get(session)
@@ -132,7 +166,7 @@ class Supervisor:
             not waiting
             or session in self._active
             or session in self._starting
-            or len(self._active) < self._max
+            or self.slots_used < self._max
         ):
             return None
         return {"waiting": waiting, "running": len(self._active), "limit": self._max}
@@ -329,7 +363,7 @@ class Supervisor:
     async def _pump(self) -> None:
         """Start as many queued turns as the global cap allows, fairly."""
         async with self._lock:
-            while self.running < self._max and self._rotation:
+            while self.slots_used < self._max and self._rotation:
                 session_id = self._rotation.popleft()
                 queue = self._queues.get(session_id)
                 if not queue:
@@ -457,6 +491,7 @@ class Supervisor:
         finally:
             self._watchers.pop(turn_id, None)
             self._active.discard(session_id)
+            self._lent.discard(session_id)
             if self._queues.get(session_id):
                 # A finished session goes to the *back* of the rotation, so a
                 # backlog on one session cannot starve the others: round-robin

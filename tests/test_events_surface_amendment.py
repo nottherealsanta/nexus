@@ -80,6 +80,7 @@ def test_catalogue_group_names_and_order():
         "input",
         "shell",
         "live",
+        "manager",
         "presence",
         "daemon",
         "misc",

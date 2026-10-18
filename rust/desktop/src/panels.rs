@@ -16,6 +16,10 @@ fn panel_scroll_handle() -> ScrollHandle {
 }
 /// Separate only a trailing canonical mock directive; original titles remain
 /// untouched in the snapshot, search index, operations and full-title tooltip.
+fn active_session_title(title: &str, manager: bool) -> (&str, Option<&str>) {
+    if manager { ("◇ Manager", None) } else { session_title(title) }
+}
+
 fn session_title(title: &str) -> (&str, Option<&str>) {
     for (open, close) in [("⟦mock scenario=", "⟧"), ("[mock scenario=", "]")] {
         if let Some(start) = title.rfind(open) {
@@ -503,7 +507,7 @@ impl Desktop {
                     self.snapshot.title.clone()
                 }
             });
-        let (display_title, mock) = session_title(&title);
+        let (display_title, mock) = active_session_title(&title, self.snapshot.manager.active);
         let workspace = compact_workspace(
             &self.snapshot.breadcrumb,
             std::env::var("HOME").ok().as_deref(),
@@ -891,6 +895,107 @@ impl Desktop {
             .child(card)
             .into_any_element()
     }
+    /// The pinned Manager card: status glyph, name, `Voice`, the status line (off / not signed in /
+    /// ready), the pinned model with Live readiness and the cross-session privacy line. The card
+    /// opens the manager session (`ManagerOpen`); `Voice` opens it and starts the Live call.
+    pub(crate) fn manager_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme();
+        let entry = &self.snapshot.manager;
+        let card = manager_card_rows(entry);
+        let tone = match card.tone {
+            "warn" => t.amber,
+            "off" => t.muted,
+            _ => t.text,
+        };
+        div()
+            .id("manager-entry")
+            .focusable()
+            .tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
+            .focus(move |s| s.bg(t.raised))
+            .mx_3()
+            .mb_2()
+            .px_3()
+            .py_2()
+            .rounded(px(crate::theme::radius::CHIP))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .border_1()
+            .border_color(if entry.active {
+                t.brand.opacity(0.7)
+            } else {
+                t.border
+            })
+            .bg(if entry.active { t.accent_bg } else { t.surface })
+            .hover(move |s| s.bg(t.raised))
+            .cursor(CursorStyle::Arrow)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when_some(session_status(&entry.status, t), |d, (glyph, color)| {
+                        d.child(
+                            div()
+                                .text_size(px(crate::theme::size::CAPTION))
+                                .text_color(color)
+                                .child(glyph),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .truncate()
+                            .child("Manager"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(crate::theme::size::CAPTION))
+                            .text_color(t.muted)
+                            .child(card.caption),
+                    )
+                    .when(card.voice, |d| {
+                        d.child(
+                            self.button(
+                                "manager-voice",
+                                "Voice",
+                                json!({"type":"manager_live"}),
+                                cx,
+                            )
+                            .px_2()
+                            .py_0(),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(crate::theme::size::SMALL))
+                    .text_color(tone)
+                    .child(card.summary.clone()),
+            )
+            .when(!card.detail.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(crate::theme::size::CAPTION))
+                        .text_color(t.muted)
+                        .child(card.detail.clone()),
+                )
+            })
+            .when(!card.privacy.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(crate::theme::size::CAPTION))
+                        .text_color(t.muted)
+                        .child(card.privacy.clone()),
+                )
+            })
+            .on_click(cx.listener(|this, _, w, cx| {
+                this.dispatch(json!({"type":"manager_open"}), w, cx)
+            }))
+            .into_any_element()
+    }
     pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         let query = self.search.read(cx).content.to_lowercase();
@@ -974,6 +1079,16 @@ impl Desktop {
                             }),
                     ),
             )
+            // The pinned Manager sits above the roots with a rule between: never one of the rows.
+            .when(self.snapshot.manager.shown(), |d| {
+                d.child(self.manager_entry(cx)).child(
+                    div()
+                        .mx_4()
+                        .mb_2()
+                        .border_b_1()
+                        .border_color(t.border.opacity(0.55)),
+                )
+            })
             .child(
                 div()
                     .id("session-list")
@@ -1590,6 +1705,35 @@ impl Desktop {
     }
     fn composer_choices(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
+        if self.snapshot.manager.active {
+            // The manager has no role, model choice or effort: labels, not controls.
+            return div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .text_size(px(crate::theme::size::SMALL))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.text)
+                        .child("Manager"),
+                )
+                .child(div().text_color(t.text_tertiary).child("·"))
+                .child(
+                    div()
+                        .text_color(t.muted)
+                        .child(manager_model_label(&self.snapshot)),
+                )
+                .child(div().text_color(t.text_tertiary).child("·"))
+                .child(
+                    div()
+                        .text_color(t.muted)
+                        .child("fixed model · no role, shell or fork"),
+                )
+                .into_any_element();
+        }
         div()
             .flex()
             .flex_wrap()
@@ -2289,6 +2433,11 @@ impl Render for ControlHint {
 mod header_tests {
     use super::*;
     #[test]
+    fn manager_header_is_distinct_from_ordinary_sessions() {
+        assert_eq!(active_session_title("Renamed session", true), ("◇ Manager", None));
+        assert_eq!(active_session_title("Renamed session", false), ("Renamed session", None));
+    }
+    #[test]
     fn mock_title_keeps_complete_directive_separate() {
         let title = "Run the marathon. ⟦mock scenario=tool-marathon actor=main speed=12 seed=0⟧";
         let (label, directive) = session_title(title);
@@ -2346,5 +2495,122 @@ fn session_status(status: &str, t: crate::theme::Theme) -> Option<(&'static str,
         "input" => Some(("●", t.amber)),
         "done" => Some(("●", t.blue)),
         _ => None,
+    }
+}
+
+/// What the pinned Manager card says, apart from the GPUI tree so it can be tested.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ManagerCard {
+    /// `PINNED`, or `PINNED · OPEN` while the manager session is the open one.
+    pub caption: &'static str,
+    pub summary: String,
+    /// `ok`, `warn` or `off`.
+    pub tone: &'static str,
+    /// The pinned model with Live readiness; while off, how to turn the manager on.
+    pub detail: String,
+    /// The cross-session privacy line (only while the manager can run).
+    pub privacy: String,
+    /// Whether the `Voice` button is offered.
+    pub voice: bool,
+}
+
+pub(crate) fn manager_card_rows(entry: &crate::bridge::ManagerEntry) -> ManagerCard {
+    let detail = if entry.enabled {
+        [entry.model.as_str(), entry.live.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ")
+    } else {
+        entry.notes.first().cloned().unwrap_or_default()
+    };
+    ManagerCard {
+        caption: if entry.active {
+            "PINNED · OPEN"
+        } else {
+            "PINNED"
+        },
+        summary: entry.summary.clone(),
+        tone: match entry.tone.as_str() {
+            "warn" => "warn",
+            "off" => "off",
+            _ => "ok",
+        },
+        detail,
+        privacy: if entry.enabled {
+            entry.privacy.clone()
+        } else {
+            String::new()
+        },
+        voice: entry.enabled,
+    }
+}
+
+/// `model  provider` for the manager's fixed composer label.
+fn manager_model_label(snapshot: &crate::bridge::Snapshot) -> String {
+    if snapshot.provider.is_empty() {
+        snapshot.model.clone()
+    } else {
+        format!("{}  {}", snapshot.model, snapshot.provider)
+    }
+}
+
+#[cfg(test)]
+mod manager_card_tests {
+    use super::*;
+    use crate::bridge::ManagerEntry;
+
+    fn entry(json: serde_json::Value) -> ManagerEntry {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_ready_manager_shows_model_voice_readiness_and_the_privacy_line() {
+        let card = manager_card_rows(&entry(serde_json::json!({
+            "known": true, "enabled": true, "tone": "ok", "summary": "Ready",
+            "model": "github-copilot/gpt-6-luna", "live": "Voice ready",
+            "privacy": "Voice calls also share other sessions' titles, status and reports with OpenAI",
+        })));
+        assert_eq!(card.caption, "PINNED");
+        assert_eq!(card.detail, "github-copilot/gpt-6-luna · Voice ready");
+        assert!(card.voice && card.privacy.contains("other sessions"));
+        assert_eq!(card.tone, "ok");
+    }
+
+    #[test]
+    fn a_disabled_manager_has_no_voice_and_explains_how_to_enable_it() {
+        let card = manager_card_rows(&entry(serde_json::json!({
+            "known": true, "enabled": false, "tone": "off",
+            "summary": "Off · [manager] enabled = false",
+            "notes": ["Turn it on with [manager] enabled = true in nexus.toml, then restart the daemon."],
+            "privacy": "never shown while off",
+        })));
+        assert!(!card.voice && card.privacy.is_empty());
+        assert!(card.detail.contains("enabled = true"));
+        assert_eq!(card.tone, "off");
+    }
+
+    #[test]
+    fn the_open_manager_is_marked_and_a_signed_out_one_warns() {
+        let card = manager_card_rows(&entry(serde_json::json!({
+            "known": true, "enabled": true, "active": true, "tone": "warn",
+            "summary": "Not signed in · sign in to GitHub Copilot under Settings > Providers",
+        })));
+        assert_eq!(card.caption, "PINNED · OPEN");
+        assert_eq!(card.tone, "warn");
+        assert!(card.summary.contains("Settings > Providers"));
+    }
+
+    #[test]
+    fn composer_label_names_the_pinned_route() {
+        let snapshot = crate::bridge::Snapshot {
+            model: "gpt-6-luna".into(),
+            provider: "github-copilot".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            manager_model_label(&snapshot),
+            "gpt-6-luna  github-copilot"
+        );
     }
 }
