@@ -67,7 +67,7 @@ log and are relayed upward like other child events.
 
 | Event | Payload |
 | --- | --- |
-| `external.started` | `provider`, `model`, `session`, `workspace`, `permission_mode`, `tools`, `allowed_tools`, `disallowed_tools`, `restricted`, `setting_sources`, `mcp` (`explicit`/`none`), `read_only`, `timeout_seconds`, `provenance`, `authority` |
+| `external.started` | `provider`, `model`, `session`, `workspace`, `permission_mode`, `tools`, `allowed_tools`, `disallowed_tools`, `restricted`, `setting_sources`, `mcp` (`explicit`/`none`), `read_only`, `provenance`, `authority` |
 | `external.tool` | `phase` `requested` (bounded `input`) or `completed` (`content`, `is_error`), `call_id`, `tool`, optional `clip_note`, `provenance` (`Claude Code (own tools)`), `provider`, `session` |
 | `external.finished` | `status` (`completed`/`failed`/`interrupted`/`cancelled`/`needs_attention`), `stop_event`, `transcript_path`, `tool_calls`, `usage` (`"unknown"`), `error`, `attention`, `clip_notes`, `elapsed_seconds`, `provenance`, `session`, `model` |
 
@@ -169,3 +169,11 @@ A `turn.cancelled` with the supervisor's expected `supervisor closing` reason ha
 `phase="cancelled"` but no view error, avoiding a misleading `Error:` row during shutdown.
 Other cancellation reasons and all `turn.failed` errors are retained. See the catalogue
 above and `ratatui-parity.md` for focused test and visual-verification caveats.
+
+`context.handoff` is a known context event. Its stable marker includes the
+handoff ID, head/summary seq, kept boundary, read-through seq, brief version,
+method, bounded redacted preview, approximate before/after counts and fallback
+flag. The reducer retains it as `ContextView(kind="handoff")`; transcript
+content before it is never deleted. Child handoff markers are suppressed from
+parent relay (the child log retains them). Native projection shows a stable
+“Context handed off” divider with `/handoff read` guidance.

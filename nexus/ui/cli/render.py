@@ -156,6 +156,9 @@ class TerminalRenderer:
         suffix = f" ({sanitize(scope, 60)})" if scope else ""
         self._out(f"[permission] {decision}{suffix}\n", "permission")
 
+    def _on_context_handoff(self, data: Mapping[str, Any]) -> None:
+        self._out("[context] ── Context handed off · earlier history preserved ──\n", "context")
+
     def _on_context_compacted(self, data: Mapping[str, Any]) -> None:
         parts = [sanitize(data["strategy"], 40) if data.get("strategy") else "",
                  f"dropped {data['dropped']}" if data.get("dropped") else "",

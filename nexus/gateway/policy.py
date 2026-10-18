@@ -148,11 +148,15 @@ def _validate(command: p.Command, device_id: str) -> p.Command:  # noqa: C901 - 
                 _bad("invalid from_seq")
         case p.SessionStart():
             _session(command.session)
+            if command.client_request_id and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command.client_request_id) is None:
+                _bad("invalid client_request_id")
             _prompt_blocks(command.content, command.blocks, command.attachments, command.attachment_labels)
         case p.SessionEnqueue():
             _session(command.session)
             if command.mode not in _QUEUE_MODES:
                 _bad("invalid mode")
+            if command.client_request_id and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command.client_request_id) is None:
+                _bad("invalid client_request_id")
             _prompt_blocks(command.content, command.blocks, command.attachments, command.attachment_labels)
         case p.SessionCancel():
             _session(command.session)

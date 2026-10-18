@@ -16,7 +16,7 @@ def _int(value: object) -> int:
 def session_status(summary: Any, seen: Mapping[str, int], current: str) -> str:
     """``working``, ``input``, ``done`` (finished since last viewed), or ``idle``."""
     state = getattr(summary, "state", "idle")
-    if state == "running":
+    if state == "running" or _int(getattr(summary, "running_children", 0)) > 0:
         return "working"
     if state in {"awaiting_permission", "awaiting_input"}:
         return "input"
@@ -61,4 +61,10 @@ def session_subline(summary: Any, status: str, now: float | None = None, *, comp
     if compact:
         words = str(_int(getattr(summary, "message_count", 0)))
         age = age.removesuffix(" ago").replace("just now", "now")
+    children = _int(getattr(summary, "running_children", 0))
+    handoffs = _int(getattr(summary, "handoff_count", 0))
+    if children:
+        words += f" · {children} running child(ren)"
+    if handoffs:
+        words += f" · {handoffs} handoff(s)"
     return f"{words} · {age}" if age else words

@@ -153,7 +153,7 @@ class SessionDashboard:
         row = self.row(operation.get("id"))
         if row is None:
             return False
-        if kind == "session_archive":
+        if kind in {"session_archive", "ownership_tree"}:
             return True
         if kind == "session_rename":
             title = operation.get("title")

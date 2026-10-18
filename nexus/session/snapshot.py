@@ -73,7 +73,7 @@ class SnapshotSummary(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         return cls(
             text=record.text,
             through_seq=record.source_to_seq,
-            source="context.compacted",
+            source="context.handoff" if record.strategy == "handoff" else "context.compacted",
             summary_id=record.summary_id,
             strategy=record.strategy,
             source_from_seq=record.source_from_seq,

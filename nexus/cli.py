@@ -1402,6 +1402,17 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
             f"database: quick_check={quick_check} schema={schema_text} "
             f"size={size_text}B wal={wal_text}B{path_text}\n"
         )
+        largest = database.get("largest_session_logs")
+        rows = largest.get("sessions") if isinstance(largest, dict) else None
+        if isinstance(rows, list) and rows:
+            stdout.write(f"largest session logs (project, top {min(len(rows), 10)}):\n")
+            for row in rows[:10]:
+                if not isinstance(row, dict):
+                    continue
+                label = "".join(c for c in f"{row.get('namespace')}/{row.get('session')}" if c.isprintable())[:120]
+                stdout.write(
+                    f"  {label} records={row.get('records')} bytes={row.get('bytes')}\n"
+                )
     legacy_extensions = report.get("legacy_extensions_pending")
     if isinstance(legacy_extensions, list):
         documented = {

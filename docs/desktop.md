@@ -481,3 +481,21 @@ desktop/action/projection/layering/docs checks: 295 passed, one existing broken
 link in `ratatui-parity.md` deselected. Native captures and the current journey
 record are in `artifacts/desktop/parity-review.md`. This verifies the recorded
 macOS journeys, not complete TUI parity or every provider/hardware workflow.
+
+### Session ownership inspection
+
+Sidebar **Tree**, or Sessions → root → **Ownership tree**, opens the shared
+host-backed read-only ownership list (`SessionTree`). Selecting a node offers
+**Readable facts**, **Transcript**, and **Request / context details**
+(`SessionInspect`). Facts include bounded task, model/tier, current tool,
+usage/result/error, branch/worktree and uncertainty where available. Long facts,
+transcripts and requests use the native scrollable detail panel; Back returns to
+the node/tree. Only the main root offers **Open root session**. No child
+send/resume/fork controls or inferred live request are exposed. The native bridge
+uses the same host operations as Ratatui, not session-manager access. Visible trees refresh on existing list polls and agent lifecycle events;
+Refresh is also available. Root descendant counts arrive with session refreshes.
+
+The shared native command bridge supports `/handoff` and `/handoff read` with
+same-tab identity preservation and the same bounded host read/write contracts
+as terminal. Shared transcript projection renders the handoff divider without
+removing earlier cards. No separate desktop compaction engine is introduced.

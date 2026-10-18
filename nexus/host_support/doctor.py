@@ -168,13 +168,60 @@ def database_diagnostics(sessions: object) -> dict[str, Any] | None:
 
     size_bytes = _file_size(path)
     wal_size_bytes = _file_size(path.with_name(path.name + "-wal"))
+    largest = _cached(
+        ("largest_logs", str(path), getattr(sessions, "project_id", None)),
+        lambda: _largest_session_logs(sessions),
+    )
     return {
+        "largest_session_logs": largest,
         "path": _clean(str(path))[:240],
         "schema_user_version": schema_version,
+        "unattached_children": sessions.unattached_count() if callable(getattr(sessions, "unattached_count", None)) else None,
         "quick_check": quick_check,
         "size_bytes": size_bytes,
         "wal_size_bytes": wal_size_bytes,
     }
+
+
+#: Rows returned by the largest-log diagnostic (PLAN P0).
+LARGEST_LOGS = 10
+
+
+def _largest_session_logs(sessions: object, *, limit: int = LARGEST_LOGS) -> dict[str, Any]:
+    """Metadata-only top-N session logs by stored bytes, across namespaces.
+
+    Scope is the store's project (the database may be shared by projects; other
+    projects are never read). Only ids, namespace, record count and the summed
+    ``length(body)`` leave SQL -- never bodies, titles or paths. SQLite's
+    ``length()`` on a BLOB does not load its overflow pages.
+    """
+    result: dict[str, Any] = {"scope": "project", "limit": limit, "sessions": []}
+    project_id = getattr(sessions, "project_id", None)
+    connection = getattr(getattr(sessions, "db", None), "_connection", None)
+    if not callable(connection) or not isinstance(project_id, str):
+        result["available"] = False
+        return result
+    try:
+        rows = connection().execute(
+            "SELECT namespace, session_id, count(*), sum(length(body)) FROM records "
+            "WHERE project_id=? GROUP BY namespace, session_id "
+            "ORDER BY 4 DESC, namespace, session_id LIMIT ?",
+            (project_id, limit),
+        ).fetchall()
+    except Exception:  # noqa: BLE001 - diagnostics must never break doctor
+        result["available"] = False
+        return result
+    result["available"] = True
+    for namespace, session_id, count, size in rows:
+        if not isinstance(session_id, str) or not is_valid_session_id(session_id):
+            continue
+        result["sessions"].append({
+            "namespace": _clean(namespace)[:64],
+            "session": session_id,
+            "records": int(count or 0),
+            "bytes": int(size or 0),
+        })
+    return result
 
 
 _LEGACY_EXTENSION_ENTRIES = (

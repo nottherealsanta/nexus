@@ -834,6 +834,9 @@ class ChildSpec:
     parent_agent_id: str | None = None
     parent_call_id: str = ""
     root_turn_id: str = ""
+    root_id: str = ""
+    owner_spawn_seq: int = 0
+    owner_turn_id: str = ""
     #: The role's ordered fallback model references (tried before the global chain).
     fallback: tuple[str, ...] = ()
     #: Model-facing note when the role's tiers or ``max_tier`` moved the request.
@@ -900,8 +903,9 @@ async def _forward(
     data: Mapping[str, Any],
     *,
     session: str | None,
-) -> None:
-    """Best-effort forward of one event; a broken sink never breaks a spawn."""
+    durable: bool = False,
+) -> Any:
+    """Forward telemetry best-effort, but propagate durable state failures."""
     if sink is None:
         return
     try:
@@ -918,9 +922,11 @@ async def _forward(
         else:
             return
         if inspect.isawaitable(outcome):
-            await outcome
-    except Exception:  # noqa: BLE001 - a broken sink must not fail a spawn
-        return
+            outcome = await outcome
+        return outcome
+    except Exception:  # noqa: BLE001 - optional observation remains best effort
+        if durable:
+            raise
 
 
 class _ChildRelay:
@@ -985,7 +991,10 @@ class _ChildRelay:
                 ref = qualify_model(payload.get("provider"), payload.get("model"))
                 if ref is not None and (not self._models or self._models[-1] != ref):
                     self._models.append(ref)
-        await _forward(self._sink, event_type, payload, session=self._session)
+        await _forward(
+            self._sink, event_type, payload, session=self._session,
+            durable=event_type == "todo.updated",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1465,7 +1474,9 @@ class SubagentRunner:
     async def _next_child_id(self) -> tuple[int, str]:
         allocator = getattr(self._sessions, "allocate_child_id", None)
         if callable(allocator):
-            allocated = allocator(self._parent_session)
+            # Logical paths remain stable for UI/tool correlation; the physical
+            # parent session is carried separately in the ownership edge.
+            allocated = allocator(self._parent_agent_id or self._parent_session)
             if inspect.isawaitable(allocated):
                 return await allocated
             return allocated
@@ -1575,6 +1586,11 @@ class SubagentRunner:
             "id": agent_id,
             "parent": self._parent_agent_id or self._parent_session,
             "parent_session": self._parent_session,
+            "root_id": (
+                self._sessions.root_id(self._parent_session)
+                if callable(getattr(self._sessions, "root_id", None))
+                else (self._parent_session if not self._parent_agent_id else "")
+            ),
             "parent_agent_id": self._parent_agent_id,
             "parent_call_id": call_id if isinstance(call_id, str) else "",
             "root_turn_id": self._root_turn_id,
@@ -1651,7 +1667,7 @@ class SubagentRunner:
                 )
                 child_workspace = Path(str(worktree["path"]))
                 meta["worktree"] = dict(worktree)
-            await _forward(
+            spawn_event = await _forward(
                 sink,
                 AGENT_SPAWNED,
                 {
@@ -1704,6 +1720,9 @@ class SubagentRunner:
                 parent_agent_id=self._parent_agent_id,
                 parent_call_id=call_id if isinstance(call_id, str) else "",
                 root_turn_id=self._root_turn_id,
+                root_id=str(meta.get("root_id") or ""),
+                owner_spawn_seq=int(getattr(spawn_event, "seq", 0) or 0),
+                owner_turn_id=str(getattr(spawn_event, "turn", "") or ""),
                 depth=depth,
                 tools=tuple(sorted(selection.selected)),
                 dropped_tools=dropped,

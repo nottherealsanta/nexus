@@ -72,6 +72,10 @@ class SessionError(NexusError, RuntimeError):
     """Session storage, locking, or format failure."""
 
 
+class RequestIdConflict(SessionError):
+    """A submission request id was reused with a different digest."""
+
+
 class SessionBusy(SessionError):
     """The requested session is already locked by another turn."""
 

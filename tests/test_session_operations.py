@@ -98,6 +98,12 @@ def test_session_summary_is_transport_neutral(tmp_path):
         "parent_id",
         "fork_seq",
         "last_user_at",
+        "kind",
+        "root_id",
+        "namespace",
+        "child_count",
+        "running_children",
+        "handoff_count",
     }
     # msgspec round-trips the frozen struct exactly.
     encoded = msgspec.json.encode(summary)

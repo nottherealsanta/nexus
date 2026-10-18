@@ -50,6 +50,20 @@ PROTOCOL_VERSION = 3
 class SessionList(msgspec.Struct, tag=True, frozen=True):
     """List every session as a transport-neutral summary."""
 
+    include_children: bool = False
+
+
+class SessionTree(msgspec.Struct, tag=True, frozen=True):
+    """Read the bounded ownership tree for this workspace; never open a handle."""
+
+    session: str
+    namespace: str = "main"
+
+
+class SessionTreeResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    tree: dict[str, Any] = msgspec.field(default_factory=dict)
+
 
 class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
     """List saved sessions across projects in this Nexus home."""
@@ -215,6 +229,35 @@ class ProvidersUsage(msgspec.Struct, tag=True, frozen=True):
     """Plan limits (5-hour, weekly, monthly…) for every connected provider."""
 
 
+class SessionHandoff(msgspec.Struct, tag=True, frozen=True):
+    """Idle same-session cutover; continuation is admitted in the same commit."""
+
+    session: str
+    summary: str | None = None
+    continuation: str | None = None
+    request_id: str = ""
+
+
+class SessionHandoffRead(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    namespace: str = "main"
+    handoff_id: str = ""
+
+
+class SessionInspect(msgspec.Struct, tag=True, frozen=True):
+    """Bounded durable read without opening a session handle."""
+    session: str
+    namespace: str = "agents"
+
+
+class SessionInspectResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    namespace: str
+    view: dict[str, Any]
+    request: dict[str, Any]
+    truncated: bool = False
+
+
 class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     session: str
     create: bool = True
@@ -256,6 +299,7 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
     attachments: list[str] = msgspec.field(default_factory=list)
     attachment_labels: list[str] = msgspec.field(default_factory=list)
 
+    client_request_id: str = ""
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     session: str
@@ -265,6 +309,7 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     attachments: list[str] = msgspec.field(default_factory=list)
     attachment_labels: list[str] = msgspec.field(default_factory=list)
 
+    client_request_id: str = ""
 
 class SessionShell(msgspec.Struct, tag=True, frozen=True):
     """Run a user-typed ``!`` command with bash in the workspace.
@@ -853,6 +898,10 @@ class WebLaunch(msgspec.Struct, tag=True, frozen=True):
 #: The complete command union. ``msgspec`` decodes it by the ``type`` tag.
 Command = (
     SessionList
+    | SessionTree
+    | SessionInspect
+    | SessionHandoff
+    | SessionHandoffRead
     | ProjectSessionsList
     | ProjectSessionOpen
     | SettingsInventory
@@ -966,6 +1015,10 @@ Command = (
 
 COMMANDS: tuple[type, ...] = (
     SessionList,
+    SessionTree,
+    SessionInspect,
+    SessionHandoff,
+    SessionHandoffRead,
     SettingsInventory,
     SettingsRead,
     SettingsMcpLoadingSet,
@@ -1199,6 +1252,10 @@ class ProviderModelsRefreshResult(msgspec.Struct, tag=True, frozen=True):
     refreshed_at: float = 0.0
     error: str = ""
     message: str = ""
+
+
+class SessionHandoffResult(msgspec.Struct, tag=True, frozen=True):
+    data: dict[str, Any]
 
 
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
@@ -1811,6 +1868,9 @@ Result = (
     | ProviderModelsRefreshResult
     | ProvidersUsageResult
     | SessionListResult
+    | SessionTreeResult
+    | SessionInspectResult
+    | SessionHandoffResult
     | SessionArchiveResult
     | SessionUnarchiveResult
     | SessionListArchivedResult
@@ -1899,6 +1959,9 @@ RESULTS: tuple[type, ...] = (
     ProviderModelsRefreshResult,
     ProvidersUsageResult,
     SessionListResult,
+    SessionTreeResult,
+    SessionInspectResult,
+    SessionHandoffResult,
     SessionArchiveResult,
     SessionUnarchiveResult,
     SessionListArchivedResult,
@@ -2118,6 +2181,13 @@ __all__ = [
     "SessionFork",
     "SessionForkResult",
     "SessionList",
+    "SessionTree",
+    "SessionTreeResult",
+    "SessionInspect",
+    "SessionInspectResult",
+    "SessionHandoff",
+    "SessionHandoffRead",
+    "SessionHandoffResult",
     "SessionListArchived",
     "SessionListArchivedResult",
     "SessionListResult",

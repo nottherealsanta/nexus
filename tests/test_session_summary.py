@@ -32,7 +32,10 @@ class RecordingSummarizer:
         return SummaryArtifact(text="SUMMARY-OF-OLD", source_count=len(messages), tokens=3)
 
 
-def _config(*, max_tokens=400, compaction="summarize", model="scripted/x"):
+def _config(
+    *, max_tokens=400, compaction="summarize", model="scripted/x", on_overflow=None
+):
+    extra = {} if on_overflow is None else {"on_overflow": on_overflow}
     return Config(
         model=model,
         version=2,
@@ -42,6 +45,7 @@ def _config(*, max_tokens=400, compaction="summarize", model="scripted/x"):
                 max_tokens=max_tokens,
                 safety_margin_tokens=0,
                 compaction=compaction,
+                **extra,
             ),
         ),
     )
@@ -273,8 +277,12 @@ def test_completed_turn_emits_context_compacted_with_safe_accounting(tmp_path):
     import asyncio
 
     summarizer = RecordingSummarizer()
+    # context.compacted is the summarize-compaction event; handoff emits context.handoff.
     context = ContextManager(
-        tmp_path, config=_config(max_tokens=400), summarizer=summarizer, counter=len
+        tmp_path,
+        config=_config(max_tokens=400, on_overflow="compact"),
+        summarizer=summarizer,
+        counter=len,
     )
     provider = ScriptedProvider(text_response("done"))
     manager = SessionManager(

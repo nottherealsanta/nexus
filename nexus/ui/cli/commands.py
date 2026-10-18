@@ -61,6 +61,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/cancel", "Cancel the active turn"),
     CommandSpec("/close", "Close the current tab (native TUI)"),
     CommandSpec("/fork", "Branch this session", "[at_seq]"),
+    CommandSpec("/handoff", "Continue with fresh context in this session", "[read]"),
     CommandSpec("/export", "Export this session", "[json|markdown|jsonl]"),
     CommandSpec("/help", "Show this help"),
     CommandSpec("/hotkeys", "Show keyboard shortcuts"),

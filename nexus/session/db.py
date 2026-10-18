@@ -41,15 +41,16 @@ import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import msgspec
 
-from ..errors import SessionError
+from ..errors import RequestIdConflict, SessionError
 from ..events import Event
 from ..model.message import Message
 from . import export as export_mod
 from . import snapshot as snapshot_mod
+from .child_ids import stored_child_id
 from .ids import validate_session_id
 from .records import (
     SESSION_LOG_VERSION,
@@ -59,6 +60,133 @@ from .records import (
     SessionRecord,
     SummaryRecord,
 )
+
+
+def _backfill_ownership(conn: sqlite3.Connection) -> None:
+    """Bounded, project-scoped evidence recovery; ambiguous rows stay unknown.
+
+    Inspect at most 10,000 evidence records per project. Spawn/completion
+    metadata and a child's recorded request are evidence; slug resemblance is
+    not. Relayed nested events must name their actual parent session explicitly.
+    """
+    conn.execute("UPDATE sessions SET kind='root', root_id=id WHERE namespace='main'")
+    conn.execute(
+        "UPDATE sessions SET context_head_seq=COALESCE((SELECT max(seq) FROM records r "
+        "WHERE r.project_id=sessions.project_id AND r.namespace=sessions.namespace "
+        "AND r.session_id=sessions.id AND r.kind='summary'),0)"
+    )
+    projects = conn.execute("SELECT id FROM projects").fetchall()
+    for project_row in projects:
+        project = project_row[0]
+        rows = conn.execute(
+            "SELECT namespace,id,root_id FROM sessions WHERE project_id=?", (project,)
+        ).fetchall()
+        identities = {(r["namespace"], r["id"]) for r in rows}
+        roots = {(r["namespace"], r["id"]): r["root_id"] for r in rows}
+        candidates: dict[str, set[tuple[Any, ...]]] = {}
+        evidence = conn.execute(
+            "SELECT namespace,session_id,seq,body FROM records WHERE project_id=? "
+            "AND kind='event' AND CASE WHEN json_valid(body) THEN (json_extract(body,'$.event.type') IN "
+            "('agent.spawned','agent.completed','context.assembled','turn.started')) ELSE 0 END "
+            "ORDER BY namespace,session_id,seq LIMIT 10000", (project,)
+        ).fetchall()
+        for record in evidence:
+            try:
+                event = msgspec.json.decode(record["body"], type=EventRecord).event
+            except (msgspec.DecodeError, msgspec.ValidationError):
+                continue
+            data = event.data
+            request = data.get("request") if event.type == "context.assembled" else None
+            if request is not None:
+                # Request snapshots are stored in the child's own log.
+                meta = request.get("agent") if isinstance(request, dict) else None
+            else:
+                meta = data.get("agent")
+            if not isinstance(meta, dict):
+                continue
+            logical = meta.get("session") or meta.get("logical_session_id") or meta.get("id")
+            if not isinstance(logical, str) or not logical:
+                continue
+            child = stored_child_id(logical)
+            if ("agents", logical) in identities:
+                child = logical
+            if ("agents", child) not in identities:
+                continue
+            parent = meta.get("parent_session")
+            nested = bool(meta.get("parent_agent_id"))
+            # Old direct root spawn events did not always carry parent_session.
+            if not parent and event.type in {"agent.spawned", "agent.completed"} and record["namespace"] == "main" and not nested and logical.startswith(record["session_id"] + "/sub/"):
+                suffix = logical[len(record["session_id"]) + 5:]
+                if suffix.isdigit():
+                    parent = record["session_id"]
+            if not isinstance(parent, str) or not parent:
+                continue
+            namespace = "agents" if nested else "main"
+            if (namespace, parent) not in identities and nested:
+                parent = stored_child_id(parent)
+            if (namespace, parent) not in identities:
+                continue
+            # A relayed copy is never assigned its containing root's sequence.
+            spawn_seq = record["seq"] if event.type == "agent.spawned" and (record["namespace"], record["session_id"]) == (namespace, parent) else 0
+            turn = str(event.turn or "") if spawn_seq else str(meta.get("owner_turn_id") or "")
+            if not turn and namespace == "main":
+                turn = str(meta.get("root_turn_id") or "")
+            call = meta.get("parent_call_id")
+            if call is not None and not isinstance(call, str):
+                continue
+            edge = (namespace, parent, turn, call, str(meta.get("id") or logical), logical)
+            if (request is not None or event.type == "turn.started") and (record["namespace"], record["session_id"]) != ("agents", child):
+                continue
+            candidates.setdefault(child, set()).add((*edge, spawn_seq))
+        accepted: dict[str, tuple[Any, ...]] = {}
+        for child, edges in candidates.items():
+            # Repeated spawn/completion evidence may differ only in sequence.
+            identities_and_calls = {(edge[0], edge[1], edge[3], edge[4], edge[5]) for edge in edges}
+            turns = {edge[2] for edge in edges if edge[2]}
+            if len(identities_and_calls) != 1 or len(turns) > 1:
+                continue
+            namespace, parent, call, agent, logical = next(iter(identities_and_calls))
+            base = (namespace, parent, next(iter(turns), ""), call, agent, logical)
+            seqs = {edge[6] for edge in edges if edge[6]}
+            if len(seqs) > 1:
+                continue
+            accepted[child] = (*base, next(iter(seqs), 0))
+        # Resolve roots only along accepted edges, with cycle/depth protection.
+        def root_for(child: str, seen: frozenset[str] = frozenset()) -> str:
+            if child in seen or len(seen) >= 64:
+                return ""
+            edge = accepted.get(child)
+            if edge is None:
+                return roots.get(("agents", child), "")
+            namespace, parent = edge[:2]
+            if namespace == "main":
+                return parent
+            return root_for(parent, seen | {child})
+
+        for child, edge in accepted.items():
+            # Cycles are contradictory evidence, not an ownership tree.
+            cursor, seen = child, set()
+            cyclic = False
+            for _ in range(65):
+                if cursor in seen:
+                    cyclic = True
+                    break
+                seen.add(cursor)
+                candidate = accepted.get(cursor)
+                if candidate is None or candidate[0] != "agents":
+                    break
+                cursor = candidate[1]
+            if cyclic:
+                continue
+            namespace, parent, turn, call, agent, logical, seq = edge
+            conn.execute(
+                "UPDATE sessions SET owner_namespace=?,owner_id=?,owner_turn_id=?,"
+                "owner_call_id=?,agent_id=?,logical_session_id=?,owner_spawn_seq=?,"
+                "owner_agent_id=?,kind='child',root_id=? WHERE project_id=? "
+                "AND namespace='agents' AND id=? AND owner_id=''",
+                (namespace, parent, turn, call, agent, logical, seq, agent,
+                 root_for(child), project, child),
+            )
 
 
 def _has_user_input(alias: str = "sessions") -> str:
@@ -75,7 +203,7 @@ def _has_user_input(alias: str = "sessions") -> str:
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
 #: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -163,6 +291,41 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
     # dashboard orders by it, so agent and tool activity, which advance
     # last_activity, never reshuffle sessions. A Python backfill fills old rows.
     ("ALTER TABLE sessions ADD COLUMN last_user_at REAL NOT NULL DEFAULT 0",),
+    # v6: ownership is distinct from fork lineage (parent_id/fork_seq).
+    (
+        "ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN root_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN owner_namespace TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN owner_agent_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN owner_turn_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN owner_spawn_seq INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN context_head_seq INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN handoff_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN owner_call_id TEXT",
+        "ALTER TABLE sessions ADD COLUMN agent_id TEXT",
+        "ALTER TABLE sessions ADD COLUMN logical_session_id TEXT",
+        "CREATE INDEX sessions_by_root ON sessions(project_id, root_id)",
+        "CREATE INDEX sessions_by_owner ON sessions(project_id, owner_namespace, owner_id)",
+        """CREATE TABLE submissions (
+          project_id TEXT NOT NULL, namespace TEXT NOT NULL, session_id TEXT NOT NULL,
+          request_id TEXT NOT NULL, content_digest TEXT NOT NULL,
+          seq INTEGER NOT NULL, turn_id TEXT NOT NULL DEFAULT '', queued_id TEXT NOT NULL DEFAULT '',
+          created_at REAL NOT NULL,
+          PRIMARY KEY (project_id, namespace, session_id, request_id),
+          FOREIGN KEY (project_id, namespace, session_id)
+            REFERENCES sessions(project_id, namespace, id) ON DELETE CASCADE
+        )""",
+    ),
+    # v7: durable allocation reservations; distinct from session/fork ownership.
+    (
+        """CREATE TABLE child_allocations (
+          project_id TEXT NOT NULL, parent_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+          logical_id TEXT NOT NULL, stored_id TEXT NOT NULL,
+          PRIMARY KEY(project_id,parent_id,ordinal),
+          UNIQUE(project_id,logical_id), UNIQUE(project_id,stored_id)
+        )""",
+    ),
 )
 
 #: Every ``kv``/session mutation this module performs is bounded by these; a
@@ -234,6 +397,8 @@ class StateDatabase:
                         _backfill_message_snippets(conn)
                     if version < 5 <= SCHEMA_VERSION:
                         _backfill_last_user_at(conn)
+                    if version < 7 <= SCHEMA_VERSION:
+                        _backfill_ownership(conn)
                     if version < SCHEMA_VERSION:
                         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     conn.execute("COMMIT")
@@ -254,7 +419,11 @@ class StateDatabase:
             conn.execute("ROLLBACK")
             raise
         else:
-            conn.execute("COMMIT")
+            try:
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     @contextlib.contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -267,7 +436,11 @@ class StateDatabase:
             conn.execute("ROLLBACK")
             raise
         else:
-            conn.execute("COMMIT")
+            try:
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     def quick_check(self) -> str:
         row = self._connection().execute("PRAGMA quick_check").fetchone()
@@ -419,14 +592,17 @@ class SqliteSessionStore:
         *,
         root: str | None = None,
         lock_dir: str | Path | None = None,
+        register_project: bool = True,
     ):
         self.db = db
         self.project_id = project_id
         self.namespace = namespace
-        self.db.touch_project(project_id, root if root is not None else project_id)
+        if register_project:
+            self.db.touch_project(project_id, root if root is not None else project_id)
         self._lock_dir = Path(lock_dir) if lock_dir is not None else None
         self._fsync = lambda fd: None  # durability is PRAGMA-provided
         self._drafts: dict[str, list[SessionRecord]] = {}
+        self._draft_metadata: dict[str, Mapping[str, Any]] = {}
         self._draft_lock = threading.RLock()
 
     @property
@@ -487,12 +663,14 @@ class SqliteSessionStore:
                 (self.project_id, self.namespace, session, time.time()),
             )
 
-    def create_draft(self, session: str) -> None:
+    def create_draft(self, session: str, *, metadata: Mapping[str, Any] | None = None) -> None:
         """Reserve a chat in memory until its first accepted user input."""
         session = validate_session_id(session)
         with self._draft_lock:
             if not self.row_exists(session):
                 self._drafts[session] = []
+                if metadata:
+                    self._draft_metadata[session] = dict(metadata)
 
     def create_from_records(
         self,
@@ -507,6 +685,8 @@ class SqliteSessionStore:
         trashed_at: float | None = None,
         trash_expires_at: float | None = None,
         trash_reason: str | None = None,
+        meta: Mapping[str, Any] | None = None,
+        _conn: sqlite3.Connection | None = None,
     ) -> None:
         """Publish a brand-new session from an exact record prefix, one txn.
 
@@ -555,13 +735,15 @@ class SqliteSessionStore:
             elif r.message.role == "assistant":
                 last_agent = snippet
         try:
-            with self.db.transaction() as conn:
+            with (self.db.transaction() if _conn is None else contextlib.nullcontext(_conn)) as conn:
                 conn.execute(
                     "INSERT INTO sessions"
                     "(project_id, namespace, id, created_at, last_seq, completion_seq, last_activity,"
                     " message_count, title, title_source, parent_id, fork_seq, archived_at, archive_reason,"
-                    " trash_id, trashed_at, trash_expires_at, trash_reason, last_user, last_agent, last_user_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " trash_id, trashed_at, trash_expires_at, trash_reason, last_user, last_agent, last_user_at,"
+                    " owner_namespace, owner_id, owner_turn_id, owner_call_id, agent_id, logical_session_id,"
+                    " kind, root_id, owner_agent_id, owner_spawn_seq)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         self.project_id,
                         self.namespace,
@@ -584,6 +766,14 @@ class SqliteSessionStore:
                         last_user,
                         last_agent,
                         last_user_at,
+                        *((meta or {}).get(key) or "" for key in (
+                            "owner_namespace", "owner_id", "owner_turn_id", "owner_call_id",
+                            "agent_id", "logical_session_id",
+                        )),
+                        (meta or {}).get("kind", "root" if self.namespace == "main" else ("child" if (meta or {}).get("owner_id") else "")),
+                        (meta or {}).get("root_id", session if self.namespace == "main" else ""),
+                        (meta or {}).get("owner_agent_id", (meta or {}).get("agent_id", "")),
+                        (meta or {}).get("owner_spawn_seq", 0),
                     ),
                 )
                 conn.executemany(
@@ -603,10 +793,75 @@ class SqliteSessionStore:
                         for r in records
                     ],
                 )
+                heads = [r for r in records if isinstance(r, SummaryRecord)]
+                if heads:
+                    conn.execute("UPDATE sessions SET context_head_seq=?, handoff_count=? "
+                        "WHERE project_id=? AND namespace=? AND id=?",
+                        (heads[-1].seq, sum(r.strategy == "handoff" for r in heads),
+                         self.project_id, self.namespace, session))
         except sqlite3.IntegrityError as exc:
             raise SessionError(f"Session log already exists: {session}") from exc
 
     # -- reading ---------------------------------------------------------
+
+    def context_head(self, session: str) -> SummaryRecord | None:
+        """Indexed head read; no history scan or recovery side effects."""
+        session = validate_session_id(session)
+        with self.db.read() as conn:
+            row = conn.execute(
+                "SELECT r.body FROM sessions s JOIN records r ON "
+                "r.project_id=s.project_id AND r.namespace=s.namespace "
+                "AND r.session_id=s.id AND r.seq=s.context_head_seq "
+                "WHERE s.project_id=? AND s.namespace=? AND s.id=?",
+                (self.project_id, self.namespace, session),
+            ).fetchone()
+        record = _decode_record(row[0]) if row else None
+        return record if isinstance(record, SummaryRecord) else None
+
+    def handoff_record(self, session: str, handoff_id: str):
+        session = validate_session_id(session)
+        if not isinstance(handoff_id, str) or len(handoff_id) != 16 or any(c not in "0123456789abcdef" for c in handoff_id):
+            raise ValueError("Invalid handoff id")
+        row = self.db._connection().execute(
+            "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+            "AND kind='summary' AND json_extract(body,'$.handoff_id')=? LIMIT 1",
+            (self.project_id, self.namespace, session, handoff_id),
+        ).fetchone()
+        return _decode_record(row[0]) if row else None
+
+    def active_context_records(self, session: str):
+        """Consistent model-only read: indexed head plus retained message range.
+
+        A later ordinary compaction artifact must not resurrect the transcript
+        retired by the most recent handoff. Historical reads use log derivation.
+        """
+        session = validate_session_id(session)
+        with self._draft_lock:
+            if session in self._drafts:
+                return tuple(self._drafts[session]), None
+        with self.db.read() as conn:
+            row = conn.execute(
+                "SELECT r.body FROM sessions s JOIN records r ON "
+                "r.project_id=s.project_id AND r.namespace=s.namespace "
+                "AND r.session_id=s.id AND r.seq=s.context_head_seq "
+                "WHERE s.project_id=? AND s.namespace=? AND s.id=?",
+                (self.project_id, self.namespace, session),
+            ).fetchone()
+            head = _decode_record(row[0]) if row else None
+            if head is not None and head.strategy != "handoff":
+                row = conn.execute(
+                    "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+                    "AND kind='summary' AND json_extract(body,'$.strategy')='handoff' ORDER BY seq DESC LIMIT 1",
+                    (self.project_id, self.namespace, session),
+                ).fetchone()
+                head = _decode_record(row[0]) if row else None
+            boundary = head.kept_from_seq if head is not None else 0
+            rows = conn.execute(
+                "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+                "AND seq>=? AND kind='message' ORDER BY seq",
+                (self.project_id, self.namespace, session, boundary),
+            ).fetchall()
+        return tuple(_decode_record(row[0]) for row in rows), head
 
     def read(self, session: str) -> ReadResult:
         session = validate_session_id(session)
@@ -688,6 +943,15 @@ class SqliteSessionStore:
                 break
         collected.reverse()
         return (b"\n".join(collected) + (b"\n" if collected else b""))[-max_bytes:]
+
+    def record_at(self, session: str, seq: int) -> SessionRecord | None:
+        """Read one committed record, without opening a handle or recovering."""
+        session = validate_session_id(session)
+        row = self.db._connection().execute(
+            "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? AND seq=?",
+            (self.project_id, self.namespace, session, seq),
+        ).fetchone()
+        return _decode_record(row[0]) if row else None
 
     def records(self, session: str) -> Iterator[SessionRecord]:
         yield from self.read(session).records
@@ -787,6 +1051,122 @@ class SqliteSessionStore:
 
         return self._commit_append(session, seq, "summary", stamp, build)
 
+    def pending_submission_sessions(self) -> list[str]:
+        """Find live sessions whose admitted input has no consumed/dropped disposition.
+
+        Read-only. Archived and trashed sessions are skipped so inspecting them
+        never needs (or implies) reopening them.
+        """
+        rows = self.db._connection().execute(
+            "SELECT DISTINCT s.session_id FROM submissions s "
+            "JOIN sessions x ON x.project_id=s.project_id AND x.namespace=s.namespace "
+            "AND x.id=s.session_id AND x.archived_at IS NULL AND x.trash_id IS NULL "
+            "WHERE s.project_id=? AND s.namespace=? AND s.queued_id<>'' AND NOT EXISTS ("
+            "SELECT 1 FROM records r WHERE r.project_id=s.project_id "
+            "AND r.namespace=s.namespace AND r.session_id=s.session_id "
+            "AND r.seq>s.seq AND r.kind='event' "
+            "AND json_extract(r.body, '$.event.type') IN "
+            "('input.consumed','input.dropped') "
+            "AND json_extract(r.body, '$.event.data.queued_id')=s.queued_id) "
+            "ORDER BY s.session_id",
+            (self.project_id, self.namespace),
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def submission(self, session: str, request_id: str, digest: str):
+        """Read an admitted request without writing or acquiring a turn lease."""
+        row = self.db._connection().execute(
+            "SELECT content_digest, seq, turn_id, queued_id FROM submissions "
+            "WHERE project_id=? AND namespace=? AND session_id=? AND request_id=?",
+            (self.project_id, self.namespace, session, request_id),
+        ).fetchone()
+        if row is not None and row[0] != digest:
+            raise RequestIdConflict("Request id was already used with different content")
+        return row
+
+    def append_batch(self, session, builders, *, row_updates=None, index_rows=()):
+        """Append consecutive records and bounded metadata in one write transaction.
+
+        Builders receive their assigned seq and return a SessionRecord. Index rows
+        are submission mappings (request_id, content_digest, seq, turn_id,
+        queued_id, created_at); callers publish/observe only after this returns.
+        Draft setup is promoted with the batch, and retained intact on rollback.
+        """
+        session = validate_session_id(session)
+        builders = tuple(builders)
+        index_rows = tuple(index_rows)
+        if not builders:
+            raise ValueError("append_batch requires at least one record")
+        updates = dict(row_updates or {})
+        if updates.keys() - {"context_head_seq", "handoff_count"}:
+            raise ValueError("Unsupported batch row update")
+        with self._draft_lock:
+            with self.db.transaction() as conn:
+                for row in index_rows:
+                    if self.submission(session, row["request_id"], row["content_digest"]) is not None:
+                        return []
+                draft = self._drafts.get(session)
+                if draft is not None:
+                    self.create_from_records(
+                        session, draft, meta=self._draft_metadata.get(session), _conn=conn,
+                    )
+                records = []
+                for builder in builders:
+                    current = conn.execute(
+                        "SELECT last_seq FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                        (self.project_id, self.namespace, session),
+                    ).fetchone()
+                    if current is None:
+                        raise SessionError(f"Session {session!r} does not exist")
+                    seq = int(current[0]) + 1
+                    record = builder(seq)
+                    if record.seq != seq:
+                        raise ValueError("Batch builder must use its assigned seq")
+                    if isinstance(record, EventRecord):
+                        record = msgspec.structs.replace(record, event=msgspec.structs.replace(
+                            record.event, seq=seq, session=session,
+                        ))
+                    kind = _kind_of(record)
+                    payload = record.event if isinstance(record, EventRecord) else (
+                        record.message if isinstance(record, MessageRecord) else None
+                    )
+                    encoded = msgspec.json.encode(record)
+                    records.append(self._append_in_transaction(
+                        conn, session, seq, kind, record.ts,
+                        lambda assigned, payload=payload, encoded=encoded: (payload, encoded),
+                    ))
+                heads = [r for r in records if isinstance(r, SummaryRecord)
+                         and r.strategy == "handoff"]
+                if heads:
+                    updates["context_head_seq"] = heads[-1].seq
+                    conn.execute(
+                        "UPDATE sessions SET handoff_count=handoff_count+? "
+                        "WHERE project_id=? AND namespace=? AND id=?",
+                        (len(heads), self.project_id, self.namespace, session),
+                    )
+                for key, value in updates.items():
+                    if type(value) is not int or value < 0:
+                        raise ValueError("Batch row values must be nonnegative integers")
+                    conn.execute(
+                        f"UPDATE sessions SET {key}=? WHERE project_id=? AND namespace=? AND id=?",
+                        (value, self.project_id, self.namespace, session),
+                    )
+                for row in index_rows:
+                    if row.get("seq", records[-1].seq) not in {record.seq for record in records}:
+                        raise ValueError("Submission index must reference a record in its batch")
+                    conn.execute(
+                        "INSERT INTO submissions (project_id, namespace, session_id, request_id, "
+                        "content_digest, seq, turn_id, queued_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (self.project_id, self.namespace, session, row["request_id"],
+                         row["content_digest"], row.get("seq", records[-1].seq),
+                         row.get("turn_id", ""), row.get("queued_id", ""), row["created_at"]),
+                    )
+            # Do not drop a draft until COMMIT has succeeded, including deferred errors.
+            if draft is not None:
+                self._drafts.pop(session, None)
+                self._draft_metadata.pop(session, None)
+        return records
+
     def _commit_append(self, session, requested_seq, kind, ts, build):
         if requested_seq is not None and (
             type(requested_seq) is not int or requested_seq < 1
@@ -812,107 +1192,117 @@ class SqliteSessionStore:
                 if submitted:
                     # All setup records and the first input become durable together.
                     # A failed transaction leaves the draft available for retry.
-                    self.create_from_records(session, [*records, record])
+                    self.create_from_records(
+                        session, [*records, record], meta=self._draft_metadata.get(session),
+                    )
                     del self._drafts[session]
+                    self._draft_metadata.pop(session, None)
                 else:
                     records.append(record)
                 return record
         with self.db.transaction() as conn:
-            row = conn.execute(
-                "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
-                "last_user, last_agent, last_user_at FROM sessions "
-                "WHERE project_id=? AND namespace=? AND id=?",
-                (self.project_id, self.namespace, session),
-            ).fetchone()
-            if row is None:
-                raise SessionError(f"Session {session!r} does not exist")
-            (
-                last_seq,
-                title,
-                message_count,
-                created_at,
-                last_activity,
-                title_source,
-                last_user,
-                last_agent,
-                last_user_at,
-            ) = row
-            assigned = requested_seq if requested_seq is not None else last_seq + 1
-            payload, encoded = build(assigned)
-            try:
-                conn.execute(
-                    "INSERT INTO records"
-                    "(project_id, namespace, session_id, seq, kind, ts, body) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (
-                        self.project_id,
-                        self.namespace,
-                        session,
-                        assigned,
-                        kind,
-                        ts,
-                        encoded,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise SessionError(
-                    f"seq {assigned} already exists for session {session!r}"
-                ) from exc
-            new_last_seq = max(last_seq, assigned)
-            new_message_count = message_count
-            new_title = title
-            new_title_source = title_source
-            new_last_user = last_user
-            new_last_agent = last_agent
-            new_last_user_at = last_user_at
-            if (
-                (kind == "message" and isinstance(payload, Message) and export_mod.is_user_prompt(payload))
-                or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
-            ) and ts > 0:
-                new_last_user_at = max(last_user_at, ts)
-            if kind == "message" and isinstance(payload, Message) and payload.role == "user":
-                new_message_count += 1
-                snippet = export_mod.message_snippet(payload)
-                if snippet:
-                    new_last_user = snippet
-                if not new_title:
-                    candidate = export_mod.derive_title([payload])
-                    if candidate:
-                        new_title = candidate
-                        new_title_source = "first_message"
-            elif kind == "message" and isinstance(payload, Message) and payload.role == "assistant":
-                snippet = export_mod.message_snippet(payload)
-                if snippet:
-                    new_last_agent = snippet
-            new_created_at = (
-                created_at if created_at > 0 else (ts if ts > 0 else created_at)
-            )
-            new_activity = max(last_activity, ts) if ts > 0 else last_activity
+            return self._append_in_transaction(conn, session, requested_seq, kind, ts, build)
+
+    def _append_in_transaction(self, conn, session, requested_seq, kind, ts, build):
+        row = conn.execute(
+            "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
+            "last_user, last_agent, last_user_at FROM sessions "
+            "WHERE project_id=? AND namespace=? AND id=?",
+            (self.project_id, self.namespace, session),
+        ).fetchone()
+        if row is None:
+            raise SessionError(f"Session {session!r} does not exist")
+        (
+            last_seq,
+            title,
+            message_count,
+            created_at,
+            last_activity,
+            title_source,
+            last_user,
+            last_agent,
+            last_user_at,
+        ) = row
+        assigned = requested_seq if requested_seq is not None else last_seq + 1
+        payload, encoded = build(assigned)
+        try:
             conn.execute(
-                "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
-                "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
-                "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
-                "WHERE project_id=? AND namespace=? AND id=?",
+                "INSERT INTO records"
+                "(project_id, namespace, session_id, seq, kind, ts, body) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (
-                    new_last_seq,
-                    new_title,
-                    new_title_source,
-                    new_message_count,
-                    new_created_at,
-                    new_activity,
-                    new_last_user,
-                    new_last_agent,
-                    new_last_user_at,
-                    kind == "event"
-                    and isinstance(payload, Event)
-                    and payload.type
-                    in {"turn.completed", "turn.failed", "turn.cancelled"},
-                    assigned,
                     self.project_id,
                     self.namespace,
                     session,
+                    assigned,
+                    kind,
+                    ts,
+                    encoded,
                 ),
             )
+        except sqlite3.IntegrityError as exc:
+            raise SessionError(
+                f"seq {assigned} already exists for session {session!r}"
+            ) from exc
+        new_last_seq = max(last_seq, assigned)
+        if kind == "summary":
+            conn.execute("UPDATE sessions SET context_head_seq=? "
+                "WHERE project_id=? AND namespace=? AND id=?",
+                (assigned, self.project_id, self.namespace, session))
+        new_message_count = message_count
+        new_title = title
+        new_title_source = title_source
+        new_last_user = last_user
+        new_last_agent = last_agent
+        new_last_user_at = last_user_at
+        if (
+            (kind == "message" and isinstance(payload, Message) and export_mod.is_user_prompt(payload))
+            or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
+        ) and ts > 0:
+            new_last_user_at = max(last_user_at, ts)
+        if kind == "message" and isinstance(payload, Message) and payload.role == "user":
+            new_message_count += 1
+            snippet = export_mod.message_snippet(payload)
+            if snippet:
+                new_last_user = snippet
+            if not new_title:
+                candidate = export_mod.derive_title([payload])
+                if candidate:
+                    new_title = candidate
+                    new_title_source = "first_message"
+        elif kind == "message" and isinstance(payload, Message) and payload.role == "assistant":
+            snippet = export_mod.message_snippet(payload)
+            if snippet:
+                new_last_agent = snippet
+        new_created_at = (
+            created_at if created_at > 0 else (ts if ts > 0 else created_at)
+        )
+        new_activity = max(last_activity, ts) if ts > 0 else last_activity
+        conn.execute(
+            "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
+            "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
+            "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
+            "WHERE project_id=? AND namespace=? AND id=?",
+            (
+                new_last_seq,
+                new_title,
+                new_title_source,
+                new_message_count,
+                new_created_at,
+                new_activity,
+                new_last_user,
+                new_last_agent,
+                new_last_user_at,
+                kind == "event"
+                and isinstance(payload, Event)
+                and payload.type
+                in {"turn.completed", "turn.failed", "turn.cancelled"},
+                assigned,
+                self.project_id,
+                self.namespace,
+                session,
+            ),
+        )
         if kind == "event":
             return EventRecord(seq=assigned, event=payload, ts=ts)
         if kind == "message":
@@ -920,6 +1310,145 @@ class SqliteSessionStore:
         return msgspec.json.decode(encoded, type=SummaryRecord)
 
     # -- session summary / listing -----------------------------------------
+
+    def resolve_child_id(self, identity: str) -> str:
+        """Resolve an exact stored/logical identity; never hash an existing id."""
+        with self._draft_lock:
+            if identity in self._drafts:
+                return identity
+        conn = self.db._connection()
+        row = conn.execute(
+            "SELECT id FROM sessions WHERE project_id=? AND namespace='agents' "
+            "AND id=?", (self.project_id, identity),
+        ).fetchone()
+        if row is not None:
+            return str(row[0])
+        rows = conn.execute(
+            "SELECT id FROM sessions WHERE project_id=? AND namespace='agents' "
+            "AND logical_session_id=? LIMIT 2", (self.project_id, identity),
+        ).fetchall()
+        if len(rows) > 1:
+            raise SessionError("Ambiguous child session identity")
+        if rows:
+            return str(rows[0][0])
+        row = conn.execute(
+            "SELECT stored_id FROM child_allocations WHERE project_id=? AND logical_id=?",
+            (self.project_id, identity),
+        ).fetchone()
+        return str(row[0]) if row else stored_child_id(identity)
+
+    def reserve_child_id(self, parent_id: str) -> tuple[int, str]:
+        """Atomically reserve a durable ordinal across processes and restarts.
+
+        Existing legacy rows (including trash) and abandoned reservations are
+        never reused. A reservation is not a session and confers no ownership.
+        """
+        with self.db.transaction() as conn:
+            last = conn.execute(
+                "SELECT COALESCE(MAX(ordinal),0) FROM child_allocations "
+                "WHERE project_id=? AND parent_id=?", (self.project_id, parent_id),
+            ).fetchone()[0]
+            for ordinal in range(last + 1, last + _MAX_LIMIT + 1):
+                logical = f"{parent_id}/sub/{ordinal}"
+                physical = stored_child_id(logical)
+                if conn.execute(
+                    "SELECT 1 FROM sessions WHERE project_id=? AND namespace='agents' "
+                    "AND (id=? OR logical_session_id=?) LIMIT 1",
+                    (self.project_id, physical, logical),
+                ).fetchone():
+                    continue
+                try:
+                    conn.execute(
+                        "INSERT INTO child_allocations VALUES(?,?,?,?,?)",
+                        (self.project_id, parent_id, ordinal, logical, physical),
+                    )
+                except sqlite3.IntegrityError:
+                    continue
+                return ordinal, logical
+            raise SessionError("Child allocation scan limit exceeded")
+
+    def ownership_tree_rows(
+        self, session: str, *, namespace: str, max_depth: int, limit: int = 500,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+        """One bounded, project-scoped snapshot of explicit ownership only.
+
+        Root lookup follows at most 64 edges. Missing owners and cycles remain
+        unattached; fork ancestry is deliberately not traversed.
+        """
+        limit = max(1, min(int(limit), 500))
+        max_depth = max(0, min(int(max_depth), 64))
+        with self.db.read() as conn:
+            identity = (namespace, session)
+            visited: set[tuple[str, str]] = set()
+            for _ in range(64):
+                if identity in visited:
+                    break
+                visited.add(identity)
+                row = conn.execute(
+                    "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND id=? "
+                    "AND trash_id IS NULL", (self.project_id, *identity),
+                ).fetchone()
+                if row is None:
+                    raise SessionError("Session does not exist")
+                owner = (row["owner_namespace"], row["owner_id"])
+                if not all(owner):
+                    break
+                if conn.execute(
+                    "SELECT 1 FROM sessions WHERE project_id=? AND namespace=? AND id=? "
+                    "AND trash_id IS NULL", (self.project_id, *owner),
+                ).fetchone() is None:
+                    break
+                identity = owner
+            rows = conn.execute(
+                """WITH RECURSIVE tree(namespace,id,depth,path) AS (
+                    SELECT namespace,id,0,'|'||namespace||':'||id||'|' FROM sessions
+                    WHERE project_id=? AND namespace=? AND id=? AND trash_id IS NULL
+                    UNION ALL
+                    SELECT s.namespace,s.id,t.depth+1,t.path||s.namespace||':'||s.id||'|'
+                    FROM sessions s JOIN tree t
+                      ON s.owner_namespace=t.namespace AND s.owner_id=t.id
+                    WHERE s.project_id=? AND s.trash_id IS NULL AND t.depth<?
+                      AND instr(t.path,'|'||s.namespace||':'||s.id||'|')=0
+                    ORDER BY 3,1,2 LIMIT ?
+                ) SELECT s.*,t.depth,
+                    EXISTS(SELECT 1 FROM sessions c WHERE c.project_id=s.project_id
+                      AND c.owner_namespace=s.namespace AND c.owner_id=s.id
+                      AND c.trash_id IS NULL) AS has_children
+                    FROM tree t JOIN sessions s ON s.project_id=?
+                      AND s.namespace=t.namespace AND s.id=t.id
+                    ORDER BY t.depth,s.namespace,s.id""",
+                (self.project_id, *identity, self.project_id, max_depth,
+                 limit + 1, self.project_id),
+            ).fetchall()
+            truncated = len(rows) > limit or any(
+                row["depth"] == max_depth and row["has_children"] for row in rows
+            )
+            # Unknown legacy children are visible, never silently adopted.
+            remaining = max(0, limit - min(len(rows), limit))
+            unknown = conn.execute(
+                "SELECT *,0 AS depth,0 AS has_children FROM sessions WHERE project_id=? "
+                "AND namespace='agents' AND kind='' AND trash_id IS NULL "
+                "AND NOT (namespace=? AND id=?) ORDER BY id LIMIT ?",
+                (self.project_id, *identity, remaining + 1),
+            ).fetchall()
+            truncated = truncated or len(unknown) > remaining
+            return ([dict(row) for row in rows[:limit]],
+                    [dict(row) for row in unknown[:remaining]], bool(truncated))
+
+    def unattached_count(self) -> int:
+        """Project-local diagnostic count, without reading any session log."""
+        return int(self.db._connection().execute(
+            "SELECT count(*) FROM sessions WHERE project_id=? AND namespace='agents' "
+            "AND kind='' AND trash_id IS NULL", (self.project_id,),
+        ).fetchone()[0])
+
+    def owned_rows(self, owner_namespace: str, owner_id: str) -> list[dict[str, Any]]:
+        """Project-scoped direct ownership query, independent of fork lineage."""
+        return [dict(row) for row in self.db._connection().execute(
+            "SELECT * FROM sessions WHERE project_id=? AND owner_namespace=? "
+            "AND owner_id=? AND trash_id IS NULL ORDER BY namespace, id",
+            (self.project_id, owner_namespace, owner_id),
+        )]
 
     def session_row(self, session: str) -> dict[str, Any] | None:
         session = validate_session_id(session)
@@ -935,7 +1464,9 @@ class SqliteSessionStore:
                     {},
                 )
                 return {
+                    **self._draft_metadata.get(session, {}),
                     "id": session,
+                    "namespace": self.namespace,
                     "title": "",
                     "title_source": "",
                     "created_at": min(
@@ -962,6 +1493,22 @@ class SqliteSessionStore:
             .fetchone()
         )
         return dict(row) if row is not None else None
+
+    def child_counts(self, namespace: str, identities: list[str]) -> dict[str, int]:
+        """Count direct children without crossing project or fork relationships."""
+        if not identities:
+            return {}
+        result: dict[str, int] = {}
+        for offset in range(0, len(identities), 500):
+            batch = identities[offset:offset + 500]
+            rows = self.db._connection().execute(
+                "SELECT owner_id,count(*) FROM sessions WHERE project_id=? "
+                "AND owner_namespace=? AND trash_id IS NULL AND owner_id IN ("
+                + ",".join("?" for _ in batch) + ") GROUP BY owner_id",
+                (self.project_id, namespace, *batch),
+            ).fetchall()
+            result.update({row[0]: row[1] for row in rows})
+        return result
 
     def list_rows(
         self, *, include_trashed: bool = False, include_archived: bool = True

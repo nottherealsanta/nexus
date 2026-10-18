@@ -97,6 +97,7 @@ pub struct Snapshot {
     pub tabs: Vec<Session>,
     pub archived_label: String,
     pub sessions_truncated: bool,
+    pub sessions_sidebar: bool,
     /// The typed one-page Settings area (`nexus/ui_support/settings_page.py`), or null.
     pub settings_page: Option<Value>,
     /// Appearance and Layout rows inlined into the Settings root list (plus drill summaries), or null.

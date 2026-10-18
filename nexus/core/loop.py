@@ -1805,9 +1805,9 @@ async def run_turn(
     token = lease.cancel_token
     emitter = _Emitter(emit, session_id, turn_id)
 
-    async def _tool_emit(event_type: str, data: dict[str, Any] | None) -> None:
-        """Adapt the dispatcher's ``(type, data)`` emit seam to the event sink."""
-        await emitter.emit(event_type, data)
+    async def _tool_emit(event_type: str, data: dict[str, Any] | None) -> object:
+        """Preserve the durable event acknowledgement across the tool seam."""
+        return await emitter.emit(event_type, data)
 
     state = lease.state
     started = clock()

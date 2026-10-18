@@ -23,7 +23,7 @@ class TurnClient(Protocol):
     ) -> AsyncIterator[Event]:
         ...
 
-    async def start_turn(self, session: str, content: str) -> str:
+    async def start_turn(self, session: str, content: str, *, client_request_id: str | None = None) -> str:
         ...
 
 
@@ -34,6 +34,7 @@ async def turn_events(
     from_seq: int = 0,
     *,
     follow: bool = True,
+    client_request_id: str | None = None,
 ) -> AsyncIterator[Event]:
     """Yield turn events after attaching the stream and starting the turn."""
     queue: asyncio.Queue[Event | BaseException | None] = asyncio.Queue()
@@ -54,7 +55,10 @@ async def turn_events(
     try:
         # Let the pump enter the transport subscription before starting the turn.
         await asyncio.sleep(0)
-        await client.start_turn(session, content)
+        if client_request_id is None:
+            await client.start_turn(session, content)
+        else:
+            await client.start_turn(session, content, client_request_id=client_request_id)
         while (event := await queue.get()) is not None:
             if isinstance(event, BaseException):
                 raise event

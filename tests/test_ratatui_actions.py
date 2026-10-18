@@ -1,6 +1,6 @@
 """Native shell host actions never leak slash commands into model input."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
 
@@ -15,7 +15,7 @@ async def test_submit_defaults_to_steering():
     client = SimpleNamespace(enqueue=AsyncMock())
     shell = ShellActions(SimpleNamespace(client=client, session="s"))
     await shell.submit("hello")
-    client.enqueue.assert_awaited_once_with("s", "hello", mode="steer", attachments=[], attachment_labels=[])
+    client.enqueue.assert_awaited_once_with("s", "hello", mode="steer", attachments=[], attachment_labels=[], client_request_id=ANY)
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_submit_modes_attachments_and_cancel_queue(tmp_path, monkeypatch):
     shell = ShellActions(controller)
     shell.attachments.append(SimpleNamespace(attachment_id="draft", kind="document"))
     await shell.submit("hello", "interrupt")
-    client.enqueue.assert_awaited_once_with("s", "hello", mode="interrupt", attachments=["draft"], attachment_labels=["document 1"])
+    client.enqueue.assert_awaited_once_with("s", "hello", mode="interrupt", attachments=["draft"], attachment_labels=["document 1"], client_request_id=ANY)
     assert not shell.attachments
     await shell.cancel()
     assert shell.composer_restore == "one\n\ntwo"
@@ -545,3 +545,15 @@ def test_form_delete_capability_is_limited_to_settings_files(tmp_path, monkeypat
     assert project(shell.controller, 1, shell=shell)["form"]["can_delete"] is True
     shell.workflows.edit("Provider key", "", {"kind": "provider_key"}, secret=True)
     assert project(shell.controller, 2, shell=shell)["form"]["can_delete"] is False
+
+
+@pytest.mark.asyncio
+async def test_submit_reuses_identity_after_lost_reply():
+    client = SimpleNamespace(enqueue=AsyncMock(side_effect=[ConnectionError("lost reply"), None, None]))
+    shell = ShellActions(SimpleNamespace(client=client, session="s"))
+    with pytest.raises(ConnectionError):
+        await shell.submit("hello")
+    await shell.submit("hello")
+    await shell.submit("hello")
+    ids = [call.kwargs["client_request_id"] for call in client.enqueue.await_args_list]
+    assert ids[0] == ids[1] and ids[2] != ids[1]

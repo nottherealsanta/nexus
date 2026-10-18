@@ -307,6 +307,10 @@ class _SecretRuntime(_FakeRuntime):
 def test_protocol_round_trips_every_command_and_result():
     commands = [
         p.SessionList(),
+        p.SessionTree(session="s"),
+        p.SessionInspect(session="child"),
+        p.SessionHandoff(session="s"),
+        p.SessionHandoffRead(session="s"),
         p.SettingsInventory(scope="project"),
         p.SettingsRead(scope="project", category="agents", id="helper"),
         p.SettingsWrite(scope="project", category="agents", id="helper", body=""),
@@ -437,6 +441,9 @@ def test_protocol_round_trips_every_command_and_result():
         p.ProvidersUsageResult(providers=[{"id": "codex", "windows": [{"label": "5-hour", "used_percent": 41.0}]}],
                                not_connected=["OpenCode Go"], fetched_at=1.0),
         p.SessionListResult(sessions=[summary]),
+        p.SessionTreeResult(session="s"),
+        p.SessionInspectResult(session="child", namespace="agents", view={}, request={}),
+        p.SessionHandoffResult(data={}),
         p.SessionArchiveResult(session=summary),
         p.SessionUnarchiveResult(session=summary),
         p.SessionListArchivedResult(sessions=[p.ArchivedSummary(id="s")]),
@@ -1153,6 +1160,11 @@ async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
     assert report["database"]["schema_user_version"] == SCHEMA_VERSION
     assert report["database"]["quick_check"] == "ok"
     assert report["database"]["size_bytes"] > 0
+    largest = report["database"]["largest_session_logs"]
+    assert largest["scope"] == "project"
+    assert largest["sessions"][0]["session"] == "probe"
+    assert largest["sessions"][0]["records"] >= 2
+    assert "probe" in str(largest) and "Bearer" not in str(largest)
     await runtime.aclose()
 
 
@@ -1877,3 +1889,103 @@ def test_dashboard_display_strings_are_redacted_control_free_and_bounded():
     assert len(value) <= 200
     assert "hunter2" not in value
     assert not any(unicodedata.category(c).startswith("C") for c in value)
+
+
+@pytest.mark.parametrize("operation", ["start", "enqueue"])
+async def test_request_identity_replays_original_result_after_restart(tmp_path, operation):
+    from nexus.errors import RequestIdConflict
+    provider = ScriptedProvider(text_response("answer"))
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    command_type = p.SessionStart if operation == "start" else p.SessionEnqueue
+    command = command_type(session="s", content="hello", client_request_id="request-1")
+    result = await facade._dispatch(command)
+    await facade.wait_idle(timeout=5)
+    before = list(runtime.session("s").records)
+    assert await facade._dispatch(command) == result
+    assert runtime.session("s").records == before
+    with pytest.raises(RequestIdConflict):
+        await facade._dispatch(command_type(session="s", content="different", client_request_id="request-1"))
+    await runtime.aclose()
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("must not run")))
+    facade = HostFacade(runtime)
+    assert await facade._dispatch(command) == result
+    assert runtime.session("s").records == before
+    await runtime.aclose()
+
+
+async def test_concurrent_protocol_clients_admit_one_request(tmp_path):
+    import asyncio
+    from nexus.client.protocol import Client
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    class Transport:
+        async def request(self, command):
+            return await facade._dispatch(command)
+    clients = [Client(Transport()), Client(Transport())]
+    results = await asyncio.gather(*(client.enqueue("s", "hello", client_request_id="shared") for client in clients))
+    assert results[0] == results[1]
+    await facade.wait_idle(timeout=5)
+    handle = runtime.session("s")
+    assert sum(event.type == "input.queued" for event in handle.events) == 1
+    assert sum(message.role == "user" for message in handle.messages) == 1
+    await runtime.aclose()
+
+
+async def test_request_retry_does_not_need_released_attachment_tokens(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    prepared = await facade.handle(p.AttachmentPrepare(name="note.txt", data=b"attached text"))
+    command = p.SessionEnqueue(session="s", content="hello", attachments=[prepared.attachment_id], client_request_id="with-file")
+    result = await facade.handle(command)
+    assert isinstance(result, p.SessionEnqueueResult)
+    assert await facade.handle(command) == result
+    await facade.wait_idle(timeout=5)
+    assert await facade.handle(command) == result
+    await runtime.aclose()
+
+
+@pytest.mark.parametrize("request_id", ["a" * 65, "with space", "../bad", "é"])
+async def test_invalid_request_id_never_promotes_draft(tmp_path, request_id):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    result = await facade.handle(p.SessionEnqueue(session="s", content="hello", client_request_id=request_id))
+    assert isinstance(result, p.ErrorResult) and result.kind == "ValueError"
+    assert runtime.session("s")._store.db._connection().execute("SELECT 1 FROM sessions WHERE id='s'").fetchone() is None
+    await runtime.aclose()
+
+
+async def test_request_conflict_is_typed_on_wire_and_does_not_interrupt_twice(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    cancel = AsyncMock()
+    monkeypatch.setattr(facade, "cancel", cancel)
+    command = p.SessionEnqueue(session="s", content="hello", mode="interrupt", client_request_id="interrupt-once")
+    result = await facade.handle(command)
+    assert await facade.handle(command) == result
+    conflict = await facade.handle(p.SessionEnqueue(session="s", content="changed", mode="interrupt", client_request_id="interrupt-once"))
+    assert isinstance(conflict, p.ErrorResult) and conflict.kind == "RequestIdConflict"
+    cancel.assert_awaited_once()
+    await facade.wait_idle(timeout=5)
+    await runtime.aclose()
+
+
+async def test_distinct_request_ids_keep_distinct_queued_turn_ids(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    # Park both admissions so neither has consumed its own queue head yet.
+    facade.supervisor._max = 0
+    first = await facade.handle(p.SessionEnqueue(session="s", content="first", mode="queue", client_request_id="one"))
+    second = await facade.handle(p.SessionEnqueue(session="s", content="second", mode="queue", client_request_id="two"))
+    assert first.turn_id != second.turn_id
+    assert first.queued_id != second.queued_id
+    assert first.depth == 1 and second.depth == 2
+    assert await facade.handle(p.SessionEnqueue(session="s", content="first", mode="queue", client_request_id="one")) == first
+    await runtime.aclose()

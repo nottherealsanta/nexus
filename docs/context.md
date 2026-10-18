@@ -173,3 +173,50 @@ at 48,000 characters across 64 servers. Inspection lists the full server
 catalogue and adds effective `tool_loading`, its source, and approximate
 `schema_tokens`. Header totals charge actual schemas and disclose deferred
 tokens separately.
+
+## Same-session handoff (P5)
+
+`context.on_overflow = "handoff"` (the default) performs a durable context-head
+cutover; set `"compact"` to opt out and keep the prior compaction-only behavior
+(unchanged). A legacy config with no `config_version = 2` layer anywhere (and
+only environment overrides, which never promote) has no `v2` section and stays on
+compaction; any v2 layer (user or workspace) promotes the whole configuration, and
+with it the `handoff` default. The
+default was flipped under an explicit maintainer waiver of the soak and
+real-provider quality gate; it is not validated by real use (see
+[decisions.md](decisions.md)). `handoff_keep_fraction` defaults to
+0.25. After tool-result eviction the assembler chooses a pair-safe suffix,
+keeps the entire current user/tool tail, and performs at most one handoff per
+assembly. Required brief/tail overflow is an actionable `ContextOverflow`, not
+a rollover loop. The PreCompact gate may block the write.
+
+A version-1 deterministic, secret-redacted brief records bounded user intent,
+recent decisions/previous brief, todos, child ownership, shell state, queue IDs,
+tool errors and tool-derived changed paths. It is capped below 24 KiB and marks
+truncation. `handoff_brief = "summarized"` additionally calls the session's
+selected provider/model in the foreground with a 10% output reserve, no tools,
+a bounded response and timeout. Empty/error recall falls back to the mandatory
+deterministic brief and marks `summary_fallback`; cancellation propagates.
+The brief itself uses a conservative 10%-of-input character cap on automatic
+cutover, leaving room for required input. It is recall, not a new instruction
+source or a guarantee of complete semantic compression. When the brief exceeds
+that cap, every line is shortened to one shared length (short lines stay whole)
+and `[truncated]` is appended, so the history pointer, intent, tool/file and
+state sections all survive; if a structured fit is impossible, `context.manager`
+raises an actionable `ContextOverflow` (no repeated rollover). Nested trailing
+clip markers are removed on reclipping so they never accumulate, while literal
+interior markers are preserved.
+
+Token accounting uses the configured counter: the brief's cost in the budget is
+the counted history cost, and `context.handoff.tokens_before`/`tokens_after` are
+the assembler's projected history and kept-suffix counts (plus the brief under
+the default tokenizer). A direct `Session.handoff()` call has no assembler and
+uses the default tokenizer over the same canonical message text.
+
+`SummaryRecord(strategy="handoff", kept_from_seq, handoff_id, brief_version)`
+plus `context.handoff`, row head/count and any continuation admission commit in
+one SQLite transaction. Only the active brief and retained messages are model
+input; `Session.messages`, exports and transcript views remain full history.
+Historical cutoffs derive the head visible at that cutoff. Fork copies the
+selected prefix and its head into a *new* identity; handoff keeps the identity;
+agent reset only changes the descriptive agent selection.

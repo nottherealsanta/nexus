@@ -38,7 +38,6 @@ import inspect
 import json
 import re
 import subprocess
-import threading
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -273,10 +272,11 @@ class _ToolDispatcherAdapter:
         cancel: CancelToken,
         parallel_allowed: bool = True,
     ):
-        async def _emit(event) -> None:
+        async def _emit(event) -> object:
             outcome = emit(event.type, event.data)
             if inspect.isawaitable(outcome):
-                await outcome
+                outcome = await outcome
+            return outcome
 
         results = await self.manager.dispatch(
             prepared,
@@ -1016,6 +1016,12 @@ class _ContextCoordinator:
             provider=provider_name,
             reasoning_effort=selected_agent_effort,
         )
+        if (resolved is not None and config.v2 is not None and config.v2.context.on_overflow == "handoff"
+                and config.v2.context.handoff_brief == "summarized"):
+            from .context.handoff_model import HandoffSummarizer
+            from .context.budget import BudgetInputs
+            reserve = int(BudgetInputs.from_config_and_caps(config, capabilities).input_budget * 0.1)
+            assembler._summarizer = HandoffSummarizer(resolved.provider, model, reserve)
         assembler._tier_name = tier_name
         assembler._effort_explicit = (
             getattr(session, "reasoning_effort_selection", None) is not None
@@ -1172,6 +1178,14 @@ class _ContextCoordinator:
             agent_definition=agent_definition,
             reasoning_effort=selected_agent_effort,
         )
+        if (request_counter is not None and config.v2 is not None and config.v2.context.on_overflow == "handoff"
+                and config.v2.context.handoff_brief == "summarized" and assembler._env is not None):
+            from dataclasses import replace
+            from .context.handoff_model import HandoffSummarizer
+            from .context.budget import BudgetInputs
+            reserve = int(BudgetInputs.from_config_and_caps(config, capabilities).input_budget * 0.1)
+            assembler._env = replace(assembler._env,
+                summarizer=HandoffSummarizer(resolved.provider, model, reserve), summarizer_async=True)
         provider_default = getattr(agent_definition, "provider", None)
         if (
             provider_default
@@ -1802,18 +1816,28 @@ class _ChildAuthority:
 
 
 def _child_session_id(logical: str) -> str:
-    """Map a logical ``<parent>/sub/<n>`` id to a valid, collision-resistant id.
+    """Compatibility wrapper for the stable stored child id mapping."""
+    from .session.child_ids import stored_child_id
 
-    Sanitizing ``/`` to ``_`` could map two distinct logical ids onto one disk
-    id (``a/b/1`` and ``a_b_1``); a short deterministic hash of the logical id is
-    appended so the mapping is injective in practice while staying stable across
-    reopens. The 80-char session-id limit is preserved.
-    """
-    raw = str(logical or "subagent")
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
-    safe = (safe or "subagent")[: 80 - len(digest) - 1]
-    return f"{safe}_{digest}"
+    return stored_child_id(str(logical or "subagent"))
+
+
+def _child_ownership(spec: Any) -> dict[str, Any]:
+    """Explicit physical owner edge; logical paths are compatibility only."""
+    nested = bool(getattr(spec, "parent_agent_id", ""))
+    parent = str(getattr(spec, "parent_session", ""))
+    return {
+        "kind": "external" if getattr(spec, "provider", "") in {"claude_code", "agy"} else "child",
+        "root_id": getattr(spec, "root_id", "") or ("" if nested else parent),
+        "owner_agent_id": spec.agent_id,
+        "owner_spawn_seq": getattr(spec, "owner_spawn_seq", 0),
+        "owner_namespace": "agents" if nested else "main",
+        "owner_id": parent or None,
+        "owner_turn_id": getattr(spec, "owner_turn_id", "") or getattr(spec, "root_turn_id", "") or None,
+        "owner_call_id": getattr(spec, "parent_call_id", "") or None,
+        "agent_id": spec.agent_id,
+        "logical_session_id": spec.session_id,
+    }
 
 
 class _ChildSessionFacade:
@@ -1826,8 +1850,6 @@ class _ChildSessionFacade:
 
     def __init__(self, manager: SessionManager) -> None:
         self._manager = manager
-        self._allocation_lock = threading.Lock()
-        self._allocated: dict[str, int] = {}
 
     @property
     def manager(self) -> SessionManager:
@@ -1837,20 +1859,15 @@ class _ChildSessionFacade:
         return f"{parent_id}/sub/{int(index)}"
 
     def allocate_child_id(self, parent_id: str) -> tuple[int, str]:
-        # Tree-local, parent-session scoped monotonic allocation prevents
-        # concurrent Task calls in separate iterations/runners colliding.
-        with self._allocation_lock:
-            index = self._allocated.get(parent_id, 0) + 1
-            while self._manager.store.exists(
-                _child_session_id(self.child_id(parent_id, index))
-            ):
-                index += 1
-            self._allocated[parent_id] = index
-            return index, self.child_id(parent_id, index)
+        return self._manager.store.reserve_child_id(parent_id)
+
+    def root_id(self, parent_id: str) -> str:
+        row = self._manager.store.session_row(parent_id)
+        return str(row.get("root_id") or "") if row else parent_id
 
     async def aclose(self, session_id: str) -> None:
         with contextlib.suppress(Exception):
-            self._manager.evict(_child_session_id(session_id))
+            self._manager.evict(self._manager.store.resolve_child_id(session_id))
 
 
 def _child_models(session: Any) -> tuple[str, ...]:
@@ -1889,6 +1906,7 @@ _CHILD_RELAY_SUPPRESS = frozenset(
         "session.closed",
         "context.assembled",
         "context.compacted",
+        "context.handoff",
         "context.degraded",
         "permission.requested",
         "permission.resolved",
@@ -1932,17 +1950,38 @@ class _ChildEventSink:
             if str(data.get("code", "")).startswith("unattended") and "deny" in str(data.get("decision", "")):
                 tool = data.get("tool") or data.get("tool_name") or "tool"
                 self.blocked.append(f"{tool}: {str(data.get('reason') or data.get('code'))[:160]}")
-        if event.type == "todo.updated":
-            self._session.append_event(event)
-        else:
-            with contextlib.suppress(Exception):
-                self._session.append_event(event)
+        persistence_error = None
+        try:
+            record = self._session.append_event(event)
+            if record is not None:
+                event = record.event
+        except Exception as exc:  # noqa: BLE001 - do not expose exception text
+            persistence_error = exc
         if self._relay is None or event.type in _CHILD_RELAY_SUPPRESS:
+            if persistence_error is not None and event.type == "todo.updated":
+                raise persistence_error
             return event
-        with contextlib.suppress(Exception):
-            outcome = self._relay(event.type, dict(event.data))
+        async def relay(event_type: str, data: Mapping[str, Any]) -> None:
+            outcome = self._relay(event_type, data)
             if inspect.isawaitable(outcome):
                 await outcome
+
+        if event.type == "todo.updated":
+            await relay(event.type, dict(event.data))
+        else:
+            with contextlib.suppress(Exception):
+                await relay(event.type, dict(event.data))
+        if persistence_error is not None:
+            # The owner log gets a stable, non-sensitive diagnostic. Ordinary
+            # observation can fail without killing the child; todo state cannot.
+            with contextlib.suppress(Exception):
+                await relay("error", {
+                    "code": "child_log_persist_failed",
+                    "message": "Could not persist a child event in its session log.",
+                    "event_type": event.type,
+                })
+            if event.type == "todo.updated":
+                raise persistence_error
         return event
 
 
@@ -2204,8 +2243,10 @@ class _ChildRuntime:
         spec = self._spec
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
-        real_id = _child_session_id(spec.session_id)
-        session = facade.manager.open(real_id, create=True, recover=False)
+        real_id = facade.manager.store.resolve_child_id(spec.session_id)
+        session = facade.manager.open(
+            real_id, create=True, recover=False, ownership=_child_ownership(spec),
+        )
         try:
             runtime._restore_todos(session)
             config = (
@@ -2412,8 +2453,10 @@ class _ChildRuntime:
         assert external is not None
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
-        real_id = _child_session_id(spec.session_id)
-        session = facade.manager.open(real_id, create=True, recover=False)
+        real_id = facade.manager.store.resolve_child_id(spec.session_id)
+        session = facade.manager.open(
+            real_id, create=True, recover=False, ownership=_child_ownership(spec),
+        )
         try:
             # External workers have no wall-clock deadline; only cancellation stops them.
             limits = TurnLimits(max_iterations=0, max_seconds=0.0)
@@ -2985,8 +3028,14 @@ class Runtime:
         return self._questions
 
     def _question_service(self, session_id: str) -> _QuestionService:
-        """Bind questions to the root of ``session_id`` (``<root>/sub/<n>...``)."""
-        root_id = str(session_id).split("/sub/", 1)[0]
+        """Bind questions through explicit stored identity, never path ancestry."""
+        root_id = str(session_id)
+        if self._child_sessions is not None:
+            store = self._child_sessions.manager.store
+            physical = store.resolve_child_id(session_id)
+            row = store.session_row(physical)
+            if row is not None and row.get("root_id"):
+                root_id = row["root_id"]
         live = getattr(self._sessions, "_live_handle", None)
         root = live(root_id) if callable(live) else None
         return _QuestionService(self._questions, root_id, root)
@@ -3254,6 +3303,10 @@ class Runtime:
             def message_seqs(self):
                 getter = getattr(session, "message_seqs", None)
                 return getter() if callable(getter) else ()
+
+            def active_messages(self):
+                getter = getattr(session, "active_messages", None)
+                return getter() if callable(getter) else (self.messages, self.message_seqs())
 
         preview_session = _PreviewSession()
         assembler = self._assembler.for_turn(session=preview_session)
@@ -5320,7 +5373,7 @@ class Runtime:
         given (its first user message); ``None`` until the child has sent.
         """
         store = self._ensure_child_sessions().manager.store
-        real_id = _child_session_id(child_session)
+        real_id = store.resolve_child_id(child_session)
         if not child_session or not store.exists(real_id):
             return None
         latest: dict[str, Any] | None = None
@@ -5614,7 +5667,7 @@ class Runtime:
         if sessions is None:
             return False
         try:
-            return sessions.manager._live_handle(_child_session_id(child_id)) is not None
+            return sessions.manager._live_handle(sessions.manager.store.resolve_child_id(child_id)) is not None
         except Exception:  # noqa: BLE001 - unknown ownership must fail closed
             return None
 
@@ -5847,11 +5900,13 @@ class Runtime:
             hooks = _HookService(
                 hook_manager, hook_specs, workspace=workspace
             )
+        child_sessions = self._ensure_child_sessions()
+        resolve_child = getattr(child_sessions.manager.store, "resolve_child_id", _child_session_id)
         child_runner = self._make_subagent_runner(
             session_id=spec.session_id,
             parent_tools=spec.tools,
             parent_depth=spec.depth,
-            parent_session=spec.session_id,
+            parent_session=resolve_child(spec.session_id),
             parent_agent_id=spec.agent_id,
             parent_tier=spec.tier,
             parent_model=spec.model,
@@ -6045,8 +6100,8 @@ class Runtime:
     ) -> ToolManager:
         manifest = self.manifest
         logical_id = str(getattr(spec, "session_id", ""))
-        if manifest is not None and "/sub/" in logical_id:
-            root_id = logical_id.split("/sub/", 1)[0]
+        root_id = str(getattr(spec, "root_id", ""))
+        if manifest is not None and root_id:
             if self._sessions.store.exists(root_id):
                 root_session = self._sessions.open(root_id, create=False, recover=True)
                 manifest = self._selected_manifest(manifest, root_session)

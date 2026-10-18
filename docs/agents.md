@@ -83,7 +83,7 @@ Requires POSIX and Claude Code >= 2.1.296; the preflight probes `--version` and
 `--restricted` (default), `--tools`, `--allowedTools`, `--disallowedTools`, and
 `--session-id`. `AskUserQuestion` is always added to `--disallowedTools` (and so
 to the disclosed authority): Nexus never answers a question menu, so one would only
-stall the worker until its deadline. `bypassPermissions` and `--dangerously-skip-permissions`
+stall the worker indefinitely. `bypassPermissions` and `--dangerously-skip-permissions`
 are never passed (and rejected at config load). `auto` is accepted as an explicit
 opt-in: Claude's own classifier then answers approvals (verified live on Haiku
 5.5: writes proceeded without a prompt; a risky action is denied with a "denied by
@@ -114,16 +114,14 @@ The JSONL transcript is read incrementally (1 MiB per read, 8 MiB per line, 32
 MiB total), other session ids and sidechains are ignored, entries are
 deduplicated by `uuid`, and reading continues 2 s after Stop to catch late
 flushes. A quiet PTY, or a process that exits without Stop, is never success.
-Hooks are checked before the deadline on each poll, so a Stop that lands at the
-deadline still completes. Permission-menu detection removes the echoed prompt and
+Permission-menu detection removes the echoed prompt and
 Claude's own replies (from the transcript) before matching, best effort.
 The terminal tail is kept only as an ANSI-stripped, redacted diagnostic of at
 most 1500 characters.
 
 **Statuses** (`SubagentOutcome.status`, with `stop_reason`): `completed`
 (`end_turn`; Stop), `failed` (`error`; StopFailure, or exit without Stop),
-`interrupted` (`timeout`; deadline, partial answer kept), `cancelled`
-(`cancelled`), `needs_attention` (trust, authentication or onboarding blocked,
+`cancelled` (`cancelled`), `needs_attention` (trust, authentication or onboarding blocked,
 model rejected, or a permission prompt while the mode is not `dontAsk`). The
 attention result names the exact command for the user to run (for example
 `cd <workspace> && claude` for trust, `claude auth login`). The only bytes Nexus
@@ -150,8 +148,9 @@ announced.
 events (provider `claude-code`). Claude's tool calls are never `tool.*` events.
 
 Not implemented: host inspect/cancel/attention/handoff commands, native Ratatui
-rendering of `external.*` rows, a web port, and recovery that marks in-flight
-external runs interrupted after a daemon crash. Verified live (2026-10-13, Claude Code 2.1.296, one account, read-only policy):
+rendering of `external.*` rows, and a web port. After a daemon crash, session
+recovery marks unfinished external runs and their child-task rows interrupted;
+it does not kill orphan Claude processes or resume them. Verified live (2026-10-13, Claude Code 2.1.296, one account, read-only policy):
 the workspace-trust prompt wording, the transcript path
 (`~/.claude/projects/<cwd with / and . as ->/<session>.jsonl`), the hook-driven
 `Stop`, and a Claude-owned `Read` call on `claude-haiku-5-5`. Not verified live:
@@ -189,8 +188,9 @@ stdin as one stream-json user event (`{"event":"user","message":{"content":...}}
 as for Claude). stdin stays open until the terminal `result` event and is then closed
 so agy exits: in streaming mode stdin EOF ends agy's session, so closing it right
 after the prompt can abort the turn. `--print-timeout` is a Go-style duration in
-seconds with 5 s slack so Nexus' own deadline decides first. The child leads its own
-process group, signalled on completion, cancel, deadline and close. The preflight
+seconds; Nexus sets no deadline, so it passes an effectively unbounded value (one
+year) because agy requires the flag. The child leads its own
+process group, signalled on completion, cancel and close. The preflight
 probes `--version` and `--help` (time-bounded, collecting stdout and stderr) and
 refuses a missing flag. `--input-format stream-json` itself selects headless
 streaming (`--print`/`-p` is not passed; its prompt is dropped in this mode). POSIX only. See [startup troubleshooting](antigravity-troubleshooting.md)
@@ -208,7 +208,7 @@ diagnostic. Usage is whatever the terminal `result.usage` carried (`reported`);
 otherwise, and always for cost, it is `unknown`, never estimated or zero.
 `files_changed` is measured by Nexus exactly as for Claude.
 
-**Statuses:** `completed`, `failed`, `interrupted` (deadline), `cancelled`, and
+**Statuses:** `completed`, `failed`, `cancelled`, and
 `needs_attention` when agy needs sign-in, workspace trust or a permission approval.
 Nexus never answers those: it writes only the prompt, so the attention result tells
 the user to run `agy` interactively, or adjust agy's own permission settings, and
@@ -419,6 +419,17 @@ child `turn.completed` would look like the parent ending, and a relayed
 reads it back through `AgentTranscript`. Events: `agent.spawned`,
 `agent.completed`, `agent.clamped`.
 
+After a daemon crash, reopening the parent under its exclusive lease closes
+unfinished spawned children as `interrupted` in the parent log, including native
+children not yet promoted to durable sessions and nested children (nested-first,
+preserving their parent-agent routing). Completed children are not closed twice,
+and a live turn's lease prevents recovery by another manager. The root
+re-delegates interrupted work; recovery never reruns tools or resumes child
+execution. The same recovery also repairs owned child logs: proven child rows are
+traversed recursively, each under its own non-blocking exclusive lease (a live
+child and its subtree are skipped; unknown legacy logs are not guessed), and
+dangling tool uses get error results ([sessions.md](sessions.md)).
+
 **Tier is not model.** A tier (`low|medium|high`) is a routing label; the model a
 child actually ran on is a separate fact, always shown beside it:
 
@@ -444,6 +455,14 @@ child actually ran on is a separate fact, always shown beside it:
   tool result metrics repeat both.
 
 ## Attention goes to the root, then the human
+
+Child event persistence distinguishes replay state from optional observation.
+`todo.updated` must be appended to the child's log and relayed to the owner's
+durable sink before the tool succeeds; failures propagate through nested
+relays. Other telemetry remains best-effort. A failed child-log append still
+attempts the owner relay and records an `error` with code
+`child_log_persist_failed` there (without raw exception text); it never claims
+that the child copy was durable. Optional UI fan-out remains best-effort.
 
 A child never asks the human directly. When it is blocked on an approval it
 cannot get, the block travels up as **attention** on its `SubagentOutcome`
@@ -475,12 +494,12 @@ reply). Offline tests: `tests/test_agent_attention.py`,
 
 ## Failed subagents keep their context
 
-A child that stops without finishing (`max_iterations` or the wall-clock/token
-budget, a provider error, a crash) returns `status: failed` with a **handoff**
+A child that stops without finishing (`max_iterations`, a provider error, a
+crash) returns `status: failed` with a **handoff**
 (`agents/handoff.py`): task given, stop reason, last assistant message, files
 changed, and the last 30 tool calls with errors flagged. It is built
 deterministically from the child's durable session, with no model call, so it
-works even when the child failed because of the clock. The Task result carries a
+works even when the child's own model is unavailable. The Task result carries a
 bounded digest; the full report is saved to `<nexus home>/handoffs/<session>.md`
 (best effort; a failed write still returns the digest and says it was not saved).
 There is no resume field on the `task` tool: hand-offs are rare, so the root
@@ -535,3 +554,9 @@ read-only enforcement, and read-only is never enforced on any provider. A
 pre-start refusal durably records `selected_model` separately from
 `resolved_model`, and shows the selected provider/model as **not started** plus
 the redacted configuration/policy error, never a claim that the model ran.
+
+Same-session handoff does not spawn or reparent an agent. Explicit child owner,
+root and logical identities remain unchanged; the child log's handoff event is
+not relayed into its parent's context timeline. External workers retain their
+own context lifecycle. `/agent reset` changes selection, `/fork` creates a new
+identity, and `/handoff` retires model context inside the existing identity.

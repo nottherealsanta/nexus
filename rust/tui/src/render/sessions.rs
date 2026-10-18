@@ -207,7 +207,7 @@ pub fn draw(
 
     let chips = status_chips(&shown, colors, width / 2);
     let chips_w = spans_width(&chips);
-    let hint = "[Choose Alt+L]";
+    let hint = "[t Tree]";
     let branch = text(dashboard, "branch");
     let path = text(dashboard, "path");
     let worktree = text(dashboard, "worktree");
@@ -591,7 +591,11 @@ fn title_spans(
     spin: usize,
 ) -> (Vec<Span<'static>>, Option<(usize, usize)>) {
     let quiet = Style::default().fg(colors.quiet);
-    let tail = age_of(row).to_owned();
+    let children = row.get("running_children").and_then(Value::as_u64).unwrap_or(0);
+    let handoffs = row.get("handoff_count").and_then(Value::as_u64).unwrap_or(0);
+    let mut tail = age_of(row).to_owned();
+    if children > 0 { tail = format!("{children} running · {tail}"); }
+    if handoffs > 0 { tail = format!("{handoffs} handoffs · {tail}"); }
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
         None => text(row, "title").to_owned(),

@@ -827,6 +827,12 @@ impl Desktop {
                     )
                     .child(
                         self.button(
+                            ("session-tree", i), "Tree",
+                            json!({"type":"session_tree","text":s.id,"workspace":s.workspace}), cx,
+                        ).px_1().py_0(),
+                    )
+                    .child(
+                        self.button(
                             ("session-more", i),
                             "···",
                             json!({"type":"session_actions","text":s.id,"workspace":s.workspace}),

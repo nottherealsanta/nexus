@@ -7,6 +7,7 @@ from nexus.session import snapshot as snapshot_mod
 from nexus.session.ids import is_valid_session_id
 from nexus.session.manager import SessionManager
 from nexus.session.records import MessageRecord
+from nexus.session.session import INTERRUPTED_ERROR
 
 
 def _msg(text, role="user"):
@@ -635,6 +636,109 @@ def test_a_turn_left_open_by_a_stopped_process_is_closed_on_reopen(tmp_path):
     # Idempotent: another process opening it finds nothing open.
     again = SessionManager(tmp_path).open("main")
     assert len([e for e in again.events if e.type == "turn.failed"]) == 1
+
+
+def test_recovery_closes_native_spawn_before_child_promotion(tmp_path):
+    from nexus.view import fold
+
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("delegate"))
+    session.append_event(Event(type="turn.started", session="main", turn="t", data={}))
+    meta = {"id": "child", "parent": "main", "depth": 1, "type": "native",
+            "task": "task-1", "session": "child"}
+    session.append_event(Event(type="agent.spawned", session="main", turn="t", data={"agent": meta, **meta}))
+    assert not SessionManager(tmp_path).store.exists("child")
+
+    reopened = SessionManager(tmp_path).open("main")
+    completed = [e for e in reopened.events if e.type == "agent.completed"]
+    assert len(completed) == 1
+    event = completed[0]
+    assert event.session == "main" and event.turn == "t"
+    assert event.data == {**meta, "agent": meta, "status": "interrupted",
+                          "error": INTERRUPTED_ERROR, "reason": "interrupted",
+                          "usage": {}, "usage_unknown": True, "ok": False, "is_error": True}
+    assert [e.type for e in reopened.events][-2:] == ["agent.completed", "turn.failed"]
+    child = fold(reopened.events).agents["child"]
+    assert child.status == "interrupted" and child.usage_unknown
+    assert child.error == INTERRUPTED_ERROR
+    assert not SessionManager(tmp_path).store.exists("child")
+    assert SessionManager(tmp_path).open("main").events == reopened.events
+
+
+def test_recovery_closes_nested_native_children_nested_first(tmp_path):
+    from nexus.view import fold
+
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("delegate"))
+    session.append_event(Event(type="turn.started", session="main", turn="t", data={}))
+    for agent_id, parent_agent_id, depth in (("child", None, 1), ("grandchild", "child", 2)):
+        meta = {"id": agent_id, "parent": "main", "parent_agent_id": parent_agent_id,
+                "depth": depth, "type": "native", "session": agent_id}
+        session.append_event(Event(type="agent.spawned", session="main", turn="t", data={"agent": meta, **meta}))
+
+    reopened = SessionManager(tmp_path).open("main")
+    completed = [e for e in reopened.events if e.type == "agent.completed"]
+    assert [e.data["agent"]["id"] for e in completed] == ["grandchild", "child"]
+    assert completed[0].data["agent"]["parent_agent_id"] == "child"
+    assert [e.type for e in reopened.events][-3:] == ["agent.completed", "agent.completed", "turn.failed"]
+    view = fold(reopened.events)
+    assert set(view.agents) == {"child"}
+    child = view.agents["child"]
+    assert child.status == "interrupted"
+    assert set(child.body.agents) == {"grandchild"}
+    grandchild = child.body.agents["grandchild"]
+    assert grandchild.status == "interrupted" and grandchild.usage_unknown
+    assert grandchild.parent_agent_id == "child"
+    assert SessionManager(tmp_path).open("main").events == reopened.events
+
+
+def test_recovery_mixes_native_and_external_children_without_duplicates(tmp_path):
+    from nexus.view import fold
+
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("delegate"))
+    session.append_event(Event(type="turn.started", session="main", turn="t", data={}))
+    for agent_id in ("native", "done", "external"):
+        meta = {"id": agent_id, "parent": "main", "depth": 1,
+                "type": "claude" if agent_id == "external" else "native", "session": agent_id}
+        session.append_event(Event(type="agent.spawned", session="main", turn="t", data={"agent": meta, **meta}))
+        if agent_id == "done":
+            session.append_event(Event(type="agent.completed", session="main", turn="t",
+                                       data={"agent": meta, "status": "completed", "ok": True}))
+        elif agent_id == "external":
+            session.append_event(Event(type="external.started", session="main", turn="t",
+                                       data={"agent": meta, "session": "worker", "provider": "claude-code"}))
+
+    reopened = SessionManager(tmp_path).open("main")
+    completed = [e for e in reopened.events if e.type == "agent.completed"]
+    assert [(e.data["agent"]["id"], e.data["status"]) for e in completed] == [
+        ("done", "completed"), ("external", "interrupted"), ("native", "interrupted"),
+    ]
+    assert len([e for e in reopened.events if e.type == "external.finished"]) == 1
+    view = fold(reopened.events)
+    assert view.agents["done"].status == "completed"
+    assert view.agents["external"].body.external["status"] == "interrupted"
+    assert view.agents["native"].status == "interrupted"
+    assert SessionManager(tmp_path).open("main").events == reopened.events
+
+
+def test_native_recovery_skips_children_with_live_turn_lease(tmp_path):
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("delegate"))
+    lease = session.begin_turn()
+    try:
+        for agent_id, parent_agent_id in (("child", None), ("grandchild", "child")):
+            meta = {"id": agent_id, "parent": "main", "parent_agent_id": parent_agent_id}
+            session.append_event(Event(type="agent.spawned", session="main", turn=lease.turn_id,
+                                       data={"agent": meta, **meta}))
+        before = session.events
+        other = SessionManager(tmp_path).open("main")
+        assert other.events == before
+        assert not any(e.type in {"agent.completed", "turn.failed"} for e in other.events)
+    finally:
+        lease.release()
+    reopened = SessionManager(tmp_path).open("main")
+    assert len([e for e in reopened.events if e.type == "agent.completed"]) == 2
 
 
 @pytest.mark.parametrize("agent_id", [None, "worker-1"])

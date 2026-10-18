@@ -69,7 +69,9 @@ def make_config(
     max_tokens: int = 180000,
     compact_at_fraction: float = 0.85,
     compaction: str = "hybrid",
+    on_overflow: str | None = None,
 ) -> Config:
+    context_extra = {} if on_overflow is None else {"on_overflow": on_overflow}
     return Config(
         model="scripted/m",
         version=2,
@@ -96,6 +98,7 @@ def make_config(
                 max_tokens=max_tokens,
                 compact_at_fraction=compact_at_fraction,
                 compaction=compaction,
+                **context_extra,
             ),
         ),
     )
@@ -1544,7 +1547,10 @@ async def test_precompact_modify_applies_typed_options(tmp_path):
         "HOOKS = [{'event': 'PreCompact', 'name': 'compactor', 'run': _run}]\n",
     )
     provider = ScriptedProvider(text_response("ok"))
-    runtime = make_runtime(tmp_path, provider, config=_compact_config())
+    # Typed keep/strategy options apply to prompt compaction, not handoff.
+    runtime = make_runtime(
+        tmp_path, provider, config=_compact_config(on_overflow="compact")
+    )
     session = runtime.session("root")
     await _long_session(session)
 
@@ -2266,7 +2272,10 @@ async def test_precompact_request_carries_real_turn_context(tmp_path):
         "HOOKS = [{'event': 'PreCompact', 'name': 'observer', 'run': _run}]\n",
     )
     provider = ScriptedProvider(text_response("ok"))
-    runtime = make_runtime(tmp_path, provider, config=_compact_config())
+    # strategy="drop_oldest" is the prompt-compaction strategy (handoff reports "handoff").
+    runtime = make_runtime(
+        tmp_path, provider, config=_compact_config(on_overflow="compact")
+    )
     session = runtime.session("root")
     await _long_session(session)
     await drain(session)

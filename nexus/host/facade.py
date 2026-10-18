@@ -155,9 +155,9 @@ class HostFacade:
 
     # -- session lifecycle -------------------------------------------------
 
-    def list_sessions(self) -> list[SessionSummary]:
+    def list_sessions(self, *, include_children: bool = False) -> list[SessionSummary]:
         """Every session, newest activity first (PLAN §14.4)."""
-        return list(self.runtime.sessions.list())
+        return list(self.runtime.sessions.list(include_children=True) if include_children else self.runtime.sessions.list())
 
     def search_files(self, query: str, limit: int = 30) -> list[str]:
         """Return bounded, visible workspace-relative file path matches."""
@@ -637,8 +637,14 @@ class HostFacade:
 
     # -- turns and the input queue ----------------------------------------
 
-    async def start_turn(self, session_id: str, content: Any) -> str:
+    async def start_turn(self, session_id: str, content: Any, *, client_request_id: str = "") -> str:
         """Schedule one turn for ``session_id``; return its pre-assigned id."""
+        if client_request_id:
+            _, turn_id = await self.enqueue(
+                session_id, content, mode="queue", client_request_id=client_request_id,
+                _operation="start",
+            )
+            return turn_id
         handle = self._session(session_id)
         return await self.supervisor.submit(session_id, handle, content)
 
@@ -651,6 +657,9 @@ class HostFacade:
         origin: dict[str, Any] | None = None,
         title_text: str | None = None,
         title_labels: list[str] | None = None,
+        client_request_id: str = "",
+        _operation: str = "enqueue",
+        _digest: str = "",
     ) -> tuple[str, str]:
         """Persist a submission and schedule its consumption at the boundary.
 
@@ -674,6 +683,23 @@ class HostFacade:
                 title_text = ""
         # Decided before anything is logged: the first message is not stored yet.
         title = self.titles.candidate(session_id, title_text, title_labels)
+        if client_request_id:
+            from ..session.submissions import submission_digest, validate_request_id
+            validate_request_id(client_request_id)
+            digest = _digest or submission_digest(_operation, content, mode, origin)
+            queued_id, turn_id, fresh = handle.admit_submission(
+                content, request_id=client_request_id, digest=digest, mode=mode,
+                origin=origin,
+            )
+            if fresh:
+                if mode == "interrupt":
+                    await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
+                await self.supervisor.submit(
+                    session_id, handle, None, queued_id=queued_id,
+                    priority=mode == "interrupt", turn_id=turn_id,
+                )
+                self.titles.start(session_id, title)
+            return queued_id, turn_id
         if mode == "interrupt":
             await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
         extra = {"origin": origin} if origin else {}
@@ -704,6 +730,10 @@ class HostFacade:
         return await self.supervisor.cancel(
             session_id, reason=reason, drop_queue=drop_queue
         )
+
+    async def recover_admissions(self) -> list[dict[str, Any]]:
+        """Report durable admissions a prior host left pending (read-only)."""
+        return await self.supervisor.recover_admissions(self.runtime.sessions)
 
     async def wait_idle(self, *, timeout: float | None = None) -> None:
         """Wait until every scheduled turn has finished."""
@@ -1577,9 +1607,38 @@ class HostFacade:
                 )
             finally:
                 await client.close()
+        if isinstance(command, p.SessionTree):
+            depth = int(getattr(self.runtime._load_config().v2.agents, "max_depth", 4)) + 1
+            return p.SessionTreeResult(
+                session=command.session,
+                tree=self.runtime.sessions.tree(
+                    command.session, namespace=command.namespace, max_depth=min(depth, 64),
+                ),
+            )
+        if isinstance(command, p.SessionInspect):
+            from ..host_support.session_inspect import inspect_session
+
+            return p.SessionInspectResult(
+                session=command.session, namespace=command.namespace,
+                **inspect_session(self.runtime.sessions, command.session, command.namespace),
+            )
+        if isinstance(command, p.SessionHandoff):
+            handle = self._session(command.session, create=False, recover=False)
+            result = handle.handoff(summary=command.summary,
+                continuation=command.continuation, request_id=command.request_id,
+                _scheduled=bool(self.supervisor.running_for(command.session)
+                    or self.supervisor.queued_for(command.session)))
+            if result["fresh"] and result["queued_id"]:
+                await self.supervisor.submit(command.session, handle,
+                    queued_id=result["queued_id"], turn_id=result["turn_id"])
+            return p.SessionHandoffResult(data=result)
+        if isinstance(command, p.SessionHandoffRead):
+            from ..host_support.session_handoff import read_handoff
+            return p.SessionHandoffResult(data=read_handoff(
+                self.runtime.sessions, command.session, command.namespace, command.handoff_id))
         if isinstance(command, p.SessionList):
             return p.SessionListResult(
-                sessions=self.list_sessions(),
+                sessions=self.list_sessions(include_children=command.include_children),
                 archived_count=archive_summary_count(self.runtime.sessions),
             )
         if isinstance(command, p.FileSearch):
@@ -1657,6 +1716,36 @@ class HostFacade:
             return await self.attachments.prepare(command)
         if isinstance(command, p.AttachmentPreview):
             return await self.attachments.preview(command)
+        if isinstance(command, (p.SessionStart, p.SessionEnqueue)) and command.client_request_id:
+            from ..session.submissions import submission_digest, validate_request_id
+            validate_request_id(command.client_request_id)
+            digest = submission_digest(
+                "start" if isinstance(command, p.SessionStart) else "enqueue",
+                command.content, getattr(command, "mode", "queue"),
+                [command.blocks, command.attachments, command.attachment_labels],
+            )
+            handle = self._session(command.session)
+            row = handle._store.submission(command.session, command.client_request_id, digest)
+            if row is None:
+                queued_id, turn_id = await self.enqueue(
+                    command.session,
+                    self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels),
+                    mode=getattr(command, "mode", "queue"),
+                    client_request_id=command.client_request_id, _digest=digest,
+                    title_text=command.content, title_labels=list(command.attachment_labels or []),
+                )
+                self.attachments.release(command.attachments)
+            else:
+                queued_id, turn_id = row[3], row[2]
+            if isinstance(command, p.SessionStart):
+                return p.SessionStartResult(session=command.session, turn_id=turn_id)
+            admitted = handle._store.submission(command.session, command.client_request_id, digest)
+            record = handle._store.record_at(command.session, admitted[1])
+            depth = int(record.event.data.get("queue_depth", 0))
+            return p.SessionEnqueueResult(
+                session=command.session, queued_id=queued_id, turn_id=turn_id,
+                depth=depth,
+            )
         if isinstance(command, p.SessionStart):
             # Decided before the turn starts: the first message is not logged yet.
             title_text = self.titles.candidate(command.session, command.content, list(command.attachment_labels or []))

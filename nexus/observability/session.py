@@ -15,6 +15,7 @@ SESSION_LOG_SCAN_WINDOW = 4096
 # Event fields are deliberately not interpolated. In particular, tool names,
 # error text, permission previews, and all message/thinking payloads stay private.
 _PROJECTIONS: dict[str, tuple[str, str, str]] = {
+    "context.handoff": ("info", "context.handoff", "Context handed off; earlier history is preserved."),
     "turn.started": ("info", "turn.started", "A turn started."),
     "turn.completed": ("info", "turn.completed", "A turn completed."),
     "turn.failed": ("error", "turn.failed", "A turn failed."),

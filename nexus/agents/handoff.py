@@ -1,12 +1,12 @@
 """Failure handoff for subagents: what a failed child knew, kept for its parent.
 
-A child that stops without finishing (iteration or wall-clock limit, token
+A child that stops without finishing (iteration limit, token
 budget, a provider error, or a crash) must not take its context with it. The
 child's session stays in the durable store, and this module distills it into a
 bounded, deterministic markdown report -- the task, the stop reason, the last
 thing the agent said, files it changed, and a timeline of its recent tool calls
 with errors flagged. It needs no model call, so it still works when the child
-failed *because* of the clock or a dead provider.
+failed *because* of a dead provider.
 
 Two outputs, one report:
 

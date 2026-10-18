@@ -369,3 +369,19 @@ inspector shows the mode alongside counts. `/mcp` opens the server list.
 inspectable. Permission requests use the target's rules and show “via McpCall”.
 The durable `tool.started.target` field preserves the target during replay.
 The deprecated web surface continues using generic rows and receives no new controls.
+
+### Read-only session ownership (P3)
+
+Both native clients use `SessionTree` and `SessionInspect` through the client/host
+boundary. Ratatui exposes `t` on the selected Sessions dashboard root; desktop
+exposes **Tree** on sidebar rows and **Ownership tree** under Sessions → root
+actions. The indented list is ownership, never fork ancestry. Select a node for
+readable bounded facts, durable transcript and last-request/context details;
+scrollable detail pages use the existing Back stack. Root nodes can open their
+main session; child nodes never offer send/resume/fork or a root switch.
+Visible trees refresh on existing list polls and agent lifecycle events;
+Refresh replaces the current tree rather than nesting stale trees. Liveness is
+host lock/handle evidence, with interrupted/unknown/legacy ownership states kept
+explicit. Root status rolls up running descendants and sublines show running
+child/handoff counts. This is inspection only: handoff accept/dismiss UI is P6,
+not implemented by P3.

@@ -81,6 +81,29 @@ class Supervisor:
 
     # -- introspection -----------------------------------------------------
 
+    async def recover_admissions(self, manager: Any) -> list[dict[str, Any]]:
+        """Report admitted input stranded by a crash; never drop, open or run it.
+
+        Durable queued input stays queued (``docs/sessions.md``): it is rehydrated
+        when its session is next opened and consumed at the next turn start.
+        Nothing is written, no session is unarchived, and no turn is replayed.
+        Each session is checked independently; a unreadable one yields an
+        ``error`` entry and does not hide the others.
+        """
+        found: list[dict[str, Any]] = []
+        try:
+            session_ids = manager.store.pending_submission_sessions()
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not block startup
+            return [{"session": "", "error": type(exc).__name__}]
+        for session_id in session_ids:
+            try:
+                manager.store.read(session_id)
+            except Exception as exc:  # noqa: BLE001
+                found.append({"session": session_id, "error": type(exc).__name__})
+            else:
+                found.append({"session": session_id, "error": ""})
+        return found
+
     @property
     def max_concurrent(self) -> int:
         return self._max
@@ -131,6 +154,7 @@ class Supervisor:
         *,
         queued_id: str = "",
         priority: bool = False,
+        turn_id: str = "",
     ) -> str:
         """Queue one turn for ``session_id``; return its pre-assigned turn id.
 
@@ -138,7 +162,7 @@ class Supervisor:
         the scheduler actually starts it. ``content=None`` consumes the head of
         the session's own persisted input queue at start time.
         """
-        turn_id = new_id()
+        turn_id = turn_id or new_id()
         self._sessions[session_id] = session
         queue = self._queues.setdefault(session_id, deque())
         (queue.appendleft if priority else queue.append)(

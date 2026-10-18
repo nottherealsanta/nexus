@@ -51,6 +51,9 @@ class SummaryRecord(msgspec.Struct, tag="summary", frozen=True):
     tokens_after: int | None = None
     provider: str | None = None
     model: str | None = None
+    kept_from_seq: int = 0
+    handoff_id: str = ""
+    brief_version: int = 0
     ts: float = 0.0
     v: int = SESSION_LOG_VERSION
 

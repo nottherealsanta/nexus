@@ -1702,6 +1702,7 @@ _HANDLERS: dict[str, Any] = {
     "context.mcp_loading_frozen": lambda s, e, d: s,
     "context.assembled": lambda s, e, d: _on_context(s, e, d, "assembled"),
     "context.compacted": lambda s, e, d: _on_context(s, e, d, "compacted"),
+    "context.handoff": lambda s, e, d: _on_context(s, e, d, "handoff"),
     "context.degraded": lambda s, e, d: _on_context(s, e, d, "degraded"),
     "skill.invoked": _on_skill_invoked,
     "skill.completed": _on_skill_completed,
@@ -1744,6 +1745,10 @@ _HANDLERS: dict[str, Any] = {
 def _apply(state: ConversationView, event: Event) -> ConversationView:
     data: Mapping[str, Any] = event.data if isinstance(event.data, Mapping) else {}
     event_type = event.type
+
+    if event_type in {"todo.updated", "handoff.created", "handoff.accepted", "handoff.dismissed"}:
+        # Session metadata is not conversation content, including mirrored events.
+        return state
 
     if event_type == "agent.spawned":
         meta = _agent_meta(data) or dict(data)

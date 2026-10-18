@@ -600,10 +600,21 @@ class ContextSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     max_tokens: int | None = None
     safety_margin_tokens: int = 4000
     compaction: Compaction = "hybrid"
+    #: ``handoff`` (default) cuts the context over to a durable brief;
+    #: ``compact`` opts out and only compacts the assembled prompt.
+    on_overflow: Literal["compact", "handoff"] = "handoff"
+    handoff_keep_fraction: float = 0.25
+    handoff_brief: Literal["deterministic", "summarized"] = "deterministic"
     compact_at_fraction: float = 0.85
     limits: ContextLimits = msgspec.field(default_factory=ContextLimits)
 
     def __post_init__(self) -> None:
+        if self.on_overflow not in {"compact", "handoff"}:
+            raise ValueError("context.on_overflow must be compact or handoff")
+        if isinstance(self.handoff_keep_fraction, bool) or not 0 < self.handoff_keep_fraction < 1:
+            raise ValueError("context.handoff_keep_fraction must be in (0, 1)")
+        if self.handoff_brief not in {"deterministic", "summarized"}:
+            raise ValueError("context.handoff_brief must be deterministic or summarized")
         if (
             isinstance(self.compact_at_fraction, bool)
             or not isinstance(self.compact_at_fraction, (int, float))

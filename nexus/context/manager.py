@@ -1070,6 +1070,7 @@ class ContextManager:
         """
         self._last_precompact = None
         self._precompact_ran = False
+        self._handoff_this_assembly = False
         self._precompact_blocked = False
         config = self.effective_config()
         env = self._env if self._env is not None else self._build_env(config)
@@ -1108,7 +1109,7 @@ class ContextManager:
         )
 
     def _assemble_sync(self, session: Any, env: AssemblyEnvironment) -> Any:
-        ctx = self._make_context(env, session.messages, session)
+        ctx = self._make_context(env, self._active_messages(session), session)
         outputs = render_parts(self._parts, ctx)
 
         def count(text: str) -> int:
@@ -1128,7 +1129,7 @@ class ContextManager:
         return self._finalize(env, ctx, outputs, costs)
 
     async def _assemble_async(self, session: Any, env: AssemblyEnvironment) -> ModelRequest:
-        ctx = self._make_context(env, session.messages, session)
+        ctx = self._make_context(env, self._active_messages(session), session)
         outputs = render_parts(self._parts, ctx)
 
         async def count(text: str) -> int:
@@ -1140,6 +1141,10 @@ class ContextManager:
         costs = await self._gather_async(outputs, count, env)
         request = await _await_if_needed(self._finalize(env, ctx, outputs, costs))
         return await self._maybe_refine(request, env, ctx, outputs, costs)
+
+    @staticmethod
+    def _active_messages(session):
+        return session.active_messages()[0] if hasattr(session, "active_messages") else session.messages
 
     def _gather(
         self,
@@ -1298,6 +1303,18 @@ class ContextManager:
                     changed = True
         return len(history) - start
 
+    @staticmethod
+    def _handoff_tokens(costs: _Costs, message: Message) -> int:
+        """Token cost of the handoff brief message, from the environment counter.
+
+        The brief is the first history message, so its cost was already counted
+        with the configured counter; only a message outside the history falls
+        back to the default tokenizer (never a character count).
+        """
+        if costs.history and costs.history[0] == message:
+            return int(costs.history_costs[0])
+        return int(DEFAULT_TOKENIZER.count_tokens(canonical_message_text(message)))
+
     # -- finalization ------------------------------------------------------
 
     def _finalize(
@@ -1318,6 +1335,12 @@ class ContextManager:
         inputs = BudgetInputs.from_config_and_caps(env.config, env.capabilities)
         caps = part_caps(env.config)
         requests: list[PartRequest] = []
+        handoff_message = None
+        active = getattr(ctx.session, "active_messages", None)
+        if callable(active) and ctx.messages and active()[1][:1] == (0,):
+            handoff_message = ctx.messages[0]
+            requests.append(PartRequest(name="handoff", priority=0,
+                tokens=self._handoff_tokens(costs, handoff_message), required=True))
         for output in outputs:
             if output is None:
                 continue
@@ -1375,6 +1398,44 @@ class ContextManager:
         )
         keep = fit_suffix_count(eligible_costs, plan.history_budget)
         keep = self._repair_pairing(costs.history, ctx.user_tail(), keep)
+        cut = len(costs.history) - keep
+        # Legacy configs without a v2 section keep compaction semantics.
+        overflow = getattr(getattr(getattr(env.config, "v2", None), "context", None), "on_overflow", "compact")
+        projected = sum(eligible_costs) + sum(costs.part_costs.values())
+        threshold = inputs.input_budget * (self._compaction_fraction(env.config) or 1.0)
+        if (persist_summary and not self._handoff_this_assembly and overflow == "handoff" and projected >= threshold
+                and hasattr(ctx.session, "handoff") and ctx.session._active is not None):
+            # Hysteresis: retire a real prefix, keep the newest complete history
+            # group and the entire pinned user/tool tail. A brief alone never
+            # rolls over again; required-tail overflow uses existing degradation.
+            keep = fit_suffix_count(eligible_costs, int(inputs.input_budget * env.config.v2.context.handoff_keep_fraction))
+            keep = self._repair_pairing(costs.history, ctx.user_tail(), keep)
+            cut = len(costs.history) - keep
+            seqs = ctx.session.active_messages()[1]
+            if cut > 1 and cut < len(seqs):
+                self._handoff_this_assembly = True
+                if self._pre_compact is not None and not self._precompact_ran:
+                    self._precompact_ran = True
+                    async def gated_handoff():
+                        decision = await _await_if_needed(self._pre_compact(PreCompactRequest(
+                            session_id=ctx.session.id, turn_id=self._turn_id,
+                            iteration=self._iteration, strategy="handoff", keep=keep,
+                            history_messages=len(costs.history), dropped_messages=cut,
+                            evicted_tool_results=0, input_budget=int(plan.input_budget),
+                            history_budget=int(plan.history_budget))))
+                        self._precompact_blocked = bool(getattr(decision, "blocked", False))
+                        self._last_precompact = {"blocked": self._precompact_blocked,
+                            "reason": str(getattr(decision, "reason", "")),
+                            "outcome": getattr(decision, "outcome", None), "options": None}
+                        if self._precompact_blocked:
+                            return await _await_if_needed(self._finalize(env, ctx, outputs, costs))
+                        return await _await_if_needed(self._perform_handoff(
+                            env, ctx, seqs[cut], cut,
+                            tokens=(sum(eligible_costs), sum(eligible_costs[cut:]))))
+                    return gated_handoff()
+                return self._perform_handoff(
+                    env, ctx, seqs[cut], cut,
+                    tokens=(sum(eligible_costs), sum(eligible_costs[cut:])))
         # Real budget/eviction facts for the PreCompact request, captured just
         # before the gate runs.
         self._precompact_budgets = (int(plan.input_budget), int(plan.history_budget))
@@ -1424,6 +1485,11 @@ class ContextManager:
         system = self._render_system(env, outputs, costs, plan)
         tools = self._render_tools(outputs)
         final_messages = [*compaction.messages, *ctx.user_tail()]
+        active = getattr(ctx.session, "active_messages", None)
+        handoff_message = (ctx.messages[0] if callable(active) and ctx.messages
+                           and active()[1][:1] == (0,) else None)
+        if handoff_message is not None and handoff_message not in final_messages:
+            final_messages.insert(0, handoff_message)
 
         text_tokens = sum(
             plan.granted(output.name)
@@ -1454,6 +1520,8 @@ class ContextManager:
             + user_tokens
             + summary_tokens
         )
+        if handoff_message is not None and handoff_message not in compaction.messages:
+            used_tokens += self._handoff_tokens(costs, handoff_message)
 
         boundaries = prompt_cache_boundaries(
             env.capabilities,
@@ -1645,6 +1713,38 @@ class ContextManager:
 
     # -- summary persistence and reuse ------------------------------------
 
+    def _perform_handoff(self, env, ctx, boundary, cut, tokens=(None, None)):
+        config = env.config.v2.context
+        def commit(summary=None, fallback=False):
+            ctx.session.handoff(kept_from_seq=boundary, reason="overflow", _within_turn=True,
+                summary=summary, _summary_fallback=fallback,
+                _tokens_before=tokens[0], _kept_tokens=tokens[1],
+                _brief_limit=max(32, min(6000, int(BudgetInputs.from_config_and_caps(
+                    env.config, env.capabilities).input_budget * 0.1))))
+            if env.counter_async or env.request_counter is not None or env.summarizer_async:
+                return self._assemble_async(ctx.session, env)
+            return self._assemble_sync(ctx.session, env)
+        if config.handoff_brief != "summarized":
+            return commit()
+        from .handoff import safe_brief
+        try:
+            if env.summarizer is None:
+                return commit(fallback=True)
+            produced = env.summarizer.summarize(list(ctx.messages[:cut]))
+            if inspect.isawaitable(produced):
+                async def finish():
+                    try:
+                        artifact = await produced
+                        text = safe_brief(getattr(artifact, "text", artifact))
+                    except Exception:
+                        return await _await_if_needed(commit(fallback=True))
+                    return await _await_if_needed(commit(text))
+                return finish()
+            text = safe_brief(getattr(produced, "text", produced))
+        except Exception:
+            return commit(fallback=True)
+        return commit(text)
+
     @staticmethod
     def _can_persist(ctx: AssemblyContext) -> bool:
         session = ctx.session
@@ -1653,6 +1753,11 @@ class ContextManager:
         return callable(getattr(session, "append_summary", None))
 
     def _message_seqs(self, ctx: AssemblyContext) -> tuple[int, ...]:
+        active = getattr(ctx.session, "active_messages", None)
+        if callable(active):
+            seqs = tuple(active()[1])
+            if len(seqs) == len(ctx.messages):
+                return seqs
         session = ctx.session
         getter = getattr(session, "message_seqs", None)
         if callable(getter):
@@ -1668,7 +1773,8 @@ class ContextManager:
         getter = getattr(session, "latest_summary", None)
         if callable(getter):
             try:
-                return getter()
+                record = getter()
+                return None if getattr(record, "strategy", "") == "handoff" else record
             except Exception:  # noqa: BLE001 - a bad artifact must not fail a turn
                 return None
         return None

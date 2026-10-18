@@ -470,13 +470,20 @@ class ShellActions:
                 await dashboard.refresh()
             return True
         try:
-            kwargs = {}
+            import uuid
+            identity = (target, text, mode, tuple(item.attachment_id for item in self.attachments))
+            pending = getattr(self, "_pending_submission", None)
+            if pending is None or pending[0] != identity:
+                pending = (identity, uuid.uuid4().hex)
+                self._pending_submission = pending
+            kwargs = {"client_request_id": pending[1]}
             if target == self.controller.session:
                 kwargs["attachments"] = [item.attachment_id for item in self.attachments]
                 kwargs["attachment_labels"] = [
                     self.attachment_label(index) for index in range(len(self.attachments))
                 ]
             await self.client.enqueue(target, text, mode=mode, **kwargs)
+            self._pending_submission = None
         except Exception:
             self.composer_restore = text
             raise
@@ -602,6 +609,16 @@ class ShellActions:
                     await self.switch(matched.id)
             else:
                 await self.workflows.sessions()
+        elif name == "/handoff":
+            if argument == "read":
+                result = await self.client.read_handoff(session)
+                self.notice = result.get("text", "No handoff yet")
+            elif not argument:
+                await self.client.handoff(session, request_id=uuid.uuid4().hex)
+                await self.controller.bootstrap()
+                self.notice = "Context handed off; session history is preserved"
+            else:
+                raise ValueError("Usage: /handoff [read]")
         elif name == "/fork":
             result = await self.client.fork(session, int(args[0]) if args and args[0].isdigit() else None)
             await self.switch(result.id)

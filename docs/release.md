@@ -15,6 +15,18 @@ reference. History of how it was built: `git log -- docs/release.md plans/releas
    the GitHub release, builds, tests the wheel, and publishes to PyPI.
 5. `install.sh` and `nexus update` install the newest PyPI release.
 
+> **Release-note warning: default context overflow changed.** `context.on_overflow`
+> now defaults to `handoff` (durable same-session context cutover) instead of
+> `compact`. The flip was made under an explicit maintainer waiver of the soak and
+> real-provider quality gate; it is not validated by real use. It applies only when
+> the effective config is v2: with no config files or only v1 layers (environment
+> variables alone do not promote) behavior stays `compact`, and any v2 layer
+> (user or workspace) promotes the configuration to `handoff`. Users who want the
+> previous behavior set `context.on_overflow = "compact"` (or
+> `NEXUS_CONTEXT__ON_OVERFLOW=compact`). Include this in the release notes of the
+> first release that carries it (use a `feat!:`/`BREAKING CHANGE:` footer or edit the
+> release PR notes by hand).
+
 ```text
 main:  fix: A ──── fix: B ──── feat: C ──── docs: D ──── [merge release PR]
                                                               │

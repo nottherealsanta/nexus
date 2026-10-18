@@ -25,3 +25,7 @@ rust/desktop/Nexus.app/
 ios/**/.build/
 ios/**/xcuserdata/
 ios/**/DerivedData/
+
+
+# need to investigate what this is 
+.baseline-p6* 

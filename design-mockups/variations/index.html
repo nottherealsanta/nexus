@@ -1,0 +1,769 @@
+<title>Nexus TUI Variations</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Geist:wght@400;500;600&display=swap">
+<style>
+/* Layout: a studio light-table. Quiet chrome on the left, live terminal plates on the right; the plates carry all the colour. */
+:root{
+  --ground:#0e0e10; --panel:#16161a; --plate:#1c1c21; --line:#2a2a31; --ink:#e8e6e3; --ink-2:#9b98a0; --ink-3:#66646c;
+  --accent:#fab283; --accent-ink:#1a120c; --current:#7aa2f7;
+  --sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+html,body{background:var(--ground);color:var(--ink)}
+body{font-family:var(--sans);font-size:14px;line-height:1.5;margin:0}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--panel)}
+a{color:inherit}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px;
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0}
+.brand b{font-family:var(--mono);font-weight:700;color:var(--accent);letter-spacing:.02em}
+.brand span{color:var(--ink-2);font-size:13px}
+.controls{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button,.btn{font:500 12px/1 var(--sans);color:var(--ink-2);background:transparent;border:0;padding:7px 10px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--plate);color:var(--ink)}
+.btn{border:1px solid var(--line);border-radius:6px}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.wrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:28px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 60px}
+nav{position:sticky;top:calc(env(safe-area-inset-top,0px) + 70px);align-self:start;display:flex;flex-direction:column;gap:1px;max-height:calc(100vh - 90px);overflow:auto}
+nav a{display:flex;justify-content:space-between;gap:8px;text-decoration:none;color:var(--ink-2);font-size:13px;padding:5px 8px;border-radius:5px}
+nav a:hover{background:var(--plate);color:var(--ink)}
+nav a .k{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+nav .how{font-size:12px;color:var(--ink-3);padding:12px 8px 0;line-height:1.45}
+main{min-width:0;display:flex;flex-direction:column;gap:44px}
+.intro{max-width:70ch;color:var(--ink-2);display:flex;flex-direction:column;gap:8px}
+.intro h1{font-size:26px;line-height:1.2;color:var(--ink);margin:0;text-wrap:balance;font-weight:600;letter-spacing:-.01em}
+.intro p{margin:0}
+.intro code,.card code{font-family:var(--mono);font-size:12px;background:var(--plate);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:var(--ink)}
+section{display:flex;flex-direction:column;gap:14px;scroll-margin-top:80px}
+.sh{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.sh h2{margin:0;font-size:19px;font-weight:600;letter-spacing:-.005em}
+.sh .pre{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.06em}
+.sh p{margin:0;color:var(--ink-2);flex-basis:100%;max-width:75ch}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--min,460px)),1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.card.cur{border-color:color-mix(in srgb,var(--current) 45%,var(--line))}
+.ch{display:flex;align-items:center;gap:10px;padding:10px 12px 0}
+.id{font-family:var(--mono);font-size:12px;font-weight:700;background:var(--accent);color:var(--accent-ink);padding:2px 7px;border-radius:4px;letter-spacing:.03em;user-select:all}
+.cur .id{background:var(--current)}
+.ch h3{margin:0;font-size:14px;font-weight:600;min-width:0}
+.tag{font-size:11px;color:var(--current);border:1px solid color-mix(in srgb,var(--current) 50%,transparent);border-radius:20px;padding:1px 8px}
+.replay{margin-left:auto;font:500 11px/1 var(--sans);color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer}
+.replay:hover{color:var(--ink)}
+.desc{margin:6px 12px 10px;color:var(--ink-2);font-size:13px;line-height:1.45}
+.plate{container-type:inline-size;background:var(--tbg);margin:0 12px 12px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.term{font-family:var(--mono);font-size:clamp(5px,calc((100cqw - 2px) / (var(--cols) * 0.6)),13.5px);line-height:1.22;white-space:pre;font-variant-ligatures:none;
+  background:var(--tbg);color:var(--tfg);overflow:hidden;width:calc(var(--cols) * 1ch)}
+.term .ln{height:1.22em}
+@media (max-width:820px){
+  .wrap{grid-template-columns:minmax(0,1fr)}
+  nav{position:static;flex-direction:row;flex-wrap:wrap;max-height:none;gap:4px}
+  nav a{border:1px solid var(--line)}
+  nav .how{display:none}
+}
+</style>
+
+<header class="top">
+  <div class="brand"><b>NEXUS</b><span>TUI variations · design overhaul review</span></div>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Playback">
+      <button id="play" aria-pressed="true">Playing</button>
+      <button id="restart">Restart all</button>
+    </div>
+    <div class="seg" role="group" aria-label="Speed">
+      <button data-speed="0.5" aria-pressed="false">0.5×</button>
+      <button data-speed="1" aria-pressed="true">1×</button>
+      <button data-speed="2" aria-pressed="false">2×</button>
+    </div>
+    <div class="seg" role="group" aria-label="Terminal theme">
+      <button data-theme-t="dark" aria-pressed="true">Dark</button>
+      <button data-theme-t="light" aria-pressed="false">Light</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav id="nav" aria-label="Sections"></nav>
+  <main id="main">
+    <div class="intro">
+      <h1>Pick the look, piece by piece</h1>
+      <p>Every section opens with <strong>how the Ratatui client looks today</strong> (blue tag), followed by variations. Each plate is drawn on a real character grid with the Nexus palette and ticks at the client's 80&nbsp;ms frame, so every animation here is something Ratatui can draw: glyph swaps, colour blends, braille and block elements. No sub-cell motion.</p>
+      <p>Tell me what you like by ID, mixing freely: <code>SPL-3</code>, <code>TL-1 with the TL-6 bars</code>, <code>GRP-4</code>, <code>AGT-2 but calmer</code>. Then we plan the overhaul from your picks.</p>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+/* ───────────── palette (mirrors rust/widgets/src/theme.rs) ───────────── */
+const DARK={bg:'#141414',text:'#e1e1e1',muted:'#787878',quiet:'#585858',el:'#242424',hi:'#2c2c2c',border:'#323237',bs:'#505058',accent:'#fab283',blue:'#7aa2f7',purple:'#bb9af7',cyan:'#7dcfff',ok:'#9ece6a',warn:'#e0af68',err:'#f7768e',peak:'#fff3e8'};
+const LIGHT={bg:'#f5f5f5',text:'#262626',muted:'#767676',quiet:'#8e8e8e',el:'#e4e4e4',hi:'#dadada',border:'#c8c8cd',bs:'#a5a5af',accent:'#c8672f',blue:'#2f64d2',purple:'#6c3eb2',cyan:'#0082aa',ok:'#378e23',warn:'#a27612',err:'#cd3048',peak:'#000000'};
+let C=DARK;
+const col=c=>c==null?null:(C[c]||c);
+function hex(c){c=col(c);if(c.startsWith('rgb'))return c.match(/\d+/g).map(Number);return[1,3,5].map(i=>parseInt(c.slice(i,i+2),16));}
+function mix(a,b,f){const A=hex(a),B=hex(b);f=Math.max(0,Math.min(1,f));return`rgb(${A.map((v,i)=>Math.round(v+(B[i]-v)*f)).join(',')})`;}
+
+/* ───────────── cell engine ───────────── */
+const s=(text,fg='text',fl='',bg=null)=>({text:String(text),fg,fl,bg});
+const sp=n=>s(' '.repeat(Math.max(0,n)));
+const R=n=>Array.from({length:n},()=>[]);
+const len=segs=>segs.reduce((a,x)=>a+(x?[...x.text].length:0),0);
+const withBg=(line,bg)=>{line.bg=bg;return line;};
+function cen(segs,w){return[sp((w-len(segs))>>1),...segs];}
+function lr(l,r,w,bg){const line=[...l,sp(Math.max(1,w-len(l)-len(r))),...r];if(bg)line.bg=bg;return line;}
+function fitw(line,w){const out=[];let n=0;for(const sg of line){if(!sg)continue;let ch=[...sg.text];if(n+ch.length>w)ch=ch.slice(0,w-n);if(ch.length){out.push({...sg,text:ch.join('')});n+=ch.length;}if(n>=w)break;}
+  if(n<w)out.push(s(' '.repeat(w-n)));if(line.bg)out.forEach(x=>{if(!x.bg)x.bg=line.bg});return out;}
+function hjoin(parts){const rows=Math.max(...parts.map(p=>p.lines.length));const out=[];for(let r=0;r<rows;r++)out.push(parts.flatMap(p=>fitw(p.lines[r]||(p.fill?withBg([],p.fill):[]),p.w)));return out;}
+function cells(line,w){const c=[];for(const sg of fitw(line,w))for(const ch of sg.text)c.push({ch,fg:sg.fg,fl:sg.fl,bg:sg.bg});return c;}
+function uncells(c){const out=[];for(const x of c){const l=out[out.length-1];if(l&&l.fg===x.fg&&l.fl===x.fl&&l.bg===x.bg)l.text+=x.ch;else out.push({text:x.ch,fg:x.fg,fl:x.fl,bg:x.bg});}return out;}
+function overlay(base,w,top,x,y,tw){return base.map((ln,r)=>{const tr=r-y;if(tr<0||tr>=top.length)return ln;const c=cells(ln,w),tc=cells(top[tr],tw);for(let i=0;i<tw;i++)if(x+i>=0&&x+i<w)c[x+i]=tc[i];return uncells(c);});}
+function dim(lines,f=.6){return lines.map(l=>{const o=l.map(sg=>({...sg,fg:mix(sg.fg,'bg',f)}));o.bg=l.bg;return o;});}
+function Grid(w,h){const c=Array.from({length:h},()=>Array.from({length:w},()=>({ch:' ',fg:'text',fl:'',bg:null})));
+  return{w,h,c,set(x,y,ch,fg='text',fl='',b){x=Math.round(x);y=Math.round(y);if(x<0||y<0||x>=w||y>=h)return;const o=c[y][x];o.ch=ch;o.fg=fg;o.fl=fl;if(b!==undefined)o.bg=b;},
+    text(x,y,str,fg,fl,b){[...str].forEach((ch,i)=>this.set(x+i,y,ch,fg,fl,b));},
+    segs(x,y,segs){let i=0;for(const sg of segs)for(const ch of sg.text){this.set(x+i,y,ch,sg.fg,sg.fl,sg.bg===null?undefined:sg.bg);i++;}},
+    lines(){return c.map(uncells);}};}
+function Braille(w,h){const W=w*2,H=h*4,bits=new Uint8Array(w*h),map=[[1,8],[2,16],[4,32],[64,128]];
+  return{W,H,set(x,y){x=Math.round(x);y=Math.round(y);if(x<0||y<0||x>=W||y>=H)return;bits[(y>>2)*w+(x>>1)]|=map[y&3][x&1];},ch(cx,cy){const b=bits[cy*w+cx];return b?String.fromCharCode(0x2800+b):' ';}};}
+
+/* ───────────── animation helpers ───────────── */
+const BR=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'], ARC=['◜','◠','◝','◞','◡','◟'], DOTS=['⣾','⣽','⣻','⢿','⡿','⣟','⣯','⣷'], DIA=['◇','◈','◆','◈'], STAR=['✶','✸','✹','✺','✹','✸'], QUAD=['▖','▘','▝','▗'];
+const spin=(set,t,rate=1)=>set[Math.floor(t/rate)%set.length];
+const h1=i=>{const x=Math.sin(i*12.9898+78.233)*43758.5453;return x-Math.floor(x);};
+const wave=(t,i,rows=32,speed=.15)=>Math.sin(t*speed+i/rows*Math.PI*2)**2;
+const pulse=(t,speed=.08)=>Math.sin(t*speed)**2;
+const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,x));
+const ease=p=>1-(1-clamp(p))**3;
+const BLK=' ▁▂▃▄▅▆▇█';
+const bar=(f)=>BLK[Math.round(clamp(f)*8)];
+const FRAC=['','▏','▎','▍','▌','▋','▊','▉'];
+function smooth(f,w){const u=clamp(f)*w,full=Math.floor(u),r=Math.floor((u-full)*8);return'█'.repeat(full)+(full<w?FRAC[r]:'')+' '.repeat(Math.max(0,w-full-(full<w&&r?1:0)));}
+function shimmer(text,t,base='muted',peak='text',speed=.15,rows=32){return[...text].map((ch,i)=>s(ch,mix(base,peak,wave(t,i%rows,rows,speed))));}
+const secs=ticks=>(ticks*0.08).toFixed(1)+'s';
+const clock=ticks=>{const x=Math.floor(ticks*0.08)+0;return`${String(Math.floor(x/60)).padStart(2,'0')}:${String(x%60).padStart(2,'0')}`;};
+function wrap(text,w){const out=[];let cur='';for(const word of text.split(' ')){if(!cur)cur=word;else if((cur+' '+word).length<=w)cur+=' '+word;else{out.push(cur);cur=word;}}if(cur)out.push(cur);return out;}
+const noise=(t,seed=0)=>Math.abs(Math.sin(t*.9+seed)*Math.sin(t*.37+seed*2.1)+.35*Math.sin(t*1.7+seed*3));
+const SCR='ABCDEFGHJKLMNPRSTUVXYZ#%&*+=<>?';
+
+/* ───────────── fixture world ───────────── */
+const PIX={N:['#...#','##..#','#.#.#','#..##','#...#','#...#'],E:['#####','#....','####.','#....','#....','#####'],X:['#...#','.#.#.','..#..','..#..','.#.#.','#...#'],U:['#...#','#...#','#...#','#...#','#...#','.###.'],S:['.####','#....','.###.','....#','....#','####.']};
+function pixRows(word){const rows=[];for(let r=0;r<3;r++){let line='';[...word].forEach((ch,i)=>{const p=PIX[ch];for(let x=0;x<5;x++){const a=p[r*2][x]==='#',b=p[r*2+1][x]==='#';const c=a&&b?'█':a?'▀':b?'▄':' ';line+=c+c;}if(i<word.length-1)line+='  ';});rows.push(line);}return rows;}
+const BIG=pixRows('NEXUS');
+const SMALL=['█▄ █ █▀▀ ▀▄▀ █ █ █▀','█ ▀█ ██▄ █ █ █▄█ ▄█'];
+const USERMSG='fix the parser edge cases and run the tests';
+const ANSWER='The empty-input case now returns an empty list instead of raising, and nested brackets parse recursively. All 12 parser tests pass; ruff flags one unused import that I left for you to confirm.';
+const TOOLS=[
+ {verb:'Read',past:'Read',pres:'Reading',noun:['file','files'],arg:'src/parser.py',a:0,b:9,res:'212 lines',kind:'read'},
+ {verb:'Grep',past:'Searched',pres:'Searching',noun:['pattern','patterns'],arg:'"def parse_" in src/',a:9,b:16,res:'4 matches',kind:'search'},
+ {verb:'Edit',past:'Edited',pres:'Editing',noun:['file','files'],arg:'src/parser.py',a:16,b:28,res:'+4 −1',kind:'edit',add:4,del:1},
+ {verb:'Bash',past:'Ran',pres:'Running',noun:['command','commands'],arg:'pytest tests/test_parser.py -q',a:28,b:72,res:'12 passed',kind:'bash'},
+ {verb:'Bash',past:'Ran',pres:'Running',noun:['command','commands'],arg:'ruff check src/parser.py',a:72,b:86,res:'1 error',kind:'bash',fail:true},
+];
+const st=(x,t)=>t<x.a?'hide':t<x.b?'run':x.fail?'fail':'ok';
+const KIND={read:['◫','blue'],search:['⌕','cyan'],edit:['✎','accent'],bash:['❯','purple'],agent:['◎','purple']};
+const PYOUT=['test_empty_input PASSED','test_single_token PASSED','test_nested_brackets PASSED','test_unicode_escape PASSED','test_trailing_comma PASSED','test_deep_nesting PASSED','test_whitespace_only PASSED','test_quoted_strings PASSED','test_numbers PASSED','test_negative_numbers PASSED','test_error_position PASSED','test_round_trip PASSED','12 passed in 3.41s'];
+const DIFF=[[' ','41','def parse(tokens):'],['-','42','    if not tokens: raise ParseError()'],['+','42','    if not tokens:'],['+','43','        return []'],['+','44','    return _parse_nested(tokens, depth=0)']];
+const AGENTS=[
+ {name:'explorer',color:'cyan',task:'Map every parse_ call site',model:'gpt-6-mini',a:0,b:70,acts:[[0,'Grep "parse_(" in src/'],[12,'Read src/cli/args.py'],[24,'Read src/config/load.py'],[38,'Read src/host/protocol.py'],[52,'Grep "parse_" in tests/']],res:'Found 9 call sites in 5 files',tok:'18.2K'},
+ {name:'reviewer',color:'purple',task:'Review the parser diff for edge cases',model:'sonnet-5.5',a:6,b:96,acts:[[6,'Read src/parser.py'],[20,'Thinking'],[40,'Read tests/test_parser.py'],[60,'Thinking'],[80,'Writing findings']],res:'2 findings · 1 blocking',tok:'31.0K'},
+ {name:'tester',color:'ok',task:'Run the full parser suite',model:'gpt-6-mini',a:14,b:60,acts:[[14,'Bash pytest -q tests/'],[30,'… 214 passed so far'],[46,'Bash pytest --lf']],res:'216 passed',tok:'6.4K'},
+];
+const agAct=(ag,t)=>{let cur=ag.acts[0][1];for(const[k,x]of ag.acts)if(t>=k)cur=x;return cur;};
+const agSt=(ag,t)=>t<ag.a?'hide':t<ag.b?'run':'ok';
+const SESS=[
+ {st:'working',title:'Redesign session page hover preview',branch:'main',ago:'now',agent:'build',tok:'52.1K',tail:['Editing rust/tui/src/render/sessions.rs','Running cargo test -p nexus-tui','Reading docs/surfaces.md'],you:'make the hover preview show the last reply',act:[1,2,4,6,3,5,7,8,6,7,5,8]},
+ {st:'working',title:'Fix parser edge cases',branch:'fix/parser',ago:'now',agent:'build',tok:'38.7K',tail:['Running pytest tests/test_parser.py','3 subagents working','Editing src/parser.py'],you:USERMSG,act:[0,1,1,3,5,6,8,7,8,6,7,8],subs:3},
+ {st:'input',title:'Release 0.5.3',branch:'main',ago:'1m',agent:'build',tok:'12.4K',tail:['Allow Bash · git push origin main?'],you:'bump the version and release',act:[2,3,2,4,3,2,1,0,0,0,0,0]},
+ {st:'idle',title:'Why tests take so long to run',branch:'main',ago:'3m',agent:'ask',tok:'9.8K',tail:['Serial pytest: 6121 tests in 15m32s, no xdist'],you:'why are the tests slow?',act:[5,6,4,2,1,0,0,0,0,0,0,0]},
+ {st:'idle',title:'Sample Mermaid diagram and Python code',branch:'main',ago:'4m',agent:'build',tok:'4.1K',tail:['Python sample: frozen Task, remaining() lists open titles'],you:'show me a mermaid sample',act:[3,4,2,1,0,0,0,0,0,0,0,0]},
+ {st:'done',title:'Docs pass for sessions.md',branch:'docs/sessions',ago:'1h',agent:'build',tok:'22.9K',tail:['Updated 3 docs, every link checked'],you:'tidy docs/sessions.md',act:[0,0,0,0,0,0,0,0,0,0,0,0]},
+];
+const sessGlyph=(x,t)=>x.st==='working'?s(spin(BR,t),'purple'):x.st==='input'?s('◆','warn'):x.st==='done'?s('●','muted'):s('◇','quiet');
+const CTX=[['System prompt','build · 2 sections',2140,'purple'],['AGENTS.md','~/repos/nexus · 1 file',3880,'blue'],['Tools','26 tools · 22 on',4780,'cyan'],['Skills','7 skills · 5 on',2680,'ok'],['MCP','3 servers · 1 running',4100,'accent']];
+const fmtK=n=>n.toLocaleString('en-US');
+
+/* the user card: one raised padding row above and below the text (rust/tui/src/transcript.rs) */
+function ucard(L,y,text,tag,w){L[y]=withBg([],'el');L[y+1]=withBg(lr([sp(3),s(text,'text')],[...tag,sp(2)],w),'el');L[y+2]=withBg([],'el');return y+3;}
+
+/* the current client's tool rows (rust/tui/src/transcript/tools.rs) */
+function currentToolRows(t,indent=3,expandFail=true){const L=[];for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;
+  if(S==='run'){L.push([sp(indent),s(spin(BR,t)+' ','text'),s(`${x.verb} · ${x.arg}`,'text')]);continue;}
+  const c=S==='fail'?'err':'muted';const row=[sp(indent),s('› ',c),s(`${x.verb} ${x.arg}`,c)];
+  if(x.kind==='edit')row.push(s('  +'+x.add,'ok'),s(' -'+x.del,'err'));L.push(row);
+  if(S==='fail'&&expandFail){L.push([sp(indent+2),s('│ ','border'),s("src/parser.py:3:8  F401 're' imported but unused",'muted')]);L.push([sp(indent+2),s('│ ','border'),s('Found 1 error.','muted')]);}}
+  return L;}
+function groupLabel(t,mode='mixed'){const agg=[];for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;let g=agg.find(a=>a.past===x.past);if(!g){g={past:x.past,pres:x.pres,noun:x.noun,n:0,run:false};agg.push(g);}g.n++;if(S==='run')g.run=true;}
+  return agg.map(g=>`${g.run&&mode!=='past'?g.pres:g.past} ${g.n} ${g.n===1?g.noun[0]:g.noun[1]}`).join(', ');}
+const lastTool=t=>{let l=null;for(const x of TOOLS)if(st(x,t)!=='hide')l=x;return l;};
+const runningTool=t=>TOOLS.find(x=>st(x,t)==='run');
+
+/* ───────────── registry ───────────── */
+const SECTIONS=[];let SEC=null;
+function section(key,title,blurb,min){SEC={key,title,blurb,min,mocks:[]};SECTIONS.push(SEC);}
+function mock(id,name,desc,o){SEC.mocks.push({id,name,desc,...o});}
+
+/* ═════════════ 1 · SPLASH ═════════════ */
+section('SPL','Splash screen','The first paint, before the daemon answers with the first snapshot. Today it is the word "Nexus" in the accent on a blank screen.','520px');
+mock('SPL-0','Current','The product name, centred, accent and bold. Static until the session loads.',{current:true,cols:76,rows:18,period:60,render(t){const L=R(18);L[9]=cen([s('Nexus','accent','b')],76);return L;}});
+mock('SPL-1','Shimmer wordmark','The full wordmark draws row by row, then a diagonal light sweep runs across it while the startup step under it ticks through.',{cols:76,rows:18,period:130,render(t){const L=R(18);
+  BIG.forEach((row,y)=>{if(t<y*3)return;L[5+y]=cen([...row].map((ch,x)=>{if(ch===' ')return s(' ');const shadow='╗║═╝╔╚'.includes(ch);const d=x+y*2-(t-12)*1.6;const w=Math.max(0,1-Math.abs(d)/5);return s(ch,shadow?mix('bg','accent',.38+.4*w):mix('accent','peak',w*.85));}),76);});
+  const steps=['starting daemon','opening ~/repos/nexus','loading session','connecting GPT-6 Luna'];const k=Math.floor(Math.max(0,t-14)/20);
+  if(t>14)L[12]=cen(k<4?[s(spin(BR,t)+' ','accent'),...shimmer(steps[k],t,'quiet','muted')]:[s('✓ ','ok'),s('ready','muted'),s(' · 1.2s','quiet')],76);
+  L[16]=cen([s('v0.5.2','quiet')],76);return L;}});
+mock('SPL-2','Converging particles','Dots drift in from across the screen and land as the letters of the wordmark, flash once, then the tagline types out.',{cols:76,rows:18,period:150,render(t){const g=Grid(76,18);const x0=(76-19)>>1,y0=7;const tg=[];SMALL.forEach((r,y)=>[...r].forEach((ch,x)=>{if(ch!==' ')tg.push([x0+x,y0+y,ch]);}));
+  tg.forEach(([tx,ty,ch],i)=>{const sx=h1(i)*75,sy=h1(i+99)*17,d=h1(i+7)*16;const p=clamp((t-d)/26),e=ease(p);const x=sx+(tx-sx)*e,y=sy+(ty-sy)*e;
+    if(p>=1){const flash=clamp(1-(t-44)/8);g.set(x,y,ch,t>44?mix('accent','peak',flash*.8):'accent','b');}else g.set(x,y,p<.55?'·':'•',mix('quiet','accent',e));});
+  if(t>50){const tag='provider-agnostic agent harness';g.text((76-tag.length)>>1,11,tag.slice(0,t-50),'muted');}
+  if(t>84)g.text((76-15)>>1,13,'~/repos/nexus  ','quiet');return g.lines();}});
+mock('SPL-3','Boot checklist','A small wordmark and the real startup steps as they finish, with timings. Shows what Nexus is loading instead of hiding it.',{cols:76,rows:18,period:100,render(t){const L=R(18);
+  L[2]=[sp(4),s(SMALL[0],'accent','b'),sp(3),s('v0.5.2','quiet')];L[3]=[sp(4),s(SMALL[1],'accent','b')];
+  const steps=[['daemon','pid 48213 · socket ready','12 ms',6],['workspace','~/repos/nexus · main · clean','3 ms',12],['providers','OpenAI · Anthropic · xAI','140 ms',24],['session','Fix parser edge cases · 2 turns','31 ms',32],['extensions','7 skills · 3 MCP servers · 2 hooks','28 ms',42]];
+  steps.forEach(([k,v,ms,done],i)=>{const start=i?steps[i-1][3]:0;if(t<start){L[6+i]=[sp(4),s('·','quiet'),sp(2),s(k.padEnd(12),'quiet')];return;}
+    L[6+i]=t<done?[sp(4),s(spin(BR,t),'accent'),sp(2),s(k.padEnd(12),'text'),...shimmer(v,t,'quiet','muted')]:[sp(4),s('✓','ok'),sp(2),s(k.padEnd(12),'muted'),s(v.padEnd(38),'quiet'),s(ms.padStart(7),'quiet')];});
+  if(t>46)L[13]=[sp(4),s('ready in 214 ms','text'),s('  ·  press any key or wait','quiet')];return L;}});
+mock('SPL-4','Ripple and decode','Rings ripple out from the centre while the letters decode from random glyphs into N E X U S, one at a time.',{cols:76,rows:18,period:120,render(t){const g=Grid(76,18);const cx=38,cy=8;
+  for(let y=0;y<18;y++)for(let x=0;x<76;x++){const d=Math.hypot((x-cx)*.5,y-cy);for(let k=0;k<4;k++){const r=(t-k*11)*.42;if(r>0&&Math.abs(d-r)<.5){const age=r/20;g.set(x,y,age<.3?'○':age<.6?'∘':'·',mix('accent','bg',Math.min(1,age*.9)));}}}
+  const word='NEXUS';for(let i=0;i<5;i++){const at=14+i*6,x=cx-4+i*2;for(let k=-1;k<=1;k++)g.set(x+k,cy,' ');let ch,fg;if(t<at){ch=SCR[Math.floor(h1(i*31+Math.floor(t/2))*SCR.length)];fg='quiet';}else{ch=word[i];fg=t-at<4?mix('peak','accent',(t-at)/4):'accent';}g.set(x,cy,ch,fg,'b');}
+  if(t>48)g.text(cx-9,cy+2,'agent harness · 0.5.2','quiet');return g.lines();}});
+mock('SPL-5','Scanline print','A bright scan line prints the wordmark top to bottom, then a segmented progress bar fills with the step name.',{cols:76,rows:18,period:110,render(t){const L=R(18);const scan=(t-2)*.18;
+  BIG.forEach((row,y)=>{if(y>scan+0.5)return;const at=Math.floor(scan)===y;L[5+y]=cen([...row].map(ch=>s(ch,at?'peak':'accent')),76);});
+  if(scan<3&&scan>0){const y=5+Math.floor(scan)+1;if(y<9)L[y]=cen([s('━'.repeat(58),mix('bg','accent',.5))],76);}
+  if(t>22){const p=clamp((t-22)/55);const n=Math.round(p*30);const steps=['daemon','workspace','providers','session','ready'];const k=Math.min(4,Math.floor(p*5));
+    L[12]=cen([s('▰'.repeat(n),'accent'),s('▱'.repeat(30-n),'border'),s(`  ${String(Math.round(p*100)).padStart(3)}%`,'muted')],76);L[13]=cen([s(steps[k].padEnd(36),'quiet')],76);}
+  if(t>80)L[15]=cen([s('press any key',mix('bg','muted',pulse(t,.12)))],76);return L;}});
+mock('SPL-6','Braille aurora','Two braille sine waves roll across the bottom in a moving accent-to-violet gradient under a small wordmark.',{cols:76,rows:18,period:200,render(t){const L=R(18);
+  L[3]=cen([s(SMALL[0],'accent','b')],76);L[4]=cen([s(SMALL[1],'accent','b')],76);L[6]=cen([s('loading session',mix('quiet','muted',pulse(t,.1)))],76);
+  const b=Braille(76,7);for(let x=0;x<b.W;x++){const a=Math.sin(x*.013-t*.05);b.set(x,14+10*Math.sin(x*.07+t*.25)*(.6+.4*a));b.set(x,14+6*Math.sin(x*.05-t*.18+1.3));}
+  for(let y=0;y<7;y++)L[9+y]=Array.from({length:76},(_,x)=>{const f=(x/76+t*.006)%1;const c=f<.5?mix('accent','purple',f*2):mix('purple','blue',(f-.5)*2);return s(b.ch(x,y),c);});return L;}});
+mock('SPL-7','Boot log then curtain','The command and a short boot log print like a shell, then a shaded curtain wipes left to right into the chat.',{cols:76,rows:18,period:110,render(t){
+  const log=[[0,[s('$ ','quiet'),s('nexus chat'.slice(0,Math.max(0,t)),'text')]],[12,[s('→ ','accent'),s('daemon up','muted'),s(' pid 48213','quiet')]],[16,[s('→ ','accent'),s('workspace','muted'),s(' ~/repos/nexus · main','quiet')]],[21,[s('→ ','accent'),s('session','muted'),s(' Fix parser edge cases','quiet')]],[26,[s('→ ','accent'),s('model','muted'),s(' GPT-6 Luna · OpenAI','quiet')]]];
+  const A=R(18);log.forEach(([at,l],i)=>{if(t>=at)A[1+i]=[sp(2),...l];});if(t<12)A[1].push(s(t%8<4?'▌':' ','text'));
+  const B=R(18);B[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · Fix parser edge cases','muted')],[s('+  ▐','muted')],76);B[2]=[sp(3),s('Ask anything, or / for commands','quiet')];
+  for(let r=14;r<17;r++)B[r]=withBg([],'el');B[14]=withBg([sp(3),s('▌','text'),s('Type a message…','quiet')],'el');B[16]=withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s('0 · 0%  ','quiet')],76),'el');
+  if(t<32)return A;const wx=(t-32)*4.2;const ga=A.map(l=>cells(l,76)),gb=B.map(l=>cells(l,76));
+  return ga.map((row,y)=>uncells(row.map((c,x)=>{if(x<wx-3)return gb[y][x];if(x<wx){const k=Math.floor(wx-x);return{ch:'░▒▓'[2-Math.min(2,k)]||'▓',fg:'accent',fl:'',bg:null};}return c;})));}});
+
+/* ═════════════ 2 · SHELL ═════════════ */
+function shellAnswer(t,start,w,indent=3){if(t<start)return[];const n=(t-start)*5;return wrap(ANSWER.slice(0,n),w-indent-2).map(x=>[sp(indent),s(x,'text')]);}
+section('SHL','Chat shell & layout','The whole screen: top bar, transcript, composer and the details pane. Each plays the same turn: read, search, edit, test, lint, answer.','100%');
+mock('SHL-0','Current','Title row, workspace, transcript with the user row on a raised band, composer block at the bottom, and the details pane (Session · Files · MCP · Logs) on the right.',{current:true,cols:108,rows:28,period:150,render(t){
+  const L=R(28);L[0]=lr([sp(1),s('Fix parser edge cases','text','b')],[s('≡   ▯ ','muted')],72);L[1]=[sp(1),s('~/repos/nexus','text')];
+  let r=ucard(L,2,USERMSG,[s('#2','quiet')],72)+1;for(const row of currentToolRows(t)){L[r++]=row;}
+  if(t>86){r++;for(const row of shellAnswer(t,86,72))L[r++]=row;if(t>130)L[r+1]=lr([],[s('12:38 AM · GPT-6 Luna · 10.4s  ','quiet')],72);}
+  for(let k=22;k<26;k++)L[k]=withBg([],'el');L[23]=withBg([sp(3),s(t%12<6?'▌':' ','text'),s('Type a message…','quiet')],'el');
+  L[25]=withBg(lr([sp(3),s('Build','blue'),s(' · ','quiet'),s('GPT-6 Luna OpenAI','text'),s(' · not exposed','muted')],[s(t<86?'⠋ working':'52.1K · 26.1% · 5.2%','quiet'),sp(2)],72),'el');L[27]=[sp(1),s('─'.repeat(70),'border')];
+  const D=[[s('Session','text','u'),s(' Files MCP Logs','muted')],[],[sp(1),s('Session  ','muted'),s('fix-parser','text')],[sp(1),s('Model    ','muted'),s('GPT-6 Luna','text')],[sp(1),s('Agent    ','muted'),s('build','text')],[sp(1),s('Branch   ','muted'),s('fix/parser','text')],[sp(1),s('Context  ','muted'),s('52.1K · 26.1%','text')],[sp(1),s('Turns    ','muted'),s('2','text')],[sp(1),s('Status   ','muted'),t<130?s(spin(BR,t)+' working','purple'):s('idle','text')]];
+  return hjoin([{lines:L,w:72},{lines:R(28).map(()=>[s(' │ ','border')]),w:3},{lines:D,w:33}]);}});
+mock('SHL-1','Focus column','One centred reading column with no side pane. A bracketed top bar carries the live state; a status line at the bottom carries agent, model, branch and context; the composer rail breathes while the agent works.',{cols:108,rows:28,period:150,render(t){
+  const W=108,busy=t<130,L=R(28);L[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · ','quiet'),s('Fix parser edge cases','text')],[busy?s(spin(BR,t)+' working '+clock(t),'purple'):s('✓ done 10.4s','muted'),s('  +  ▐','muted')],W);
+  const C2=[];C2.push([s('┃ ','accent'),s(USERMSG,'text','b')]);C2.push([]);
+  for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const g=S==='run'?s(spin(BR,t),'accent'):S==='fail'?s('✗','err'):s('✓','ok');C2.push([g,sp(1),s(x.verb.padEnd(5),S==='run'?'text':'muted'),s(x.arg,S==='fail'?'err':S==='run'?'text':'quiet'),...(S!=='run'?[s('  '+x.res,S==='fail'?'err':'quiet')]:[])]);}
+  if(t>86){C2.push([]);for(const l of wrap(ANSWER.slice(0,(t-86)*5),76))C2.push([s(l,'text')]);}
+  C2.forEach((l,i)=>L[2+i]=[sp(16),...l]);
+  const rail=busy?mix('border','accent',pulse(t,.1)):'border';L[23]=[sp(14),s('▎ ',rail),s(t%12<6?'▌':' ','text'),s('Type a message…  ','quiet'),s(busy?'(queued messages send when the turn ends)':'','quiet')];L[24]=[sp(14),s('▎','rail'===rail?'border':rail)];
+  const seg=(txt,fg,bgc)=>s(` ${txt} `,fg,'',bgc);L[27]=[seg('build','bg','accent'),s('','accent','', 'el'),seg('GPT-6 Luna','text','el'),s('│','border','','el'),seg('fix/parser','muted','el'),s('│','border','','el'),seg('52.1K ▰▰▱▱▱▱▱▱ 26%','muted','el'),s('│','border','','el'),seg('? keys','quiet','el')];L[27].bg='el';
+  return L;}});
+mock('SHL-2','Three panes','Sessions on the left with live glyphs, the conversation in the middle, compact details on the right. The top bar counts what is working and what needs you.',{cols:108,rows:28,period:150,render(t){
+  const top=lr([s('▌ ','accent'),s('Nexus','text','b'),s('  ~/repos/nexus · fix/parser','quiet')],[s(spin(BR,t)+' 2 working','purple'),s('  ◆ 1 needs you','warn'),s('  +  ▐','muted')],108);
+  const S=[[s(' Sessions','muted','b')],[]];SESS.forEach((x,i)=>{const sel=i===1;const row=[s(sel?'▌':' ','accent'),sessGlyph(x,t),sp(1),s(x.title.slice(0,19),sel?'text':'muted',sel?'b':'')];if(sel)row.bg='el';S.push(row);S.push([sp(3),s(x.ago==='now'?x.tail[Math.floor(t/50)%x.tail.length].slice(0,19):x.ago,'quiet')]);});
+  const M=[[s('┃ ','accent'),s(USERMSG,'text','b')],[]];for(const row of currentToolRows(t,0,false))M.push(row);if(t>86){M.push([]);for(const l of wrap(ANSWER.slice(0,(t-86)*5),52))M.push([s(l,'text')]);}
+  while(M.length<22)M.push([]);M.length=22;M.push(withBg([],'el'),withBg([s(' ▌','text'),s('Type a message…','quiet')],'el'),withBg([s(' Build','blue'),s(' · GPT-6 Luna','muted')],'el'),withBg([],'el'));
+  const D=[[s('Details','muted','b')],[],[s('model ','quiet'),s('GPT-6 Luna','text')],[s('agent ','quiet'),s('build','text')],[s('ctx   ','quiet'),s('▰▰▱▱▱▱ 26%','accent')],[s('turns ','quiet'),s('2','text')],[],[s('Files','muted','b')],[s('M ','warn'),s('src/parser.py','text')],[s('A ','ok'),s('tests/…_comma.py','text')],[],[s('MCP','muted','b')],[s('● ','ok'),s('github','text')],[s('○ ','quiet'),s('linear','quiet')]];
+  const body=hjoin([{lines:S,w:24},{lines:R(26).map(()=>[s('│','border')]),w:1},{lines:M.map(l=>{const o=[sp(2),...l];o.bg=l.bg;return o;}),w:58},{lines:R(26).map(()=>[s('│ ','border')]),w:2},{lines:D,w:23}]);return[top,[s('─'.repeat(108),'border')],...body];}});
+mock('SHL-3','Turn rail and context column','A thin left rail marks each turn (the current one glows) with a scroll thumb; a vertical context column on the right fills by category as the turn spends tokens.',{cols:108,rows:28,period:150,render(t){
+  const rail=R(28).map((_,y)=>{const turns={2:'●',9:'●',15:'◉'};if(turns[y])return[s(' '+turns[y],turns[y]==='◉'?mix('accent','peak',pulse(t,.1)*.6):'muted')];return[s(' '+(y>=13&&y<=22?'┃':'│'),y>=13&&y<=22?'bs':'border')];});
+  const M=R(28);M[0]=lr([s('Fix parser edge cases','text','b'),s('  ·  turn 3 of 3','quiet')],[s(t<130?spin(BR,t)+' working':'idle','purple')],86);
+  M[2]=[s('add a failing test for trailing commas','muted')];M[3]=[s('› Edit tests/test_parser.py  +9','quiet')];M[9]=[s('now make it pass','muted')];M[10]=[s('› Edit src/parser.py  +2 -2','quiet')];
+  M[15]=[s(USERMSG,'text','b')];let r=16;for(const row of currentToolRows(t,1,false).slice(-4))M[r++]=row;if(t>86)for(const l of wrap(ANSWER.slice(0,(t-86)*5),80).slice(0,4))M[r++]=[sp(1),s(l,'text')];
+  M[25]=withBg([s(' ▌','text'),s('Type a message…','quiet')],'el');M[26]=withBg(lr([s(' Build','blue'),s(' · GPT-6 Luna','muted')],[s('? keys ','quiet')],86),'el');
+  const used=Math.min(14,9+Math.floor(t/18)),cat=[['purple',2],['blue',2],['cyan',3],['ok',1]];const ctx=R(28);ctx[0]=[s(' ctx','quiet')];let y=24;for(const[c,n]of cat)for(let i=0;i<n;i++)ctx[y--]=[s('  ██',c)];const hist=used-8;for(let i=0;i<hist;i++)ctx[y--]=[s('  ██',i===hist-1?mix('accent','peak',pulse(t,.15)*.5):'accent')];for(;y>=2;y--)ctx[y]=[s('  ┊┊','border')];ctx[26]=[s(' '+Math.round(used/23*100)+'%','muted')];
+  return hjoin([{lines:rail,w:3},{lines:R(28).map(()=>[sp(1)]),w:1},{lines:M,w:86},{lines:R(28).map(()=>[s(' │','border')]),w:2},{lines:ctx,w:6},{lines:[],w:10}]);}});
+mock('SHL-4','Floating composer','The composer is a rounded card with mode tabs on its border, a context ring, and hints that fade in only when you pause.',{cols:108,rows:28,period:160,render(t){
+  const L=R(28);L[1]=cen([s('Fix parser edge cases','text','b'),s('  ·  fix/parser','quiet')],108);L[3]=[sp(14),s(USERMSG,'muted','i')];let r=5;for(const row of currentToolRows(t,14,false))L[r++]=row;if(t>86){r++;for(const l of wrap(ANSWER.slice(0,(t-86)*5),76))L[r++]=[sp(14),s(l,'text')];}
+  const modes=['Build','Plan','Ask'],m=Math.floor(t/55)%3,W=80,x0=14;const tabs=[];modes.forEach((md,i)=>{tabs.push(s(' '+md+' ',i===m?'bg':'muted',i===m?'b':'',i===m?'accent':null));tabs.push(s('─','border'));});
+  const pct=26,ring='○◔◑◕●'[Math.round(pct/25)];const top=[s('╭─','border'),...tabs,s('─'.repeat(W-2-len(tabs)-10),'border'),s(` ${ring} ${pct}% `,'muted'),s('─╮','border')];
+  const idle=t>140||t<6;const hint=idle?mix('bg','quiet',clamp((t>140?t-140:6-t)/6)):'bg';
+  L[22]=[sp(x0),...top];L[23]=[sp(x0),s('│ ','border'),s(t%12<6?'▌':' ','text'),s('Type a message…'.padEnd(W-5),'quiet'),s('│','border')];L[24]=[sp(x0),s('│','border'),sp(W-2),s('│','border')];
+  const bot=[s('╰─ ','border'),s('GPT-6 Luna','text'),s(' · OpenAI · ','quiet'),s('fix/parser','muted'),s(' ','border')];L[25]=[sp(x0),...bot,s('─'.repeat(W-len(bot)-1),'border'),s('╯','border')];
+  L[26]=cen([s('Enter send · Shift+Enter newline · / commands · @ files · Ctrl+K palette',hint)],108);return L;}});
+
+/* ═════════════ 3 · THINKING ═════════════ */
+section('THK','Thinking & waiting','The line shown while the model is reasoning or the first token has not arrived yet.','420px');
+mock('THK-0','Current','Braille spinner with a slow shimmer across "Waiting for response…".',{current:true,cols:60,rows:3,period:200,render(t){return[[],[sp(3),s(spin(BR,t)+' ','muted'),...shimmer('Waiting for response…',t)]];}});
+mock('THK-1','Arc and counters','A rotating arc, the word, then elapsed time and tokens counting up so you can tell it is alive.',{cols:60,rows:3,period:200,render(t){return[[],[sp(3),s(spin(ARC,t)+' ','accent'),s('Thinking','text'),s(` · ${secs(t)} · ↓ ${(t*13/1000+.2).toFixed(1)}k tok`,'quiet')]];}});
+mock('THK-2','Comet','A comet with a fading tail runs along a hairline next to the model name.',{cols:60,rows:3,period:200,render(t){const n=18,head=t%(n+6);const cells=Array.from({length:n},(_,i)=>{const d=head-i;return d>=0&&d<6?s('━',mix('accent','bg',d/6)):s('─','border');});return[[],[sp(3),...cells,s('  GPT-6 Luna','muted'),s(' · '+secs(t),'quiet')]];}});
+mock('THK-3','Diamond and verbs','A diamond breathes in violet while the verb rotates with a soft cross-fade, so the line reads what the model is doing.',{cols:60,rows:3,period:200,render(t){const verbs=['Reading the diff','Planning the fix','Weighing edge cases','Drafting the answer'];const k=Math.floor(t/28)%4,ph=t%28;const f=ph<4?ph/4:ph>24?(28-ph)/4:1;return[[],[sp(3),s(spin(DIA,t,3)+' ',mix('quiet','purple',.4+.6*pulse(t,.12))),s(verbs[k],mix('bg','text',f)),s('…',mix('bg','muted',f))]];}});
+mock('THK-4','Decode','The word keeps decoding from random glyphs, a wave sweeping left to right.',{cols:60,rows:3,period:200,render(t){const w='reasoning',ph=t%36;return[[],[sp(3),s('∴ ','purple'),...[...w].map((ch,i)=>ph>=i*2&&ph<i*2+5?s(SCR[Math.floor(h1(i+t)*SCR.length)].toLowerCase(),'quiet'):s(ch,'text')),s('  '+secs(t),'quiet')]];}});
+mock('THK-5','Equalizer','Six bars bounce like a level meter, accent to violet, beside the reasoning token count.',{cols:60,rows:3,period:200,render(t){return[[],[sp(3),...Array.from({length:6},(_,i)=>s(bar(.2+.8*Math.abs(Math.sin(t*.22+i*.9))),mix('accent','purple',i/5))),s('  reasoning','text'),s(` · ${(t*11/1000+.3).toFixed(1)}k tokens`,'quiet')]];}});
+mock('THK-6','Thought ticker','The newest reasoning summary scrolls past in quiet italics, so the wait shows what the model is weighing.',{cols:60,rows:3,period:400,render(t){const msg='checking whether empty input should raise or return [] · the tests expect [] · nested brackets need a depth guard · ';const w=40,o=t%msg.length;const v=(msg+msg).slice(o,o+w);return[[],[sp(3),s('∴ ','purple'),s(v,'muted','i'),s(' '+secs(t),'quiet')]];}});
+mock('THK-7','Breathing dot','A single dot breathes slowly; the ellipsis counts in beats. The calmest choice.',{cols:60,rows:3,period:200,render(t){return[[],[sp(3),s('● ',mix('bg','accent',.25+.75*pulse(t,.07))),s('Thinking','muted'),s('.'.repeat(Math.floor(t/6)%4),'muted')]];}});
+
+/* ═════════════ 4 · STREAMING ═════════════ */
+section('STR','Streaming text','How the answer arrives as tokens stream in.','420px');
+const streamPlate=(fn)=>({cols:66,rows:6,period:110,render(t){return fn(t%110);}});
+const streamWrap=(n)=>wrap(ANSWER.slice(0,n),60);
+mock('STR-0','Current','Text appears in chunks as deltas land. No cursor, no fade.',{current:true,...streamPlate(t=>{const L=R(6);streamWrap(Math.floor(t/3)*14).slice(0,5).forEach((l,i)=>L[i]=[sp(3),s(l,'text')]);return L;})});
+mock('STR-1','Block cursor','Steady character flow with a blinking accent block at the write head.',{...streamPlate(t=>{const L=R(6);const ls=streamWrap(t*2.4).slice(0,5);ls.forEach((l,i)=>L[i]=[sp(3),s(l,'text'),...(i===ls.length-1&&t<95?[s(t%8<5?'▌':' ','accent')]:[])]);return L;})});
+mock('STR-2','Word fade-in','Each new word lands quiet and settles to full brightness over half a second.',{...streamPlate(t=>{const words=ANSWER.split(' ');const L=R(6);const shown=Math.floor(t/1.6);let x=0,y=0;const W=60;words.slice(0,shown).forEach((w,i)=>{if(x+w.length>W){y++;x=0;}if(y>4)return;const age=(t-i*1.6)/6;(L[y]=L[y]||[]);if(!L[y].length)L[y].push(sp(3));L[y].push(s(w+' ',mix('quiet','text',age)));x+=w.length+1;});return L;})});
+mock('STR-3','Glowing edge','The last dozen characters glow in the accent and cool down as more text arrives.',{...streamPlate(t=>{const n=Math.floor(t*2.4);const L=R(6);let k=0;streamWrap(n).slice(0,5).forEach((l,i)=>{L[i]=[sp(3),...[...l].map(ch=>{const d=n-(k++);return s(ch,d<12?mix('text','accent',1-d/12):'text');})];k++;});return L;})});
+mock('STR-4','Line settle','Finished lines dim slightly; the line being written stays bright, so your eye stays on the write head.',{...streamPlate(t=>{const L=R(6);const ls=streamWrap(t*2.4).slice(0,5);ls.forEach((l,i)=>L[i]=[sp(3),s(l,i===ls.length-1&&t<95?'text':mix('text','muted',.45))]);return L;})});
+
+/* ═════════════ 5 · TOOLS ═════════════ */
+section('TL','Tool rows','A single tool call in the transcript: running, finished, failed. The same five calls play in each plate.','520px');
+const toolPlate={cols:80,rows:13,period:120};
+mock('TL-0','Current','No status word or badge: running calls are bright with a spinner, finished ones go quiet, failures turn red and open their relevant lines behind a rail.',{current:true,...toolPlate,render(t){const L=R(13);currentToolRows(t,3).forEach((r,i)=>L[1+i]=r);return L;}});
+mock('TL-1','Status gutter','A fixed gutter of ✓ ✗ and spinner, aligned columns for verb, target, result and time. The running row carries a soft moving highlight.',{...toolPlate,render(t){const L=R(13);let r=1;for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;
+  const g=S==='run'?s(spin(BR,t),'accent'):S==='fail'?s('✗','err'):s('✓','ok');const dur=S==='run'?secs(t-x.a):secs(x.b-x.a);
+  const row=[sp(3),g,sp(2),s(x.verb.padEnd(6),S==='run'?'text':'muted','b'),s(x.arg.padEnd(34),S==='fail'?'err':S==='run'?'text':'muted'),s((S==='run'?'':x.res).padEnd(14),S==='fail'?'err':'quiet'),s(dur.padStart(6),'quiet')];
+  if(S==='run'){const c=cells(row,80);c.forEach((cc,i)=>cc.bg=mix('bg','hi',wave(t,i,40,.2)));L[r++]=uncells(c);}else L[r++]=row;}return L;}});
+mock('TL-2','Kind icons and chips','Each kind has its own glyph and colour; results sit in small filled chips (green and red for line counts).',{...toolPlate,render(t){const L=R(13);let r=1;for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const[ic,icc]=KIND[x.kind];
+  const row=[sp(3),s(ic,S==='fail'?'err':icc),sp(2),s(x.verb+' ',S==='run'?'text':'muted','b'),s(x.arg,S==='fail'?'err':S==='run'?'text':'muted'),sp(2)];
+  if(S==='run')row.push(s(' ','','',mix('bg','el',1)),...shimmer(`running ${secs(t-x.a)}`,t,'quiet','text').map(c=>({...c,bg:'el'})),s(' ','','','el'));
+  else if(x.kind==='edit')row.push(s(' +4 ','ok','',mix('bg','ok',.16)),sp(1),s(' −1 ','err','',mix('bg','err',.16)));
+  else row.push(s(` ${x.res} `,S==='fail'?'err':'muted','',S==='fail'?mix('bg','err',.16):'el'));L[r++]=row;r++;}return L;}});
+mock('TL-3','Live shell tail','A running command streams its last three output lines under a dashed rail; on success it folds to one line with the result. Failures keep their tail open.',{...toolPlate,render(t){const L=R(13);let r=0;for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;
+  const g=S==='run'?s(spin(BR,t),'accent'):S==='fail'?s('✗','err'):s('✓','ok');L[r++]=[sp(3),g,sp(1),s(x.kind==='bash'?x.arg:`${x.verb} ${x.arg}`,S==='run'?'text':S==='fail'?'err':'muted'),...(S==='run'?[s('  '+secs(t-x.a),'quiet')]:[s('  '+x.res+' · '+secs(x.b-x.a),S==='fail'?'err':'quiet')])];
+  if(S==='run'&&x.arg.startsWith('pytest')){const n=Math.min(PYOUT.length,Math.floor((t-x.a)/3.3));const tail=PYOUT.slice(Math.max(0,n-3),n);tail.forEach((l,i)=>L[r++]=[sp(5),s('╎ ','border'),s(i===tail.length-1?l.slice(0,((t-x.a)%3.3)*12+8):l,i===tail.length-1?'muted':'quiet')]);}
+  if(S==='run'&&x.arg.startsWith('ruff'))L[r++]=[sp(5),s('╎ ','border'),...shimmer('checking 1 file',t,'quiet','muted')];
+  if(S==='fail'){L[r++]=[sp(5),s('╎ ','err'),s("src/parser.py:3:8: F401 're' imported but unused",'muted')];L[r++]=[sp(5),s('╎ ','err'),s('Found 1 error. [*] 1 fixable with --fix','muted')];}}return L;}});
+mock('TL-4','Edit card','Rows slide in from the left as they start. A finished edit opens a bordered card with its diff, drawn one line at a time.',{...toolPlate,rows:15,render(t){const L=R(15);let r=0;for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const off=Math.max(0,8-(t-x.a)*2),fade=clamp((t-x.a)/4);
+  const[ic,icc]=KIND[x.kind];L[r++]=[sp(3+off),s(ic+' ',mix('bg',S==='fail'?'err':icc,fade)),s(`${x.verb} ${x.arg}`,mix('bg',S==='run'?'text':S==='fail'?'err':'muted',fade)),s(S==='run'?'  '+spin(BR,t):'  '+x.res,S==='fail'?'err':'quiet')];
+  if(x.kind==='edit'&&S==='ok'){const W=66,k=Math.floor((t-x.b)/1.5);const head=[s('╭─ ','border'),s('src/parser.py','text','b'),s(' ','border')];const rhs=[s(' +4 ','ok'),s('−1 ','err'),s('─╮','border')];
+    const rows=[[sp(5),...head,s('─'.repeat(W-len(head)-len(rhs)),'border'),...rhs]];DIFF.forEach(([m,n,c])=>{const fg=m==='+'?'ok':m==='-'?'err':'muted';const bgc=m==='+'?mix('bg','ok',.1):m==='-'?mix('bg','err',.1):null;rows.push([sp(5),s('│ ','border'),s(n.padStart(3)+' ','quiet','',bgc),s(m+' ',fg,'',bgc),s(c.padEnd(W-9),fg,'',bgc),s('│','border')]);});rows.push([sp(5),s('╰'+'─'.repeat(W-2)+'╯','border')]);
+    rows.slice(0,k+1).forEach(rr=>L[r++]=rr);}}return L;}});
+mock('TL-5','Prose line','Calls read as one running sentence; the part in progress shimmers. Very compact, details stay one key away.',{...toolPlate,rows:6,render(t){const parts=[];for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const txt={read:`read ${x.arg} (${x.res})`,search:`searched ${x.arg} (${x.res})`,edit:`edited ${x.arg} (+4 −1)`,bash:`ran ${x.arg.split(' ')[0]} → ${x.res}`}[x.kind];parts.push([S,S==='run'?txt.replace(/\(.*\)|→.*$/,'').trim()+'…':txt]);}
+  const words=[];parts.forEach(([S,txt],i)=>{const segs=S==='run'?shimmer(txt,t,'quiet','text'):[s(txt,S==='fail'?'err':'muted')];words.push(...segs);if(i<parts.length-1)words.push(s(', ','quiet'));});
+  const c=cells([sp(3),s('◦ ','accent'),...words],200);const L=R(6);for(let i=0;i<3;i++){const sl=c.slice(i?3+i*74-3:0,i?3+(i+1)*74-3:77);if(i)sl.unshift(...cells([sp(5)],5));L[1+i]=uncells(sl);}return L;}});
+mock('TL-6','Timing bars','Every row ends in a bar sized to its duration; the running bar grows live. Slow calls stand out without reading numbers.',{...toolPlate,render(t){const L=R(13);let r=1;for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const end=S==='run'?t:x.b,w=(end-x.a)*.4,full=Math.floor(w);const c=S==='fail'?'err':S==='run'?'accent':'bs';
+  L[r++]=[sp(3),s(S==='run'?spin(BR,t):S==='fail'?'✗':'·',S==='run'?'accent':c),sp(1),s(`${x.verb} ${x.arg}`.padEnd(42),S==='run'?'text':S==='fail'?'err':'muted'),s(sp(Math.round(x.a*.4)).text),s('━'.repeat(full)+(S==='run'?'╸':''),c),s(' '+secs(end-x.a),'quiet')];}
+  L[r+1]=[sp(49),s('└'+'┴────'.repeat(7),'border')];L[r+2]=[sp(49),...['0s','','','','','','','7s'].map((x,i)=>s(x.padEnd(5),'quiet'))];return L;}});
+
+/* ═════════════ 6 · TOOL GROUPS ═════════════ */
+section('GRP','Tool groups','A run of consecutive calls folded into one summary row. Same five calls, grouped.','520px');
+const grpPlate={cols:80,rows:12,period:140};
+mock('GRP-0','Current','One quiet summary row in present tense while running, with a live tail under it; past tense and subdued when done. Enter opens the members as one-line rows.',{current:true,...grpPlate,render(t){const L=R(12);const busy=t<86;const head=[sp(3),s(t>100?'▾ ':'▸ ',busy?'text':'muted'),s(groupLabel(t),busy?'text':'muted'),s(' · ','quiet'),s(secs(busy?t:86),busy?'muted':'quiet')];L[1]=head;
+  if(busy){const x=runningTool(t);if(x)L[2]=[sp(5),s('╰─ ','border'),s(spin(BR,t)+' ','text'),s(`${x.verb} ${x.arg}`,'text')];}
+  if(t>100)TOOLS.forEach((x,i)=>L[2+i]=[sp(5),s('▸ ',x.fail?'err':'quiet'),s(`${x.verb} ${x.arg}`,x.fail?'err':'muted'),s('  '+secs(x.b-x.a),'quiet','i')]);return L;}});
+mock('GRP-1','Cascading tree','Members drop into a tree as they start; a counter shows progress. When all finish, the tree rolls up bottom-first into the summary.',{...grpPlate,render(t){const L=R(12);const vis=TOOLS.filter(x=>st(x,t)!=='hide');const done=vis.filter(x=>st(x,t)!=='run').length;const fin=t>=86;
+  L[1]=[sp(3),fin?s('✓','ok'):s(spin(ARC,t),'accent'),sp(1),s(fin?groupLabel(t,'past'):'Working','text','b'),s(`  ${done}/5`,'muted'),s('  '+secs(Math.min(t,86)),'quiet'),...(fin?[s('  · 1 failed','err')]:[])];
+  const keep=fin?Math.max(0,vis.length-Math.floor((t-92)/2)):vis.length;vis.slice(0,keep).forEach((x,i)=>{const S=st(x,t),last=i===keep-1,off=Math.max(0,4-(t-x.a));
+    L[2+i]=[sp(4+off),s(last?'└─ ':'├─ ','border'),S==='run'?s(spin(BR,t),'accent'):S==='fail'?s('✗','err'):s('✓','ok'),sp(1),s(`${x.verb} ${x.arg}`,S==='run'?'text':S==='fail'?'err':'muted')];});return L;}});
+mock('GRP-2','Chip rail','Each call is a chip on one rail, tinted by outcome; the running chip shimmers. The line under it describes only the newest call.',{...grpPlate,render(t){const L=R(12);const chips=[];for(const x of TOOLS){const S=st(x,t);if(S==='hide')continue;const lbl=` ${KIND[x.kind][0]} ${x.verb} `;
+  if(S==='run')chips.push(...[...lbl].map((ch,i)=>s(ch,'text','',mix('el','hi',wave(t,i,8,.3)))));else chips.push(s(lbl,S==='fail'?'err':'muted','',S==='fail'?mix('bg','err',.16):mix('bg','ok',.09)));chips.push(sp(1));}
+  L[1]=[sp(3),...chips];const x=lastTool(t);if(x){const S=st(x,t);L[3]=[sp(3),s('╰ ','border'),s(`${x.verb} ${x.arg}`,S==='run'?'text':S==='fail'?'err':'muted'),s('  '+(S==='run'?secs(t-x.a):x.res),S==='fail'?'err':'quiet')];}
+  if(t>=86)L[5]=[sp(3),s(groupLabel(t,'past'),'quiet'),s(' · 6.9s','quiet')];return L;}});
+mock('GRP-3','Rolling counters','The summary is a row of kind counters that roll when they change: the old digit drops away and the new one lands in the accent.',{...grpPlate,render(t){const L=R(12);const kinds=[['read','file','files'],['search','search','searches'],['edit','edit','edits'],['bash','command','commands']];
+  const row=[sp(3)];for(const[k,one,many]of kinds){const xs=TOOLS.filter(x=>x.kind===k&&st(x,t)!=='hide');const n=xs.length;const changed=xs.length?t-Math.max(...xs.map(x=>x.a)):99;const[ic,icc]=KIND[k];
+    row.push(s(ic+' ',n?icc:'border'));if(changed<3)row.push(s(changed<1?'▔':changed<2?String(n):String(n),changed<2?'peak':'accent','b'));else row.push(s(String(n),n?'text':'quiet','b'));row.push(s(' '+(n===1?one:many)+'   ',n?'muted':'quiet'));}
+  row.push(s(secs(Math.min(t,86)),'quiet'));L[1]=row;const x=runningTool(t);L[3]=x?[sp(3),s('  ',''),...shimmer(`${x.pres} ${x.arg}`,t,'quiet','text')]:[sp(5),s('done · 1 failed: ruff check','err')];return L;}});
+mock('GRP-4','Gantt','Members are bars on a shared clock, so you see what ran in parallel and what was slow. The running bar grows; a "now" line sweeps.',{...grpPlate,render(t){const L=R(12);L[0]=[sp(3),s(groupLabel(t),t<86?'text':'muted'),s(' · '+secs(Math.min(t,86)),'quiet')];const X=33,sc=.48;
+  TOOLS.forEach((x,i)=>{const S=st(x,t);const lab=`${x.verb} ${x.arg}`.slice(0,28).padEnd(29);if(S==='hide'){L[2+i]=[sp(3),s(lab,'border')];return;}const end=S==='run'?t:x.b;const a=Math.round(x.a*sc),n=Math.max(1,Math.round((end-x.a)*sc));
+    const c=S==='fail'?'err':S==='run'?'accent':KIND[x.kind][1];L[2+i]=[sp(3),s(lab,S==='run'?'text':S==='fail'?'err':'muted'),s(' '.repeat(X-32+a)),s('█'.repeat(n),S==='run'?mix(c,'peak',pulse(t,.2)*.4):mix('bg',c,.75))];});
+  const now=X+Math.round(Math.min(t,86)*sc);L[8]=[s(' '.repeat(X)),s('└'+'────┴'.repeat(9),'border')];L[9]=[s(' '.repeat(X)),...['0','1s','2s','3s','4s','5s','6s','7s','8s'].map(x=>s(x.padEnd(5),'quiet'))];
+  const out=L.map(l=>l);for(let y=2;y<7;y++){const c=cells(out[y],80);if(t<86&&now<80)c[now]={ch:'│',fg:'warn',fl:'',bg:null};out[y]=uncells(c);}return out;}});
+mock('GRP-5','Card stack','The group is a card; each finished call drops another sheet behind it, so the stack height counts the work. Enter fans it out.',{...grpPlate,render(t){const L=R(12);const done=TOOLS.filter(x=>['ok','fail'].includes(st(x,t))).length;const x=runningTool(t);const W=60;const fan=t>104;
+  if(!fan){const head=x?[s(spin(BR,t)+' ','accent'),...shimmer(`${x.pres} ${x.arg}`,t,'muted','text')]:[s('✓ ','ok'),s(groupLabel(t,'past'),'text')];
+    L[1]=[sp(3),s('╭'+'─'.repeat(W-2)+'╮','border')];L[2]=[sp(3),s('│ ','border'),...head,sp(W-4-len(head)-8),s(`${done}/5 ▸`,'quiet'),s(' │','border')];L[3]=[sp(3),s('╰'+'─'.repeat(W-2)+'╯','border')];
+    for(let k=0;k<Math.min(3,done);k++){const drop=TOOLS.filter(z=>z.b<=t)[k];const fresh=drop&&t-drop.b<3;L[3+k]=[sp(4+k),s((k===0?'╰┬':'╰┬')+'─'.repeat(W-4-2*k)+'┬╯',fresh?'accent':mix('border','bg',k*.25))];L[4+k]=[sp(5+k),s('╰'+'─'.repeat(W-6-2*k)+'╯',mix('border','bg',(k+1)*.25))];}}
+  else TOOLS.forEach((z,i)=>{const k=Math.min(i,Math.floor((t-104)/2));L[1+i*2]=[sp(3+k),s('╭─ ','border'),s(`${z.verb} ${z.arg}`,z.fail?'err':'muted'),s(' · '+z.res,z.fail?'err':'quiet')];});return L;}});
+mock('GRP-6','Fold away','While running, members stay open as rows. When the last one finishes they fold up into the header one by one, and the header flashes once.',{...grpPlate,render(t){const L=R(12);const fin=t>=86,k=fin?Math.floor((t-90)/2):0;const flash=fin&&t>100?clamp(1-(t-100)/8):0;
+  L[1]=[sp(3),s(fin&&k>=5?'▸ ':'▾ ','muted'),s(groupLabel(t,fin?'past':'mixed'),fin?mix('muted','accent',flash):'text'),s(' · '+secs(Math.min(t,86)),'quiet')];
+  const vis=TOOLS.filter(x=>st(x,t)!=='hide');vis.slice(0,Math.max(0,vis.length-Math.max(0,k))).forEach((x,i)=>{const S=st(x,t);L[2+i]=[sp(5),s('│ ','border'),S==='run'?s(spin(BR,t),'accent'):S==='fail'?s('✗','err'):s('·','quiet'),sp(1),s(`${x.verb} ${x.arg}`,S==='run'?'text':S==='fail'?'err':'muted')];});return L;}});
+
+/* ═════════════ 7 · SUB-AGENTS ═════════════ */
+section('AGT','Sub-agents','Three helpers run under the build agent: explorer, reviewer, tester. How they show in the parent transcript, and what opening one looks like.','100%');
+const agPlate={cols:96,rows:15,period:140};
+mock('AGT-0','Current','Each subagent is a tool-style row in the parent (spinner while it runs). Opening one shows its own transcript under a header, with a "Sub agent · read-only" bar at the bottom.',{current:true,...agPlate,render(t){const L=R(15);
+  if(t<104){let r=ucard(L,0,USERMSG,[s('#2','quiet')],96)+1;for(const ag of AGENTS){const S=agSt(ag,t);if(S==='hide')continue;L[r++]=S==='run'?[sp(3),s(spin(BR,t)+' ','text'),s(`Agent · ${ag.name}  ${ag.task}`,'text')]:[sp(3),s('› ','muted'),s(`Agent ${ag.name}  ${ag.task}`,'muted')];}
+    if(t>90)L[r+1]=[sp(3),s('(Enter on a row opens that subagent)','quiet','i')];return L;}
+  const ag=AGENTS[0];L[0]=lr([sp(1),s(`${ag.name} · ${ag.task}`,'text','b'),s('    tier unknown · '+ag.model+' · ','quiet'),s('Done','text','b')],[s('▯ ','muted')],96);ucard(L,1,ag.task,[],96);
+  ag.acts.forEach(([,a],i)=>L[5+i]=[sp(3),s('› ','muted'),s(a,'muted')]);L[10]=[sp(3),s(ag.res+'.','text')];L[14]=withBg([sp(1),s('Sub agent · read-only · Esc or ↑ returns to the parent','muted')],'el');return L;}});
+mock('AGT-1','Lanes with live tails','Each agent gets a coloured name and a second line with what it is doing right now. Finished agents keep one line with their result.',{...agPlate,render(t){const L=R(15);const run=AGENTS.filter(a=>agSt(a,t)==='run').length,done=AGENTS.filter(a=>agSt(a,t)==='ok').length;
+  L[1]=[sp(3),s('◎ ','purple'),s('3 subagents','text','b'),s(` · ${run} working · ${done} done`,'muted')];let r=3;for(const ag of AGENTS){const S=agSt(ag,t);if(S==='hide'){L[r]=[sp(5),s('○ '+ag.name,'border')];r+=3;continue;}
+    L[r++]=lr([sp(5),s(S==='run'?'●':'✓',S==='run'?mix(ag.color,'bg',.5*pulse(t,.12)):'ok'),sp(1),s(ag.name.padEnd(10),ag.color,'b'),s(ag.task,S==='run'?'text':'muted')],[s(`${ag.model} · ${ag.tok} · ${clock(Math.min(t,ag.b)-ag.a)}  `,'quiet')],96);
+    L[r++]=S==='run'?[sp(7),s('╰ ','border'),s(spin(BR,t)+' ','muted'),...shimmer(agAct(ag,t),t,'quiet','muted')]:[sp(7),s('╰ ','border'),s(ag.res,'muted')];r++;}return L;}});
+mock('AGT-2','Swimlanes','Agents as lanes on one clock. Tick marks are their tool calls, the bar grows while they work, and the line underneath reads the newest event.',{...agPlate,render(t){const L=R(15);const X=16,sc=.55;L[1]=[sp(3),s('Subagents','text','b'),s('  · '+clock(t),'quiet')];
+  AGENTS.forEach((ag,i)=>{const S=agSt(ag,t),y=3+i*2;const lab=[sp(3),s(ag.name.padEnd(X-3),S==='hide'?'border':ag.color,'b')];if(S==='hide'){L[y]=lab;return;}const end=Math.min(t,ag.b);const a=Math.round(ag.a*sc),n=Math.max(1,Math.round((end-ag.a)*sc));
+    const ticks=new Set(ag.acts.filter(([k])=>k<=t).map(([k])=>Math.round(k*sc)-a));const segs=Array.from({length:n},(_,j)=>ticks.has(j)?s('┃',S==='run'?'peak':ag.color):s('━',mix('bg',ag.color,S==='run'?.7:.45)));
+    L[y]=[...lab,sp(a),...segs,S==='run'?s('▶',mix(ag.color,'peak',pulse(t,.2))):s(' ✓ '+ag.res,'muted')];});
+  L[10]=[sp(X),s('└'+'─────────┴'.repeat(7),'border')];L[11]=[sp(X),...['0:00','0:01','0:02','0:03','0:04','0:05','0:06','0:07'].map(x=>s(x.padEnd(10),'quiet'))];
+  const ev=AGENTS.flatMap(ag=>ag.acts.filter(([k])=>k<=t).map(([k,a])=>[k,ag,a])).sort((a,b)=>b[0]-a[0])[0];if(ev)L[13]=[sp(3),s('latest  ','quiet'),s(ev[1].name+' ',ev[1].color),s(ev[2],'muted')];return L;}});
+mock('AGT-3','Agent cards','Side-by-side cards with the last few actions. A light runs around the border of each working card; a finished card settles with a check.',{...agPlate,render(t){const W=30,H=9;const g=Grid(96,15);AGENTS.forEach((ag,i)=>{const x0=2+i*(W+2),y0=2,S=agSt(ag,t);const per=2*(W-1)+2*(H-1);const pos=(t*1.4+i*20)%per;
+    const perim=(x,y)=>y===0?x:x===W-1?(W-1)+y:y===H-1?(W-1)+(H-1)+(W-1-x):2*(W-1)+(H-1)+(H-1-y);
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(y>0&&y<H-1&&x>0&&x<W-1)continue;let ch=y===0?(x===0?'╭':x===W-1?'╮':'─'):y===H-1?(x===0?'╰':x===W-1?'╯':'─'):'│';let d=(pos-perim(x,y)+per)%per;const lit=S==='run'&&d<6;g.set(x0+x,y0+y,ch,lit?mix(ag.color,'border',d/6):S==='ok'?mix('border','ok',.4):'border');}
+    g.segs(x0+2,y0,[s(' '+ag.name+' ',S==='hide'?'quiet':ag.color,'b')]);g.segs(x0+W-4,y0,[S==='run'?s(' '+spin(BR,t),'accent'):S==='ok'?s(' ✓','ok'):s(' ·','quiet')]);
+    wrap(ag.task,W-4).slice(0,2).forEach((l,k)=>g.text(x0+2,y0+1+k,l,S==='hide'?'quiet':'text'));
+    const acts=ag.acts.filter(([k])=>k<=t).map(([,a])=>a).slice(-3);acts.forEach((a,k)=>g.segs(x0+2,y0+4+k,[s('▸ ','quiet'),s(a.slice(0,W-6),k===acts.length-1&&S==='run'?'muted':'quiet')]));
+    g.text(x0+2,y0+H-2,S==='ok'?ag.res.slice(0,W-4):S==='run'?`${clock(t-ag.a)} · ${ag.model}`:'waiting to start',S==='ok'?'ok':'quiet');});return g.lines();}});
+mock('AGT-4','Spawn tree','A tree under the parent agent. Branches draw themselves as agents spawn, and an agent can spawn its own child (the reviewer starts docs-check).',{...agPlate,render(t){const L=R(15);const all=[...AGENTS.map(a=>({...a,d:0})),{name:'docs-check',color:'blue',task:'Check docs/parser.md matches',a:40,b:82,acts:[[40,'Read docs/parser.md']],res:'docs match',d:1,parent:'reviewer'}];
+  L[1]=[sp(3),s('◉ ','accent'),s('build','text','b'),s('  Fix parser edge cases','muted'),s(t<96?`   waiting on ${AGENTS.filter(a=>agSt(a,t)==='run').length}`:'   all returned','quiet')];
+  const order=[all[0],all[1],all[3],all[2]];order.forEach((ag,i)=>{const S=agSt(ag,t);if(S==='hide')return;const last=i===order.length-1;const grow=Math.min(3,t-ag.a);const pre=ag.d?(i<3?'│   ':'    ')+'└'+'─'.repeat(grow):(last?'└':'├')+'─'.repeat(grow);
+    const row=[sp(4),s(pre,'border'),sp(3-grow),s(S==='run'?spin(BR,t):'✓',S==='run'?ag.color:'ok'),sp(1),s(ag.name.padEnd(11),ag.color,'b')];row.push(S==='run'?s(agAct(ag,t),'muted'):s(ag.res,'quiet'));L[3+i*2]=lr(row,[s(clock(Math.min(t,ag.b)-ag.a)+'  ','quiet')],96);if(!last&&!ag.d)L[4+i*2]=[sp(4),s('│','border')];if(ag.name==='reviewer'&&t>=40)L[4+i*2]=[sp(4),s('│   │','border')];});return L;}});
+mock('AGT-5','Inline threads','Each agent works in a coloured thread inside the parent transcript. When it returns, the thread collapses to one ↳ line with its answer.',{...agPlate,render(t){const L=R(15);L[0]=[sp(3),s(USERMSG,'text','b')];let r=2;for(const ag of AGENTS){const S=agSt(ag,t);if(S==='hide')continue;
+  if(S==='ok'&&t-ag.b>4){L[r++]=[sp(3),s('↳ ',ag.color),s(ag.name,ag.color,'b'),s(' returned · ','quiet'),s(ag.res,'text'),s(' · '+secs(ag.b-ag.a),'quiet')];continue;}
+  L[r++]=[sp(3),s('┃ ',ag.color),s(ag.name,ag.color,'b'),s('  '+ag.task,'muted')];ag.acts.filter(([k])=>k<=t).slice(-2).forEach(([k,a],j,arr)=>L[r++]=[sp(3),s('┃   ',ag.color),j===arr.length-1&&S==='run'?s(spin(BR,t)+' ','muted'):s('· ','quiet'),s(a,j===arr.length-1&&S==='run'?'text':'quiet')]);
+  if(S==='ok')L[r++]=[sp(3),s('┃   ',ag.color),s('✓ '+ag.res,'ok')];}return L;}});
+mock('AGT-6','Agent tabs','Opening agents turns the header into tabs with live glyphs. The underline glides between tabs as you switch; the body is that agent\'s own transcript.',{...agPlate,render(t){const L=R(15);const tabs=[{name:'build',color:'accent',run:t<96}].concat(AGENTS.map(a=>({name:a.name,color:a.color,run:agSt(a,t)==='run',ok:agSt(a,t)==='ok'})));const sel=Math.floor(t/35)%4;
+  const pos=[];let x=2;const row=[sp(2)];tabs.forEach((tb,i)=>{const lbl=` ${tb.run?spin(BR,t):tb.ok?'✓':'◇'} ${tb.name} `;pos.push([x,lbl.length]);row.push(s(lbl,i===sel?'text':'muted',i===sel?'b':''));row.push(s('│','border'));x+=lbl.length+1;});L[0]=row;
+  const ph=t%35,from=pos[(sel+3)%4],to=pos[sel],f=ease(ph/5);const ux=Math.round(from[0]+(to[0]-from[0])*f),uw=Math.round(from[1]+(to[1]-from[1])*f);L[1]=[s('─'.repeat(ux),'border'),s('━'.repeat(uw),tabs[sel].color),s('─'.repeat(96-ux-uw),'border')];
+  if(sel===0){L[3]=[sp(3),s(USERMSG,'text','b')];AGENTS.forEach((a,i)=>L[5+i]=[sp(3),s('◎ ','purple'),s(a.name,a.color),s('  '+(agSt(a,t)==='ok'?a.res:agAct(a,t)),'muted')]);}
+  else{const ag=AGENTS[sel-1];L[3]=[sp(3),s(ag.task,'text','b'),s('  · '+ag.model,'quiet')];ag.acts.filter(([k])=>k<=t).forEach(([,a],i)=>L[5+i]=[sp(3),s('› ','muted'),s(a,'muted')]);if(agSt(ag,t)==='ok')L[11]=[sp(3),s(ag.res,'text')];}
+  L[14]=withBg([sp(1),s('Ctrl+PgUp/PgDn','text'),s(' switch agent · ','quiet'),s('Esc','text'),s(' back to build · subagents are read-only','quiet')],'el');return L;}});
+
+/* ═════════════ 8 · SESSIONS ═════════════ */
+section('SES','Session dashboard','Every session in the workspace: what is working, what needs you, what is idle.','100%');
+const sesPlate={cols:104,rows:22,period:150};
+mock('SES-0','Current','Bracketed top bar, workspace line with status chips, then collapsible groups (Working, Idle) with a preview line under each session.',{current:true,...sesPlate,render(t){const W=104,L=R(22);
+  L[0]=lr([s(' ▌  ','accent'),s('Nexus · visual','text')],[s('+   ▐ ','muted')],W);L[1]=lr([s('main ','text'),s('~/repos/nexus ','muted'),s('[Choose Ctrl+L]','quiet')],[s(spin(BR,t)+' 2 working','purple'),s(' | ','quiet'),s('◆ 1 needs input','warn'),s(' | ','quiet'),s('◇ 2 idle ','quiet')],W);
+  L[2]=lr([s('+ New Agent','accent')],[s('Open Previous /resume | Worktree Ctrl+w','quiet')],W);let r=3;
+  for(const[grp,keys]of[['Working',['working','input']],['Idle',['idle','done']]]){const xs=SESS.filter(x=>keys.includes(x.st));L[r++]=[s(`▾ ${grp} ${xs.length} `,'muted'),s('─'.repeat(W-10-grp.length),'border')];
+    for(const x of xs){L[r++]=lr([sessGlyph(x,t),s(' '+x.title,'text'),s(' · '+x.branch+' nexus','quiet')],[s(x.ago==='now'?'just now':x.ago,'quiet')],W);L[r++]=[sp(2),s(x.st==='working'?x.tail[Math.floor(t/50)%x.tail.length]:x.tail[0],'muted')];}r++;}
+  L[19]=[sp(5),s('Type a message…','quiet')];L[20]=lr([sp(5),s('Build · GPT-6 Luna OpenAI · not exposed','muted')],[s('52.1K · 26.1% · 5.2%    ','quiet')],W);return L;}});
+mock('SES-1','Board','Four columns: Working, Needs you, Idle, Done. Working cards stream their latest action; the card waiting on you has a pulsing border.',{...sesPlate,render(t){const g=Grid(104,22);const cols=[['Working','working','purple'],['Needs you','input','warn'],['Idle','idle','quiet'],['Done','done','muted']];const W=25;
+  cols.forEach(([name,stt,c],i)=>{const x0=1+i*26,xs=SESS.filter(x=>x.st===stt);g.segs(x0,0,[s(name,c,'b'),s(' '+xs.length,'quiet')]);g.text(x0,1,'─'.repeat(W),'border');
+    xs.forEach((x,k)=>{const y0=2+k*6,bc=stt==='input'?mix('border','warn',pulse(t,.1)):stt==='working'?mix('border','purple',.35):'border';g.text(x0,y0,'╭'+'─'.repeat(W-2)+'╮',bc);for(let y=1;y<5;y++){g.set(x0,y0+y,'│',bc);g.set(x0+W-1,y0+y,'│',bc);}g.text(x0,y0+5,'╰'+'─'.repeat(W-2)+'╯',bc);
+      wrap(x.title,W-4).slice(0,2).forEach((l,j)=>g.text(x0+2,y0+1+j,l,'text','b'));g.segs(x0+2,y0+3,[s(x.branch,'quiet'),s(' · '+x.ago,'quiet')]);
+      const tail=stt==='working'?x.tail[Math.floor(t/50)%x.tail.length]:x.tail[0];g.segs(x0+2,y0+4,stt==='working'?[s(spin(BR,t)+' ','purple'),...shimmer(tail.slice(0,W-6),t,'quiet','muted')]:[s(tail.slice(0,W-4),stt==='input'?'warn':'quiet')]);});});return g.lines();}});
+mock('SES-2','Table with activity','A dense sortable table. Each row has a 12-bucket activity sparkline that keeps scrolling for working sessions; the cursor moves with ↑↓.',{...sesPlate,render(t){const L=R(22);const sel=Math.floor(t/30)%SESS.length;
+  L[0]=[sp(2),s('Sessions','text','b'),s('  6 · sorted by last activity','quiet')];L[2]=[sp(4),s('Title'.padEnd(40)+'Branch'.padEnd(15)+'Agent'.padEnd(8)+'Tokens'.padStart(7)+'   Activity      Last','quiet','u')];
+  SESS.forEach((x,i)=>{const sh=x.st==='working'?Math.floor(t/4):0;const act=Array.from({length:12},(_,k)=>x.act[(k+sh)%12]);const spark=act.map((v,k)=>s(bar(v/8),x.st==='working'?mix('purple','accent',k/11):'bs'));
+    const row=[s(i===sel?' ▌':'  ','accent'),sessGlyph(x,t),sp(1),s(x.title.padEnd(40).slice(0,40),'text',i===sel?'b':''),s(x.branch.padEnd(15),'muted'),s(x.agent.padEnd(8),'muted'),s(x.tok.padStart(7),'muted'),sp(3),...spark,sp(3),s(x.ago.padStart(4),'quiet')];if(i===sel)row.bg='el';L[4+i*2]=row;
+    if(i===sel)L[5+i*2]=withBg([sp(6),s(x.st==='working'?x.tail[Math.floor(t/50)%x.tail.length]:x.tail[0],'muted','i')],'el');});
+  L[20]=[sp(2),s('↑↓','text'),s(' move  ','quiet'),s('Enter','text'),s(' open  ','quiet'),s('s','text'),s(' sort  ','quiet'),s('/','text'),s(' filter  ','quiet'),s('n','text'),s(' new','quiet')];return L;}});
+mock('SES-3','Worktree tree','Sessions grouped under their branch or worktree. A session with subagents shows them folded beneath it with live glyphs.',{...sesPlate,render(t){const L=R(22);L[0]=[sp(2),s('~/repos/nexus','text','b'),s('  3 branches · 6 sessions','quiet')];let r=2;
+  const groups=[['main','',SESS.filter(x=>x.branch==='main')],['fix/parser','worktree .worktrees/fix-parser',SESS.filter(x=>x.branch==='fix/parser')],['docs/sessions','',SESS.filter(x=>x.branch==='docs/sessions')]];
+  groups.forEach(([b,wt,xs],gi)=>{const lastG=gi===groups.length-1;L[r++]=[sp(2),s(lastG?'└─ ':'├─ ','border'),s('⎇ '+b,'blue','b'),s(wt?'  '+wt:'','quiet')];const pipe=lastG?'   ':'│  ';
+    xs.forEach((x,i)=>{L[r++]=lr([sp(2),s(pipe,'border'),s(i===xs.length-1&&!x.subs?'└ ':'├ ','border'),sessGlyph(x,t),s(' '+x.title,'text'),s(x.st==='input'?'  · Allow git push?':'','warn')],[s(x.ago+'  ','quiet')],104);
+      if(x.subs)AGENTS.forEach((ag,k)=>{const S=agSt(ag,t%140);L[r++]=[sp(2),s(pipe+'│   '+(k===2?'└ ':'├ '),'border'),s(S==='run'?spin(BR,t):S==='ok'?'✓':'·',S==='run'?ag.color:'ok'),s(' '+ag.name,ag.color),s('  '+(S==='ok'?ag.res:S==='run'?agAct(ag,t%140):'waiting'),'quiet')];});});});return L;}});
+mock('SES-4','Preview cards','A grid of cards with the last exchange in each. Working sessions type their newest line live; idle ones show the final reply.',{...sesPlate,render(t){const g=Grid(104,22);const W=33,H=10;SESS.forEach((x,i)=>{const x0=1+(i%3)*(W+2),y0=1+Math.floor(i/3)*(H+1);const sel=Math.floor(t/40)%6===i;const bc=sel?'accent':x.st==='input'?mix('border','warn',pulse(t,.1)):'border';
+    g.text(x0,y0,'╭'+'─'.repeat(W-2)+'╮',bc);for(let y=1;y<H-1;y++){g.set(x0,y0+y,'│',bc);g.set(x0+W-1,y0+y,'│',bc);}g.text(x0,y0+H-1,'╰'+'─'.repeat(W-2)+'╯',bc);
+    const gl=sessGlyph(x,t);g.segs(x0+2,y0+1,[gl,s(' '+x.title.slice(0,W-6),'text','b')]);g.text(x0+4,y0+2,`${x.branch} · ${x.ago} · ${x.tok}`,'quiet');
+    g.segs(x0+2,y0+4,[s('you  ','quiet'),s(x.you.slice(0,W-9),'muted')]);const tail=x.st==='working'?x.tail[Math.floor(t/50)%x.tail.length]:x.tail[0];const typed=x.st==='working'?tail.slice(0,(t%50)*1.5):tail;
+    wrap(typed,W-9).slice(0,3).forEach((l,k)=>g.segs(x0+2,y0+5+k,[s(k?'     ':'agent','quiet'),s(' '+l,x.st==='input'?'warn':'text')]));});return g.lines();}});
+mock('SES-5','Activity timeline','Rows are sessions, columns are the last hour. Shaded blocks show when each one was busy; a "now" column advances and working rows keep filling.',{...sesPlate,render(t){const L=R(22);const X=40,N=60;L[0]=[sp(2),s('Last hour','text','b'),s('  · shading shows tool and token activity','quiet')];
+  L[2]=[sp(X),s('-60m'.padEnd(20)+'-40m'.padEnd(20)+'-20m'.padEnd(17)+'now','quiet')];SESS.forEach((x,i)=>{const cellsA=Array.from({length:N},(_,k)=>{const age=N-1-k;let v=0;
+    if(x.st==='working')v=h1(i*100+k+Math.floor(t/6))*(k>N-25?1:.4);else if(x.st==='input')v=k>N-20&&k<N-2?h1(i*50+k):0;else if(x.st==='idle')v=k>N-30&&k<N-4-i*3?h1(i*70+k)*.8:0;else v=k<20?h1(k)*.7:0;
+    const ch=' ░▒▓█'[Math.round(v*4)];return s(ch,x.st==='working'?'purple':x.st==='input'?'warn':'bs');});
+    if(x.st==='working')cellsA[N-1]=s('█',mix('purple','peak',pulse(t,.2)));L[4+i*2]=[sp(1),sessGlyph(x,t),sp(1),s(x.title.slice(0,X-5).padEnd(X-3),'text'),...cellsA,s(' │','border')];});
+  L[17]=[sp(X),s('└'+'─'.repeat(N-1)+'┘','border')];return L;}});
+mock('SES-6','Attention first','Whatever needs you gets a banner at the top with its actions. Working sessions follow with live tails; everything else collapses into a quiet list.',{...sesPlate,render(t){const W=104,L=R(22);const inp=SESS.find(x=>x.st==='input');const glow=mix('bg','warn',.1+.12*pulse(t,.1));
+  L[1]=withBg([sp(2),s('◆ ','warn','b'),s(inp.title,'text','b'),s(' needs you','warn'),s('  ·  Allow Bash: ','muted'),s('git push origin main','text')],glow);L[2]=withBg([sp(4),s('Enter','text','b'),s(' open   ','muted'),s('a','text','b'),s(' allow once   ','muted'),s('d','text','b'),s(' deny','muted'),s('   waiting 1m 12s','quiet')],glow);
+  L[4]=[sp(2),s('Working','purple','b')];SESS.filter(x=>x.st==='working').forEach((x,i)=>{L[5+i*3]=lr([sp(2),sessGlyph(x,t),s(' '+x.title,'text','b')],[s(x.tok+' · '+x.branch+'  ','quiet')],W);L[6+i*3]=[sp(4),s('╰ ','border'),...shimmer(x.tail[Math.floor(t/50)%x.tail.length],t,'quiet','muted')];});
+  L[12]=[sp(2),s('Recent','muted','b')];SESS.filter(x=>['idle','done'].includes(x.st)).forEach((x,i)=>L[13+i]=lr([sp(2),sessGlyph(x,t),s(' '+x.title,'muted')],[s(x.ago+'  ','quiet')],W));return L;}});
+
+/* ═════════════ 9 · GPT LIVE ═════════════ */
+section('LIV','GPT Live voice calls','A live voice call: connect, you speak, the request goes to the agent, the voice answers. One scripted call plays in every plate.','520px');
+const LIVE_USER='Please fix the parser and run the tests.',LIVE_SAY="On it. I've asked the agent to start, and I'll tell you when the tests finish.";
+const phase=t=>t<14?'connecting':t<58?'listening':t<70?'working':t<130?'speaking':'listening';
+const micLv=t=>t>=18&&t<50?clamp(.35+.6*noise(t,1)):clamp(.04+.06*noise(t,2));
+const spkLv=t=>t>=70&&t<128?clamp(.3+.65*noise(t,5)):0;
+const userSaid=t=>LIVE_USER.slice(0,clamp((t-18)/32)*LIVE_USER.length|0);
+const saidWords=t=>{const w=LIVE_SAY.split(' ');return[w,clamp((t-70)/55)*w.length];};
+const livePlate={cols:80,rows:12,period:170};
+const meter=(f,n=6)=>'▰'.repeat(Math.round(f*n))+'▱'.repeat(n-Math.round(f*n));
+mock('LIV-0','Current','A "● Live" bar with phase, clock and mic/speaker meters, then the call log behind a violet rail: You, Sent to agent, Voice, and your partial words in italics.',{current:true,...livePlate,render(t){const L=R(12);const ph=phase(t);
+  L[0]=lr([s('● ',ph==='connecting'?'quiet':'ok'),s('Live','text','b'),s(' · ','bs'),s(ph,'accent'),s(' · ','bs'),s(clock(t+1600),'muted'),s('   mic ','quiet'),s(meter(micLv(t)),'ok'),s(' spk ','quiet'),s(meter(spkLv(t)),'ok')],[s(' ⤢ expand ','muted','','el')],80);
+  const rows=[[s('Started  ','muted','b'),s('instructions: bundled · 2 earlier turns carried over','muted')]];if(t>=50)rows.push([s('You  ','muted','b'),s(LIVE_USER,'text')]);
+  if(t>=58)rows.push([s('Sent to agent (steer)  ','warn','b'),s('Fix the parser and run the tests.  ','text'),s('→ turn #3','muted')]);
+  if(t>=70){const[w,n]=saidWords(t);rows.push([s('Voice  ','blue','b'),s(w.slice(0,Math.ceil(n)).join(' '),'text')]);}
+  if(t>=18&&t<50)rows.push([s('You…  ','quiet','b'),s(userSaid(t),'quiet','i')]);if(t>=140)rows.push([s('You…  ','quiet','b'),s('and also check the lint'.slice(0,(t-140)*1.2),'quiet','i')]);
+  rows.forEach((rw,i)=>L[1+i]=[s('▏','purple'),...rw]);L[9]=withBg([sp(3),s('▌','text'),s('Type a message…','quiet')],'el');L[10]=withBg([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],'el');return L;}});
+mock('LIV-1','Mirrored waveform','A scrolling waveform: the voice rises above the line in the accent, your mic falls below it in blue. The phase reads at the left.',{...livePlate,render(t){const L=R(12);const ph=phase(t);L[0]=lr([s('◉ ','err'),s('Live','text','b'),s('  '+ph,'accent')],[s(clock(t+1600)+'   m mute · e end','quiet')],80);
+  const W=80,mid=5;const up=R(4),dn=R(4);const colsU=[],colsD=[];for(let x=0;x<W;x++){const tt=t-(W-1-x)*.5;colsU.push(spkLv(tt)*3.2);colsD.push(micLv(tt)*3.2);}
+  for(let r=0;r<3;r++){L[mid-1-r]=colsU.map((a,x)=>{const f=a-r;return s(f>=1?'█':f>0?BLK[Math.max(1,Math.round(f*8))]:' ',mix('accent','purple',x/W));});L[mid+1+r]=colsD.map(a=>{const f=a-r;return s(f>=1?'█':f>.5?'▀':f>0?'▔':' ','blue');});}
+  L[mid]=Array.from({length:W},(_,x)=>s('─',x===W-1?'text':'border'));const[w,n]=saidWords(t);L[10]=[sp(1),...(t>=70&&t<140?[s('voice  ','quiet'),s(w.slice(Math.max(0,Math.ceil(n)-9),Math.ceil(n)).join(' '),'text')]:t>=18&&t<58?[s('you  ','quiet'),s(userSaid(t),'muted','i')]:[])];return L;}});
+mock('LIV-2','Orb','A braille orb on the left breathes with the voice. Each phase has its own motion: dotted spin to connect, blue ripple to listen, violet arc while the agent works, accent pulse to speak.',{...livePlate,render(t){const ph=phase(t);const b=Braille(22,11),cx=22,cy=22;
+  const amp=ph==='speaking'?spkLv(t):ph==='listening'?micLv(t):0;
+  if(ph==='connecting'){for(let a=0;a<6.28;a+=.35){const aa=a+t*.2;b.set(cx+Math.cos(aa)*16,cy+Math.sin(aa)*16*.95);}}
+  else if(ph==='working'){for(let a=0;a<2.2;a+=.03){const aa=a+t*.35;b.set(cx+Math.cos(aa)*16,cy+Math.sin(aa)*15);b.set(cx+Math.cos(aa)*15,cy+Math.sin(aa)*14);}}
+  else for(let k=0;k<3;k++){const r=8+k*4+amp*6*(1-k*.25)+Math.sin(t*.2+k)*.6;for(let a=0;a<6.28;a+=.025){const wob=1+.08*amp*Math.sin(a*6+t*.5);b.set(cx+Math.cos(a)*r*wob,cy+Math.sin(a)*r*wob*.95);}}
+  const c=ph==='listening'?'blue':ph==='working'?'purple':ph==='connecting'?'quiet':'accent';const L=R(12);for(let y=0;y<11;y++)L[y]=[sp(1),...Array.from({length:22},(_,x)=>s(b.ch(x,y),c))];
+  const R2=R(12);R2[1]=[s(ph,c,'b'),s('  '+clock(t+1600),'quiet')];const[w,n]=saidWords(t);const cap=t>=70?w.slice(0,Math.ceil(n)).join(' '):t>=18?userSaid(t):'';wrap(cap,48).slice(-5).forEach((l,i)=>R2[3+i]=[s(l,t>=70?'text':'muted',t>=70?'':'i')]);
+  R2[10]=[s('m','text'),s(' mute  ','quiet'),s('p','text'),s(' pause  ','quiet'),s('e','text'),s(' end call','quiet')];return hjoin([{lines:L,w:26},{lines:R2,w:54}]);}});
+mock('LIV-3','Karaoke captions','The spoken reply is captioned word by word: past words in white, the current word in the accent, upcoming words quiet. "Sent to agent" slides in from the right as a chip.',{...livePlate,render(t){const L=R(12);const ph=phase(t);L[0]=[sp(2),s('● ','ok'),s('Live ','text','b'),s(ph,'accent'),s('  '+clock(t+1600),'quiet')];
+  L[3]=[sp(4),s('you  ','quiet'),s(t>=18?userSaid(t):'',t<50?'muted':'text',t<50?'i':'')];
+  if(t>=58){const off=Math.max(0,30-(t-58)*5);const chip=[s(' → sent to agent ','bg','b','warn'),s(' turn #3 · steer ','text','','el')];L[5]=[sp(4+off),...chip];}
+  const[w,n]=saidWords(t);if(t>=70){const words=w.map((x,i)=>i<Math.floor(n)?s(x+' ','text'):i===Math.floor(n)?s(x,'accent','bu'):s(x+' ','quiet'));const segs=[];let line=[sp(4),s('voice ','quiet')],ln=10;const lines=[];words.forEach(sg=>{if(ln+sg.text.length>74){lines.push(line);line=[sp(10)];ln=10;}line.push(sg);if(sg.fl==='bu')line.push(sp(1));ln+=sg.text.length+(sg.fl==='bu'?1:0);});lines.push(line);lines.forEach((l,i)=>L[7+i]=l);}return L;}});
+mock('LIV-4','Top bar pill','The call lives in a small pill in the top bar with a mini meter; the conversation itself lands in the timeline as quoted lines.',{...livePlate,render(t){const L=R(12);const ph=phase(t);const lv=ph==='speaking'?spkLv(t):micLv(t);const mini=Array.from({length:5},(_,i)=>s(bar(clamp(lv*(1-Math.abs(i-2)*.25)+.1*noise(t,i))),ph==='speaking'?'accent':'blue'));
+  L[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · Fix parser edge cases','muted')],[s('◖','el'),s(' ● ','ok','','el'),s('live ','text','','el'),s(clock(t+1600)+' ','muted','','el'),...mini.map(m=>({...m,bg:'el'})),s(' ','','','el'),s('◗','el'),s('  ▐','muted')],80);L[1]=[s('─'.repeat(80),'border')];
+  let r=3;if(t>=50)L[r++]=[sp(3),s('“','quiet'),s(LIVE_USER,'text','i'),s('”','quiet'),s('  you, by voice','quiet')];if(t>=58)L[r++]=[sp(3),s('→ ','warn'),s('steered turn #3','muted')];if(t>=60)for(const row of currentToolRows((t-60)*1.2,3,false).slice(0,3))L[r++]=row;
+  if(t>=70){const[w,n]=saidWords(t);L[r++]=[sp(3),s('“','quiet'),s(w.slice(0,Math.ceil(n)).join(' ').slice(0,64),'blue','i'),s(n>=w.length?'”':'','quiet')];}return L;}});
+mock('LIV-5','Phase strip','A single status strip whose animation changes with the phase: dots filling while connecting, a blue level meter while listening, an orbit while the agent works, rolling waves while speaking.',{...livePlate,render(t){const L=R(12);const ph=phase(t);let anim;
+  if(ph==='connecting')anim=[s(['●○○','●●○','●●●','○●●','○○●','○○○'][Math.floor(t/2)%6],'muted')];else if(ph==='listening')anim=Array.from({length:8},(_,i)=>s(bar(clamp(micLv(t-i*.7)*1.1)),'blue'));
+  else if(ph==='working')anim=[s(spin(DOTS,t),'purple'),s(' agent turn #3 running','purple')];else anim=[...'∿∿∿∿∿∿∿∿'].map((ch,i)=>s(ch,mix('accent','bg',wave(t,i,8,.4)*(1-spkLv(t)*.6))));
+  L[1]=withBg([sp(2),s(ph.toUpperCase().padEnd(12),ph==='speaking'?'accent':ph==='listening'?'blue':ph==='working'?'purple':'muted','b'),...anim],'el');L[1]=withBg(lr(L[1],[s(clock(t+1600)+'  ','quiet')],80),'el');
+  const legend=[['connecting','●●○','muted'],['listening','▃▅▂▇▄','blue'],['working','⣾ orbit','purple'],['speaking','∿∿∿∿','accent']];L[4]=[sp(2),...legend.flatMap(([n,g,c])=>[s(n===ph?'▸ ':'  ',c),s(n+' ',n===ph?'text':'quiet'),s(g+'   ',n===ph?c:'border')])];
+  const[w,n]=saidWords(t);if(t>=70)wrap(w.slice(0,Math.ceil(n)).join(' '),72).forEach((l,i)=>L[7+i]=[sp(4),s(l,'text')]);else if(t>=18)L[7]=[sp(4),s(userSaid(t),'muted','i')];return L;}});
+mock('LIV-6','Call screen','Expanded call mode takes the whole pane: a big clock, a ring that swells with whoever is speaking, the last caption, and the controls.',{...livePlate,rows:16,render(t){const ph=phase(t);const b=Braille(28,8),cx=28,cy=16;const amp=Math.max(spkLv(t),micLv(t));for(let a=0;a<6.28;a+=.02){const r=10+amp*5+Math.sin(a*8+t*.4)*amp*1.5;b.set(cx+Math.cos(a)*r*1.6,cy+Math.sin(a)*r*.95);}
+  const L=R(16);L[0]=cen([s('GPT Live · ','muted'),s(ph,'accent','b')],80);const c=ph==='speaking'?'accent':ph==='working'?'purple':'blue';for(let y=0;y<8;y++)L[2+y]=cen(Array.from({length:28},(_,x)=>s(b.ch(x,y),c)),80);
+  L[5]=overlay([L[5]],80,[[s(clock(t+1600),'text','b')]],37,0,5)[0];const[w,n]=saidWords(t);const cap=t>=70?w.slice(Math.max(0,Math.ceil(n)-10),Math.ceil(n)).join(' '):t>=18?userSaid(t):'connecting…';L[11]=cen([s(cap,t>=70?'text':'muted',t>=70?'':'i')],80);
+  L[14]=cen([s(' m ','bg','b','muted'),s(' mute   ','quiet'),s(' p ','bg','b','muted'),s(' pause   ','quiet'),s(' e ','bg','b','err'),s(' end call   ','quiet'),s(' Esc ','bg','b','muted'),s(' back to chat','quiet')],80);return L;}});
+
+/* ═════════════ 10 · VOICE DICTATION ═════════════ */
+section('VOX','Voice dictation','Local dictation into the composer: record, transcribe, land in the draft.','520px');
+const DICT='Rename parse_args to parse_cli and update every caller';
+const voxPlate={cols:80,rows:6,period:130};
+const dictWords=t=>{const w=DICT.split(' ');return w.slice(0,Math.floor(clamp(t/60)*w.length));};
+const recLv=t=>t<60?clamp(.25+.7*noise(t,9)):0;
+const comp=(rail,body,status,t)=>[[s('▎','border')].concat([]),[s('▎ ',rail),...body],[s('▎','border')],[s('▎ ','border'),...status]];
+const status0=[s('build  ','muted'),s('GPT-6 Luna  ','text'),s('medium','muted'),sp(30),s('26% · 52k/200k','quiet')];
+mock('VOX-0','Current','A "● rec" timer with a small level sparkline on the composer\'s top row and "● Listening…" with the keys. The words land in the draft when you finish.',{current:true,...voxPlate,render(t){const L=R(6);const rec=t<60;
+  L[0]=rec?lr([s('▎','accent')],[s('● ','err'),s('rec '+clock(t+.5),'muted'),sp(1),...Array.from({length:6},(_,i)=>s(bar(recLv(t-i)),'err'))],80):[s('▎','border')];
+  L[1]=rec?[s('▎ ','accent'),s('● ','err'),s('Listening…','text'),s('  Esc finishes · Enter sends','quiet')]:t<74?[s('▎ ','accent'),s(spin(BR,t)+' ','muted'),s('Transcribing…','muted')]:[s('▎ ','accent'),s(DICT,'text'),s(t%12<6?'▌':' ','text')];
+  L[2]=[s('▎','accent')];L[3]=[s('▎ ','accent'),...status0];return L;}});
+mock('VOX-1','Waveform in the draft','While recording, the draft line becomes a scrolling waveform in the record red; the transcript replaces it when you stop.',{...voxPlate,render(t){const L=R(6);const rec=t<60;
+  L[1]=rec?[s('▎ ','err'),s('●',mix('err','bg',pulse(t,.15)*.6)),sp(1),...Array.from({length:62},(_,x)=>{const v=recLv(t-(61-x)*.5);return s(bar(v),mix('err','accent',x/62));}),s(' '+clock(t),'muted')]:t<74?[s('▎ ','accent'),...shimmer('Transcribing 4.8s of audio…',t,'quiet','text')]:[s('▎ ','accent'),s(DICT.slice(0,(t-74)*3),'text'),s('▌','accent')];
+  L[0]=[s('▎','border')];L[2]=[s('▎','border')];L[3]=[s('▎ ','border'),...status0];return L;}});
+mock('VOX-2','Ghost words','Words appear while you talk: tentative ones in quiet italics, confirmed ones in white two words behind. The mic glyph breathes.',{...voxPlate,render(t){const L=R(6);const w=dictWords(t);const conf=Math.max(0,w.length-2);
+  L[1]=t<60?[s('▎ ','err'),s('◉ ',mix('err','bg',pulse(t,.12)*.7)),...w.map((x,i)=>s(x+' ',i<conf?'text':'quiet',i<conf?'':'i')),s(t%8<4?'▏':' ','err')]:[s('▎ ','accent'),s('✓ ','ok'),s(DICT,'text'),s(t%12<6?'▌':' ','text')];
+  L[0]=[s('▎','border')];L[2]=[s('▎','border')];L[3]=[s('▎ ','border'),...(t<60?[s('Esc','text'),s(' finish · ','quiet'),s('Enter','text'),s(' send now · ','quiet'),s(clock(t),'muted')]:status0)];return L;}});
+mock('VOX-3','VU meter','A smooth level bar that shades green to amber to red, with a peak marker that hangs and then falls. Easy to see if your mic is too quiet.',{...voxPlate,render(t){const L=R(6);const lv=recLv(t);let pk=0;for(let k=0;k<12;k++)pk=Math.max(pk,recLv(t-k)-k*.02);const W=40;const sm=smooth(lv,W);
+  const barSegs=[...sm].map((ch,i)=>s(ch,i<W*.6?'ok':i<W*.85?'warn':'err'));const pki=Math.min(W-1,Math.round(pk*W));if(t<60)barSegs[pki]=s('│','text');
+  L[1]=t<60?[s('▎ ','err'),s('rec ','err','b'),s('▕','border'),...barSegs,s('▏','border'),s(` ${Math.round(-30+lv*30)} dB`.padEnd(8),'muted'),s(clock(t),'quiet')]:[s('▎ ','accent'),s(DICT,'text')];
+  L[0]=[s('▎','border')];L[2]=[s('▎','border')];L[3]=[s('▎ ','border'),...status0];return L;}});
+mock('VOX-4','Transcribe and drop','After you stop, a shimmer names how much audio is being transcribed; the text then types into the draft quickly and the new words glow briefly.',{...voxPlate,render(t){const L=R(6);
+  if(t<60)L[1]=[s('▎ ','err'),s('● ','err'),s('Recording ','text'),s(clock(t),'muted'),sp(2),...Array.from({length:10},(_,i)=>s(bar(recLv(t-i)),'err'))];
+  else if(t<78)L[1]=[s('▎ ','accent'),s(spin(BR,t)+' ','accent'),...shimmer('Transcribing 4.8s of audio on this machine…',t,'quiet','text')];
+  else{const n=Math.min(DICT.length,(t-78)*4);L[1]=[s('▎ ','accent'),...[...DICT.slice(0,n)].map((ch,i)=>s(ch,mix('text','accent',clamp(1-(t-78-i/4)/8))))];}
+  L[0]=[s('▎','border')];L[2]=[s('▎','border')];L[3]=[s('▎ ','border'),...status0];return L;}});
+mock('VOX-5','Ring and stamp','A ring glyph cycles ◉ ◎ ○ with the timer. Each recognised word lands with a short highlight behind it.',{...voxPlate,render(t){const L=R(6);const w=dictWords(t);
+  L[1]=[s('▎ ','err'),...(t<60?[s(['◉','◎','○','◎'][Math.floor(t/4)%4]+' ','err'),s(clock(t)+'  ','muted'),...w.map((x,i)=>{const at=(i+1)/DICT.split(' ').length*60;const age=t-at;return s(x+' ','text','',age<4?mix('bg','err',.3*(1-age/4)):null);})]:[s('✓ ','ok'),s(DICT,'text')])];
+  L[0]=[s('▎','border')];L[2]=[s('▎','border')];L[3]=[s('▎ ','border'),...status0];return L;}});
+
+/* ═════════════ 11 · PERMISSION ═════════════ */
+section('PRM','Permission prompt','The agent wants to run git push and asks first.','520px');
+const prmPlate={cols:80,rows:12,period:130};
+const prmBg=()=>dim([[sp(3),s('✓ Read 3 files · Ran 2 commands · Edited 1 file','muted')],[sp(3),s('Version bumped to 0.5.3 and the changelog is ready.','text')]],.4);
+mock('PRM-0','Current','An inline block with a bar, labelled fields (command, cwd, policy) and three options; the selected option sits on a raised band.',{current:true,...prmPlate,render(t){const L=R(12);prmBg().forEach((l,i)=>L[i]=l);const sel=Math.floor(t/40)%3;
+  L[3]=[sp(3),s('▌ ','warn'),s('Permission · bash','text','b')];L[4]=[sp(5),s('command     ','muted'),s('git push origin main','text')];L[5]=[sp(5),s('cwd         ','muted'),s('~/repos/nexus','text')];L[6]=[sp(5),s('policy      ','muted'),s('ask (network writes)','text')];
+  const opts=['Allow once','Allow for session','Deny'];L[8]=[sp(7),...opts.flatMap((o,i)=>[s(` ${o} `,i===sel?'text':'muted',i===sel?'b':'',i===sel?'el':null),sp(4)])];return L;}});
+mock('PRM-1','Bottom sheet','The request rises from the bottom over the composer with an amber stripe and single-key answers.',{...prmPlate,render(t){const L=R(12);prmBg().forEach((l,i)=>L[i]=l);const sh=[withBg([s('▔'.repeat(80),'warn')],null),withBg([sp(2),s('◆ ','warn'),s('Bash wants to run','text','b'),s('  network · writes to a remote','warn')],'el'),withBg([sp(4),s('$ ','quiet'),s('git push origin main','text','b')],'el'),withBg([sp(4),s('in ~/repos/nexus · pushes 3 commits to origin/main','muted')],'el'),withBg([],'el'),withBg([sp(4),s(' y ','bg','b','ok'),s(' allow once   ','muted'),s(' s ','bg','b','blue'),s(' for this session   ','muted'),s(' n ','bg','b','err'),s(' deny   ','muted'),s(' i ','bg','b','muted'),s(' inspect','muted')],'el'),withBg([],'el')];
+  const k=Math.min(sh.length,Math.floor(t/1.5));for(let i=0;i<k;i++)L[12-k+i]=sh[i];return L;}});
+mock('PRM-2','Waiting border','A bordered card whose amber border breathes so it catches your eye from across the room, with a timer counting how long it has waited.',{...prmPlate,render(t){const L=R(12);prmBg().forEach((l,i)=>L[i]=l);const bc=mix('border','warn',.3+.7*pulse(t,.09));const W=70;
+  const head=[s('╭─ ','',''),s('◆ Waiting on you','warn','b'),s(' · '+clock(t+90)+' ','muted')];L[3]=[sp(3),s('╭─ ',bc),s('◆ Waiting on you','warn','b'),s(' · '+clock(t+90)+' ','muted'),s('─'.repeat(W-len(head)-1),bc),s('╮',bc)];
+  const body=[[s('Bash  ','muted'),s('git push origin main','text','b')],[s('pushes 3 commits to origin/main from ~/repos/nexus','muted')],[],[s('[y] ','ok','b'),s('allow once   ','text'),s('[s] ','blue','b'),s('this session   ','text'),s('[n] ','err','b'),s('deny   ','text'),s('[i] ','muted','b'),s('inspect','text')]];
+  body.forEach((b,i)=>L[4+i]=[sp(3),s('│ ',bc),...fitw(b,W-4),s(' │',bc)]);L[8]=[sp(3),s('╰'+'─'.repeat(W-2)+'╯',bc)];return L;}});
+mock('PRM-3','Explained','Spells out what will happen before you answer: the commits that will be pushed, where they go, and why it asked.',{...prmPlate,rows:14,render(t){const L=R(14);L[0]=[sp(3),s('◆ ','warn'),s('Allow ','text'),s('git push origin main','text','b'),s('?','text')];
+  L[2]=[sp(5),s('What happens','muted','b')];L[3]=[sp(5),s('3 commits go to ','text'),s('origin/main','blue'),s(' (github.com/nottherealsanta/nexus)','quiet')];
+  const commits=[['a53607e','feat(agents): remove worker wall-clock deadlines'],['9c1e2f0','fix(parser): return [] for empty input'],['1d04b7a','chore: release 0.5.3']];commits.forEach(([h,m],i)=>{if(t>4+i*3)L[4+i]=[sp(7),s('• ','quiet'),s(h+' ','warn'),s(m,'muted')];});
+  L[8]=[sp(5),s('Why it asked','muted','b'),s('   rule: ','quiet'),s('bash · network writes → ask','text')];L[10]=[sp(5),s(' y ','bg','b','ok'),s(' once  ','muted'),s(' s ','bg','b','blue'),s(' session  ','muted'),s(' a ','bg','b','purple'),s(' always for git push  ','muted'),s(' n ','bg','b','err'),s(' deny','muted')];return L;}});
+mock('PRM-4','Answer and record','The highlight moves with your keys; on Enter the card collapses into a one-line green record that stays in the transcript.',{...prmPlate,render(t){const L=R(12);prmBg().forEach((l,i)=>L[i]=l);const opts=['Allow once','Allow for session','Deny'];
+  if(t<70){const sel=t<25?0:1;const press=t>60;L[3]=[sp(3),s('▌ ','warn'),s('Bash ','text','b'),s('git push origin main','text')];L[5]=[sp(5),...opts.flatMap((o,i)=>[s(i===sel?'› ':'  ',i===sel?'accent':'quiet'),s(o+'   ',i===sel?(press?'peak':'text'):'muted',i===sel?'b':'',i===sel&&press?mix('bg','accent',.3):null)])];L[7]=[sp(5),s('←→ choose · Enter confirm','quiet')];}
+  else{const f=clamp((t-70)/10);L[3]=[sp(3),s('✓ ',mix('peak','ok',f)),s('Allowed for this session','ok'),s(' · git push origin main · by you · 12:41','quiet')];if(t>80)L[5]=[sp(3),s(spin(BR,t)+' ','text'),s('Bash · git push origin main','text')];}return L;}});
+mock('PRM-5','One line','The smallest form: one row with the keys inline and a slow pulse on the diamond. Press i to open the full detail.',{...prmPlate,rows:5,render(t){const L=R(5);L[2]=[sp(3),s('◆ ',mix('warn','bg',pulse(t,.1)*.6)),s('Allow ','text'),s('Bash git push origin main','text','b'),s('?   ','text'),s('y','ok','b'),s(' once · ','quiet'),s('s','blue','b'),s(' session · ','quiet'),s('n','err','b'),s(' deny · ','quiet'),s('i','muted','b'),s(' inspect','quiet')];return L;}});
+
+/* ═════════════ 12 · CONTEXT HEADER ═════════════ */
+section('CTX','Context header','The block that opens every conversation and shows exactly what the model sees.','100%');
+const ctxPlate={cols:96,rows:10,period:150};
+const TOTAL=CTX.reduce((a,c)=>a+c[2],0);
+mock('CTX-0','Current','One row per block with a dotted leader to its count and tokens, and the total underneath. Each row expands with ▸.',{current:true,...ctxPlate,render(t){const L=R(10);CTX.forEach(([n,d,k],i)=>{const left=`  ▸ ◈ ${n} `,right=` ${d}   ${fmtK(k)} tok`;L[i+1]=[s('  ▸ ','muted'),s('◈ ','accent'),s(n+' ','text'),s('·'.repeat(96-left.length-right.length-1),'border'),s(' '+d,'muted'),s(`   ${fmtK(k)} tok`,'quiet')];});
+  L[7]=lr([],[s(`Context total · ~${fmtK(TOTAL)} tokens `,'muted')],96);return L;}});
+mock('CTX-1','Stacked bar','One bar shows the whole context, coloured by block, filling left to right as the header loads. A legend under it names each slice.',{...ctxPlate,render(t){const L=R(10);const W=88,f=ease(t/30);L[1]=[sp(3),s('Context','text','b'),s(`  ~${fmtK(Math.round(TOTAL*f))} of 200,000 tokens`,'muted')];
+  const segs=[];let used=0;const scale=W/TOTAL*.95;CTX.forEach(([,,k,c])=>{const n=Math.round(k*scale*f);segs.push(s('█'.repeat(n),c));used+=n;});segs.push(s('░'.repeat(Math.max(0,W-used)),'border'));L[3]=[sp(3),...segs];
+  L[5]=[sp(3),...CTX.flatMap(([n,,k,c])=>[s('■ ',c),s(n+' ','text'),s(fmtK(k)+'   ','quiet')])];L[7]=[sp(3),s('Enter','text'),s(' opens a block · ','quiet'),s('Tab','text'),s(' walks them','quiet')];return L;}});
+mock('CTX-2','Chip row','The whole header fits on one line of chips. The cursor walks across them and the focused chip opens its detail underneath.',{...ctxPlate,render(t){const L=R(10);const sel=Math.floor(t/30)%5;const chips=CTX.flatMap(([n,d,k,c],i)=>[s(` ◈ ${n} ${(k/1000).toFixed(1)}k `,i===sel?'bg':'text',i===sel?'b':'',i===sel?c:'el'),sp(1)]);L[1]=[sp(2),...chips,s(` = ${(TOTAL/1000).toFixed(1)}k`,'muted')];
+  const[n,d,k,c]=CTX[sel];const det={0:['You are Nexus, a provider-agnostic coding agent…','build agent · 2 sections'],1:['Guidance for coding agents working on Nexus…','~/repos/nexus/AGENTS.md · 1 file'],2:['read write edit glob grep bash web_fetch …','22 of 26 on · 4 off by policy'],3:['native-app-review gpui-nexus release code-review simplify','5 of 7 on'],4:['github ● running   linear ○ stopped   figma ○ stopped','1 of 3 running']}[sel];
+  L[3]=[sp(4),s('╰ ',c),s(d,'muted')];L[4]=[sp(6),s(det[0],'text')];L[5]=[sp(6),s(det[1],'quiet')];return L;}});
+mock('CTX-3','Row bars','The familiar rows, each with its own bar sized to its tokens. The bars grow in a short stagger when the session opens.',{...ctxPlate,render(t){const L=R(10);const mx=Math.max(...CTX.map(c=>c[2]));CTX.forEach(([n,d,k,c],i)=>{const f=ease((t-i*4)/18);L[i+1]=[s('  ▸ ','muted'),s(n.padEnd(15),'text'),s(d.padEnd(26),'muted'),s(smooth(k/mx*f,28),c),s(`  ${fmtK(Math.round(k*f)).padStart(6)} tok`,'quiet')];});
+  L[7]=[sp(4),s(' '.repeat(41)),s('total','muted'),s(`  ${fmtK(TOTAL)} tok · 8.8% of the window`,'text')];return L;}});
+mock('CTX-4','Resolving skeleton','Before data arrives, each row is a shaded skeleton with a sweep. Rows resolve one by one as their counts land.',{...ctxPlate,render(t){const L=R(10);CTX.forEach(([n,d,k],i)=>{const at=10+i*9;if(t<at){L[i+1]=[s('  ▸ ','border'),...[...'░'.repeat(14+i*3)].map((ch,x)=>s(ch,mix('el','bs',wave(t,x,20,.3)))),sp(30),...[...'░░░░░░░░'].map((ch,x)=>s(ch,mix('el','bs',wave(t,x+40,20,.3))))];return;}
+  const f=clamp((t-at)/4);L[i+1]=[s('  ▸ ','muted'),s('◈ ','accent'),s(n.padEnd(16),mix('bg','text',f)),s(d.padEnd(30),mix('bg','muted',f)),s(`${fmtK(k)} tok`.padStart(12),mix('bg','quiet',f))];});
+  if(t>56)L[7]=[sp(4),s(`Context total · ~${fmtK(TOTAL)} tokens`,'muted')];return L;}});
+
+/* ═════════════ 13 · COMPOSER ═════════════ */
+section('CMP','Composer & status','Where you type, and the row that says which agent, model and how much context.','100%');
+const cmpPlate={cols:96,rows:7,period:150};
+mock('CMP-0','Current','A raised block: the draft line with a block cursor, then agent (blue), model and provider, exposure, and context used on the right; a rule underneath.',{current:true,...cmpPlate,render(t){const L=R(7);for(let i=0;i<4;i++)L[i]=withBg([],'el');L[1]=withBg([sp(3),s(t%12<6?'▌':' ','text'),s('Type a message…','quiet')],'el');
+  L[3]=withBg(lr([sp(3),s('Build','blue'),s(' · ','quiet'),s('GPT-6 Luna OpenAI','text'),s(' · not exposed','muted')],[s('52.1K · 26.1% · 5.2%   ','quiet')],96),'el');L[5]=[s('─'.repeat(96),'border')];return L;}});
+mock('CMP-1','Card with modes','A rounded composer whose top border holds Build / Plan / Ask tabs. You type, press Enter, and the draft lifts into the transcript.',{...cmpPlate,render(t){const L=R(7);const msg='add a test for trailing commas',typed=msg.slice(0,Math.max(0,t-10)),sent=t>60;const W=92;
+  const tabs=[['Build',1],['Plan',0],['Ask',0]].flatMap(([m,on])=>[s(` ${m} `,on?'bg':'muted',on?'b':'',on?'blue':null),s('─','border')]);L[1]=[sp(2),s('╭─','border'),...tabs,s('─'.repeat(W-3-len(tabs)-14),'border'),s(' GPT-6 Luna ','muted'),s('─╮','border')];
+  L[2]=[sp(2),s('│ ','border'),...(sent?[s(t%12<6?'▌':' ','text'),s('Type a message…'.padEnd(W-5),'quiet')]:[s(typed,'text'),s(t%12<6?'▌':' ','text'),sp(W-5-typed.length)]),s('│','border')];
+  L[3]=[sp(2),s('╰'+'─'.repeat(W-2)+'╯','border')];if(sent){const f=clamp((t-60)/8);L[0]=[sp(4),s('┃ ',mix('bg','accent',f)),s(msg,mix('bg','text',f),'b'),s(t>70?'  sent':'',mix('bg','quiet',f))];}
+  L[5]=[sp(4),s('Enter','text'),s(' send · ','quiet'),s('Shift+Tab','text'),s(' mode · ','quiet'),s('Ctrl+M','text'),s(' model','quiet')];return L;}});
+mock('CMP-2','Busy rail and queue','While the agent works, the rail breathes and anything you send stacks above as queued chips; they flush into the transcript when the turn ends.',{...cmpPlate,render(t){const L=R(7);const busy=t<110;const q=['check the lint too','and update the docs'].slice(0,t<40?0:t<75?1:2);
+  if(busy&&q.length)L[0]=[sp(3),s(`▾ Queued ${q.length}  `,'muted'),...q.flatMap(m=>[s(` ${m} `,'muted','','el'),sp(1)])];else if(!busy)L[0]=[sp(3),s('✓ 2 queued messages sent','ok')];
+  const rail=busy?mix('border','accent',.2+.8*pulse(t,.1)):'border';L[2]=[sp(1),s('▎ ',rail),s(t%12<6?'▌':' ','text'),s(busy?'Type to queue for after this turn…':'Type a message…','quiet')];L[3]=[sp(1),s('▎',rail)];
+  L[4]=[sp(1),s('▎ ',rail),s('Build','blue'),s(' · GPT-6 Luna','muted'),s(busy?'   '+spin(BR,t)+' turn running '+clock(t):'','purple')];return L;}});
+mock('CMP-3','Context gauge','The context figure becomes a smooth gauge. It eases to each new value and shifts from neutral to amber past 70% and red past 90%.',{...cmpPlate,render(t){const L=R(7);const pct=.2+.75*ease(t/120);const c=pct>.9?'err':pct>.7?'warn':'accent';const W=24;
+  L[2]=withBg([sp(3),s(t%12<6?'▌':' ','text'),s('Type a message…','quiet')],'el');L[1]=withBg([],'el');L[3]=withBg([],'el');
+  L[4]=withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s('▕','border'),s(smooth(pct,W),c),s('▏','border'),s(` ${(pct*100).toFixed(1)}% · ${(pct*200).toFixed(0)}K/200K `,pct>.7?c:'muted'),...(pct>.9?[s('compact soon ','err','b')]:[]),sp(1)],96),'el');L[5]=withBg([],'el');return L;}});
+mock('CMP-4','Command popup','Typing a slash opens a small list above the composer that narrows with each key, the matched letters in the accent.',{...cmpPlate,rows:9,render(t){const L=R(9);const typed='/mod'.slice(0,Math.floor(Math.max(0,t-8)/8));const cmds=[['/model','choose the model for this session'],['/mode','switch Build, Plan or Ask'],['/mcp','servers and their tools'],['/memory','what Nexus remembers here']];
+  const q=typed.slice(1);const list=typed?cmds.filter(([c])=>c.slice(1).startsWith(q)):[];const sel=0;
+  if(list.length){const top=5-list.length;list.forEach(([c,d],i)=>{L[top+i]=withBg([sp(3),s(c.slice(0,1+q.length),'accent','b'),s(c.slice(1+q.length).padEnd(12-q.length),'text'),s(d,'muted')],i===sel?'hi':'el');});}
+  L[6]=withBg([sp(3),s(typed,'text'),s(t%12<6?'▌':' ','text'),...(typed?[]:[s('Type a message…','quiet')])],'el');L[7]=withBg([sp(3),s('Build','blue'),s(' · GPT-6 Luna','muted'),s(list.length?'   ↑↓ choose · Tab complete · Enter run':'','quiet')],'el');return L;}});
+
+/* ═════════════ 14 · TOASTS ═════════════ */
+section('TST','Toasts & notifications','Short confirmations and background events.','520px');
+const tstPlate={cols:80,rows:9,period:120};
+const tstBase=()=>dim([[],[sp(3),s(USERMSG,'text','b')],[sp(3),s('› Read src/parser.py','muted')],[sp(3),s('› Edit src/parser.py  +4 -1','muted')],[sp(3),s(ANSWER.slice(0,70),'text')],[sp(3),s(ANSWER.slice(70,140),'text')],[],[],[]],.45);
+mock('TST-0','Current','A boxed message at the top right with a bar on the left, a repeat counter (×2) and a close ×.',{current:true,...tstPlate,render(t){let L=tstBase();if(t>8&&t<80){const n=t>30?'  ×2':'';const tw=46;L=overlay(L,80,[[s('▌ ','blue','','el'),s('i ','blue','','el'),s('Copied 120 characters'+n,'text','','el'),sp(tw-26-n.length),s('×  ','muted','','el')].map(x=>({...x,bg:'el'})),[s('▌'+'─'.repeat(tw-1),'border')]],80-tw-1,1,tw);}return L;}});
+mock('TST-1','Slide and countdown','The toast slides in from the right edge, and a thin line under it shrinks to show how long it will stay.',{...tstPlate,render(t){let L=tstBase();const life=60,a=t-8;if(a<0||a>life+8)return L;const tw=40;const inX=80-tw-1+Math.round((1-ease(a/6))*tw)+(a>life?Math.round(ease((a-life)/8)*tw):0);
+  const left=clamp(1-a/life);const w=Math.round(left*(tw-2));L=overlay(L,80,[withBg([s(' ✓ ','ok','b'),s('Copied 120 characters','text'),sp(tw-26),s('× ','muted')],'el'),[s(' '+'▔'.repeat(w),'accent')]],inX,1,tw);return L;}});
+mock('TST-2','Stack','New toasts push older ones down; older ones fade toward the background, and anything past three folds into "+2 more".',{...tstPlate,render(t){let L=tstBase();const msgs=[[10,'ok','✓','Saved settings'],[28,'blue','i','Copied 120 characters'],[46,'purple','◎','explorer finished · 9 call sites'],[64,'warn','◆','Release 0.5.3 needs you'],[80,'ok','✓','Tests passed · 216']].filter(m=>t>=m[0]).reverse();const tw=40;
+  const rows=[];msgs.slice(0,3).forEach(([,c,g,m],i)=>{const f=i*.3;rows.push(withBg([s(` ${g} `,mix(c,'el',f),'b'),s(m.padEnd(tw-4),mix('text','el',f))],'el'));});if(msgs.length>3)rows.push([s(`   +${msgs.length-3} more · Ctrl+X N`,'quiet')]);L=overlay(L,80,rows,80-tw-1,1,tw);return L;}});
+mock('TST-3','Status line','No floating box: the message types into the bottom status line, holds, then fades back to the normal hints.',{...tstPlate,render(t){const L=tstBase();const msg='✓ Copied 120 characters to the clipboard';const a=t-10;let line;
+  if(a<0||a>70)line=[s(' Enter send · / commands · ? keys','quiet')];else{const n=Math.min(msg.length,a*3);const f=a>55?clamp((a-55)/15):0;line=[sp(1),s(msg.slice(0,2),mix('ok','bg',f)),s(msg.slice(2,n),mix('text','bg',f))];}L[8]=withBg(line,'el');return L;}});
+mock('TST-4','Bell and drawer','Background events bump a counter in the top bar that pops when it changes; Ctrl+X N drops a drawer with the list.',{...tstPlate,rows:11,render(t){const L=[[],...tstBase()].slice(0,11);while(L.length<11)L.push([]);const n=t<20?0:t<40?1:t<60?2:3;const pop=n&&[20,40,60].some(k=>t-k>=0&&t-k<4);
+  L[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · Fix parser edge cases','muted')],[s(pop?`( ◔ ${n} )`:`  ◔ ${n}  `,n?(pop?'peak':'warn'):'quiet',pop?'b':''),s('  ▐','muted')],80);
+  if(t>78){const k=Math.min(5,Math.floor((t-78)/2));const items=[withBg([s(' Notifications','text','b'),s('  3 new · Ctrl+X A undo','quiet')],'hi'),withBg([s(' ◎ ','purple'),s('explorer finished · 9 call sites','text'),s('  12s','quiet')],'el'),withBg([s(' ◆ ','warn'),s('Release 0.5.3 needs you','text'),s('  40s','quiet')],'el'),withBg([s(' ✓ ','ok'),s('Tests passed · 216','text'),s('  1m','quiet')],'el'),[s(' '+'▔'.repeat(44),'border')]];return overlay(L,80,items.slice(5-k),80-47,1,46);}return L;}});
+
+/* ═════════════ 0 · YOUR PICKS (composed from the review) ═════════════ */
+const byId=id=>SECTIONS.flatMap(x=>x.mocks).find(m=>m.id===id);
+/* stable identity colour: same name → same colour on every run (FNV-1a, never the run's child id) */
+const AGENT_HUES=['cyan','purple','ok','warn','err','accent'];
+function agentColor(name){if(name.toLowerCase()==='build')return'blue';let h=0x811c9dc5;for(const ch of name.toLowerCase()){h^=ch.charCodeAt(0);h=Math.imul(h,0x01000193)>>>0;}return AGENT_HUES[h%AGENT_HUES.length];}
+/* the activity rule under the composer: context fill in the agent colour, the rest quiet */
+const activityRule=(w,fill=.26)=>[s('─'.repeat(Math.round(w*fill)),'blue'),s('─'.repeat(w-Math.round(w*fill)),'border')];
+section('PICK','Your picks','Each plate combines the variations you chose, with your edits applied. Confirm these, and they become the implementation plan.','520px');
+mock('P-SPL','Splash · SPL-2 + SPL-5 + SPL-7','The dots converge into the wordmark while the SPL-5 bar fills underneath, both at once. The wordmark flashes when loading completes, then the SPL-7 curtain wipes into the chat.',{cols:76,rows:18,period:130,render(t){
+  const g=Grid(76,18);const x0=(76-19)>>1,y0=6;const tg=[];SMALL.forEach((r,y)=>[...r].forEach((ch,x)=>{if(ch!==' ')tg.push([x0+x,y0+y,ch]);}));const done=50;
+  tg.forEach(([tx,ty,ch],i)=>{const sx=h1(i)*75,sy=h1(i+99)*17,d=h1(i+7)*16;const p=clamp((t-d)/(done-16)),e=ease(p);const x=sx+(tx-sx)*e,y=sy+(ty-sy)*e;
+    if(p>=1){const flash=clamp(1-(t-done)/8);g.set(x,y,ch,t>=done?mix('accent','peak',flash*.8):'accent','b');}else g.set(x,y,p<.55?'·':'•',mix('quiet','accent',e));});
+  const p=clamp(t/done);const n=Math.round(p*30);const steps=['daemon','workspace','providers','session','ready'];const k=Math.min(4,Math.floor(p*5));
+  g.segs((76-36)>>1,11,[s('▰'.repeat(n),'accent'),s('▱'.repeat(30-n),'border'),s(`  ${String(Math.round(p*100)).padStart(3)}%`,'muted')]);g.text((76-36)>>1,12,steps[k],'quiet');
+  const A=g.lines();if(t<62)return A;
+  const B=R(18);B[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · Fix parser edge cases','muted')],[s('+  ▐','muted')],76);B[2]=[sp(3),s('Ask anything, or / for commands','quiet')];
+  for(let r=14;r<17;r++)B[r]=withBg([],'el');B[14]=withBg([sp(3),s('▌','text'),s('Type a message…','quiet')],'el');B[16]=withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s('0 · 0%  ','quiet')],76),'el');
+  const wx=(t-62)*4.2;const ga=A.map(l=>cells(l,76)),gb=B.map(l=>cells(l,76));
+  return ga.map((row,y)=>uncells(row.map((c,x)=>{if(x<wx-3)return gb[y][x];if(x<wx){const k=Math.floor(wx-x);return{ch:'░▒▓'[2-Math.min(2,k)]||'▓',fg:'accent',fl:'',bg:null};}return c;})));}});
+for(const id of ['THK-4','STR-3']){const m=byId(id);mock('P-'+id.split('-')[0],m.name+' · '+id,m.desc,{cols:m.cols,rows:m.rows,period:m.period,render:m.render});}
+/* tool groups: reads, searches and commands group together; edits, writes and patches only group with each other */
+const GT=[
+ ['Read','Read','src/parser.py',0,6],['Grep','Searched','"def parse_" in src/',6,11],['Read','Read','src/cli/args.py',11,16],['Read','Read','src/config/load.py',16,21],
+ ['Grep','Searched','"parse_(" in tests/',21,26],['Read','Read','tests/test_parser.py',26,31],['Bash','Ran','pytest tests/test_parser.py -q',31,58],
+ ['Edit','Edited','src/parser.py',60,68],['Edit','Edited','tests/test_parser.py',68,76]].map(([verb,past,arg,a,b])=>({verb,past,arg,a,b,edit:verb==='Edit'}));
+const NOUN={Read:['file','files'],Searched:['pattern','patterns'],Ran:['command','commands'],Edited:['file','files']};
+function groupRows(members,t,y0,L){const vis=members.filter(x=>t>=x.a);if(!vis.length)return 0;const fin=vis.length===members.length&&t>=members[members.length-1].b;const end=members[members.length-1].b;
+  const k=fin?t-end:0;const shown=vis.slice(-5);const keep=Math.max(0,shown.length-k);
+  const agg=[];for(const x of members){let g=agg.find(a=>a.past===x.past);if(!g)agg.push(g={past:x.past,n:0});g.n++;}
+  const label=agg.map(g=>members.length>5?`${g.past} ${g.n}`:`${g.past} ${g.n} ${NOUN[g.past][g.n===1?0:1]}`).join(', ');
+  const flash=fin&&keep===0?clamp(1-(k-shown.length)/6):0;
+  L[y0]=keep>0?[sp(3),s('▾ ','muted'),...(fin?[s('Working','muted')]:shimmer('Working',t,'quiet','text'))]:[sp(3),s('▸ ','muted'),s(label,mix('muted','peak',flash*.8)),s(' · '+secs(end-members[0].a),'quiet')];
+  let r=1;if(keep>0&&vis.length>5){L[y0+r++]=[sp(5),s(`… ${vis.length-5} earlier`,'quiet')];}
+  shown.slice(0,keep).forEach(x=>{const run=t<x.b;L[y0+r++]=[sp(5),...(run?shimmer(`${x.verb} ${x.arg}`,t,'quiet','text'):[s(`${x.verb} ${x.arg}`,'muted')])];});return keep>0?r:1;}
+mock('P-GRP','Tool group · GRP-1 + GRP-6, revised','All grey: no icons, ticks, crosses or status colours; the running call shimmers. At most 5 calls show. Over 5, the summary drops the nouns ("Read 4, Searched 2, Ran 1"). Edits never join a read/search/command group; consecutive edits form their own group.',{cols:80,rows:14,period:110,render(t){const L=R(14);const n=groupRows(GT.filter(x=>!x.edit),t,1,L);if(t>=60)groupRows(GT.filter(x=>x.edit),t,1+n+1,L);return L;}});
+mock('P-AGT','Sub-agents · current, refined rows','Two lines per agent. Line one: spinner in the agent\'s colour, the name capitalised in that colour and cut to 10 characters, then the task always starting at character 11. Line two: model-effort (tier), tool count and tokens when known, and time (live while working, total when done).',{cols:96,rows:14,period:120,render(t){const L=R(14);
+  const META={explorer:{effort:'medium',tier:'low',tools:true,tok:18200},reviewer:{effort:'high',tier:'high',tools:false,tok:0},tester:{effort:'low',tier:'low',tools:true,tok:6400}};const fmtTok=n=>n<1000?String(n):n<10000?(n/1000).toFixed(1)+'K':Math.round(n/1000)+'K';
+  const fmtD=ms=>ms<60000?(ms/1000).toFixed(1)+'s':ms<3600000?`${Math.floor(ms/60000)}m ${Math.floor(ms/1000)%60}s`:`${Math.floor(ms/3600000)}h ${Math.floor(ms/60000)%60}m`;
+  const nameCell=n=>{const c=n[0].toUpperCase()+n.slice(1);return (c.length>10?c.slice(0,9)+'…':c).padEnd(10);};
+  let r=ucard(L,0,USERMSG,[s('#2','quiet')],96)+1;
+  const all=[...AGENTS,{name:'documentation-checker',color:'blue',task:'Check docs/parser.md matches the new behaviour',model:'gpt-6-mini',a:20,b:66,acts:[[20,'Read docs/parser.md']]}];
+  for(const ag of all){const S=agSt(ag,t);if(S==='hide')continue;const c=agentColor(ag.name);const m=META[ag.name]||{effort:'low',tier:'low',tools:true,tok:3100};
+    const run=S==='run';const calls=ag.acts.filter(([k])=>k<=t).length;
+    L[r++]=[sp(3),run?s(spin(BR,t),c):s('›','muted'),sp(1),s(nameCell(ag.name),c),s(ag.task,run?'text':'muted')];
+    const meta=[s(`${ag.model}-${m.effort} (${m.tier})`,'quiet')];if(m.tools)meta.push(s(` · ${calls} tool${calls===1?'':'s'}`,'quiet'));if(m.tok)meta.push(s(` · ${fmtTok(Math.round(m.tok*clamp((Math.min(t,ag.b)-ag.a)/(ag.b-ag.a))))} tokens`,'quiet'));meta.push(s(' · '+fmtD((Math.min(t,ag.b)-ag.a)*80),run?'muted':'quiet'));
+    L[r++]=[sp(5),...meta];r++;}
+  return L;}});
+mock('P-SES','Session dashboard · current + "Needs you" section','Today\'s look with "Needs you" as its own section above Working, Idle and Archived. It shows the question, the keys and how long it has waited. A blank row after "New Agent", no composer, and no "Open Previous".',{cols:104,rows:22,period:150,render(t){const W=104,L=R(22);
+  L[0]=lr([s(' ▌  ','accent'),s('Nexus · visual','text')],[s('+   ▐ ','muted')],W);L[1]=lr([s('main ','text'),s('~/repos/nexus ','muted'),s('[Choose Ctrl+L]','quiet')],[s('◆ 1 needs you','warn'),s(' | ','quiet'),s(spin(BR,t)+' 2 working','purple'),s(' | ','quiet'),s('◇ 2 idle','quiet'),s(' | ','quiet'),s('● 1 archived ','muted')],W);
+  L[2]=lr([s('+ New Agent','accent')],[s('Worktree Ctrl+w','quiet')],W);let r=4;
+  for(const[grp,keys]of[['Needs you',['input']],['Working',['working']],['Idle',['idle']],['Archived',['done']]]){const xs=SESS.filter(x=>keys.includes(x.st));L[r++]=[s(`▾ ${grp} ${xs.length} `,grp==='Needs you'?'warn':'muted'),s('─'.repeat(W-10-grp.length),'border')];
+    for(const x of xs){L[r++]=lr([sessGlyph(x,t),s(' '+x.title,'text'),s(' · '+x.branch+' nexus','quiet')],[s(x.ago==='now'?'just now':x.ago,'quiet')],W);
+      if(x.st==='input'){L[r++]=[sp(2),s('Allow Bash: ','muted'),s('git push origin main','text'),s('   waiting '+clock(t+72),'quiet')];L[r++]=[sp(2),s('Enter','text'),s(' open  ','quiet'),s('a','text'),s(' allow once  ','quiet'),s('d','text'),s(' deny','quiet')];}
+      else L[r++]=[sp(2),s(x.st==='working'?x.tail[Math.floor(t/50)%x.tail.length]:x.tail[0],'muted')];}r++;}return L;}});
+mock('P-LIV','GPT Live · LIV-5 bar + LIV-3 captions','The LIV-5 phase strip on top, its animation changing per phase, with LIV-3 word-by-word captions below. The "sent to agent" chip just appears. The whole pane sits directly above the composer.',{cols:80,rows:15,period:170,render(t){const L=R(15);const ph=phase(t);let anim;
+  if(ph==='connecting')anim=[s(['●○○','●●○','●●●','○●●','○○●','○○○'][Math.floor(t/2)%6],'muted')];else if(ph==='listening')anim=Array.from({length:8},(_,i)=>s(bar(clamp(micLv(t-i*.7)*1.1)),'blue'));
+  else if(ph==='working')anim=[s(spin(DOTS,t),'purple'),s(' agent turn #3 running','purple')];else anim=[...'∿∿∿∿∿∿∿∿'].map((ch,i)=>s(ch,mix('accent','bg',wave(t,i,8,.4)*(1-spkLv(t)*.6))));
+  L[0]=[sp(3),s('› Edit src/parser.py  +4 -1','muted')];
+  L[2]=withBg(lr([sp(2),s(ph.toUpperCase().padEnd(12),ph==='speaking'?'accent':ph==='listening'?'blue':ph==='working'?'purple':'muted','b'),...anim],[s(clock(t+1600)+'  ','quiet')],80),'el');
+  L[3]=[sp(4),s('you  ','quiet'),s(t>=18?userSaid(t):'',t<50?'muted':'text',t<50?'i':'')];if(t>=58)L[4]=[sp(4),s(' → sent to agent ','bg','b','warn'),s(' turn #3 · steer ','text','','el')];
+  const[w,n]=saidWords(t);if(t>=70){const words=w.map((x,i)=>i<Math.floor(n)?s(x+' ','text'):i===Math.floor(n)?s(x,'accent','bu'):s(x+' ','quiet'));let line=[sp(4),s('voice ','quiet')],ln=10;const lines=[];words.forEach(sg=>{if(ln+sg.text.length>74){lines.push(line);line=[sp(10)];ln=10;}line.push(sg);if(sg.fl==='bu')line.push(sp(1));ln+=sg.text.length+(sg.fl==='bu'?1:0);});lines.push(line);lines.slice(0,2).forEach((l,i)=>L[6+i]=l);}
+  for(let i=9;i<13;i++)L[i]=withBg([],'el');L[10]=withBg([sp(3),s('▌','text'),s('Type a message…','quiet')],'el');L[12]=withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s('52.1K · 26.1%  ','quiet')],80),'el');
+  L[14]=[sp(1),...activityRule(78)];return L;}});
+mock('P-VOX','Voice dictation · red square on the activity rule','Unchanged composer. The recording square (full red / dim red, never accent or grey) and the timer sit on the activity rule under the composer as two separate marks, with the rule and its context fill showing between and around them.',{cols:80,rows:7,period:130,render(t){const L=R(7);const rec=t<60;const words=dictWords(t).join(' ');
+  for(let i=0;i<5;i++)L[i]=withBg([],'el');L[1]=withBg([sp(3),...(rec||t<74?[s(words,'text'),s(rec?'':' transcribing…','quiet')]:[s(DICT,'text'),s(t%12<6?'▌':' ','text')])],'el');
+  L[3]=withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s('52.1K · 26.1%  ','quiet')],80),'el');
+  const rule=activityRule(78);if(!rec){L[6]=[sp(1),...rule];return L;}const c=cells([sp(1),...rule],80);c[3]={ch:'■',fg:t%8<4?'err':mix('err','bg',.55),fl:'',bg:null};[...clock(t)].forEach((ch,i)=>c[5+i]={ch,fg:'err',fl:'',bg:null});L[6]=uncells(c);return L;}});
+mock('P-PRM','Permission · PRM-3 + PRM-2 timer','The explained prompt, with the PRM-2 "Waiting on you" clock in its header counting up.',{cols:80,rows:14,period:130,render(t){const L=R(14);L[0]=[sp(3),s('◆ ','warn'),s('Allow ','text'),s('git push origin main','text','b'),s('?','text'),s('   waiting on you · '+clock(t+90),'muted')];
+  L[2]=[sp(5),s('What happens','muted','b')];L[3]=[sp(5),s('3 commits go to ','text'),s('origin/main','blue'),s(' (github.com/nottherealsanta/nexus)','quiet')];
+  [['a53607e','feat(agents): remove worker wall-clock deadlines'],['9c1e2f0','fix(parser): return [] for empty input'],['1d04b7a','chore: release 0.5.3']].forEach(([h,m],i)=>{if(t>4+i*3)L[4+i]=[sp(7),s('• ','quiet'),s(h+' ','warn'),s(m,'muted')];});
+  L[8]=[sp(5),s('Why it asked','muted','b'),s('   rule: ','quiet'),s('bash · network writes → ask','text')];L[10]=[sp(5),s(' y ','text','b','el'),s(' once  ','muted'),s(' s ','text','b','el'),s(' session  ','muted'),s(' a ','text','b','el'),s(' always for git push  ','muted'),s(' n ','text','b','el'),s(' deny','muted')];return L;}});
+mock('P-CTX','Context header · CTX-3 in grey textures','CTX-3\'s growing bars with no hue, each block in its own grey shade texture (█ ▓ ▒ ░ ▚). The bars grow again every time a session opens: new, resumed or switched to. The plate cycles three sessions.',{cols:96,rows:10,period:300,render(t){const L=R(10);const u=t%100,sess=['Fix parser edge cases','Release 0.5.3','Docs pass for sessions.md'][Math.floor(t/100)];L[0]=[sp(2),s(sess,'text','b'),s(u<30?'  · opened, header replays':'','quiet')];const mx=Math.max(...CTX.map(c=>c[2]));const TEX=[['█','muted'],['▓','muted'],['▒','muted'],['░','muted'],['▚','quiet']];
+  CTX.forEach(([n,d,k],i)=>{const f=ease((u-i*4)/18);const w=Math.round(k/mx*f*28);const[ch,c]=TEX[i];L[i+1]=[s('  ▸ ','muted'),s(n.padEnd(15),'text'),s(d.padEnd(26),'muted'),s(ch.repeat(w),c),s(' '.repeat(28-w)),s(`  ${fmtK(Math.round(k*f)).padStart(6)} tok`,'quiet')];});
+  L[7]=[sp(4),s(' '.repeat(41)),s('total','muted'),s(`  ${fmtK(TOTAL)} tok · 8.8% of the window`,'text')];return L;}});
+const fmtDur=ms=>ms<60000?(ms/1000).toFixed(1)+'s':ms<3600000?`${Math.floor(ms/60000)}m ${Math.floor(ms/1000)%60}s`:`${Math.floor(ms/3600000)}h ${Math.floor(ms/60000)%60}m`;
+mock('P-TURN','Turn times','The user card shows when you sent it, right after the turn number. The footer shows when the turn completed, not when it started. Durations of an hour or more read in hours and minutes only.',{cols:96,rows:20,period:60,render(t){const L=R(20);
+  const turns=[['#2','12:36 AM',USERMSG,'12:36 AM',11600],['#3','12:37 AM','now run the full suite and fix whatever fails','12:48 AM',700000],['#4','12:50 AM','refactor the parser into a package and port every caller','2:04 AM',4440000]];
+  turns.forEach(([n,sent,msg,done,ms],i)=>{const y=i*6;ucard(L,y,msg,[s(n,'quiet'),s(' · ','border'),s(sent,'muted')],96);L[y+3]=[sp(3),s('› Bash pytest -q','muted')];L[y+4]=lr([],[s(`${done} · GPT-6 Luna · ${fmtDur(ms)}  `,'quiet')],96);});
+  L[18]=[sp(3),s('footer: completion time · model · duration   (11.6s · 11m 40s · 1h 14m)','quiet','i')];return L;}});
+mock('P-TST','Toasts · TST-4, opened by click or /notifications','The counter pops on each new event. The drawer opens by clicking the counter (first half) or by typing /notifications (second half); Ctrl+X N still works.',{cols:80,rows:13,period:200,render(t){const u=t%100,byCmd=t>=100;const L=R(13);const n=u<15?1:u<30?2:3;const pop=[15,30].some(k=>u-k>=0&&u-k<4);
+  L[0]=lr([s('▌ ','accent'),s('Nexus','text','b'),s(' · Fix parser edge cases','muted')],[s(pop?`( ◔ ${n} )`:`  ◔ ${n}  `,pop?'peak':'warn',pop?'b':'',!byCmd&&u>=40&&u<48?'hi':null),s('  ▐','muted')],80);
+  if(!byCmd&&u>=38&&u<48)L[1]=lr([],[s('↖ click','accent'),sp(6)],80);
+  tstBase().slice(1,7).forEach((l,i)=>{if(!L[2+i].length)L[2+i]=l;});
+  for(let i=9;i<12;i++)L[i]=withBg([],'el');const typed=byCmd?'/notifications'.slice(0,Math.max(0,Math.floor((u-34)/1.2))):'';L[10]=withBg([sp(3),s(typed||'',typed?'text':'quiet'),s(typed?'':'Type a message…','quiet'),s(t%12<6?'▌':' ','text')],'el');
+  const open=byCmd?u>=54:u>=48;if(open){const k=Math.min(5,Math.floor((u-(byCmd?54:48))/2));const items=[withBg([s(' Notifications','text','b'),s('  3 · Esc closes','quiet')],'hi'),withBg([s(' ◎ ','purple'),s('explorer finished · 9 call sites','text'),s('  12s','quiet')],'el'),withBg([s(' ◆ ','warn'),s('Release 0.5.3 needs you','text'),s('  40s','quiet')],'el'),withBg([s(' ✓ ','ok'),s('Tests passed · 216','text'),s('  1m','quiet')],'el'),[s(' '+'▔'.repeat(44),'border')]];return overlay(L,80,items.slice(5-k),80-47,1,46);}return L;}});
+mock('P-QUE','Steering and queued messages','Same look as today: no background, Queued directly under Steering, one blank row above and below the whole list. Hovering a queued message shows ↑ ↓ Steer ✕; a steering message shows Interrupt ✕, with no arrows. The plate promotes #2 to steer, cancels steer #1 (its text returns to the empty composer), then interrupts with #2.',{cols:90,rows:26,period:150,render(t){const W=90;
+  const Q2='then update docs/sessions.md to match',S1='also check the lint before you finish',Q3='and bump the patch version';
+  let steer=[{n:1,text:S1}],queued=[{n:2,text:Q2},{n:3,text:Q3}];let hover=null,flash=null,composer='',cflash=99,status='work';
+  if(t>=12&&t<36)hover={n:2,btn:t>=28?'Steer':null};
+  if(t>=36){queued=queued.filter(x=>x.n!==2);steer=[...steer,{n:2,text:Q2}];if(t<48)flash={n:2,age:t-36};}
+  if(t>=58&&t<76)hover={n:1,btn:t>=70?'✕':null};
+  if(t>=76){steer=steer.filter(x=>x.n!==1);composer=S1;cflash=t-76;}
+  if(t>=96&&t<116)hover={n:2,btn:t>=108?'Interrupt':null};
+  if(t>=116){steer=steer.filter(x=>x.n!==2);status='int';}
+  const L=[];L.push(...dim([[sp(3),s('› Edit src/parser.py  +4 -1','muted')],[sp(3),s('The empty-input case now returns an empty list instead of raising.','text')]],.45));L.push([]);
+  L.push(status==='work'?lr([sp(3),s(spin(BR,t)+' ','blue'),s('Working…','quiet')],[s('1m 20s ↓4.2k [stop]  ','quiet')],W):lr([sp(3),s(spin(BR,t)+' ','blue'),s('Interrupted · starting with #2','text')],[s('0.4s [stop]  ','quiet')],W));L.push([]);
+  const chip=(label,on)=>s(` ${label} `,on?'bg':'text',on?'b':'',on?'muted':'hi');
+  const block=(title,color,items,kind)=>{if(!items.length)return;L.push([sp(3),s('▾ '+title,color,'b'),s(' '+items.length,'quiet')]);
+    items.forEach(x=>{const hot=hover&&hover.n===x.n;const fl=flash&&flash.n===x.n?clamp(1-flash.age/12):0;const bgc=hot?'el':fl?mix('bg','accent',.22*fl):null;
+      const left=[sp(5),s(`#${x.n}  `,kind==='steer'?'accent':'quiet'),s(x.text,'text')];
+      const right=!hot?[]:kind==='steer'?[chip('Interrupt',hover.btn==='Interrupt'),sp(2),s('✕',hover.btn==='✕'?'err':'muted','b'),sp(3)]:[s('↑','text'),sp(1),s('↓','text'),sp(2),chip('Steer',hover.btn==='Steer'),sp(2),s('✕','muted','b'),sp(3)];
+      const row=lr(left,right,W);if(bgc)row.bg=bgc;L.push(row);});};
+  block('Steering','accent',steer,'steer');block('Queued','muted',queued,'queue');L.push([]);
+  while(L.length<20)L.push([]);L.length=20;
+  const cb=cflash<10?mix('el','accent',.25*(1-cflash/10)):'el';L.push(withBg([],'el'));L.push(withBg(composer?[sp(3),s(composer,'text'),s(t%12<6?'▌':' ','text')]:[sp(3),s(t%12<6?'▌':' ','text'),s('Type a message…','quiet')],cb));L.push(withBg([],'el'));
+  L.push(withBg(lr([sp(3),s('Build','blue'),s(' · GPT-6 Luna OpenAI','muted')],[s(composer&&cflash<30?'restored from steer #1  ':'52.1K · 26.1%  ','quiet')],W),'el'));L.push([]);L.push([sp(1),...activityRule(W-2)]);return L;}});
+for(const id of ['CMP-0']){const m=byId(id);mock('P-'+id.split('-')[0],m.name+' · '+id,m.desc,{cols:m.cols,rows:m.rows,period:m.period,render:m.render});}
+SECTIONS.unshift(SECTIONS.pop());
+
+/* ═════════════ STICKY TURN CARD ═════════════ */
+const TURNBODY=[[],[s('  ▸ Todowrite 1 call · 9ms','quiet')],[],[s('  Substantial progress, but ','text'),s('the plan is not complete yet.','text','b')],[],[s('  Implemented','ok','b')],[],[s('  The task agents implemented P1–P5:','text')],[],
+ ...['Interrupted child recovery and persistence-failure reporting.','Durable ownership metadata and collision-safe child allocation.','Read-only session trees in Ratatui and desktop.','Atomic event batches and request-ID submission deduplication.','Same-session handoffs with durable context heads.'].map(x=>[s('  • ','quiet'),s(x,'text')]),[],
+ [s('  Verification','ok','b')],[],[s('  • ','quiet'),s('Full Python run: ','text'),s('6,584 passed, 336 skipped, 7 failed.','text','b')],[s('  • ','quiet'),s('Latest focused handoff/tree checks: ','text'),s('42 passed.','text','b')],[s('  • ','quiet'),s('Reported native Rust results: ','text'),s('264 TUI tests','text','b'),s(' passed.','text')],[s('  • ','quiet'),s('Targeted Ruff and whitespace checks passed.','text')],[],
+ [s('  Still outstanding','ok','b')],[],...['Investigate three PTY interaction failures.','Finish the 100k-record assembly measurement.','Decide whether conditional P7 bounded reads are needed.'].map(x=>[s('  • ','quiet'),s(x,'text')]),[s('  • ','quiet'),s('Flip the default from ','text'),s('compact','accent'),s(' to ','text'),s('handoff','accent'),s(' only after acceptance passes.','text','b')],[],
+ [s('  All implementation changes remain uncommitted.','text','b')],[]];
+const STK_W=90,STK_H=16;
+function stkCard(){return[withBg([],'el'),withBg(lr([sp(3),s('use task on medium with codex sol 6.1 to complete','text')],[s('#4 · 6:16 AM  ','quiet')],STK_W),'el'),withBg([sp(3),s('for low use codex gpt 6 luna','text')],'el'),withBg([],'el')];}
+function stkContent(){const c=stkCard();return[...c,...TURNBODY,lr([],[s('8:32 AM · gpt-6.1-sol · 2h 15m · turn ↑461.3K ↓6.8K · 12% cached  ','quiet')],STK_W)];}
+/* plays: rest at the top, scroll down a row every other frame, hold at the bottom */
+function stkView(t,indicator){const all=stkContent();const max=all.length-STK_H;const off=Math.round(t<12?0:Math.min(max,(t-12)*.5));const lines=all.slice(off,off+STK_H);
+  if(off<2)return lines;const card=stkCard();const above=off+4-4;const prog=clamp((off)/max);
+  const pin=[card[0],card[1],card[2],indicator(above,prog,t)];return overlay(lines,STK_W,pin,0,0,STK_W);}
+section('STK','Pinned turn card while scrolling','When you scroll into the middle of a long turn, the user card pins to the top. Its last row should say that more of this turn sits above. Each plate scrolls the same turn.','100%');
+const stkPlate=(fn)=>({cols:STK_W,rows:STK_H,period:110,render(t){return stkView(t,fn);}});
+mock('STK-0','Current','The pinned copy\'s bottom row gets a dot every fourth column in the border colour. Easy to miss.',{current:true,...stkPlate((n,p,t)=>withBg(Array.from({length:STK_W},(_,x)=>s(x%4===2?'·':' ','border')),'el'))});
+mock('STK-1','Shade texture','The bottom row fills with a light shade texture, so the card reads as cut off.',{...stkPlate(()=>withBg([s('░'.repeat(STK_W),'bs')],'el'))});
+mock('STK-2','Torn edge','The bottom row becomes a torn-paper edge below the card.',{...stkPlate(()=>[s('▀▚'.repeat(STK_W/2),'el')])});
+mock('STK-3','Shade and count','Shade texture with a quiet label saying how many rows of this turn are above.',{...stkPlate((n)=>withBg(lr([s('░'.repeat(4),'bs')],[s(` ↑ ${n} lines of this turn above `,'muted'),s('░'.repeat(4),'bs')],STK_W).map(x=>x.text.trim()===''?{...x,text:'░'.repeat(x.text.length),fg:'bs'}:x),'el'))});
+mock('STK-4','Position rule','The bottom row is a thin rule that fills as you move through the turn, so it shows both that you are mid-turn and how far.',{...stkPlate((n,p)=>{const k=Math.round(p*(STK_W-6));return withBg([sp(3),s('━'.repeat(k),'muted'),s('─'.repeat(STK_W-6-k),'border'),sp(3)],'el');})});
+mock('STK-5','Dashed fold and keys','A dashed fold line with the count and the key that jumps back to the start of the turn.',{...stkPlate((n)=>withBg(lr([s(' ╌╌ ','bs'),s(`${n} lines above`,'muted'),s(' ╌'+'╌'.repeat(52),'bs')],[s(' Home','text'),s(' turn start ','quiet')],STK_W),'el'))});
+SECTIONS.splice(1,0,SECTIONS.pop());
+
+/* ───────────── page assembly & loop ───────────── */
+const esc=x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function paint(m){const rows=m.rows;let lines;try{lines=m.render(m.t%m.period);}catch(e){lines=[[s(' render error: '+e.message,'err')]];console.error(m.id,e);}
+  let html='';for(let r=0;r<rows;r++){const line=lines[r]||[];const segs=fitw(line,m.cols);const lbg=line.bg;
+    html+='<div class="ln"'+(lbg?` style="background:${col(lbg)}"`:'')+'>'+segs.map(sg=>{let st=`color:${col(sg.fg)}`;if(sg.bg)st+=`;background:${col(sg.bg)}`;const f=sg.fl||'';if(f.includes('b'))st+=';font-weight:700';if(f.includes('i'))st+=';font-style:italic';if(f.includes('u'))st+=';text-decoration:underline';return`<span style="${st}">${esc(sg.text)}</span>`;}).join('')+'</div>';}
+  m.el.innerHTML=html;}
+const main=document.getElementById('main'),nav=document.getElementById('nav');const ALL=[];
+for(const sec of SECTIONS){const a=document.createElement('a');a.href='#'+sec.key;a.innerHTML=`<span>${esc(sec.title)}</span><span class="k">${sec.key}</span>`;nav.appendChild(a);
+  const el=document.createElement('section');el.id=sec.key;el.innerHTML=`<div class="sh"><span class="pre">${sec.key}</span><h2>${esc(sec.title)}</h2><p>${esc(sec.blurb)}</p></div>`;const grid=document.createElement('div');grid.className='grid';grid.style.setProperty('--min',sec.min);
+  for(const m of sec.mocks){const card=document.createElement('article');card.className='card'+(m.current?' cur':'');card.innerHTML=`<div class="ch"><span class="id">${m.id}</span><h3>${esc(m.name)}</h3>${m.current?'<span class="tag">today</span>':''}<button class="replay" type="button">Replay</button></div><p class="desc">${esc(m.desc)}</p><div class="plate"><div class="term" style="--cols:${m.cols}"></div></div>`;
+    m.el=card.querySelector('.term');m.t=0;m.vis=false;card.querySelector('.replay').onclick=()=>{m.t=0;paint(m);};grid.appendChild(card);ALL.push(m);}
+  el.appendChild(grid);main.appendChild(el);}
+const how=document.createElement('div');how.className='how';how.textContent='Reply with IDs, e.g. "SPL-3, TL-1 with TL-6 bars, AGT-2".';nav.appendChild(how);
+const io=new IntersectionObserver(es=>es.forEach(e=>{const m=ALL.find(x=>x.el===e.target);if(m){if(e.isIntersecting&&!m.vis)m.t=0;m.vis=e.isIntersecting;}}),{rootMargin:'100px'});ALL.forEach(m=>io.observe(m.el));
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;let playing=!reduce,speed=1,acc=0;
+ALL.forEach(m=>{m.t=reduce?Math.floor(m.period*.6):0;paint(m);});
+setInterval(()=>{if(!playing)return;acc+=speed;const steps=Math.floor(acc);acc-=steps;if(!steps)return;for(const m of ALL)if(m.vis){m.t+=steps;paint(m);}},80);
+const playBtn=document.getElementById('play');const setPlay=v=>{playing=v;playBtn.textContent=v?'Playing':'Paused';playBtn.setAttribute('aria-pressed',String(v));};setPlay(playing);
+playBtn.onclick=()=>setPlay(!playing);document.getElementById('restart').onclick=()=>{ALL.forEach(m=>{m.t=0;paint(m);});};
+document.querySelectorAll('[data-speed]').forEach(b=>b.onclick=()=>{speed=+b.dataset.speed;document.querySelectorAll('[data-speed]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));});
+document.querySelectorAll('[data-theme-t]').forEach(b=>b.onclick=()=>{C=b.dataset.themeT==='light'?LIGHT:DARK;document.documentElement.style.setProperty('--tbg',C.bg);document.documentElement.style.setProperty('--tfg',C.text);document.querySelectorAll('[data-theme-t]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));ALL.forEach(paint);});
+document.documentElement.style.setProperty('--tbg',C.bg);document.documentElement.style.setProperty('--tfg',C.text);
+</script>

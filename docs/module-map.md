@@ -120,6 +120,8 @@ here, so add a row when you add a file.
 | `budget.py` | Token budget accounting and the priority allocation algorithm |
 | `cache.py` | Semantic token-count disk cache and generic prompt-cache boundaries |
 | `compact.py` | Deterministic context compaction strategies |
+| `handoff.py` | Versioned redacted deterministic briefs and active model-context derivation |
+| `handoff_model.py` | Optional bounded foreground recall using the session's selected model |
 | `counting.py` | Request-aware token counting with an exact-count disk cache |
 | `manager.py` | Composable context assembly |
 | `parts.py` | Composable context parts |
@@ -223,6 +225,8 @@ here, so add a row when you add a file.
 | --- | --- |
 | `attachments.py` | Prepare and validate image and document prompt attachments |
 | `__init__.py` | Implementation helpers for host-facing read-only projections |
+| `session_inspect.py` | Bounded durable session transcript and last-request inspection without opening handles |
+| `session_handoff.py` | Read-only indexed active handoff brief projection |
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
 | `auto_title.py` | Starts, bounds and cancels the background session-title call for a new root session |
@@ -325,7 +329,10 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Session layer: shared SQLite state database, cross-process lock, handle |
 | `agent_selection.py` | Durable descriptive root-agent selection for one session |
-| `db.py` | The shared SQLite state database: one file for every project |
+| `db.py` | Shared SQLite state, atomic child reservations, ownership queries and conservative evidence migration |
+| `child_ids.py` | Stable legacy-compatible logical-to-stored child id mapping; no ownership inference |
+| `handoff.py` | Atomic same-session summary, head, marker and continuation admission transaction |
+| `tree.py` | Bounded read-only, redacted ownership tree and OS-lock liveness projection |
 | `export.py` | Structured, transport-neutral SQLite session export |
 | `ids.py` | Session ID validation shared by SQLite session rows and lock paths |
 | `lock.py` | Cross-process session locking |
@@ -334,6 +341,7 @@ here, so add a row when you add a file.
 | `session.py` | The public session handle over SQLite records |
 | `title.py` | Automatic session titles: the small side call to a cheap model, the title prompt and reply cleaning |
 | `snapshot.py` | Versioned, derived snapshots for fast session resume |
+| `submissions.py` | Request-id validation and canonical admission digests; no scheduling or effect replay |
 
 ### `nexus/skills/`
 
@@ -542,6 +550,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
 | `preferences.py` | Native shell preferences |
+| `ownership.py` | Shared read-only ownership tree, facts, transcript and request projection for native clients |
 | `workflows.py` | Settings, provider, context, session and worktree workflows |
 | `speak_pages.py` | `/speak` consent, download progress and speaking in the native client |
 | `tier_pages.py` | An agent's Tiers row (Settings → Models and titles are on the Models page) |

@@ -43,7 +43,9 @@ async def test_child_event_sink_propagates_todo_append_failure():
     else:
         raise AssertionError("todo.updated append failure was suppressed")
 
-    assert relayed == []
+    assert relayed[0] == ("todo.updated", event.data)
+    assert relayed[1][0] == "error"
+    assert relayed[1][1]["code"] == "child_log_persist_failed"
 
 
 def scripted_config(model="scripted/sm"):
@@ -569,6 +571,7 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
     facade = SimpleNamespace(
         manager=SimpleNamespace(
             open=lambda *_args, **_kwargs: session,
+            store=SimpleNamespace(resolve_child_id=runtime_module._child_session_id),
         )
     )
     runtime = SimpleNamespace(
@@ -767,7 +770,10 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
     runtime = SimpleNamespace(
         workspace=tmp_path,
         _ensure_child_sessions=lambda: SimpleNamespace(
-            manager=SimpleNamespace(open=lambda *_args, **_kwargs: session)
+            manager=SimpleNamespace(
+                open=lambda *_args, **_kwargs: session,
+                store=SimpleNamespace(resolve_child_id=runtime_module._child_session_id),
+            )
         ),
         _restore_todos=lambda _opened: None,
         _effective_todo_store=lambda: store,

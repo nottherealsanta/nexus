@@ -513,7 +513,7 @@ async def test_secrets_are_redacted_from_error_results(short_dir):
 
     def secret_factory(workspace_, **kwargs):
         class _SecretRuntime:
-            sessions = SimpleNamespace()
+            sessions = SimpleNamespace(store=SimpleNamespace(pending_submission_sessions=lambda: []))
 
             def session(self, session_id, **kwargs):
                 from nexus.errors import SessionError

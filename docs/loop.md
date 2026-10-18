@@ -165,3 +165,10 @@ have no wall clock at all (2026-10-17; see `docs/decisions.md`).
 - Every new observable state is an event ([events-and-view.md](events-and-view.md)).
 - Tests: `tests/test_core_*.py`, `test_capability_degradation.py`, `test_hooks_*`;
   drive with `ScriptedProvider` ([testing.md](testing.md)).
+
+In handoff overflow mode, context assembly commits its head before returning
+the request to the loop. A cut cannot split a ToolUse/ToolResult group or the
+pinned current input. It does not start another turn or change session IDs.
+One cutover per assembly and a 25% retained-history target provide hysteresis;
+required-input overflow still fails explicitly. There is no provider retry
+expansion or generic background compactor in P5.

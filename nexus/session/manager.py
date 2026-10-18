@@ -56,7 +56,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 import msgspec
 
@@ -113,6 +113,12 @@ class SessionSummary(msgspec.Struct, frozen=True):
     #: Time of the newest user prompt (0.0 if none). Unlike ``last_activity`` it
     #: ignores agent and tool records, so it is the dashboard's ordering key.
     last_user_at: float = 0.0
+    namespace: str = "main"
+    kind: str = "root"
+    root_id: str = ""
+    child_count: int = 0
+    running_children: int = 0
+    handoff_count: int = 0
 
     @property
     def order_time(self) -> float:
@@ -268,6 +274,7 @@ class SessionManager:
         *,
         create: bool = True,
         recover: bool = True,
+        ownership: Mapping[str, Any] | None = None,
     ) -> Session:
         """Open a session, reusing the live handle for an id when one exists.
 
@@ -308,7 +315,7 @@ class SessionManager:
                     raise SessionError(f"Session {session_id!r} does not exist")
             # Reserve in memory; the first accepted user input atomically
             # publishes the buffered setup records and session row.
-            self.store.create_draft(session_id)
+            self.store.create_draft(session_id, metadata=ownership)
 
     def _build_handle(self, session_id: str) -> Session:
         return Session(
@@ -522,7 +529,18 @@ class SessionManager:
 
     # -- list / summary ----------------------------------------------------
 
-    def list(self, *, include_archived: bool = False) -> list[SessionSummary]:
+    def tree(self, session_id: str, *, namespace: str = "main", max_depth: int = 5) -> dict[str, Any]:
+        """Read-only, project-scoped ownership projection; no recovery or handles."""
+        from .tree import project_tree
+
+        session_id = validate_session_id(session_id)
+        if namespace not in {"main", "agents"}:
+            raise ValueError("Invalid session namespace")
+        if type(max_depth) is not int or not 0 <= max_depth <= 64:
+            raise ValueError("Tree depth must be an integer between 0 and 64")
+        return project_tree(self, session_id, namespace=namespace, max_depth=max_depth)
+
+    def list(self, *, include_archived: bool = False, include_children: bool = False) -> list[SessionSummary]:
         """Summarize every session, newest user prompt first (``order_time``).
 
         One indexed query: the denormalized ``sessions`` row columns (title,
@@ -531,6 +549,24 @@ class SessionManager:
         """
         rows = self.store.list_rows(include_archived=include_archived)
         summaries = [self._summary_from_row(row) for row in rows]
+        counts = self.store.child_counts(self.store.namespace, [row["id"] for row in rows])
+        from .tree import running_child_counts
+
+        running = running_child_counts(self.store)
+        summaries = [msgspec.structs.replace(
+            item, child_count=counts.get(item.id, 0), running_children=running.get(item.id, 0),
+        ) for item in summaries]
+        if include_children and self.store.namespace == "main":
+            child_store = SqliteSessionStore(
+                self.store.db, self.store.project_id, "agents", lock_dir=self.store.lock_dir,
+                register_project=False,
+            )
+            child_rows = child_store.list_rows(include_archived=include_archived)
+            child_counts = self.store.child_counts("agents", [row["id"] for row in child_rows])
+            summaries.extend(msgspec.structs.replace(
+                self._summary_from_row(row), child_count=child_counts.get(row["id"], 0),
+                running_children=running.get("agents:" + row["id"], 0),
+            ) for row in child_rows)
         summaries.sort(key=lambda item: (-item.order_time, item.id))
         return summaries
 
@@ -543,7 +579,7 @@ class SessionManager:
         return self._summary_from_row(row)
 
     def _summary_from_row(self, row: dict[str, Any]) -> SessionSummary:
-        handle = self._live_handle(row["id"])
+        handle = self._live_handle(row["id"]) if row.get("namespace", self.store.namespace) == self.store.namespace else None
         return SessionSummary(
             id=row["id"],
             title=row["title"] or "",
@@ -557,6 +593,10 @@ class SessionManager:
             parent_id=row["parent_id"] or "",
             fork_seq=row["fork_seq"] or 0,
             last_user_at=row.get("last_user_at") or 0.0,
+            namespace=row.get("namespace", self.store.namespace),
+            kind=row.get("kind") or ("root" if self.store.namespace == "main" else "unknown"),
+            root_id=row.get("root_id") or (row["id"] if self.store.namespace == "main" else ""),
+            handoff_count=row.get("handoff_count") or 0,
         )
 
     # -- export ------------------------------------------------------------

@@ -1672,14 +1672,14 @@ class ToolManager:
         call: ToolCall,
         spec: ToolSpec,
     ) -> Callable[[str, dict[str, Any] | None], Any]:
-        async def _report(event_type: str, data: dict[str, Any] | None = None) -> None:
+        async def _report(event_type: str, data: dict[str, Any] | None = None) -> object:
             payload = {
                 "call_id": call.id,
                 "tool": spec.name,
                 "bundle": spec.bundle,
                 **dict(data or {}),
             }
-            await self._emit(emit, event_type, payload)
+            return await self._emit(emit, event_type, payload)
 
         return _report
 
@@ -1688,13 +1688,14 @@ class ToolManager:
         emit: Callable[[Event], object] | None,
         event_type: str,
         data: Mapping[str, Any],
-    ) -> None:
+    ) -> object:
         if emit is None:
             return
         event = Event(type=event_type, data=dict(data))
         outcome = emit(event)
         if inspect.isawaitable(outcome):
-            await outcome
+            outcome = await outcome
+        return outcome
 
     # -- result capping ----------------------------------------------------
 

@@ -32,7 +32,9 @@ def v2_config(
     max_output=None,
     compaction="hybrid",
     limits=None,
+    on_overflow=None,
 ):
+    extra = {} if on_overflow is None else {"on_overflow": on_overflow}
     return Config(
         model="anthropic/claude-test",
         version=2,
@@ -46,6 +48,7 @@ def v2_config(
                 safety_margin_tokens=safety,
                 compaction=compaction,
                 limits=limits or ContextLimits(),
+                **extra,
             ),
         ),
     )
@@ -593,7 +596,9 @@ def test_200_message_scripted_session_completes_with_suffix_history(tmp_path):
     from nexus.session.manager import SessionManager
     from nexus.session.records import MessageRecord
 
-    config = v2_config(max_tokens=1200, safety=0)
+    # This pins compaction's suffix-history contract; the handoff default
+    # prepends a brief and is covered by the handoff tests.
+    config = v2_config(max_tokens=1200, safety=0, on_overflow="compact")
     context = ContextManager(tmp_path, config=config, counter=char_counter())
     provider = ScriptedProvider(*[text_response("ok") for _ in range(100)])
 
@@ -624,6 +629,57 @@ def test_200_message_scripted_session_completes_with_suffix_history(tmp_path):
     assert final[-1].content[0].text == "turn 99"
     assert final == history_at_assembly[len(history_at_assembly) - len(final) :]
     assert [m for m in final if m.content[0].text == "turn 99"] == [final[-1]]
+
+
+def test_repeated_handoff_briefs_do_not_accumulate_truncation_markers():
+    from nexus.context.handoff import build_brief, fit_brief
+
+    brief = "Handoff brief v1\nFirst user intent: turn0\n[truncated]"
+    for index in range(5):
+        messages = [
+            Message(role="user", content=[Text(text=brief)]),
+            Message(role="assistant", content=[Text(text="d" * 400 + str(index))]),
+        ]
+        brief = build_brief(messages, boundary=index + 2)
+        # The oversized filler line forces clipping; the limit leaves room for
+        # every section, so only the stacked prior markers could add more.
+        brief = fit_brief(brief + "\n" + "x" * 3000, 2000)
+        assert brief is not None
+        assert brief.count("[truncated]") == 1
+        assert brief.endswith("\n[truncated]")
+
+
+def test_strip_truncation_only_removes_trailing_markers():
+    from nexus.context.handoff import safe_brief, strip_truncation
+
+    assert strip_truncation("a\nb\n[truncated]\n[truncated]") == "a\nb"
+    assert strip_truncation("a\nb") == "a\nb"
+    literal = "user said:\n[truncated]\nand then more"
+    assert strip_truncation(literal) == literal
+    assert safe_brief(literal + "\n[truncated]") == literal
+
+
+def test_strip_truncation_handles_whitespace_and_repeated_tails():
+    from nexus.context.handoff import strip_truncation
+
+    assert strip_truncation("a \n\n[truncated]  \n[truncated]\n \t") == "a"
+    # No marker tail: text, including trailing whitespace, is untouched.
+    assert strip_truncation("a\n  ") == "a\n  "
+    # A marker not preceded by a newline is content.
+    assert strip_truncation("a [truncated]") == "a [truncated]"
+    assert strip_truncation("[truncated]") == "[truncated]"
+    assert strip_truncation("\n[truncated]") == ""
+    # A literal marker in the middle survives while the tail is stripped.
+    assert strip_truncation("x\n[truncated]\ny\n[truncated]") == "x\n[truncated]\ny"
+
+
+def test_strip_truncation_large_whitespace_runs_complete():
+    from nexus.context.handoff import strip_truncation
+
+    blank = " " * 200_000
+    assert strip_truncation("a" + blank) == "a" + blank
+    assert strip_truncation("a" + blank + "\n[truncated]" + blank) == "a"
+    assert strip_truncation("a" + "\n[truncated]" * 20_000) == "a"
 
 
 def test_catalogue_input_limit_caps_the_budget_but_not_the_window():

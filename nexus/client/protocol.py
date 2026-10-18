@@ -201,11 +201,11 @@ class Client:
     async def preview_attachment(self, attachment_id: str, *, max_bytes: int = 4 * 1024 * 1024) -> p.AttachmentPreviewResult:
         return await self._request(p.AttachmentPreview(attachment_id=attachment_id, max_bytes=max_bytes))  # type: ignore[return-value]
 
-    async def start_turn(self, session: str, content: str) -> str:
-        return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
+    async def start_turn(self, session: str, content: str, *, client_request_id: str | None = None) -> str:
+        return (await self._request(p.SessionStart(session=session, content=content, client_request_id=client_request_id if client_request_id is not None else uuid.uuid4().hex))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str, *, mode: str = "steer", attachments: list[str] | None = None, attachment_labels: list[str] | None = None) -> tuple[str, str]:
-        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
+    async def enqueue(self, session: str, content: str, *, mode: str = "steer", attachments: list[str] | None = None, attachment_labels: list[str] | None = None, client_request_id: str | None = None) -> tuple[str, str]:
+        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or [], client_request_id=client_request_id if client_request_id is not None else uuid.uuid4().hex))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
     async def shell(self, session: str, command: str) -> str:
@@ -308,6 +308,23 @@ class Client:
 
     async def live_consent(self, accept: bool | None = None) -> p.LiveConsentResult:
         return await self._request(p.LiveConsent(accept=accept))  # type: ignore[return-value]
+
+    async def session_tree(self, session: str, namespace: str = "main") -> dict[str, Any]:
+        result = await self._request(p.SessionTree(session=session, namespace=namespace))
+        return dict(result.tree)
+
+    async def inspect_session(self, session: str, namespace: str = "agents") -> Any:
+        return await self._request(p.SessionInspect(session=session, namespace=namespace))
+
+    async def handoff(self, session: str, *, summary: str | None = None,
+                      continuation: str | None = None, request_id: str = "") -> dict[str, Any]:
+        result = await self._request(p.SessionHandoff(session=session, summary=summary,
+            continuation=continuation, request_id=request_id))
+        return dict(result.data)
+
+    async def read_handoff(self, session: str, namespace: str = "main", handoff_id: str = "") -> dict[str, Any]:
+        result = await self._request(p.SessionHandoffRead(session=session, namespace=namespace, handoff_id=handoff_id))
+        return dict(result.data)
 
     async def agent_transcript(self, session: str, agent_id: str) -> dict[str, Any]:
         result = await self._request(

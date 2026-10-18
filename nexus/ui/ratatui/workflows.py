@@ -43,6 +43,24 @@ class Workflows(TierPages, SpeakPages):
     def client(self):
         return self.shell.client
 
+    async def refresh_ownership(self):
+        """Refresh a visible tree in place; never steal a node/detail page."""
+        if self.shell.panel_title != "Session ownership" or not getattr(self, "ownership_root", None):
+            return False
+        from .ownership import tree_menu
+        root, revision = self.ownership_root, self.shell.panel_revision
+        tree = await self.client.session_tree(root)
+        if self.shell.panel_title != "Session ownership" or revision != self.shell.panel_revision:
+            return False
+        if tree == getattr(self, "ownership_tree", None):
+            return False
+        rows, lines = tree_menu(tree)
+        self.ownership_tree = tree
+        rows.insert(0, ("Refresh", {"kind": "ownership_tree", "id": root}))
+        self.shell.items = [{"label": label, "command": "", "operation": op} for label, op in rows]
+        self.shell.panel_lines = list(lines)
+        return True
+
     @property
     def selected_agent(self):
         def locate(body, depth=0):
@@ -242,6 +260,42 @@ class Workflows(TierPages, SpeakPages):
 
     async def _operate(self, operation):
         kind = operation["kind"]
+        if kind == "ownership_tree":
+            from .ownership import tree_menu
+            root = operation["id"]
+            # Refresh / explicit return replaces the tree, never nests copies.
+            for index, entry in enumerate(self.stack):
+                if entry[0] == "Session ownership":
+                    self.stack = self.stack[:index]
+                    self.shell.panel_title = ""
+                    break
+            if self.shell.panel_title == "Session ownership":
+                self.shell.panel_title = ""
+            self.ownership_root = root
+            tree = await self.client.session_tree(root)
+            rows, lines = tree_menu(tree)
+            self.ownership_tree = tree
+            self.menu("Session ownership", [("Refresh", {"kind": "ownership_tree", "id": root}), *rows], lines)
+            return
+        if kind == "ownership_node":
+            identity, namespace = operation["id"], operation["namespace"]
+            rows = [("Transcript", {"kind": "ownership_transcript", "id": identity, "namespace": namespace}),
+                    ("Request / context details", {"kind": "ownership_request", "id": identity, "namespace": namespace}),
+                    ("Readable facts", {"kind": "ownership_facts", "facts": operation["facts"]})]
+            if namespace == "main" and identity == self.ownership_root:
+                rows.insert(0, ("Open root session", {"kind": "switch", "id": identity}))
+            rows.append(("Back to ownership tree", {"kind": "ownership_tree", "id": self.ownership_root}))
+            self.menu("Session details · read only", rows, operation["facts"][:2])
+            return
+        if kind == "ownership_facts":
+            self.menu("Ownership facts", [], operation["facts"], layout="detail")
+            return
+        if kind in {"ownership_transcript", "ownership_request"}:
+            from .ownership import transcript_lines, request_lines
+            result = await self.client.inspect_session(operation["id"], operation["namespace"])
+            lines = transcript_lines(result) if kind == "ownership_transcript" else request_lines(result)
+            self.menu("Durable child inspection", [], lines, layout="detail")
+            return
         if kind.startswith("sp_"):
             from .settings_pages import page_module
             return await page_module(operation["area"]).handle(self, operation)
@@ -594,7 +648,7 @@ class Workflows(TierPages, SpeakPages):
             session = await self.client.restore(operation["id"])
             await self.shell.switch(session)
         elif kind == "session_actions":
-            self.menu("Session actions", [("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
+            self.menu("Session actions", [("Ownership tree", {"kind": "ownership_tree", "id": operation["id"]}), ("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
                 ("Archive", {"kind": "session_archive", "id": operation["id"]}),
                 ("Move to trash…", {"kind": "confirm", "label": "Move session to trash?", "next": {"kind": "session_delete", "id": operation["id"]}})])
         elif kind == "worktrees":
@@ -951,6 +1005,14 @@ class Workflows(TierPages, SpeakPages):
 
     async def sessions(self):
         """Open the dashboard without switching the selected session."""
+        if not getattr(self.shell, "local_transcript", True):
+            # GPUI consumes typed menus, not the Ratatui-only dashboard snapshot.
+            result = await self.client.list_sessions()
+            rows = [(escape_controls(row.title or row.id),
+                     {"kind": "session_actions", "id": row.id,
+                      "workspace": self.shell.workspace}) for row in result]
+            self.menu("Sessions", rows, ["Choose a root session for its ownership tree"], layout="list")
+            return
         from .bridge import SessionDashboard
         if not hasattr(self, "dashboard"):
             self.dashboard = SessionDashboard(self.shell)
@@ -1064,6 +1126,8 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
             "repo": _repo_of(entry), "worktree": escape_controls(tree),
             "status": status, "sub": escape_controls(session_subline(summary, status, now, compact=True)),
             "age": escape_controls(age),
+            "running_children": getattr(summary, "running_children", 0),
+            "handoff_count": getattr(summary, "handoff_count", 0),
             "updated": float(ordered),
             "bucket": _time_bucket(ordered, now),
             "last_user": clean_preview_text(getattr(entry, "last_user", "") or "", 240),

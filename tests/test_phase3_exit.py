@@ -274,7 +274,23 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
             for record in runtime.sessions.store.records(session.id)
         )
 
+        # The default overflow policy is a same-session handoff: the transcript
+        # stays complete, and the request leads with a synthetic brief message
+        # followed by a pair-safe suffix of history (plus the current turn).
+        from nexus.session.records import EventRecord
+
+        handoffs = sum(
+            isinstance(record, EventRecord) and record.event.type == "context.handoff"
+            for record in runtime.sessions.store.records(session.id)
+        )
         final = provider.requests[-1].messages
+        brief = [
+            message
+            for message in final[:1]
+            if message.role == "user"
+            and getattr(message.content[0], "text", "").startswith("Handoff brief")
+        ]
+        final = final[len(brief) :]
         history_at_assembly = messages[:-1]
         suffix = history_at_assembly[len(history_at_assembly) - len(final) :]
         current_text = "turn 99 " + "x" * 60
@@ -288,6 +304,7 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
             "messages": len(messages),
             "model_calls": provider.calls,
             "compacted_assemblies": compacted,
+            "handoffs": handoffs,
             "input_budget": input_budget,
             "peak_used_tokens": peak_used,
             "persisted_message_records": persisted_message_records,
@@ -304,7 +321,9 @@ async def test_phase3_exit_200_message_constrained_session(tmp_path: Path) -> No
     assert metrics["messages"] == 200
     assert metrics["persisted_message_records"] == 200
     assert metrics["model_calls"] == 100
-    assert metrics["compacted_assemblies"] > 0
+    # Default overflow policy hands off (retiring the prefix) rather than
+    # dropping history per assembly, so either counts as the budget biting.
+    assert metrics["compacted_assemblies"] + metrics["handoffs"] > 0
     assert metrics["peak_used_tokens"] <= metrics["input_budget"]
     assert metrics["contiguous_suffix"] is True
     assert metrics["current_turn_appears_once"] is True

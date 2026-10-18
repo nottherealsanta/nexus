@@ -250,7 +250,7 @@ async def test_submit_targets_the_selected_dashboard_session():
     enqueued = []
 
     class Client:
-        async def enqueue(self, session, text, mode="steer", attachments=None, attachment_labels=None):
+        async def enqueue(self, session, text, mode="steer", attachments=None, attachment_labels=None, client_request_id=""):
             enqueued.append((session, text, mode, attachments))
             return ("t", "ok")
 

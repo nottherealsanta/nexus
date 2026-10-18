@@ -542,6 +542,22 @@ are refused. It asks with a plain `[y/N]` after listing every path and size, and
 `--yes` without a terminal. The Hugging Face cache is shared with other tools, so only
 the two speech model folders are removed. Project files are not Nexus state and are kept.
 
+## `context.on_overflow` defaults to `handoff`, soak waived (2026-10)
+
+The unified sessions plan gated the default flip on a maintainer soak and a
+real-provider completion-rate comparison. Neither was run: the only data is
+synthetic benchmarks and one dossier snapshot with zero handoffs. The maintainer
+explicitly chose to waive the soak and make `handoff` the default now. The default
+is therefore **not** validated by real use or provider quality evidence; the flip is
+a product decision, and P7 (bounded assembly reads) stays deferred. Rollback is a
+config flip: `context.on_overflow = "compact"` keeps the earlier behavior unchanged,
+and the default applies only when the effective config is v2: no config at all or
+only v1 layers (environment overrides do not promote) remain on compaction, while
+any v2 layer promotes the whole configuration to `handoff`. The config version
+policy is unchanged. Plan:
+`plans/planning/01-unified-sessions-and-handoffs.md`; behavior in
+[context.md](context.md#same-session-handoff-p5).
+
 ## Composer `!` shell output is context, not a prompt
 
 `!command` runs with bash and its bounded output is added to the model context

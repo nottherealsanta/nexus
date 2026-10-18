@@ -46,7 +46,7 @@ TURN_EVENTS = (
     "turn.failed",
     "turn.cancelled",
 )
-CONTEXT_EVENTS = ("context.assembled", "context.compacted", "context.degraded")
+CONTEXT_EVENTS = ("context.assembled", "context.compacted", "context.degraded", "context.handoff")
 MODEL_EVENTS = (
     "model.selected",
     "reasoning_effort.selected",

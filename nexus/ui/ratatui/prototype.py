@@ -361,6 +361,12 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
     lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
     emit = lines.append if literal else (lambda _line: None)
     entries = []  # (seq, rank, block, top_margin, bottom_margin)
+    for context in turn.context:
+        if context.kind == "handoff":
+            seq = context.data.get("head_seq", 0) + 1
+            entries.append((seq, 0, {"id": f"{turn.id}:handoff:{seq}",
+                "kind": "literal", "title": "Context handed off",
+                "text": "Earlier history is preserved · /handoff read"}, 1, 1, "context"))
     numbered = False  # only the turn's first user card carries #N; a steer folded in does not
     for retry in turn.retries:
         if retry.reason == "provider_overloaded":
@@ -1139,6 +1145,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         if event is not False and event is not None:
             event_kind = event.type
             stream_turn = event.turn if event.type in STREAM_EVENTS and (stream_turn in {None, event.turn}) else False
+            if event.type in {"agent.spawned", "agent.completed", "agent.failed", "agent.cancelled"}:
+                try:
+                    await shell.workflows.refresh_ownership()
+                except Exception as exc:
+                    shell.notice = f"Ownership refresh failed: {type(exc).__name__}: {exc}"
         elif not _scheduled:
             stream_turn = False
         if event is not False and event is not None and not desktop:
@@ -1254,7 +1265,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         return repr((shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
-                     shell.breadcrumb, shell.worktree))
+                     shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines))
     async def poll():
         preview_cursor = -1
         last_polled = None
@@ -1275,6 +1286,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 from .workflows import session_rows
                 shell.refresh_session_tabs(session_rows(result, controller.session, shell.seen_seq))
                 shell.sessions_truncated = bool(result.truncated)
+                await shell.workflows.refresh_ownership()
                 archived = await shell.client.list_archived_sessions("", limit=200)
                 count = len(archived.sessions)
                 shell.archived_label = f"Archived · {count}{'+' if archived.has_more else ''}" if count else ""
@@ -1575,6 +1587,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if names:
                         index = names.index(controller.agent_name) if controller.agent_name in names else -1
                         await shell.select_agent(names[(index+1)%len(names)])
+                elif action["type"] == "session_tree":
+                    row = next((row for row in shell.sessions if row["id"] == action["text"] and row["workspace"] == action["workspace"]), None)
+                    if row:
+                        await shell.switch_project(row["workspace"], row["id"])
+                        await shell.workflows.operate({"kind": "ownership_tree", "id": row["id"]})
                 elif action["type"] == "session_actions":
                     row = next((row for row in shell.sessions if row["id"] == action["text"] and row["workspace"] == action["workspace"]), None)
                     if row:

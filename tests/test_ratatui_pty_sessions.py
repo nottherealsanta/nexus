@@ -118,3 +118,26 @@ def test_there_is_no_sessions_sidebar_and_the_top_bar_opens_the_dashboard():
         assert t.action()["type"] == "quit"
     finally:
         t.close()
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_ownership_tree_shortcut_and_read_only_node_menu():
+    t = Terminal(30, 120)
+    try:
+        t.send(dashboard={"rows": [{"id": "root", "title": "Root", "workspace": "/w",
+                                   "status": "idle", "bucket": "Today", "updated": 1}],
+                          "query": "", "loaded": 1, "total": 1}, generation=1)
+        time.sleep(.3)
+        t.key(b"t")
+        assert t.action() == {"type": "operation", "operation": {"kind": "ownership_tree", "id": "root"}, "generation": 1}
+        child = {"kind": "ownership_node", "id": "child", "namespace": "agents", "facts": ["agents/child", "interrupted"]}
+        t.send(dashboard=None, panel_title="Session ownership",
+               panel_lines=["Ownership (not fork ancestry) · read only"], panel_layout="list",
+               items=[{"label": "Root · idle", "operation": {"kind": "ownership_node", "id": "root", "namespace": "main", "facts": []}},
+                     {"label": "  task · interrupted", "operation": child}], generation=2)
+        time.sleep(.3)
+        assert "Session ownership" in t.text()
+        assert "interrupted" in t.text()
+        t.key(b"\x1b[B\r")
+        assert t.action() == {"type": "operation", "operation": child, "generation": 2}
+    finally:
+        t.close()

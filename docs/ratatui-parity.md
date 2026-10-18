@@ -1570,3 +1570,28 @@ Live-bar Rust tests (13), Models traversal regression (1), and documentation tes
 (34) also passed. No real-terminal/font sidebar-residue reproduction was obtained.
 Items 2 and 4 remain open pending an image-capable review; a PTY text inspection
 cannot establish pixel cleanup or Live color/spacing quality.
+
+### P3 read-only ownership tree
+
+Sessions dashboard `t` opens the selected root's host `SessionTree` as an
+indented ownership list, with an explicit Refresh row. Select a root/child for
+readable facts (scrollable detail page), durable transcript, and persisted
+request/context detail via `SessionInspect`; Escape/Back returns through the
+existing stack. Visible trees refresh on existing list polls and agent lifecycle events;
+Refresh and explicit return replace stale tree pages. Only a
+main root can be opened; children have no send/resume/fork actions. Running
+children roll up into root status/counts; missing lock evidence never revives a
+stale `turn.started`. Unknown legacy ownership, truncated trees/tails, nullable
+facts and bounded latest-model usage remain labelled. PTY coverage exercises
+`t`, indented child selection and operation identity. Native handoff actions
+remain P6.
+
+### P5 handoff
+
+The shared native command table exposes `/handoff` and `/handoff read` without
+switching tabs or session IDs. The former writes an idle cutover with a request
+ID; the latter reads a bounded redacted brief without recovery. The shared
+transcript projection renders a stable divider; earlier cards stay readable.
+The desktop NativeShell bridge uses the same command/projection and host codec.
+No web feature expansion is required. Terminal skill service was unavailable;
+this document remains the native implementation/parity guidance.

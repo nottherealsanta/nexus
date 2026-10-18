@@ -44,6 +44,19 @@ def test_agent_color_marks_the_agent_not_the_prompt_card(tmp_path, monkeypatch, 
     assert snapshot["agent_color"]
 
 
+def test_handoff_divider_keeps_earlier_cards_and_stable_identity(tmp_path, monkeypatch):
+    from nexus.view.model import ContextView
+    turn = _turn()
+    turn.context = [ContextView(kind="handoff", data={"head_seq": 4})]
+    first = _snapshot(tmp_path, monkeypatch, [turn], literal=False)
+    second = _snapshot(tmp_path, monkeypatch, [turn], literal=False)
+    divider = next(b for b in first["blocks"] if b.get("title") == "Context handed off")
+    assert divider["id"] == "t:handoff:5"
+    assert any(b["kind"] == "user" for b in first["blocks"])
+    assert any(b.get("text") == "Hello!" for b in first["blocks"])
+    assert divider in second["blocks"]
+
+
 def test_no_transcript_block_names_the_agent(tmp_path, monkeypatch):
     turns = [_turn(agent={"name": "review"}), replace(_turn(agent={"name": "plan"}), id="t2", index=1)]
     snapshot = _snapshot(tmp_path, monkeypatch, turns)

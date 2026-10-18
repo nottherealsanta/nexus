@@ -623,6 +623,13 @@ class Daemon:
                 owns_runtime=True,
                 emit=self._emit,
             )
+            stranded = await self._facade.recover_admissions()
+            if stranded:
+                self._log(
+                    "daemon.admissions_pending",
+                    count=len(stranded),
+                    unreadable=sum(1 for item in stranded if item.get("error")),
+                )
             # Diagnostics are owned by this daemon generation and shared with
             # the facade's read-only LogsRead projection.
             self._facade.daemon_diagnostics = self.diagnostics

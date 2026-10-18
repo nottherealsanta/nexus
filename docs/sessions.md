@@ -117,8 +117,17 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   dead. A reused `pid` can keep a dead `!` run open (not handled).
   Unfinished `external.started` workers get `external.finished` with status/reason
   `interrupted` and usage `unknown`, preserving worker session, agent and turn
-  IDs. Unclosed child-task rows also get `agent.completed` with status
-  `interrupted`. This covers crashes before the child writes `turn.started` too.
+  IDs. Every unclosed `agent.spawned` in the parent log (native or external)
+  also gets `agent.completed` with status `interrupted`, unknown usage and an
+  interruption error, before the parent's `turn.failed`. Native/nested children
+  close in reverse spawn order, retaining `parent_agent_id` for replay routing.
+  This covers crashes before child promotion or `turn.started` too. This
+  parent-log recovery runs alongside owned-log recovery: proven child rows
+  are traversed recursively using the project-scoped ownership index, and each
+  child takes its own non-blocking exclusive lease before repair. A live child
+  and its subtree are skipped. Unknown legacy logs and missing/unpromoted rows
+  are not guessed or created. Descendant dangling tool uses receive error
+  results; tools are never retried.
   Replay shows the recovered status; no tools are retried. The warning says the
   orphan Claude process may still be running: recovery does not kill it or claim
   it was stopped. The exclusive lease protects live workers; already-finished
@@ -134,6 +143,24 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
 - **Summaries.** `append_summary` stores compaction artifacts as their own
   record kind, reused by `input_digest`; a summary is never mistaken for model
   output ([context.md](context.md#compaction)).
+
+## Ownership storage (schema 6)
+
+Ownership is independent of fork lineage (`parent_id`/`fork_seq`). Schema 6
+adds kind/root and owner namespace/id/agent/turn/spawn-sequence columns, the
+context-head/handoff watermarks, and indexes by project/root and project/owner.
+Compatibility fields retain the logical child id, agent id and parent call id.
+New child ownership metadata is published in the same transaction as its first
+accepted input, never as an empty durable draft. Owner columns describe facts;
+they do not grant authority or share conversation context.
+
+Migration preserves legacy ids and backfills direct children only where a
+persisted owner `agent.spawned` matches an existing hashed child log exactly.
+Unknown or conflicting evidence keeps ownership empty; nested legacy inference
+and removal of remaining logical-id routing are not yet implemented. Root rows
+and the latest summary context-head watermark are backfilled without rewriting
+record bodies. Collision-safe child allocation and full root metadata for
+nested children remain follow-up work; schema 6 alone is not full P2 completion.
 
 ## Snapshots
 
@@ -213,3 +240,94 @@ composer. Enter sends to the selected session. `+ New Agent` starts a session, O
 Previous opens the archived list (`/resume`), and Worktree opens the worktree list.
 Cross-workspace sends switch to that workspace. Attachments stay on the open session.
 
+
+### Ownership identity and read-only trees
+
+Schema **7** adds durable child-allocation reservations on top of schema 6's
+ownership columns. Every allocation uses `BEGIN IMMEDIATE`; ordinals survive
+restart and concurrent daemons, including abandoned reservations. Existing
+legacy rows and trashed ids are never reused. Reservations are not session
+rows and do not appear in lists. `session/child_ids.py` preserves the old stable
+logical-id mapping; lookup first checks exact stored ids and explicit logical
+metadata, avoiding accidental double hashing. The mapping never establishes
+ownership or grants access.
+
+Child promotion atomically inserts the row, initial records and explicit owner
+metadata. Nested children name their **physical owner session**, owner-local
+spawn sequence and turn id, logical agent/call ids, and explicit root id.
+`parent_id`/`fork_seq` still mean historical ancestry, not task/cancellation
+ownership. Cancellation and recovery traverse only explicit owner edges.
+
+Migration examines at most 10,000 relevant evidence records per project:
+spawn/completion events, child request snapshots, and child turn metadata.
+Only consistent recorded edges are adopted; relayed nested events do not lend
+the root's sequence number to a child owner. Missing, conflicting, cyclic or
+out-of-budget facts remain unknown rather than being reconstructed from slugs.
+Existing summary records initialize `context_head_seq`; handoff execution is a
+later phase. Doctor reports the project-local `unattached_children` count.
+
+`SessionManager.tree` and host `SessionTree` are bounded read-only projections:
+500 nodes including the explicit `unattached` collection; host depth is configured
+agent depth plus one (hard cap 64). Reads neither open handles nor recover logs,
+create lock files, or update project activity. Liveness comes from live handles
+or existing OS turn locks, never old `turn.started` events. Dead unterminated
+turns display `interrupted`. Fork relatives are not tree children. Display text
+is sanitized and secret-redacted, unknown facts are null, and truncation is
+explicit. `SessionList(include_children=True)` adds child summaries; its default
+remains roots only. Summary child counts are direct; running descendants are a
+conservative roll-up over at most 500 recently active child rows.
+
+P3 native inspection uses `SessionTree` plus `SessionInspect`, never a UI-side
+manager handle. Both native clients can traverse root/child ownership, inspect
+bounded facts and durable child transcript/last request after restart, and return
+to the root. Children are inspection-only. Tree usage is bounded latest-event
+evidence; unavailable facts remain null, not zero or inferred. Root sublines
+include running descendant and handoff counts. See [surfaces.md](surfaces.md#read-only-session-ownership-p3).
+
+### Atomic batches and request admission
+
+`SqliteSessionStore.append_batch(session, builders, row_updates=..., index_rows=...)`
+assigns consecutive sequences under one `BEGIN IMMEDIATE`. Builders receive a
+sequence and return a record; the store normalizes event session/sequence fields,
+uses the same title/snippet/activity/completion bookkeeping as individual appends,
+and commits bounded context-head row updates and submission indexes together.
+Draft setup records promote in that transaction and remain retryable on any
+failure, including COMMIT failure. Observers and live publication run only after
+commit; a failed append must not change in-memory admission/permission state.
+
+The host optionally admits `SessionStart`/`SessionEnqueue` with a
+`client_request_id` (1–64 ASCII letters, digits, `_`, `-`). Its durable
+`input.queued` record and `submissions` row commit together. Same session/id and
+canonical content/mode/operation digest return the original ids (and original
+admission queue depth), without appending, restarting a turn, interrupting again,
+or requiring released attachment tokens. Different content returns
+`RequestIdConflict`. No id retains the legacy path. Index rows cascade on session
+deletion; no expiration sweeper is required.
+
+Startup admission recovery is **read-only**. It finds live (not archived, not
+trashed) sessions whose request-id admission has no `input.consumed` or
+`input.dropped` event, and reports them through a `daemon.admissions_pending`
+log line. It never drops input, writes events, takes a lease, opens or
+unarchives a session, or schedules a turn; each session is checked
+independently so an unreadable one does not hide the rest. Stranded and legacy
+(no request id) queued input stays queued and is rehydrated on the next open;
+it runs, combined FIFO, at the next turn start. A retry with the same request id
+returns the original receipt and does not schedule it.
+
+This is **admission idempotency, not exactly-once tool effects**. After a crash,
+unconsumed input remains durable; duplicate retries do not launch work anew.
+Recovery does not replay tools. A new request id is new work and can repeat
+external side effects. Session locks, supervisor limits, permission policy and
+normal turn-boundary prompt hooks remain in force.
+
+### Same-session context handoff
+
+`Session.handoff()` is an idle, nonblocking exclusive-lease operation; the
+assembler's private automatic path already owns the turn lease. The summary,
+marker, head/count and optional `input.queued`/submission index are one bounded
+batch. A failed transaction publishes nothing. Retrying the same request ID
+returns the original queued/turn IDs; conflicting payloads fail. A post-COMMIT
+lost response is durable and does not cause a second cutover on retry.
+Attachments, pending approvals, existing queue and child owners are not moved or
+reassigned. No external tool effects are replayed. A continuation left queued
+by a daemon crash remains durable; this does not introduce background workers.

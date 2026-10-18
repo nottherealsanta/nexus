@@ -157,6 +157,9 @@ snapshot fits; `detail` carries availability notices and resource templates.
   MCP; it performs no model request. It also carries `git` (`root`, `branch`,
   `detached`, `worktree`, `worktree_name`; `{}` outside a repository), read
   without subprocesses by `host_support/git_head.py`, for the top-bar breadcrumb.
+  Its database section lists the 10 largest session logs of the project (record
+  count and total body bytes, computed in SQL; no content, titles or paths),
+  cached for `HEAVY_TTL` across namespaces.
 
 ## Supervisor and presence
 
@@ -249,7 +252,7 @@ Read-only projections and helpers kept out of `host/`:
 | `model_settings.py`, `auto_title.py` | Tier lists, the subagent ceiling and the title switch (global config); the background title task |
 | `settings_inventory.py`, `settings_scope.py` | Settings console reads/writes and path policy ([extensions.md](extensions.md#settings-files-host)) |
 | `setup.py`, `provider_auth.py` | first-run setup and provider sign-in ([models.md](models.md#authentication)) |
-| `doctor.py` | bounded redacted health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session; the `quick_check` and tail scan are cached per store for 10 min (`HEAVY_TTL`) |
+| `doctor.py` | redacted, bounded-output health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session; the largest-logs rows aggregate all of the project's records (output bounded, scan cost not); the `quick_check`, tail scan and aggregate are cached per store for 10 min (`HEAVY_TTL`) and can be costly on a large store |
 | `voice.py` | voice dispatch and Doctor projection ([voice.md](voice.md)) |
 | `live.py` | `Live*` dispatch and `FacadeLiveHost`, the manager's per-call seam ([live.md](live.md)) |
 | `mock.py` | `Mock*` dispatch (dev mode) |
@@ -369,3 +372,96 @@ type, or client `dashboard_preview` method, and the dashboard snapshot has no
 its rows carry the schema 4 snippets. Preserve the durable user-facing title
 **Sessions** and the `/sessions` command. The archive `SessionPreview` command is
 unchanged. Why it was removed: [decisions.md](decisions.md#sessions-dashboard-has-no-preview-pane-2026-10).
+
+### Read-only ownership tree
+
+`SessionTree(session, namespace="main")` returns `SessionTreeResult(session,
+tree)`. Namespace is restricted to this workspace's `main` or `agents`; session
+ids are validated stored ids, not logical agent paths. The host uses configured
+agent max depth plus one, capped at 64. The response contains `nodes`,
+`unattached`, `truncated`, `max_nodes` (500), `max_depth` and `read_only`.
+
+Each node exposes stored `id`, `namespace`, `kind`, redacted `title`, `status`,
+`depth`, `root_id`, `owner_namespace`, `owner_id`, `owner_agent_id`,
+`owner_turn_id`, `owner_spawn_seq`, `owner_call_id`, `agent_id`,
+`logical_session_id`, historical `parent_id`/`fork_seq`, `last_seq`,
+`context_head_seq`, resolved model/tier, handoff count, last activity/idle seconds,
+`running_children`, nested `children` and `actions`. Unknown facts are null.
+`handoff_count_bounded` marks a tail-derived lower bound before the later handoff
+writer exists. Action flags advertise transcript/request/context inspection only;
+send/resume/fork are false. This endpoint grants no child execution authority,
+never recovers interrupted logs and never adopts a fork as a task child.
+
+`SessionList(include_children=False)` remains root-only by default. Opting in
+adds child summaries with namespace/kind/root identity. Summaries add direct
+`child_count` and bounded conservative `running_children` counts. Unknown legacy
+children remain explicitly unattached; Doctor's database section exposes
+`unattached_children` and `largest_session_logs`: the 10 largest logs of the
+current project across namespaces (`scope: "project"`), each only
+`{namespace, session, records, bytes}` from one bounded SQL aggregate over
+`records` (cached with the `quick_check`); bodies, titles and paths never leave
+SQL. These additive host contracts do not add a web feature or
+change terminal navigation in P2.
+
+`SessionInspect(session, namespace="agents")` returns `SessionInspectResult`
+with a pure-reduced durable `view`, last persisted `context.assembled.request`
+(including provider/model), and `truncated`. It validates project visibility via
+the ownership contract, reads at most 4,000 tail records and does not open a
+handle, recover dangling tools, start a turn, or create/acquire a turn lock.
+Display values preserve newlines, redact likely secrets and strip unsafe control
+characters; fields cap at 16,000 characters, collections at 500, nesting at 24
+and text at 256,000 characters per result. Missing request evidence is `{}`, not
+an inferred live context. Tree detail fields are nullable: task/description,
+resolved model/tier, current tool, running elapsed time, bounded latest model
+usage, optional cost, branch/worktree, terminal result/error. Usage is explicitly
+bounded rather than a lifetime total. Existing `AgentTranscript` remains a
+parent-log projection (including fork boundaries); ownership-tree inspection
+uses the separate durable `SessionInspect` endpoint.
+
+### Submission request identity
+
+`SessionStart` and `SessionEnqueue` accept optional `client_request_id: str = ""`.
+Nonempty ids must match `[A-Za-z0-9_-]{1,64}`. One durable admission per
+`(project, namespace, session, request id)` is guaranteed: a matching retry returns
+the original result, including ids and admission depth, while changed content,
+blocks, attachment tokens/labels, operation or mode returns typed
+`RequestIdConflict`. Retry lookup precedes attachment resolution, so a lost reply
+can be retried after the host has released prepared attachment bytes. Empty ids
+keep legacy submission behavior. Shell submissions and queue edits are excluded.
+
+Python `Client.start_turn`/`enqueue` generate an id unless explicitly supplied;
+callers retrying after a lost reply should retain and pass that id. The shared
+stream helper accepts an explicit retry id. Native/desktop shared composer actions
+and the existing web composer retain a pending id across a failed send, replacing
+it when content/session/mode/attachments change or a send succeeds. This adds no
+new web UI. Durable queue/index commit precedes scheduling, cancellation for an
+interrupt, observation and publication. Idempotency is not a promise of
+exactly-once external effects or crash-time turn resumption.
+
+On startup the daemon runs a read-only admission scan
+(`HostFacade.recover_admissions`): admitted input with no consumed/dropped
+disposition in a live session is only counted in a `daemon.admissions_pending`
+log line. Nothing is dropped, replayed or scheduled and archived/trashed
+sessions are untouched; the durable queue runs at the session's next turn.
+
+Recovery limitation after a daemon crash: a retry with the same
+`client_request_id` returns the original (historical) `turn_id`, but that turn is
+not resumed; an interrupted turn stays failed. A retained queued entry runs on a
+fresh explicit turn under a new turn id, so clients must not read a retry as
+restarted execution. Completed tool results are durable and not re-executed;
+in-flight external shell recovery is not covered
+(`tests/test_host_daemon_crash.py`).
+
+### Handoff contract
+
+`SessionHandoff(session, summary?, continuation?, request_id="")` returns
+`SessionHandoffResult(data)` with `handoff_id` on fresh success, `queued_id`,
+`turn_id`, and `fresh`. A continuation is admitted atomically with the head;
+only fresh admission is scheduled. Manual writes require an idle session and
+refuse a competing turn lease. Text continuations use the existing queue;
+there is no attachment upload or permission bypass in this command.
+`SessionHandoffRead(session, namespace="main", handoff_id="")` is project/namespace scoped,
+read-only, and returns a bounded redacted brief plus head/version/boundary.
+It does not open/recover a live handle. Both commands share protocol codecs
+across direct, socket and desktop clients. `LogsRead` projects a constant
+`context.handoff` message, never the private brief/preview.

@@ -968,6 +968,18 @@ class Session:
         self._read = None
         return record
 
+    def active_messages(self, *, at_seq: int | None = None):
+        """Active model context; history/export APIs deliberately stay complete."""
+        from ..context.handoff import active_context
+        if at_seq is not None:
+            return active_context(self.read(force=True).records, cutoff=at_seq)
+        records, head = self._store.active_context_records(self._id)
+        return active_context(records, head=head)
+
+    def handoff(self, **kwargs):
+        from .handoff import handoff
+        return handoff(self, **kwargs)
+
     def append_summary(
         self,
         *,
@@ -1119,7 +1131,9 @@ class Session:
 
     def _publish(self, event: Event) -> None:
         """Fan one persisted event out to every live subscriber."""
-        self._bus.publish(event)
+        # Observers cannot turn a durable commit into a reported failure.
+        with contextlib.suppress(Exception):
+            self._bus.publish(event)
 
     def _emit(
         self, event_type: str, data: dict[str, Any] | None = None
@@ -1254,6 +1268,39 @@ class Session:
 
     # -- input queue -------------------------------------------------------
 
+    def admit_submission(self, content, *, request_id, digest, mode="queue", turn_id="", origin=None):
+        """Durably admit once; observation and queue publication follow COMMIT."""
+        from .submissions import validate_request_id
+        validate_request_id(request_id)
+        if mode not in {"queue", "steer", "interrupt"}:
+            raise ValueError("mode must be queue, steer, or interrupt")
+        self._ensure_writable()
+        blocks = _coerce_user_input(content)
+        queued_id, turn_id = new_id(), turn_id or new_id()
+        stamp = Event(type="input.queued").ts
+        event = Event(type="input.queued", session=self._id, ts=stamp, data={
+            "queued_id": queued_id, "mode": mode,
+            "content": _encode_queued_content(blocks),
+            "target_turn_id": self.active_turn_id if mode == "steer" else "", "turn_id": turn_id,
+            "queue_depth": self.queue_depth + 1,
+        })
+        if origin:
+            event = msgspec.structs.replace(event, data={
+                **event.data, "origin": {str(k)[:40]: str(v)[:200] for k, v in origin.items()},
+            })
+        records = self._store.append_batch(self._id, [lambda seq: EventRecord(
+            seq=seq, ts=stamp, event=msgspec.structs.replace(event, seq=seq),
+        )], index_rows=[dict(request_id=request_id, content_digest=digest,
+                            queued_id=queued_id, turn_id=turn_id, created_at=stamp)])
+        if not records:
+            row = self._store.submission(self._id, request_id, digest)
+            return row[3], row[2], False
+        self._read = None
+        self._rehydrate_queue()
+        self._observe_event(records[0].event)
+        self._publish(records[0].event)
+        return queued_id, turn_id, True
+
     def enqueue(
         self,
         user_input: str | list[ContentBlock],
@@ -1277,19 +1324,19 @@ class Session:
         content = _coerce_user_input(user_input)
         queued_id = new_id()
         item = _QueuedInput(queued_id, content, mode)
-        if mode == "interrupt":
-            self._queue.appendleft(item)
-        else:
-            self._queue.append(item)
         payload: dict[str, Any] = {
             "queued_id": queued_id,
             "content": _encode_queued_content(content),
-            "queue_depth": len(self._queue),
+            "queue_depth": len(self._queue) + 1,
             "mode": mode,
         }
         if origin:
             payload["origin"] = {str(key)[:40]: str(value)[:200] for key, value in origin.items()}
         self._emit("input.queued", payload)
+        if mode == "interrupt":
+            self._queue.appendleft(item)
+        else:
+            self._queue.append(item)
         return queued_id
 
     def add_context(self, user_input: str | list[ContentBlock]) -> bool:
@@ -1501,7 +1548,9 @@ class Session:
 
     # -- crash recovery ----------------------------------------------------
 
-    def recover_dangling_tool_uses(self, *, lock: bool = True) -> list[MessageRecord]:
+    def recover_dangling_tool_uses(
+        self, *, lock: bool = True, _visited: set[tuple[str, str]] | None = None,
+    ) -> list[MessageRecord]:
         """Append an error result for every ``ToolUse`` with no matching result.
 
         Recovery is deterministic and idempotent: it only reads persisted
@@ -1515,6 +1564,11 @@ class Session:
         if self._retired:
             # A deleted session is never recovered: its log belongs to the trash.
             return []
+        visited = _visited if _visited is not None else set()
+        key = (self._store.namespace, self.id)
+        if key in visited:
+            return []
+        visited.add(key)
         if lock:
             if self._lock.held:
                 # This handle already owns the active turn; never write while it runs.
@@ -1524,23 +1578,44 @@ class Session:
             except SessionBusy:
                 return []
             try:
+                self._recover_owned_logs(visited)
                 self._recover_interrupted_locked()
                 return self._recover_locked()
             finally:
                 self._lock.release()
+        self._recover_owned_logs(visited)
         self._recover_interrupted_locked()
         return self._recover_locked()
 
+    def _recover_owned_logs(self, visited: set[tuple[str, str]]) -> None:
+        """Repair proven owned logs under each child's non-blocking lease."""
+        from .db import SqliteSessionStore
+
+        # Normal trees are bounded by configured fanout/depth; corrupt or old
+        # databases must not turn recovery into an unbounded recursive walk.
+        if len(visited) >= 256:
+            return
+        for row in self._store.owned_rows(self._store.namespace, self.id):
+            if len(visited) >= 256:
+                break
+            store = SqliteSessionStore(
+                self._store.db, self._store.project_id, row["namespace"],
+                lock_dir=self._store.lock_dir,
+            )
+            child = Session(row["id"], store=store)
+            child.recover_dangling_tool_uses(_visited=visited)
+
     def _recover_interrupted_locked(self) -> None:
-        """Close turns, external workers and abandoned ``!`` runs under the lock.
+        """Close turns, spawned children, external workers and abandoned ``!`` runs under the lock.
 
         Holding the exclusive lock proves no turn runs anywhere (every turn
         holds it, and ``turn.started`` is written after the lease), so a last
         ``turn.started`` with no terminal event was abandoned: it gets a
-        ``turn.failed`` with reason ``interrupted``. Unfinished external workers
-        and their child-task rows are closed without rerunning tools or claiming
-        their orphan processes were stopped. ``!`` runs do not hold the
-        lock; one is closed only when no task in this process runs it and the
+        ``turn.failed`` with reason ``interrupted``. Unfinished spawned children
+        are closed in the parent log, nested children first; external workers
+        are also closed without rerunning tools or claiming their orphan
+        processes were stopped. Child logs are not recovered here. ``!`` runs do
+        not hold the lock; one is closed only when no task in this process runs it and the
         process that started it (``pid``) is gone. Idempotent: closed items
         are not found again.
         """
@@ -1550,6 +1625,7 @@ class Session:
         turn_open = False
         shells: dict[str, Mapping[str, Any]] = {}
         workers: dict[tuple[str | None, str], Event] = {}
+        agents: dict[str, Event] = {}
         completed_agents: set[str] = set()
         for event in self.read().events():
             if event.type == "turn.started":
@@ -1576,11 +1652,13 @@ class Session:
                 meta = event.data.get("agent")
                 agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
                 if isinstance(agent_id, str):
+                    agents[agent_id] = event
                     completed_agents.discard(agent_id)
             elif event.type == "agent.completed" and isinstance(event.data, dict):
                 meta = event.data.get("agent")
                 agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
                 if isinstance(agent_id, str):
+                    agents.pop(agent_id, None)
                     completed_agents.add(agent_id)
         for (agent_id, worker_session), started in workers.items():
             # The lease covers a worker's whole lifetime, including the window
@@ -1610,6 +1688,21 @@ class Session:
                 self._observe_event(record.event)
                 self._publish(record.event)
                 completed_agents.add(agent_id)
+        for agent_id, spawned in sorted(agents.items(), key=lambda item: item[1].seq, reverse=True):
+            if agent_id in completed_agents:
+                continue
+            meta = spawned.data.get("agent")
+            if not isinstance(meta, dict):
+                meta = dict(spawned.data)
+            record = self.append_event(Event(
+                type="agent.completed",
+                data={**meta, "agent": meta, "status": "interrupted",
+                      "error": INTERRUPTED_ERROR, "reason": "interrupted",
+                      "usage": {}, "usage_unknown": True, "ok": False, "is_error": True},
+                session=self._id, turn=spawned.turn,
+            ))
+            self._observe_event(record.event)
+            self._publish(record.event)
         if turn_open:
             event = Event(
                 type="turn.failed",

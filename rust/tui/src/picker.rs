@@ -415,6 +415,9 @@ impl Dashboard {
         if shortcut('n') {
             return Some(json!({"kind":"session_new"}));
         }
+        if shortcut('t') {
+            return self.selected_row(dashboard).map(|row| json!({"kind":"ownership_tree","id":text(row, "id")}));
+        }
         if shortcut('r') {
             let title = self
                 .selected_row(dashboard)
@@ -451,7 +454,7 @@ impl Dashboard {
             KeyCode::Char('c') if control => draft_empty,
             KeyCode::Char('s' | 'n' | 'w') if control => true,
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => true,
-            KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd')
+            KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd' | 't')
                 if plain && draft_empty =>
             {
                 true
@@ -585,6 +588,13 @@ mod tests {
             {"id":"a","title":"Alpha","workspace":"/a","status":"idle","day":"Today"},
             {"id":"b","title":"Beta","workspace":"/b","status":"idle","day":"Today"},
         ]))
+    }
+    #[test]
+    fn tree_shortcut_is_read_only_and_targets_selected_root() {
+        let rows = two();
+        let mut picker = Dashboard::default();
+        assert_eq!(picker.key(key(KeyCode::Char('t')), &rows),
+                   Some(json!({"kind":"ownership_tree","id":"a"})));
     }
     #[test]
     fn arrows_move_locally_enter_opens() {

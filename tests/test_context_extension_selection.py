@@ -81,10 +81,18 @@ async def test_discovery_selection_replay_and_cache_lock(tmp_path):
             {"server": "project-server", "uri": "file:///secret"}, ToolContext(workspace=workspace, session_id="s", turn_id="test", config=_config()))
         assert resource_result.is_error
         from types import SimpleNamespace
+        child_tools = ("ReadMcpResource", *disabled_tool_names)
+        # Ownership is explicit (spec.root_id, as the runner stores it); a
+        # slash-looking logical id alone never implies a parent.
+        unowned = runtime._build_child_tool_manager(
+            SimpleNamespace(session_id="s/sub/1", workspace=workspace,
+                            tools=child_tools, permissions=None),
+            _config(), None)
+        assert disabled_tool_names.intersection(unowned.names)
         for logical_id in ("s/sub/1", "s/sub/1/sub/1"):
             child_manager = runtime._build_child_tool_manager(
-                SimpleNamespace(session_id=logical_id, workspace=workspace,
-                                tools=("ReadMcpResource", *disabled_tool_names), permissions=None),
+                SimpleNamespace(session_id=logical_id, workspace=workspace, root_id="s",
+                                tools=child_tools, permissions=None),
                 _config(), None)
             assert not disabled_tool_names.intersection(child_manager.names)
             resource = next(tool for tool in child_manager.tools if tool.name == "ReadMcpResource")

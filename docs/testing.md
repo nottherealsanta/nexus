@@ -66,6 +66,11 @@ fails, say so; do not change it.
 | Release | `test_install_script.py`, `test_update_*`, `test_model_data_package.py` |
 | Docs | `test_docs.py` |
 
+`test_runtime_handoff.py` drives automatic same-session handoff through a real
+offline `Runtime` (scripted provider, small `context.max_tokens`). Its
+compact-versus-handoff test is a loop-integrity check on one fixed script, not a
+completion-rate measurement.
+
 Notable adversarial tests: the 200-reload leak test and the
 write-a-tool-and-call-it walkthrough (`test_hot_extension_*`); crash-resume and
 cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
@@ -123,6 +128,74 @@ no credentials) through the same adapter (`ratatui_browser_demo.py --bridge CMD`
 and saves one screenshot per typed line (or `click:X,Y` / `key:Control+p` step; it uses fresh preferences so both sidebars show) under `artifacts/ratatui-live/`. It found
 the "context preview unavailable while the session is active" bug that unit tests
 missed.
+
+## Session crash durability
+
+`tests/test_session_crash_recovery.py` (8 tests, about 1 s) launches a real child
+process over the real SQLite session store, ownership rows, turn locks, `Session`
+and handoff `ContextManager` code, parks it at a deterministic stdout barrier,
+`SIGKILL`s it and reopens the on-disk state. It covers handoff atomicity (brief
+build, before COMMIT, mid-batch, after commit with a next small turn) and child
+lifecycle (killed before promotion, active streamed child owned-log recovery that
+adds only `turn.failed` and no tool events, and a live second holder left
+untouched). It is storage-level only: no daemon/socket, `Runtime`, provider,
+network or credentials, and it does not prove an executor would not rerun a tool.
+
+`tests/test_host_daemon_crash.py` (3 tests, about 7 s) is the daemon half: a real
+`Daemon` subprocess (offline `Runtime`, `ScriptedProvider`, no credentials,
+isolated home and socket) is `SIGKILL`ed, a second daemon is started over the same
+home and socket through `ensure_daemon`, and a real socket client reconnects.
+T1: handoff committed, killed before its continuation was scheduled; the brief
+and head survive, the queued continuation is not auto-run, a retry returns the
+same identity, and one fresh turn consumes it once. T2: model turn interrupted
+with a queued admission; the entry is preserved and deduped, and a fresh turn
+consumes it once. T3: native child model stream interrupted after `bash`
+completed; the durable result and side effect are not re-executed (not an
+in-flight tool kill). After the first `SessionTree` following restart,
+`SessionHandoffRead`, `SessionTree` and `SessionInspect` leave every `last_seq`
+unchanged and make no provider call; startup admission recovery before that
+baseline is not asserted. Child inspect takes the stored id; the tree exposes the
+logical id as metadata. A retried `SessionStart` returns its historical turn id,
+which is not resumed (existing policy; queued work runs on a fresh turn).
+This covers those scenarios only, not every crash point; in-flight external shell
+recovery is untested. The real-session soak and real-provider quality comparison
+remain open and need the maintainer.
+
+`scripts/p6_dossier.py [--database PATH]` is a read-only, metadata-only report
+(SQLite `mode=ro`; no writes, no message text, titles or paths): counts, sizes,
+largest logs, and handoff turn/message intervals (fork-inherited and trashed
+rows excluded). Output size is bounded; the offline scan is not (no hard cost
+ceiling), and the `doctor` largest-logs rows likewise aggregate all project
+records (cached 10 min). A point-in-time run on one real database found zero
+handoffs, so it is not soak evidence. To evaluate for real, note that
+`NEXUS_HOME` isolates only the DB/socket/auth, not config (`Config.load` also
+reads `~/.nexus/config.toml`): use a throwaway workspace whose
+`.agents/nexus.toml` explicitly sets `context.on_overflow` per arm, a separate
+`NEXUS_HOME`, pass `--database "$NEXUS_HOME/nexus.db"`, and verify the effective
+config before each arm from the same environment (`NEXUS_*` variables such as
+`NEXUS_CONTEXT__ON_OVERFLOW` also override the file layers; the command prints
+only that one field, never the whole config):
+`python -c 'import sys; from pathlib import Path; from nexus.config import Config; c=Config.load(Path(sys.argv[1])); print(c.v2.context.on_overflow if c.v2 is not None else "compact (legacy)")' "$WORKSPACE"`.
+Run the same long tasks under `compact` and `handoff`,
+and compare quality, errors, brief sizes and intervals. The default is now
+`handoff` by explicit maintainer waiver of this comparison (it has not been run);
+`compact` remains a supported opt-out. See the
+readiness ledger in `plans/planning/01-unified-sessions-and-handoffs.md`.
+
+Final full run after all code fixes (`.venv/bin/python -m pytest -q -rf`):
+6 failed, 6636 passed, 336 skipped, 6 deselected in 542.29 s; not green. The six
+failures are the baseline list below; none were introduced by the schema-v2
+default flip, and four old test assumptions were updated. Ruff is clean on all
+changed Python files; the final docs tests were 34 passed in 2.75 s. P0–P6 are
+complete under the maintainer's explicit waiver of the soak/quality gate (no soak
+or quality evidence exists); P7 is optional and deferred. The `handoff` default
+applies to schema-v2 configs, and legacy no-config/v1 stays `compact`. Not covered: killing an in-flight external
+shell/tool. The six baseline failures reproduce on the baseline: `test_external_child_gets_no_wall_clock_even_when_parent_has_one`,
+`shared_shortcuts_have_matching_desktop_routes`, ratatui PTY
+`local_disclosure_without_python_reply`,
+`tool_single_click_selects_double_click_toggles_locally`,
+`hover_copy_buttons_on_user_cards_and_code_fences`, and
+`member_summaries_are_concise_first_line_with_an_ellipsis`.
 
 ## Native redesign verification
 
