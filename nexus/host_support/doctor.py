@@ -286,6 +286,17 @@ def doctor_report(
             getattr(runtime, "workspace", None)
         ),
     }
+    from ..tools.codemode.tool import availability
+    code_mode = dict(availability())
+    load = getattr(runtime, "_load_config", None)
+    try:
+        configured = getattr(getattr(load() if callable(load) else None, "v2", None), "code_mode", None)
+    except Exception:  # noqa: BLE001 - diagnostics must never break doctor
+        configured = None
+    code_mode["enabled"] = bool(getattr(configured, "enabled", False))
+    if code_mode["enabled"] and not code_mode.get("available"):
+        code_mode["note"] = "code_mode.enabled is set but the sandbox is unavailable: the code tool is not offered"
+    report["code_mode"] = code_mode
     report["agents_without_tiers"] = _agents_without_tiers(runtime)
     sessions = getattr(runtime, "sessions", None)
     database = database_diagnostics(getattr(sessions, "store", None))

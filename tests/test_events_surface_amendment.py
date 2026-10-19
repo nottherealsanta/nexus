@@ -70,6 +70,7 @@ def test_catalogue_group_names_and_order():
         "context",
         "model",
         "tool",
+        "code",
         "permission",
         "ext",
         "mcp",

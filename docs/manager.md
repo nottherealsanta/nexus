@@ -1,12 +1,11 @@
 # Manager session
 
 Plan: [`plans/planning/02-manager-session-orchestration.md`](../plans/planning/02-manager-session-orchestration.md).
-**Status: implemented but not yet verified end to end; no completion is claimed. The
-feature is off by default (`[manager] enabled = false`).** The backend has offline tests
-and the native presentation (`nexus/ui_support/manager.py`, `nexus/ui/ratatui/manager.py`,
-the Rust TUI and desktop panels) is implemented, but the full Python suite, the Rust
-builds and the PTY tests have not been run green against this change, and nothing has
-been soaked against the real Copilot or GPT Live services. With the flag on, a client can
+**Status: implemented and verified offline; off by default (`[manager] enabled = false`).**
+The backend, the native presentation (`nexus/ui_support/manager.py`, `nexus/ui/ratatui/manager.py`,
+the Rust TUI and desktop panels) and the manager PTY flow pass offline; `cargo test` passes for
+`rust/tui` and `rust/desktop`. Nothing has been soaked against the real Copilot or GPT Live
+services. With the flag on, a client can
 `ManagerOpen`, talk to the manager like any session, and connect GPT Live to it; nothing
 else in Nexus changes when it is off.
 
@@ -177,10 +176,7 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 
 ## Not done
 
-- **Native UI is implemented but unverified**: the pinned row, manager chat affordance and Live route exist in the
-  Ratatui and desktop clients. The desktop `bridge::Prompt` test initializer was updated for the expanded shared
-  `Prompt` (`title`, `since`, `what`, `why`, `what_rows`), but `cargo test` for `rust/desktop` and `rust/tui`, the PTY
-  tests and a visual pass have **not** been run since: that change was made in an environment without a shell.
+- **Desktop visual pass not done**: the desktop manager card has Rust tests but no interactive or screenshot review.
 - **PTY tests need the debug binary**: `tests/test_ratatui_pty*.py` read a fixed
   `rust/tui/target/debug/nexus-ratatui` (no `NEXUS_RATATUI_BIN` override exists) and are `skipif` when it is missing, so
   a green Python run without `cargo build --manifest-path rust/tui/Cargo.toml` skips them rather than passing them.

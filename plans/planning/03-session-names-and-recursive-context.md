@@ -1,7 +1,16 @@
 # Plan 03: Session names, code mode, and recursive (RLM-style) context access
 
-Status: proposal (advisor draft, 2026-10-17; code mode merged 2026-10-18). Not
-implemented. Doc updates are future implementation tasks.
+Status: implemented offline (2026-10-19); not verified live. CM1-CM8, N1, N2 and
+C1-C5 are in the tree with offline tests; E1 (evaluation and live trials) is NOT
+done, nor are the Ratatui/desktop visual reviews. Where this plan and the code
+differ, the code and `docs/` win: the Monty pool is a per-call helper process, not
+daemon-owned (see `docs/codemode-monty-compat.md`, `docs/decisions.md`); sandbox
+names are flat, not `ctx.*`; the session name is stored in the row, not logged as
+`session.named`. Resolved user decisions: U1 no rename, U2 batch backfill, U3
+manager never, U4 external transcripts off, U5/U8 no, U7 `read_only` and no
+only-mode. Remaining gaps: images attach by ref only; structured bash/MCP returns
+need producers to set metrics (not yet); per-row collapse on desktop not done;
+`llm()` spend is per-program, not in the turn tree budget.
 
 Phase 3 of 3. **Requires plan 01** (immutable logical ids, supervision edges,
 segments) for the names track and the context namespace. The code-mode core
@@ -643,24 +652,24 @@ structure; the web client is deprecated and gets only the generic fallback
 Two tracks. **N** (names) needs plan 01. **CM** (code mode) needs nothing
 until CM8.
 
-| # | Work package | Depends on |
-| --- | --- | --- |
-| CM1 | **Finish the Monty spike** (§2.3 covered the core on macOS): Linux wheel, pool cold-start time and worker RSS, `min_processes=0`, custom env for workers, `request_timeout` kill path, dotted names via `external_lookup`, PEP 723 refusal on the pure worker, callback access to call position, full list of importable stdlib modules. Write `docs/codemode-monty-compat.md`. **Abort criteria:** no Linux wheel, or worker env cannot be scrubbed → revisit (fallback: run the pool under a separate low-privilege helper) | — |
-| CM2 | Monty adapter + daemon-owned pool + hard rules (§3.6, §3.8); `nexus[codemode]` extra; Doctor row | CM1 |
-| CM3 | Stub generator from JSON Schema; catalog rendering with budget; `search_tools`/`describe_tool` over the existing MCP ranker | CM2 |
-| CM4 | Wire `ToolContext.invoke_tool`: nested `prepare` → hooks → permission port → `dispatch`; `parent_call_id` on hooks and permission events; layering-safe port injected by `runtime.py` | CM2 |
-| CM5 | `code` tool with `expose = read_only`; result format (§3.10); `code.*` events; reducer folding + replay fixtures | CM3, CM4 |
-| CM6 | Ratatui and desktop rendering (§3.13); PTY check and desktop screenshot check | CM5 |
-| CM7 | `store`/`load` with `code.store` events and context-view table | CM5 |
-| CM8 | `expose = all` and lists; mutating nested calls exclusive and gated; `research` refusal | CM5 |
-| N1 | Names: word lists, generator, `session_names` table, `session.named`, `SessionResolve`, list/query integration | plan 01 M2 |
-| N2 | Name UX: Ratatui and desktop labels, `/open <name>`, CLI `sessions show` | N1 |
-| C1 | Authorisation function `may_read(A, B)` over edges, with exhaustive tests (siblings, forks, manager, cross-project, trashed, ended edges) | plan 01 M3 |
-| C2 | Host-side read port: `meta/messages/tool_calls/search/report` over segments, bounded and redacted | C1, plan 01 M7 |
-| C3 | `context` namespace in code mode for `self` only | CM5, C2 |
-| C4 | Child targets behind `ContextQuery(<name>)` (`ask`), up-front via `targets` | C3, N1 |
-| C5 | `llm()` sub-calls with budgets and `code.call kind=llm` | C4 |
-| E1 | Evaluation: offline benchmark with `ScriptedProvider` (programs as scripted tool calls) for code mode vs direct tools on fan-out tasks (many greps/reads, MCP list-and-filter); one live trial per supported provider; one RLM trial on a long child transcript. Decide default enablement, default exposure, and U7/U8 | CM8, C5 |
+| # | Work package | Depends on | State |
+| --- | --- | --- | --- |
+| CM1 | **Finish the Monty spike** (§2.3 covered the core on macOS): Linux wheel, pool cold-start time and worker RSS, `min_processes=0`, custom env for workers, `request_timeout` kill path, dotted names via `external_lookup`, PEP 723 refusal on the pure worker, callback access to call position, full list of importable stdlib modules. Write `docs/codemode-monty-compat.md`. **Abort criteria:** no Linux wheel, or worker env cannot be scrubbed → revisit (fallback: run the pool under a separate low-privilege helper) | — | done (helper design; Linux, cold start, callback positions not verified) |
+| CM2 | Monty adapter + daemon-owned pool + hard rules (§3.6, §3.8); `nexus[codemode]` extra; Doctor row | CM1 | done (per-call helper, not daemon pool) |
+| CM3 | Stub generator from JSON Schema; catalog rendering with budget; `search_tools`/`describe_tool` over the existing MCP ranker | CM2 | done |
+| CM4 | Wire `ToolContext.invoke_tool`: nested `prepare` → hooks → permission port → `dispatch`; `parent_call_id` on hooks and permission events; layering-safe port injected by `runtime.py` | CM2 | done |
+| CM5 | `code` tool with `expose = read_only`; result format (§3.10); `code.*` events; reducer folding + replay fixtures | CM3, CM4 | done |
+| CM6 | Ratatui and desktop rendering (§3.13); PTY check and desktop screenshot check | CM5 | partial (rendering written; visual review not done) |
+| CM7 | `store`/`load` with `code.store` events and context-view table | CM5 | done |
+| CM8 | `expose = all` and lists; mutating nested calls exclusive and gated; `research` refusal | CM5 | done |
+| N1 | Names: word lists, generator, `session_names` table, `session.named`, `SessionResolve`, list/query integration | plan 01 M2 | done (name in row, no `session.named` at create) |
+| N2 | Name UX: Ratatui and desktop labels, `/open <name>`, CLI `sessions show` | N1 | partial (`/open`, CLI done; visual review not done) |
+| C1 | Authorisation function `may_read(A, B)` over edges, with exhaustive tests (siblings, forks, manager, cross-project, trashed, ended edges) | plan 01 M3 | done |
+| C2 | Host-side read port: `meta/messages/tool_calls/search/report` over segments, bounded and redacted | C1, plan 01 M7 | done |
+| C3 | `context` namespace in code mode for `self` only | CM5, C2 | done |
+| C4 | Child targets behind `ContextQuery(<name>)` (`ask`), up-front via `targets` | C3, N1 | done |
+| C5 | `llm()` sub-calls with budgets and `code.call kind=llm` | C4 | done |
+| E1 | Evaluation: offline benchmark with `ScriptedProvider` (programs as scripted tool calls) for code mode vs direct tools on fan-out tasks (many greps/reads, MCP list-and-filter); one live trial per supported provider; one RLM trial on a long child transcript. Decide default enablement, default exposure, and U7/U8 | CM8, C5 | not done |
 
 ---
 
@@ -749,17 +758,17 @@ state, or why code mode is absent.
 
 Acceptance:
 
-- [ ] Every session shows a unique three-word name; `/open quiet-cobalt-otter` works.
-- [ ] With `[code_mode] enabled = true`, the model can grep, read 10 files
+- [x] (offline) Every session shows a unique name (adjective-colour-animal); `/open <name>` works. Live not verified.
+- [x] (offline; live not verified) With `[code_mode] enabled = true`, the model can grep, read 10 files
       concurrently and return a filtered summary in one `code` call; the user
       sees the program and every nested call with full input and output.
-- [ ] A nested call to a path outside read roots is denied with the same
+- [x] (offline; live not verified) A nested call to a path outside read roots is denied with the same
       message a direct call gets, and the program can catch it.
-- [ ] A root can ask "why did my child fail?" and answer by running a program
+- [x] (offline; live not verified) A root can ask "why did my child fail?" and answer by running a program
       over the child's context, with each read visible.
-- [ ] The same root cannot read a sibling root, its manager, or another
+- [x] (offline; live not verified) The same root cannot read a sibling root, its manager, or another
       workspace's session (denied, logged).
-- [ ] With Monty missing, Nexus runs normally and Doctor explains the absent tool.
+- [x] (offline; live not verified) With Monty missing, Nexus runs normally and Doctor explains the absent tool.
 
 ---
 

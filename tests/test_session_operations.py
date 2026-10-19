@@ -101,6 +101,7 @@ def test_session_summary_is_transport_neutral(tmp_path):
         "kind",
         "root_id",
         "namespace",
+        "name",
         "child_count",
         "running_children",
         "handoff_count",
@@ -598,8 +599,11 @@ def test_export_jsonl_matches_consistent_records(tmp_path):
     session.append_event(Event(type="turn.started"))
     lines = [line for line in manager.export("s", format="jsonl").splitlines() if line]
     decoded = [msgspec.json.decode(line.encode()) for line in lines]
-    assert [item["seq"] for item in decoded] == [1, 2]
-    assert decoded == msgspec.json.decode(msgspec.json.encode(session.records))
+    # The export opens with a synthesized seq-0 ``session.named`` header (plan 03 section 3.1).
+    header, *body = decoded
+    assert header["seq"] == 0 and header["event"]["type"] == "session.named"
+    assert [item["seq"] for item in body] == [1, 2]
+    assert body == msgspec.json.decode(msgspec.json.encode(session.records))
 
 
 def test_export_rejects_unknown_format_and_bad_type(tmp_path):

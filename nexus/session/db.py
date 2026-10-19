@@ -52,6 +52,7 @@ from . import export as export_mod
 from . import snapshot as snapshot_mod
 from .child_ids import stored_child_id
 from .ids import validate_session_id
+from .names import allocate as _allocate_name
 from .records import (
     SESSION_LOG_VERSION,
     EventRecord,
@@ -203,7 +204,7 @@ def _has_user_input(alias: str = "sessions") -> str:
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
 #: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -326,6 +327,13 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
           UNIQUE(project_id,logical_id), UNIQUE(project_id,stored_id)
         )""",
     ),
+    (
+        "ALTER TABLE sessions ADD COLUMN name TEXT",
+        "CREATE UNIQUE INDEX sessions_by_name ON sessions(name) WHERE name IS NOT NULL",
+        "CREATE TABLE session_names (name TEXT PRIMARY KEY, project_id TEXT NOT NULL, namespace TEXT NOT NULL, logical_id TEXT NOT NULL, created_at REAL NOT NULL, retired_at REAL)",
+        "CREATE UNIQUE INDEX session_names_by_identity ON session_names(project_id,namespace,logical_id) WHERE retired_at IS NULL",
+    ),
+    ("ALTER TABLE child_allocations ADD COLUMN context_read INTEGER NOT NULL DEFAULT 0",),
 )
 
 #: Every ``kv``/session mutation this module performs is bounded by these; a
@@ -407,6 +415,8 @@ class StateDatabase:
                     raise
             finally:
                 conn.close()
+            # Names are backfilled after the schema commits, in bounded batches (plan 03 U2).
+            _backfill_names(self._raw_connect)
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -487,9 +497,9 @@ class StateDatabase:
             pattern = "%" + query.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
             search = "AND (" + " OR ".join(
                 f"{column} LIKE ? ESCAPE '!' COLLATE NOCASE"
-                for column in ("s.title", "s.id", "s.last_user", "s.last_agent", "p.root")
+                for column in ("s.title", "s.id", "s.name", "s.last_user", "s.last_agent", "p.root")
             ) + ") "
-            params.extend([pattern] * 5)
+            params.extend([pattern] * 6)
         params.append(limit)
         return [
             dict(row)
@@ -599,6 +609,148 @@ def _backfill_last_user_at(conn: sqlite3.Connection) -> None:
             )
 
 
+def _append_in_txn(conn, project_id, namespace, session, requested_seq, kind, ts, build):
+    row = conn.execute(
+        "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
+        "last_user, last_agent, last_user_at FROM sessions "
+        "WHERE project_id=? AND namespace=? AND id=?",
+        (project_id, namespace, session),
+    ).fetchone()
+    if row is None:
+        raise SessionError(f"Session {session!r} does not exist")
+    (
+        last_seq,
+        title,
+        message_count,
+        created_at,
+        last_activity,
+        title_source,
+        last_user,
+        last_agent,
+        last_user_at,
+    ) = row
+    assigned = requested_seq if requested_seq is not None else last_seq + 1
+    payload, encoded = build(assigned)
+    try:
+        conn.execute(
+            "INSERT INTO records"
+            "(project_id, namespace, session_id, seq, kind, ts, body) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                project_id,
+                namespace,
+                session,
+                assigned,
+                kind,
+                ts,
+                encoded,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise SessionError(
+            f"seq {assigned} already exists for session {session!r}"
+        ) from exc
+    new_last_seq = max(last_seq, assigned)
+    if kind == "summary":
+        conn.execute("UPDATE sessions SET context_head_seq=? "
+            "WHERE project_id=? AND namespace=? AND id=?",
+            (assigned, project_id, namespace, session))
+    new_message_count = message_count
+    new_title = title
+    new_title_source = title_source
+    new_last_user = last_user
+    new_last_agent = last_agent
+    new_last_user_at = last_user_at
+    if (
+        (kind == "message" and isinstance(payload, Message) and export_mod.is_user_prompt(payload))
+        or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
+    ) and ts > 0:
+        new_last_user_at = max(last_user_at, ts)
+    if kind == "message" and isinstance(payload, Message) and payload.role == "user":
+        new_message_count += 1
+        snippet = export_mod.message_snippet(payload)
+        if snippet:
+            new_last_user = snippet
+        if not new_title:
+            candidate = export_mod.derive_title([payload])
+            if candidate:
+                new_title = candidate
+                new_title_source = "first_message"
+    elif kind == "message" and isinstance(payload, Message) and payload.role == "assistant":
+        snippet = export_mod.message_snippet(payload)
+        if snippet:
+            new_last_agent = snippet
+    new_created_at = (
+        created_at if created_at > 0 else (ts if ts > 0 else created_at)
+    )
+    new_activity = max(last_activity, ts) if ts > 0 else last_activity
+    conn.execute(
+        "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
+        "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
+        "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
+        "WHERE project_id=? AND namespace=? AND id=?",
+        (
+            new_last_seq,
+            new_title,
+            new_title_source,
+            new_message_count,
+            new_created_at,
+            new_activity,
+            new_last_user,
+            new_last_agent,
+            new_last_user_at,
+            kind == "event"
+            and isinstance(payload, Event)
+            and payload.type
+            in {"turn.completed", "turn.failed", "turn.cancelled"},
+            assigned,
+            project_id,
+            namespace,
+            session,
+        ),
+    )
+    if kind == "event":
+        return EventRecord(seq=assigned, event=payload, ts=ts)
+    if kind == "message":
+        return MessageRecord(seq=assigned, message=payload, ts=ts)
+    return msgspec.json.decode(encoded, type=SummaryRecord)
+
+
+def allocate_name(conn, project_id, namespace, session, *, preferred=None):
+    return _allocate_name(conn, project_id, namespace, session, preferred=preferred)
+
+
+_NAME_BACKFILL_BATCH = 500
+
+
+def _backfill_names(conn_factory) -> int:
+    """Name unnamed sessions in deterministic batches of <= 500, one transaction each (plan 03 U2).
+
+    Idempotent: only rows with ``name IS NULL`` are touched, so a crash or a
+    second run resumes where it stopped. Returns the number of sessions named.
+    """
+    total = 0
+    conn = conn_factory()
+    try:
+        while True:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    "SELECT project_id,namespace,id FROM sessions WHERE name IS NULL "
+                    "ORDER BY project_id,namespace,id LIMIT ?", (_NAME_BACKFILL_BATCH,)).fetchall()
+                for row in rows:
+                    allocate_name(conn, *row)
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            total += len(rows)
+            if len(rows) < _NAME_BACKFILL_BATCH:
+                return total
+    finally:
+        conn.close()
+
+
 class SqliteSessionStore:
     """SQL-backed store for one project's ``(project_id, namespace)`` sessions.
 
@@ -689,6 +841,8 @@ class SqliteSessionStore:
                 "VALUES (?,?,?,?,0,0)",
                 (self.project_id, self.namespace, session, time.time()),
             )
+
+            allocate_name(conn, self.project_id, self.namespace, session)
 
     def create_draft(self, session: str, *, metadata: Mapping[str, Any] | None = None) -> None:
         """Reserve a chat in memory until its first accepted user input."""
@@ -820,6 +974,9 @@ class SqliteSessionStore:
                         for r in records
                     ],
                 )
+                carried = next((r.event.data.get("name") for r in records
+                                if isinstance(r, EventRecord) and r.event.type == "session.named"), None)
+                allocate_name(conn, self.project_id, self.namespace, session, preferred=carried)
                 heads = [r for r in records if isinstance(r, SummaryRecord)]
                 if heads:
                     conn.execute("UPDATE sessions SET context_head_seq=?, handoff_count=? "
@@ -1231,112 +1388,23 @@ class SqliteSessionStore:
             return self._append_in_transaction(conn, session, requested_seq, kind, ts, build)
 
     def _append_in_transaction(self, conn, session, requested_seq, kind, ts, build):
-        row = conn.execute(
-            "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
-            "last_user, last_agent, last_user_at FROM sessions "
-            "WHERE project_id=? AND namespace=? AND id=?",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
-        if row is None:
-            raise SessionError(f"Session {session!r} does not exist")
-        (
-            last_seq,
-            title,
-            message_count,
-            created_at,
-            last_activity,
-            title_source,
-            last_user,
-            last_agent,
-            last_user_at,
-        ) = row
-        assigned = requested_seq if requested_seq is not None else last_seq + 1
-        payload, encoded = build(assigned)
-        try:
-            conn.execute(
-                "INSERT INTO records"
-                "(project_id, namespace, session_id, seq, kind, ts, body) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (
-                    self.project_id,
-                    self.namespace,
-                    session,
-                    assigned,
-                    kind,
-                    ts,
-                    encoded,
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise SessionError(
-                f"seq {assigned} already exists for session {session!r}"
-            ) from exc
-        new_last_seq = max(last_seq, assigned)
-        if kind == "summary":
-            conn.execute("UPDATE sessions SET context_head_seq=? "
-                "WHERE project_id=? AND namespace=? AND id=?",
-                (assigned, self.project_id, self.namespace, session))
-        new_message_count = message_count
-        new_title = title
-        new_title_source = title_source
-        new_last_user = last_user
-        new_last_agent = last_agent
-        new_last_user_at = last_user_at
-        if (
-            (kind == "message" and isinstance(payload, Message) and export_mod.is_user_prompt(payload))
-            or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
-        ) and ts > 0:
-            new_last_user_at = max(last_user_at, ts)
-        if kind == "message" and isinstance(payload, Message) and payload.role == "user":
-            new_message_count += 1
-            snippet = export_mod.message_snippet(payload)
-            if snippet:
-                new_last_user = snippet
-            if not new_title:
-                candidate = export_mod.derive_title([payload])
-                if candidate:
-                    new_title = candidate
-                    new_title_source = "first_message"
-        elif kind == "message" and isinstance(payload, Message) and payload.role == "assistant":
-            snippet = export_mod.message_snippet(payload)
-            if snippet:
-                new_last_agent = snippet
-        new_created_at = (
-            created_at if created_at > 0 else (ts if ts > 0 else created_at)
-        )
-        new_activity = max(last_activity, ts) if ts > 0 else last_activity
-        conn.execute(
-            "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
-            "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
-            "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
-            "WHERE project_id=? AND namespace=? AND id=?",
-            (
-                new_last_seq,
-                new_title,
-                new_title_source,
-                new_message_count,
-                new_created_at,
-                new_activity,
-                new_last_user,
-                new_last_agent,
-                new_last_user_at,
-                kind == "event"
-                and isinstance(payload, Event)
-                and payload.type
-                in {"turn.completed", "turn.failed", "turn.cancelled"},
-                assigned,
-                self.project_id,
-                self.namespace,
-                session,
-            ),
-        )
-        if kind == "event":
-            return EventRecord(seq=assigned, event=payload, ts=ts)
-        if kind == "message":
-            return MessageRecord(seq=assigned, message=payload, ts=ts)
-        return msgspec.json.decode(encoded, type=SummaryRecord)
+        return _append_in_txn(conn, self.project_id, self.namespace, session, requested_seq, kind, ts, build)
 
     # -- session summary / listing -----------------------------------------
+
+    def resolve_name(self, target: str, *, namespace: str | None = None) -> str:
+        """Exact id first, then exact name; workspace scoped, read-only, no drafts."""
+        if not isinstance(target, str) or not target or len(target) > 256:
+            raise SessionError("Invalid session target")
+        conn = self.db._connection()
+        scope = " AND namespace=?" if namespace is not None else ""
+        args = (self.project_id, target) + ((namespace,) if namespace is not None else ())
+        rows = conn.execute("SELECT id FROM sessions WHERE project_id=? AND id=? " + scope + " LIMIT 2", args).fetchall()
+        if not rows:
+            rows = conn.execute("SELECT id FROM sessions WHERE project_id=? AND name=? " + scope + " LIMIT 2", args).fetchall()
+        if len(rows) != 1:
+            raise SessionError("Session target is missing or ambiguous")
+        return str(rows[0][0])
 
     def resolve_child_id(self, identity: str) -> str:
         """Resolve an exact stored/logical identity; never hash an existing id."""
@@ -1386,13 +1454,23 @@ class SqliteSessionStore:
                     continue
                 try:
                     conn.execute(
-                        "INSERT INTO child_allocations VALUES(?,?,?,?,?)",
+                        "INSERT INTO child_allocations(project_id,parent_id,ordinal,logical_id,stored_id) VALUES(?,?,?,?,?)",
                         (self.project_id, parent_id, ordinal, logical, physical),
                     )
                 except sqlite3.IntegrityError:
                     continue
                 return ordinal, logical
             raise SessionError("Child allocation scan limit exceeded")
+
+    def grant_child_context_read(self, logical_id: str, *, allowed: bool = False) -> None:
+        """Host-only allocation policy; legacy/unknown allocations deny by default."""
+        with self.db.transaction() as conn:
+            changed = conn.execute(
+                "UPDATE child_allocations SET context_read=? WHERE project_id=? AND logical_id=?",
+                (int(allowed is True), self.project_id, logical_id),
+            ).rowcount
+            if changed != 1:
+                raise SessionError("Unknown child allocation")
 
     def ownership_tree_rows(
         self, session: str, *, namespace: str, max_depth: int, limit: int = 500,
@@ -1598,6 +1676,7 @@ class SqliteSessionStore:
         """Hard-delete a session row and its records/snapshot (cascades)."""
         session = validate_session_id(session)
         with self.db.transaction() as conn:
+            conn.execute("UPDATE session_names SET retired_at=? WHERE project_id=? AND namespace=? AND logical_id=COALESCE(NULLIF((SELECT logical_session_id FROM sessions WHERE project_id=? AND namespace=? AND id=?),''),?) AND retired_at IS NULL", (time.time(), self.project_id, self.namespace, self.project_id, self.namespace, session, session))
             conn.execute(
                 "DELETE FROM sessions WHERE project_id=? AND namespace=? AND id=?",
                 (self.project_id, self.namespace, session),
@@ -1760,6 +1839,10 @@ class SqliteSessionStore:
                 (self.project_id, self.namespace, moment),
             ).fetchall()
             ids = [row[0] for row in rows]
+            conn.execute(
+                "UPDATE session_names SET retired_at=? WHERE project_id=? AND namespace=? AND logical_id IN (SELECT COALESCE(NULLIF(logical_session_id,''),id) FROM sessions WHERE project_id=? AND namespace=? AND trash_id IS NOT NULL AND trash_expires_at < ?)",
+                (moment, self.project_id, self.namespace, self.project_id, self.namespace, moment),
+            )
             conn.execute(
                 "DELETE FROM sessions WHERE project_id=? AND namespace=? AND "
                 "trash_id IS NOT NULL AND trash_expires_at < ?",

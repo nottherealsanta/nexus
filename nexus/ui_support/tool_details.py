@@ -164,8 +164,253 @@ def _mcp_search_sections(tool: ToolCallView) -> list[DetailSection]:
     return sections
 
 
+# --- Code mode (plan 03 section 3.13) -------------------------------------------------------
+
+_GLYPHS = {"ok": "✓", "error": "✗", "denied": "⊘", "running": "…", "cancelled": "–"}
+_ARG_VALUE = 40  # characters of one argument in a compact nested row
+_ARGS_TOTAL = 110  # characters of all arguments in a compact nested row
+_EXCERPT = 600  # characters of an llm prompt or answer excerpt
+_MAX_PROGRAM_LINES = 400
+
+
+def _size(count: object) -> str:
+    if not isinstance(count, (int, float)) or isinstance(count, bool):
+        return ""
+    return f"{count} B" if count < 1024 else f"{count / 1024:.1f} KB"
+
+
+def compact_args(args: object) -> str:
+    """``key=value`` pairs on one line; every value clipped, the cut announced by ``…``."""
+    if not isinstance(args, Mapping):
+        return "" if args is None else _clean(args, _ARGS_TOTAL).replace("\n", " ")
+    parts = []
+    for key, value in args.items():
+        if key == "args" and isinstance(value, Sequence) and not isinstance(value, str):
+            parts += [_compact_value(item) for item in value]
+        else:
+            parts.append(f"{key}={_compact_value(value)}")
+    line = ", ".join(parts)
+    return line if len(line) <= _ARGS_TOTAL else f"{line[:_ARGS_TOTAL]}…"
+
+
+def _compact_value(value: object) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+    text = escape_controls(text).replace("\n", "⏎")
+    text = text if len(text) <= _ARG_VALUE else f"{text[:_ARG_VALUE]}…"
+    return json.dumps(text, ensure_ascii=False) if isinstance(value, str) else text
+
+
+def _nested_status(call: Mapping[str, Any]) -> str:
+    status = str(call.get("status") or "running")
+    return {"completed": "ok", "failed": "error"}.get(status, status)
+
+
+def _nested_summary(call: Mapping[str, Any]) -> tuple[str, str]:
+    """(label, value) of a nested call's one-line row: glyph, index, tool; args, time, size."""
+    glyph = _GLYPHS.get(_nested_status(call), "?")
+    label = f"{glyph} {call.get('index') or '·'}. {call.get('tool') or '?'}"
+    bits = [compact_args(call.get("args"))]
+    if isinstance(call.get("duration_ms"), (int, float)):
+        bits.append(f"{call['duration_ms']} ms")
+    if call.get("bytes") is not None:
+        bits.append(_size(call["bytes"]) + (" (clipped)" if call.get("clipped") else ""))
+    if call.get("kind") == "llm" and call.get("model"):
+        bits.append(f"{call['model']} {call.get('input_tokens', '?')}→{call.get('output_tokens', '?')} tok")
+    if _nested_status(call) == "denied":
+        permission = call.get("permission")
+        rule = permission.get("rule") if isinstance(permission, Mapping) else None
+        bits.append(f"rule {rule}" if rule else "denied")
+    return label, " · ".join(b for b in bits if b)
+
+
+def _numbered_program(program: str) -> str:
+    lines = escape_controls(program).split("\n")
+    shown = lines[:_MAX_PROGRAM_LINES]
+    width = len(str(len(lines)))
+    body = "\n".join(f"{i:>{width}}  {line}" for i, line in enumerate(shown, 1))
+    if len(lines) > len(shown):
+        body += f"\n[clipped {len(lines) - len(shown)} more lines]"
+    return body
+
+
+def _nested_result_text(call: Mapping[str, Any]) -> str:
+    result = call.get("result")
+    if isinstance(result, str):
+        return result
+    if isinstance(result, Mapping) and isinstance(result.get("text"), str):
+        return result["text"]
+    return "" if result is None else json.dumps(result, default=str, ensure_ascii=False)
+
+
+def _nested_detail_rows(call: Mapping[str, Any]) -> list[DetailRow]:
+    """Everything one nested call knew: permission, full arguments, full result."""
+    status = _nested_status(call)
+    rows = [_row("Tool", call.get("tool") or "?"), _row("Kind", call.get("kind") or "tool"),
+            DetailRow("Status", status)]
+    permission = call.get("permission")
+    if isinstance(permission, Mapping):
+        rows.append(_row("Permission", permission.get("decision") or "none"))
+        if permission.get("rule"):
+            rows.append(_row("Matched rule", permission["rule"]))
+    if call.get("duration_ms") is not None:
+        rows.append(_row("Duration (ms)", call["duration_ms"]))
+    if call.get("bytes") is not None:
+        rows.append(_row("Bytes", call["bytes"]))
+    if call.get("kind") == "llm":
+        rows += [_row("Model", call.get("model") or "unknown"),
+                 _row("Input tokens", call.get("input_tokens", "unknown")),
+                 _row("Output tokens", call.get("output_tokens", "unknown"))]
+    elif _nested_status(call) == "denied" and not (isinstance(permission, Mapping) and permission.get("rule")):
+        rows.append(_row("Matched rule", "none recorded"))
+    rows += flatten(args, "Arguments") if (args := call.get("args")) else []
+    args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
+    text = _nested_result_text(call)
+    # The tool's own renderer (the one a direct call uses) lays out arguments and result.
+    stand_in = ToolCallView(
+        name=str(call.get("tool") or ""), input=dict(args), status="completed",
+        is_error=status in {"error", "denied"},
+        result=[{"type": "text", "text": text}] if text else [],
+    )
+    for section in tool_detail_sections(stand_in):
+        if section.title in {"Overview", "Parameters"}:
+            continue
+        rows.append(DetailRow(section.title, "", header=True))
+        rows += [replace(r, indent=r.indent + 1) for r in section.rows]
+    if call.get("kind") == "llm":
+        for key, label in (("prompt", "Prompt excerpt"), ("text", "Input excerpt")):
+            if isinstance(args.get(key), str):
+                rows.append(DetailRow(label, _clean(args[key], _EXCERPT), True))
+    if call.get("clipped"):
+        rows.append(_row("Result clipped", f"shown {len(text)} characters of {call.get('bytes', 'unknown')} bytes"))
+    if call.get("error"):
+        rows.append(DetailRow("Error", _clean(call["error"]), True))
+    return rows
+
+
+def _diagnostic_rows(diagnostic: object) -> list[DetailRow]:
+    if isinstance(diagnostic, Mapping):
+        rows = [_row("Kind", diagnostic.get("kind") or "unknown"),
+                DetailRow("Message", _clean(diagnostic.get("message", "")), True)]
+        if diagnostic.get("line") is not None:
+            rows.append(_row("Line", diagnostic["line"]))
+        return rows
+    return [DetailRow("Diagnostic", _clean(diagnostic), True)] if diagnostic else []
+
+
+def _nested_row(call: Mapping[str, Any]) -> DetailRow:
+    label, value = _nested_summary(call)
+    return DetailRow(label, value)
+
+
+def _code_sections(tool: ToolCallView) -> list[DetailSection]:
+    """Labelled sections of one ``code`` call: program, every nested call, result, store writes."""
+    meta = tool.code_mode or {}
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    purpose = meta.get("purpose") or args.get("purpose") or ""
+    rows = [DetailRow("Status", tool_status(tool))]
+    status_rows = []
+    if meta.get("status"):
+        status_rows.append(_row("Status", meta["status"]))
+    if meta.get("limit"):
+        status_rows.append(_row("Limit hit", meta["limit"]))
+    timeout = meta.get("timeout_s", args.get("timeout_s"))
+    if timeout is not None:
+        rows.append(_row("timeout_s", timeout))
+    for key, label in (("exposure", "Exposure"), ("monty_version", "Monty"), ("program_digest", "Program digest"),
+                       ("wall_ms", "Wall time (ms)"), ("calls", "Nested calls"), ("ok", "OK"), ("errors", "Errors"),
+                       ("denied", "Denied"), ("sub_calls", "Model sub-calls"), ("sub_tokens", "Sub-call tokens")):
+        if meta.get(key) is not None:
+            (rows if key in {"exposure", "monty_version", "program_digest"} else status_rows).append(_row(label, meta[key]))
+    if meta.get("callable"):
+        rows.append(_row("Callable", ", ".join(map(str, meta["callable"]))))
+    if tool.call_id:
+        rows.append(_row("Call ID", tool.call_id))
+    sections = [DetailSection(_clean(f"code · {purpose}" if purpose else "code", 300), tuple(rows))]
+    if status_rows:
+        sections.append(DetailSection("Program status", tuple(status_rows)))
+    targets = meta.get("targets") or []
+    if targets:
+        sections.append(DetailSection("Targets", tuple(
+            _row(str(t.get("name") or t.get("ref") or "?"), f"logical id {t.get('logical_id') or 'unknown'}")
+            if isinstance(t, Mapping) else _row("target", t) for t in targets)))
+    program = args.get("program") or args.get("code") or tool.code
+    if program:
+        sections.append(DetailSection("Code", (DetailRow("code", _numbered_program(str(program)), True),)))
+    if tool.nested_calls:
+        calls = list(tool.nested_calls)
+        sections.append(DetailSection(f"Call list ({len(calls)})", _bounded([_nested_row(c) for c in calls])))
+        for number, call in enumerate(calls, 1):
+            sections.append(DetailSection(f"Nested call {number}", _bounded(_nested_detail_rows(call))))
+    result_rows = _result_rows(tool.result) if tool.result else []
+    if tool.error:
+        result_rows.append(DetailRow("Error", _clean(tool.error), True))
+    if result_rows:
+        sections.append(DetailSection("Result", _bounded(result_rows)))
+    diag = _diagnostic_rows(meta.get("diagnostic"))
+    if diag:
+        sections.append(DetailSection("Diagnostic", tuple(diag)))
+    store = (tool.metrics or {}).get("code.store") if isinstance(tool.metrics, Mapping) else None
+    if isinstance(store, Mapping):
+        writes = store.get("set") if isinstance(store.get("set"), Mapping) else None
+        if writes is None and isinstance(store.get("entries"), Mapping):
+            writes = store["entries"]
+        scalar = (str, int, float, bool, type(None))
+        srows = [_row(str(k), v if isinstance(v, scalar) else json.dumps(v, default=str, ensure_ascii=False))
+                 for k, v in (writes or {}).items()]
+        srows += [_row(str(k), "deleted") for k in store.get("delete") or []]
+        if srows:
+            sections.append(DetailSection("Store writes", _bounded(srows)))
+        if isinstance(store.get("entries"), Mapping) and store["entries"]:
+            sections.append(DetailSection("Stored entries", _bounded(flatten(store["entries"]))))
+    if tool.progress:
+        sections.append(DetailSection("Progress", _bounded(
+            [DetailRow(f"#{i}", _clean(x, 2_000)) for i, x in enumerate(tool.progress, 1)])))
+    if tool.context_note:
+        sections.append(DetailSection("Context", (DetailRow("note", _clean(tool.context_note), True),)))
+    return sections
+
+
+def code_signal_rows(tool: ToolCallView) -> list[tuple[str, str]]:
+    """Compact ``(kind, text)`` rows for the expanded timeline body of a ``code`` call.
+
+    Numbered program, one glyph row per nested call (live as ``running`` rows arrive), then
+    the outcome. The full labelled sections stay behind the details view.
+    """
+    meta = tool.code_mode or {}
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    rows: list[tuple[str, str]] = []
+    program = args.get("program") or args.get("code") or tool.code
+    if program:
+        lines = _numbered_program(str(program)).split("\n")
+        rows += [("out", line) for line in lines[:60]]
+        if len(lines) > 60:
+            rows.append(("clip", f"… {len(lines) - 60} more program lines; open details for all"))
+    for call in tool.nested_calls:
+        label, value = _nested_summary(call)
+        failed = _nested_status(call) in {"error", "denied"}
+        rows.append(("error" if failed else "text", f"{label}  {value}".rstrip()))
+    diag = meta.get("diagnostic")
+    if isinstance(diag, Mapping):
+        where = f" (line {diag['line']})" if diag.get("line") is not None else ""
+        rows.append(("error", f"{diag.get('kind', 'error')}{where}: {_clean(diag.get('message', ''), 400)}"))
+    if meta.get("limit"):
+        rows.append(("error", f"limit hit: {meta['limit']}"))
+    text = "\n".join(str(b.get("text", "")) for b in tool.result if isinstance(b, Mapping))
+    if text:
+        lines = _clean(text, 4_000).split("\n")
+        rows += [("out", line) for line in lines[:12]]
+        if len(lines) > 12:
+            rows.append(("clip", f"… {len(lines) - 12} more result lines; open details for all"))
+    store = (tool.metrics or {}).get("code.store") if isinstance(tool.metrics, Mapping) else None
+    if isinstance(store, Mapping) and isinstance(store.get("set"), Mapping) and store["set"]:
+        rows.append(("kv", "store: " + ", ".join(map(str, store["set"]))))
+    return rows
+
+
 def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
     """Project one reducer tool call into sections; empty ones are omitted."""
+    if tool.name == "code" and (tool.code_mode or tool.nested_calls or "program" in (tool.input or {})):
+        return _code_sections(tool)
     overview = [DetailRow("Status", tool_status(tool))]
     for label, value in (
         ("Tool", tool.name or None),

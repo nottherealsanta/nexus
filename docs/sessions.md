@@ -142,7 +142,7 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   new session to change them.
 - **Summaries.** `append_summary` stores compaction artifacts as their own
   record kind, reused by `input_digest`; a summary is never mistaken for model
-  output ([context.md](context.md#compaction)).
+  output ([context.md](context.md)).
 
 ## Ownership storage (schema 6)
 
@@ -332,3 +332,31 @@ lost response is durable and does not cause a second cutover on retry.
 Attachments, pending approvals, existing queue and child owners are not moved or
 reassigned. No external tool effects are replayed. A continuation left queued
 by a daemon crash remains durable; this does not introduce background workers.
+
+### Immutable session names
+
+Saved sessions receive an immutable ASCII adjective-color-animal name, globally unique across projects and root and child namespaces. Names survive title changes, archive, and trash; purged names are never reused. The name lives in the `sessions` row and the `session_names` table, not in the session log: no record is appended, so seqs stay stable. Exports carry it (JSON/Markdown via the summary metadata; JSONL as a synthesized leading `session.named` line with seq 0), and import (`create_from_records`) keeps a carried name when it is valid and free, otherwise allocates a new one. Drafts remain unnamed until persistence. Exact ids take precedence over exact, case-sensitive names; prefixes and Unicode lookalikes are not normalized. `nexus sessions show <name-or-id>` resolves without opening a handle. The host `SessionResolve` command accepts `ref` and optional `namespace`, returning canonical identity and lifecycle metadata; resolution does not grant access or revive deleted sessions. There is no rename operation.
+
+### Context read authority
+
+Context access uses host-owned allocation ancestry, never model/provider spawn
+events. Child allocations deny by default and require explicit `context_read`
+opt-in; external/unknown workers deny. Completion preserves access; missing,
+trashed, purged or cross-project ancestors revoke it. See [context](context.md).
+
+Name version 2 uses 229 adjectives x 56 colors x 188 animals = 2,410,912 base
+names (about 21.2 bits); every word is 3-9 lowercase ASCII letters so a `-99`
+suffix still fits 32 characters. These are display identities, not secrets or
+access tokens. Global uniqueness is enforced by SQLite (`session_names.name` is
+the primary key), with 16 random attempts then suffixes 2-99; exhaustion fails
+explicitly rather than reusing a tombstone. Allocation happens in the same
+transaction that creates the row. Existing sessions are named by a backfill in
+deterministic batches of at most 500 per transaction (idempotent, resumes after a
+crash). The legacy `session.named` event, if an old log contains it, is still
+folded by the reducer; new sessions never get one.
+
+Schema migration 9 is forward-only. Back up the state database before upgrade;
+old binaries cannot safely open the upgraded schema. Do not downgrade in place.
+`SessionResolve(include_retired=True)` explicitly permits tombstone lookup and
+returns `retired: true`; default resolution refuses purged names. Retired results
+are metadata only and cannot be opened.

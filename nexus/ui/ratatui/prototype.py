@@ -996,7 +996,7 @@ def _session_title(session_id: str, shell=None) -> str:
         return "Manager"
     for row in getattr(shell, "sessions", ()):
         if row.get("id") == session_id:
-            return escape_controls(row.get("title") or "New session")
+            return escape_controls(row.get("name") or row.get("title") or "New session")
     return "New session"
 
 

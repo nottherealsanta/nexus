@@ -782,6 +782,8 @@ impl Desktop {
                             .text_color(t.muted)
                             .child(block.detail.clone())
                             .into_any_element()
+                    } else if block.kind == "tool" && crate::code_detail::is_code_detail(&block.detail) {
+                        crate::code_detail::code_detail(&block.detail, t)
                     } else {
                         labelled_detail(&block.detail, t)
                     });
@@ -903,10 +905,15 @@ fn labelled_detail(detail: &str, t: Theme) -> AnyElement {
         .border_color(t.border)
         .flex()
         .flex_col()
-        .text_size(px(theme::size::SMALL))
-        .line_height(px(theme::size::CODE_LINE))
-        .font_family(theme::code_font())
-        .children(detail_rows(detail).into_iter().map(|row| match row {
+        .children(detail_children(detail, t))
+        .into_any_element()
+}
+/// The labelled rows of `detail` without the surrounding rule, so code mode can
+/// embed them inside its own cards.
+pub(crate) fn detail_children(detail: &str, t: Theme) -> Vec<AnyElement> {
+    detail_rows(detail)
+        .into_iter()
+        .map(|row| match row {
             DetailRow::Pair(label, value) => div()
                 .flex()
                 .gap_3()
@@ -932,8 +939,12 @@ fn labelled_detail(detail: &str, t: Theme) -> AnyElement {
             DetailRow::Text(text, _) => div()
                 .text_color(t.text)
                 .child(if text.is_empty() { " ".to_string() } else { text.to_string() }),
-        }))
-        .into_any_element()
+        }
+        .text_size(px(theme::size::SMALL))
+        .line_height(px(theme::size::CODE_LINE))
+        .font_family(theme::code_font())
+        .into_any_element())
+        .collect()
 }
 /// Reasoning dimmed behind a rule; whole-line `**headings**` become muted bold.
 fn thought_detail(detail: &str, t: Theme) -> AnyElement {

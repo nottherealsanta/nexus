@@ -1,0 +1,517 @@
+[
+  {
+    "data": {
+      "limits": {}
+    },
+    "id": "e001",
+    "seq": 1,
+    "session": "s1",
+    "ts": 1.0,
+    "turn": "t1",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic"
+    },
+    "id": "e002",
+    "seq": 2,
+    "session": "s1",
+    "ts": 2.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "input": {
+        "program": "files = grep(pattern='TODO', path='src')\nbody = read(path='src/a.py')\nwrite(path='/etc/x', content='y')\nsummary = llm('summarize', body)\nstore.set('n', 3)\nprint(len(files))",
+        "purpose": "audit TODOs",
+        "timeout_s": 30
+      },
+      "tool": "code"
+    },
+    "id": "e003",
+    "seq": 3,
+    "session": "s1",
+    "ts": 3.0,
+    "turn": "t1",
+    "type": "tool.requested"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "tool": "code"
+    },
+    "id": "e004",
+    "seq": 4,
+    "session": "s1",
+    "ts": 4.0,
+    "turn": "t1",
+    "type": "tool.started"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "callable": [
+        "grep",
+        "read",
+        "write"
+      ],
+      "exposure": "read_only",
+      "limits": {
+        "max_nested_calls": 64
+      },
+      "monty_version": "1.1.0",
+      "program_digest": "abc123",
+      "purpose": "audit TODOs",
+      "targets": [
+        {
+          "logical_id": "L1",
+          "name": "quiet-cobalt-otter",
+          "ref": "quiet-cobalt-otter"
+        }
+      ],
+      "timeout_s": 30
+    },
+    "id": "e005",
+    "seq": 5,
+    "session": "s1",
+    "ts": 5.0,
+    "turn": "t1",
+    "type": "code.started"
+  },
+  {
+    "data": {
+      "args": {
+        "path": "src",
+        "pattern": "TODO"
+      },
+      "call_id": "c1",
+      "index": 1,
+      "kind": "tool",
+      "nested_id": "c1.1",
+      "status": "running",
+      "tool": "grep"
+    },
+    "id": "e006",
+    "seq": 6,
+    "session": "s1",
+    "ts": 6.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "path": "src/a.py"
+      },
+      "call_id": "c1",
+      "index": 2,
+      "kind": "tool",
+      "nested_id": "c1.2",
+      "status": "running",
+      "tool": "read"
+    },
+    "id": "e007",
+    "seq": 7,
+    "session": "s1",
+    "ts": 7.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "path": "src",
+        "pattern": "TODO"
+      },
+      "bytes": 22,
+      "call_id": "c1",
+      "clipped": false,
+      "duration_ms": 8,
+      "index": 1,
+      "kind": "tool",
+      "nested_id": "c1.1",
+      "permission": {
+        "decision": "allow",
+        "rule": "Grep(*)"
+      },
+      "result": "src/a.py:3: # TODO fix",
+      "status": "ok",
+      "tool": "grep"
+    },
+    "id": "e008",
+    "seq": 8,
+    "session": "s1",
+    "ts": 8.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "path": "src/a.py"
+      },
+      "bytes": 31,
+      "call_id": "c1",
+      "clipped": false,
+      "duration_ms": 3,
+      "index": 2,
+      "kind": "tool",
+      "nested_id": "c1.2",
+      "permission": {
+        "decision": "allow",
+        "rule": null
+      },
+      "result": "error: file not found: src/a.py",
+      "status": "error",
+      "tool": "read"
+    },
+    "id": "e009",
+    "seq": 9,
+    "session": "s1",
+    "ts": 9.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "content": "y",
+        "path": "/etc/x"
+      },
+      "call_id": "c1",
+      "index": 3,
+      "kind": "tool",
+      "nested_id": "c1.3",
+      "status": "running",
+      "tool": "write"
+    },
+    "id": "e010",
+    "seq": 10,
+    "session": "s1",
+    "ts": 10.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "content": "y",
+        "path": "/etc/x"
+      },
+      "bytes": 29,
+      "call_id": "c1",
+      "clipped": false,
+      "duration_ms": 1,
+      "index": 3,
+      "kind": "tool",
+      "nested_id": "c1.3",
+      "permission": {
+        "decision": "deny",
+        "rule": "Write(/etc/**)"
+      },
+      "result": "denied by rule Write(/etc/**)",
+      "status": "denied",
+      "tool": "write"
+    },
+    "id": "e011",
+    "seq": 11,
+    "session": "s1",
+    "ts": 11.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "start": 0,
+        "stop": 2,
+        "target": "quiet-cobalt-otter"
+      },
+      "bytes": 26,
+      "call_id": "c1",
+      "clipped": false,
+      "duration_ms": 5,
+      "index": 4,
+      "kind": "context",
+      "nested_id": "c1.4",
+      "permission": {
+        "decision": "ask:allow",
+        "rule": null
+      },
+      "result": "[user] hello\n[assistant] hi",
+      "status": "ok",
+      "tool": "context_messages"
+    },
+    "id": "e012",
+    "seq": 12,
+    "session": "s1",
+    "ts": 12.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "prompt": "summarize",
+        "text": "no source"
+      },
+      "call_id": "c1",
+      "index": 5,
+      "kind": "llm",
+      "model": "claude-x",
+      "nested_id": "c1.5",
+      "status": "running",
+      "tool": "llm"
+    },
+    "id": "e013",
+    "seq": 13,
+    "session": "s1",
+    "ts": 13.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "args": {
+        "prompt": "summarize",
+        "text": "no source"
+      },
+      "bytes": 16,
+      "call_id": "c1",
+      "clipped": false,
+      "duration_ms": 900,
+      "index": 5,
+      "input_tokens": 120,
+      "kind": "llm",
+      "model": "claude-x",
+      "nested_id": "c1.5",
+      "output_tokens": 9,
+      "result": "A short summary.",
+      "status": "ok",
+      "tool": "llm"
+    },
+    "id": "e014",
+    "seq": 14,
+    "session": "s1",
+    "ts": 14.0,
+    "turn": "t1",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "delete": [],
+      "set": {
+        "n": 3,
+        "note": "done"
+      }
+    },
+    "id": "e015",
+    "seq": 15,
+    "session": "s1",
+    "ts": 15.0,
+    "turn": "t1",
+    "type": "code.store"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "calls": 5,
+      "denied": 1,
+      "diagnostic": null,
+      "errors": 1,
+      "limit": null,
+      "ok": 3,
+      "status": "ok",
+      "sub_calls": 1,
+      "sub_tokens": 129,
+      "wall_ms": 930
+    },
+    "id": "e016",
+    "seq": 16,
+    "session": "s1",
+    "ts": 16.0,
+    "turn": "t1",
+    "type": "code.finished"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "duration_ms": 930,
+      "executed": true,
+      "is_error": false,
+      "result": {
+        "content": [
+          {
+            "text": "value: 3\nprinted: 1",
+            "type": "text"
+          }
+        ]
+      },
+      "tool": "code"
+    },
+    "id": "e017",
+    "seq": 17,
+    "session": "s1",
+    "ts": 17.0,
+    "turn": "t1",
+    "type": "tool.completed"
+  },
+  {
+    "data": {
+      "iterations": 1,
+      "stop_reason": "end_turn"
+    },
+    "id": "e018",
+    "seq": 18,
+    "session": "s1",
+    "ts": 18.0,
+    "turn": "t1",
+    "type": "turn.completed"
+  },
+  {
+    "data": {
+      "limits": {}
+    },
+    "id": "e019",
+    "seq": 19,
+    "session": "s1",
+    "ts": 19.0,
+    "turn": "t2",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "call_id": "c2",
+      "input": {
+        "program": "while True:\n    read(path='a')",
+        "purpose": "loop",
+        "timeout_s": 5
+      },
+      "tool": "code"
+    },
+    "id": "e020",
+    "seq": 20,
+    "session": "s1",
+    "ts": 20.0,
+    "turn": "t2",
+    "type": "tool.requested"
+  },
+  {
+    "data": {
+      "call_id": "c2",
+      "tool": "code"
+    },
+    "id": "e021",
+    "seq": 21,
+    "session": "s1",
+    "ts": 21.0,
+    "turn": "t2",
+    "type": "tool.started"
+  },
+  {
+    "data": {
+      "call_id": "c2",
+      "callable": [
+        "read"
+      ],
+      "exposure": "read_only",
+      "limits": {},
+      "monty_version": "1.1.0",
+      "program_digest": "def456",
+      "purpose": "loop",
+      "targets": [],
+      "timeout_s": 5
+    },
+    "id": "e022",
+    "seq": 22,
+    "session": "s1",
+    "ts": 22.0,
+    "turn": "t2",
+    "type": "code.started"
+  },
+  {
+    "data": {
+      "args": {
+        "path": "a"
+      },
+      "call_id": "c2",
+      "index": 1,
+      "kind": "tool",
+      "nested_id": "c2.1",
+      "status": "running",
+      "tool": "read"
+    },
+    "id": "e023",
+    "seq": 23,
+    "session": "s1",
+    "ts": 23.0,
+    "turn": "t2",
+    "type": "code.call"
+  },
+  {
+    "data": {
+      "call_id": "c2",
+      "calls": 1,
+      "denied": 0,
+      "diagnostic": {
+        "kind": "cancelled",
+        "line": 2,
+        "message": "program cancelled"
+      },
+      "errors": 0,
+      "limit": null,
+      "ok": 0,
+      "status": "cancelled",
+      "sub_calls": 0,
+      "sub_tokens": 0,
+      "wall_ms": 40
+    },
+    "id": "e024",
+    "seq": 24,
+    "session": "s1",
+    "ts": 24.0,
+    "turn": "t2",
+    "type": "code.finished"
+  },
+  {
+    "data": {
+      "call_id": "c2",
+      "duration_ms": 40,
+      "executed": true,
+      "is_error": true,
+      "result": {
+        "content": [
+          {
+            "text": "cancelled",
+            "type": "text"
+          }
+        ]
+      },
+      "tool": "code"
+    },
+    "id": "e025",
+    "seq": 25,
+    "session": "s1",
+    "ts": 25.0,
+    "turn": "t2",
+    "type": "tool.completed"
+  },
+  {
+    "data": {
+      "iterations": 1,
+      "stop_reason": "cancelled"
+    },
+    "id": "e026",
+    "seq": 26,
+    "session": "s1",
+    "ts": 26.0,
+    "turn": "t2",
+    "type": "turn.completed"
+  }
+]

@@ -240,3 +240,44 @@ Antigravity `worker_permission_mode` defaults to `auto`; explicit `accept-edits`
 or `plan` remain supported. The mode does not override an explicit inheritance opt-out,
 tool restriction checks, or the ban on bypass/always-proceed flags unless the
 user-level `worker_dangerously_skip_permissions` opt-in is set (then `auto` is sent as `accept-edits`).
+
+### Optional code mode
+
+Install `nexus[codemode]` (pinned `pydantic-monty==1.1.0`) and enable:
+
+```toml
+[code_mode]
+enabled = true
+expose = "read_only" # or "all", or an explicit list of tool/glob names
+context = false
+max_workers = 2
+max_tool_seconds = 120
+max_nested_calls = 64
+inline_budget_tokens = 2500
+pinned = []
+# sub_model = "..."  # model for llm(); unset = the session's own model
+max_sub_calls = 16
+max_sub_input_tokens = 32000
+max_total_sub_tokens = 200000
+max_depth = 1
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Advertise the `code` tool (needs the optional Monty dependency). |
+| `expose` | `"read_only"` | Callable tools: `"read_only"`, `"all"`, or a list of names / `mcp__server__*` globs. |
+| `context` | `false` | Bind the `context_*` functions and `llm()`. |
+| `max_workers` | `2` | Sandbox worker processes (1-16). |
+| `max_tool_seconds` | `120` | Upper bound for one program's `timeout_s` (1-3600). |
+| `max_nested_calls` | `64` | Tool calls one program may make (1-10000). |
+| `inline_budget_tokens` | `2500` | Estimated tokens of stubs inlined in the `code` description; the rest is found with `search_tools()` / `describe_tool()`. |
+| `pinned` | `[]` | Tool names whose stubs are listed first in the inline catalog. |
+| `sub_model` | unset | Model used by `llm()`; unset uses the session's model. |
+| `max_sub_calls` | `16` | `llm()` calls per program (1-1000). |
+| `max_sub_input_tokens` | `32000` | Input tokens per `llm()` call. |
+| `max_total_sub_tokens` | `200000` | Input plus output tokens across a program's `llm()` calls. |
+| `max_depth` | `1` | Nesting depth of sub-model calls (1-8). |
+
+The manager profile never gains `code`. Disabled sessions and installations
+without the exact optional dependency do not advertise it. Exposure intersects
+the selected tool catalog and excludes loop-driving tools.

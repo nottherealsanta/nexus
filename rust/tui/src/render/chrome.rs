@@ -116,6 +116,11 @@ fn partition(text: &str) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
+    top_layout_at(s, width, 0)
+}
+/// `top_layout` with the working-tab spinner on animation frame `spin` (all frames are one cell
+/// wide, so geometry and click ranges do not depend on it).
+fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String, Seg)> {
     let dash = format!(" {DASHBOARD_GLYPH} ");
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
@@ -197,7 +202,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
             .iter()
             .map(|tab| {
                 let glyph = match tab.status.as_str() {
-                    "working" => "⠋",
+                    "working" => SPINNER[spin % SPINNER.len()],
                     "input" => "●",
                     "done" => "✓",
                     _ => "·",
@@ -341,7 +346,7 @@ pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
         .map(|(kind, start, end)| TabCell { kind, start, end })
         .collect()
 }
-pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, _spin: usize) {
+pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, spin: usize) {
     if !s.agent_page.is_empty() {
         let status = if s.status == "running" {
             "Working"
@@ -426,7 +431,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
     };
     let bar = Rect { height: 1, ..area };
     frame.render_widget(
-        Paragraph::new(row(top_layout(s, width))).style(background),
+        Paragraph::new(row(top_layout_at(s, width, spin))).style(background),
         bar,
     );
     // Row 1 stays blank; the workspace row sits below it.
@@ -766,6 +771,38 @@ mod chrome_tests {
             ..s
         };
         assert_eq!(bar_rows(&plain, 100)[1].trim(), "~/repo main");
+    }
+
+    #[test]
+    fn working_tab_spinner_advances_with_the_frame() {
+        let mut tabs = open_tabs(2, 0);
+        tabs[1].status = "working".into();
+        let s = Snapshot {
+            tabs,
+            ..Snapshot::default()
+        };
+        let row = |spin: usize| {
+            let backend = ratatui::backend::TestBackend::new(80, 3);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_top_bar(frame, &s, frame.area(), &Palette::new(false), spin))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..80u16)
+                .map(|x| buffer[(x, 0)].symbol().to_string())
+                .collect::<String>()
+        };
+        for spin in 0..SPINNER.len() {
+            let text = row(spin);
+            assert!(text.contains(SPINNER[spin]), "frame {spin}: {text}");
+            assert_eq!(
+                SPINNER.iter().filter(|g| text.contains(**g)).count(),
+                1,
+                "only the working tab spins: {text}"
+            );
+        }
+        let widths = |spin: usize| top_layout_at(&s, 80, spin).len();
+        assert_eq!(widths(0), widths(5), "geometry is frame independent");
     }
 
     #[test]

@@ -91,6 +91,30 @@ child's unique `external.tool` rows, raised to `external.finished.tool_calls`
 when that is larger, so live and replayed sessions agree. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
 a web port is not planned (the web client is being deprecated).
 
+### Code mode (`code.*`, plan 03 section 3.12)
+
+`code.started`, `code.call`, `code.store` and `code.finished` describe one `code` tool call
+(`call_id` is the outer call); nested calls are not message blocks and never enter the model
+context. The reducer folds them into the outer `ToolCallView` (`view/reduce.py:_on_code`):
+
+- `code_mode`: `code.started` and `code.finished` data merged (purpose, digest, timeout_s,
+  exposure, callable, targets, limits, then status, limit, diagnostic, totals).
+- `nested_calls`: one dict per `nested_id`, in start order. `code.call` is emitted `running`
+  and again final; the later event merges over the earlier one, so rows appear live and replay
+  equals live. When `code.finished` arrives, rows still `running` become `cancelled` (the
+  program was cut off by a cancel, limit or crash), so a replayed log never shows a spinner.
+- `ConversationView.code_store`: the reduced store (`set` / `delete`, only on success). The outer
+  tool's `metrics["code.store"]` holds `entries` (whole store), `set` and `delete` of that call;
+  `tool.completed` keeps it when it replaces the result metrics.
+
+Rendering: `ui_support/tool_details.py` lays a code call out as sections `code · <purpose>`,
+`Program status`, `Targets`, `Code` (line-numbered program), `Call list`, one `Nested call N` per
+call (Tool, Kind, Status, Duration (ms), Permission, Matched rule, Bytes, Model / Input tokens /
+Output tokens for `llm`, `Arguments.*`, then the result through the tool's own renderer; clipped
+results are announced), `Result`, `Diagnostic`, `Store writes`, `Stored entries`.
+`code_signal_rows` gives the compact timeline body (numbered program, one glyph row per nested call
+`✓ ✗ ⊘ … –`, outcome). Golden log: `tests/fixtures/view/code_mode.*`.
+
 ## The reducer (`view/`)
 
 `view/reduce.py` is pure and synchronous: `apply(state, event) → state`,

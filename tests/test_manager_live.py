@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from nexus.host import HostFacade
 from nexus.host_support.live import FacadeLiveHost
 from nexus.host_support.manager_port import HostManagerPort, scan_manager_log
 from nexus.live.bridge import LiveBridge

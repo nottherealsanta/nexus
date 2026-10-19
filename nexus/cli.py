@@ -24,6 +24,8 @@ import uuid
 from pathlib import Path
 from typing import Any, TextIO
 
+from .util import redact_secrets
+
 DEFAULT_CONFIG = '''# Nexus reloads configuration before each turn. Unknown keys are errors.
 # `models.default` may be a tier name ("medium"), "provider/model", or a bare id.
 config_version = 2
@@ -248,6 +250,21 @@ async def _dispatch_sessions(
         stdout.writelines(
             _format_summary(summary) + "\n" for summary in await client.list_sessions()
         )
+        return 0
+    if action == "show":
+        info = await client.session_resolve(args.session_id, include_retired=True)
+        summary = None
+        if not info.get("retired"):
+            summary = next((s for s in await client.list_sessions() if s.id == info["logical_id"]), None)
+        rows = (
+            ("name", info.get("name") or "-"),
+            ("id", info.get("logical_id") or "-"),
+            ("title", (getattr(summary, "title", "") if summary else "") or "-"),
+            ("kind", info.get("kind") or "-"),
+            ("state", info.get("state") or "-"),
+            ("project", info.get("project") or "-"),
+        )
+        stdout.write("".join(f"{label:<8}{redact_secrets(str(value))}\n" for label, value in rows))
         return 0
     if action == "fork":
         summary = await client.fork(args.session_id, args.at_seq)
@@ -1329,7 +1346,7 @@ def _format_summary(summary: Any) -> str:
     last_seq = getattr(summary, "last_seq", 0)
     viewers = getattr(summary, "viewers", 0)
     title = getattr(summary, "title", "")
-    return f"{sid} [{state}] seq={last_seq} viewers={viewers} {title}".rstrip()
+    return f"{sid} {getattr(summary, 'name', None) or ''} [{state}] seq={last_seq} viewers={viewers} {title}".rstrip()
 
 
 def _render_view(view: Any) -> str:
@@ -1720,6 +1737,8 @@ def build_parser() -> argparse.ArgumentParser:
     sessions_fork = sessions_sub.add_parser("fork", help="Branch a session")
     sessions_fork.add_argument("session_id")
     sessions_fork.add_argument("--at-seq", type=int, default=None)
+    sessions_show = sessions_sub.add_parser("show", help="Resolve a session name or id")
+    sessions_show.add_argument("session_id")
     sessions_replay = sessions_sub.add_parser("replay", help="Re-render a session")
     sessions_replay.add_argument("session_id")
     sessions_export = sessions_sub.add_parser("export", help="Export a consistent prefix")

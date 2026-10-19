@@ -3,6 +3,7 @@
 use core::prelude::v1::test;
 #[path = "../../tui/src/bridge.rs"]
 mod bridge;
+mod code_detail;
 mod icons;
 mod input;
 mod keymap;
@@ -1632,7 +1633,7 @@ fn search_matches(sessions: &[bridge::Session], query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, session)| {
-            format!("{} {} {}", session.title, session.id, session.workspace)
+            format!("{} {} {} {}", session.name.as_deref().unwrap_or(""), session.title, session.id, session.workspace)
                 .to_lowercase()
                 .contains(&query)
         })

@@ -330,6 +330,7 @@ impl Default for Form {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct Session {
+    pub name: Option<String>,
     #[serde(default)]
     pub group: String,
     pub id: String,

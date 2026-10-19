@@ -22,7 +22,7 @@ from nexus.tools.bundles import (
 
 
 def test_the_bundles_are_defined():
-    assert BUNDLE_NAMES == frozenset({"fs", "patch", "shell", "legacy_shell", "legacy_fs", "task", "web", "meta", "ext", "mcp", "manager"})
+    assert BUNDLE_NAMES == frozenset({"fs", "patch", "shell", "legacy_shell", "legacy_fs", "task", "web", "meta", "ext", "mcp", "manager", "code"})
     assert all_bundles() is BUNDLES
 
 
@@ -58,12 +58,15 @@ def test_base_profile_advertises_only_implemented_canonical_tools():
         {
             "read", "apply_patch", "glob", "grep", "edit", "write", "bash",
             "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
+            # Declared by the profile; the runtime offers it only when [code_mode] is enabled and Monty is available.
+            "code",
         }
     )
 
 
 def test_meta_tools_require_the_explicit_meta_profile():
-    assert profile_tools("coding_meta") == profile_tools("coding") | frozenset(
+    # Only the plain coding profile can offer the code tool.
+    assert profile_tools("coding_meta") == (profile_tools("coding") - {"code"}) | frozenset(
         {"ReloadExtensions", "ListExtensions", "WriteTool"}
     )
 

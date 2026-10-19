@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from ..view import ToolCallView
 from .text import escape_controls
 from .timeline import tool_status
-from .tool_details import SECTION_ROWS, VALUE_LIMIT
+from .tool_details import SECTION_ROWS, VALUE_LIMIT, code_signal_rows
 
 FIRST_LINES = 5  # Grok's FIRST_LINES / LAST_LINES for a long excerpt
 LAST_LINES = 3
@@ -218,6 +218,11 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
     out = _result_text(tool, cuts)
     rows: list[SignalRow] = []
     omitted = 0
+    if name == "code":
+        rows = [SignalRow(kind, text) for kind, text in code_signal_rows(tool)]
+        return SignalView("Code program", tuple(rows[:2000]) + (
+            (SignalRow("clip", "… additional details clipped"),) if len(rows) > 2000 else ()
+        ), max(0, len(rows) - 2000))
     if name == "read":
         path = _path(tool)
         args = tool.input if isinstance(tool.input, Mapping) else {}

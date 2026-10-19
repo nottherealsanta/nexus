@@ -41,7 +41,7 @@ SHUTDOWN_CANCEL_REASON = "supervisor closing"
 
 #: ``session.linked`` is a supervision edge recorded in the *manager's* log
 #: (``kind: "managed"``, ``child``, ``origin_message_id``, ``instruction_digest``).
-SESSION_EVENTS = ("session.opened", "session.closed", "session.forked", "session.linked")
+SESSION_EVENTS = ("session.named", "session.opened", "session.closed", "session.forked", "session.linked")
 TURN_EVENTS = (
     "turn.started",
     "turn.completed",
@@ -62,6 +62,7 @@ MODEL_EVENTS = (
     "model.stopped",
     "model.retrying",
 )
+CODE_EVENTS = ("code.started", "code.call", "code.store", "code.finished")
 TOOL_EVENTS = (
     "tool.requested",
     "tool.started",
@@ -190,6 +191,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "context": CONTEXT_EVENTS,
     "model": MODEL_EVENTS,
     "tool": TOOL_EVENTS,
+    "code": CODE_EVENTS,
     "permission": PERMISSION_EVENTS,
     "ext": EXT_EVENTS,
     "mcp": MCP_EVENTS,
@@ -213,6 +215,7 @@ EVENT_TYPES = frozenset(
 __all__ = [
     "AGENT_EVENTS",
     "COMPAT_EVENTS",
+    "CODE_EVENTS",
     "CONTEXT_EVENTS",
     "DAEMON_EVENTS",
     "EVENT_GROUPS",

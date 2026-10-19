@@ -48,7 +48,7 @@ def test_v5_migration_backfills_only_matching_spawn_evidence(tmp_path):
     db = StateDatabase(path)
     store = SqliteSessionStore(db, "p", "agents")
     row = store.session_row(child_id)
-    assert db.schema_version() == SCHEMA_VERSION == 7
+    assert db.schema_version() == SCHEMA_VERSION == 9
     assert (row["owner_namespace"], row["owner_id"], row["owner_turn_id"], row["owner_call_id"]) == (
         "main", "root", "turn", "call",
     )
@@ -56,7 +56,7 @@ def test_v5_migration_backfills_only_matching_spawn_evidence(tmp_path):
     assert store.session_row("unknown")["owner_id"] == ""
     assert len(store.owned_rows("main", "root")) == 1
     assert SqliteSessionStore(db, "other", "main").owned_rows("main", "root") == []
-    assert StateDatabase(path).schema_version() == 7
+    assert StateDatabase(path).schema_version() == SCHEMA_VERSION
 
 
 def managers(tmp_path):
@@ -202,7 +202,7 @@ def test_allocation_is_durable_cross_process_and_skips_legacy_trash(tmp_path):
         allocated = [item for _ in workers for item in output.get(timeout=20)]
         assert len(set(logical for _, logical in allocated)) == 36
         assert sorted(index for index, _ in allocated) == list(range(2, 38))
-        assert StateDatabase(path).schema_version() == 7
+        assert StateDatabase(path).schema_version() == SCHEMA_VERSION
         reopened = SqliteSessionStore(StateDatabase(path), "p", "agents")
         assert reopened.reserve_child_id("root")[0] == 38
         assert store.reserve_child_id("other")[0] == 1

@@ -106,6 +106,7 @@ class SessionSummary(msgspec.Struct, frozen=True):
 
     id: str
     title: str = ""
+    name: str | None = None
     state: SessionState = "idle"
     last_activity: float = 0.0
     last_seq: int = 0
@@ -535,6 +536,47 @@ class SessionManager:
 
     # -- list / summary ----------------------------------------------------
 
+    def resolve(self, ref: str, *, namespace: str | None = None, include_retired: bool = False) -> dict[str, Any]:
+        """Resolve a name or id to identity (plan 03 §3.1); callers still authorize each operation.
+
+        Project scoped: another project's sessions are not found. An exact id wins over a name.
+        A trashed session resolves with ``trashed: true``; a purged one resolves only with
+        ``include_retired`` and answers ``retired: true``. The manager is never addressable by name.
+        """
+        if not isinstance(ref, str) or not ref or len(ref) > 256:
+            raise SessionError("Invalid session target")
+        conn = self.store.db._connection()
+        try:
+            identity = self.store.resolve_name(ref, namespace=namespace)
+        except SessionError:
+            retired = conn.execute(
+                "SELECT logical_id, namespace, name, retired_at FROM session_names "
+                "WHERE name=? AND project_id=? AND retired_at IS NOT NULL",
+                (ref, self.store.project_id),
+            ).fetchone() if include_retired else None
+            if retired is None or (namespace is not None and retired["namespace"] != namespace):
+                raise
+            return {"logical_id": retired["logical_id"], "namespace": retired["namespace"],
+                    "name": retired["name"], "project": self.store.project_id, "kind": "",
+                    "state": "retired", "trashed": False, "retired": True,
+                    "retired_at": retired["retired_at"]}
+        query = "SELECT * FROM sessions WHERE project_id=? AND id=?"
+        args: tuple[Any, ...] = (self.store.project_id, identity)
+        if namespace is not None:
+            query += " AND namespace=?"
+            args += (namespace,)
+        row = conn.execute(query, args).fetchone()
+        if row is None:
+            raise SessionError("Session target is missing or ambiguous")
+        if row["kind"] == MANAGER_KIND and identity != ref:
+            raise SessionError("Session target is missing or ambiguous")
+        trashed = row["trash_id"] is not None
+        handle = None if trashed else self._live_handle(row["id"]) if row["namespace"] == self.store.namespace else None
+        return {"id": row["id"], "logical_id": row["logical_session_id"] or identity, "retired": False,
+                "project": self.store.project_id, "name": row["name"], "kind": row["kind"] or "root",
+                "state": "trashed" if trashed else _state_for(handle),
+                "namespace": row["namespace"], "trashed": trashed}
+
     def tree(self, session_id: str, *, namespace: str = "main", max_depth: int = 5) -> dict[str, Any]:
         """Read-only, project-scoped ownership projection; no recovery or handles."""
         from .tree import project_tree
@@ -606,6 +648,7 @@ class SessionManager:
         handle = self._live_handle(row["id"]) if row.get("namespace", self.store.namespace) == self.store.namespace else None
         return SessionSummary(
             id=row["id"],
+            name=row.get("name"),
             title=row["title"] or "",
             state=_state_for(handle),
             last_activity=row["last_activity"] or 0.0,

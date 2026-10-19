@@ -1,9 +1,10 @@
 # Plan 02: Manager session above roots
 
-Status: **implemented 2026-10-18 but not verified end to end; no completion is claimed; feature
-off by default; not soaked against the real services.** The backend (M1-M8, host half of M9/M10)
-and the current Ratatui/desktop UI are written; the full Python suite, the Rust builds and PTY
-tests, and the soak that flips the default remain unverified (§4). Behavior is
+Status: **implemented and verified offline (2026-10-19); feature off by default; not soaked
+against the real services.** The backend (M1-M9), the Ratatui pinned manager row and chat, the
+desktop manager card and the `nexus manager` CLI are written and covered by the offline Python
+suite, the Rust TUI/desktop tests and the manager PTY flow. What remains is live-only: a real
+Copilot/GPT Live run and the soak that flips the default (M10, §7 acceptance). Behavior is
 documented in [docs/manager.md](../../docs/manager.md); where this plan and the code differ,
 the code wins. The high advisor review changed several first-draft decisions; this text states
 the settled ones (they are listed in §8).
@@ -179,7 +180,7 @@ Human ──msg──▶ Manager session (gpt-6-luna, tools: find/launch/status/
                   │                                    └─ Supervisor (cap 4 turns)
                   │ session_wait ◀── durable state of the roots, polled; ends on new user input
                   └ session_result ◀── bounded final report (redacted)
-Dashboard (Ratatui/desktop): Manager pinned on top ▸ managed roots ▸ their children   (not built yet)
+Dashboard (Ratatui/desktop): Manager pinned on top ▸ managed roots ▸ their children
 GPT Live ──LiveStart(manager id)──▶ the same session over the delegation bridge
 ```
 
@@ -196,8 +197,8 @@ GPT Live ──LiveStart(manager id)──▶ the same session over the delegati
 | M5 | Tools `sessions_find`, `session_status`, `session_result` with bounds and visibility rules; managed/user text injected from the manager log | done (resolved-model and files-changed fields dropped) |
 | M6 | `session_launch` with `origin_message_id` provenance, approval gate, `managed` link | done |
 | M7 | `session_wait` (bounded, interrupted by user input, cancellable) and `session_cancel` (approval) | done |
-| M8 | Packaged manager prompt (short; states what it cannot do) | done (a code constant, not a role file); passing the message id is a follow-up (§8) |
-| M9 | `ManagerOpen`/`ManagerState`, Live pathway, storage/list/refusal rules | host half done (`test_manager_host.py`); Ratatui pinned manager row and chat, desktop parity: **not started** |
+| M8 | Packaged manager prompt (short; states what it cannot do) | done (a code constant, not a role file); the runtime appends the current user message id to the system prompt |
+| M9 | `ManagerOpen`/`ManagerState`, Live pathway, storage/list/refusal rules | done: host (`test_manager_host.py`), Ratatui pinned row and chat (`test_ratatui_manager.py`, `test_ratatui_pty_manager.py`), desktop manager card |
 | M10 | Flag `[manager] enabled = false` default; flip after soak | flag done and default off; **soak not done** |
 
 ---
@@ -255,7 +256,7 @@ GPT Live ──LiveStart(manager id)──▶ the same session over the delegati
 Acceptance:
 
 - [ ] "Start a session to do X" → one approval → one new root running X, shown under the manager. (Backend
-      path tested offline; needs the UI and a real run.)
+      and UI paths tested offline; needs a real Copilot run.)
 - [ ] "What finished in the last two hours?" lists only sessions from that window, with titles and status.
       (Tested offline.)
 - [x] Manager never runs a model other than `github-copilot/gpt-6-luna` (pinned, no fallback; offline tests).
@@ -272,8 +273,6 @@ selection refused (U4); no `session_send` in v1 (U5); no model override, so the 
 
 Open:
 
-- The manager model cannot see `m<seq>` message ids, so its first launch in a turn is normally refused once
-  with the valid id and then succeeds. Surfacing the id in the prompt context is a runtime/prompt follow-up.
 - Two provider sign-ins (Copilot for the manager, Codex for Live) and the cross-session consent are
   implemented and reported by `ManagerState`; UI wording is implemented; a live soak is not verified.
 - Quota and rate-limit behavior of Luna under manager load; Copilot token expiry stops the manager (stated,
@@ -284,7 +283,7 @@ Open:
 Workspace only (paths inline). No external sources needed for this phase.
 Not verified: live Copilot `/models` today; GPT Live with the manager; quota behavior under manager load.
 
-### Release verification (2026-04-23)
+### Release verification (2026-10-19)
 
 Automated verification completed on macOS: full Python suite **6,872 passed,
 336 skipped, 6 deselected**; focused manager/CLI/native bridge/PTY suite
@@ -294,3 +293,8 @@ Automated verification completed on macOS: full Python suite **6,872 passed,
 manual acceptance: the real Copilot/OpenAI smoke test and interactive desktop
 review remain unverified. The unchecked acceptance items above are retained
 where they require that manual verification rather than inferred from mocks.
+
+Re-checked 2026-10-19 against the code (audit of §3 contracts, §4 milestones, §7 tests): the manager
+suites pass (236 tests; one fork/reserved-id test broke under in-flight plan 03 resolve work and was
+fixed by refusing the reserved `new_id` before name resolution), `cargo test` passes for `rust/tui`
+(580 + 58) and `rust/desktop` (114). Still unverified: live Copilot/GPT Live and the soak.

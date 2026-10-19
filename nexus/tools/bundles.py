@@ -102,6 +102,7 @@ class Profile:
 
 BUNDLES: Mapping[str, Bundle] = MappingProxyType(
     {
+        "code": Bundle(name="code", tools=("code",)),
         "fs": Bundle(
             name="fs",
             tools=("read", "glob", "grep", "edit", "write"),
@@ -172,7 +173,7 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
     {
         "coding": Profile(
             name="coding",
-            bundles=("fs", "patch", "shell", "task", "web", "ext", "mcp"),
+            bundles=("fs", "patch", "shell", "task", "web", "ext", "mcp", "code"),
         ),
         # Extension-management tools are opt-in: the default coding vocabulary
         # remains lowercase, with this profile for callers that want meta.

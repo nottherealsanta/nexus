@@ -53,6 +53,16 @@ class SessionList(msgspec.Struct, tag=True, frozen=True):
     include_children: bool = False
 
 
+class SessionResolve(msgspec.Struct, tag=True, frozen=True):
+    ref: str
+    namespace: str | None = None
+    include_retired: bool = False
+
+
+class SessionResolveResult(msgspec.Struct, tag=True, frozen=True):
+    resolution: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
 class SessionTree(msgspec.Struct, tag=True, frozen=True):
     """Read the bounded ownership tree for this workspace; never open a handle."""
 
@@ -938,6 +948,7 @@ class WebLaunch(msgspec.Struct, tag=True, frozen=True):
 Command = (
     SessionList
     | SessionTree
+    | SessionResolve
     | SessionInspect
     | SessionHandoff
     | SessionHandoffRead
@@ -1058,6 +1069,7 @@ Command = (
 COMMANDS: tuple[type, ...] = (
     SessionList,
     SessionTree,
+    SessionResolve,
     SessionInspect,
     SessionHandoff,
     SessionHandoffRead,
@@ -1951,6 +1963,7 @@ Result = (
     | ProvidersUsageResult
     | SessionListResult
     | SessionTreeResult
+    | SessionResolveResult
     | SessionInspectResult
     | SessionHandoffResult
     | SessionArchiveResult
@@ -2044,6 +2057,7 @@ RESULTS: tuple[type, ...] = (
     ProvidersUsageResult,
     SessionListResult,
     SessionTreeResult,
+    SessionResolveResult,
     SessionInspectResult,
     SessionHandoffResult,
     SessionArchiveResult,
@@ -2273,6 +2287,8 @@ __all__ = [
     "SessionForkResult",
     "SessionList",
     "SessionTree",
+    "SessionResolve",
+    "SessionResolveResult",
     "SessionTreeResult",
     "SessionInspect",
     "SessionInspectResult",

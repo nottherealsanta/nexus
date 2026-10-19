@@ -79,7 +79,7 @@ from .agents.manager_prompt import (
     MANAGER_PROVIDER,
     MANAGER_SIGN_IN_HINT,
 )
-from .errors import ConfigError, OperationCancelled
+from .errors import ConfigError, OperationCancelled, SessionError
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
 from .model.http import DEFAULT_TIMEOUT
@@ -121,7 +121,8 @@ from .session.records import MessageRecord
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
 from .tools.builtin.todo import TodoStore
-from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES
+from .session.context_authz import ContextDenied
+from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES, get_profile
 from .tools.manager import ToolManager
 from .tools.manager_tools import build_manager_catalog
 from .tools.permissions import (
@@ -132,9 +133,16 @@ from .tools.permissions import (
     PathGuard,
     PermissionEngine,
     collect_grants,
+    synthetic_call,
 )
 from .tools.questions import QuestionBroker
-from .tools.spec import ToolCall, ToolContext
+from .tools.spec import (
+    NestedAuthorization,
+    NestedOutcome,
+    ToolCall,
+    ToolContext,
+    ToolExecutionResult,
+)
 from .util import redact_secrets, redact_url_userinfo
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the runtime imports lazily
@@ -328,6 +336,64 @@ class _ToolDispatcherAdapter:
         self._outbound_http = outbound_http
         self._local_search_http = local_search_http
         self._questions = questions
+        #: Bound per iteration by the loop (``_NestedPipeline``); the
+        #: ``ToolContext`` receives the typed wrappers below (plan 03 section 3.5).
+        self.invoke_tool = None
+        self.authorize_nested = None
+
+    @property
+    def max_parallel(self) -> int:
+        return self.manager.max_parallel
+
+    @property
+    def nested_call_limit(self) -> int:
+        code_mode = getattr(getattr(self._config, "v2", None), "code_mode", None)
+        return int(getattr(code_mode, "max_nested_calls", 64))
+
+    def nested_traits(self, name: object) -> dict[str, Any] | None:
+        """Mutation and refusal facts for a nested call target.
+
+        A read-only profile (``research``) refuses a mutating nested call with a
+        clear message, as ``McpCall`` refuses mutating targets; such a tool is
+        not in the selected catalog, so it is looked up in the full one.
+        """
+        selected = self.manager.get(name)
+        if selected is not None:
+            return {"mutates": bool(selected.spec.mutates), "refusal": None}
+        full = getattr(self.manager, "_by_name", {}).get(name) if isinstance(name, str) else None
+        if full is not None and full.spec.mutates and get_profile(self.manager.profile).read_only:
+            return {
+                "mutates": True,
+                "refusal": f"the {self.manager.profile} profile refuses nested calls that change state",
+            }
+        return None
+
+    async def _invoke_nested(self, name, args, *, parent_call_id, nested_id=None):
+        call = await self.invoke_tool(
+            name, args, parent_call_id=parent_call_id, nested_id=nested_id
+        )
+        result = call.result
+        return NestedOutcome(
+            result=ToolExecutionResult(
+                content=list(result.content),
+                is_error=result.is_error,
+                display=getattr(result, "display", None),
+                metrics=getattr(result, "metrics", None),
+                context_note=getattr(result, "context_note", None),
+                diff=getattr(result, "diff", None),
+            ),
+            status=call.status,
+            permission=call.permission,
+        )
+
+    async def _authorize_nested(self, permission_key, *, parent_call_id, summary=None):
+        grant = await self.authorize_nested(
+            permission_key, parent_call_id=parent_call_id, summary=summary or {}
+        )
+        return NestedAuthorization(
+            allowed=grant.allowed, decision=grant.decision,
+            rule=grant.rule, message=grant.message,
+        )
 
     def prepare(self, tool_uses):
         calls = [ToolCall.from_tool_use(block) for block in tool_uses]
@@ -359,6 +425,10 @@ class _ToolDispatcherAdapter:
             outbound_http=self._outbound_http,
             local_search_http=self._local_search_http,
             questions=self._questions,
+            invoke_tool=self._invoke_nested if self.invoke_tool is not None else None,
+            authorize_nested=(
+                self._authorize_nested if self.authorize_nested is not None else None
+            ),
         )
 
     async def dispatch(
@@ -518,6 +588,17 @@ class _PermissionGateAdapter:
             plan = replace(plan, evaluations=tuple(evaluations))
         self._issued_plans[id(plan)] = (plan, prepared)
         return plan
+
+    def plan_key(self, permission_key: str, call_id: str):
+        """Plan a synthetic ``ContextQuery(<name>)`` key through the same engine.
+
+        Same frozen engine, grants and attended flag as :meth:`plan`; ``deny``
+        rules stay absolute and the unattended policy applies (plan 03 3.2).
+        """
+        call, spec = synthetic_call(permission_key, call_id)
+        return self.engine.evaluate(
+            call, spec, grants=self._grants, attended=self._attended
+        )
 
     def bind_manager(self, manager: ToolManager) -> None:
         """Bind multi-target evidence to the manager executing this iteration.
@@ -1920,6 +2001,7 @@ class _HookService:
         session_id: str,
         turn_id: str,
         cancel: Any = None,
+        parent_call_id: str | None = None,
     ) -> Any:
         invocation = HookInvocation(
             event=HookEvent.PRE_TOOL_USE.value,
@@ -1929,6 +2011,7 @@ class _HookService:
             tool_input=dict(tool_input or {}),
             session_id=session_id,
             turn_id=turn_id,
+            data={"parent_call_id": parent_call_id} if parent_call_id else {},
         )
         return await self._run(HookEvent.PRE_TOOL_USE.value, invocation, cancel)
 
@@ -1943,6 +2026,7 @@ class _HookService:
         session_id: str,
         turn_id: str,
         cancel: Any = None,
+        parent_call_id: str | None = None,
     ) -> Any:
         invocation = HookInvocation(
             event=HookEvent.POST_TOOL_USE.value,
@@ -1952,7 +2036,10 @@ class _HookService:
             tool_input=dict(tool_input or {}),
             session_id=session_id,
             turn_id=turn_id,
-            data={"result": dict(result or {})},
+            data={
+                "result": dict(result or {}),
+                **({"parent_call_id": parent_call_id} if parent_call_id else {}),
+            },
         )
         return await self._run(HookEvent.POST_TOOL_USE.value, invocation, cancel)
 
@@ -1982,6 +2069,41 @@ class _HookService:
 # ---------------------------------------------------------------------------
 # Subagents (plan sections 5.6, 15.6-15.8)
 # ---------------------------------------------------------------------------
+
+
+class _RootOnlyContext:
+    """Restricts the ``context`` namespace to root sessions (plan 03 section 3.9, v1).
+
+    Delegates everything else to the wrapped :class:`ContextNamespaceProvider`
+    (contract I2); a child, manager, or unknown caller is refused fail-closed.
+    """
+
+    def __init__(self, provider: Any, sessions: Any) -> None:
+        self._provider = provider
+        self._sessions = sessions
+
+    def _require_root(self, caller: str) -> None:
+        try:
+            kind = self._sessions.kind_of(caller)
+        except Exception:  # noqa: BLE001 - fail closed
+            kind = ""
+        if kind != "root":
+            raise ContextDenied("context access is available to root sessions only")
+
+    def resolve(self, caller: str, *args: Any, **kwargs: Any) -> Any:
+        self._require_root(caller)
+        return self._provider.resolve(caller, *args, **kwargs)
+
+    def check(self, caller: str, *args: Any, **kwargs: Any) -> Any:
+        self._require_root(caller)
+        return self._provider.check(caller, *args, **kwargs)
+
+    def bind(self, caller: str, *args: Any, **kwargs: Any) -> Any:
+        self._require_root(caller)
+        return self._provider.bind(caller, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
 
 
 #: The turn-frozen authority a child inherits: the parent's permission engine and
@@ -2425,6 +2547,13 @@ class _ChildRuntime:
         session = facade.manager.open(
             real_id, create=True, recover=False, ownership=_child_ownership(spec),
         )
+        # A Nexus-run child on a ``spawned`` edge is readable by its ancestors
+        # through the context namespace (plan 03 section 3.2 rule 3); external
+        # workers (the other ``open`` below) keep the default 0.
+        grant = getattr(facade.manager.store, "grant_child_context_read", None)
+        if callable(grant):  # lightweight runtime fakes have no allocation table
+            with contextlib.suppress(SessionError):
+                grant(spec.session_id, allowed=True)
         try:
             runtime._restore_todos(session)
             config = (
@@ -4766,8 +4895,106 @@ class Runtime:
                 home=self._home,
             ),
         )
+        code_config = getattr(getattr(config, "v2", None), "code_mode", None)
+        if code_config is not None and code_config.enabled and manager.profile == "coding":
+            from .tools.codemode.catalog import build_catalog
+            from .tools.codemode.runner import Runner
+            from .tools.codemode.tool import availability, register
+            if availability()["available"] and (restrict is None or "code" in restrict):
+                runner = getattr(self, "_code_runner", None)
+                if runner is None:
+                    runner = self._code_runner = Runner(
+                        code_config.max_workers,
+                        context_provider=self._code_context_provider(code_config),
+                    )
+                # ``manager.tools`` is already this iteration's selection: the
+                # session's disabled tools/MCP servers were removed from the
+                # catalog before the manager was built, and ``restrict`` carries
+                # the skill/agent allowlist. The callable catalog is therefore
+                # per iteration and never includes a tool disabled for the
+                # session.
+                callable_catalog = build_catalog(manager.tools, code_config.expose)
+                options: dict[str, Any] = {}
+                accepted = inspect.signature(register).parameters
+                for name in ("inline_budget_tokens", "pinned"):
+                    if name in accepted:
+                        options[name] = getattr(code_config, name)
+                code_tool = register(runner, callable_catalog, code_config,
+                                     events=lambda sid: self._sessions.open(sid, create=False).events,
+                                     context_session=lambda sid: self._sessions.open(sid, create=False),
+                                     **options)
+                manager = ToolManager(
+                    config, workspace=self.workspace, tools=(*manager.tools, code_tool),
+                    restrict=restrict, job_registry=self._job_registry,
+                    todo_store=self._effective_todo_store(), path_guard=manager.path_guard,
+                )
         self._track_tool_manager(manager)
         return manager
+
+    def _code_context_provider(self, code_config: Any) -> Any | None:
+        """The ``context`` namespace provider for code mode, or ``None`` (off).
+
+        Plan 03 sections 3.2 and 3.9. Roots only in v1; sub-calls run on the
+        calling session's own resolved model unless ``sub_model`` is set.
+        """
+        if not getattr(code_config, "context", False) or self._sessions is None:
+            return None
+        from .session.context_port import ContextReadPort
+        from .tools.codemode.context_ns import ContextLimits, ContextNamespaceProvider
+
+        limits = ContextLimits(
+            max_sub_calls=code_config.max_sub_calls,
+            max_sub_input_tokens=code_config.max_sub_input_tokens,
+            max_total_sub_tokens=code_config.max_total_sub_tokens,
+            max_depth=code_config.max_depth,
+            sub_model=code_config.sub_model,
+        )
+        provider = ContextNamespaceProvider(
+            ContextReadPort(self._sessions),
+            llm_factory=self._code_llm,
+            budget_factory=self._code_budget,
+            limits=limits,
+        )
+        return _RootOnlyContext(provider, self._sessions)
+
+    def _code_llm(self, session_id: str) -> Any | None:
+        """The session's own provider and model for ``llm()``; no fallback or upgrade."""
+        config = self.effective_config()
+        code_config = getattr(getattr(config, "v2", None), "code_mode", None)
+        try:
+            sub_model = getattr(code_config, "sub_model", None)
+            if sub_model:
+                resolved = self._router.resolve(ModelRequest(messages=[], model=sub_model))
+                provider_name, model = resolved.provider.name, resolved.model
+            else:
+                session = self._sessions.open(session_id, create=False)
+                provider_name, model, resolved = self._root_route(
+                    session, config=config,
+                    agent_definition=getattr(session, "_turn_agent_definition", None),
+                    model_selection=None,
+                )
+            if resolved is None:
+                return None
+        except Exception:  # noqa: BLE001 - no resolvable model means llm() is unavailable
+            return None
+        from .tools.codemode.context_ns import ContextLlm
+
+        return ContextLlm(provider=resolved.provider, model=model, sampling=None)
+
+    def _code_budget(self, session_id: str) -> Any:
+        """A bounded budget for one program's sub-calls (shared tree budget if configured)."""
+        budget = self._new_subagent_budget(None)
+        if budget is not None:
+            return budget
+        from .agents import SubagentBudget
+
+        code_config = getattr(getattr(self.effective_config(), "v2", None), "code_mode", None)
+        return SubagentBudget(
+            max_concurrent=1,
+            max_depth=int(getattr(code_config, "max_depth", 1)),
+            max_fanout=int(getattr(code_config, "max_sub_calls", 16)),
+            token_budget=int(getattr(code_config, "max_total_sub_tokens", 200_000)),
+        )
 
     def _web_tool_availability(
         self, config: Config
@@ -6786,6 +7013,10 @@ class Runtime:
             return
         self._closed = True
         await self.voice.shutdown()
+        code_runner = getattr(self, "_code_runner", None)
+        if code_runner is not None:
+            with contextlib.suppress(Exception):
+                await code_runner.close()
         if (live := getattr(self, "live", None)) is not None:
             await live.shutdown()
         for provider in self._owned_providers:

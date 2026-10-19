@@ -178,8 +178,11 @@ class TaskRequest:
     model: str | None = None
     description: str | None = None
     worktree: bool = False
+    context_read: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.context_read, bool):
+            raise SubagentError("context_read must be boolean")
         if not isinstance(self.prompt, str) or not self.prompt.strip():
             raise SubagentError("prompt must be a non-empty string")
         if (
@@ -1574,6 +1577,13 @@ class SubagentRunner:
 
         sink = emit if emit is not None else self._event_sink
         index, session_id = await self._next_child_id()
+        manager = getattr(self._sessions, "manager", None)
+        store = getattr(manager, "store", None)
+        if store is not None:
+            # External workers cannot participate in host context ancestry.
+            store.grant_child_context_read(
+                session_id, allowed=req.context_read and child_provider in {None, "nexus"}
+            )
         task_id = new_id()
         # Session ids are stable identities inside a parent log and globally
         # unique within the persistent session facade's allocation scope.

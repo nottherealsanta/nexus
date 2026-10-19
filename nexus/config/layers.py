@@ -63,6 +63,7 @@ V2_SECTION_KEYS = frozenset(
         "live",
         "manager",
         "updates",
+        "code_mode",
     }
 )
 # ``model`` is the one name shared by both shapes: a string in v1, a table in v2.
@@ -86,6 +87,14 @@ _LEGACY_ENV = {
 # anything else stay strings even when they look numeric.
 _LEGACY_ENV_TYPES = {"timeout_seconds": float, "context_chars": int}
 _V2_NUMERIC = {
+    "code_mode.max_workers": int,
+    "code_mode.max_tool_seconds": int,
+    "code_mode.max_nested_calls": int,
+    "code_mode.inline_budget_tokens": int,
+    "code_mode.max_sub_calls": int,
+    "code_mode.max_sub_input_tokens": int,
+    "code_mode.max_total_sub_tokens": int,
+    "code_mode.max_depth": int,
     "agent.max_iterations": int,
     "agent.max_turn_seconds": float,
     "model.params.temperature": float,
@@ -146,6 +155,8 @@ _V2_BOOL = frozenset(
         "live.progress",
         "live.log_raw",
         "manager.enabled",
+        "code_mode.enabled",
+        "code_mode.context",
     }
 )
 
