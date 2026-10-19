@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.6.0](https://github.com/nottherealsanta/nexus/compare/v0.5.2...v0.6.0) (2026-10-19)
+
+
+* request 0.6.0 release ([693ff5a](https://github.com/nottherealsanta/nexus/commit/693ff5aa14a6aa27d7a8b02b23a51c23e603dea1))
+
+
+### Features
+
+* add Antigravity workers, device gateway, and provider usage controls ([0aca0c4](https://github.com/nottherealsanta/nexus/commit/0aca0c403f30e7c348c1bf16670ed5a38cada2a5))
+* add Claude Code subagent backend switch and harden the worker ([7c7006a](https://github.com/nottherealsanta/nexus/commit/7c7006aaf8c62f442ac273e33552f3522599e24b))
+* add manager orchestration and code-mode surfaces ([#88](https://github.com/nottherealsanta/nexus/issues/88)) ([db6e5dc](https://github.com/nottherealsanta/nexus/commit/db6e5dc661d388fe90566d1968594a227f09a338))
+* add xAI (Grok) provider over the SuperGrok subscription ([0919e4c](https://github.com/nottherealsanta/nexus/commit/0919e4cc38d44c5c0e6f0dd2007feb8f7625c927))
+* **agents:** remove worker wall-clock deadlines and add session planning docs ([a53607e](https://github.com/nottherealsanta/nexus/commit/a53607e21d74aef0926fc5c62a30087a3a0556ff))
+* antigravity worker updates and troubleshooting doc ([a019366](https://github.com/nottherealsanta/nexus/commit/a0193669c1d4bb7ca2f8d05c65e64cd2de4dc5cd))
+* Codex-style GPT Live handoff with transcript context and speakable replies ([148e356](https://github.com/nottherealsanta/nexus/commit/148e356d6ad33c302caa262ec42047d244ecb304))
+* expandable terminal Live pane above the composer ([c29d98d](https://github.com/nottherealsanta/nexus/commit/c29d98d9d1d60049f351857c5855f2c0de0f0b43))
+* Grok-style native TUI with sessions dashboard and settings modal ([82bdf52](https://github.com/nottherealsanta/nexus/commit/82bdf52232a4257fdb9a798ba6a1975e8c335f97))
+* hot-apply tiers, client project sessions and session DB changes ([0db032f](https://github.com/nottherealsanta/nexus/commit/0db032f60520bed4c643d240534d3f27dcd55fae))
+* improve provider, worker, and terminal behavior ([b8cbd7f](https://github.com/nottherealsanta/nexus/commit/b8cbd7fc44ffa2a5110e54ebf3b8ab6e6dc0c3d1))
+* improve session dashboard ordering and live controls ([4443a9d](https://github.com/nottherealsanta/nexus/commit/4443a9dead6d1fda4b724de6b0620d078bd4d43d))
+* **manager:** add opt-in session orchestration across native surfaces ([0e2055d](https://github.com/nottherealsanta/nexus/commit/0e2055dd04ab638de98a1885eba19885e1e3fabb))
+* merge Antigravity, gateway, and provider usage updates ([2ddfd33](https://github.com/nottherealsanta/nexus/commit/2ddfd33347e4a2d24007d0671ec7183aa06b3f12))
+* one-line session rows and finished-subagent diamonds ([37e5033](https://github.com/nottherealsanta/nexus/commit/37e5033544ec1822b4ee1cd8a88d794d34e8148f))
+* pause and resume GPT Live calls with Ctrl+X P ([493a394](https://github.com/nottherealsanta/nexus/commit/493a394ec2290736a23a0c8f0b88fd500c8bd4f5))
+* polish native Ratatui terminal experience ([b646f42](https://github.com/nottherealsanta/nexus/commit/b646f42ef606b20c5502e94558d1a254ac7d0992))
+* record heard text, source and verbatim in Live delegation ([af3d9a4](https://github.com/nottherealsanta/nexus/commit/af3d9a4d7624ed3fe84fd7f4b7842f2689a6a1a4))
+* show turns waiting for a free slot under the global limit ([0bbcf2c](https://github.com/nottherealsanta/nexus/commit/0bbcf2c67d1f86b1cab8eaa2e9ba0519a1b62de8))
+* sticky user message while scrolling and top bar spacing ([323e700](https://github.com/nottherealsanta/nexus/commit/323e7006e6e7b0a6bbeed9c30f3e11c6e6ded9df))
+* support tool-result images on OpenAI wire and refine Ratatui TUI ([28c1da4](https://github.com/nottherealsanta/nexus/commit/28c1da491d398820e5a27b02d20e7d49c90a1c25))
+* time-grouped sessions dashboard with search and keyboard preview ([01ab9e7](https://github.com/nottherealsanta/nexus/commit/01ab9e77d3a272fcd50ea3c3a768ee6abae43226))
+* unified sessions, session trees, and context handoffs ([0787104](https://github.com/nottherealsanta/nexus/commit/0787104fcd42036fb9c2966e53af80377c239c75))
+
+
+### Bug fixes
+
+* banded user cards and a pill row that never covers content ([e19e940](https://github.com/nottherealsanta/nexus/commit/e19e940351e63a8a68b69849d81f54430d9d3bd8))
+* clicking a context header line opens its inspector ([5a9d528](https://github.com/nottherealsanta/nexus/commit/5a9d528084d703faa51cefbb8132917cea2bffc3))
+* Codex-style GPT Live sideband reconnect without client pings ([87f08a4](https://github.com/nottherealsanta/nexus/commit/87f08a4f7906413ffd9120a17e47d1c1a4844c8f))
+* drop read-only role enforcement and update UI projections ([54265ed](https://github.com/nottherealsanta/nexus/commit/54265ed919e90dbbeeab87b02d4e14063aa69460))
+* drop the blank row between the composer and the activity meter ([0d5d1fb](https://github.com/nottherealsanta/nexus/commit/0d5d1fbcec32a7f740fe651fbcc0e45ad65d9b51))
+* keep GPT Live calls alive past 35s by upgrading webrtc to 0.17.2 ([453ab89](https://github.com/nottherealsanta/nexus/commit/453ab89ddabe28234233c35d5151dc203a0b50ff))
+* keep trailing tool groups running until their turn closes ([ec66fce](https://github.com/nottherealsanta/nexus/commit/ec66fceda3faa0c764dd22d3a14273631f1ac8c5))
+* report an empty Antigravity SUCCESS as needs-attention, not completed ([fc504cc](https://github.com/nottherealsanta/nexus/commit/fc504ccae96bb34939853bbb48fcd7a607a5eb62))
+* sentence-case tool names and purple accents on sessions and settings ([fdacf5b](https://github.com/nottherealsanta/nexus/commit/fdacf5b76ae7820ae7d2ca54b90b1d698718098a))
+* simpler top bar, details sidebar on Sessions, context click opens inspector ([81d1451](https://github.com/nottherealsanta/nexus/commit/81d1451730dc89a27eb873a7ae427600a68f6215))
+* stabilize offline tests and target release 0.5.4 ([#86](https://github.com/nottherealsanta/nexus/issues/86)) ([7567151](https://github.com/nottherealsanta/nexus/commit/7567151f1621c76ba3bc8fe5c413ac783dc6dc69))
+* stabilize PTY snapshots and active tool groups ([f50cb2a](https://github.com/nottherealsanta/nexus/commit/f50cb2a5b8097cde5549b97a85e8f247c87c2daf))
+* surface agy denials and --mode fallback; close ERROR tool rows ([b6acf5f](https://github.com/nottherealsanta/nexus/commit/b6acf5f122c3dcbe711d0637c9c97bccb7bf8c0a))
+* trigger patch release 0.5.3 ([8a69304](https://github.com/nottherealsanta/nexus/commit/8a6930478c9f3f058c5e876dccbc773b42fa1321))
+* **tui:** finish overhaul rendering and startup polish ([b2f2c77](https://github.com/nottherealsanta/nexus/commit/b2f2c775d2d087c19a6103364117b78e3e7a3289))
+* user card without prompt glyph, time in turn details, stable turn numbers ([ad7d555](https://github.com/nottherealsanta/nexus/commit/ad7d5557046e729295679cb7074bbe397db71d90))
+
 ## [0.5.2](https://github.com/nottherealsanta/nexus/compare/v0.5.1...v0.5.2) (2026-10-13)
 
 
