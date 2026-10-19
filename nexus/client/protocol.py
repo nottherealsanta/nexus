@@ -326,6 +326,14 @@ class Client:
     async def manager_state(self) -> p.ManagerStateResult:
         return await self._request(p.ManagerState())  # type: ignore[return-value]
 
+    async def session_resolve(
+        self, ref: str, namespace: str | None = None, *, include_retired: bool = False
+    ) -> dict[str, Any]:
+        result = await self._request(
+            p.SessionResolve(ref=ref, namespace=namespace, include_retired=include_retired)
+        )
+        return dict(result.resolution)
+
     async def session_tree(self, session: str, namespace: str = "main") -> dict[str, Any]:
         result = await self._request(p.SessionTree(session=session, namespace=namespace))
         return dict(result.tree)

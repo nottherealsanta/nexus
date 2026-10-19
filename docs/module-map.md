@@ -12,7 +12,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `nexus/` | the package (below) |
 | `nexus/gateway/` | opt-in loopback device gateway; module file map below |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, code-mode detail cards in `src/code_detail.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
@@ -339,6 +339,9 @@ here, so add a row when you add a file.
 | `export.py` | Structured, transport-neutral SQLite session export |
 | `ids.py` | Session ID validation shared by SQLite session rows and lock paths |
 | `lock.py` | Cross-process session locking |
+| `context_authz.py` | Pure ancestry authorisation for context reads: owner-edge walk with `context_read = 1` on every hop, same project, depth cap, trash denies |
+| `context_port.py` | `ContextReadPort`: bounded, redacted, untrusted-marked reads (meta, messages, tool calls, search, report) over an authorised target |
+| `names.py` | Immutable session names: v2 vocabulary, CSPRNG allocation with retry then suffix, validation, backfill batches |
 | `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export; `kind_of`, `manager_summary`, and the manager session's archive/delete/fork refusal |
 | `records.py` | Versioned records persisted by the SQLite session store |
 | `session.py` | The public session handle over SQLite records; `Session.kind`, and no hooks for a `manager` session |
@@ -373,6 +376,20 @@ here, so add a row when you add a file.
 | `permissions.py` | Permission grammar, evaluation, path security, and approval primitives |
 | `questions.py` | Session-scoped question requests for tools and agents |
 | `spec.py` | Tool contracts |
+
+### `nexus/tools/codemode/`
+
+| File | Purpose |
+| --- | --- |
+| `__init__.py` | Optional code-mode package ([tools.md](tools.md#code-mode-the-code-tool)) |
+| `catalog.py` | Callable catalog from the frozen tool set, exposure filter, `render_catalog` within the inline budget, skipped names |
+| `context_ns.py` | Flat `context_*` and `llm` host functions over `ContextReadPort`, with per-program sub-call limits |
+| `ipc.py` | Bounded, framed JSON IPC between daemon and helper (finite numbers, 32-level nesting) |
+| `monty_adapter.py` | Isolated helper process; sole importer of `pydantic_monty` |
+| `runner.py` | Daemon-side runner: helper lifecycle, admission, id-correlated callbacks, `killpg` |
+| `store.py` | Bounded JSON `store`/`load` committed on success, replayed from `code.store` |
+| `stubs.py` | Python stubs from JSON Schema (`Literal`, `| None = None`) for type checking |
+| `tool.py` | The `code` `RegisteredTool`, result text, events |
 
 ### `nexus/tools/builtin/`
 
@@ -604,3 +621,8 @@ loop over local state; splitting it further needs a state struct and is not done
 
 The manual `tests/ratatui_performance_check.py` script measures controlling-PTY
 streaming, input and CPU cost.
+
+- `nexus/tools/codemode/`: optional code-mode catalog/stubs, JSON event store,
+  bounded IPC and daemon-side runner. `monty_adapter.py` is the isolated helper
+  and sole importer of `pydantic_monty`; `runner.ContextNamespaceProvider` defines
+  the context integration seam (`bind(session, targets) -> dict` of callables).

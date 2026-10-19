@@ -18,7 +18,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `run MESSAGE [--session ID] [--json]` | one turn (session defaults to `default`) over the daemon; `-` reads stdin; human rendering with terminal approvals, or `--json` JSONL event envelopes (unattended) |
 | `live [--session ID] [--voice V] [--new] [--workspace PATH]` | headless GPT Live voice call (experimental): asks for consent on the terminal the first time, prints captions, delegations and appends labelled, Ctrl+C or Ctrl+D hangs up ([live.md](live.md#headless-cli-nexus-live)) |
 | `replay SESSION [--json]` / `sessions replay` | re-render a session from its log through the reducer |
-| `sessions list\|fork\|replay\|export\|delete\|restore` | session management (`fork --at-seq`, `export --format json\|markdown\|jsonl`, `delete --force`) |
+| `sessions list\|show\|fork\|replay\|export\|delete\|restore` | session management (`show <name\|id>` prints name, id, title, kind, state, project; `fork --at-seq`, `export --format json\|markdown\|jsonl`, `delete --force`) |
 | `models list\|show\|refresh\|tiers\|select` | registry inspection (`list --provider --tier --selectable --search`); `select --session` |
 | `agents list\|select\|current\|reset` | subagent definitions and the session's root agent |
 | `tools list` | the model-facing tool catalogue for the current config |
@@ -68,6 +68,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | --- | --- | --- | --- |
 | `/attach` | `<path> \| clear` | | attach an image or document |
 | `/new` | `[id]` | `/clear` | start a new session |
+| `/open` | `<name\|id>` | | switch to a session by its immutable name (e.g. `quiet-cobalt-otter`) or id; trashed or unknown refs only show a notice |
 | `/sessions` | `[id]` | `/session` | switch to `[id]`, or (native TUI) open Sessions, the same surface as `Ctrl+B` |
 | `/model` | `[list\|tier\|provider/model\|id]` | | list models or set this session's model |
 | `/effort` | `[LEVEL]` | `/reasoning` | reasoning effort |
@@ -165,3 +166,12 @@ ask “What finished in the last two hours?” to find sessions, then use `/sess
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.
+
+### Immutable session names
+
+Saved sessions receive an immutable ASCII adjective-color-animal name, globally unique across projects and root and child namespaces. Names survive title changes, archive, and trash; purged names are never reused. Drafts remain unnamed until persistence. Exact ids take precedence over exact, case-sensitive names; prefixes and Unicode lookalikes are not normalized. `nexus sessions show <name-or-id>` resolves without opening a handle. The host `SessionResolve` command accepts `ref` and optional `namespace`, returning canonical identity and lifecycle metadata; resolution does not grant access or revive deleted sessions. There is no rename operation.
+
+Saved immutable session names are accepted anywhere a session target is accepted,
+including `sessions show` and open; exact IDs win. Completion lists saved names,
+not retired tombstones or unsaved drafts. Names are case-sensitive and cannot be
+renamed; titles remain independently editable.

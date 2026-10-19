@@ -33,6 +33,12 @@ picker, including immediately after creation and after session-list refreshes.
 Existing titles remain unchanged; session IDs are retained for navigation, not
 used as fallback names.
 
+A `working` tab in the top bar animates the shared 4-row braille spinner (an 8-dot perimeter
+covering all four rows to match completed `⣿`, on the same frame
+clock as the sidebar and tool rows; frames are one cell wide so tab click ranges
+never shift). It rests on the first frame when animations are off. Regression:
+`working_tab_spinner_advances_with_the_frame` in `render/chrome.rs`.
+
 ### Completion notifications
 
 The native client plays a Nexus-generated two-note completion cue through
@@ -331,8 +337,11 @@ need a client built from the same source; an older binary rejects them with
 
 **Splash (design overhaul, step 12).** `rust/tui/src/splash.rs` replaces the plain word.
 The small half-block wordmark is made of particles that start at deterministic pseudo-random
-cells and ease (`1-(1-p)^3`) to their places, drawn `·` then `•` and blended quiet → accent,
-while a 30-segment `▰▱` bar with a percentage and the current step name fills under it. Then
+cells and ease (`1-(1-p)^3`) to their places, drawn `·` then `•` and blended dim → ink blue,
+while a 30-segment `▰▱` bar fills under it: the bar itself is centred horizontally, the
+percentage sits on its right, and the current step name is centred on the row below the bar
+(never beside or above it; on a screen too narrow for the percentage beside a centred bar the
+bar shifts left, and below ~35 columns it shortens). Then
 the wordmark flashes once (160 ms), and a 3-cell `▓▒░` curtain wipes left to right at 4
 cells per 8 ms tick (500 cells/s, ~0.3 s at 140 columns) from the splash into the first chat frame (the chat is drawn, then cells
 right of the curtain are copied from the splash; the last frame is exactly the chat). Input
@@ -341,10 +350,23 @@ reaches the composer during the wipe, and Ctrl-Q and resize always work. The fir
 stepped every 80 ms and held input until the 36-frame wipe ended (~4 s after the session had
 loaded), so the splash looked laggy and typed keys vanished. Now it is a pure function of 8 ms
 "frames" since launch (fake clock in the tests; the draw loop paces redraws at 60 fps, so motion
-is continuous). Progress is milestone-driven, not timed: particle progress is `min(bar, elapsed /
-60 frames)`, so they arrive when the bar completes, never sooner than ~0.48 s, with no maximum;
-start times are staggered over the first 60% of that progress range. After `ready` the whole
-sequence takes under 1.1 s at 140 columns (`the_whole_sequence_after_ready_is_short`).
+is continuous). **Two independent layers** (the user's report: "the background froze at 40% during
+restart"): the *bar* is milestone-driven only (k-th of five milestones fills k/5; time never moves
+it), while the *background* is a pure function of the clock: a field of ambient dim-blue dots
+(`ambient_cell`, one per ~48 cells, clamped 6..96) drifts at fixed per-particle velocities and
+wraps, twinkling slowly, for as long as the splash is up, kept clear of the wordmark/bar block;
+and the wordmark's particles assemble over the first 60 frames (~0.48 s, `progress`, staggered
+over the first 60% of that range) whatever the bar says. Earlier versions drove the particles
+from `min(bar, elapsed/60)` plus a sway whose radius shrank near the target (then a radius
+floor), so a bar stalled at 40% left the field effectively still; the root cause was that
+coupling, not rounding. The flash waits for `ready` and for the intro to finish, so the
+earliest flash is still ~0.48 s; there is no maximum. After `ready` the whole sequence takes
+under 1.1 s at 140 columns (`the_whole_sequence_after_ready_is_short`). Palette: dark blue
+(`INK` rgb 74,126,224, ~4.7:1 on the dark background, for wordmark, filled bar, curtain;
+`DIM` rgb 38,64,122 for the ambient field and in-flight particles); the app's orange accent is
+not used on the splash. Residual limit: the client is single-threaded, so a snapshot whose parse
+and apply is CPU-heavy (a very large restored transcript) still pauses every redraw for its
+duration, which the splash cannot hide; `trace::stall` and `snapshot→frame` timings show it.
 The five milestones are mostly **client-side** observations: `daemon` = the bridge pipe is
 open, `workspace` = a first line arrived, `providers` = it parsed, `session` = the first
 snapshot was applied, `ready` = chat state ready. The launcher additionally writes
@@ -355,11 +377,13 @@ never claim `session` or `ready`; those still need a real snapshot. Startup line
 snapshots (snapshots start `{"schema":`; the client matches the exact `{"startup":` prefix,
 max 64 bytes, and drops them before the parser), so a snapshot stream without them behaves
 as before, and they are idempotent and order-independent. The names do not mean the
-workspace or providers were checked. While waiting (animated, `ready` not reached) the
-splash idles instead of freezing at the last milestone: particles in flight sway on a
-slow orbit (`drift`, 2.5 s per turn, fading as they near their targets) and a pulse
-scans the unfilled bar. This is motion only; the percentage and fill never move for it,
-and after `ready` it is zero so arrival and flash are purely milestone-driven. Each fills a fifth over 25 frames (200 ms). With animations off (Settings → Appearance) or
+workspace or providers were checked. While waiting (animated, `ready` not reached) a pulse
+also scans the unfilled bar (colour only; the percentage and fill never move for it).
+Each milestone fills a fifth over 25 frames (200 ms). Regression tests:
+`stalled_at_forty_percent_the_background_never_stands_still`,
+`assembly_and_background_do_not_read_the_milestones` (frames with no milestone and with four are
+identical outside the bar row) and `the_palette_is_dark_blue_and_readable_on_the_dark_background`;
+the PTY test also samples the screen for 1.5 s at 40%. With animations off (Settings → Appearance) or
 `NEXUS_SPLASH=off` the wordmark and bar are drawn in their final state and the chat follows
 the first snapshot with a straight cut. ASCII glyph set: `#` wordmark, `.`/`o` particles,
 `#-` bar, `#=-` curtain. The splash always uses the dark palette (the theme arrives with the
@@ -597,7 +621,8 @@ The composer grows with its wrapped content from the 8-row resting layout up to
 (`render::composer_height`; mouse hit-testing uses the same height).
 
 Running tool rows animate: Python puts the private-use slot `U+E000` where the
-spinner glyph goes, and Rust draws the current braille frame there and redraws
+spinner glyph goes, and Rust draws the current braille frame there (an 8-dot perimeter
+sequence across all four rows: `⠋⠙⠸⢰⣠⣄⡆⠇`, matching completed `⣿`) and redraws
 at ~8 Hz only while some block holds a slot. A running tool group's header
 uses the same spinner in place of its `▸`/`▾` glyph until the group finishes. Cached wrapped rows keep the slot,
 so animation costs no re-wrap and sends no snapshots.
@@ -682,6 +707,7 @@ Error, Progress) exceeds 8 lines gets `N lines ▸`; clicking or Enter expands t
 full details in place (`block_toggle` on `<call_id>:output`, kept in `shell.expanded`).
 Only a subagent row opens a page; it never expands the tool details in place (verbose mode included), and only a failed child's `Error:` line shows inline. On that page the top bar shows the child's
 model, and Up returns to the parent like Escape (PageUp/PageDown/wheel scroll).
+A subagent row's left icon (column 5, the name stays at column 7) is the animated `look::SLOT` spinner while running (using an 8-dot perimeter sequence across all 4 braille rows, matching completed `⣿`) and a full `⣿` when done, blended 50% from the agent colour toward the background (error colour when failed).
 The page keeps 30% of the viewport as blank padding below the last row so tools never
 sit on the bottom edge, and every scroll key clamps to the same `max_scroll` as the
 wheel (no overshoot). Laid-out rows are cached per page, so Esc back to the parent
@@ -1909,3 +1935,16 @@ ask “What finished in the last two hours?” to find sessions, then use `/sess
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.
+
+## Code mode rows (plan 03 section 3.13)
+
+A `code` call is an ordinary tool row whose `signal` body is built by
+`ui_support/tool_details.py:code_signal_rows` (no new Rust wire kind): the program with line numbers
+(`out` rows, so the number column is quiet), then one row per nested call, `✓` ok, `✗` error, `⊘`
+denied (with the matching rule), `…` running, `–` cancelled, each with compact arguments, duration,
+size and, for `llm`, model and tokens; failed and denied rows use the `error` kind. The bridge
+re-sends the block whenever a `code.call` arrives, so running rows appear live. `i` opens the full
+labelled sections (`tool_detail_sections`, one `Nested call N` each with full arguments and result,
+clipping announced). Checks: `tests/test_ratatui_pty_codemode.py` (live mid-run then finished
+snapshot), `transcript::signal` unit test. Not verified: nested approval prompts highlighting the
+calling line.

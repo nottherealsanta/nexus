@@ -47,6 +47,8 @@ from .names import (
 from .spec import PathTarget, ToolCall, ToolSpec
 
 __all__ = [
+    "SYNTHETIC_PERMISSION_TOOLS",
+    "synthetic_call",
     "ApprovalBroker",
     "BatchPlan",
     "Decision",
@@ -1174,6 +1176,10 @@ _NEVER_ASK_TOOLS = frozenset({"question"})
 #: every mode (a blocked child must always be able to say so). An explicit
 #: ``deny`` rule is evaluated earlier and still wins.
 _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
+#: Families whose mode fallback is ``ask`` even under ``mode = "allow"``: reading
+#: another session's context is the sensitive path. Deny rules, grants and
+#: explicit allow rules still come first; ``mode = "deny"`` still denies.
+_MODE_FALLBACK_ASK_TOOLS = frozenset({"ContextQuery"})
 
 
 class PermissionEngine:
@@ -1381,7 +1387,7 @@ class PermissionEngine:
                 call, spec, key, Outcome.DENY, None, "mode_deny",
                 "Denied by default mode", suggestions,
             )
-        if self.mode == "allow":
+        if self.mode == "allow" and public_name not in _MODE_FALLBACK_ASK_TOOLS:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, None, "mode_allow",
                 "Allowed by default mode", suggestions,
@@ -1906,6 +1912,44 @@ class PermissionEngine:
             call, spec, key, Outcome.DENY, rule, "unattended_deny",
             "No approver available; unattended policy denies", suggestions,
         )
+
+
+# ---------------------------------------------------------------------------
+# Synthetic permission keys (plan 03 section 3.2)
+# ---------------------------------------------------------------------------
+
+#: Permission families that are not tools but are planned through the same
+#: engine, grants, and rules (``ContextQuery(<session-name>)``). Rules use the
+#: ordinary ``Tool(glob)`` grammar, so ``deny = ["ContextQuery(*)"]`` is absolute.
+SYNTHETIC_PERMISSION_TOOLS = frozenset({"ContextQuery"})
+
+_SYNTHETIC_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\((.+)\)$", re.S)
+
+
+def synthetic_call(permission_key: str, call_id: str) -> tuple[ToolCall, ToolSpec]:
+    """A ``(call, spec)`` pair so the engine can plan ``Family(key)`` like a tool.
+
+    Raises :class:`PermissionRuleError` for an unknown family or a malformed
+    key, so a caller fails closed instead of inventing a permission family.
+    """
+    match = _SYNTHETIC_KEY.match(permission_key) if isinstance(permission_key, str) else None
+    if match is None or match.group(1) not in SYNTHETIC_PERMISSION_TOOLS:
+        raise PermissionRuleError(f"Unknown synthetic permission key: {permission_key!r}")
+    family, key = match.group(1), match.group(2)
+    if "\x00" in key or len(key) > MAX_PERMISSION_KEY_CHARS:
+        raise PermissionRuleError("Synthetic permission key is not representable")
+    spec = ToolSpec(
+        name=family,
+        description=f"Synthetic permission family {family}; not a callable tool.",
+        input_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+        },
+        bundle="code",
+        permission_key=lambda tool_input: tool_input["target"],
+    )
+    return ToolCall(id=call_id, name=family, input={"target": key}), spec
 
 
 # ---------------------------------------------------------------------------

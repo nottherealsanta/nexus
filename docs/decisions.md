@@ -175,7 +175,7 @@ pressed queue chip is reversed. Spinner frames, status marks and queue controls 
 Stated so nobody builds on a false assumption.
 
 - **No summarizer is wired in `Runtime`:** `hybrid` compaction is evict-then-drop,
-  and `strategy = "summarize"` fails actionably ([context.md](context.md#compaction)).
+  and `strategy = "summarize"` fails actionably ([context.md](context.md)).
 - **`[permissions] mode` defaults to `allow` in the schema** but `ask` in
   `PermissionEngine`'s constructor and in examples; set it explicitly.
 - **Root `README.md`** still says raw GitHub Copilot is omitted, that the web
@@ -601,7 +601,7 @@ only v1 layers (environment overrides do not promote) remain on compaction, whil
 any v2 layer promotes the whole configuration to `handoff`. The config version
 policy is unchanged. Plan:
 `plans/planning/01-unified-sessions-and-handoffs.md`; behavior in
-[context.md](context.md#same-session-handoff-p5).
+[context.md](context.md).
 
 ## Composer `!` shell output is context, not a prompt
 
@@ -1083,3 +1083,67 @@ Design overhaul step 6 scrambled a window of graphemes in the activity word with
 always shows its real characters, a highlight sweeps across it every 1.8 s on the 30 Hz motion clock, and
 the `∴` is grey too. The word stays readable at every frame, and only colours change, so the `[stop]`
 geometry is untouched. Animations off: static dark grey; Monochrome: plain text.
+
+## Session names live in the row, not the log
+
+A session's name is stored in `sessions.name` and `session_names`, not as a
+`session.named` record. Plan 03 section 3.1 proposed an early record; we chose
+the row because an extra first record shifts every seq and costs a record per
+session, while the name is already durable and globally unique in SQLite.
+Exports carry it (a synthesized leading line in JSONL) and import keeps it when
+free. Old logs that contain `session.named` still replay.
+
+## Code mode: per-call helper process, not a daemon-owned pool
+
+Plan 03 proposed a daemon-owned Monty pool. Monty 1.1.0's `AsyncMonty` has no
+environment or cwd controls, and mutating the daemon's own `os.environ`/cwd races
+with other work. Nexus instead runs a short-lived Python helper per `code` call
+(`tools/codemode/monty_adapter.py`) with a minimal env, a private temp cwd and a new
+process group; the helper owns a one-process Monty pool and the whole group is
+killed on finish, cancel or deadline. Cost: a cold start per call (latency and RSS
+not verified). Gain: stronger isolation and a simple cancel story. Revisit if a
+Monty release adds per-worker env/cwd. See [codemode-monty-compat.md](codemode-monty-compat.md).
+
+## Code mode: flat sandbox names
+
+Tools are bare function names; helpers are `search_tools`, `describe_tool`, `store`,
+`load`, `store_delete`; context reads are `context_*`. Dotted `ctx.*` was dropped:
+dotted-name callbacks were unverified in Monty and flat names are shorter for the
+model. Unsafe or colliding tool names are skipped and listed, never renamed silently.
+
+## Code mode: `ToolError = RuntimeError`
+
+Monty 1.1.0 has no class inheritance, so a prelude aliases `ToolError` to
+`RuntimeError`. Consequence: `except ToolError` also catches any `RuntimeError`.
+Accepted; diagnostics still name the real kind.
+
+## `ContextQuery` under `mode = allow`
+
+`ContextQuery(<name>)` always asks unless an explicit rule or grant allows it, because
+reading another session's context is the sensitive path; `mode = allow` does not cover
+it. The engine keeps its order (`deny`, grants incl. "always allow", `allow` rules such
+as `ContextQuery(*)`, `ask`) and only the mode fallback differs (`_MODE_FALLBACK_ASK_TOOLS`
+in `tools/permissions.py`); `mode = deny` still denies and unattended sessions follow
+`on_unattended`. Authz (ancestry, `context_read`, project, trash) is separate and still
+denies, so approval cannot widen scope.
+
+## `llm()` sub-calls use a per-program budget
+
+The turn-shared subagent tree budget is not reachable from `Runtime` where the
+context provider is built, so `llm()` is charged to a bounded per-program
+`SubagentBudget` (16 calls, 32k input, 200k total tokens, depth 1). Known gap: spend
+is not deducted from the turn's tree budget.
+
+## Plan 03 scope decisions (U1-U8)
+
+No rename (U1); batch backfill of names, at most 500 per transaction (U2); manager
+never gets context (U3); external-worker transcripts unreadable (U4); no deeper
+recursion or plain-mode `llm()` before evaluation (U5, U8); `read_only` exposure and
+no "only" mode (U7). Context is root-sessions-only in v1.
+
+## Session names: vocabulary size
+
+229 adjectives x 56 colours x 188 animals = 2,410,912 bases (about 21.2 bits), words
+of 3-9 letters so a `-99` suffix fits 32 characters. Display identity only, not a
+secret. Why the name is in the row and not the log: see "Session names live in the
+row, not the log" above.

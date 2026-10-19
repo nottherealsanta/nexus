@@ -211,7 +211,7 @@ def test_schema_upgrade_keeps_old_rows_and_leaves_their_title_alone(tmp_path):
     )
     conn.close()
     db = StateDatabase(path)
-    assert db.schema_version() == SCHEMA_VERSION == 7
+    assert db.schema_version() == SCHEMA_VERSION == 9
     store = SqliteSessionStore(db, "project", "main", root=str(tmp_path), lock_dir=tmp_path)
     row = store.session_row("old")
     assert (row["title"], row["title_source"]) == ("Old title", "")

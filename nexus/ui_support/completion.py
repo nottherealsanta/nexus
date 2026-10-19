@@ -149,8 +149,8 @@ async def _arguments(client: Any, name: str, query: str, efforts: Sequence[str])
         values = ["list", "current", "reset", *[str(r.get("name", "")) for r in root_agents(await client.list_agents())]]
     elif name == "/effort":
         values = ["default", *efforts]
-    elif name == "/sessions":
-        values = [row.id for row in await client.list_sessions()]
+    elif name in ("/sessions", "/open"):
+        values = [value for row in await client.list_sessions() for value in (getattr(row, "name", None), row.id) if value]
     elif name == "/attach":
         return filter_prefix(["clear"], query) + await _files(client, query)
     else:

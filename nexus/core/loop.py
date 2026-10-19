@@ -341,6 +341,7 @@ class HookRunner(Protocol):
         session_id: str,
         turn_id: str,
         cancel: CancelToken | None = None,
+        parent_call_id: str | None = None,
     ) -> HookOutcomeView: ...
 
     async def post_tool_use(
@@ -354,6 +355,7 @@ class HookRunner(Protocol):
         session_id: str,
         turn_id: str,
         cancel: CancelToken | None = None,
+        parent_call_id: str | None = None,
     ) -> HookOutcomeView: ...
 
 
@@ -1612,7 +1614,10 @@ def _result_for_entry(entry: object, detail: str) -> ToolResult:
 
 
 async def _emit_gate_decision(
-    emitter: _Emitter, evaluation, gate: PermissionGate
+    emitter: _Emitter,
+    evaluation,
+    gate: PermissionGate,
+    extra: Mapping[str, Any] | None = None,
 ) -> None:
     """Audit an unattended allow/deny so the decision is reconstructable."""
     request = gate.request_for(evaluation)
@@ -1627,7 +1632,332 @@ async def _emit_gate_decision(
             "grant": None,
         }
     )
+    if extra:
+        data.update(extra)
     await emitter.emit("permission.resolved", data)
+
+
+class NestedCall(msgspec.Struct, frozen=True):
+    """Loop-level result of one nested call (plan 03 section 3.5).
+
+    ``result`` is the exact IR result a direct call would have produced; the
+    runtime adapter wraps it as ``nexus.tools.spec.NestedOutcome`` (the loop
+    never imports the tools layer).
+    """
+
+    result: ToolResult
+    status: str
+    permission: dict[str, Any] | None = None
+
+
+class NestedGrant(msgspec.Struct, frozen=True):
+    """Loop-level verdict for a synthetic permission key (wrapped by the adapter)."""
+
+    allowed: bool
+    decision: str
+    rule: str | None = None
+    message: str = ""
+
+
+_DEFAULT_NESTED_PARALLEL = 4
+_DEFAULT_NESTED_CALLS = 64
+
+
+class _NestedExclusion:
+    """Reader/writer arrangement for nested dispatch.
+
+    Read-only calls share up to ``limit`` slots; a mutating call waits for every
+    in-flight nested call and runs alone. A waiting writer blocks new readers so
+    mutations cannot starve.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = max(1, limit)
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+        self._cond = asyncio.Condition()
+
+    @contextlib.asynccontextmanager
+    async def hold(self, *, exclusive: bool) -> AsyncIterator[None]:
+        async with self._cond:
+            if exclusive:
+                self._waiting_writers += 1
+                try:
+                    await self._cond.wait_for(
+                        lambda: not self._writer and self._readers == 0
+                    )
+                finally:
+                    self._waiting_writers -= 1
+                    self._cond.notify_all()
+                self._writer = True
+            else:
+                await self._cond.wait_for(
+                    lambda: not self._writer
+                    and not self._waiting_writers
+                    and self._readers < self._limit
+                )
+                self._readers += 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                if exclusive:
+                    self._writer = False
+                else:
+                    self._readers -= 1
+                self._cond.notify_all()
+
+
+def _nested_permission(evaluation: object | None, decision: object | None) -> dict[str, Any] | None:
+    """The ``{decision, rule}`` audit of one nested call (plan 03 section 3.12)."""
+    if evaluation is None:
+        return None
+    outcome = _outcome_value(getattr(evaluation, "outcome", ""))
+    rule = getattr(getattr(evaluation, "rule", None), "raw", None)
+    if outcome == "ask":
+        allowed = bool(getattr(decision, "allows", False))
+        return {"decision": "ask:allow" if allowed else "ask:deny", "rule": rule}
+    return {"decision": "allow" if outcome == "allow" else "deny", "rule": rule}
+
+
+class _NestedPipeline:
+    """Runs sandbox host calls through the same path as a direct tool call.
+
+    Resolve and prepare, PreToolUse (with ``parent_call_id``), plan and ask, then
+    dispatch under the reader/writer arrangement, then PostToolUse. Plan 03
+    section 3.5. Nothing here raises except on cancellation: every refusal is a
+    :class:`NestedCall` carrying the text a direct call would get.
+    """
+
+    def __init__(
+        self,
+        *,
+        tools: Any,
+        gate: Any,
+        hooks: Any,
+        emitter: _Emitter,
+        tool_emit: Callable[[str, dict[str, Any] | None], Awaitable[object]],
+        token: CancelToken,
+        session_id: str,
+        turn_id: str,
+        parent_inputs: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        self._tools = tools
+        self._gate = gate
+        self._hooks = hooks
+        self._emitter = emitter
+        self._tool_emit = tool_emit
+        self._token = token
+        self._session_id = session_id
+        self._turn_id = turn_id
+        self._parent_inputs = parent_inputs
+        parallel = getattr(tools, "max_parallel", None)
+        self._exclusion = _NestedExclusion(
+            parallel if isinstance(parallel, int) and parallel >= 1 else _DEFAULT_NESTED_PARALLEL
+        )
+        limit = getattr(tools, "nested_call_limit", None)
+        self._max_calls = limit if isinstance(limit, int) and limit >= 1 else _DEFAULT_NESTED_CALLS
+        self._counts: dict[str, int] = {}
+        self._sequence = 0
+
+    def _next_id(self, parent_call_id: str) -> str:
+        self._sequence += 1
+        return f"{parent_call_id}.{self._sequence}"
+
+    def _parent_program(self, parent_call_id: str) -> dict[str, Any]:
+        return _safe_tool_input(dict(self._parent_inputs.get(parent_call_id, {})))
+
+    async def _hook(self, method: str, parent_call_id: str, **kwargs: Any) -> Any:
+        hooks = self._hooks
+        if hooks is None:
+            return None
+        try:
+            return await getattr(hooks, method)(
+                session_id=self._session_id,
+                turn_id=self._turn_id,
+                cancel=self._token,
+                parent_call_id=parent_call_id,
+                **kwargs,
+            )
+        except (OperationCancelled, asyncio.CancelledError):
+            raise
+        except Exception:  # noqa: BLE001 - a broken hook never fails a nested call
+            return None
+
+    async def invoke(
+        self,
+        name: str,
+        args: Mapping[str, Any],
+        *,
+        parent_call_id: str,
+        nested_id: str | None = None,
+    ) -> NestedCall:
+        nested_id = nested_id or self._next_id(parent_call_id)
+        count = self._counts.get(parent_call_id, 0) + 1
+        self._counts[parent_call_id] = count
+        if count > self._max_calls:
+            return NestedCall(
+                _error_result(
+                    nested_id, name, f"limit: calls (at most {self._max_calls} nested calls per program)"
+                ),
+                "error",
+            )
+        tools = self._tools
+        traits_fn = getattr(tools, "nested_traits", None)
+        traits = traits_fn(name) if callable(traits_fn) else None
+        refusal = traits.get("refusal") if isinstance(traits, Mapping) else None
+        if refusal:
+            return NestedCall(_error_result(nested_id, name, str(refusal)), "denied")
+
+        block = ToolUse(id=nested_id, name=name, input=dict(args))
+        bundle = tools.bundle_for(name) if hasattr(tools, "bundle_for") else None
+        key: str | None = None
+        if self._hooks is not None:
+            preview_fn = getattr(tools, "preview", None)
+            if callable(preview_fn):
+                with contextlib.suppress(Exception):
+                    previews = list(preview_fn([block]))
+                    if previews:
+                        bundle = getattr(previews[0], "bundle", bundle)
+                        key = getattr(previews[0], "key", None)
+            hooked = await self._hook(
+                "pre_tool_use", parent_call_id,
+                tool=name, key=key, bundle=bundle, tool_input=dict(block.input),
+            )
+            if hooked is not None:
+                await _persist_hook_events(self._emitter, hooked, "PreToolUse")
+                if getattr(hooked, "blocked", False):
+                    reason = str(getattr(hooked, "reason", "") or "").strip()
+                    reason = reason or "blocked by PreToolUse hook"
+                    return NestedCall(
+                        _error_result(nested_id, name, f"blocked by PreToolUse hook: {reason}"),
+                        "denied",
+                    )
+                modified = getattr(hooked, "modified_input", None)
+                if getattr(hooked, "modified", False) and isinstance(modified, Mapping):
+                    block = msgspec.structs.replace(block, input=dict(modified))
+
+        prepared = tools.prepare([block])
+        plan = self._gate.plan(prepared)
+        for evaluation in plan.evaluations:
+            if _outcome_value(evaluation.outcome) != "ask" and evaluation.code.startswith("unattended"):
+                await _emit_gate_decision(
+                    self._emitter, evaluation, self._gate, extra={"parent_call_id": parent_call_id}
+                )
+        prepared = prepared.apply_plan(plan)
+        evaluation = next(iter(plan.evaluations), None)
+        decisions: list[tuple[str, object]] = []
+        decision: object | None = None
+        for asked in plan.asks():
+            request = self._gate.request_for(asked)
+            self._gate.open(request)
+            request_data = _safe_tool_input(dict(request.to_dict()) if hasattr(request, "to_dict") else {})
+            request_data["parent_call_id"] = parent_call_id
+            request_data["parent_program"] = self._parent_program(parent_call_id)
+            await self._emitter.emit("permission.requested", request_data)
+            try:
+                decision = await self._gate.await_decision(request, cancel=self._token)
+            except OperationCancelled:
+                self._gate.cancel_pending()
+                raise
+            record = self._gate.resolution(request.id)
+            await self._emitter.emit(
+                "permission.resolved",
+                {
+                    **(_safe_tool_input(dict(record)) if record else request_data),
+                    "parent_call_id": parent_call_id,
+                },
+            )
+            decisions.append((asked.call.id, decision))
+        if decisions:
+            prepared = prepared.with_decisions(decisions)
+        authorize = getattr(self._gate, "authorize", None)
+        if callable(authorize):
+            prepared = authorize(prepared, plan, decisions)
+
+        entry = next(iter(getattr(prepared, "entries", ())), None)
+        spec = getattr(entry, "spec", None)
+        exclusive = bool(
+            getattr(spec, "mutates", False) or getattr(spec, "concurrency", "") == "exclusive"
+        ) if spec is not None else bool(isinstance(traits, Mapping) and traits.get("mutates"))
+
+        async def nested_emit(kind: str, data: dict[str, Any] | None) -> object:
+            if not kind.startswith("tool."):
+                return await self._tool_emit(kind, data)
+            return None
+
+        async with self._exclusion.hold(exclusive=exclusive):
+            results = await tools.dispatch(
+                prepared, emit=nested_emit, cancel=self._token, parallel_allowed=False
+            )
+        result = results[0]
+        post = await self._hook(
+            "post_tool_use", parent_call_id,
+            tool=name, key=getattr(entry, "key", key), bundle=bundle,
+            tool_input=dict(block.input), result=_tool_result_view(result, block.id),
+        )
+        if post is not None:
+            await _persist_hook_events(self._emitter, post, "PostToolUse")
+
+        denied = (
+            evaluation is not None
+            and _outcome_value(evaluation.outcome) in {"deny", "fail_turn"}
+        ) or (decision is not None and bool(getattr(decision, "denies", False)))
+        status = "denied" if denied else "error" if result.is_error else "ok"
+        return NestedCall(result, status, _nested_permission(evaluation, decision))
+
+    async def authorize(
+        self,
+        permission_key: str,
+        *,
+        parent_call_id: str,
+        summary: Mapping[str, Any] | None = None,
+    ) -> NestedGrant:
+        """Plan a synthetic key (``ContextQuery(<name>)``) like a tool call."""
+        plan_key = getattr(self._gate, "plan_key", None)
+        if not callable(plan_key):
+            return NestedGrant(False, "deny", None, f"{permission_key}: permission planning unavailable")
+        try:
+            evaluation = plan_key(permission_key, self._next_id(parent_call_id))
+        except Exception as exc:  # noqa: BLE001 - an unplannable key fails closed
+            return NestedGrant(False, "deny", None, f"{permission_key}: {redact_secrets(str(exc))}")
+        outcome = _outcome_value(evaluation.outcome)
+        rule = getattr(getattr(evaluation, "rule", None), "raw", None)
+        if outcome == "allow":
+            return NestedGrant(True, "allow", rule)
+        if outcome != "ask":
+            if evaluation.code.startswith("unattended"):
+                await _emit_gate_decision(
+                    self._emitter, evaluation, self._gate,
+                    extra={"parent_call_id": parent_call_id,
+                           "parent_program": self._parent_program(parent_call_id)},
+                )
+            return NestedGrant(False, "deny", rule, f"{permission_key}: {evaluation.reason}")
+        request = self._gate.request_for(evaluation)
+        self._gate.open(request)
+        request_data = _safe_tool_input(dict(request.to_dict()) if hasattr(request, "to_dict") else {})
+        request_data["parent_call_id"] = parent_call_id
+        request_data["parent_program"] = self._parent_program(parent_call_id)
+        request_data["summary"] = _safe_tool_input(dict(summary or {}))
+        await self._emitter.emit("permission.requested", request_data)
+        try:
+            decision = await self._gate.await_decision(request, cancel=self._token)
+        except OperationCancelled:
+            self._gate.cancel_pending()
+            raise
+        record = self._gate.resolution(request.id)
+        await self._emitter.emit(
+            "permission.resolved",
+            {
+                **(_safe_tool_input(dict(record)) if record else request_data),
+                "parent_call_id": parent_call_id,
+                "parent_program": request_data["parent_program"],
+            },
+        )
+        if bool(getattr(decision, "allows", False)):
+            return NestedGrant(True, "ask:allow", rule)
+        return NestedGrant(False, "ask:deny", rule, f"{permission_key}: denied by permission decision")
 
 
 async def _emit_terminal(
@@ -1807,7 +2137,7 @@ async def run_turn(
 
     async def _tool_emit(event_type: str, data: dict[str, Any] | None) -> object:
         """Preserve the durable event acknowledgement across the tool seam."""
-        return await emitter.emit(event_type, data)
+        return await emitter.emit(event_type, _safe_tool_input(data or {}) if event_type.startswith("code.") else data)
 
     state = lease.state
     started = clock()
@@ -2468,6 +2798,24 @@ async def run_turn(
             authorize = getattr(iteration_gate, "authorize", None)
             if callable(authorize):
                 prepared = authorize(prepared, plan, decisions)
+
+            # Nested host calls share this iteration's frozen dispatcher and gate.
+            # A code invocation is one outer tool row; nested ordinary tool events
+            # are suppressed in favor of the durable code.call family.
+            if hasattr(iteration_tools, "invoke_tool"):
+                nested = _NestedPipeline(
+                    tools=iteration_tools,
+                    gate=iteration_gate,
+                    hooks=iteration_hooks,
+                    emitter=emitter,
+                    tool_emit=_tool_emit,
+                    token=token,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    parent_inputs={use.id: dict(use.input) for use in active_uses},
+                )
+                iteration_tools.invoke_tool = nested.invoke
+                iteration_tools.authorize_nested = nested.authorize
 
             results = await iteration_tools.dispatch(
                 prepared,

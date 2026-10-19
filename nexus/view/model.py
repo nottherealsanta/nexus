@@ -64,6 +64,8 @@ def _dump(value: object) -> Any:
         result = {}
         for item in fields(value):
             field_value = getattr(value, item.name)
+            if item.name in {"code_mode", "code_store", "nested_calls"} and not field_value:
+                continue
             if isinstance(value, BlockView) and item.name == "image_url":
                 if field_value is not None:
                     result[item.name] = field_value[:12 * 1024 * 1024]
@@ -254,6 +256,8 @@ class ToolCallView(_View):
     code: str | None = None
     error: str | None = None
     duration_ms: int | None = None
+    nested_calls: list[dict[str, Any]] = field(default_factory=list)
+    code_mode: dict[str, Any] | None = None
     progress: list[str] = field(default_factory=list)
     requested_ts: float | None = None
     started_ts: float | None = None
@@ -566,7 +570,9 @@ class ConversationView(_View):
     """The full renderable state of one session, folded from its event log."""
 
     session_id: str | None = None
+    session_name: str | None = None
     last_seq: int = 0
+    code_store: dict[str, Any] = field(default_factory=dict)
     phase: str = "idle"  # idle|running|awaiting_input|awaiting_permission|closed
     opened: bool = False
     closed: bool = False

@@ -1654,6 +1654,24 @@ class HostFacade:
             )
 
     async def _dispatch(self, command: p.Command) -> p.Result:
+        # Resolve only at the user-facing boundary. Authorization and lifecycle
+        # checks below continue to operate on canonical ids, not capabilities.
+        target_commands = (p.SessionTree, p.SessionInspect, p.SessionFork,
+                           p.SessionDelete, p.SessionExport,
+                           p.SessionArchive, p.SessionUnarchive)
+        if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
+            namespace = getattr(command, "namespace", "main")
+            if isinstance(command, p.SessionFork) and command.new_id == MANAGER_SESSION_ID:
+                raise ValueError(f"session id {MANAGER_SESSION_ID!r} is reserved for the manager")
+            try:
+                resolved = self.runtime.sessions.resolve(command.session, namespace=namespace)
+            except SessionError:
+                # Unresolvable (unknown id, another project, a name that would address the
+                # manager): leave the ref untouched so each handler keeps its own refusal.
+                pass
+            else:
+                # Handlers take the stored id (a child's logical id is not a valid session id).
+                command = msgspec.structs.replace(command, session=resolved.get("id") or resolved["logical_id"])
         if result := await dispatch_voice(command, self.runtime):
             return result
         if result := await dispatch_live(command, self):
@@ -1720,7 +1738,7 @@ class HostFacade:
                             pending = {}
                 else:
                     summary = SessionSummary(
-                        id=row["id"], title=row["title"], last_activity=row["last_activity"],
+                        id=row["id"], name=row.get("name"), title=row["title"], last_activity=row["last_activity"],
                         last_seq=row["last_seq"], completion_seq=row["completion_seq"],
                         message_count=row["message_count"],
                         created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
@@ -1755,6 +1773,10 @@ class HostFacade:
                 )
             finally:
                 await client.close()
+        if isinstance(command, p.SessionResolve):
+            return p.SessionResolveResult(resolution=self.runtime.sessions.resolve(
+                command.ref, namespace=command.namespace, include_retired=command.include_retired
+            ))
         if isinstance(command, p.SessionTree):
             depth = int(getattr(self.runtime._load_config().v2.agents, "max_depth", 4)) + 1
             return p.SessionTreeResult(
@@ -1856,9 +1878,17 @@ class HostFacade:
                 child_id=_worktree_text(command.child_id, 256), **result
             )
         if isinstance(command, p.SessionOpen):
+            target = command.session
+            if target is not None and hasattr(self.runtime.sessions, "resolve"):
+                try:
+                    target = self.runtime.sessions.resolve(target, namespace="main")["logical_id"]
+                except SessionError:
+                    from ..session.names import valid_name
+                    if valid_name(target) or not command.create:
+                        raise
             return p.SessionOpenResult(
                 session=self.open_session(
-                    command.session, create=command.create, recover=command.recover
+                    target, create=command.create, recover=command.recover
                 )
             )
         if isinstance(command, p.AttachmentPrepare):

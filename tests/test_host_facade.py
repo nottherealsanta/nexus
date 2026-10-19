@@ -308,6 +308,7 @@ def test_protocol_round_trips_every_command_and_result():
     commands = [
         p.SessionList(),
         p.SessionTree(session="s"),
+        p.SessionResolve(ref="s"),
         p.SessionInspect(session="child"),
         p.SessionHandoff(session="s"),
         p.SessionHandoffRead(session="s"),
@@ -446,6 +447,7 @@ def test_protocol_round_trips_every_command_and_result():
                                not_connected=["OpenCode Go"], fetched_at=1.0),
         p.SessionListResult(sessions=[summary]),
         p.SessionTreeResult(session="s"),
+        p.SessionResolveResult(),
         p.SessionInspectResult(session="child", namespace="agents", view={}, request={}),
         p.SessionHandoffResult(data={}),
         p.SessionArchiveResult(session=summary),

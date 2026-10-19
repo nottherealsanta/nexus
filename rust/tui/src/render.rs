@@ -601,7 +601,7 @@ pub fn targets(cache: &Cache) -> Vec<(usize, usize)> {
     out
 }
 pub const SPINNER_SLOT: char = '\u{e000}';
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER: [&str; 8] = ["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇"];
 /// Running turns, tools, sessions and usage refreshes need ~8 Hz redraws.
 pub fn animating(s: &Snapshot) -> bool {
     s.panel_loading
@@ -4137,9 +4137,69 @@ mod tests {
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
         assert_eq!(with_spinner(&line, 0).spans[0].content, "⠋ Bash · ls");
-        assert_eq!(with_spinner(&line, 11).spans[0].content, "⠙ Bash · ls");
+        assert_eq!(with_spinner(&line, 9).spans[0].content, "⠙ Bash · ls");
+        assert_eq!(with_spinner(&line, 11).spans[0].content, "⢰ Bash · ls");
         let s = Snapshot::default();
         assert!(!animating(&s));
+    }
+    #[test]
+    fn spinner_animates_four_rows_of_braille_dots_and_matches_completed_glyph() {
+        // Unicode Braille pattern 8-dot matrix (2 columns x 4 rows):
+        // Col 1: dot 1 (0x01), dot 2 (0x02), dot 3 (0x04), dot 7 (0x40)
+        // Col 2: dot 4 (0x08), dot 5 (0x10), dot 6 (0x20), dot 8 (0x80)
+        // Row 1: dots 1, 4 (0x01 | 0x08 = 0x09)
+        // Row 2: dots 2, 5 (0x02 | 0x10 = 0x12)
+        // Row 3: dots 3, 6 (0x04 | 0x20 = 0x24)
+        // Row 4: dots 7, 8 (0x40 | 0x80 = 0xC0)
+        const ROW1: u32 = 0x01 | 0x08;
+        const ROW2: u32 = 0x02 | 0x10;
+        const ROW3: u32 = 0x04 | 0x20;
+        const ROW4: u32 = 0x40 | 0x80;
+
+        assert_eq!(SPINNER.len(), 8, "8-dot perimeter frames has 8 steps");
+
+        let mut row1_participates = false;
+        let mut row2_participates = false;
+        let mut row3_participates = false;
+        let mut row4_participates = false;
+        let mut union_dots: u32 = 0;
+
+        for (i, glyph) in SPINNER.iter().enumerate() {
+            let ch = glyph.chars().next().expect("glyph character");
+            let pattern = (ch as u32).saturating_sub(0x2800);
+            assert!(
+                pattern <= 0xff,
+                "frame {i} ({glyph}) must be a valid Braille pattern"
+            );
+            if pattern & ROW1 != 0 {
+                row1_participates = true;
+            }
+            if pattern & ROW2 != 0 {
+                row2_participates = true;
+            }
+            if pattern & ROW3 != 0 {
+                row3_participates = true;
+            }
+            if pattern & ROW4 != 0 {
+                row4_participates = true;
+            }
+            union_dots |= pattern;
+
+            // Existing replacement mechanism works for every frame
+            let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} subagent"))]);
+            let rendered = with_spinner(&line, i);
+            assert_eq!(rendered.spans[0].content, format!("{glyph} subagent"));
+        }
+
+        assert!(row1_participates, "row 1 dots must participate");
+        assert!(row2_participates, "row 2 dots must participate");
+        assert!(row3_participates, "row 3 dots must participate");
+        assert!(row4_participates, "fourth-row dots (dots 7 and 8) must participate");
+
+        // The union of dots across all 8 perimeter frames covers all 4 rows (2x4),
+        // exactly matching the completed subagent cell '⣿' (U+28FF).
+        assert_eq!(union_dots, 0xff);
+        assert_eq!(char::from_u32(0x2800 + union_dots), Some('⣿'));
     }
     #[test]
     fn composer_grows_with_content_and_is_capped() {

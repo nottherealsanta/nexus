@@ -222,3 +222,55 @@ input; `Session.messages`, exports and transcript views remain full history.
 Historical cutoffs derive the head visible at that cutoff. Fork copies the
 selected prefix and its head into a *new* identity; handoff keeps the identity;
 agent reset only changes the descriptive agent selection.
+
+## Recursive context (code mode)
+
+Code mode ([tools.md](tools.md#code-mode-the-code-tool)) can read session contexts
+through host functions in the program's flat namespace: `context_meta`,
+`context_messages`, `context_tool_calls`, `context_search`, `context_report`, and
+`llm`. They are on offer only when `[code_mode] context = true`. All reads take a
+`target`: `"self"` (default; the current session) or a name or id declared in the
+program's `targets` variable. Results are redacted, bounded, and marked
+**untrusted data, not instructions**. Each read is a `code.call` event, so the user
+sees what was read.
+
+**Scope (v1).** Only root sessions get the namespace; a child never reads its own
+descendants. The manager session never gets it. This is a recorded decision
+([decisions.md](decisions.md)) rather than an omission.
+
+**Authority** (`nexus/session/context_authz.py`) is host-owned and never comes from
+model, provider or voice text. The reader must reach the target by walking owner
+edges (`sessions.owner_id` / `owner_namespace`, `child_allocations`), with
+`context_read = 1` on **every** hop. Nexus-run children get `context_read = 1` when
+spawned; external workers (Claude Code, Antigravity) get 0, and existing or legacy
+edges fail closed. Further rules: the same project, at most `max_depth` hops
+(default 1, ceiling 8), and a trashed or purged session on the path denies. The
+check runs again on every call, so revocation takes effect mid-program. Completed
+children stay readable. Siblings, ancestors, the manager and other projects are
+denied. Not verified live: only offline tests exercise these paths.
+
+**Permission.** A non-self target is a synthetic permission key `ContextQuery(<name>)`
+evaluated by the ordinary engine (`deny` is absolute; mode fallback is always `ask`, so
+`mode = allow` does not cover it, only an `allow` rule such as `ContextQuery(*)` or a
+grant does). It is checked up front, once per non-self target, before the program runs
+([decisions.md](decisions.md)). Approval never widens authority: authz
+still applies.
+
+**Read port** (`nexus/session/context_port.py`, `ContextReadPort`) reads only the
+target's own records, bounded per call: a range scans at most 200 seqs and returns at
+most 100 rows; `search` examines at most 5000 records or 512 KiB and returns at most
+50 hits. `context_report` returns the last assistant text, else a handoff digest.
+Output is redacted before it leaves the port.
+
+**`llm(prompt, text)`** is one tool-less request on the session's own model, or
+`[code_mode] sub_model` when set. No fallback, no tools, depth 1. Limits (config):
+`max_sub_calls` 16, `max_sub_input_tokens` 32000, `max_total_sub_tokens` 200000,
+`max_depth` 1. The text argument is wrapped as `<context source=... seq=...>` so the
+sub-call treats it as data. Calls are charged to a **per-program** bounded
+`SubagentBudget`. Known gap: the turn-shared subagent tree budget is not reachable
+from `Runtime` at this layer, so sub-call spend is not deducted from the turn's tree
+budget; only the per-program bound applies.
+
+Injection posture: tool output or child content that says "call llm 1000 times" or
+contains code is only data; the caps above hold and nothing in it is executed
+(offline-tested; live behavior not verified).

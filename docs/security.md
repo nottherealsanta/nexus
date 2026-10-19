@@ -237,3 +237,31 @@ snippets cleaned before they reach the terminal. They are not copied onto every
 `SessionSummary`. Archive `SessionPreview` is unchanged.
 The `i` inspector keeps full tool details reachable, so the local double-click
 view hides nothing from the user. This note does not assert final verification.
+
+### Optional code-mode interpreter boundary
+
+The pinned `codemode` extra uses pure Monty, never an embedded CPython worker.
+Only the isolated helper imports the dependency. Helpers run in a new process
+group, with an explicit minimal locale-only environment and a private temporary
+working directory; the daemon never changes its own environment or cwd. Deadline,
+cancellation and cleanup kill the entire helper process group, including Rust
+workers. No OS provider, filesystem mount, dependency installation or interpreter
+snapshot is permitted. IPC is bounded, framed JSON with finite numbers and a
+32-level nesting limit, not pickle. Tool authority remains with nested dispatch.
+
+### Code-mode sandbox threats
+
+| Threat | Mitigation |
+| --- | --- |
+| Credential theft from the environment | Helper starts with an explicit minimal env and a private empty temp cwd; the daemon never mutates its own env or cwd |
+| Escape to filesystem/network/process | Monty exposes none; `os`, `sys`, `pathlib` are virtual and denied; `subprocess`, `urllib` unavailable; no mounts or dependency installs |
+| Runaway CPU/memory/output | Monty limits (time, 64 MiB, recursion), call/output/store caps, whole-call deadline |
+| Orphaned workers | New process group, `killpg` on finish, cancel and deadline |
+| Tool-policy bypass | Nested calls use the full pipeline ([loop.md](loop.md#nested-tool-calls-from-code-mode)) |
+| Cross-session reads | `ContextQuery(<name>)` permission plus ancestry authz on every call ([context.md](context.md#recursive-context-code-mode)) |
+| Prompt injection via tool/child output | Context text is redacted, marked untrusted and wrapped `<context source seq>`; caps hold regardless |
+
+`ContextQuery(<name>)` is a synthetic permission key through the ordinary engine:
+mode fallback always `ask` (`mode = allow` does not cover it), `deny` absolute; only an
+explicit `allow` rule or a grant skips the prompt.
+Linux execution of the sandbox is not verified.

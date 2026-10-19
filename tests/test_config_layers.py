@@ -783,3 +783,36 @@ def test_bash_yield_and_max_load_from_toml(tmp_path):
     config = Config.load(tmp_path, home=home, environ={})
     assert config.v2.tools.bash_yield_window_s == 15
     assert config.v2.tools.bash_max_s == 900
+
+
+def test_code_mode_defaults_and_env_coercion():
+    from nexus.config.schema import CodeModeSection
+
+    section = CodeModeSection()
+    assert (section.max_nested_calls, section.inline_budget_tokens, section.pinned) == (64, 2500, [])
+    assert (section.max_sub_calls, section.max_sub_input_tokens,
+            section.max_total_sub_tokens, section.max_depth, section.sub_model) == (
+        16, 32000, 200000, 1, None)
+    overlay = env_overlay_v2({"NEXUS_CODE_MODE__MAX_NESTED_CALLS": "7",
+                              "NEXUS_CODE_MODE__INLINE_BUDGET_TOKENS": "900"})
+    assert overlay == {"code_mode": {"max_nested_calls": 7, "inline_budget_tokens": 900}}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"max_nested_calls": 0}, {"inline_budget_tokens": -1}, {"max_depth": 99},
+     {"max_workers": True}, {"expose": "some"}, {"expose": [""]}, {"pinned": [3]},
+     {"sub_model": " "}],
+)
+def test_code_mode_rejects_bad_values(kwargs):
+    from nexus.config.schema import CodeModeSection
+
+    with pytest.raises(ValueError):
+        CodeModeSection(**kwargs)
+
+
+def test_code_mode_accepts_glob_list_and_pinned():
+    from nexus.config.schema import CodeModeSection
+
+    section = CodeModeSection(expose=["read", "mcp__gh__*"], pinned=["read"])
+    assert section.pinned == ["read"]

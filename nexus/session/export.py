@@ -27,6 +27,7 @@ from typing import Any
 
 import msgspec
 
+from ..events import Event
 from ..model.message import (
     ContentBlock,
     Document,
@@ -37,7 +38,7 @@ from ..model.message import (
     ToolResult,
     ToolUse,
 )
-from .records import ReadResult, SessionRecord
+from .records import EventRecord, ReadResult, SessionRecord
 
 #: Export document version. Bumped when the JSON shape changes so a consumer can
 #: refuse an unknown document instead of misreading it.
@@ -141,13 +142,18 @@ def to_json(
     return msgspec.json.encode(document(session_id, read, meta=meta)).decode("utf-8")
 
 
-def to_jsonl(read: ReadResult) -> str:
+def to_jsonl(read: ReadResult, *, name: str | None = None, session_id: str = "") -> str:
     """Render the selected SQLite record prefix as JSONL, one record per line.
 
     The output is an export representation; SQLite remains the authoritative
     session store.
     """
     lines = [msgspec.json.encode(record).decode("utf-8") for record in read.records]
+    if name:
+        # The name lives in the session row, not the log; the export carries it as a leading
+        # synthesized event (seq 0) that import (``create_from_records``) understands.
+        event = Event("session.named", {"name": name}, seq=0, session=session_id or None)
+        lines.insert(0, msgspec.json.encode(EventRecord(seq=0, event=event, ts=0.0)).decode("utf-8"))
     return "".join(line + "\n" for line in lines)
 
 
@@ -207,7 +213,7 @@ def render(
     if canonical == "json":
         return to_json(session_id, read, meta=meta)
     if canonical == "jsonl":
-        return to_jsonl(read)
+        return to_jsonl(read, name=(meta or {}).get("name"), session_id=session_id)
     return to_markdown(session_id, read, meta=meta)
 
 

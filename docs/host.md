@@ -494,3 +494,32 @@ read-only, and returns a bounded redacted brief plus head/version/boundary.
 It does not open/recover a live handle. Both commands share protocol codecs
 across direct, socket and desktop clients. `LogsRead` projects a constant
 `context.handoff` message, never the private brief/preview.
+
+### Immutable session names
+
+Saved sessions receive an immutable ASCII adjective-color-animal name, globally unique across projects and root and child namespaces. Names survive title changes, archive, and trash; purged names are never reused. Drafts remain unnamed until persistence. Exact ids take precedence over exact, case-sensitive names; prefixes and Unicode lookalikes are not normalized. `nexus sessions show <name-or-id>` resolves without opening a handle. The host `SessionResolve` command accepts `ref` and optional `namespace`, returning canonical identity and lifecycle metadata; resolution does not grant access or revive deleted sessions. There is no rename operation.
+
+### Named identities and code telemetry
+
+`SessionResolve` accepts exact `ref`, optional `namespace`, and
+`include_retired` (default false). It returns canonical logical identity and
+lifecycle metadata without opening a session: `{logical_id, project, name, kind,
+state, trashed, retired, namespace}`. Only this workspace's project resolves; another
+project's name or id is "missing or ambiguous". A trashed session answers
+`trashed: true` (`state: "trashed"`); a purged name answers `retired: true`
+(`state: "retired"`) only with `include_retired`, otherwise it is missing. The manager is
+never resolvable by name (its reserved id still works, and its usual refusals apply).
+`_dispatch` resolves names for `SessionTree/Inspect/Fork/Delete/Export/Archive/Unarchive`
+and `SessionOpen`; a ref that does not resolve is passed through unchanged so each
+handler keeps its own refusal (reserved manager id first). `name` is on `SessionSummary`,
+`SessionTree` nodes and `ProjectSessionsList` rows, and `query` matches names.
+Retired results are tombstones, not handles. `session.named` is durable on allocation/backfill with `name`,
+`names_version`, `logical_id`, and `namespace`.
+
+The public event catalogue also includes `code.started`, `code.call`,
+`code.store`, and `code.finished`. They correlate by outer `call_id`;
+`code.call` updates a nested call by `nested_id`, carrying labelled tool, kind,
+status, arguments, output/error and timing. `code.store` applies `set`/`delete`
+to bounded preview entries. Native bridges project these into labelled program,
+parameters, nested calls, results, diagnostics and store rows, not raw JSON.
+Unknown event types remain forward-compatible.

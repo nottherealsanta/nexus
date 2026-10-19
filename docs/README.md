@@ -36,6 +36,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |
 | GPT Live voice calls (experimental) | [live.md](live.md) | `nexus/live/` |
 | The workspace manager session (implemented, unverified, off by default) | [manager.md](manager.md) | `nexus/tools/manager_*.py`, `nexus/host_support/manager_port.py`, `nexus/agents/manager_prompt.py` |
+| Code mode (`code` tool, Monty sandbox, helper isolation, findings) | [tools.md](tools.md#code-mode-the-code-tool), [codemode-monty-compat.md](codemode-monty-compat.md), [context.md](context.md#recursive-context-code-mode) | `nexus/tools/codemode/`, `nexus/session/context_*.py`, `nexus/session/names.py` |
 | Network, credentials, sandboxing, trust boundaries | [security.md](security.md) | |
 | Write or run tests; fakes; browser checks | [testing.md](testing.md) | `tests/` |
 | Dev mode, mock scenarios, benchmark, examples | [devtools.md](devtools.md) | `nexus/devtools/`, `benchmark/` |

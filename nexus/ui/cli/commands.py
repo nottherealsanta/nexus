@@ -50,6 +50,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/attach", "Attach an image or document", "<path> | clear"),
     CommandSpec("/new", "Start a new session", "[id]", aliases=("/clear",)),
     CommandSpec("/sessions", "Open the sessions sidebar, or switch to [id]", "[id]", aliases=("/session",)),
+    CommandSpec("/open", "Switch to a session by its name or id", "<name|id>"),
     CommandSpec("/model", "List models or set this session's model", "[list|tier|provider/model|id]"),
     CommandSpec("/effort", "Choose this session's reasoning effort", "[LEVEL]", aliases=("/reasoning",)),
     CommandSpec("/agent", "List or select this session's root agent", "[list|current|reset|NAME]"),

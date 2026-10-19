@@ -28,7 +28,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "view"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VIEW_ROOT = REPO_ROOT / "nexus" / "view"
 
-GOLDEN_LOGS = ("text_stream", "multi_turn_tools", "subagent", "reconnect")
+GOLDEN_LOGS = ("text_stream", "multi_turn_tools", "subagent", "reconnect", "code_mode")
 
 
 # ---------------------------------------------------------------------------
@@ -919,3 +919,32 @@ def test_terminal_timestamp_survives_replay(kind):
     view = fold(events)
     assert view.turns[0].completed_ts == 123
     assert fold(events[1:], fold(events[:1])).to_dict() == view.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Code mode (plan 03 section 3.12)
+# ---------------------------------------------------------------------------
+
+
+def test_code_calls_fold_by_nested_id_in_start_order_and_replay_equals_live():
+    events = _load_events("code_mode")
+    live = initial_state()
+    for event in events:
+        live = apply(live, event)
+    assert live.to_dict() == fold(events).to_dict()
+    tool = live.turns[0].tools[0]
+    assert [row["nested_id"] for row in tool.nested_calls] == [f"c1.{n}" for n in range(1, 6)]
+    assert [row["status"] for row in tool.nested_calls] == ["ok", "error", "denied", "ok", "ok"]
+    assert tool.nested_calls[2]["permission"]["rule"] == "Write(/etc/**)"
+    assert tool.nested_calls[4]["output_tokens"] == 9
+    assert tool.code_mode["purpose"] == "audit TODOs" and tool.code_mode["status"] == "ok"
+    assert live.code_store == {"n": 3, "note": "done"}
+
+
+def test_running_nested_rows_are_cancelled_when_the_program_finishes():
+    events = _load_events("code_mode")
+    until_running = [e for e in events if e.seq <= 23]  # c2.1 still running
+    mid = fold(until_running).turns[1].tools[0]
+    assert mid.nested_calls[0]["status"] == "running"
+    done = fold(events).turns[1].tools[0]
+    assert done.nested_calls[0]["status"] == "cancelled" and done.code_mode["status"] == "cancelled"

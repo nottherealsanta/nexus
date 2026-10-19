@@ -621,6 +621,36 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
 
 
 # ---------------------------------------------------------------------------
+# Nested invocation (plan 03 section 3.5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NestedOutcome:
+    """What one nested tool call produced, with its permission audit.
+
+    ``result`` carries exactly the model-visible text a direct call would get.
+    ``permission`` is ``{"decision": "allow"|"deny"|"ask:allow"|"ask:deny",
+    "rule": str | None}`` or ``None`` when no decision was made (for example an
+    unknown tool).
+    """
+
+    result: ToolExecutionResult
+    status: str
+    permission: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class NestedAuthorization:
+    """The verdict for a synthetic permission key (for example ``ContextQuery``)."""
+
+    allowed: bool
+    decision: str
+    rule: str | None = None
+    message: str = ""
+
+
+# ---------------------------------------------------------------------------
 # Execution context and registration
 # ---------------------------------------------------------------------------
 
@@ -643,8 +673,15 @@ class ToolContext:
     #: the child session, and the event relay. ``None`` means the capability is
     #: unavailable for this call and ``Task`` reports an actionable error.
     subagents: SubagentServiceView | None = None
-    #: Supplied by the tool manager packet; ``None`` until then.
-    invoke_tool: Callable[..., Awaitable[Any]] | None = None
+    #: Nested tool invocation for the ``code`` tool (plan 03 section 3.5):
+    #: ``await invoke_tool(name, args, *, parent_call_id, nested_id)`` returns a
+    #: :class:`NestedOutcome` and never raises except on cancellation. ``None``
+    #: until the loop binds it for the iteration.
+    invoke_tool: Callable[..., Awaitable[NestedOutcome]] | None = None
+    #: Permission planning for a synthetic key such as ``ContextQuery(<name>)``
+    #: (plan 03 section 3.2): ``await authorize_nested(permission_key, *,
+    #: parent_call_id, summary)`` returns a :class:`NestedAuthorization`.
+    authorize_nested: Callable[..., Awaitable[NestedAuthorization]] | None = None
     #: Explicit service seams injected by the tool manager (never a Runtime).
     job_registry: JobRegistryView | None = None
     todo_store: TodoStoreView | None = None
@@ -748,6 +785,8 @@ __all__ = [
     "ExtensionServiceView",
     "JobRegistryView",
     "MultiPathTargetFn",
+    "NestedAuthorization",
+    "NestedOutcome",
     "PathTarget",
     "PermissionKeyFn",
     "ProgressEmitter",

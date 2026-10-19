@@ -691,6 +691,55 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
         )
     return _put(state, index, turn)
 
+def _on_code(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    if event.type == "code.store":
+        values = dict(state.code_store)
+        values.update(data.get("set", {}))
+        for key in data.get("delete", []):
+            values.pop(key, None)
+        state = replace(state, code_store=values)
+        state, index = _turn_for(state, event)
+        turn = state.turns[index]
+        call_id = _as_str(data.get("call_id")) or ""
+        for tool in turn.tools:
+            if tool.call_id == call_id:
+                metrics = {**(tool.metrics or {}), "code.store": {
+                    "entries": values,
+                    "set": dict(data.get("set") or {}),
+                    "delete": list(data.get("delete") or []),
+                }}
+                turn = _update_tool(turn, call_id, metrics=metrics)
+                break
+        return _put(state, index, turn)
+    state, index = _turn_for(state, event)
+    turn = state.turns[index]
+    call_id = _as_str(data.get("call_id")) or ""
+    turn = _ensure_tool(turn, call_id, name="code", ts=event.ts, seq=event.seq)
+    for tool in turn.tools:
+        if tool.call_id != call_id:
+            continue
+        if event.type == "code.call":
+            rows = [dict(row) for row in tool.nested_calls]
+            existing = next((i for i, row in enumerate(rows) if row.get("nested_id") == data.get("nested_id")), None)
+            if existing is None:
+                rows.append(dict(data))
+            else:
+                rows[existing] = {**rows[existing], **dict(data)}
+            turn = _update_tool(turn, call_id, nested_calls=rows)
+        else:
+            changes: dict[str, Any] = {"code_mode": {**(tool.code_mode or {}), **dict(data)}}
+            if event.type == "code.finished":
+                # A finished program has no live calls: rows still "running" were cut off
+                # (cancel, limit, crash) and must not keep a spinner on replay.
+                changes["nested_calls"] = [
+                    {**row, "status": "cancelled"} if row.get("status") == "running" else row
+                    for row in tool.nested_calls
+                ]
+            turn = _update_tool(turn, call_id, **changes)
+        break
+    return _put(state, index, replace(turn, updated_ts=event.ts))
+
+
 def _on_tool_started(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
     turn = state.turns[index]
@@ -739,10 +788,18 @@ def _on_tool_completed(state: ConversationView, event: Event, data: Mapping[str,
         result=jsonable(content) if isinstance(content, list) else [],
         display=_as_str(result_data.get("display")),
         context_note=_as_str(result_data.get("context_note")),
-        metrics=_key_map(result_data, "metrics"),
+        metrics=_keep_code_store(turn, call_id, _key_map(result_data, "metrics")),
         diff=_key_map(result_data, "diff"),
     )
     return _put(state, index, replace(turn, updated_ts=event.ts))
+
+def _keep_code_store(turn: TurnView, call_id: str, metrics: Any) -> Any:
+    """``code.store`` precedes ``tool.completed``; the result's own metrics must not erase it."""
+    existing = next((t for t in turn.tools if t.call_id == call_id), None)
+    kept = (existing.metrics or {}).get("code.store") if existing else None
+    if kept is None:
+        return metrics
+    return {**(metrics or {}), "code.store": kept}
 
 def _on_tool_result(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
@@ -1681,6 +1738,7 @@ def _on_legacy(state: ConversationView, event: Event, data: Mapping[str, Any]) -
         state = replace(
             state,
             opened=True,
+            session_name=_as_str(data.get("name")) or state.session_name,
             session_id=_as_str(data.get("session")) or state.session_id,
         )
         return _on_turn_started(state, event, {})
@@ -1722,6 +1780,10 @@ _HANDLERS: dict[str, Any] = {
     "model.stopped": _on_model_stopped,
     "model.retrying": _on_model_retrying,
     "tool.requested": _on_tool_requested,
+    "code.started": _on_code,
+    "code.call": _on_code,
+    "code.store": _on_code,
+    "code.finished": _on_code,
     "tool.started": _on_tool_started,
     "tool.progress": _on_tool_progress,
     "tool.completed": _on_tool_completed,
@@ -1830,10 +1892,13 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         return handler(state, event, data)
     if event_type in _LEGACY:
         return _on_legacy(state, event, data)
+    if event_type == "session.named":
+        return replace(state, session_name=_as_str(data.get("name")) or state.session_name)
     if event_type == "session.opened":
         return replace(
             state,
             opened=True,
+            session_name=_as_str(data.get("name")) or state.session_name,
             session_id=_as_str(data.get("id")) or event.session or state.session_id,
         )
     if event_type == "session.closed":

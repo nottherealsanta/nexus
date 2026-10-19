@@ -319,5 +319,6 @@
     "input_tokens": 45,
     "output_tokens": 9,
     "reasoning_tokens": 0
-  }
+  },
+  "session_name": null
 }

@@ -817,7 +817,11 @@ fn title_spans(
     }
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
-        None => text(row, "title").to_owned(),
+        None => {
+            let name = text(row, "name");
+            if name.is_empty() { text(row, "title").to_owned() }
+            else { format!("{} · {}", text(row, "title"), name) }
+        },
     };
     // Inset (1+1), indent (2), glyph and space (2), a gap, and two trailing columns.
     let inner = width.saturating_sub(2);

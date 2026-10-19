@@ -1178,11 +1178,19 @@ class Session:
         """
         if self._retired:
             return None
-        event = Event(type=event_type, data=dict(data or {}), session=self._id)
+        payload = dict(data or {})
+        if event_type == "session.opened":
+            payload["name"] = self.name
+        event = Event(type=event_type, data=payload, session=self._id)
         record = self.append_event(event)
         self._observe_event(event)
         self._publish(record.event)
         return record
+
+    @property
+    def name(self) -> str | None:
+        row = self._store.session_row(self._id)
+        return row.get("name") if row else None
 
     def emit_session_event(
         self, event_type: str, data: dict[str, Any] | None = None

@@ -868,10 +868,20 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
             };
             // Tool-group rows start with a 4-column gutter and a two-column "▸ " slot; the
-            // task row keeps the gutter and puts two plain spaces where the slot is, so
-            // its name lands on the column where a group's verb text starts.
+            // task row keeps the gutter and puts its status icon plus a space where the slot
+            // is, so its name lands on the column where a group's verb text starts. The icon
+            // is the animated spinner while running and a full braille cell once done, both
+            // at half the agent colour against the background (a failure tints from error).
+            const GUTTER: &str = "    ";
             const LEAD: &str = "      ";
-            let name_field = truncate(&capitalize(raw_name), width.saturating_sub(LEAD.len()));
+            const LEAD_WIDTH: usize = LEAD.len();
+            let icon = if running { look::SLOT } else { "\u{28ff}" };
+            let icon_tone = nexus_widgets::theme::mix(
+                if failed { p.error } else { agent_color },
+                p.background,
+                0.5,
+            );
+            let name_field = truncate(&capitalize(raw_name), width.saturating_sub(LEAD_WIDTH));
 
             let raw_task = if !b.task.is_empty() {
                 b.task.as_str()
@@ -882,9 +892,11 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
             };
 
-            let prefix_width = LEAD.len() + name_field.width() + 2;
+            let prefix_width = LEAD_WIDTH + name_field.width() + 2;
             let mut head = vec![
-                Span::raw(LEAD),
+                Span::raw(GUTTER),
+                Span::styled(icon, Style::default().fg(icon_tone)),
+                Span::raw(" "),
                 Span::styled(name_field, Style::default().fg(name_color)),
             ];
 
@@ -1503,7 +1515,11 @@ mod tests {
         };
         let rows = build(&running_task, 80, &p);
         let line1 = &rows[0].0;
-        let name_span = &line1.spans[2];
+        let tint = nexus_widgets::theme::mix(agent_col, p.background, 0.5);
+        // Pad, gutter, icon, space, name.
+        assert_eq!(line1.spans[2].content, look::SLOT);
+        assert_eq!(line1.spans[2].style.fg, Some(tint));
+        let name_span = &line1.spans[4];
         assert_eq!(name_span.content, "Explorer");
         assert_eq!(name_span.style.fg, Some(agent_col));
         let line2 = &rows[1].0;
@@ -1511,7 +1527,7 @@ mod tests {
         assert!(time_span.content.ends_with('s'));
         assert_eq!(time_span.style.fg, Some(p.muted));
 
-        // Done: no mark, time is total in p.quiet
+        // Done: full braille cell at the same tint, time is total in p.quiet
         let done_task = Content {
             kind: "task".into(),
             agent_name: "explorer".into(),
@@ -1524,7 +1540,9 @@ mod tests {
         };
         let rows = build(&done_task, 80, &p);
         let line1 = &rows[0].0;
-        assert_eq!(line1.spans[2].content, "Explorer");
+        assert_eq!(line1.spans[2].content, "\u{28ff}");
+        assert_eq!(line1.spans[2].style.fg, Some(tint));
+        assert_eq!(line1.spans[4].content, "Explorer");
         let line2 = &rows[1].0;
         let time_span = line2.spans.last().unwrap();
         assert_eq!(time_span.content, "3.2s");
@@ -1539,9 +1557,14 @@ mod tests {
             ..Default::default()
         };
         let rows = build(&failed_task, 80, &p);
-        let name_span = &rows[0].0.spans[2];
+        let name_span = &rows[0].0.spans[4];
         assert_eq!(name_span.content, "Explorer");
         assert_eq!(name_span.style.fg, Some(p.error));
+        assert_eq!(rows[0].0.spans[2].content, "\u{28ff}");
+        assert_eq!(
+            rows[0].0.spans[2].style.fg,
+            Some(nexus_widgets::theme::mix(p.error, p.background, 0.5))
+        );
     }
 
     #[test]
@@ -1564,10 +1587,12 @@ mod tests {
                 };
                 let rows = build(&task, 80, &p);
                 let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
-                // Transcript pad (1) + group gutter (4) + two spaces: the name starts at
+                // Transcript pad (1) + group gutter (4) + icon and a space: the name starts at
                 // column 7, where a tool group's verb text starts after "▸ ".
-                assert_eq!(text, format!("       {shown}  find all calls"));
-                for glyph in ["\u{203a}", "\u{25c6}", ">", "*", look::SLOT] {
+                let icon = if status == "running" { look::SLOT } else { "\u{28ff}" };
+                assert_eq!(text, format!("     {icon} {shown}  find all calls"));
+                assert_eq!(text.chars().take(7).map(|c| c.to_string().width()).sum::<usize>(), 7);
+                for glyph in ["\u{203a}", "\u{25c6}", ">", "*"] {
                     assert!(!text.contains(glyph), "no chevron or mark: {text:?}");
                 }
                 assert!(!text.contains('…'));
@@ -1588,14 +1613,14 @@ mod tests {
         let rows = build(&task, 14, &p);
         let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.width() <= 14, "{text:?}");
-        assert_eq!(text, "       Really…");
+        assert_eq!(text, format!("     {} Really…", look::SLOT));
         assert!(text.ends_with('…'), "{text:?}");
 
         // Widening the terminal shows more characters up to the width rather than capping at 10.
         let rows = build(&task, 20, &p);
         let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.width() <= 20, "{text:?}");
-        assert_eq!(text, "       Reallylongsu…");
+        assert_eq!(text, format!("     {} Reallylongsu…", look::SLOT));
         assert!(text.ends_with('…'), "{text:?}");
     }
 

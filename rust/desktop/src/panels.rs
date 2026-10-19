@@ -583,7 +583,7 @@ impl Desktop {
                                             cx.new(|_| ControlHint(title.clone().into())).into()
                                         }
                                     })
-                                    .child(session_title(&s.title).0.to_owned()),
+                                    .child(s.name.clone().unwrap_or_else(|| session_title(&s.title).0.to_owned())),
                             )
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.dispatch(
@@ -827,7 +827,7 @@ impl Desktop {
                                 move |_, cx| cx.new(|_| ControlHint(title.clone().into())).into()
                             })
                             .truncate()
-                            .child(session_title(&s.title).0.to_owned()),
+                            .child(s.name.clone().unwrap_or_else(|| session_title(&s.title).0.to_owned())),
                     )
                     .child(
                         self.button(

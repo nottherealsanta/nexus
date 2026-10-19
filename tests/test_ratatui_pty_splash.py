@@ -61,6 +61,15 @@ def test_splash_shows_wordmark_and_bar_then_wipes_into_the_chat(monkeypatch):
         process.stdin.write(b'{"startup":2}\n')
         process.stdin.flush()
         wait_for("40%")
+        # Regression: the background froze while the bar sat at 40% (the host still starting).
+        # The bar is milestone-driven and must not move, but the background is clock-driven.
+        frames = set()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            assert "40%" in screen and "60%" not in screen, screen.text()
+            frames.add(screen.text())
+            time.sleep(.05)
+        assert len(frames) >= 5, f"splash stood still at 40%: {len(frames)} distinct screens"
         process.stdin.write(b'{"startup":3}\n')
         process.stdin.flush()
         wait_for("60%")

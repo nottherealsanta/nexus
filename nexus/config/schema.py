@@ -971,6 +971,48 @@ class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     check: bool = True
 
 
+class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """``[code_mode]`` (plan 03 section 5). Every numeric key is bounded."""
+
+    enabled: bool = False
+    #: ``read_only`` | ``all`` | list of tool names / ``mcp__server__*`` globs.
+    expose: str | list[str] = "read_only"
+    context: bool = False
+    max_workers: int = 2
+    max_tool_seconds: int = 120
+    max_nested_calls: int = 64
+    #: Estimated tokens of tool stubs inlined in the ``code`` description.
+    inline_budget_tokens: int = 2500
+    sub_model: str | None = None
+    max_sub_calls: int = 16
+    max_sub_input_tokens: int = 32000
+    max_total_sub_tokens: int = 200000
+    max_depth: int = 1
+    #: Tool names rendered first in the inline catalog.
+    pinned: list[str] = msgspec.field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.expose, str):
+            if self.expose not in ("read_only", "all"):
+                raise ValueError("code_mode.expose must be read_only, all, or a list")
+        elif not all(isinstance(p, str) and p for p in self.expose) or len(self.expose) > 256:
+            raise ValueError("code_mode.expose list must hold up to 256 non-empty strings")
+        if not all(isinstance(p, str) and p for p in self.pinned) or len(self.pinned) > 256:
+            raise ValueError("code_mode.pinned must hold up to 256 non-empty tool names")
+        bounds = {
+            "max_workers": 16, "max_tool_seconds": 3600, "max_nested_calls": 10_000,
+            "inline_budget_tokens": 100_000, "max_sub_calls": 1000,
+            "max_sub_input_tokens": 10_000_000, "max_total_sub_tokens": 100_000_000,
+            "max_depth": 8,
+        }
+        for name, top in bounds.items():
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= top:
+                raise ValueError(f"code_mode.{name} must be an integer from 1 to {top}")
+        if self.sub_model is not None and not self.sub_model.strip():
+            raise ValueError("code_mode.sub_model must be a non-empty model name or unset")
+
+
 class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     config_version: Literal[2] = 2
     agent: AgentSection = msgspec.field(default_factory=AgentSection)
@@ -991,6 +1033,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     voice: VoiceSection = msgspec.field(default_factory=VoiceSection)
     live: LiveSection = msgspec.field(default_factory=LiveSection)
     manager: ManagerSection = msgspec.field(default_factory=ManagerSection)
+    code_mode: CodeModeSection = msgspec.field(default_factory=CodeModeSection)
     updates: UpdatesSection = msgspec.field(default_factory=UpdatesSection)
 
     def __post_init__(self) -> None:

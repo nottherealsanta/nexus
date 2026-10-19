@@ -536,3 +536,29 @@ ask “What finished in the last two hours?” to find sessions, then use `/sess
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.
+
+### Code mode rows (Plan 03 §3.13)
+
+The `code` tool's expanded detail is rendered by `rust/desktop/src/code_detail.rs`.
+It parses the same labelled sections every native client receives from
+`ui_support/tool_details.py` (no new wire field; `wire.py` is unchanged because
+tool rows already travel as projected blocks), so it follows whatever the host
+projects. Structure, matching Ratatui:
+
+- `Code` is a line-numbered code block (numbers match Monty tracebacks).
+- Each `Nested call N` section is a card in start order: status glyph
+  (check/x/refresh/dot, amber for denied), tool name, compact arguments,
+  status word when not `ok`, matching permission rule for denied rows, duration
+  and size. The full arguments and full result follow it as labelled rows;
+  `llm` rows show whatever model/token/excerpt rows the host provides.
+- Running nested rows appear as soon as the reducer folds `code.call running`,
+  because the block is rebuilt from the view on each snapshot.
+- Store writes and every other section (Program status, result, diagnostic)
+  use the generic labelled rows, so nothing is hidden.
+
+Update: the `Code · <purpose>` section is the card header; the host's `N  line` numbers are used as the gutter (never renumbered); Store writes / Stored entries are two-column tables; the card header shows Bytes and the Matched rule. The `Call list (N)` section is the compact summary.
+
+Deviation: cards are always expanded inside the already-expanded tool detail;
+there is no per-nested-row collapse. Section titles recognised: `Nested call`,
+`Stored entries`/`Store writes`, `Program status`, `Code`. Unit tests in `code_detail.rs`; a native
+screenshot was not taken (not verified visually).

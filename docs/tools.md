@@ -86,7 +86,8 @@ Grammar: `tool` (any arguments) · `tool(glob)` matched against the permission k
 is rejected (keys are canonical paths).
 
 Evaluation is first-match in a fixed order: **`deny` → session grants → `allow` →
-`ask` → `mode`**.
+`ask` → `mode`**. The synthetic `ContextQuery(<name>)` family's mode fallback is
+always `ask` (even under `mode = allow`; `mode = deny` still denies).
 
 - `deny` is absolute: no grant, path trick or model can override it.
 - `PathGuard` canonicalises (`realpath`, symlinks followed, prospective writes
@@ -277,3 +278,87 @@ permission key, mutability, concurrency and server deadline govern execution.
 runner and arguments. Preparation keeps the proxy call alongside this target;
 permission batches use target calls so existing MCP wildcard rules and durable
 grants keep their meaning. Filesystem targets cannot bypass path preparation.
+
+### Code mode: the `code` tool
+
+Optional (`pip install 'nexus[codemode]'`, pinned `pydantic-monty==1.1.0`; off by
+default, `[code_mode] enabled = true`, see [config.md](config.md)). One tool,
+`code`, runs a short Python program in the Monty sandbox so the model can fan out
+and filter tool calls without putting intermediate results in context. The user
+still sees every nested call with full input and output. Package: `nexus/tools/codemode/`.
+Design history: `plans/planning/03-*.md`; Monty findings: [codemode-monty-compat.md](codemode-monty-compat.md).
+
+**Input.** `program` (<= 16 KiB), `purpose` (<= 512 chars, shown to the user),
+optional `timeout_s` (<= `max_tool_seconds`), optional `targets` (<= 50 session
+names/ids, for context reads; see [context.md](context.md#recursive-context-code-mode)).
+Permission key `code`; the tool is `exclusive` when mutating tools are exposed.
+
+**Sandbox names are flat.** Each exposed tool is a bare async function
+(`await read(path="README.md")`; MCP tools by their safe local name), plus
+`search_tools`, `describe_tool`, `store`, `load`, `store_delete`, and with
+`context = true` the `context_*` functions and `llm` and the `targets` variable.
+Names that are unsafe or collide are skipped and listed in the description. Reason:
+Monty 1.1.0 has no dotted-name lookup we could verify and flat names are shortest
+for the model. `ToolError` is an alias of `RuntimeError` (Monty 1.1.0 has no class
+inheritance), so `except ToolError` also catches any `RuntimeError`.
+
+**Exposure** (`[code_mode] expose`):
+
+| Value | Callable from a program |
+| --- | --- |
+| `read_only` (default) | Tools that do not mutate (`ToolSpec.mutates` false) |
+| `all` | Every enabled tool, including mutating ones (each still permission-gated) |
+| a list | Tool names and `mcp__server__*` globs; still limited to what the session has enabled |
+
+Never callable, whatever the setting: `code`, `subagent`, `question`, `todowrite`, `skill`,
+`McpSearch`/`McpCall`, and the `meta` and `manager` bundles (`catalog.EXCLUDED`). They drive the
+loop, the user or the agent tree and stay visible as top-level rows.
+
+Direct tools stay available beside `code` (no "only" mode). A tool the session has
+disabled is not callable. The `research` profile refuses mutating nested calls.
+
+**Language.** Importable: `json`, `re`, `math`, `datetime`, `asyncio` (must be
+imported), `collections`, `itertools`, `functools`, `dataclasses`, `typing`, `copy`,
+`base64`, `random`, `time`. `os`, `sys`, `pathlib` are virtual and denied. Not
+available: `string`, `textwrap`, `hashlib`, `urllib`, `enum`, `decimal`,
+`statistics`, `operator`, `subprocess`; no `yield`, no `match`, no class inheritance.
+Programs are type-checked against generated stubs (from each tool's JSON Schema:
+`Literal` for enums, `X | None = None` for optional) before any host call.
+
+**Catalog.** `render_catalog` lists per-namespace counts, then pinned stubs
+(`[code_mode] pinned`) first, within `inline_budget_tokens` (2500); the rest are
+reached with `search_tools` / `describe_tool`.
+
+**Nested pipeline.** Every nested call goes through `ctx.invoke_tool` into
+`_NestedPipeline` in `core/loop.py`; see [loop.md](loop.md#nested-tool-calls-from-code-mode).
+It is the ordinary pipeline, not a bypass: validation, `PathGuard`, hooks,
+permissions, timeouts, result caps. A denied path gets the same message a direct call
+gets, and the program can catch it.
+
+**Result format.** Per plan 03 section 3.10: status line, the program's output, a
+bounded appendix listing every nested call, and image refs `img-N` (images attach by
+reference only). Anything clipped is announced with sizes. Diagnostics name a kind:
+`SyntaxError`, `TypeError`, `NameError`, `ToolError`, `limit:memory|time|calls|output`,
+`timeout`, `cancelled`, `crashed`, or the inner exception class.
+
+**Limits.** Source 16 KiB; `max_nested_calls` per program (default 64, counted per
+`parent_call_id`); memory 64 MiB; recursion depth 200; no sleep; per-call deadline
+`timeout_s`; runner admission is a semaphore of `max_workers` (default 2) and the
+call reports busy after 5 s. Host callbacks are id-correlated and may overlap;
+read-only nested calls overlap up to `tools.max_parallel`, mutating or `exclusive`
+ones run alone. `store`: key <= 128 chars, value <= 64 KiB, total <= 512 KiB, JSON
+only; writes commit **only when the program succeeds** and are replayed from
+`code.store` events. Earlier tool side effects are **not** rolled back when a later
+statement fails.
+
+**Events.** `code.started`, `code.call`, `code.store`, `code.finished`
+(`nexus/events.py:CODE_EVENTS`); fields follow plan 03 section 3.12 plus `skipped`,
+`bytes`, `clipped`, `permission`. They fold in `view/reduce.py`; replay equals live.
+`permission.requested`/`.resolved` for a nested call carry `parent_call_id` and
+`parent_program`. Surfaces: `tool_details._code_sections` renders the labelled
+sections ([ratatui-parity.md](ratatui-parity.md), [desktop.md](desktop.md)); the web
+client has only the generic tool fallback.
+
+**Not done / not verified.** Live-model trials (E1); Linux execution; Ratatui and
+desktop visual review; structured results for bash/MCP depend on producers setting
+metrics (not yet); per-row collapse on desktop.

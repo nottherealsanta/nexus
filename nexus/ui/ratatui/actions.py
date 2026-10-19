@@ -646,6 +646,18 @@ class ShellActions:
                     await self.switch(matched.id)
             else:
                 await self.workflows.sessions()
+        elif name == "/open":
+            if len(args) != 1:
+                raise ValueError("Usage: /open <name|id>")
+            try:
+                resolved = await self.client.session_resolve(args[0])
+            except Exception:
+                self.notice = f"No session named or numbered {args[0][:80]}"
+            else:
+                if resolved.get("trashed"):
+                    self.notice = f"Session {args[0][:80]} is in the trash"
+                else:
+                    await self.switch(str(resolved["logical_id"]))
         elif name == "/handoff":
             if argument == "read":
                 result = await self.client.read_handoff(session)

@@ -578,3 +578,28 @@ root and logical identities remain unchanged; the child log's handoff event is
 not relayed into its parent's context timeline. External workers retain their
 own context lifecycle. `/agent reset` changes selection, `/fork` creates a new
 identity, and `/handoff` retires model context inside the existing identity.
+
+## Recursive context authority
+
+See [Recursive context](context.md) for CodeMode context reads and host injection.
+A persisted, provider-identified Nexus spawn edge can grant parent-to-descendant
+reads; sibling/ancestor reads, external worker contexts and cross-project reads
+are denied. Every hop is checked again on every read. Legacy edges lacking provider
+identity fail closed. ContextQuery approval cannot upgrade these scopes, and
+Voice/user/model text is never supervision authority. Context LLM summaries have
+no tools, use the parent's resolved model/provider and shared subagent budget,
+and cannot recursively invoke another context LLM.
+
+### `context_read` on spawned edges
+
+A Nexus-run child allocation records `context_read = 1` at spawn; external workers
+(Claude Code, Antigravity) record 0, as do legacy edges. A root's code mode may read
+a descendant only if every owner edge on the path has `context_read = 1`. The flag
+is host-owned, never set from provider text. Details: [context.md](context.md#recursive-context-code-mode).
+
+### Context read authority
+
+Context access uses host-owned allocation ancestry, never model/provider spawn
+events. Child allocations deny by default and require explicit `context_read`
+opt-in; external/unknown workers deny. Completion preserves access; missing,
+trashed, purged or cross-project ancestors revoke it. See [context](context.md).

@@ -140,7 +140,7 @@ def project_tree(manager: Any, session: str, *, namespace: str, max_depth: int) 
                         branch = _text(meta.get("branch")) or None
                         worktree = _text(meta.get("worktree_path")) or None
         result = {
-            "id": identity, "namespace": ns, "kind": row["kind"] or "unknown",
+            "id": identity, "name": row.get("name"), "namespace": ns, "kind": row["kind"] or "unknown",
             "title": _text(row["title"]), "status": status, "depth": row["depth"],
             "owner_agent_id": _text(row["owner_agent_id"]) or None,
             "resolved_model": model, "tier": tier,

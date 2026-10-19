@@ -80,7 +80,8 @@
             },
             "kind": "agent"
           }
-        ]
+        ],
+        "session_name": null
       },
       "clamped": true,
       "completed_ts": 12.0,
@@ -227,5 +228,6 @@
     "input_tokens": 9,
     "output_tokens": 3,
     "reasoning_tokens": 0
-  }
+  },
+  "session_name": null
 }
