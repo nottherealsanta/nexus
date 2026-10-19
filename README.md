@@ -1,11 +1,32 @@
+<div align="center">
+
 # Nexus
 
-A small, provider-agnostic Python agent harness. Nexus owns the agentic loop,
-the message and tool contracts, permissions, sessions, context, and the
-extension system; model providers are pluggable adapters behind one protocol.
+**A small, provider-agnostic agent harness for your terminal.**<br>
+One agentic loop, any model, real permissions, and an extension system the agent can grow itself.
 
-Runtime dependencies include `httpx`, `msgspec`, `mcp`, and `rich`. Python 3.13+ on macOS or
-Linux. No vendor SDK, no agent framework, no OS sandbox.
+[Install](#install) · [Quick start](#quick-start) · [Why Nexus](#why-nexus) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+
+<br>
+
+<img src="docs/images/tui-session.png" alt="The Nexus native terminal client: a conversation with collapsed context blocks, compact tool-call lines for Glob, Grep and Read, and a details sidebar showing session status, agent, model and turn counts" width="900">
+
+<sub>The native Ratatui terminal client: a streaming conversation beside a live session-details sidebar.</sub>
+
+</div>
+
+<br>
+
+Nexus owns the agentic loop, the message and tool contracts, permissions,
+sessions, context, and the extension system. Model providers are pluggable
+adapters behind one protocol. Python 3.13+ on macOS, Linux, and WSL. No vendor
+SDK, no agent framework, no OS sandbox.
+
+> [!WARNING]
+> Tools run **on your machine, with your user's privileges**. Nexus has no OS
+> sandbox or container isolation: an approved `Bash` call can do anything your
+> shell can. Review approval prompts, keep `deny` rules, and only enable
+> extensions you trust. See [Tools and permissions](#tools-and-permissions).
 
 ## Install
 
@@ -13,14 +34,85 @@ Linux. No vendor SDK, no agent framework, no OS sandbox.
 curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
 ```
 
-Then `cd` into a project and run `nexus` (or `nexus chat` / `nexus web`). Update with
-`nexus update`. macOS, Linux and WSL; installs [uv](https://docs.astral.sh/uv/) and
-Python 3.13+ for you if they are missing. Already have uv? `uv tool install nexus-harness`.
-Options: `sh install.sh --help`. Changes: [CHANGELOG.md](CHANGELOG.md).
+The script installs [uv](https://docs.astral.sh/uv/) and Python 3.13+ if they are
+missing. Already have uv? `uv tool install nexus-harness`. Update later with
+`nexus update`. More options: [Install details](#install-details).
 
-New here? Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
-[EXTENDING.md](EXTENDING.md) to add tools, skills, agents, hooks, MCP servers,
-or providers.
+## Quick start
+
+```sh
+export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY / GEMINI_API_KEY ... (never put a key in a config file)
+cd your-project
+nexus                            # full-screen terminal client; first run walks you through provider and model
+```
+
+No API key? Run a local model with [Ollama](https://ollama.com) instead; see
+[Offline and local](#offline-and-local).
+
+For scripts, pipes, or headless runs, use `nexus run` directly from your shell:
+
+```sh
+nexus run "Explain this repository"
+nexus run "Summarize the repository" --json > events.jsonl   # headless JSONL
+```
+
+Inside the client, press `Ctrl+P` for the command palette, `Ctrl+N` for a new
+session, `Ctrl+S` for Settings, and `Ctrl+X ?` for the rest of the shortcuts. The
+full key list is under [Get started](#get-started).
+
+## A look around
+
+<table>
+  <tr>
+    <td valign="top">
+      <img src="docs/images/tui-diff.png" alt="A completed Edit tool call rendered as a side-by-side diff inside the Nexus terminal client, above the composer showing agent, model and context usage" width="100%">
+      <br><sub><b>Edits as diffs.</b> Tool calls stream inline; edits render a side-by-side diff.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/images/tui-permission.png" alt="An approval prompt strip in the Nexus terminal client asking 'Allow Edit?' with choices: allow once, allow for session, deny once, deny for session" width="100%">
+      <br><sub><b>Approval prompt strip.</b> You stay in control with interactive allow/deny choices (once or for the session) before tools run.</sub>
+    </td>
+  </tr>
+</table>
+
+Screenshots are from the native Ratatui client, which is the primary interface. The
+browser client (`nexus web`) is being deprecated; see [docs/web.md](docs/web.md).
+
+## Why Nexus
+
+- **One agentic loop, many providers.** Anthropic, any OpenAI-compatible endpoint
+  (Responses or Chat Completions), Gemini, and Ollama/llama.cpp all run through the
+  same loop and one message IR. Capabilities come from the model registry.
+- **Permissions you can read.** Declarative `allow` / `ask` / `deny` rules with
+  path scoping; `deny` is absolute. Honest about limits: host execution, no sandbox.
+- **Self-extension without a restart.** Tools, hooks, skills, agents, MCP servers,
+  and config are watched data; a tool written in one loop iteration is callable in
+  the next. See [Self-extension](#self-extension-trusted-code-quarantine-hot-reload).
+- **Sessions that outlive their views.** One daemon per workspace runs many sessions
+  at once; every session is an append-only log you can replay, fork, and export.
+- **Subagents with bounds.** `Task` spawns nested agents whose tools, permissions,
+  tier, depth, and fan-out can never exceed the parent's.
+- **Everything visible.** Inspect the exact context sent to the model (`Ctrl+I`),
+  token usage, plan limits, and file diffs from within the client.
+
+## Documentation
+
+| Start here | |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | How the loop, runtime, daemon, and surfaces fit together |
+| [docs/README.md](docs/README.md) | Index of all design docs |
+| [docs/cli.md](docs/cli.md) | CLI reference |
+| [docs/config.md](docs/config.md) | Configuration reference |
+| [docs/extending.md](docs/extending.md) | Add tools, skills, agents, hooks, MCP servers, or providers |
+| [docs/security.md](docs/security.md) | Security model |
+| [examples/](examples/) | Config, tool, skill, agent, hook, and Python API samples |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+
+Everything below is the detailed reference.
+
+---
 
 ### From a clean checkout
 
@@ -65,7 +157,7 @@ a literal key in a config file:
 
 ```sh
 export ANTHROPIC_API_KEY=...
-# or OPENAI_API_KEY / GEMINI_API_KEY / GEMINI_GOOGLE_API_KEY ...
+# or OPENAI_API_KEY / GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY ...
 ```
 
 For a fully local setup, install [Ollama](https://ollama.com), pull a model, and
@@ -1058,4 +1150,4 @@ Replies are buffered and text-only. Nexus executes tool requests through its own
 permissions and durable session log; the SDK's built-in tools and project hooks
 are disabled. Temperature, top-p, stop sequences, exact output-token caps, and
 explicit thinking budgets are not supported by this bridge. See
-[the implementation plan](plans/CLAUDE_AGENT_PLAN.md) for its boundaries and tests.
+[docs/models.md](docs/models.md) for its boundaries and tests.
