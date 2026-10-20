@@ -6,7 +6,8 @@ use crate::{
     DetailsPrevious, Dismiss, FavoriteModel, FocusComposer, FocusNext, ForkSession, HistoryNext,
     HistoryPrevious, InspectContext, InterruptSubmit, JumpLatest, Live, LivePause, Models, NewSession, Palette,
     PreviousFocus, QueueSubmit, Quit, Reconnect, RefreshModels, SaveForm, Sessions, Settings,
-    Shortcuts, SortModels, StopTurn, ThemeToggle, ToggleDetails, ToggleLogs, ToggleSessions,
+    Shortcuts, SortModels, StopTurn, ThemeToggle, ToggleDetails, ToggleLogs, ToggleManager,
+    ToggleSessions,
     TranscriptPageDown, TranscriptPageUp, UpdateHelp, Usage, Voice,
 };
 
@@ -60,6 +61,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-x v", Voice, Some("Nexus")),
         KeyBinding::new("ctrl-x d", Live, Some("Nexus")),
         KeyBinding::new("ctrl-x p", LivePause, Some("Nexus")),
+        KeyBinding::new("ctrl-x a", ToggleManager, Some("Nexus")),
+        KeyBinding::new("ctrl-x shift-a", ToggleManager, Some("Nexus")),
         KeyBinding::new("ctrl-x n", NewSession, Some("Nexus")),
         KeyBinding::new("ctrl-x o", Sessions, Some("Nexus")),
         KeyBinding::new("ctrl-x f", ForkSession, Some("Nexus")),
@@ -154,6 +157,7 @@ mod tests {
             ("ctrl-enter", "QueueSubmit", "Editor"),
             ("ctrl-x d", "Live", "Nexus"),
             ("ctrl-x p", "LivePause", "Nexus"),
+            ("ctrl-x a", "ToggleManager", "Nexus"),
             ("ctrl-x c", "ContextPopover", "Nexus"),
             ("ctrl-x z", "UpdateHelp", "Nexus"),
             ("ctrl-x ?", "Shortcuts", "Nexus"),

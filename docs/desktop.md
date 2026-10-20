@@ -77,15 +77,23 @@ in a running window.** Rules and backend: [manager.md](manager.md); terminal beh
   not a session row: it is not searched, grouped or archived. The card dispatches `manager_open`; `Voice` dispatches
   `manager_live`. Both run the shared Python `Manager` (`ManagerOpen`, then the ordinary Live flow with the separate
   `LiveConsent(scope="manager")` dialog).
+- **Top-bar toggle, not a tab.** The Manager is never a tab (the shared bridge adds none and drops it from the tab
+  rows). A `Manager` icon button (`network`, icon-only like its neighbours) sits in the top bar immediately before
+  `Sessions`; it is drawn once the host has reported the manager (also while off) and reads pressed (surface
+  background, accent icon text) while `manager.active`. The button and `Ctrl+X A` (`ToggleManager`, shared
+  `LEADER_SHORTCUTS` row `a` / `toggle_manager`) dispatch `manager_toggle`: the shared `Manager.toggle` opens the
+  view and the next toggle restores the session in front before (see
+  [ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui)); closing archives and deletes nothing and
+  leaves Live alone. While it is open the header shows no title, workspace path or git branch (the pressed toggle marks the view), even with other tabs. Rust tests:
+  `panels.rs::manager_button`, `keymap.rs` route table; not looked at in a running window.
 - **Wire.** The card is the snapshot field `manager`, carried in the `sessions` topic of
   `nexus/ui/desktop/wire.py` (so it never invalidates the header topic); `rust/tui/src/bridge.rs::ManagerEntry`
   is shared with the terminal. The presentation (`panels.rs::manager_card_rows`) is a pure function.
 - **Manager chat.** While the manager is open the composer row reads `Manager · model provider · fixed model · no
   role, shell or fork` and is not clickable; `/model`, `/effort`, `/agent`, `/fork`, `/handoff`, the cycle keys and
   shell mode are refused by the bridge with a reason.
-- **Confirmation.** The approval sheet shows `prompt.lines` (the whole launch instruction or cancel target and
-  `Asked every time · this answer is never remembered`) and exactly two choices (launch or do not launch; stop or
-  keep running). There is no always-allow row; the bridge rejects any value that was not offered.
+- **No confirmation.** Manager launch, cancel and send run without an approval request, so the desktop shows no
+  manager-specific sheet; any permission prompt is the ordinary one.
 
 ## GPT Live (voice calls)
 
@@ -111,8 +119,13 @@ verified.** Daemon, helper and call flow: [live.md](live.md).
   from `ui_support/live_card.py`); a delegated user message carries `status: "live"`.
   The bridge types are shared with the terminal client (`rust/tui/src/bridge.rs`).
 - Call bar (`src/live.rs`, drawn above the composer controls): `● Live · model · phase ·
-  mm:ss`, `mic` / `spk` meters, a `MUTED` badge, `· in <session>` when another session is on
-  screen, and a `/live stop` button. The composer stays editable (typing is steering).
+  mm:ss`, `mic` / `spk` meters, a `MUTED` badge, `· in Manager` when another session is on
+  screen, and a `/live stop` button. The composer stays editable (typing is steering) and keeps
+  sending to the displayed session. The call is always attached to the manager (plan 02 §10):
+  the bar stays above the composer in every session, an amber `approval waiting` chip (`live.attention`)
+  appears while a manager approval is pending elsewhere, and that approval arrives as the ordinary
+  approval sheet (prefixed `Manager ·`, answered on the manager session). Desktop reports its foreground
+  session to the host like the terminal (`nexus/ui/ratatui/focus.py`). Offline-tested; not verified live.
 - Live card: same rows and disclosure as the terminal (`Started`, `You`, `Voice`, `Sent to
   agent (queue|steer)` with `-> turn #N`, `Told voice [...]`, `Error`, `Ended`); clicking
   the card opens or closes it (commentary and the instructions text show when open).
@@ -217,7 +230,7 @@ so a terminal keymap update cannot silently remove the desktop shortcuts.
 | Transcript navigation | j/k or Up/Down or Shift+Tab move, Enter/Space opens, Escape or any other key leaves |
 | Focus traversal | Ctrl+Tab / Ctrl+Shift+Tab |
 | Composer focus / theme | Cmd+Enter / Cmd+Shift+T |
-| Ctrl+X leader | m v d n o f g b l s i e t u r c z ? (model, dictate, GPT Live call, new, sessions, fork, agent, sidebars, settings, context, logs, effort, usage, reconnect, context popover, update help, shortcuts) |
+| Ctrl+X leader | m v d n o f g b l s i e t a u r c z ? (Manager toggle `a`, model, dictate, GPT Live call, new, sessions, fork, agent, sidebars, settings, context, logs, effort, usage, reconnect, context popover, update help, shortcuts) |
 
 ## Visual verification
 
@@ -530,8 +543,8 @@ removing earlier cards. No separate desktop compaction engine is introduced.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. The active header says `◇ Manager`.
-Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider

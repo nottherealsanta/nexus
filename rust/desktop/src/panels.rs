@@ -14,11 +14,19 @@ thread_local! {
 fn panel_scroll_handle() -> ScrollHandle {
     PANEL_SCROLL.with(|scroll| scroll.borrow().clone())
 }
+/// The header title is for a session with no tabs; the manager view never shows one (presentation
+/// only: the snapshot keeps its title and breadcrumb).
+fn header_shows_title(no_tabs: bool, manager: bool) -> bool {
+    no_tabs && !manager
+}
+
+/// The workspace path, branch and mock chip are hidden while the manager view is in front.
+fn header_shows_workspace(manager: bool) -> bool {
+    !manager
+}
+
 /// Separate only a trailing canonical mock directive; original titles remain
 /// untouched in the snapshot, search index, operations and full-title tooltip.
-fn active_session_title(title: &str, manager: bool) -> (&str, Option<&str>) {
-    if manager { ("◇ Manager", None) } else { session_title(title) }
-}
 
 fn session_title(title: &str) -> (&str, Option<&str>) {
     for (open, close) in [("⟦mock scenario=", "⟧"), ("[mock scenario=", "]")] {
@@ -106,6 +114,7 @@ impl Desktop {
                 | "Listen"
                 | "Stop dictation"
                 | "Commands"
+                | "Manager"
                 | "Sessions"
                 | "Details"
                 | "Settings"
@@ -471,6 +480,20 @@ impl Desktop {
                 json!({"type":"command","text":"/help"}),
                 cx,
             ))
+            // The Manager is a view, not a tab: this toggle opens it, and again restores the
+            // session it replaced. It reads as pressed while the manager is in front.
+            .when(manager_button(&self.snapshot.manager).is_some(), |d| {
+                let pressed = manager_button(&self.snapshot.manager) == Some(true);
+                d.child(
+                    self.button(
+                        "manager-toggle",
+                        "Manager",
+                        json!({"type":"manager_toggle"}),
+                        cx,
+                    )
+                    .when(pressed, |b| b.bg(t.surface).text_color(t.accent)),
+                )
+            })
             .child(self.button(
                 "sessions-toggle",
                 "Sessions",
@@ -507,7 +530,8 @@ impl Desktop {
                     self.snapshot.title.clone()
                 }
             });
-        let (display_title, mock) = active_session_title(&title, self.snapshot.manager.active);
+        let manager = self.snapshot.manager.active;
+        let (display_title, mock) = session_title(&title);
         let workspace = compact_workspace(
             &self.snapshot.breadcrumb,
             std::env::var("HOME").ok().as_deref(),
@@ -618,7 +642,7 @@ impl Desktop {
                 .justify_between()
                 .gap_4()
                 .px_6()
-                .py_2()
+                .py_1()
                 .child(
                     div()
                         .flex()
@@ -626,7 +650,10 @@ impl Desktop {
                         .gap_1()
                         .flex_1()
                         .min_w_0()
-                        .when(self.snapshot.tabs.is_empty(), |d| {
+                        // The manager view names itself through its pressed toggle, not a title.
+                        .when(
+                            header_shows_title(self.snapshot.tabs.is_empty(), manager),
+                            |d| {
                             d.child(
                                 div()
                                     .id("session-header-title")
@@ -642,7 +669,7 @@ impl Desktop {
                                     .child(display_title.to_owned()),
                             )
                         })
-                        .child(
+                        .when(header_shows_workspace(manager), |d| d.child(
                             div()
                                 .flex()
                                 .flex_wrap()
@@ -711,7 +738,7 @@ impl Desktop {
                                             .child(mock_label(directive)),
                                     )
                                 }),
-                        ),
+                        )),
                 )
                 .child(
                     div()
@@ -2433,9 +2460,14 @@ impl Render for ControlHint {
 mod header_tests {
     use super::*;
     #[test]
-    fn manager_header_is_distinct_from_ordinary_sessions() {
-        assert_eq!(active_session_title("Renamed session", true), ("◇ Manager", None));
-        assert_eq!(active_session_title("Renamed session", false), ("Renamed session", None));
+    fn manager_header_hides_title_and_workspace_but_ordinary_sessions_keep_them() {
+        assert!(!header_shows_title(true, true));
+        assert!(!header_shows_title(false, true));
+        assert!(!header_shows_workspace(true));
+        assert!(header_shows_title(true, false));
+        assert!(!header_shows_title(false, false));
+        assert!(header_shows_workspace(false));
+        assert_eq!(session_title("Renamed session"), ("Renamed session", None));
     }
     #[test]
     fn mock_title_keeps_complete_directive_separate() {
@@ -2546,6 +2578,12 @@ pub(crate) fn manager_card_rows(entry: &crate::bridge::ManagerEntry) -> ManagerC
     }
 }
 
+/// The top-bar Manager toggle: `None` while the host reported no manager (no button), else whether
+/// it is pressed (the manager view is in front).
+pub(crate) fn manager_button(entry: &crate::bridge::ManagerEntry) -> Option<bool> {
+    entry.shown().then_some(entry.active)
+}
+
 /// `model  provider` for the manager's fixed composer label.
 fn manager_model_label(snapshot: &crate::bridge::Snapshot) -> String {
     if snapshot.provider.is_empty() {
@@ -2599,6 +2637,25 @@ mod manager_card_tests {
         assert_eq!(card.caption, "PINNED · OPEN");
         assert_eq!(card.tone, "warn");
         assert!(card.summary.contains("Settings > Providers"));
+    }
+
+    #[test]
+    fn the_top_bar_toggle_is_drawn_once_the_host_reports_a_manager_and_is_pressed_while_open() {
+        assert_eq!(manager_button(&ManagerEntry::default()), None);
+        // Off still draws the button so the manager stays discoverable.
+        assert_eq!(
+            manager_button(&entry(serde_json::json!({"known": true, "enabled": false}))),
+            Some(false)
+        );
+        assert_eq!(
+            manager_button(&entry(serde_json::json!({"known": true, "enabled": true, "active": true}))),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn manager_toggle_uses_a_labelled_icon_only_button() {
+        assert_eq!(crate::icons::button_label("Manager"), (Some("network"), "Manager"));
     }
 
     #[test]

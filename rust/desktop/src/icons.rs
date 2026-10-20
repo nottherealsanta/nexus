@@ -162,6 +162,7 @@ pub fn button_label(label: &str) -> (Option<&'static str>, &str) {
         "Send" => (Some("arrow-up"), label),
         "Stop dictation" => (Some("square"), label),
         "Stop" => (Some("square"), label),
+        "Manager" => (Some("network"), label),
         "Sessions" => (Some("panel-left"), label),
         "Details" => (Some("panel-right"), label),
         "Inspect workspace" => (Some("folder"), label),

@@ -52,6 +52,7 @@ actions!(
         Voice,
         Live,
         LivePause,
+        ToggleManager,
         Speak,
         ThemeToggle,
         Reconnect,
@@ -1334,6 +1335,10 @@ impl Desktop {
         // Ctrl+X P: pause or resume the open call (Ctrl+X F is Fork).
         self.command("/live pause", w, cx);
     }
+    fn toggle_manager(&mut self, _: &ToggleManager, w: &mut Window, cx: &mut Context<Self>) {
+        // Ctrl+X A: open the Manager view, or close it and restore the session it replaced.
+        self.dispatch(json!({"type":"manager_toggle"}), w, cx);
+    }
     fn speak(&mut self, _: &Speak, w: &mut Window, cx: &mut Context<Self>) {
         self.command("/speak", w, cx);
     }
@@ -1822,6 +1827,7 @@ impl Render for Desktop {
             .on_action(cx.listener(Self::voice))
             .on_action(cx.listener(Self::live))
             .on_action(cx.listener(Self::live_pause))
+            .on_action(cx.listener(Self::toggle_manager))
             .on_action(cx.listener(Self::speak))
             .on_action(cx.listener(Self::theme_toggle))
             .on_action(cx.listener(Self::cycle_agent))

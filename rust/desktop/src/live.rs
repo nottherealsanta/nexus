@@ -134,6 +134,19 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .gap_2()
+                    // A manager approval waiting while another session is in front.
+                    .when(!live.attention.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("live-attention")
+                                .px_2()
+                                .rounded(px(crate::theme::radius::CHIP))
+                                .bg(t.amber)
+                                .text_color(t.background)
+                                .font_weight(FontWeight::BOLD)
+                                .child(live.attention.clone()),
+                        )
+                    })
                     .when_some(badge(live), |d, text| {
                         d.child(
                             div()
@@ -320,5 +333,16 @@ mod tests {
         let snapshot: Snapshot = serde_json::from_value(value).unwrap();
         assert!(snapshot.live.active && snapshot.live.muted);
         assert_eq!(snapshot.live.level_in, 0.5);
+        assert!(!snapshot.live.manager && snapshot.live.attention.is_empty());
+    }
+
+    #[test]
+    fn manager_attachment_and_waiting_approval_decode_from_the_desktop_wire() {
+        let value = json!({"live": {"active": true, "state": "active", "phase": "listening",
+            "elsewhere": "Manager", "manager": true, "attention": "approval waiting"}});
+        let snapshot: Snapshot = serde_json::from_value(value).unwrap();
+        assert!(snapshot.live.manager);
+        assert_eq!(snapshot.live.attention, "approval waiting");
+        assert_eq!(headline(&snapshot.live, 0.0), "Live · listening · 00:00 · in Manager");
     }
 }
