@@ -21,6 +21,7 @@ for setup and usage.
 | Approvals never broaden | `*_always` persists an exact-action rule; unattended policy defaults to deny | `tools/permissions.py`, `session/session.py` |
 | Child processes | command hooks and MCP children get a fixed safe environment plus explicitly configured names; shells are argv, not strings, unless opted in | `hooks/`, `mcp/client.py` |
 | MCP detail | `McpServerShow` and the context rows expose only the command basename and argument count; env, headers, URLs and working directories are never shown, and errors are redacted | `host/facade.py`, `runtime.py` |
+| Debug manager MCP | optional and off: needs `NEXUS_DEBUG_MCP=1` and a project `mcp.json` entry that ships `enabled: false`; stdio only (no listener), a plain host-protocol client of an already running daemon (never starts one, never reads storage); its launch/send/cancel change real sessions, so they are rate-limited, `cancel` reaches only roots that server launched, and each send names the debug MCP in its first line. The MCP client's own tool approval is the human gate ([manager.md](manager.md#debug-mcp-server-debug-only)) | `devtools/manager_debug_mcp.py`, `devtools/debug_mcp_port.py` |
 | Untrusted data | MCP descriptions/results, web pages and search results are wrapped with no-authority delimiters and sanitised; results' links are never fetched | `mcp/bridge.py`, `tools/builtin/webfetch.py`, `websearch.py` |
 | Outbound network | public-address-only, resolve once and pin the vetted address, validated redirects (≤ 5), size/time caps, rate limit | `net/outbound.py`, `net/local_search.py` |
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |
@@ -190,6 +191,14 @@ The daemon refuses `LiveStart` on the manager without it (`live_consent_required
 it while `[manager] enabled = false` (`manager_disabled`). Existing base consent stays valid
 for ordinary calls. Not verified against the real service.
 
+Manager `session_launch`, `session_send`, `session_cancel` and `session_show` run with **no approval
+prompt**, so on a voice call a mis-heard request can start, message or cancel a session, or move the
+native client to another session, before the user can object. Guards: a real user message of the current
+turn (for Live, only the delegated request, never the `Voice:` lines), visibility, per-turn caps, and
+that cancel reaches only what the manager launched. `session_show` changes no session and sends
+nothing; it only asks a client that is showing the manager (or following the Live call) to switch,
+never over a modal, form or pending prompt.
+
 ## Outbound HTTP (`net/`)
 
 `SafeOutboundHTTPService` validates the URL, resolves the host **once** per socket,
@@ -212,6 +221,29 @@ exactly like `nexus.toml` and `SOUL.md`. The permission engine gates *calls*, no
 obviously dangerous import-time effects; nothing more. A hook is policy, never a
 grant, and a hook `modify` is re-validated and re-gated. `ToolContext` exposes no
 `Runtime`, so a tool reaches only its narrow service views.
+
+Installing skills from `npx skills` (Settings → Skills) **runs third-party code**
+(`npx` downloads and executes the pinned `skills` package, which fetches the source)
+under the user's account, at the user's explicit, confirmed request, never from the
+model loop and never for a paired device (`SkillsInstall` is default-denied by the
+gateway). The child gets the `build_child_env` allow-list plus proxy variables (no
+Nexus or provider credentials), no stdin, a process group killed on timeout or
+cancel, and bounded redacted output. Nexus imports only validated copies: no
+symlinks or special files, no `tools/` folder, no permission bits. Installed skills
+are then trusted extension data like any other. Overwritten folders go to settings
+trash. A live run of the pinned package is unverified (see plan 04).
+
+Adding an MCP server from Settings (`SettingsMcpAdd`) **starts a process or connects to a
+URL the user typed**, at the user's confirmed request: the review states that and masks
+env/header values and URL credentials. Like `SkillsInstall` it is never a model tool and
+is default-denied by the gateway for paired devices. The entry is validated with the
+loader's own parser (no `${input:…}`, no masked placeholders, `envFile` never read), error
+text and reload failures are redacted with every literal env/header/URL secret of the draft,
+and `SettingsMcpAdd`'s repr hides the entry. The insert never rewrites other servers, so a
+masked placeholder can never restore another server's secret. Literal credentials are stored
+as typed (prefer `${env:VAR}`); a project file may be committed. Symlinked roots/files and
+paths outside the scope are refused, the replace is atomic and re-checks the file, and a
+project add is refused while only the legacy `.nexus/mcp.json` exists.
 
 ## Dev and test safety
 
@@ -238,9 +270,9 @@ snippets cleaned before they reach the terminal. They are not copied onto every
 The `i` inspector keeps full tool details reachable, so the local double-click
 view hides nothing from the user. This note does not assert final verification.
 
-### Optional code-mode interpreter boundary
+### Code-mode interpreter boundary
 
-The pinned `codemode` extra uses pure Monty, never an embedded CPython worker.
+The pinned `pydantic-monty` base dependency (default-on code mode) uses pure Monty, never an embedded CPython worker.
 Only the isolated helper imports the dependency. Helpers run in a new process
 group, with an explicit minimal locale-only environment and a private temporary
 working directory; the daemon never changes its own environment or cwd. Deadline,

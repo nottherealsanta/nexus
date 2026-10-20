@@ -42,13 +42,13 @@ inward-only exceptions. Errors are
 | Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` `AgentCancel` |
 | Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
-| Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
+| Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
-| Workspace | `FileSearch` `GitDiff` `LogsRead` |
+| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
-| Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Copilot/Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
+| Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
 
@@ -363,6 +363,21 @@ It preserves JSONC comments and surrounding formatting, refuses ambiguous
 objects, checks the supplied hash and returns `SettingsWriteResult`. Successful
 writes reload extensions. Existing sessions keep frozen modes.
 
+`SettingsMcpAdd(scope, name, entry, expected_sha256=None)` inserts one new server
+(see `docs/extensions.md`, "Adding an MCP server from Settings") and returns
+`SettingsWriteResult` with `status` `written | exists | conflict | legacy` and a
+`message`. `expected_sha256`: `None` = current file, `""` = the file must not exist, hex =
+must match. Its repr masks `entry`. It is a daemon slow command (the reload starts the
+server's process) and default-denied to paired devices.
+
+`SettingsMcpAdd(..., dry_run=True)` (client: `settings_mcp_add_preview`) runs the same
+validation and target checks (exists, stale hash, legacy `.nexus/mcp.json`, global root vs
+`NEXUS_HOME`) but writes and starts nothing. It returns `status="preview"` with the masked
+confirmation `lines` (no env/header value, no URL credential) and the structured
+`transport`; the ratatui Add server flow shows these lines, so the UI imports no MCP code.
+`SkillsInstall` for the global scope is likewise refused when `NEXUS_HOME` points away from
+`~/.nexus`, the folder Settings writes.
+
 ### Cancelling one child agent
 
 `AgentCancel(session, agent_id, reason="")` stops one running child (including an
@@ -406,8 +421,8 @@ unchanged. Why it was removed: [decisions.md](decisions.md#sessions-dashboard-ha
 
 `SessionTree(session, namespace="main")` returns `SessionTreeResult(session,
 tree)`. Namespace is restricted to this workspace's `main` or `agents`; session
-ids are validated stored ids, not logical agent paths. The host uses configured
-agent max depth plus one, capped at 64. The response contains `nodes`,
+ids are validated stored ids, not logical agent paths. The host uses a fixed depth of 8
+(independent of `agents.max_depth`) so legacy nested sessions still render. The response contains `nodes`,
 `unattached`, `truncated`, `max_nodes` (500), `max_depth` and `read_only`.
 
 Each node exposes stored `id`, `namespace`, `kind`, redacted `title`, `status`,
@@ -523,3 +538,13 @@ status, arguments, output/error and timing. `code.store` applies `set`/`delete`
 to bounded preview entries. Native bridges project these into labelled program,
 parameters, nested calls, results, diagnostics and store rows, not raw JSON.
 Unknown event types remain forward-compatible.
+
+### Foreground session hints
+
+Native clients report `SessionFocus(session, client_id)` independently of subscriptions
+and receive `SessionFocusResult`. Empty/null session clears the claim. IDs are printable
+ASCII without spaces, at most 128 characters; the host retains at most 64 claims and
+expires them after five minutes (clients heartbeat every 15 seconds). These ephemeral
+claims are hints, not authority: multiple clients may focus different sessions. Manager
+`session_find` rows expose `focused_clients`; uncertain spoken targets must be clarified.
+GPT Live starts only on the singleton manager, never on a foreground root session.

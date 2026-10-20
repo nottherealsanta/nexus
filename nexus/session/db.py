@@ -568,6 +568,8 @@ def _backfill_message_snippets(conn: sqlite3.Connection) -> None:
                 continue
             if not isinstance(record, MessageRecord):
                 continue
+            if record.message.meta.notice is not None:
+                continue
             snippet = export_mod.message_snippet(record.message)
             if not snippet:
                 continue
@@ -666,7 +668,9 @@ def _append_in_txn(conn, project_id, namespace, session, requested_seq, kind, ts
         or (kind == "event" and isinstance(payload, Event) and payload.type == "input.queued")
     ) and ts > 0:
         new_last_user_at = max(last_user_at, ts)
-    if kind == "message" and isinstance(payload, Message) and payload.role == "user":
+    if kind == "message" and isinstance(payload, Message) and payload.meta.notice is not None:
+        pass  # a harness notice is not a user message: no count, title or last prompt
+    elif kind == "message" and isinstance(payload, Message) and payload.role == "user":
         new_message_count += 1
         snippet = export_mod.message_snippet(payload)
         if snippet:
@@ -894,6 +898,7 @@ class SqliteSessionStore:
             1
             for r in records
             if isinstance(r, MessageRecord) and r.message.role == "user"
+            and r.message.meta.notice is None
         )
         title = ""
         last_user = ""
@@ -902,7 +907,7 @@ class SqliteSessionStore:
         for r in records:
             if isinstance(r, EventRecord) and r.event.type == "input.queued":
                 last_user_at = max(last_user_at, r.ts)
-            if not isinstance(r, MessageRecord):
+            if not isinstance(r, MessageRecord) or r.message.meta.notice is not None:
                 continue
             if export_mod.is_user_prompt(r.message):
                 last_user_at = max(last_user_at, r.ts)

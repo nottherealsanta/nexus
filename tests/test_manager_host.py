@@ -71,7 +71,7 @@ async def test_manager_open_is_refused_while_disabled_but_state_still_answers(tm
         state = await facade.handle(p.ManagerState())
         assert isinstance(state, p.ManagerStateResult)
         assert not state.enabled and state.session == "" and state.managed == []
-        assert state.model == "github-copilot/gpt-6-luna"
+        assert state.model == "codex/gpt-6-luna"
         assert not state.signed_in and "Settings" in state.sign_in
         assert not runtime.sessions.store.row_exists(MANAGER_ID)
     finally:
@@ -121,13 +121,37 @@ async def test_the_manager_id_is_reserved_and_a_disabled_manager_is_unreachable(
         await runtime.aclose()
 
 
+async def test_enqueue_to_a_forgotten_manager_draft_recreates_the_manager(tmp_path):
+    runtime, facade = build(tmp_path)
+    try:
+        assert isinstance(await facade.handle(p.ManagerOpen()), p.ManagerOpenResult)
+    finally:
+        await runtime.aclose()  # the draft never got a message, so it is gone on restart
+    runtime, facade = build(tmp_path)
+    try:
+        assert not runtime.sessions.exists(MANAGER_ID)
+        result = await facade.handle(p.SessionEnqueue(session=MANAGER_ID, content="hi"))
+        assert isinstance(result, p.SessionEnqueueResult), result
+        assert runtime.sessions.kind_of(MANAGER_ID) == "manager"
+    finally:
+        await runtime.aclose()
+    runtime, facade = build(tmp_path, enabled=False)
+    try:
+        result = await facade.handle(p.SessionEnqueue(session="nexus-manager", content="x"))
+        assert isinstance(result, p.ErrorResult)
+    finally:
+        await runtime.aclose()
+
+
 async def test_manager_state_reports_sign_in_consent_and_managed_roots(tmp_path, monkeypatch):
     runtime, facade = build(tmp_path)
     try:
-        connected = {"github-copilot": False, "codex": True}
+        connected = {"codex": False}
+        asked: list[str] = []
 
         async def lookup(_runtime, provider):
-            return connected[provider]
+            asked.append(provider)
+            return connected[provider]  # a Copilot lookup would raise KeyError: it is not required
 
         monkeypatch.setattr("nexus.host.facade.provider_connected", lookup)
         await facade.handle(p.ManagerOpen())
@@ -137,13 +161,15 @@ async def test_manager_state_reports_sign_in_consent_and_managed_roots(tmp_path,
         manager.emit_session_event("session.linked", {"kind": "managed", "child": "mgr-2", "turn": "t1"})
         state = await facade.handle(p.ManagerState())
         assert state.enabled and state.session == MANAGER_ID and state.managed == ["mgr-1", "mgr-2"]
-        assert not state.signed_in and "GitHub Copilot" in state.sign_in
-        assert state.codex_signed_in and not state.live_ready
+        assert state.model == "codex/gpt-6-luna" and state.provider == "codex"
+        assert not state.signed_in and "Codex" in state.sign_in and "Copilot" not in state.sign_in
+        assert not state.codex_signed_in and not state.live_ready
         assert (state.max_launches_per_turn, state.max_live_managed) == (3, 8)
-        connected["github-copilot"] = True
+        connected["codex"] = True
         lc.write_consent(True, tmp_path / "home", "manager")
         ready = await facade.handle(p.ManagerState())
         assert ready.signed_in and ready.sign_in == "" and ready.live_manager_consent and ready.live_ready
+        assert set(asked) == {"codex"}
     finally:
         await runtime.aclose()
 
@@ -268,7 +294,7 @@ def test_a_call_on_the_manager_needs_it_enabled_and_the_cross_session_consent(tm
         )
 
     refusal = live_support._manager_refusal
-    assert refusal(facade("root"), "s", tmp_path) is None  # ordinary sessions are untouched
+    assert refusal(facade("root"), "s", tmp_path).kind == "live_manager_required"
     disabled = refusal(facade("manager", enabled=False), "m", tmp_path)
     assert disabled.kind == "manager_disabled"
     lc.write_consent(True, tmp_path)

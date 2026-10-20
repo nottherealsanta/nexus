@@ -114,38 +114,31 @@ async def test_host_tree_wire_and_configured_depth(tmp_path):
         assert child["owner_spawn_seq"] > 0
         assert child["owner_agent_id"] == child["agent_id"]
         assert child["resolved_model"] and child["tier"]
-        assert result.tree["max_depth"] == runtime._load_config().v2.agents.max_depth + 1
+        assert result.tree["max_depth"] == 8  # fixed: legacy nested sessions still render
         listing = await host.handle(p.SessionList(include_children=True))
         assert {item.namespace for item in listing.sessions} == {"main", "agents"}
     finally:
         await runtime.aclose()
 
 
-async def test_nested_runtime_physical_owner_root_and_spawn_sequence(tmp_path):
+async def test_child_cannot_spawn_so_tree_stays_one_level_deep(tmp_path):
+    # Legacy nested ownership is covered with recorded stores above; a live
+    # child that forges a Task call is refused and no grandchild is created.
     from test_phase6_integration import make_runtime
     from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
 
     runtime = make_runtime(tmp_path, ScriptedProvider(
         tool_response(("outer", "Task", {"prompt": "delegate", "subagent_type": "general"})),
         tool_response(("inner", "Task", {"prompt": "nested", "subagent_type": "general"})),
-        text_response("grandchild report"), text_response("child report"), text_response("root done"),
+        text_response("child report"), text_response("root done"),
     ))
     try:
         async for _ in runtime.session("root").send("go"):
             pass
         tree = (await HostFacade(runtime).handle(p.SessionTree(session="root"))).tree
         parent = tree["nodes"][0]["children"][0]
-        nested = parent["children"][0]
-        assert nested["owner_id"] == parent["id"]
-        assert nested["owner_namespace"] == "agents"
-        assert nested["root_id"] == "root"
-        assert nested["owner_spawn_seq"] > 0
-        store = runtime._ensure_child_sessions().manager.store
-        record = store.record_at(parent["id"], nested["owner_spawn_seq"])
-        assert record.event.type == "agent.spawned"
-        assert nested["owner_turn_id"] == record.event.turn
-        assert record.event.data["agent"]["id"] == nested["agent_id"]
-        assert runtime._question_service(nested["logical_session_id"])._root == "root"
+        assert parent["children"] == []
+        assert parent["root_id"] == "root"
     finally:
         await runtime.aclose()
 
@@ -161,7 +154,8 @@ def test_tree_total_node_budget_and_no_cross_project_adoption(tmp_path):
         agents.store.create_from_records(f"child-{index}", [], meta={
             "kind": "child", "owner_namespace": "main", "owner_id": "root", "root_id": "root",
         })
-    other = SessionManager(store=SqliteSessionStore(root.store.db, "other-project", "agents"))
+    other = SessionManager(store=SqliteSessionStore(
+        root.store.db, "other-project", "agents", lock_dir=root.store.lock_dir))
     other.store.create_from_records("foreign", [], meta={
         "kind": "child", "owner_namespace": "main", "owner_id": "root", "root_id": "root",
     })

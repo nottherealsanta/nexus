@@ -153,6 +153,30 @@ class SettingsMcpEnabledSet(msgspec.Struct, tag=True, frozen=True):
     expected_sha256: str
 
 
+class SettingsMcpAdd(msgspec.Struct, tag=True, frozen=True):
+    """Insert one new server into the scope's ``mcp.json`` without touching anything else.
+
+    ``entry`` may carry literal credentials (``env``, ``headers``, URL userinfo), so the
+    repr masks it. ``expected_sha256``: ``None`` accepts the current file, ``""`` requires
+    that the file does not exist, a hex digest must match the file as read. Settings only:
+    never a model tool, never reachable by a paired device (default-denied by the gateway).
+
+    ``dry_run`` validates and checks the target exactly like a real add (conflict, legacy
+    file, global root) but writes and starts nothing: the result carries ``status="preview"``
+    with the masked confirmation ``lines`` and the structured ``transport``.
+    """
+
+    scope: Literal["global", "project"]
+    name: str
+    entry: dict[str, Any]
+    expected_sha256: str | None = None
+    dry_run: bool = False
+
+    def __repr__(self) -> str:
+        return (f"SettingsMcpAdd(scope={self.scope!r}, name={self.name!r}, entry=<masked>, "
+                f"expected_sha256={self.expected_sha256!r}, dry_run={self.dry_run!r})")
+
+
 class SettingsReset(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
@@ -162,6 +186,20 @@ class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
     id: str
+
+
+class SkillsInstall(msgspec.Struct, tag=True, frozen=True):
+    """Install skills from an ``npx skills`` source into the scope's skills folder.
+
+    Runs third-party code (``npx``) at the user's explicit request, so it is a
+    Settings action only: never a model tool, never reachable by a paired device.
+    An empty ``skills`` installs everything the source offers.
+    """
+
+    scope: Literal["global", "project"]
+    source: str
+    skills: list[str] = msgspec.field(default_factory=list)
+    overwrite: bool = False
 
 
 class SetupStatus(msgspec.Struct, tag=True, frozen=True):
@@ -379,6 +417,18 @@ class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
     session: str
     from_seq: int = 0
     follow: bool = True
+
+
+class SessionFocus(msgspec.Struct, tag=True, frozen=True):
+    """Report a client's foreground root session; never inferred from subscriptions."""
+
+    session: str | None
+    client_id: str
+
+
+class SessionFocusResult(msgspec.Struct, tag=True, frozen=True):
+    session: str | None
+    client_id: str
 
 
 class SessionState(msgspec.Struct, tag=True, frozen=True):
@@ -696,6 +746,7 @@ class FileSearch(msgspec.Struct, tag=True, frozen=True):
 
     query: str
     limit: int = 30
+    include_directories: bool = False
 
 
 class GitDiff(msgspec.Struct, tag=True, frozen=True):
@@ -958,9 +1009,11 @@ Command = (
     | SettingsRead
     | SettingsMcpLoadingSet
     | SettingsMcpEnabledSet
+    | SettingsMcpAdd
     | SettingsWrite
     | SettingsDelete
     | SettingsReset
+    | SkillsInstall
     | SetupStatus
     | SetupSave
     | ProvidersStatus
@@ -988,6 +1041,7 @@ Command = (
     | SessionQueueRemove
     | SessionQueueSetMode
     | SessionSubscribe
+    | SessionFocus
     | SessionState
     | LogsRead
     | AgentTranscript
@@ -1077,9 +1131,11 @@ COMMANDS: tuple[type, ...] = (
     SettingsRead,
     SettingsMcpLoadingSet,
     SettingsMcpEnabledSet,
+    SettingsMcpAdd,
     SettingsWrite,
     SettingsDelete,
     SettingsReset,
+    SkillsInstall,
     SetupStatus,
     SetupSave,
     ProvidersStatus,
@@ -1107,6 +1163,7 @@ COMMANDS: tuple[type, ...] = (
     SessionQueueRemove,
     SessionQueueSetMode,
     SessionSubscribe,
+    SessionFocus,
     SessionState,
     LogsRead,
     AgentTranscript,
@@ -1230,6 +1287,12 @@ class SettingsWriteResult(msgspec.Struct, tag=True, frozen=True):
     unloaded: list[str] = msgspec.field(default_factory=list)
     failed: list[str] = msgspec.field(default_factory=list)
     config_reloaded: bool = False
+    #: ``SettingsMcpAdd`` only: ``status`` is written | exists | conflict | legacy | preview; a human note.
+    message: str = ""
+    #: ``SettingsMcpAdd(dry_run=True)`` only: ``transport`` is stdio | http | sse ...; ``lines`` are masked
+    #: (no env/header value, no URL credential).
+    transport: str = ""
+    lines: list[str] = msgspec.field(default_factory=list)
 
 
 class SettingsResetResult(msgspec.Struct, tag=True, frozen=True):
@@ -1240,6 +1303,18 @@ class SettingsResetResult(msgspec.Struct, tag=True, frozen=True):
 class SettingsDeleteResult(msgspec.Struct, tag=True, frozen=True):
     status: str
     trash_id: str = ""
+
+
+class SkillsInstallResult(msgspec.Struct, tag=True, frozen=True):
+    """``status``: installed | partial | conflict | nothing | failed | unavailable | timeout | busy."""
+
+    status: str
+    installed: list[str] = msgspec.field(default_factory=list)
+    conflicts: list[str] = msgspec.field(default_factory=list)
+    skipped: list[str] = msgspec.field(default_factory=list)
+    failed: list[str] = msgspec.field(default_factory=list)
+    reload_failed: list[str] = msgspec.field(default_factory=list)
+    message: str = ""
 
 
 class SetupStatusResult(msgspec.Struct, tag=True, frozen=True):
@@ -1844,7 +1919,7 @@ class ManagerStateResult(msgspec.Struct, tag=True, frozen=True):
     """The manager's state. Never an error for a disabled or not-yet-created manager.
 
     ``session`` is ``""`` until ``ManagerOpen`` created it. ``model`` is the pinned
-    route (no fallback of any kind). ``signed_in`` says whether GitHub Copilot, which
+    route (no fallback of any kind). ``signed_in`` says whether Codex (ChatGPT), which
     runs the manager, is connected; ``sign_in`` then names the exact fix. ``live_ready``
     is the GPT Live side: Codex connected and the base and cross-session consents given.
     """
@@ -1954,6 +2029,7 @@ Result = (
     | SettingsWriteResult
     | SettingsDeleteResult
     | SettingsResetResult
+    | SkillsInstallResult
     | SetupStatusResult
     | SetupSaveResult
     | ProvidersStatusResult
@@ -1980,6 +2056,7 @@ Result = (
     | SessionCancelResult
     | SessionQueueEditResult
     | SessionSubscribeResult
+    | SessionFocusResult
     | SessionStateResult
     | LogsReadResult
     | AgentTranscriptResult
@@ -2048,6 +2125,7 @@ RESULTS: tuple[type, ...] = (
     SettingsWriteResult,
     SettingsDeleteResult,
     SettingsResetResult,
+    SkillsInstallResult,
     SetupStatusResult,
     SetupSaveResult,
     ProvidersStatusResult,
@@ -2079,6 +2157,7 @@ RESULTS: tuple[type, ...] = (
     SessionCancelResult,
     SessionQueueEditResult,
     SessionSubscribeResult,
+    SessionFocusResult,
     SessionStateResult,
     LogsReadResult,
     AgentTranscriptResult,
@@ -2320,6 +2399,8 @@ __all__ = [
     "SettingsCategory",
     "SettingsReset",
     "SettingsResetResult",
+    "SkillsInstall",
+    "SkillsInstallResult",
     "SettingsDelete",
     "SettingsDeleteResult",
     "SettingsInventory",
@@ -2329,6 +2410,7 @@ __all__ = [
     "SettingsReadResult",
     "SettingsMcpLoadingSet",
     "SettingsMcpEnabledSet",
+    "SettingsMcpAdd",
     "SettingsWrite",
     "SettingsWriteResult",
     "SetupSave",

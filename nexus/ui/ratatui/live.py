@@ -6,6 +6,10 @@ daemon owns the call itself (``LiveStart/Mute/Stop``); the timeline card is a
 projection of the durable ``live.*`` events (``ui_support/live_card.py``). Typing
 during a call is ordinary steering: nothing here takes the editor.
 
+Every call is attached to the manager session (plan 02 section 10), never to the session on
+screen: ``manager_follow.ManagerFollow`` subscribes to it so the pane and the manager's
+approvals stay reachable while another session is in front.
+
 Consent is stored by the daemon (``LiveConsent``), once per machine, never only in
 memory. Real microphone and OpenAI behavior are not verified (docs/live.md).
 """
@@ -21,8 +25,11 @@ from ...ui_support.live_card import encode as card_encode
 from ...ui_support.live_helper import CONSENT_LINES, LiveCall, describe_failure
 from ...ui_support.manager import CONSENT_LINES as MANAGER_CONSENT_LINES
 from ...ui_support.voice_capture import play_cue
+from .manager_follow import ManagerFollow
 
 USAGE = "Use /live [stop|pause|resume|mute|new|status|revoke [manager]]"
+MANAGER_LABEL = "Manager"
+MANAGER_PREFIX = "Manager · "
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
                 "working": "working", "muted": "muted", "paused": "paused", "ended": "ended"}
 
@@ -33,6 +40,7 @@ class Live:
         self.call: LiveCall | None = None
         self.state = "idle"  # idle|starting|active|stopping
         self.session = ""
+        self.workspace = ""  # the project whose manager this call is on (captured when the call starts)
         self.started_at = 0.0
         self.begin_ts = 0.0  # wall clock when the current start began (matches a call before its id is known)
         self.muted = False
@@ -46,6 +54,9 @@ class Live:
         # The native terminal draws the open call in a pane above the composer instead of
         # a timeline card; the desktop client keeps the card (prototype.run sets this).
         self.pane = True
+        # The panel subscribes to the manager session itself, so its rows and approvals reach the
+        # user wherever they are (a hidden manager view would deadlock or auto-deny an approval).
+        self.follow = ManagerFollow(shell)
 
     # -- state ---------------------------------------------------------------
 
@@ -71,7 +82,7 @@ class Live:
         if self.state == "stopping":
             phase = "ended"
         current = getattr(self.shell.controller, "session", "")
-        pane = (self._card(view, self._turn_numbers(self.shell.controller.view))
+        pane = (self._card(view, self._turn_numbers(self._view()))
                 if self.pane and view is not None else {})
         return {
             "active": True, "state": self.state, "phase": _STATE_LABEL.get(phase, phase),
@@ -80,25 +91,60 @@ class Live:
             "pause_left": round(max(0.0, self.pause_left - time.time()), 1) if self.paused else 0.0,
             "started": self.started_at, "in": 0.0 if self.muted or self.paused else round(helper.level_in if helper else 0.0, 3),
             "out": round(helper.level_out if helper else 0.0, 3),
-            "elsewhere": self.session if self.session and self.session != current else "",
+            # The call is on the manager: named when another session is in front.
+            "elsewhere": MANAGER_LABEL if self.session and self.session != current else "",
+            "manager": True,
+            "attention": self._attention(current),
             # The open call's card rows, drawn in the Live pane above the composer.
             "detail": pane.get("detail", ""), "collapsed": pane.get("collapsed", True),
             "operation": pane.get("operation"),
         }
 
+    def _view(self):
+        """The manager's folded view: the shown session's when it is the manager, else the followed one."""
+        controller = self.shell.controller
+        if self.session and getattr(controller, "session", "") == self.session:
+            return controller.view
+        return self.follow.view if self.follow.session == self.session else None
+
+    def _attention(self, current: str) -> str:
+        """``approval waiting`` while a manager prompt is pending and another session is in front."""
+        if not self.session or current == self.session or self.follow.session != self.session:
+            return ""
+        return self.follow.waiting()
+
+    def manager_prompt(self, current: str, build) -> dict | None:
+        """The manager's pending approval or question, for any other session in front.
+
+        ``build`` is the projection's prompt builder. The prompt names its session so the answer
+        goes to the manager, and its first line says whose it is (it is not the shown session's).
+        """
+        if self.state == "idle" or not self.session or current == self.session:
+            return None
+        view = self._view()
+        prompt = build(view) if view is not None else None
+        if prompt is None:
+            return None
+        prompt["session"] = self.session
+        lines = list(prompt.get("lines") or [""])
+        prompt["lines"] = [MANAGER_PREFIX + lines[0], *lines[1:]]
+        if prompt.get("title"):
+            prompt["title"] = MANAGER_PREFIX + prompt["title"]
+        return prompt
+
     def _view_call(self):
-        """This call's folded view, when the shown session is the call's session."""
+        """This call's folded view, in the manager's view (shown or followed)."""
         if self.call is None:
             return None
-        calls = getattr(self.shell.controller.view, "live_calls", [])
+        view = self._view()
+        calls = getattr(view, "live_calls", []) if view is not None else []
         if self.call.result is not None:
             return next((c for c in reversed(calls) if c.call_id == self.call.result.call_id), None)
         # The daemon records ``live.started`` before this client has the start result, so for
         # a moment the call id is unknown. This client holds one call (the daemon allows one),
-        # so the newest call of the shown session that has not ended and began after we did
+        # so the newest call of the manager that has not ended and began after we did
         # is ours; matching it keeps the pane up and the card out of the timeline.
-        if self.state not in {"starting", "active", "stopping"} or getattr(
-                self.shell.controller, "session", "") != self.session:
+        if self.state not in {"starting", "active", "stopping"}:
             return None
         for call in reversed(calls):
             if call.status != "ended" and (call.started_ts or 0.0) >= self.begin_ts - 5.0:
@@ -150,10 +196,16 @@ class Live:
                 self.opened.clear()
 
     async def start(self, *, new_conversation: bool = False, consented: bool = False) -> None:
+        """Start a call. Live always attaches to the manager, never to the session on screen.
+
+        The foreground session stays where it is: the call, its pane and the manager's approvals
+        follow the user across sessions (plan 02 section 10).
+        """
         if self.state != "idle":
             self.shell.notice = f"A Live call is {self.state} · /live stop ends it"
             return
-        session = self.shell.controller.session
+        if not await self.shell.manager.live_ready():
+            return
         status = await self.shell.client.live_status()
         if not status.available:
             self._unavailable(status)
@@ -163,13 +215,15 @@ class Live:
         except live_helper.LiveHelperError as exc:
             self.fail("GPT Live is not available", exc)
             return
-        manager = self.shell.manager.is_active(session)
         agreed = status.consent
-        if agreed and manager and not consented:
-            # A call on the manager also sends what it reads of other sessions: its own notice.
+        if agreed and not consented:
+            # The call is on the manager, which also sends what it reads of other sessions: its own notice.
             agreed = bool((await self.shell.client.live_consent(None, scope="manager")).accepted)
         if not (agreed or consented):
-            self._consent_dialog(new_conversation, manager)
+            self._consent_dialog(new_conversation, True)
+            return
+        session = await self.shell.manager.live_session()
+        if not session:
             return
         await self._connect(session, new_conversation)
 
@@ -187,20 +241,24 @@ class Live:
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
+        self.workspace = self.shell.workspace
         self.paused, self.pause_left, self.hibernated = False, 0.0, False
         self.begin_ts = time.time()
         self.call = LiveCall(self.shell.client, session)
+        self.follow.start(session)
         await self._refresh()
         try:
             await self.call.start(new_conversation=new_conversation)
         except asyncio.CancelledError:
             await self._release()
+            self.state = "idle"
             raise
         except Exception as exc:  # noqa: BLE001 - every failure is shown with its fix
             await self._release()
+            self.state = "idle"
             if getattr(exc, "kind", "") == "live_consent_required":  # the daemon's refusal is the consent dialog
                 self.shell.notice = "GPT Live needs your consent first"
-                self._consent_dialog(new_conversation, self.shell.manager.is_active(session))
+                self._consent_dialog(new_conversation, True)
                 return
             self.fail("GPT Live could not start", exc)
             return
@@ -273,14 +331,16 @@ class Live:
         self.watch = None
         call, self.call = self.call, None
         self.state = "idle"
+        await self.follow.stop()
         if call is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(call.stop("client_closed"), 5)
 
     async def _release(self) -> None:
         call, self.call = self.call, None
-        self.state, self.started_at, self.muted = "idle", 0.0, False
+        self.started_at, self.muted = 0.0, False
         self.paused, self.pause_left = False, 0.0
+        await self.follow.stop()
         if call is not None:
             with contextlib.suppress(Exception):
                 await call.helper.stop()
@@ -291,12 +351,15 @@ class Live:
             watch.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watch
+        if not error:
+            self.shell.notice = notice
         await self._release()
         play_cue("stop")
         if error:
             self.fail("GPT Live call ended", None, message=error[0], fix=error[1])
         else:
             self.shell.notice = notice
+        self.state = "idle"
         await self._refresh()
 
     async def _watch(self, call: LiveCall) -> None:

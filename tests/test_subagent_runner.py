@@ -190,9 +190,9 @@ async def test_blank_model_uses_default_for_permission_and_execution(tmp_path, m
     )
     result = await task.run(request, ctx)
     assert not result.is_error
-    # The built-in task role declares tiers [low, medium], so with no model
+    # The built-in task role declares tiers [medium, high], so with no model
     # pinned the child runs its default tier instead of the parent's model.
-    assert factory.specs[-1].model == (role_model or "low")
+    assert factory.specs[-1].model == (role_model or "medium")
 
 
 def test_model_reference_trims_surrounding_whitespace():
@@ -338,17 +338,11 @@ async def test_worktree_scope_excludes_unreviewed_tools_and_inherits(tmp_path):
     assert spec.worktree_scope is True
     assert "worktree safety" in outcome.render()
 
-    nested = runner.for_child(spec)
-    assert nested._worktree_scope is True
-    assert nested._worktree_service is runner._worktree_service
-    assert nested._worktree_root == runner._worktree_root
-    nested_outcome = await nested.spawn(
-        TaskRequest(prompt="nested", tools=("bash", "CustomWriter", "read"))
-    )
-    assert nested_outcome.ok
-    grandchild_spec = factory.specs[-1]
-    assert grandchild_spec.tools == ("read",)
-    assert grandchild_spec.worktree_scope is True
+    assert "subagent" not in spec.tools
+    nested = make_runner(tmp_path, factory, parent_depth=1, worktree_scope=True)
+    nested_outcome = await nested.spawn(TaskRequest(prompt="nested"))
+    assert nested_outcome.status == "refused"
+    assert len(factory.specs) == 1
 
 
 async def test_normal_child_keeps_parent_bash_authority(tmp_path):
@@ -411,15 +405,15 @@ async def test_planner_declaration_asking_for_write_gets_it_within_the_parent_ce
 
 def test_permission_key_uses_type_and_effective_tier(tmp_path):
     runner = make_runner(tmp_path, Factory(), max_tier="medium")
-    # task's first tier is its default; "medium" is allowed but not chosen.
-    assert runner.permission_key({"prompt": "x"}) == "task:low"
+    # task defaults to medium and clamps low up to it.
+    assert runner.permission_key({"prompt": "x"}) == "task:medium"
     assert (
         runner.permission_key({"prompt": "x", "model": "medium"})
         == "task:medium"
     )
     assert (
         runner.permission_key({"prompt": "x", "model": "low"})
-        == "task:low"
+        == "task:medium"
     )
     # The role's declared high tier is clamped in the key, so a
     # ``deny = ["Task(*:high)"]`` rule can never be dodged by omitting ``model``.
@@ -481,7 +475,9 @@ async def test_tier_hint_without_role_model_routes_the_requested_tier(tmp_path):
     runner = make_runner(tmp_path, factory, parent_model="codex/gpt-6-luna")
     await runner.spawn(TaskRequest(prompt="x", subagent_type="worker", model="low"))
     await runner.spawn(TaskRequest(prompt="x", subagent_type="worker"))
-    await runner.spawn(TaskRequest(prompt="x", model="codex/gpt-5-mini"))
+    await runner.spawn(
+        TaskRequest(prompt="x", subagent_type="scout", model="codex/gpt-5-mini")
+    )
     assert [spec.model for spec in factory.specs] == [
         "low",
         "codex/gpt-6-luna",
@@ -495,51 +491,85 @@ async def test_tier_hint_without_role_model_routes_the_requested_tier(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-async def test_depth_limit_refuses_recursion(tmp_path):
+async def test_child_depth_runner_refuses_before_role_or_factory(tmp_path):
     factory = Factory()
-    runner = make_runner(tmp_path, factory, max_depth=1)
+    runner = make_runner(tmp_path, factory, max_depth=3)
     first = await runner.spawn(TaskRequest(prompt="one"))
     assert first.ok
-    spec = factory.specs[-1]
-    assert spec.depth == 1
+    assert factory.specs[-1].depth == 1
 
-    child_runner = runner.for_child(spec)
-    assert child_runner.budget is runner.budget  # one shared tree
-    assert child_runner.depth == 1
-    refused = await child_runner.spawn(TaskRequest(prompt="two"))
-    assert refused.is_error
-    assert refused.status == "refused"
-    assert "max_depth" in refused.text
-    # The refused grandchild never reached the factory.
+    # Independent of max_depth and of the role: even an unknown role gets the
+    # root-only refusal, and nothing reaches the factory.
+    child_runner = make_runner(
+        tmp_path, factory, max_depth=3, parent_depth=1, budget=runner.budget
+    )
+    for role in ("task", "no-such-role"):
+        refused = await child_runner.spawn(
+            TaskRequest(prompt="two", subagent_type=role)
+        )
+        assert refused.is_error
+        assert refused.status == "refused"
+        assert refused.text == (
+            "Task: subagents cannot spawn subagents; only the root session may"
+        )
     assert len(factory.specs) == 1
 
 
-async def test_recursion_within_the_depth_cap_shares_the_tree(tmp_path):
+async def test_max_depth_zero_still_disables_root_spawning(tmp_path):
     factory = Factory()
-    runner = make_runner(tmp_path, factory, max_depth=3, parent_tools={"Read"})
-    first = await runner.spawn(TaskRequest(prompt="one"))
-    assert first.ok
-    child = runner.for_child(factory.specs[-1])
-    second = await child.spawn(TaskRequest(prompt="two"))
-    assert second.ok
-    grandchild = child.for_child(factory.specs[-1])
-    assert grandchild.depth == 2
-    assert grandchild.budget is runner.budget
-    third = await grandchild.spawn(TaskRequest(prompt="three"))
-    assert third.ok
-    assert [spec.depth for spec in factory.specs] == [1, 2, 3]
-    assert [spec.session_id for spec in factory.specs] == [
-        "root/sub/1",
-        "root/sub/1/sub/1",
-        "root/sub/1/sub/1/sub/1",
-    ]
-    # The whole tree shares one fan-out counter.
-    assert runner.budget.children == 3
-
-    great = grandchild.for_child(factory.specs[-1])
-    refused = await great.spawn(TaskRequest(prompt="four"))
-    assert refused.is_error
+    runner = make_runner(tmp_path, factory, max_depth=0)
+    refused = await runner.spawn(TaskRequest(prompt="one"))
+    assert refused.status == "refused"
     assert "max_depth" in refused.text
+    assert not factory.specs
+
+
+async def test_root_keeps_subagent_and_children_never_get_it(tmp_path):
+    factory = Factory()
+    tools = {"read", "grep", "subagent", "todowrite", "question"}
+    runner = make_runner(tmp_path, factory, parent_tools=tools)
+    for role in ("task", "quick", "advisor", "scout"):
+        for worktree in (False, True):
+            selection = runner.select_tools(
+                runner._agents.resolve(role, context="subagent"),
+                TaskRequest(prompt="x", subagent_type=role, worktree=worktree),
+            )
+            assert "subagent" not in selection.selected
+            # Inherited roles do not report the root-only tool as dropped noise.
+            assert "subagent" not in selection.dropped
+    outcome = await runner.spawn(TaskRequest(prompt="go"))
+    assert outcome.ok
+    assert "subagent" not in factory.specs[-1].tools
+
+
+@pytest.mark.parametrize("name", ["subagent", "Task"])
+async def test_explicit_subagent_declarations_are_dropped(tmp_path, name):
+    factory = Factory()
+    runner = make_runner(
+        tmp_path, factory, parent_tools={"read", "subagent", "Task"}
+    )
+    selection = runner.select_tools(
+        runner._agents.resolve("task", context="subagent"),
+        TaskRequest(prompt="x", tools=(name, "read")),
+    )
+    assert "subagent" not in selection.selected
+    assert selection.selected == {"read"}
+    definitions = tmp_path / "ws" / ".agents" / "agents"
+    definitions.mkdir(parents=True)
+    (definitions / "tasker.md").write_text(
+        f"---\nname: tasker\ndescription: d\ncontexts: [subagent]\n"
+        f"tools: [{name}, read]\n---\nbody\n"
+    )
+    declared = make_runner(
+        tmp_path, factory, agents=make_manager(tmp_path),
+        parent_tools={"read", "subagent"},
+    )
+    chosen = declared.select_tools(
+        declared._agents.resolve("tasker", context="subagent"),
+        TaskRequest(prompt="x", subagent_type="tasker"),
+    )
+    assert chosen.selected == {"read"}
+    assert "subagent" in chosen.dropped
 
 
 async def test_fanout_and_concurrency_are_shared_and_bounded(tmp_path):
@@ -641,7 +671,7 @@ async def test_unknown_role_is_refused_with_the_defined_set(tmp_path):
     assert outcome.is_error
     assert outcome.status == "refused"
     assert "unknown subagent_type" in outcome.text
-    assert "advisor, quick, task" in outcome.text
+    assert "advisor, quick, scout, task" in outcome.text
     assert "build" not in outcome.text  # root-only agents are not spawnable
 
 
@@ -897,24 +927,17 @@ async def test_worktree_uses_service_record_and_child_workspace(tmp_path):
     assert recorder.of("agent.spawned")[-1]["worktree"]["path"] == str(record.path)
     assert recorder.of("agent.completed")[-1]["worktree"]["dirty"] is False
 
-    nested = runner.for_child(spec)
-    assert nested._workspace == record.path
-    assert nested._worktree_scope is True
+    # A worktree child cannot create a nested worktree: it cannot spawn at all.
+    nested = make_runner(
+        tmp_path, factory, workspace=record.path, parent_depth=1,
+        worktree_scope=True,
+    )
+    specs_before = len(factory.specs)
     nested_outcome = await nested.spawn(
         TaskRequest(prompt="nested", worktree=True)
     )
-    assert nested_outcome.ok
-    nested_spec = factory.specs[-1]
-    nested_root = tmp_path / "daemon" / "worktrees" / "child-registry"
-    nested_record = service.get(nested_spec.session_id, root=nested_root)
-    assert nested_spec.workspace == nested_record.path
-    assert nested_record.parent_workspace == record.path
-    assert nested_record.base_commit == _git(record.path, "rev-parse", "HEAD")
-    nested_reopened = worktrees.WorktreeService().get(
-        nested_spec.session_id, root=nested_root
-    )
-    assert nested_reopened.lifecycle == "finalized"
-    assert nested_reopened.final_status == "completed"
+    assert nested_outcome.status == "refused"
+    assert len(factory.specs) == specs_before
 
 
 async def test_dirty_worktree_parent_is_refused_before_spawn_event(tmp_path):
@@ -1159,7 +1182,7 @@ async def test_emit_override_isolates_this_spawn(tmp_path):
     assert "agent.spawned" in override.types()
 
 
-async def test_nested_correlation_has_immediate_parent_and_root_turn(tmp_path):
+async def test_child_spawn_attempt_emits_no_spawn_event(tmp_path):
     recorder = Recorder()
     factory = Factory()
     root = make_runner(
@@ -1169,14 +1192,15 @@ async def test_nested_correlation_has_immediate_parent_and_root_turn(tmp_path):
         root_turn_id="root-turn-9",
     )
     await root.spawn(TaskRequest(prompt="outer"), call_id="parent-call")
-    child_runner = root.for_child(factory.specs[-1])
-    await child_runner.spawn(TaskRequest(prompt="inner"), call_id="child-call")
-    spawned = recorder.of("agent.spawned")
-    nested = next(data for data in spawned if agent_meta(data)["depth"] == 2)
-    meta = agent_meta(nested)
-    assert meta["parent_agent_id"] == agent_meta(spawned[0])["id"]
-    assert meta["parent_call_id"] == "child-call"
-    assert meta["root_turn_id"] == "root-turn-9"
+    child_runner = make_runner(
+        tmp_path, factory, event_sink=recorder, parent_depth=1,
+        root_turn_id="root-turn-9", budget=root.budget,
+    )
+    refused = await child_runner.spawn(
+        TaskRequest(prompt="inner"), call_id="child-call"
+    )
+    assert refused.status == "refused"
+    assert len(recorder.of("agent.spawned")) == 1
 
 
 # ---------------------------------------------------------------------------

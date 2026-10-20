@@ -50,7 +50,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
 | `[tools]` | `bash_timeout_s` 120, `bash_yield_s`, `bash_max_s` 3600, `grep_timeout_s` 5.0, `max_result_tokens` 25000, `max_parallel` 8, `[tools.web]` (local search on, `searxng_instances`, `allowed_origins`, fetch on, timeouts, `max_results` 5, `max_output_bytes` 512000) |
 | `[ext]` | `enabled`, `watch_interval_ms` 500 (0 disables), `dirs` (`.agents/tools`, `.nexus/tools`, `~/.nexus/tools`), `quarantine` true, `max_file_bytes` 262144 |
-| `[agents]` | `enabled`, `default_type` task, `max_depth` 3, `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles` |
+| `[agents]` | `enabled`, `default_type` task, `max_depth` 3 (values above 1 behave as 1 because only the root session spawns; 0 disables spawning), `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles` |
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
 | `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
@@ -58,7 +58,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
 | `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `pause_seconds` 120 (5-3600: a paused call ends after this long, see [live.md](live.md#pause-vs-stop)), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Experimental, see [live.md](live.md) |
-| `[manager]` | `enabled` **false**, `max_launches_per_turn` 3 (1-20), `max_live_managed` 8 (1-50). Gates `ManagerOpen` and every operation on the workspace manager session; the caps bound its `session_launch` ([manager.md](manager.md)). Env: `NEXUS_MANAGER__ENABLED`, `NEXUS_MANAGER__MAX_LAUNCHES_PER_TURN`, `NEXUS_MANAGER__MAX_LIVE_MANAGED`. The model is not configurable: it is pinned to `github-copilot/gpt-6-luna` |
+| `[manager]` | `enabled` **false**, `max_launches_per_turn` 3 (1-20), `max_live_managed` 8 (1-50). Gates `ManagerOpen` and every operation on the workspace manager session; the caps bound its `session_launch` ([manager.md](manager.md)). Env: `NEXUS_MANAGER__ENABLED`, `NEXUS_MANAGER__MAX_LAUNCHES_PER_TURN`, `NEXUS_MANAGER__MAX_LIVE_MANAGED`. The model is not configurable: it is pinned to `codex/gpt-6-luna` |
 | `[updates]` | `check` true |
 
 `[permissions] mode` defaults to `allow` in the schema while `PermissionEngine`'s
@@ -241,9 +241,12 @@ or `plan` remain supported. The mode does not override an explicit inheritance o
 tool restriction checks, or the ban on bypass/always-proceed flags unless the
 user-level `worker_dangerously_skip_permissions` opt-in is set (then `auto` is sent as `accept-edits`).
 
-### Optional code mode
+### Code mode
 
-Install `nexus[codemode]` (pinned `pydantic-monty==1.1.0`) and enable:
+On by default. `pydantic-monty==1.1.0` is a base dependency, so no extra install is
+needed (`nexus[codemode]` remains as an alias). If the sandbox package is missing or
+the wrong version the `code` tool is simply not offered and `nexus doctor` says why.
+Set `enabled = false` to turn it off. Defaults shown:
 
 ```toml
 [code_mode]
@@ -264,7 +267,7 @@ max_depth = 1
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Advertise the `code` tool (needs the optional Monty dependency). |
+| `enabled` | `true` | Advertise the `code` tool (needs the Monty dependency; absent means the tool is not offered). |
 | `expose` | `"read_only"` | Callable tools: `"read_only"`, `"all"`, or a list of names / `mcp__server__*` globs. |
 | `context` | `false` | Bind the `context_*` functions and `llm()`. |
 | `max_workers` | `2` | Sandbox worker processes (1-16). |

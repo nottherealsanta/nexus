@@ -1,7 +1,7 @@
 """Host-side :class:`~nexus.tools.manager_port.ManagerPort` over ``SessionManager``.
 
 Plan 02 (docs/manager.md). The host facade builds one of these per manager turn
-through ``Runtime.manager_port_factory``; the manager's six tools call nothing else.
+through ``Runtime.manager_port_factory``; the manager's eight tools call nothing else.
 
 Visibility (the only sessions the manager can ever see or name): main namespace,
 ``kind == "root"``, not archived, not trashed, not the manager itself, with real
@@ -11,8 +11,7 @@ not probed.
 Provenance, all derived from the manager's own log (never from the model):
 
 * ``launch`` needs a real user prompt in the **current turn**, named by its id
-  (``m<seq>``), and the manager must be attended (the runtime already asks the
-  viewer to approve; with nobody watching the port refuses as a second line).
+  (``m<seq>``). No approval is asked, attended or not.
   Per-turn and live-managed caps apply. Every launch first records a
   ``session.linked`` (``kind: "managed"``) in the manager log, then starts a
   normal root: workspace default model, normal root permissions, no override.
@@ -20,6 +19,17 @@ Provenance, all derived from the manager's own log (never from the model):
   to occur in the user's latest message. A GPT Live delegation counts only by its
   request text, never by the ``Voice:`` lines of the spoken transcript it carries.
 * ``cancel`` only touches a session the manager launched.
+* ``send`` queues one user-origin message (``origin.kind == "manager"``) on a visible
+  root that is live or active within the recent window. It needs the same current-turn
+  user provenance as ``launch``, is capped per turn and per minute, and records a
+  ``session.linked`` of kind ``routed`` first. A routed link is not a ``managed`` link,
+  so it grants neither ``result`` nor ``cancel``.
+* ``show`` asks the user's native client to switch to a visible root. It needs the same
+  current-turn user provenance, is capped per turn, and writes one durable ``manager.show``
+  record in the manager log (target, origin id, turn, the clients that reported the manager in
+  the foreground, whether the request came from Live, and an expiry 30 s ahead; no user text).
+  The record is the whole mechanism: a client acts on it or nobody does, so the result says
+  ``requested`` or ``no_viewer`` and never that the session was shown.
 * ``wait`` is bounded (600 s), ends early when the user sends the manager new
   input, and never cancels a target. Cancelling the wait abandons it only.
 
@@ -48,9 +58,17 @@ from ..session.records import EventRecord, MessageRecord
 from ..tools.manager_port import (
     MAX_FIND_LIMIT,
     MAX_RESULT_BYTES,
+    MAX_SEND_BYTES,
+    MAX_SENDS_PER_MINUTE,
+    MAX_SENDS_PER_TURN,
+    MAX_SHOWS_PER_TURN,
     MAX_TITLE_CHARS,
     RECENT_WINDOW_SECONDS,
+    SEND_RATE_WINDOW_SECONDS,
+    SHOW_TTL_SECONDS,
     CancelResult,
+    SendResult,
+    ShowResult,
     FindResult,
     LaunchRefused,
     LaunchResult,
@@ -153,9 +171,30 @@ class _Link:
 
 
 @dataclass(frozen=True, slots=True)
+class _Routed:
+    """A ``session.linked`` of kind ``routed``: a send, never a launch or a result grant."""
+
+    target: str
+    turn: str
+    seq: int
+    at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _Shown:
+    """A ``manager.show`` record: counts against the per-turn show cap."""
+
+    target: str
+    turn: str
+    seq: int
+
+
+@dataclass(frozen=True, slots=True)
 class LogScan:
     messages: tuple[UserMessage, ...] = ()
     links: tuple[_Link, ...] = ()
+    routed: tuple[_Routed, ...] = ()
+    shown: tuple[_Shown, ...] = ()
 
 
 def _text_of(message: Any) -> str:
@@ -173,11 +212,15 @@ def scan_manager_log(records: Collection[Any]) -> LogScan:
     consumed: dict[str, list[str]] = {}
     users: list[MessageRecord] = []
     links: list[_Link] = []
+    routed: list[_Routed] = []
+    shown: list[_Shown] = []
     for record in records:
         if isinstance(record, EventRecord):
             event = record.event
             data = event.data if isinstance(event.data, dict) else {}
-            if event.type == "input.queued":
+            if event.type == "manager.show":
+                shown.append(_Shown(str(data.get("target") or ""), str(data.get("turn") or ""), record.seq))
+            elif event.type == "input.queued":
                 origin = data.get("origin")
                 origins[str(data.get("queued_id") or "")] = (
                     str(origin.get("kind") or "") if isinstance(origin, dict) else ""
@@ -188,6 +231,14 @@ def scan_manager_log(records: Collection[Any]) -> LogScan:
                 child = data.get("child")
                 if isinstance(child, str) and child:
                     links.append(_Link(child, str(data.get("turn") or ""), record.seq))
+            elif event.type == "session.linked" and data.get("kind") == "routed":
+                target = data.get("target")
+                at = data.get("at")
+                if isinstance(target, str) and target:
+                    routed.append(_Routed(
+                        target, str(data.get("turn") or ""), record.seq,
+                        float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else 0.0,
+                    ))
         elif isinstance(record, MessageRecord) and is_user_prompt(record.message):
             users.append(record)
     by_turn: dict[str, list[MessageRecord]] = {}
@@ -208,7 +259,7 @@ def scan_manager_log(records: Collection[Any]) -> LogScan:
                 text=delegated_request(body) if live else body, live=live,
             ))
     messages.sort(key=lambda item: item.seq)
-    return LogScan(tuple(messages), tuple(links))
+    return LogScan(tuple(messages), tuple(links), tuple(routed), tuple(shown))
 
 
 # -- the host seam -----------------------------------------------------------------
@@ -236,6 +287,14 @@ class ManagerHost(Protocol):
     ) -> None: ...
 
     async def cancel_root(self, session_id: str, reason: str) -> bool: ...
+
+    async def send_message(self, session_id: str, message: str, *, origin: dict[str, str]) -> None:
+        """Queue ``message`` as a user message with ``origin`` on an existing session."""
+        ...
+
+    def focused_clients(self, session_id: str) -> tuple[str, ...]:
+        """Client ids that recently reported ``session_id`` in the foreground (a hint, not a grant)."""
+        ...
 
 
 class HostManagerPort:
@@ -310,10 +369,6 @@ class HostManagerPort:
         agent: str | None,
         title: str | None,
     ) -> LaunchResult:
-        if not getattr(handle, "attended", False):
-            raise LaunchRefused(
-                "denied", "no viewer is attached to approve a launch; open the manager in a client first"
-            )
         if not turn:
             raise LaunchRefused("no_user_message", "a launch needs a user message in the current turn")
         scan = await asyncio.to_thread(self._scan)
@@ -397,10 +452,6 @@ class HostManagerPort:
 
     async def cancel(self, session_id: str, reason: str) -> CancelResult:
         host, _handle = self._acting()
-        if not getattr(_handle, "attended", False):
-            raise LaunchRefused(
-                "denied", "no viewer is attached to approve a cancellation; open the manager in a client first"
-            )
         scan = await asyncio.to_thread(self._scan)
         if session_id not in {link.child for link in scan.links}:
             raise LaunchRefused("not_managed", f"session {session_id!r} was not launched by this manager")
@@ -409,6 +460,115 @@ class HostManagerPort:
         cancelled = bool(await host.cancel_root(session_id, cleaned))
         self._emit("manager.cancelled", {"session": session_id, "cancelled": cancelled})
         return CancelResult(id=session_id, cancelled=cancelled)
+
+    async def send(self, session_id: str, message: str, origin_message_id: str) -> SendResult:
+        host, handle = self._acting()
+        async with self._launch_lock:
+            turn = str(getattr(handle, "active_turn_id", None) or "")
+            try:
+                return await self._send(host, handle, turn, session_id, message, origin_message_id)
+            except LaunchRefused as exc:
+                self._emit("manager.send_refused", {"reason": exc.reason, "target": session_id, "turn": turn})
+                raise
+
+    async def _send(
+        self, host: ManagerHost, handle: Any, turn: str, session_id: str, message: str, origin_message_id: str
+    ) -> SendResult:
+        size = len(message.encode("utf-8"))
+        if not message.strip() or size > MAX_SEND_BYTES:
+            raise LaunchRefused("error", f"a message must be non-empty and at most {MAX_SEND_BYTES} bytes")
+        if not turn:
+            raise LaunchRefused("no_user_message", "a send needs a user message in the current turn")
+        scan = await asyncio.to_thread(self._scan)
+        # A Live delegation counts by its request text only (``Voice:`` lines are dropped); a
+        # message with no such text authorises nothing.
+        current = [item for item in scan.messages if item.turn == turn and item.text.strip()]
+        if not current:
+            raise LaunchRefused("no_user_message", "a send needs a user message in the current turn")
+        if origin_message_id not in {item.id for item in current}:
+            raise LaunchRefused(
+                "no_user_message",
+                "origin_message_id must be the id of a user message in this turn; "
+                f"the latest one is {current[-1].id!r}",
+            )
+        if sum(1 for item in scan.routed if item.turn == turn) >= MAX_SENDS_PER_TURN:
+            raise LaunchRefused("cap", f"at most {MAX_SENDS_PER_TURN} sends per turn")
+        now = self._clock()
+        if sum(1 for item in scan.routed if now - item.at < SEND_RATE_WINDOW_SECONDS) >= MAX_SENDS_PER_MINUTE:
+            raise LaunchRefused(
+                "rate", f"at most {MAX_SENDS_PER_MINUTE} sends per {int(SEND_RATE_WINDOW_SECONDS)} seconds"
+            )
+        item = await asyncio.to_thread(self._require_visible, session_id)
+        if item.state == "idle" and max(item.last_activity, item.order_time) < now - RECENT_WINDOW_SECONDS:
+            raise LaunchRefused(
+                "not_sendable", f"session {session_id!r} has been idle for over 2 hours; ask the user to open it"
+            )
+        digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+        # The routing edge first, as for a launch: a delivered message can never lack its link.
+        try:
+            handle.emit_session_event("session.linked", {
+                "kind": "routed", "target": session_id, "turn": turn,
+                "origin_message_id": origin_message_id,
+                "payload_digest": digest, "bytes": size, "at": now,
+            })
+        except Exception as exc:  # noqa: BLE001 - nothing was sent
+            raise LaunchRefused("error", f"could not record the send: {_why(exc)}") from exc
+        origin = {"kind": "manager", "manager": self._self_id, "origin_message_id": origin_message_id}
+        try:
+            await host.send_message(session_id, message, origin=origin)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LaunchRefused("error", f"could not send the message: {_why(exc)}") from exc
+        self._emit("manager.routed", {
+            "target": session_id, "origin_message_id": origin_message_id,
+            "payload_digest": digest, "bytes": size,
+        })
+        return SendResult(
+            id=session_id, title=sanitize_text(item.title, limit=MAX_TITLE_CHARS), state="queued", bytes=size
+        )
+
+    async def show(self, session_id: str, origin_message_id: str) -> ShowResult:
+        _host, handle = self._acting()
+        async with self._launch_lock:
+            turn = str(getattr(handle, "active_turn_id", None) or "")
+            try:
+                return await self._show(handle, turn, session_id, origin_message_id)
+            except LaunchRefused as exc:
+                self._emit("manager.show_refused", {"reason": exc.reason, "target": session_id, "turn": turn})
+                raise
+
+    async def _show(self, handle: Any, turn: str, session_id: str, origin_message_id: str) -> ShowResult:
+        if not turn:
+            raise LaunchRefused("no_user_message", "a show needs a user message in the current turn")
+        scan = await asyncio.to_thread(self._scan)
+        # Same provenance as a send: a Live delegation counts by its request text only.
+        current = [item for item in scan.messages if item.turn == turn and item.text.strip()]
+        if not current:
+            raise LaunchRefused("no_user_message", "a show needs a user message in the current turn")
+        origin = next((item for item in current if item.id == origin_message_id), None)
+        if origin is None:
+            raise LaunchRefused(
+                "no_user_message",
+                "origin_message_id must be the id of a user message in this turn; "
+                f"the latest one is {current[-1].id!r}",
+            )
+        if sum(1 for item in scan.shown if item.turn == turn) >= MAX_SHOWS_PER_TURN:
+            raise LaunchRefused("cap", f"at most {MAX_SHOWS_PER_TURN} shows per turn")
+        item = await asyncio.to_thread(self._require_visible, session_id)
+        focused = getattr(self._host, "focused_clients", None)
+        clients = tuple(focused(self._self_id)) if callable(focused) else ()
+        now = self._clock()
+        try:  # The record is the request itself, so a write failure is an error, not best effort.
+            handle.emit_session_event("manager.show", {
+                "target": session_id, "origin_message_id": origin_message_id, "turn": turn,
+                "clients": list(clients), "live": bool(origin.live),
+                "expires_at": now + SHOW_TTL_SECONDS,
+            })
+        except Exception as exc:  # noqa: BLE001 - nothing was requested
+            raise LaunchRefused("error", f"could not record the show request: {_why(exc)}") from exc
+        state = "requested" if clients or origin.live else "no_viewer"
+        return ShowResult(id=session_id, title=sanitize_text(item.title, limit=MAX_TITLE_CHARS), state=state)
 
     # -- internals: the manager's log ----------------------------------------
 
@@ -477,6 +637,7 @@ class HostManagerPort:
                 id=item.id, title=title, state=item.state, kind=item.kind,
                 order_time=item.order_time, completion_seq=item.completion_seq,
                 child_count=item.child_count, running_children=item.running_children,
+                focused_clients=(self._host.focused_clients(item.id) if self._host is not None and hasattr(self._host, "focused_clients") else ()),
             ))
         matched.sort(key=lambda row: (-row.order_time, row.id))
         return FindResult(rows=tuple(matched[:limit]), truncated=len(matched) > limit)
@@ -558,6 +719,9 @@ class FacadeManagerHost:
     def __init__(self, facade: Any) -> None:
         self._facade = facade
 
+    def focused_clients(self, session_id: str) -> tuple[str, ...]:
+        return self._facade.focused_clients(session_id)
+
     def limits(self) -> ManagerLimits:
         section = self._facade.manager_config()
         return ManagerLimits(
@@ -601,3 +765,7 @@ class FacadeManagerHost:
     async def cancel_root(self, session_id: str, reason: str) -> bool:
         cancelled, dropped = await self._facade.cancel(session_id, reason=reason or None, drop_queue=True)
         return bool(cancelled) or dropped > 0
+
+    async def send_message(self, session_id: str, message: str, *, origin: dict[str, str]) -> None:
+        # Mode "queue": a busy target consumes it at its next boundary like any user message.
+        await self._facade.enqueue(session_id, message, mode="queue", origin=origin)

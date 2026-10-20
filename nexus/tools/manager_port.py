@@ -1,4 +1,4 @@
-"""``ManagerPort``: the narrow seam the six manager tools call.
+"""``ManagerPort``: the narrow seam the eight manager tools call.
 
 Plan 02 (docs/manager.md). The manager session's tools depend on this protocol
 only; they never import ``host/`` or touch the database. The concrete adapter
@@ -6,9 +6,9 @@ lives host-side (``nexus/host_support/manager_port.py``); the runtime gets it fr
 ``Runtime.manager_port_factory``, which the host facade fills in.
 
 The read side is ``find``, ``status`` and ``result``; the acting side is
-``launch``, ``wait`` and ``cancel``. The port enforces provenance (a launch needs
-a real user message in the current turn), visibility, the launch caps and the
-managed-link rule for cancel; the tools only validate shapes and sizes.
+``launch``, ``wait``, ``cancel``, ``send`` and ``show``. The port enforces provenance (a
+launch, send or show needs a real user message in the current turn), visibility, the
+caps and the managed-link rule for cancel; the tools only validate shapes and sizes.
 
 Every value is a frozen primitive record with a hard bound, so a port
 implementation cannot hand the model an unbounded or unredacted payload.
@@ -27,8 +27,16 @@ __all__ = [
     "MAX_RESULT_BYTES",
     "MAX_STATUS_IDS",
     "MAX_TITLE_CHARS",
+    "MAX_SEND_BYTES",
+    "MAX_SENDS_PER_MINUTE",
+    "MAX_SENDS_PER_TURN",
+    "MAX_SHOWS_PER_TURN",
+    "SHOW_TTL_SECONDS",
     "RECENT_WINDOW_SECONDS",
+    "SEND_RATE_WINDOW_SECONDS",
     "CancelResult",
+    "SendResult",
+    "ShowResult",
     "FindResult",
     "LaunchRefused",
     "LaunchResult",
@@ -54,6 +62,15 @@ MAX_TITLE_CHARS = 160
 #: One ``session_result`` payload, after redaction (UTF-8 bytes).
 MAX_RESULT_BYTES = 16 * 1024
 
+#: ``session_send`` payload, UTF-8 bytes; sends per manager turn; sends per rolling window.
+MAX_SEND_BYTES = 16 * 1024
+MAX_SENDS_PER_TURN = 3
+MAX_SENDS_PER_MINUTE = 6
+SEND_RATE_WINDOW_SECONDS = 60.0
+#: ``session_show`` requests per manager turn; seconds a ``manager.show`` stays actionable.
+MAX_SHOWS_PER_TURN = 3
+SHOW_TTL_SECONDS = 30.0
+
 Scope = Literal["live", "recent"]
 Outcome = Literal["completed", "failed", "cancelled"]
 
@@ -78,7 +95,8 @@ class LaunchRefused(ManagerPortError):
     """A launch or cancel the port will not perform.
 
     ``reason`` is the stable code recorded in ``manager.launch_refused``:
-    ``no_user_message``, ``denied``, ``cap``, ``bad_agent``, ``not_managed`` or ``error``.
+    ``no_user_message``, ``denied``, ``cap``, ``bad_agent``, ``not_managed``, ``rate``,
+    ``not_sendable`` or ``error``.
     """
 
     def __init__(self, reason: str, message: str) -> None:
@@ -96,6 +114,7 @@ class SessionRow:
     completion_seq: int
     child_count: int
     running_children: int
+    focused_clients: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +172,26 @@ class CancelResult:
     cancelled: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SendResult:
+    id: str
+    #: The target's title, control-free and clipped.
+    title: str
+    #: ``queued``: the message is admitted; the target consumes it at its next boundary.
+    state: str = "queued"
+    bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ShowResult:
+    id: str
+    #: The target's title, control-free and clipped.
+    title: str
+    #: ``requested``: a client is foreground on the manager (or a Live call is open) and may
+    #: switch; ``no_viewer``: nobody is known to be watching. Never "shown".
+    state: str = "requested"
+
+
 @runtime_checkable
 class ManagerPort(Protocol):
     """The manager's facade. Implementations enforce visibility, provenance and caps."""
@@ -188,4 +227,20 @@ class ManagerPort(Protocol):
 
     async def cancel(self, session_id: str, reason: str) -> CancelResult:
         """Cancel one session this manager launched."""
+        ...
+
+    async def send(self, session_id: str, message: str, origin_message_id: str) -> SendResult:
+        """Queue one user-origin message on an existing root session of this workspace.
+
+        Needs a real user message in the current turn. Grants no read of the target's
+        result and no cancel.
+        """
+        ...
+
+    async def show(self, session_id: str, origin_message_id: str) -> ShowResult:
+        """Ask the user's native client to switch to a visible root session.
+
+        Needs a real user message in the current turn. It records a request only: no
+        client is guaranteed to be listening, and the result never claims it was shown.
+        """
         ...

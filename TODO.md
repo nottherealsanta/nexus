@@ -1,101 +1,18 @@
-1. new skill add ( with npx skills ) ( project level or global level )
-2. new MCP add ( project level or global level )
-3. Keep the `subagent` tool definition stable when tier model lists change.
-   Look up the live roster with a tool call instead of baking it into the schema.
+Each item is implemented and tracked in `plans/planning/04` through `09`. Verified with `.venv/bin/python -m pytest` (exact feature suite: 781 passed) and `cargo test --manifest-path rust/tui/Cargo.toml --locked` (590 passed, 2 ignored + 58 dashboard passed).
 
-   Intent
-   The general rule is to never do anything that invalidates the prompt cache,
-   and a tool definition that changes whenever the tier models change breaks
-   that rule. Spawning a subagent never needs to know which model sits in a
-   tier. It needs only the tier: "run this as a low task", "give me a high
-   advisor". Which `provider/model` serves that tier is a backend concern
-   handled by the router and the per-turn runner. So the `subagent` tool
-   definition stays fixed: the agent asks for a tier by name, and the
-   description never lists model ids. The concrete ids matter only when the
-   user asks for a specific model. For that case the same tool takes a boolean,
-   `get_tiers_models_info`. When it is true, the tool spawns nothing and returns
-   the current list of model ids in each tier, per role, as an ordinary tool
-   result. That result lands in history instead of the cached system+tools
-   prefix, so the cache survives. It is also always current: if the tiers have
-   changed since the last lookup, the agent calls the tool again with the flag
-   on and gets the updated list, then passes the model it wants on a normal
-   spawn call. The definition never has to change, and the agent is never told
-   it did.
-
-   Problem
-   - Changing `models.tiers` (or a role's tier list) does not rewrite, compact, or
-     otherwise touch conversation history. The system prompt does not contain the
-     roster either. `Runtime.reload_tier_config` only rebuilds the tier table and
-     the router.
-   - It does change the `subagent` tool definition. `build_task_tool`
-     (`nexus/tools/builtin/task.py`) builds the description with `_describe`,
-     which calls `SubagentRunner.role_index()` (`nexus/agents/runner.py`). That
-     text lists every role, the tiers it may use (first is the default), and the
-     `provider/model` ids in order, plus the "Choosing a tier" guidance. The JSON
-     parameter schema stays the same; the description does not.
-   - The next turn builds a fresh `SubagentRunner` and calls `build_task_tool`,
-     so the new description is what the model sees. The prompt-cache breakpoint
-     `system_tools` sits on the stable system+tools prefix (Anthropic puts
-     `cache_control` on the last tool definition). A real roster change makes
-     that prefix miss and writes a new cache entry. An edit that does not change
-     the rendered roster text still hits. Other tool schemas are unaffected.
-   - A one-line context note such as "tool definitions have changed" is not the
-     fix. That note is still new prefix bytes, so it invalidates the same cache,
-     and it still tells the model the tool definition moved.
-
-   Decision
-   - The tool definition must not change when tiers or their model lists change.
-     Tier assignment stays a backend concern (router, per-turn runner). The model
-     learns the current roster from a tool result, which is ordinary history and
-     does not move the system+tools prefix.
-   - Do not add a context part, system-prompt line, or description edit to
-     announce that the roster changed.
-
-   Behavior
-   - Remove the live roster from the `subagent` description. The description and
-     the JSON schema are fixed strings. They must not call `role_index()` or
-     interpolate tier or model ids.
-   - Keep a short, stable instruction in the description: tiers and concrete
-     `provider/model` ids are not listed here; before choosing a tier or a
-     specific model, call `subagent` with `get_tiers_models_info` true and no
-     prompt. Leave the rest of the spawn instructions as they are.
-   - Add a boolean parameter `get_tiers_models_info` (default false). It has to
-     be a declared property: the tool schema is `additionalProperties: false`,
-     so an undeclared flag is rejected before `run`.
-   - `prompt` is required only for a spawn. When `get_tiers_models_info` is
-     true, `prompt`, `description`, `subagent_type`, `tools`, `model`, and
-     `worktree` are ignored and must not be required. The handler returns before
-     `_build_request` spawns.
-   - The lookup does not spawn a child, open a session, or create a worktree.
-     It reads the live runner (`role_index()` or the same data) and returns a
-     normal tool result, model-visible, not a new context part. Include each
-     agent, the tiers it may use, and the `provider/model` ids in order, plus
-     the existing guidance: omit `model` for the default tier; pass `low`,
-     `medium`, or `high` only when the role lists it; a tier or model outside
-     the role's list runs on the nearest allowed tier; if a route fails, call
-     the next model in that tier and do not repeat a failed route. Keep the
-     `MAX_ROLE_INDEX_CHARS` cap and the truncation note.
-   - When the flag is false or omitted, spawning is unchanged.
-   - After the user asks for a specific model, the agent calls this lookup,
-     then passes `model` on a normal `subagent` call. The backend still clamps
-     to the role's list.
-
-   Docs and tests
-   - `docs/tools.md` subagent row currently says the description lists each
-     role's tiers. Point that at the lookup call.
-   - `docs/agents.md` tiers section says the same thing about the tool
-     description. Describe the lookup result instead.
-   - `docs/decisions.md`: record why the roster left the tool definition (a
-     description change invalidates the `system_tools` prefix; a context note
-     would too).
-   - `docs/context.md` only if it claims tool definitions track tiers. The
-     prefix rule itself does not change.
-   - Update `tests/test_builtin_task.py` (`test_task_tool_describes_tier_choice`
-     and any description assertion), `tests/test_subagent_tiers.py`, and
-     `tests/test_subagent_runner.py`. Assert the schema text is identical for
-     two different tier tables, that `get_tiers_models_info: true` returns the
-     roster and does not spawn, and that a spawn still requires `prompt`.
-
-4. Any sub-agent like task quick or advisor should not be able to launch more sub-agents. It should not have the sub-agent tool. Only root or lead-level agents which are build and orchestrator can have it
-
-5. using @ for folder too instead of just files
+1. new skill add ( with npx skills ) ( project level or global level ):
+   [plan 04](plans/planning/04-skill-add-via-npx-skills.md) — implemented and verified. Ratatui Settings → Skills form and confirmation dialogs with host `SkillsInstall`. Offline unit tests passed (781 feature suite); fixture forms/confirmation/results inspected earlier (`artifacts/native-final`); real isolated installation verified separately for `anthropics algorithmic-art`. Limitation: Node 22.15 is below the requested 22.20 engine version for `skills@1.7.2`; CLI subcommand deferred.
+2. new MCP add ( project level or global level ):
+   [plan 05](plans/planning/05-mcp-server-add.md) — implemented and verified. Ratatui Settings → MCP servers single-server JSON editor with masked confirmation and host `SettingsMcpAdd`. Offline unit tests passed (781 feature suite); fixture forms/confirmation/results inspected earlier (`artifacts/native-final`); real isolated install verified separately for MCP `filesystem@2.0.0`. Limitation: Ratatui JSON editor only (no field-by-field form, no CLI, web/desktop deferred); legacy `.nexus/mcp.json` is read-only.
+3. Keep the model names and effort in the `subagent` tool description, and tell
+   the model when the relevant settings change with a history notice instead of
+   a separate lookup parameter:
+   [plan 06](plans/planning/06-subagent-roster-and-settings-notice.md) — implemented and verified. Model ids and efforts in `subagent` tool description, whole-line budgeting with clipped marker, and history-tail `context.notice` on tier changes. Verified in Python feature suite (781 passed). Limitation: prompt cache miss behavior verified for prefix byte stability offline; live provider cache token metrics remain unverified.
+4. Any sub-agent like task quick or advisor should not be able to launch more
+   sub-agents. It should not have the sub-agent tool. Only root or lead-level
+   agents which are build and orchestrator can have it:
+   [plan 07](plans/planning/07-root-only-subagent-spawning.md) — implemented and verified. Tool selection strips `subagent` for all children, child runtimes omit runner, `max_depth` clamped to 1, and runtime refuses spawn at depth ≥ 1. Verified in Python feature suite (781 passed) and Rust tests. Limitation: legacy nested sessions supported for replay and read-only inspection only (depth 8); external workers not filtered.
+5. using @ for folder too instead of just files:
+   [plan 08](plans/planning/08-at-mention-folders.md) — implemented and verified in code/tests and visually verified via contrast-enhanced crop. Opt-in `include_directories=True` in host `FileSearch` and composer completion. Verified by Python and Rust tests; parent visually verified enhanced crop `artifacts/native-final/artifacts/10-folder-menu.png` shows selected `src/main.py` above composer query `@sr`, and raw terminal text `artifacts/native-final/artifacts/10-folder-completion.txt` also contains `src/` and `src/main.py` (noting original palette is very low contrast). Limitation: desktop/web unchanged.
+6. top bar in subagent page should have a back button:
+   [plan 09](plans/planning/09-subagent-page-back-button.md) — implemented and fully verified. Subagent top bar clickable `←` back button with shared layout and `TabHit::Back` dismiss action. Verified by Rust tests (590 passed 2 ignored + 58 dashboard passed), Python feature suite (781 passed), and parent visual inspection of `artifacts/native-final` native captures (normal and narrow show left back arrow, title truncation, and status; click fixture returns parent).

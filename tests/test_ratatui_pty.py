@@ -121,9 +121,9 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         assert read_action() == {"type": "submit", "text": "keep my draft", "mode": "steer", "generation": 3}
         session_snapshot("", 0, 1)
         os.write(master, b"/m")  # no Tab: completion is requested after a short pause
-        assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
+        assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "directories": True, "generation": 0}
         os.write(master, b"\t")
-        assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
+        assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "directories": True, "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 2, "title": "Nexus PTY", "status": "idle",
             "completion_query": "/m", "completions": ["/model", "/mcp"]}) + "\n").encode())
         process.stdin.flush()
@@ -192,6 +192,8 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "agent_page": "child", "title": "advisor · Inspect", "sessions_sidebar": False}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
+        os.write(master, b"\x1b[<0;1;2M")  # header y=1 (zero-based), SGR coordinates are one-based
+        assert read_action() == {"type": "dismiss", "text": ""}
         os.write(master, b"ignored\r\x1b[200~pasted\x1b[201~")
         time.sleep(.1)
         os.write(master, b"\x1b")

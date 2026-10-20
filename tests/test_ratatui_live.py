@@ -79,9 +79,16 @@ def shell(tmp_path, monkeypatch):
     monkeypatch.setattr(live_module, "play_cue", cues.append)
     monkeypatch.setattr(live_helper, "binary_path", lambda: tmp_path / "nexus-live")
     monkeypatch.setattr(live_helper, "available", lambda: True)
+    # Live is always attached to the manager; these tests give it the session they show ("s").
+    manager = p.ManagerStateResult(
+        enabled=True, session="s", state="idle", model="codex/gpt-6-luna", provider="codex",
+        signed_in=True, codex_signed_in=True, live_consent=True, live_manager_consent=True, live_ready=True,
+        managed=[])
     client = SimpleNamespace(
         live_status=AsyncMock(return_value=status()), live_consent=AsyncMock(return_value=p.LiveConsentResult(accepted=True)),
-        live_stop=AsyncMock(), live_mute=AsyncMock(), live_helper_event=AsyncMock())
+        live_stop=AsyncMock(), live_mute=AsyncMock(), live_helper_event=AsyncMock(),
+        manager_state=AsyncMock(return_value=manager),
+        manager_open=AsyncMock(return_value=SimpleNamespace(session=SimpleNamespace(id="s"), created=False)))
     controller = SimpleNamespace(session="s", client=client, view=initial_state("s"))
     shell = ShellActions(controller)
     shell.cues = cues
@@ -140,7 +147,7 @@ async def test_call_bar_reports_view_phase_model_mute_and_other_session(shell):
     await shell.command("/live", ("mute",))
     assert not shell.live.bar()["muted"]
     shell.controller.session = "other"
-    assert shell.live.bar()["elsewhere"] == "s"  # the mic stays visible in every session
+    assert shell.live.bar()["elsewhere"] == "Manager"  # the mic stays visible in every session
     await shell.live.shutdown()
 
 
@@ -219,7 +226,7 @@ async def test_missing_helper_binary_is_a_clear_unsupported_message(shell, monke
 async def test_first_use_asks_for_consent_and_remembers_it(shell):
     shell.client.live_status.return_value = status(consent=False)
     await shell.command("/live", ())
-    assert FakeCall.instances == [] and shell.panel_title == "Use GPT Live voice?"
+    assert FakeCall.instances == [] and shell.panel_title == "Use GPT Live with the Manager?"  # Live is the manager's
     text = "\n".join(shell.panel_lines)
     assert "OpenAI" in text and "ChatGPT account" in text and "audio" in text and "summaries" in text
     shell.client.live_consent.assert_not_awaited()  # nothing is recorded by merely asking
@@ -228,7 +235,7 @@ async def test_first_use_asks_for_consent_and_remembers_it(shell):
     assert "OpenAI" in "\n".join(shell.items[0]["lines"])  # the notice is visible in the list dialog itself
     agree = shell.items[1]["operation"]
     await shell.workflows.operate(agree)
-    shell.client.live_consent.assert_awaited_once_with(True)
+    shell.client.live_consent.assert_awaited_once_with(True, scope="manager")
     assert shell.live.state == "active" and shell.panel_title == ""
     await shell.live.shutdown()
 
@@ -243,7 +250,7 @@ async def test_cancelling_the_consent_dialog_starts_nothing(shell):
 
 async def test_consent_already_given_goes_straight_to_the_call(shell):
     await shell.command("/live", ())
-    assert shell.panel_title != "Use GPT Live voice?" and shell.live.state == "active"
+    assert shell.panel_title != "Use GPT Live with the Manager?" and shell.live.state == "active"
     await shell.live.shutdown()
 
 
@@ -274,7 +281,7 @@ async def test_daemon_consent_refusal_reopens_the_consent_dialog(shell):
     FakeCall.fail = FacadeError("live_consent_required", "GPT Live needs your consent first")
     await shell.command("/live", ())
     assert FakeCall.instances[0].helper.stop.await_count == 1  # the helper is released
-    assert shell.panel_title == "Use GPT Live voice?" and shell.live.state == "idle"
+    assert shell.panel_title == "Use GPT Live with the Manager?" and shell.live.state == "idle"
     assert [item["label"] for item in shell.items][1] == "Agree and start the call"
     assert "GPT Live could not start" not in "\n".join(shell.panel_lines)
 
@@ -596,4 +603,4 @@ async def test_the_card_is_not_matched_in_another_session_while_starting(shell):
     shell.controller.view = fold(call_events(ended=False))
     _starting(shell)
     shell.controller.session = "other"
-    assert shell.live.bar()["detail"] == "" and shell.live.bar()["elsewhere"] == "s"
+    assert shell.live.bar()["detail"] == "" and shell.live.bar()["elsewhere"] == "Manager"

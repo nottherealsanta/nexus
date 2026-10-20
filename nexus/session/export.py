@@ -62,7 +62,7 @@ def derive_title(messages: Sequence[Message], *, limit: int = TITLE_LIMIT) -> st
     multi-line prompt still yields one title line.
     """
     for message in messages:
-        if message.role != "user":
+        if message.role != "user" or message.meta.notice is not None:
             continue
         for block in message.content:
             if isinstance(block, Text):
@@ -78,8 +78,10 @@ def is_user_prompt(message: Message) -> bool:
     Tool results also carry the ``user`` role, so a message made only of
     ``ToolResult`` blocks (or nothing) is agent activity, not a prompt.
     """
-    return message.role == "user" and any(
-        not isinstance(block, ToolResult) for block in message.content
+    return (
+        message.role == "user"
+        and message.meta.notice is None
+        and any(not isinstance(block, ToolResult) for block in message.content)
     )
 
 

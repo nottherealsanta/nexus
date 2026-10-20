@@ -187,6 +187,121 @@ async def test_file_search_protocol_dispatch_and_client_api(tmp_path):
     assert await client.search_files("beta") == ["beta.txt"]
 
 
+def test_file_search_directories_are_opt_in_with_trailing_slash(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").touch()
+    (tmp_path / "src" / "lib").mkdir()
+    (tmp_path / "notes.md").touch()
+    facade = _facade(tmp_path)
+
+    assert facade.search_files("sr") == ["src/main.py"]
+    assert facade.search_files("sr", include_directories=True) == [
+        "src/",
+        "src/lib/",
+        "src/main.py",
+    ]
+    assert facade.search_files("", include_directories=True) == [
+        "src/",
+        "notes.md",
+        "src/lib/",
+        "src/main.py",
+    ]
+
+
+def test_file_search_directory_query_with_slash_excludes_the_directory_itself(tmp_path):
+    (tmp_path / "src" / "lib").mkdir(parents=True)
+    (tmp_path / "src" / "main.py").touch()
+
+    assert _facade(tmp_path).search_files("src/", include_directories=True) == [
+        "src/lib/",
+        "src/main.py",
+    ]
+
+
+def test_file_search_directory_ranks_before_files_of_equal_rank(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app.py").touch()
+    (tmp_path / "app" / "x.py").touch()
+
+    assert _facade(tmp_path).search_files("app", include_directories=True) == [
+        "app/",
+        "app.py",
+        "app/x.py",
+    ]
+
+
+def test_file_search_directories_skip_hidden_symlinked_and_denied(tmp_path):
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "escape").symlink_to(external, target_is_directory=True)
+    (tmp_path / "private").mkdir()
+    (tmp_path / "public").mkdir()
+
+    assert _facade(tmp_path, denied=("private",)).search_files(
+        "", include_directories=True
+    ) == ["public/"]
+
+
+def test_file_search_directories_skip_git_ignored(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "out.py").touch()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").touch()
+
+    assert _facade(tmp_path).search_files("", include_directories=True) == [
+        "src/",
+        "src/main.py",
+    ]
+
+
+def test_file_search_directories_respect_limit_and_entry_bound(tmp_path):
+    for index in range(5):
+        (tmp_path / f"dir-{index}").mkdir()
+    facade = _facade(tmp_path)
+
+    assert facade.search_files("", limit=3, include_directories=True) == [
+        "dir-0/",
+        "dir-1/",
+        "dir-2/",
+    ]
+    from nexus.host_support.workspace import search_files
+
+    assert len(search_files(facade.runtime, "", max_entries=2, include_directories=True)) <= 2
+
+
+def test_file_search_wire_field_defaults_to_files_only():
+    legacy_raw = p.decode_command(b'{"type": "FileSearch", "query": "a"}')
+    assert legacy_raw == p.FileSearch(query="a")
+    assert legacy_raw.include_directories is False
+    old = p.decode_command(p.encode_command(p.FileSearch(query="a")))
+    assert old.include_directories is False
+    assert p.FileSearch(query="a", include_directories=True).include_directories is True
+
+
+async def test_file_search_dispatch_and_client_forward_include_directories(tmp_path):
+    (tmp_path / "src").mkdir()
+    facade = _facade(tmp_path)
+    command = p.FileSearch(query="sr", include_directories=True)
+    assert p.decode_command(p.encode_command(command)) == command
+    assert await facade.handle(command) == p.FileSearchResult(paths=["src/"])
+    assert await facade.handle(p.FileSearch(query="sr")) == p.FileSearchResult(paths=[])
+
+    class Transport:
+        async def request(self, command):
+            return await facade.handle(command)
+
+        async def aclose(self):
+            pass
+
+    assert await Client(Transport()).search_files("sr", include_directories=True) == ["src/"]
+    assert await Client(Transport()).search_files("sr") == []
+
+
 async def test_file_search_dispatch_returns_error_for_traversal(tmp_path):
     result = await _facade(tmp_path).handle(p.FileSearch(query="../secret"))
 

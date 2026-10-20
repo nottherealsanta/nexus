@@ -406,6 +406,20 @@ class Workflows(TierPages, SpeakPages):
                 self.builtin_note()
         elif kind == "settings_new":
             self.edit("New file name · Enter/Control+S to continue", "", operation)
+        elif kind == "skills_install_open":
+            self.edit("Add skills from npx skills · source [skill …] · Enter/Control+S to continue", "",
+                      {"kind": "skills_install_form", "scope": operation["scope"]})
+        elif kind == "skills_install_run":
+            self.start_skills_install(operation)
+        elif kind == "mcp_add_open":
+            from .settings_pages import mcp as mcp_page
+            scope = operation["scope"]
+            where = "~/.nexus/mcp.json" if scope == "global" else "<project>/.agents/mcp.json"
+            self.edit(f"Add MCP server to {where} · one JSON server · Control+S to review", mcp_page.ADD_TEMPLATE,
+                      {"kind": "mcp_add_form", "scope": scope})
+            self.form["status"] = "Use ${env:VAR} for secrets. Nothing is saved until you confirm."
+        elif kind == "mcp_add_run":
+            self.start_mcp_add(operation)
         elif kind == "settings_reset":
             await self.client.settings_reset(operation["scope"], operation["category"])
             await self.return_to_settings(operation["scope"], operation["category"])
@@ -826,6 +840,34 @@ class Workflows(TierPages, SpeakPages):
                 target["builtin"] = False
                 target["overrides_builtin"] = bool(target.get("overrides_builtin")) or was_builtin
                 await self.refresh_settings_pages(target["scope"], target["category"])
+        elif target["kind"] == "skills_install_form":
+            if not body.strip():
+                raise ValueError("Enter a source such as owner/repo")
+            source, *names = body.split()
+            where = "~/.nexus/skills" if target["scope"] == "global" else "<project>/.agents/skills"
+            lines = [f"Source: {escape_controls(source)}", f"Skills: {escape_controls(', '.join(names)) if names else 'all the source offers'}",
+                     f"Scope: {target['scope']} · {where}", "",
+                     "This runs `npx skills` (pinned package): it downloads and runs third-party code under your account.",
+                     "Skills are copied, never linked; a tools/ folder is not imported. Existing skills are kept unless you confirm an overwrite."]
+            self.menu(f"Install skills from {escape_controls(source)[:60]}?", [
+                ("Cancel", {"kind": "back"}),
+                ("Install · runs third-party code", {"kind": "skills_install_run", "scope": target["scope"], "source": source,
+                                                      "skills": names, "overwrite": False})], lines)
+        elif target["kind"] == "mcp_add_form":
+            from .settings_pages import mcp as mcp_page
+            name, entry = mcp_page.parse_add_draft(body)
+            scope = target["scope"]
+            # The host validates the draft and checks the target (exists, legacy file, root) before any confirmation.
+            preview = await self.client.settings_mcp_add_preview(scope, name, entry, None)
+            status = field(preview, "status", "")
+            if status != "preview":
+                reason = str(field(preview, "message", "") or status)
+                raise ValueError(reason[:400] if status != "conflict" else "mcp.json changed on disk; reopen Add server… and try again")
+            lines = [escape_controls(str(line)) for line in field(preview, "lines", []) or []]
+            self.mcp_add_draft = {"scope": scope, "name": name, "entry": entry, "generation": self.shell.generation, "client": self.client}
+            self.menu(f"Add MCP server {escape_controls(name)[:40]}?", [
+                ("Cancel", {"kind": "back"}),
+                ("Add server", {"kind": "mcp_add_run", "scope": scope})], lines)
         elif target["kind"] == "settings_new":
             if not body.strip():
                 raise ValueError("Enter a file name")
@@ -834,6 +876,114 @@ class Workflows(TierPages, SpeakPages):
                 "category": target["category"], "id": name, "sha256": "", "builtin": False, "overrides_builtin": False,
                 "refresh": True}, autosave=True, replace=True)
     agent_draft: dict = {}
+    install_task = None
+
+    def start_skills_install(self, operation):
+        """Run ``SkillsInstall`` in the background: the UI stays responsive and the result is a toast.
+
+        The task keeps its own client and generation: after a session or project switch it still
+        reports, but never navigates, refreshes or opens a confirmation over the new view.
+        """
+        import asyncio
+        if self.install_task is not None and not self.install_task.done():
+            self.shell.flash("A skill install is already running", "warning")
+            return
+        shell, client, generation = self.shell, self.client, self.shell.generation
+        scope, source, names, overwrite = operation["scope"], operation["source"], list(operation.get("skills") or []), bool(operation.get("overwrite"))
+        for _ in range(3):  # leave the confirmation (and the editor under it) for the Skills page
+            if not self.page_area or shell.panel_title == self.page_title or not self.stack:
+                break
+            self.back()
+        shell.flash(f"Installing skills from {escape_controls(source)[:80]} · npx skills is running", "info")
+
+        async def run():
+            try:
+                result = await client.skills_install(scope, source, names, overwrite)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the host's redacted reason is the message
+                shell.flash("Skill install failed", "error", body=escape_controls(str(exc))[:400])
+                return
+            title, level, body = skills_install_summary(result)
+            shell.flash(title, level, body=body)
+            current = generation == shell.generation and client is shell.client
+            if current and self.page_area == "skills" and shell.panel_title == self.page_title:
+                await self.refresh_page()
+                conflicts = list(field(result, "conflicts", []) or [])
+                if conflicts and not overwrite:  # stale-safe: only offered over the unchanged Skills page
+                    self.menu(f"Overwrite {len(conflicts)} existing skill(s)?", [
+                        ("Cancel", {"kind": "back"}),
+                        ("Overwrite · old folders move to trash", {"kind": "skills_install_run", "scope": scope, "source": source,
+                                                                   "skills": conflicts, "overwrite": True})],
+                        [escape_controls(name) for name in conflicts])
+            if current and shell.on_update:
+                try:
+                    await shell.on_update()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        self.install_task = asyncio.get_running_loop().create_task(run())
+
+    mcp_add_draft: dict = {}
+    mcp_add_task = None
+
+    def start_mcp_add(self, operation):
+        """Run ``SettingsMcpAdd`` in the background: no input block, the result is a toast.
+
+        The draft (which may hold secrets) lives only here, never in an operation payload. One add at
+        a time; the task keeps its own client and generation so a session or project switch never
+        navigates or refreshes the new view.
+        """
+        import asyncio
+        if self.mcp_add_task is not None and not self.mcp_add_task.done():
+            self.shell.flash("An MCP server add is already running", "warning")
+            return
+        shell, client, generation = self.shell, self.client, self.shell.generation
+        draft, self.mcp_add_draft = self.mcp_add_draft, {}
+        if (not draft or draft.get("scope") != operation.get("scope") or draft.get("generation") != generation
+                or draft.get("client") is not client):
+            shell.flash("The Add server draft is no longer current; open Add server… again", "warning")
+            return
+        scope, name, entry = draft["scope"], draft["name"], draft["entry"]
+        for _ in range(3):  # leave the confirmation (and the editor under it) for the MCP page
+            if not self.page_area or shell.panel_title == self.page_title or not self.stack:
+                break
+            self.back()
+        label = escape_controls(name)[:60]
+        shell.flash(f"Adding MCP server {label} · starting it", "info")
+
+        async def run():
+            try:
+                result = await client.settings_mcp_add(scope, name, entry, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the host's redacted reason is the message
+                shell.flash("MCP server add failed", "error", body=escape_controls(str(exc))[:400])
+                return
+            status = field(result, "status", "")
+            message = escape_controls(str(field(result, "message", "") or ""))[:400]
+            failed = [escape_controls(str(row))[:200] for row in field(result, "failed", []) or []]
+            if status == "written":
+                if failed:
+                    shell.flash(f"{label} added, but did not load", "warning", body="\n".join([message, *failed[:4]]).strip())
+                else:
+                    shell.flash(f"{label} added · applies to new sessions", "success", body=message)
+            elif status == "exists":
+                shell.flash(f"{label} already exists", "warning", body=message)
+            elif status == "conflict":
+                shell.flash("mcp.json changed on disk; reload this page and try again", "warning", body=message)
+            else:
+                shell.flash(f"{label} was not added", "warning", body=message or escape_controls(str(status)))
+            current = generation == shell.generation and client is shell.client
+            if current and self.page_area == "mcp" and shell.panel_title == self.page_title:
+                await self.refresh_page()
+            if current and shell.on_update:
+                try:
+                    await shell.on_update()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        self.mcp_add_task = asyncio.get_running_loop().create_task(run())
 
     def builtin_note(self):
         """A built-in default says that saving writes an override."""
@@ -1047,6 +1197,30 @@ def find_tool(view, call_id):
         if tool is not None:
             return tool
     return None
+
+
+def skills_install_summary(result):
+    """``(title, level, body)`` for one ``SkillsInstallResult``; every name is control-escaped."""
+    status = field(result, "status", "failed")
+    pick = lambda key: [escape_controls(str(item)) for item in field(result, key, []) or []]  # noqa: E731
+    installed, conflicts = pick("installed"), pick("conflicts")
+    detail = [*[f"Failed: {row}" for row in pick("failed")], *[f"Skipped: {row}" for row in pick("skipped")],
+              *[f"Reload: {row}" for row in pick("reload_failed")],
+              *([f"Already exists: {', '.join(conflicts)}"] if conflicts else [])]
+    message = escape_controls(str(field(result, "message", "") or ""))
+    if message:
+        detail.append(message)
+    body = "\n".join(detail)[:400]
+    if status == "installed":
+        return f"Installed {len(installed)} skill(s): {', '.join(installed)}", "warning" if detail else "success", body
+    if status == "partial":
+        return f"Installed {len(installed)} skill(s): {', '.join(installed)}; some were not installed", "warning", body
+    if status == "conflict":
+        return f"{len(conflicts)} skill(s) already exist; nothing installed", "warning", body
+    if status in {"unavailable", "busy", "nothing"}:
+        return {"unavailable": "npx is not available", "busy": "A skill install is already running",
+                "nothing": "The source offered no skills"}[status], "warning", body
+    return "Skill install timed out" if status == "timeout" else "Skill install failed", "error", body
 
 
 REVIEW_PAGE_LIMIT = 8

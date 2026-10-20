@@ -127,7 +127,7 @@ provider is wrapped so a sign-in, quota or provider error also surfaces as
 and the loop records it as a failed turn. Transient overload, malformed tool
 calls and capability rejections pass through unchanged, so the same-model
 retries and the `EndpointFallback` dialect retry still work. Effort stays the
-provider default. The manager is `github-copilot/gpt-6-luna` (a concrete
+provider default. The manager is `codex/gpt-6-luna` (a concrete
 reference, never a tier). The manager context also has no summarizer, so
 compaction and handoff never call a second model. Per-session `/model` and effort choices
 are durable (`model.selected`, `reasoning_effort.selected`).
@@ -337,8 +337,9 @@ routes and cannot reload. A subagent's model is resolved when the spawn tool cal
 creates its session (`ModelRouter.resolve` -> `tier_candidates`), so reordering a tier
 makes the next spawn and the next turn use the new first model. Running children and
 the in-flight request keep the model they already chose. Not covered: a runner built
-for an already-running turn keeps its construction-time config for the roster's effort
-labels and the tier-name lookup of concrete refs until the next turn.
+for an already-running turn keeps its construction-time tier table for the tier-name
+lookup of concrete refs until the next turn; the roster's effort labels read the
+router's live efforts.
 
 ### Antigravity visibility and safe discovery
 

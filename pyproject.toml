@@ -19,9 +19,12 @@ dependencies = [
     # GPT Live sideband WebSocket client (docs/live.md), imported lazily by
     # nexus/live/transport.py. Default so `uv tool install nexus-harness` can start a call.
     "websockets>=14,<16",
+    # Code mode (docs/tools.md) is on by default, so its sandbox ships with the base install.
+    "pydantic-monty==1.1.0",
 ]
 
 [project.optional-dependencies]
+# Compatibility alias, included by default.
 codemode = ["pydantic-monty==1.1.0"]
 # misaki[en] would pull spacy-curated-transformers and with it torch; misaki only
 # imports spacy and num2words for English, so the speak extra names those directly.

@@ -15,7 +15,7 @@ async def build(workflows) -> dict:
     direct = [[description, _title(key), "Global"] for key, _, description in SHORTCUTS]
     leader = [[description, f"Ctrl+X {letter.upper()}", "Leader"] for letter, _, description in LEADER_SHORTCUTS]
     # Ctrl+K (Search sessions) is already a SHORTCUTS row; only keys the shared table lacks go here.
-    extra = [["Dismiss all toasts", "Ctrl+X X", "Leader"], ["Run the newest toast's action", "Ctrl+X A", "Leader"],
+    extra = [["Dismiss all toasts", "Ctrl+X X", "Leader"], ["Run the newest toast's action", "Ctrl+X Y", "Leader"],
              ["Show recent notifications (Ctrl+X N is /new)", "Ctrl+X Shift+N", "Leader"]]
     blocks = [
         sp.heading("Shortcuts"),

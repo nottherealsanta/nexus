@@ -69,12 +69,19 @@ pub(super) fn control_spans(
 /// after a redraw (see `needs_full_repaint`).
 const DASHBOARD_GLYPH: &str = "≡";
 const DETAILS_GLYPH: &str = "▯";
+/// The Manager toggle: hollow while another session is in front, filled (and accented) while the
+/// manager view is. One cell each, like the glyphs above.
+const MANAGER_GLYPH: &str = "◇";
+const MANAGER_OPEN_GLYPH: &str = "◆";
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
+    Back,
     Session(usize),
     Close(usize),
     New,
+    /// `◇`: toggles the Manager view (`manager_toggle`); right before the dashboard button.
+    Manager,
     /// `≡`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
     /// `▯`: toggles the details sidebar.
@@ -90,6 +97,7 @@ pub struct TabCell {
 /// How a top-bar segment is painted.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Seg {
+    Back,
     Session(usize),
     Close(usize),
     New,
@@ -101,6 +109,7 @@ enum Seg {
     Divider,
     Notice,
     Worktree,
+    Manager,
     Dashboard,
     Details,
     /// The notifications counter.
@@ -140,6 +149,15 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
             ));
             out.push((" ".into(), Seg::Gap));
         }
+        if s.manager.shown() {
+            let glyph = if s.manager.active {
+                MANAGER_OPEN_GLYPH
+            } else {
+                MANAGER_GLYPH
+            };
+            out.push((format!(" {glyph} "), Seg::Manager));
+            out.push((" ".into(), Seg::Gap));
+        }
         out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
         out.push((format!(" {DETAILS_GLYPH} "), Seg::Details));
@@ -176,16 +194,14 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
         left.push((text, seg));
     };
     let mut room = room;
+    // The manager view names itself through the pressed right-hand toggle, not a left title.
     let title = if s.manager.active {
-        "◇ Manager"
+        ""
     } else if s.title.is_empty() {
         "New session"
     } else {
         s.title.as_str()
     };
-    if s.manager.active && !s.tabs.is_empty() {
-        place("◇ Manager · ", Seg::Title, &mut left, &mut room);
-    }
     if s.tabs.is_empty() {
         place(
             &crate::transcript::truncate(title, 40.min(room)),
@@ -289,6 +305,10 @@ pub fn needs_full_repaint(previous: Option<LayoutKey>, next: LayoutKey) -> bool 
 }
 /// The workspace row under the tabs: `path branch worktree`, aligned with the first tab label.
 fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
+    // Presentation only: the manager has no workspace of its own to show.
+    if s.manager.active {
+        return Vec::new();
+    }
     let (path, branch) = partition(&s.breadcrumb);
     let at = if width < 12 { 0 } else { 3 };
     let mut room = width.saturating_sub(at + usize::from(width >= 12));
@@ -321,63 +341,88 @@ fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     }
     out
 }
+/// Agent header runs are shared by painting and hit testing. Drop optional right
+/// content before sacrificing either navigation target; all budgets are cells.
+fn agent_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
+    let mut out = Vec::new();
+    if width < 3 {
+        return out;
+    }
+    out.push((0, " ← ".into(), Seg::Back));
+    let mut right = Vec::new();
+    if width >= 7 {
+        let mut end = if width >= 9 { width - 2 } else { width };
+        right.push((end - 3, format!(" {DETAILS_GLYPH} "), Seg::Details));
+        end -= 3;
+        let status = if s.status == "running" {
+            "Working "
+        } else {
+            "Done "
+        };
+        if end >= 4 + status.width() {
+            end -= status.width();
+            right.push((end, status.into(), Seg::Title));
+            let model = format!("{} · ", s.model);
+            if end >= 4 + model.width() {
+                end -= model.width();
+                right.push((end, model, Seg::Path));
+            }
+        }
+        let title = crate::transcript::truncate(&s.title, end.saturating_sub(5));
+        if !title.is_empty() {
+            out.push((4, title, Seg::Title));
+        }
+    } else if width > 4 {
+        out.push((
+            4,
+            crate::transcript::truncate(&s.title, width - 4),
+            Seg::Title,
+        ));
+    }
+    right.reverse();
+    out.extend(right);
+    out
+}
 /// Clickable session bodies, close buttons, new-session and sidebar controls. On a sub-agent page the
 /// only cell is the details toggle.
 pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
-    if !s.agent_page.is_empty() {
-        return vec![TabCell {
-            kind: TabHit::Details,
-            start: width.saturating_sub(5),
-            end: width.saturating_sub(2),
-        }];
-    }
-    top_layout(s, width)
-        .into_iter()
-        .filter_map(|(start, text, seg)| match seg {
-            Seg::Session(i) => Some((TabHit::Session(i), start, start + text.width())),
-            Seg::Close(i) => Some((TabHit::Close(i), start, start + text.width())),
-            Seg::New => Some((TabHit::New, start, start + text.width())),
-            Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
-            Seg::Details => Some((TabHit::Details, start, start + text.width())),
-            Seg::Counter => Some((TabHit::Notifications, start, start + text.width())),
-            _ => None,
-        })
-        .filter(|(_, start, end)| start < end && *end <= width)
-        .map(|(kind, start, end)| TabCell { kind, start, end })
-        .collect()
+    (if !s.agent_page.is_empty() {
+        agent_layout(s, width)
+    } else {
+        top_layout(s, width)
+    })
+    .into_iter()
+    .filter_map(|(start, text, seg)| match seg {
+        Seg::Back => Some((TabHit::Back, start, start + text.width())),
+        Seg::Session(i) => Some((TabHit::Session(i), start, start + text.width())),
+        Seg::Close(i) => Some((TabHit::Close(i), start, start + text.width())),
+        Seg::New => Some((TabHit::New, start, start + text.width())),
+        Seg::Manager => Some((TabHit::Manager, start, start + text.width())),
+        Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
+        Seg::Details => Some((TabHit::Details, start, start + text.width())),
+        Seg::Counter => Some((TabHit::Notifications, start, start + text.width())),
+        _ => None,
+    })
+    .filter(|(_, start, end)| start < end && *end <= width)
+    .map(|(kind, start, end)| TabCell { kind, start, end })
+    .collect()
 }
 pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, spin: usize) {
     if !s.agent_page.is_empty() {
-        let status = if s.status == "running" {
-            "Working"
-        } else {
-            "Done"
-        };
-        let model = format!("{} · ", s.model);
-        let title = crate::transcript::truncate(
-            &s.title,
-            usize::from(area.width).saturating_sub(16 + model.width()),
-        );
-        let gap = usize::from(area.width)
-            .saturating_sub(title.width() + model.width() + status.len() + 9);
+        let mut spans = Vec::new();
+        let mut at = 0;
+        for (start, text, seg) in agent_layout(s, usize::from(area.width)) {
+            spans.push(Span::raw(" ".repeat(start.saturating_sub(at))));
+            at = start + text.width();
+            let fg = match seg {
+                Seg::Back | Seg::Path => p.muted,
+                Seg::Details => p.border_strong,
+                _ => p.text,
+            };
+            spans.push(Span::styled(text, Style::default().fg(fg)));
+        }
         frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(vec![
-                    Span::raw(format!("  {title}{} ", " ".repeat(gap))),
-                    Span::styled(model, Style::default().fg(p.muted)),
-                    Span::raw(format!("{status} ")),
-                    Span::styled(
-                        format!(" {DETAILS_GLYPH} "),
-                        Style::default().fg(p.border_strong),
-                    ),
-                    Span::raw("  "),
-                ]),
-                Line::styled(
-                    "─".repeat(usize::from(area.width)),
-                    Style::default().fg(p.background),
-                ),
-            ])
-            .style(Style::default().fg(p.text).bg(p.panel)),
+            Paragraph::new(Line::from(spans)).style(Style::default().fg(p.text).bg(p.panel)),
             Rect {
                 height: area.height.min(1),
                 ..area
@@ -416,7 +461,13 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 }
                 Seg::Path => background.fg(p.text),
                 Seg::Notice => background.fg(p.accent),
-                Seg::Dashboard | Seg::Details => background.fg(p.muted),
+                Seg::Back | Seg::Dashboard | Seg::Details => background.fg(p.muted),
+                // Pressed while the manager view is in front.
+                Seg::Manager if s.manager.active => background
+                    .bg(p.panel)
+                    .fg(p.accent)
+                    .add_modifier(Modifier::BOLD),
+                Seg::Manager => background.fg(p.muted),
                 // Warn while something is unread, quiet otherwise; the change pop is bold
                 // in the text colour (the peak of the quiet→text range).
                 Seg::Counter if s.notifications_pop => {
@@ -434,16 +485,37 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         Paragraph::new(row(top_layout_at(s, width, spin))).style(background),
         bar,
     );
-    // Row 1 stays blank; the workspace row sits below it.
-    if area.height > 2 {
+    // The workspace row sits directly under the tabs.
+    if area.height > 1 {
         let crumbs = Rect {
-            y: area.y + 2,
+            y: area.y + 1,
             height: 1,
             ..area
         };
         frame.render_widget(
             Paragraph::new(row(crumb_layout(s, width))).style(background),
             crumbs,
+        );
+    }
+    // A thin rule closes the bar. `─` is drawn mid-cell, so the row reads as half a row of air
+    // above a line. Same inset as the tabs; absent in the manager view (no workspace to divide).
+    if area.height > 2 && !s.manager.active {
+        let inset = if width < 12 { 0 } else { 2 };
+        let rule = Rect {
+            y: area.y + 2,
+            height: 1,
+            ..area
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" ".repeat(inset), background),
+                Span::styled(
+                    "─".repeat(width.saturating_sub(2 * inset)),
+                    background.fg(p.border),
+                ),
+            ]))
+            .style(background),
+            rule,
         );
     }
 }
@@ -659,22 +731,56 @@ pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
 mod chrome_tests {
     use super::*;
 
-    /// The top-bar rows: the tabs, a blank row, then the workspace path and branch. The blank
-    /// row is dropped here so index 1 is the workspace row.
+    #[test]
+    fn agent_header_geometry_matches_unicode_buffers() {
+        for title in ["Agent", "代理任务 🌍🚀", "👩‍💻 long title 世界"] {
+            for model in ["model", "模型 🚀 very long model"] {
+                for width in 0..=160u16 {
+                    let mut s = Snapshot::default();
+                    s.agent_page = "agent".into();
+                    s.title = title.into();
+                    s.model = model.into();
+                    let runs = agent_layout(&s, usize::from(width));
+                    let mut end = 0;
+                    for (start, text, _) in &runs {
+                        assert!(*start >= end);
+                        end = start + text.width();
+                        assert!(end <= usize::from(width));
+                    }
+                    let backend = ratatui::backend::TestBackend::new(width, 2);
+                    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+                    terminal
+                        .draw(|f| draw_top_bar(f, &s, f.area(), &Palette::new(false), 0))
+                        .unwrap();
+                    let cells = tab_cells(&s, usize::from(width));
+                    assert_eq!(cells.iter().any(|c| c.kind == TabHit::Back), width >= 3);
+                    assert_eq!(cells.iter().any(|c| c.kind == TabHit::Details), width >= 7);
+                    for cell in cells {
+                        let glyph = if cell.kind == TabHit::Back {
+                            "←"
+                        } else {
+                            DETAILS_GLYPH
+                        };
+                        assert_eq!(
+                            terminal.backend().buffer()[((cell.start + 1) as u16, 0)].symbol(),
+                            glyph
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The two top-bar rows: the tabs, then the workspace path and branch directly beneath.
     fn bar_rows(s: &Snapshot, width: u16) -> Vec<String> {
-        let backend = ratatui::backend::TestBackend::new(width, 3);
+        let backend = ratatui::backend::TestBackend::new(width, 2);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| draw_top_bar(frame, s, frame.area(), &Palette::new(false), 0))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let row = |y: u16| -> String { (0..width).map(|x| buffer[(x, y)].symbol()).collect() };
-        assert!(
-            row(1).trim().is_empty(),
-            "blank row between tabs and workspace: {:?}",
-            row(1)
-        );
-        vec![row(0), row(2)]
+        vec![row(0), row(1)]
     }
     /// The tab row.
     fn bar_text(s: &Snapshot, width: u16) -> String {
@@ -694,13 +800,122 @@ mod chrome_tests {
     }
 
     #[test]
-    fn manager_header_survives_open_tabs() {
+    fn manager_view_hides_left_title_path_and_branch() {
         let mut s = Snapshot::default();
+        s.breadcrumb = "~/repo:main".into();
+        s.title = "Fix bug".into();
+        s.manager.known = true;
+        s.manager.enabled = true;
         s.manager.active = true;
+        for tabs in [open_tabs(2, 0), Vec::new()] {
+            s.tabs = tabs;
+            let rows = bar_rows(&s, 100);
+            assert!(!rows[0].contains("Manager"), "{:?}", rows[0]);
+            assert!(!rows[0].contains("Fix bug"), "{:?}", rows[0]);
+            assert!(rows[0].contains('◆'), "{:?}", rows[0]);
+            assert!(!rows[1].contains("~/repo"), "{:?}", rows[1]);
+            assert!(!rows[1].contains("main"), "{:?}", rows[1]);
+            assert!(crumb_layout(&s, 100).is_empty());
+        }
+    }
+
+    #[test]
+    fn ordinary_session_keeps_title_path_and_branch() {
+        let mut s = Snapshot::default();
+        s.breadcrumb = "~/repo:main".into();
+        s.title = "Fix bug".into();
+        let rows = bar_rows(&s, 100);
+        assert!(rows[0].contains("Fix bug"), "{:?}", rows[0]);
+        assert!(rows[1].contains("~/repo"), "{:?}", rows[1]);
+        assert!(rows[1].contains("main"), "{:?}", rows[1]);
+    }
+
+    #[test]
+    fn crumb_row_is_adjacent_and_columns_match_layout() {
+        let mut s = Snapshot::default();
+        s.breadcrumb = "~/repo:main".into();
         s.tabs = open_tabs(2, 0);
-        assert!(bar_text(&s, 100).contains("◇ Manager"));
-        s.tabs.clear();
-        assert!(bar_text(&s, 100).contains("◇ Manager"));
+        let rows = bar_rows(&s, 100);
+        // Path starts at column 3, branch one gap cell after it.
+        assert_eq!(rows[1].find("~/repo"), Some(3), "{:?}", rows[1]);
+        assert_eq!(
+            rows[1].find("main"),
+            Some(3 + "~/repo".len() + 1),
+            "{:?}",
+            rows[1]
+        );
+        let layout = crumb_layout(&s, 100);
+        assert_eq!(layout[0].0, 3);
+        // Tab hit cells live on the first row only and are unaffected by the crumb row.
+        assert!(tab_cells(&s, 100)
+            .iter()
+            .any(|c| c.kind == TabHit::Session(0)));
+        // Normal sessions use two rows; the second row is blank only for the manager.
+        s.manager.active = true;
+        assert!(bar_rows(&s, 100)[1].trim().is_empty());
+    }
+
+    fn manager_snapshot(active: bool) -> Snapshot {
+        let mut s = Snapshot {
+            tabs: open_tabs(2, 0),
+            ..Snapshot::default()
+        };
+        s.manager.known = true;
+        s.manager.enabled = true;
+        s.manager.active = active;
+        s
+    }
+
+    #[test]
+    fn manager_toggle_sits_right_before_the_dashboard_button() {
+        let s = manager_snapshot(false);
+        let text = bar_rows(&s, 100)[0].clone();
+        let cells = tab_cells(&s, 100);
+        let manager = cells.iter().find(|c| c.kind == TabHit::Manager).unwrap();
+        let dash = cells.iter().find(|c| c.kind == TabHit::Dashboard).unwrap();
+        assert_eq!(manager.end + 1, dash.start, "{text}");
+        let glyph = |cell: &TabCell| {
+            text.chars()
+                .skip(cell.start)
+                .take(cell.end - cell.start)
+                .collect::<String>()
+        };
+        assert_eq!(glyph(manager), " ◇ ");
+        // It is never a session tab.
+        assert!(cells
+            .iter()
+            .all(|c| !matches!(c.kind, TabHit::Session(_)) || c.start < manager.start));
+    }
+
+    #[test]
+    fn manager_toggle_is_absent_until_the_host_reports_a_manager() {
+        let mut s = manager_snapshot(false);
+        s.manager = Default::default();
+        assert!(tab_cells(&s, 100).iter().all(|c| c.kind != TabHit::Manager));
+    }
+
+    #[test]
+    fn manager_toggle_reads_pressed_while_the_manager_is_in_front() {
+        let paint = |s: &Snapshot| {
+            let backend = ratatui::backend::TestBackend::new(100, 3);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_top_bar(frame, s, frame.area(), &Palette::new(false), 0))
+                .unwrap();
+            let cell = tab_cells(s, 100)
+                .into_iter()
+                .find(|c| c.kind == TabHit::Manager)
+                .unwrap();
+            terminal.backend().buffer()[(cell.start as u16 + 1, 0)].clone()
+        };
+        let p = Palette::new(false);
+        let idle = paint(&manager_snapshot(false));
+        let pressed = paint(&manager_snapshot(true));
+        assert_eq!(idle.symbol(), "◇");
+        assert_eq!(idle.fg, p.muted);
+        assert_eq!(pressed.symbol(), "◆");
+        assert_eq!(pressed.fg, p.accent);
+        assert_eq!(pressed.bg, p.panel);
     }
 
     #[test]
@@ -976,7 +1191,7 @@ mod chrome_tests {
 
     #[test]
     fn chrome_button_glyphs_are_single_cell_text_presentation() {
-        for glyph in [DASHBOARD_GLYPH, DETAILS_GLYPH] {
+        for glyph in ["←", DASHBOARD_GLYPH, DETAILS_GLYPH] {
             assert_eq!(glyph.chars().count(), 1, "{glyph}");
             assert_eq!(glyph.width(), 1, "{glyph}");
             assert!(!glyph.contains(['\u{fe0f}', '\u{200d}']), "{glyph}");
@@ -1116,7 +1331,11 @@ mod chrome_tests {
 }
 /// The update notice in the top bar (`area` is the top-bar row) is under this point.
 pub fn update_notice_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> bool {
-    if s.update_notice.is_empty() || !area.contains((x, y).into()) || y != area.y {
+    if !s.agent_page.is_empty()
+        || s.update_notice.is_empty()
+        || !area.contains((x, y).into())
+        || y != area.y
+    {
         return false;
     }
     let column = usize::from(x - area.x);

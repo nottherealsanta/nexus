@@ -10,8 +10,8 @@ from nexus.ui_support.prompts import approval_choices
 
 def state(**over) -> p.ManagerStateResult:
     base = dict(
-        enabled=True, session="nexus-manager", state="idle", model="github-copilot/gpt-6-luna",
-        provider="github-copilot", signed_in=True, codex_signed_in=True, live_consent=True,
+        enabled=True, session="nexus-manager", state="idle", model="codex/gpt-6-luna",
+        provider="codex", signed_in=True, codex_signed_in=True, live_consent=True,
         live_manager_consent=True, live_ready=True, managed=["a", "b"],
     )
     base.update(over)
@@ -21,13 +21,11 @@ def state(**over) -> p.ManagerStateResult:
 def test_constants_mirror_the_host_and_runtime_contracts():
     from nexus.agents.manager_prompt import MANAGER_MODEL_REF, MANAGER_SIGN_IN_HINT
     from nexus.host.facade import MANAGER_SESSION_ID
-    from nexus.tools.bundles import MANAGER_BUNDLE, MANAGER_TOOL_NAMES
 
     assert ui.MANAGER_SESSION_ID == MANAGER_SESSION_ID
     assert ui.MANAGER_MODEL_REF == MANAGER_MODEL_REF
     assert ui.SIGN_IN_HINT == MANAGER_SIGN_IN_HINT
-    assert ui.MANAGER_BUNDLE == MANAGER_BUNDLE
-    assert ui.CONFIRMED_TOOLS == {"session_launch", "session_cancel"} <= set(MANAGER_TOOL_NAMES)
+    assert not hasattr(ui, "CONFIRMED_TOOLS") and not hasattr(ui, "confirmation")
 
 
 def test_ready_entry_shows_model_status_live_readiness_and_privacy():
@@ -35,7 +33,7 @@ def test_ready_entry_shows_model_status_live_readiness_and_privacy():
     assert row["known"] and row["enabled"] and row["can_open"] and not row["active"]
     assert (row["tone"], row["status"]) == ("ok", "idle")
     assert row["summary"] == "Ready · 2 sessions launched"
-    assert row["model"] == "github-copilot/gpt-6-luna"
+    assert row["model"] == "codex/gpt-6-luna"
     assert row["live"] == "Voice ready" and row["live_ready"]
     assert "other sessions' titles, status and reports" in row["privacy"]
     assert any("fixed, no fallback" in note for note in row["notes"])
@@ -61,9 +59,9 @@ def test_disabled_entry_says_off_and_how_to_turn_it_on_without_a_voice_route():
 
 
 def test_signed_out_entry_names_the_exact_fix():
-    row = ui.entry(state(signed_in=False, sign_in="sign in to GitHub Copilot under Settings > Providers"))
+    row = ui.entry(state(signed_in=False, sign_in="sign in to ChatGPT (Codex) under Settings > Providers"))
     assert row["tone"] == "warn" and row["enabled"]
-    assert row["summary"] == "Not signed in · sign in to GitHub Copilot under Settings > Providers"
+    assert row["summary"] == "Not signed in · sign in to ChatGPT (Codex) under Settings > Providers"
     assert any("turns fail until" in note for note in row["notes"])
 
 
@@ -91,8 +89,8 @@ def test_entry_text_is_control_safe():
 
 def test_status_lines_label_every_fact():
     rows = ui.status_lines(state(managed=["x", "y"]))
-    assert rows["Enabled"] == "yes" and rows["Model"] == "github-copilot/gpt-6-luna"
-    assert rows["GitHub Copilot"] == "signed in" and rows["Codex (GPT Live)"] == "signed in"
+    assert rows["Enabled"] == "yes" and rows["Model"] == "codex/gpt-6-luna"
+    assert rows["Codex (manager model)"] == "signed in" and "GitHub Copilot" not in rows and rows["Codex (GPT Live)"] == "signed in"
     assert rows["Launched sessions"] == "x, y" and "3 per turn" in rows["Launch cap"]
     assert ui.status_lines(None) == {"Manager": "unknown"}
 
@@ -102,60 +100,11 @@ def test_manager_refuses_role_model_fork_and_shell_with_reasons():
     assert all(ui.REFUSED_COMMANDS.values()) and "shell" in ui.SHELL_REFUSED
 
 
-# -- confirmation --------------------------------------------------------------------------
-
-
-def test_only_manager_launch_and_cancel_are_unconditionally_confirmed():
-    assert ui.is_confirmed({"tool": "session_launch", "key": "do it"})
-    assert ui.is_confirmed({"tool": "session_cancel", "key": "id: why", "bundle": "manager"})
-    assert not ui.is_confirmed({"tool": "Bash", "key": "ls"})
-    assert not ui.is_confirmed({"tool": "sessions_find"})
-    assert not ui.is_confirmed({"tool": "session_launch", "bundle": "other"})
-
-
-def test_confirmation_choices_are_launch_or_cancel_and_never_remembered():
-    launch = ui.approval_choices({"tool": "session_launch"})
-    assert [(c.value, c.key, c.disabled) for c in launch] == [("allow_once", "y", False), ("deny_once", "n", False)]
-    assert [c.label for c in launch] == ["Launch this session", "Do not launch"]
-    cancel = ui.approval_choices({"tool": "session_cancel"})
-    assert [c.label for c in cancel] == ["Stop that session", "Keep it running"]
-    # The ordinary approval keeps its four decisions, including "always".
+def test_ordinary_approval_keeps_its_four_decisions():
     ordinary = approval_choices({"tool": "Bash", "persistence_available": True})
     assert {c.value for c in ordinary} == {"allow_once", "allow_always", "deny_once", "deny_always"}
-    for choices in (launch, cancel):
-        assert not {c.value for c in choices} & {"allow_always", "deny_always"}
-        assert not {c.key for c in choices} & {"a", "d"}
-
-
-def test_confirmation_shows_the_whole_instruction_and_says_nothing_is_remembered():
-    key = "[reviewer] fix the flaky sync test\nthen run the suite"
-    fields = ui.confirmation({"tool": "session_launch", "key": key})
-    assert fields["title"] == "Launch a new session?"
-    assert "[reviewer] fix the flaky sync test" in fields["what"] and "then run the suite" in fields["what"]
-    assert fields["why"] == ui.ASKED_EVERY_TIME and "never remembered" in fields["why"]
-    assert fields["what_rows"] == 8
-    assert fields["lines"][0] == fields["title"] and ui.ASKED_EVERY_TIME in fields["lines"]
-
-
-def test_confirmation_wraps_and_announces_a_clipped_instruction():
-    key = "word " * 2000  # 10,000 characters: far more rows than the prompt shows
-    fields = ui.confirmation({"tool": "session_launch", "key": key})
-    assert len(fields["what"]) <= 1 + ui._ROW_LIMIT + 1
-    assert all(len(row) <= ui._ROW_WIDTH + 1 for row in fields["what"][1:-1])
-    assert "more characters not shown" in fields["what"][-1]
-    short = ui.confirmation({"tool": "session_launch", "key": "short"})
-    assert not any("not shown" in row for row in short["what"])
-
-
-def test_cancel_confirmation_names_the_session_and_reason():
-    fields = ui.confirmation({"tool": "session_cancel", "key": "abc123: stuck in a loop"})
-    assert fields["title"] == "Stop a session the manager launched?"
-    assert "abc123: stuck in a loop" in fields["what"]
-
-
-def test_confirmation_text_is_control_safe():
-    fields = ui.confirmation({"tool": "session_launch", "key": "rm \x1b[2J\x07"})
-    assert "\x1b" not in "".join(fields["what"]) and "\x07" not in "".join(fields["lines"])
+    # Manager session actions no longer have a special confirmation presentation.
+    assert not hasattr(ui, "is_confirmed") and not hasattr(ui, "approval_choices")
 
 
 def test_manager_cli_parser_and_host_only_status(monkeypatch, tmp_path):
@@ -185,11 +134,11 @@ def test_manager_cli_parser_and_host_only_status(monkeypatch, tmp_path):
     args = parser.parse_args(["manager", "status"])
     output = io.StringIO()
     asyncio.run(cli._manager_command(tmp_path, args, output))
-    assert "github-copilot/gpt-6-luna" in output.getvalue()
+    assert "codex/gpt-6-luna" in output.getvalue()
     assert client.closed
 
 
 def test_manager_entry_exposes_launch_and_finder_guidance():
     notes = " ".join(ui.entry(state())["notes"])
-    assert "Start a session" in notes and "confirm" in notes
+    assert "Start a session" in notes and "starts right away" in notes and "confirm" not in notes
     assert "/sessions" in notes and "m returns" in notes

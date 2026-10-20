@@ -305,6 +305,17 @@ pub fn spans(
             "/live stop"
         };
         let mut extras = Vec::new();
+        if !live.attention.is_empty() {
+            // Kept ahead of the session and model so a waiting approval is the last to drop.
+            let text = format!("{} {}", if ascii { "!" } else { "▲" }, live.attention);
+            if used + 2 + text.width() <= room {
+                out.push(Span::styled(
+                    format!("  {text}"),
+                    on(p.warning).add_modifier(Modifier::BOLD),
+                ));
+                used += 2 + text.width();
+            }
+        }
         if !live.elsewhere.is_empty() {
             extras.push(format!("in {}", live.elsewhere));
         }
@@ -612,6 +623,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn manager_approval_waiting_is_drawn_ahead_of_the_session() {
+        let mut live = bar();
+        live.manager = true;
+        live.elsewhere = "Manager".into();
+        live.attention = "approval waiting".into();
+        let p = Palette::new(false);
+        let out = header(&live, 0, 100, true, &[]);
+        let line = text(&out);
+        let chip = line.find("approval waiting").expect("chip shown");
+        assert!(chip < line.find("in Manager").unwrap(), "{line:?}");
+        let span = out
+            .iter()
+            .find(|s| s.content.contains("approval waiting"))
+            .unwrap();
+        assert_eq!(span.style.fg, Some(p.warning));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        for width in 0..=100 {
+            assert!(
+                text(&header(&live, 0, width, true, &[])).width() <= width,
+                "{width}"
+            );
+        }
+        live.attention.clear();
+        assert!(!text(&header(&live, 0, 100, true, &[])).contains("approval"));
     }
 
     #[test]

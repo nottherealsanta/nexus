@@ -28,6 +28,7 @@ ACTIONS = {
     "open_model_picker": "Models",
     "start_voice": "Voice",
     "toggle_live": "Live",
+    "toggle_manager": "ToggleManager",
     "pause_live": "LivePause",
     "toggle_logs": "ToggleLogs",
     "cycle_reasoning_effort": "CycleEffort",

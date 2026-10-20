@@ -44,7 +44,7 @@ from .http import redact_secrets
 from .provider import Provider, ResolvedModel
 from .request import ModelRequest
 from .stream import StreamEvent
-from .tiers import DEFAULT_TIER_EFFORTS, DEFAULT_TIER_MODELS
+from .tiers import DEFAULT_TIER_MODELS, effective_tier_effort
 
 __all__ = ["MODEL_POLICY_PINNED", "ModelRouter", "pinned_reference"]
 
@@ -154,6 +154,11 @@ class ModelRouter:
         self._tier_efforts = {tier: dict(efforts) for tier, efforts in (tier_efforts or {}).items()}
 
     # -- introspection -----------------------------------------------------
+
+    @property
+    def tier_efforts(self) -> dict[str, dict[str, str]]:
+        """The per-tier route efforts the router applies right now."""
+        return {tier: dict(efforts) for tier, efforts in self._tier_efforts.items()}
 
     @property
     def providers(self) -> dict[str, Provider]:
@@ -396,13 +401,12 @@ class ModelRouter:
         ):
             return request.params.reasoning_effort
         reference = f"{candidate.provider.name}/{candidate.model}"
-        selected = self._tier_efforts.get(tier, {}).get(reference)
-        if selected is not None:
-            return selected
-        if tier not in DEFAULT_TIER_MODELS or self._tier_pinned(tier):
+        configured = self._tier_efforts.get(tier, {}).get(reference)
+        pinned = self._tier_pinned(tier)
+        if configured is None and (tier not in DEFAULT_TIER_MODELS or pinned):
             return request.params.reasoning_effort
-        return DEFAULT_TIER_EFFORTS.get(
-            (tier, f"{candidate.provider.name}/{candidate.model}")
+        return effective_tier_effort(
+            tier, reference, configured=configured, pinned=pinned
         )
 
     def _resolve_info(self, info: Any, ref: str) -> ResolvedModel:

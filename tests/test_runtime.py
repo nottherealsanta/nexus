@@ -644,7 +644,33 @@ def test_child_workspace_config_fails_closed_without_scoped_permissions(tmp_path
         runtime._child_workspace_config(Config(model="scripted/sm"), guard)
 
 
-async def test_child_runtime_nested_runner_inherits_parent_model(tmp_path):
+@pytest.mark.parametrize(("configured", "effective"), [(3, 1), (1, 1), (0, 0)])
+async def test_root_runner_clamps_max_depth_to_one(tmp_path, configured, effective):
+    from nexus.agents import AgentManager
+
+    config = Config(
+        model="scripted/sm",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/sm"),
+            agents=AgentsSection(enabled=True, max_depth=configured),
+        ),
+    )
+    runtime = Runtime(
+        tmp_path,
+        config=config,
+        providers={"scripted": ScriptedProvider(text_response("unused"))},
+        agents=AgentManager.for_workspace(tmp_path, seed=False),
+    )
+    runner = runtime._make_subagent_runner(
+        session_id="root", parent_tools=("read", "subagent"), config=config
+    )
+    assert runner is not None
+    assert runner.budget.max_depth == effective
+    await runtime.aclose()
+
+
+async def test_child_runtime_has_no_runner(tmp_path):
     from dataclasses import replace
 
     from nexus.agents import AgentManager, ChildSpec, SubagentBudget
@@ -714,15 +740,11 @@ async def test_child_runtime_nested_runner_inherits_parent_model(tmp_path):
     )
     child_runtime = runtime._build_child_runtime(spec)
 
-    assert child_runtime._runner._parent_model == "scripted/sm"
-    assert child_runtime._runner._worktree_service is runtime._worktree_service
-    assert child_runtime._runner._worktree_root == runtime.workspace.parent / (
+    # Only the root session spawns: a child runtime carries no runner.
+    assert child_runtime._runner is None
+    assert runtime._worktree_root == runtime.workspace.parent / (
         f".nexus-worktrees-{runtime.workspace.name}"
     )
-    assert child_runtime._runner._worktree_root == runtime._worktree_root
-    root_for = child_runtime._runner._worktree_root_for
-    assert root_for.__self__ is runtime
-    assert root_for.__func__ is Runtime._owned_worktree_root_for
     assert runtime._worktree_service is not None
     nested_workspace = runtime.workspace / "nested-checkout"
     assert nested_workspace not in runtime._worktree_roots

@@ -43,7 +43,7 @@ __all__ = [
 ]
 
 
-#: The manager session's six tools, in model-facing order (plan 02 section 3.2).
+#: The manager session's eight tools, in model-facing order (plan 02 section 3.2).
 MANAGER_TOOL_NAMES: tuple[str, ...] = (
     "sessions_find",
     "session_launch",
@@ -51,6 +51,8 @@ MANAGER_TOOL_NAMES: tuple[str, ...] = (
     "session_wait",
     "session_result",
     "session_cancel",
+    "session_send",
+    "session_show",
 )
 MANAGER_BUNDLE = "manager"
 MANAGER_PROFILE = "manager"

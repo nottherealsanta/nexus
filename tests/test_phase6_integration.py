@@ -349,14 +349,6 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
         ),
         tool_response(
             (
-                "nested",
-                "subagent",
-                {"prompt": "inspect without changing anything", "subagent_type": "explore"},
-            )
-        ),
-        text_response("nested read-only findings"),
-        tool_response(
-            (
                 "parent-bash-escape",
                 "bash",
                 {"command": f"echo escaped > {parent / 'parent-bash-write.txt'}"},
@@ -405,11 +397,8 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
         for event in events
     )
     agent_spawns = [event.data for event in events if event.type == "agent.spawned"]
-    assert len(agent_spawns) == 2
-    nested_spawn = next(data for data in agent_spawns if data["depth"] == 2)
-    assert nested_spawn["worktree"] is None
-    # Read-only is prompt guidance only: the nested explore child inherits write tools.
-    assert {"write", "edit"} <= set(nested_spawn["tools"])
+    assert len(agent_spawns) == 1
+    assert "subagent" not in spawned["tools"]
     assert (checkout / "child-output.txt").read_text(encoding="utf-8") == "from child"
     assert not (parent / "parent-write.txt").exists()
     assert (parent / "tracked.txt").read_text(encoding="utf-8") == "parent base\n"
@@ -453,17 +442,8 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
                 {"command": f"echo escaped > {parent / 'parent-shell-write.txt'}"},
             ),
             ("custom-escape", "CustomWriter", {}),
-            ("nested-spawn", "subagent", {"prompt": "inherit safety ceiling"}),
+            ("nested-spawn", "subagent", {"prompt": "forged nested spawn"}),
         ),
-        tool_response(
-            (
-                "grandchild-bash",
-                "bash",
-                {"command": f"echo escaped > {parent / 'grandchild-shell-write.txt'}"},
-            ),
-            ("grandchild-custom", "CustomWriter", {}),
-        ),
-        text_response("child done"),
         text_response("child done"),
         text_response("parent done"),
     )
@@ -493,12 +473,9 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
     assert "bash_output" not in advertised
     assert "kill_shell" not in advertised
     assert "CustomWriter" not in advertised
-    nested = next(data for data in spawns if data["depth"] == 2)
-    assert nested["worktree"] is None
-    assert "bash" not in nested["tools"]
-    assert "CustomWriter" not in nested["tools"]
+    assert "subagent" not in advertised
+    assert len(spawns) == 1  # the forged nested spawn never created a child
     assert not (parent / "parent-shell-write.txt").exists()
-    assert not (parent / "grandchild-shell-write.txt").exists()
     assert not (parent / "custom-parent-write.txt").exists()
     assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
     failed_calls = {
@@ -506,9 +483,7 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
         for event in events
         if event.type == "tool.failed" and event.data.get("executed") is False
     }
-    assert {
-        "bash-escape", "custom-escape", "grandchild-bash", "grandchild-custom"
-    } <= failed_calls
+    assert {"bash-escape", "custom-escape"} <= failed_calls
     await runtime.aclose()
 
 
@@ -727,8 +702,9 @@ async def test_legacy_max_tier_does_not_cap_root_subagents(tmp_path):
     await runtime.aclose()
 
 
-async def test_depth_limit_refuses_a_grandchild(tmp_path):
-    # Parent -> general child -> Task again; max_depth=1 refuses the grandchild.
+@pytest.mark.parametrize("max_depth", [1, 3])
+async def test_child_cannot_spawn_whatever_max_depth_says(tmp_path, max_depth):
+    # Parent -> general child forges Task again: the child has no `subagent`.
     provider = ScriptedProvider(
         tool_response(("t1", "Task", {"prompt": "outer", "subagent_type": "general"})),
         tool_response(("t2", "Task", {"prompt": "inner", "subagent_type": "general"})),
@@ -736,48 +712,30 @@ async def test_depth_limit_refuses_a_grandchild(tmp_path):
         text_response("done"),
     )
     runtime = make_runtime(
-        tmp_path, provider, config=make_config(max_depth=1)
+        tmp_path, provider, config=make_config(max_depth=max_depth)
     )
     session = runtime.session("root")
     events = await drain(session)
 
     assert events[-1].type == "turn.completed"
-    # The grandchild's Task call is refused inside the child turn; its
-    # tool.completed is relayed into the parent log with is_error set.
-    grandchild = [
-        e
-        for e in events
-        if e.type == "tool.completed" and e.data.get("call_id") == "t2"
-    ]
-    assert grandchild and grandchild[0].data.get("is_error") is True
+    spawned = [e for e in events if e.type == "agent.spawned"]
+    assert len(spawned) == 1
+    assert spawned[0].data["agent"]["depth"] == 1
+    assert "subagent" not in spawned[0].data["tools"]
+    # Replay of historical nested logs stays covered by tests/test_view_reduce.py
+    # and tests/test_session_tree.py, which use recorded events and stores.
     await runtime.aclose()
 
 
-async def test_nested_agents_keep_immediate_parent_and_root_turn(tmp_path):
+async def test_max_depth_zero_disables_root_spawning(tmp_path):
     provider = ScriptedProvider(
-        tool_response(("outer-call", "Task", {"prompt": "outer", "subagent_type": "general"})),
-        tool_response(("inner-call", "Task", {"prompt": "inner", "subagent_type": "general"})),
-        text_response("inner report"),
-        text_response("outer report"),
-        text_response("root report"),
+        tool_response(("t1", "Task", {"prompt": "outer", "subagent_type": "general"})),
+        text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider)
-    session = runtime.session("root")
-    live = await drain(session)
-    state = fold(list(session.events))
-    assert state.to_dict() == fold(live).to_dict()
-    top = state.agents["root/sub/1"]
-    assert set(top.body.agents) == {"root/sub/1/sub/1"}
-    nested = top.body.agents["root/sub/1/sub/1"]
-    assert nested.parent_agent_id == top.id
-    assert nested.parent_call_id == "inner-call"
-    assert nested.root_turn_id == top.root_turn_id
-    transcript = HostFacade(runtime).agent_transcript("root", nested.id)
-    assert transcript["found"] is True
-    assert any(
-        "inner report" in "".join(block["text"] for block in message["blocks"] if block["kind"] == "text")
-        for message in transcript["view"]["body"]["messages"]
-    )
+    runtime = make_runtime(tmp_path, provider, config=make_config(max_depth=0))
+    events = await drain(runtime.session("root"))
+
+    assert not [e for e in events if e.type == "agent.spawned"]
     await runtime.aclose()
 
 

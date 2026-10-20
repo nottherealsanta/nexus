@@ -558,3 +558,22 @@ def test_render_invocation_is_bounded_even_with_a_huge_body():
     assert len(invocation.text.encode("utf-8")) <= 256
     assert invocation.text.startswith(SKILL_BEGIN_DELIMITER)
     assert invocation.text.endswith(SKILL_END_DELIMITER)
+
+
+@pytest.mark.parametrize("value", ["Complete terms in LICENSE.txt", "x" * 2048])
+def test_license_is_inert_bounded_scalar(value):
+    parsed = parse_frontmatter(doc(f"name: demo\ndescription: d\nlicense: {value}"))
+    assert parsed.name == "demo"
+
+
+@pytest.mark.parametrize("declaration", [
+    "license: " + "x" * 2049,
+    "license: [MIT]",
+    "license: MIT\nlicense: BSD",
+    "license:\n  text: MIT",
+    "metadata: value",
+    "compatibility: value",
+])
+def test_license_does_not_widen_grammar(declaration):
+    with pytest.raises(SkillParseError):
+        parse_frontmatter(doc(f"name: demo\ndescription: d\n{declaration}"))

@@ -283,6 +283,11 @@ def bridge(command=None):
                         meta = json.loads(payload)
                         if meta.get("type") == "resize":
                             resize(int(meta["width"]), int(meta["height"]))
+                            height, width, _, _ = struct.unpack(
+                                "HHHH", fcntl.ioctl(master, termios.TIOCGWINSZ, b"\0" * 8)
+                            )
+                            ack = json.dumps({"type": "resize", "width": width, "height": height}).encode()
+                            os.write(1, b"M" + len(ack).to_bytes(4, "big") + ack)
     finally:
         child.terminate()
         child.wait(timeout=5)

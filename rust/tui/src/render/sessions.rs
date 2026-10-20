@@ -124,10 +124,7 @@ fn marks(spin: usize) -> (&'static str, &'static str, &'static str, &'static str
     marks_for(nexus_widgets::Glyphs::from_env().ascii, spin)
 }
 
-fn marks_for(
-    ascii: bool,
-    spin: usize,
-) -> (&'static str, &'static str, &'static str, &'static str) {
+fn marks_for(ascii: bool, spin: usize) -> (&'static str, &'static str, &'static str, &'static str) {
     if ascii {
         let frames = nexus_widgets::Glyphs::ascii().spinner;
         ("!", frames[spin % frames.len()], "o", "*")
@@ -241,10 +238,9 @@ fn manager_band(
     if !crate::picker::has_manager(dashboard) {
         return (Vec::new(), None);
     }
-    let Some(entry) = dashboard
-        .get("manager")
-        .and_then(|value| serde_json::from_value::<crate::bridge::ManagerEntry>(value.clone()).ok())
-    else {
+    let Some(entry) = dashboard.get("manager").and_then(|value| {
+        serde_json::from_value::<crate::bridge::ManagerEntry>(value.clone()).ok()
+    }) else {
         return (Vec::new(), None);
     };
     let quiet = Style::default().fg(colors.quiet);
@@ -497,7 +493,11 @@ pub fn draw_at(
     for (key, members) in &groups {
         let collapsed = state.is_collapsed(key);
         let glyphs = nexus_widgets::Glyphs::from_env();
-        let chevron = if collapsed { glyphs.closed } else { glyphs.open };
+        let chevron = if collapsed {
+            glyphs.closed
+        } else {
+            glyphs.open
+        };
         let label = format!("{chevron} {key}");
         let count = format!(" {}", members.len());
         lines.push((
@@ -819,9 +819,12 @@ fn title_spans(
         Some(draft) => format!("{draft}▏"),
         None => {
             let name = text(row, "name");
-            if name.is_empty() { text(row, "title").to_owned() }
-            else { format!("{} · {}", text(row, "title"), name) }
-        },
+            if name.is_empty() {
+                text(row, "title").to_owned()
+            } else {
+                format!("{} · {}", text(row, "title"), name)
+            }
+        }
     };
     // Inset (1+1), indent (2), glyph and space (2), a gap, and two trailing columns.
     let inner = width.saturating_sub(2);
@@ -947,8 +950,16 @@ mod tests {
         assert!(!beta.contains("feat/ui"), "no branch on the row: {beta}");
         let alpha = screen.lines().find(|l| l.contains("Alpha")).unwrap();
         assert!(alpha.contains("◇ Alpha") && alpha.contains("2m"), "{alpha}");
-        assert_eq!(alpha.matches('◇').count(), 1, "one status glyph per row: {alpha}");
-        assert_eq!(beta.matches('◆').count(), 1, "one status glyph per row: {beta}");
+        assert_eq!(
+            alpha.matches('◇').count(),
+            1,
+            "one status glyph per row: {alpha}"
+        );
+        assert_eq!(
+            beta.matches('◆').count(),
+            1,
+            "one status glyph per row: {beta}"
+        );
     }
 
     #[test]
@@ -1136,12 +1147,19 @@ mod tests {
         );
         // A rule of its own closes the pinned entry before the first group.
         assert!(
-            l[manager + 1..first_group].iter().any(|row| row.contains("────")),
+            l[manager + 1..first_group]
+                .iter()
+                .any(|row| row.contains("────")),
             "{screen}"
         );
         // Ordinary roots keep their own rows; the manager is never one of them.
         assert_eq!(
-            state.line_rows.iter().flatten().copied().collect::<Vec<_>>(),
+            state
+                .line_rows
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
             [0, 1]
         );
         assert!(state.manager_hit.width > 0 && state.manager_live_hit.width > 0);
@@ -1168,7 +1186,10 @@ mod tests {
         });
         let screen = render(100, 40, &with_manager(entry.clone()), &mut state);
         assert!(screen.contains("◇ Manager"), "{screen}");
-        assert!(screen.contains("Off · [manager] enabled = false"), "{screen}");
+        assert!(
+            screen.contains("Off · [manager] enabled = false"),
+            "{screen}"
+        );
         assert!(screen.contains("enabled = true in nexus.toml"), "{screen}");
         assert!(!screen.contains("Voice M"), "no voice while off: {screen}");
         assert_eq!(state.manager_live_hit.width, 0);
@@ -1390,7 +1411,11 @@ mod tests {
             let id = state.selected_id.clone();
             let bar = nexus_widgets::Glyphs::from_env().focus_bar;
             let rows: Vec<String> = (0..30)
-                .map(|y| (0..100).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+                .map(|y| {
+                    (0..100)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect()
+                })
                 .collect();
             (id, bar, rows)
         };

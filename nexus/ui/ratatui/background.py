@@ -44,7 +44,10 @@ class BackgroundActions:
             kind = action["type"]
             if kind == "complete":
                 query, prefix = action["text"], action.get("prefix", action["text"])
-                rows = await complete(client, prefix, query, efforts=shell.controller.supported_levels)
+                rows = await complete(
+                    client, prefix, query, efforts=shell.controller.supported_levels,
+                    include_directories=action.get("directories") is True,
+                )
                 if not current() or serial != self.completion_serial:
                     return
                 shell.completion_query, shell.completion_prefix, shell.completions = query, prefix, rows

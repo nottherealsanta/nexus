@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import math
 import re
@@ -47,11 +48,16 @@ import threading
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from ..errors import ConfigError, NexusError, OperationCancelled
 from ..events import Event
-from ..model.tiers import DEFAULT_TIER, TierResolution, TierTable
+from ..model.tiers import (
+    DEFAULT_TIER,
+    TierResolution,
+    TierTable,
+    effective_tier_effort,
+)
 from ..tools.names import canonical_tool_name
 from ..util import new_id, redact_secrets
 from .manager import AgentManager, AgentToolSelection
@@ -59,7 +65,6 @@ from .model import (
     MODEL_INHERIT,
     MUTATING_FS_TOOLS,
     AgentDef,
-    AgentIndex,
     AgentNotFoundError,
 )
 
@@ -76,6 +81,9 @@ __all__ = [
     "TierDecision",
     "MAX_REPORTED_FILES",
     "MAX_ROLE_INDEX_CHARS",
+    "ROSTER_CLIP_NOTE",
+    "RosterDigests",
+    "ROOT_ONLY_TOOLS",
     "WORKTREE_CHILD_TOOLS",
     "ChildRuntime",
     "ChildSpec",
@@ -129,6 +137,42 @@ DEFAULT_CHILD_TYPE = "task"
 _TOOL_NAMESPACE = "functions."
 #: Budget for the roster the ``subagent`` tool advertises (whole lines only).
 MAX_ROLE_INDEX_CHARS = 4_000
+#: Own-line note appended when the roster dropped tier lines or role descriptions.
+ROSTER_CLIP_NOTE = "[Subagent roster and tier models clipped]"
+
+
+def _tier_line(tier: str, row: Sequence[tuple[str, str | None]]) -> str:
+    listed = ", ".join(
+        ref + (f" (effort: {effort})" if effort is not None else "") for ref, effort in row
+    )
+    return f"{tier} models (in order): {listed or 'none configured'}"
+
+
+def _role_prefix(entry: Any) -> str:
+    """``name [tiers: ...; effort: x]``: the part of a role line that is never clipped."""
+    details = []
+    if entry.tiers:
+        details.append("tiers: " + ", ".join(
+            f"{tier} (default)" if index == 0 and len(entry.tiers) > 1 else tier
+            for index, tier in enumerate(entry.tiers)
+        ))
+    if entry.reasoning_effort:
+        details.append(f"effort: {entry.reasoning_effort}")
+    return f"{entry.name} [{'; '.join(details)}]" if details else entry.name
+
+
+class RosterDigests(NamedTuple):
+    """Digests of the tier lines the ``subagent`` description actually shows.
+
+    Models and efforts are hashed apart so a change notice can name exactly
+    which of the two moved; role descriptions are never part of either.
+    """
+
+    models: str
+    efforts: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"models": self.models, "efforts": self.efforts}
 # First-release worktree profile: only reviewed, shipped tools are exposed.
 WORKTREE_CHILD_TOOLS = frozenset(
     {
@@ -138,7 +182,6 @@ WORKTREE_CHILD_TOOLS = frozenset(
         "edit",
         "write",
         "apply_patch",
-        "subagent",
         "todowrite",
         "question",
         "skill",
@@ -146,6 +189,8 @@ WORKTREE_CHILD_TOOLS = frozenset(
         "websearch",
     }
 )
+#: Tools only the root session may hold; a child never gets them.
+ROOT_ONLY_TOOLS = frozenset({"subagent"})
 #: The child session path segment: ``<parent>/sub/<n>``.
 CHILD_SESSION_SEGMENT = "sub"
 
@@ -1079,6 +1124,7 @@ class SubagentRunner:
         worktree_scope: bool = False,
         tier_probe: Callable[[str], bool] | None = None,
         tier_candidates: Callable[[str], Sequence[str]] | None = None,
+        tier_efforts: Callable[[], Mapping[str, Mapping[str, str]]] | None = None,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -1124,6 +1170,9 @@ class SubagentRunner:
         #: Says whether a tier currently resolves to a runnable model. Absent
         #: (tests, static wiring) every tier is assumed runnable.
         self._tier_probe = tier_probe
+        #: The router's live per-route efforts, so the roster advertises what the
+        #: next request will run even when ``config`` is an older generation.
+        self._tier_efforts = tier_efforts
         self._tier_candidates = tier_candidates
         self._sessions: SessionFacade = (
             sessions if sessions is not None else DefaultSessionFacade(
@@ -1183,23 +1232,111 @@ class SubagentRunner:
         descriptions of definitions eligible in the ``subagent`` context, never
         a body, path, or tool list, bounded to whole lines.
         """
+        return self._render_roster(max_chars)[0]
+
+    def tier_lines(self) -> list[str]:
+        """One whole ``<tier> models (in order): ...`` line per tier, unclipped."""
+        return [_tier_line(tier, row) for tier, row in self._tier_rows()]
+
+    def roster_digests(self, *, max_chars: int = MAX_ROLE_INDEX_CHARS) -> RosterDigests:
+        """Digests of the tier lines the description advertises at ``max_chars``.
+
+        Same code path as :meth:`role_index`, so a digest change is exactly a
+        change of the advertised tier models or efforts (never of a role
+        description, and not of a tier line the budget dropped).
+        """
+        return self._render_roster(max_chars)[1]
+
+    def _tier_rows(self) -> list[tuple[str, list[tuple[str, str | None]]]]:
+        """``(tier, [(reference, effective effort)])`` as the router would run them."""
+        efforts = self._tier_efforts() if self._tier_efforts is not None else None
+        if efforts is None:
+            efforts = getattr(
+                getattr(getattr(self._config, "v2", None), "models", None), "tier_efforts", None
+            )
+        efforts = efforts or {}
+        pinned = set(self._tiers.overrides.values())
+        rows = []
+        for tier in self._tiers.order:
+            refs = (
+                self._tier_candidates(tier)
+                if self._tier_candidates
+                else [
+                    ref
+                    for ref, name in {**self._tiers.builtin, **self._tiers.overrides}.items()
+                    if name == tier
+                ]
+            )
+            configured = efforts.get(tier) or {}
+            rows.append((tier, [
+                (ref, effective_tier_effort(
+                    tier, ref, configured=configured.get(ref), pinned=tier in pinned
+                ))
+                for ref in refs
+            ]))
+        return rows
+
+    def _render_roster(self, max_chars: int) -> tuple[str, RosterDigests]:
+        """Render tier lines then the role index in whole lines under ``max_chars``.
+
+        Role names (with tiers and any effort override) and the clip-note line
+        are reserved first; tier lines then take what is left, dropping whole
+        lines from the end, and role descriptions fill the remainder in order.
+        A role whose full line does not fit still appears by name.
+        """
         eligible = {
             agent.name for agent in self._agents.agents if agent.eligible_in("subagent")
         }
-        entries = tuple(entry for entry in self._agents.index if entry.name in eligible)
-        lines = []
-        models = getattr(getattr(getattr(self._config, "v2", None), "models", None), "tier_efforts", {})
-        for tier in self._tiers.order:
-            refs = self._tier_candidates(tier) if self._tier_candidates else [ref for ref, name in {**self._tiers.builtin, **self._tiers.overrides}.items() if name == tier]
-            selections = models.get(tier, {})
-            listed = ", ".join(ref + (f" (effort: {selections[ref]})" if ref in selections else "") for ref in refs)
-            lines.append(f"{tier} models (in order): {listed or 'none configured'}")
-        roster = AgentIndex(entries=entries).render(max_chars=max_chars)
-        rendered = "\n".join(lines) + "\n\n" + roster
-        if len(rendered) > max_chars:
-            marker = "\n[Subagent roster and tier models clipped]"
-            return rendered[:max(0, max_chars - len(marker))] + marker[:max_chars]
-        return rendered
+        roles = [
+            (_role_prefix(entry), entry.description)
+            for entry in self._agents.index
+            if entry.name in eligible
+        ]
+        rows = self._tier_rows()
+        reserved = len(ROSTER_CLIP_NOTE) + 1 + sum(len(prefix) + 1 for prefix, _ in roles)
+        tier_budget = max_chars - reserved - 2
+        kept: list[tuple[str, list[tuple[str, str | None]]]] = []
+        used = 0
+        for row in rows:
+            cost = len(_tier_line(*row)) + 1
+            if used + cost > tier_budget:
+                break
+            kept.append(row)
+            used += cost
+        clipped = len(kept) < len(rows)
+        available = max_chars - used - (2 if kept else 0) - len(ROSTER_CLIP_NOTE) - 1
+        role_lines: list[str] = []
+        for index, (prefix, description) in enumerate(roles):
+            later = sum(len(p) + 1 for p, _ in roles[index + 1:])
+            full = f"{prefix}: {description}"
+            if len(full) + 1 + later <= available:
+                role_lines.append(full)
+                available -= len(full) + 1
+            elif len(prefix) + 1 + later <= available:
+                role_lines.append(prefix)
+                available -= len(prefix) + 1
+                clipped = True
+            else:
+                clipped = True
+        sections = [
+            section
+            for section in ("\n".join(_tier_line(*row) for row in kept), "\n".join(role_lines))
+            if section
+        ]
+        rendered = "\n\n".join(sections)
+        if clipped:
+            rendered += ("\n" if rendered else "") + ROSTER_CLIP_NOTE
+        # Only a budget smaller than the clip note itself can overflow.
+        rendered = rendered[:max(0, max_chars)]
+        models = "\n".join(f"{tier}\t{','.join(ref for ref, _ in row)}" for tier, row in kept)
+        efforts = "\n".join(
+            tier + "\t" + ",".join(ref + "=" + (effort or "") for ref, effort in row)
+            for tier, row in kept
+        )
+        return rendered, RosterDigests(
+            hashlib.sha256(models.encode()).hexdigest(),
+            hashlib.sha256(efforts.encode()).hexdigest(),
+        )
 
     @property
     def budget(self) -> SubagentBudget:
@@ -1384,7 +1521,11 @@ class SubagentRunner:
         )
         selection = self._agents.select_tools(
             role,
-            available=self._parent_tools,
+            available=[
+                tool
+                for tool in self._parent_tools
+                if canonical_tool_name(str(tool)) not in ROOT_ONLY_TOOLS
+            ],
             profile=profile,
             bundle_map=self._bundle_map_or_default(),
             mutating=self._mutating_tools,
@@ -1517,12 +1658,19 @@ class SubagentRunner:
         if _is_cancelled(cancel):
             raise OperationCancelled(_cancel_reason(cancel) or "cancelled")
 
+        if self._depth >= 1:
+            return self._refusal(
+                agent=req.subagent_type,
+                error="Task: subagents cannot spawn subagents; only the root session may",
+                request=req,
+            )
+
         try:
             role = self._agents.resolve(req.subagent_type, context="subagent")
         except AgentNotFoundError:
             role = None
         if role is None:
-            available = ", ".join(
+            available =", ".join(
                 agent.name for agent in self._agents.agents if agent.eligible_in("subagent")
             ) or "(none)"
             return self._refusal(
@@ -2033,58 +2181,6 @@ class SubagentRunner:
             clamped=False,
             tier=self._parent_tier,
             requested_tier=(request.model if request is not None else None),
-        )
-
-    # -- descent -----------------------------------------------------------
-
-    def for_child(
-        self,
-        spec: ChildSpec,
-        *,
-        cancel: object | None = None,
-        parent_tools: Sequence[str] | None = None,
-    ) -> SubagentRunner:
-        """A runner for a child of this one, sharing the tree budget.
-
-        The nested runtime calls this so a grandchild inherits the child's tool
-        authority, tier, and depth while the tree budget (and its semaphore)
-        stays shared.
-        """
-        return SubagentRunner(
-            agents=self._agents,
-            runtime_factory=self._factory,
-            workspace=spec.workspace,
-            parent_session=spec.session_id,
-            parent_agent_id=spec.agent_id,
-            root_turn_id=spec.root_turn_id,
-            tiers=self._tiers,
-            sessions=self._sessions,
-            parent_tools=(
-                tuple(parent_tools)
-                if parent_tools is not None
-                else tuple(spec.tools)
-            ),
-            parent_tier=spec.tier,
-            parent_depth=spec.depth,
-            permissions=self._permissions,
-            grants=self._grants,
-            budget=self._budget,
-            max_tier=self._max_tier,
-            default_type=self._default_type,
-            profile_for=self._profile_for,
-            config=self._config,
-            event_sink=self._event_sink,
-            bundle_map=self._bundle_map,
-            mutating_tools=self._mutating_tools,
-            reserved_tokens=self._reserved_tokens,
-            reserved_cost=self._reserved_cost,
-            hooks=self._hooks,
-            parent_model=spec.model,
-            worktree_service=self._worktree_service,
-            worktree_root=self._worktree_root,
-            worktree_root_for=self._worktree_root_for,
-            runtime_supports_workspace=self._runtime_supports_workspace,
-            worktree_scope=self._worktree_scope or spec.worktree_scope,
         )
 
 

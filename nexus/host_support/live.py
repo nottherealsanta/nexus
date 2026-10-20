@@ -220,7 +220,7 @@ def _manager_refusal(facade: Any, session: str, home: Any) -> p.ErrorResult | No
     except Exception:  # noqa: BLE001 - a bad id is rejected later, by the live manager
         return None
     if kind != "manager":
-        return None
+        return p.ErrorResult(kind="live_manager_required", message="GPT Live connects only to the manager session")
     if not facade.manager_config().enabled:
         return p.ErrorResult(kind="manager_disabled", message=MANAGER_DISABLED_MESSAGE)
     if not read_consent(home, "manager"):

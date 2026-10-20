@@ -415,6 +415,12 @@ pub struct LiveBar {
     pub level_out: f64,
     /// The call's session id when it is not the session on screen.
     pub elsewhere: String,
+    /// The Live call is attached to the manager (always, docs/manager.md); the call bar and its
+    /// rows stay up while another session is in the foreground.
+    pub manager: bool,
+    /// A manager approval or question is waiting while another session is in front (`approval
+    /// waiting`); empty otherwise. The prompt itself is the snapshot's `prompt`.
+    pub attention: String,
     /// The open call's card rows (`tone TAB label TAB text` per line), drawn in the Live
     /// pane below the composer; empty when the call's session is not on screen.
     pub detail: String,
@@ -1047,9 +1053,10 @@ mod restore_tests {
     }
     #[test]
     fn restore_attachments_is_read_from_the_wire() {
-        let next: Snapshot =
-            serde_json::from_str(r#"{"restore":"t","restore_if_empty":true,"restore_attachments":2}"#)
-                .unwrap();
+        let next: Snapshot = serde_json::from_str(
+            r#"{"restore":"t","restore_if_empty":true,"restore_attachments":2}"#,
+        )
+        .unwrap();
         assert_eq!(next.restore_attachments, 2);
     }
 }
@@ -1086,10 +1093,9 @@ mod manager_tests {
 
     #[test]
     fn prompt_what_rows_defaults_to_the_ordinary_layout() {
-        let prompt: Prompt = serde_json::from_str(
-            r#"{"kind":"permission","id":"p","lines":[],"choices":[]}"#,
-        )
-        .unwrap();
+        let prompt: Prompt =
+            serde_json::from_str(r#"{"kind":"permission","id":"p","lines":[],"choices":[]}"#)
+                .unwrap();
         assert_eq!(prompt.what_rows, 0);
     }
 }

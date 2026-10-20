@@ -11,11 +11,11 @@ mod live_bar;
 mod local_ui;
 mod markdown;
 mod mermaid;
+mod panic_log;
 mod picker;
 mod render;
 mod session;
 mod settings_page;
-mod panic_log;
 mod splash;
 mod sticky;
 mod trace;
@@ -156,6 +156,18 @@ fn rank_commands(commands: &[(String, Vec<String>)], needle: &str) -> Vec<String
     rows.into_iter().take(10).map(|(_, n)| n.clone()).collect()
 }
 
+/// Text inserted for an accepted completion. An `@` directory (`dir/`) gets no
+/// trailing space so completion continues inside it; everything else is
+/// followed by a space.
+fn accepted_completion(query: &str, value: &str) -> String {
+    let at = query.starts_with('@');
+    format!(
+        "{}{value}{}",
+        if at { "@" } else { "" },
+        if at && value.ends_with('/') { "" } else { " " }
+    )
+}
+
 /// Reuse only ancestor requests in the same token context while the host responds.
 fn completion_candidates(cache: &[(String, Vec<String>)], prefix: &str) -> Vec<String> {
     let token = prefix.rsplit(char::is_whitespace).next().unwrap_or("");
@@ -175,6 +187,8 @@ fn completion_candidates(cache: &[(String, Vec<String>)], prefix: &str) -> Vec<S
             let needle = token.trim_start_matches('@').to_lowercase();
             let (mut hits, rest): (Vec<_>, Vec<_>) = values
                 .iter()
+                // An accepted `dir/` must not offer itself again.
+                .filter(|value| !(value.ends_with('/') && value.to_lowercase() == needle))
                 .partition(|value| value.to_lowercase().starts_with(&needle));
             // File menus keep their height while the host re-ranks.
             if token.starts_with('@') {
@@ -215,8 +229,8 @@ const TTY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// hung-up tty on macOS, where `tcgetattr` and `poll` still succeed) and `tcgetattr` (fails
 /// with EIO on Linux). Opening `/dev/tty` failing means no controlling terminal is left.
 fn terminal_alive() -> bool {
-    use std::os::unix::fs::OpenOptionsExt;
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
     let Ok(tty) = std::fs::OpenOptions::new()
         .write(true)
         .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
@@ -538,7 +552,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else if next.restore_attachments > 0 {
                     // The bridge already re-attached the files; this draft is not empty, so ask
                     // it to drop those whose `[image N]` marker is not in the text.
-                    send(json!({"type":"draft_changed","text":draft.text,"generation":next.generation}))?;
+                    send(
+                        json!({"type":"draft_changed","text":draft.text,"generation":next.generation}),
+                    )?;
                 }
                 hint_id += 1;
                 cache.toasts.ingest(&[bridge::ToastWire {
@@ -926,15 +942,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string();
             asked = prefix.clone();
             send(
-                json!({"type":"complete","text":query,"prefix":prefix,"generation":s.generation}),
+                json!({"type":"complete","text":query,"prefix":prefix,"directories":true,"generation":s.generation}),
             )?;
         }
         // The animation clock advances on every pass, not only when input is idle:
         // a continuous wheel or pointer stream keeps `poll` returning true, which
         // used to freeze the spinner and activity bar while scrolling.
         // A finished tool group settling is an animation too; it ends by itself.
-        let folding = cache.folding()
-            || cache.queue_flash.live(Instant::now(), cache.animate);
+        let folding = cache.folding() || cache.queue_flash.live(Instant::now(), cache.animate);
         if folding {
             dirty = true;
         }
@@ -968,7 +983,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if last_tty_check.elapsed() >= TTY_CHECK_INTERVAL {
             last_tty_check = Instant::now();
             if !terminal_alive() {
-                panic_log::record("terminal-lost", "controlling terminal was lost (hangup); exiting");
+                panic_log::record(
+                    "terminal-lost",
+                    "controlling terminal was lost (hangup); exiting",
+                );
                 return Ok(());
             }
         }
@@ -1295,14 +1313,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        if key.code == KeyCode::Char('a') {
-                            if let Some((id, operation)) = cache.toasts.newest_action() {
-                                send(
-                                    json!({"type":"operation","operation":operation,"generation":s.generation}),
-                                )?;
-                                cache.toasts.dismiss(id);
-                                dirty = true;
-                            }
+                        // `Ctrl+X A` (either case) always toggles the Manager view. The newest
+                        // toast's action moved to `Ctrl+X Y`.
+                        let toast_action = if key.code == KeyCode::Char('y') {
+                            cache.toasts.newest_action()
+                        } else {
+                            None
+                        };
+                        if let Some((id, operation)) = toast_action {
+                            send(
+                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                            )?;
+                            cache.toasts.dismiss(id);
+                            dirty = true;
+                            continue;
+                        }
+                        if matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A')) {
+                            action("manager_toggle", "")?;
+                            dirty = true;
                             continue;
                         }
                         let command = match key.code {
@@ -1846,11 +1874,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 for _ in query.graphemes(true) {
                                     draft.backspace();
                                 }
-                                if query.starts_with('@') {
-                                    draft.insert("@");
-                                }
-                                draft.insert(value);
-                                draft.insert(" ");
+                                draft.insert(&accepted_completion(&query, value));
                                 completion_hidden = query;
                                 dirty = true;
                                 continue;
@@ -2084,7 +2108,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             complete_due = None;
                             asked = draft.text[..draft.cursor].to_string();
                             send(
-                                json!({"type":"complete","text":query,"prefix":draft.text[..draft.cursor],"generation":s.generation}),
+                                json!({"type":"complete","text":query,"prefix":draft.text[..draft.cursor],"directories":true,"generation":s.generation}),
                             )?;
                         }
                         _ => edit(&mut draft, key, true),
@@ -2438,7 +2462,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             let held = cache.queue_ui.press.take();
                             if let Some((id, op)) =
                                 render::queue_control_at(r.composer, &s, mouse.column, mouse.row)
-                                    .filter(|hit| held.as_ref().is_some_and(|(hid, hop)| *hid == hit.0 && *hop == hit.1))
+                                    .filter(|hit| {
+                                        held.as_ref().is_some_and(|(hid, hop)| {
+                                            *hid == hit.0 && *hop == hit.1
+                                        })
+                                    })
                             {
                                 send(
                                     json!({"type":"queue_edit","text":id,"key":op,"generation":s.generation}),
@@ -2450,9 +2478,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             if cache.queue_ui.press.is_some() =>
                         {
                             // Dragging off the chip lets go of it (release then does nothing).
-                            let over = render::queue_control_at(r.composer, &s, mouse.column, mouse.row);
+                            let over =
+                                render::queue_control_at(r.composer, &s, mouse.column, mouse.row);
                             if over.as_ref().map(|(id, op)| (id.as_str(), *op))
-                                != cache.queue_ui.press.as_ref().map(|(id, op)| (id.as_str(), *op))
+                                != cache
+                                    .queue_ui
+                                    .press
+                                    .as_ref()
+                                    .map(|(id, op)| (id.as_str(), *op))
                             {
                                 cache.queue_ui.press = None;
                                 dirty = true;
@@ -2644,10 +2677,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     if mouse.row >= area.y && mouse.row < area.bottom() {
                                         if let Some(value) = completion.completions.get(index) {
                                             let start = draft.cursor - query.len();
-                                            let replacement = format!(
-                                                "{}{value} ",
-                                                if query.starts_with('@') { "@" } else { "" }
-                                            );
+                                            let replacement = accepted_completion(query, value);
                                             draft
                                                 .text
                                                 .replace_range(start..draft.cursor, &replacement);
@@ -2906,6 +2936,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     column >= cell.start && column < cell.end.max(cell.start + 1)
                                 });
                                 match hit.map(|cell| cell.kind) {
+                                    Some(render::TabHit::Back) => action("dismiss", "")?,
                                     Some(render::TabHit::Session(index)) => {
                                         if let Some(tab) = s.tabs.get(index) {
                                             send(
@@ -2921,6 +2952,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     Some(render::TabHit::New) => action("command", "/new")?,
+                                    // `◇` toggles the Manager view (not a tab).
+                                    Some(render::TabHit::Manager) => action("manager_toggle", "")?,
                                     // `≡` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
                                         action("command", "/sessions")?
@@ -2979,6 +3012,30 @@ mod tests {
         assert_eq!(completion_candidates(&cache, "/effort h"), vec!["high"]);
         assert!(completion_candidates(&cache, "/agent h").is_empty());
         assert!(completion_candidates(&cache, "ordinary text").is_empty());
+    }
+
+    #[test]
+    fn accepted_directories_keep_completion_open() {
+        assert_eq!(accepted_completion("@sr", "src/"), "@src/");
+        assert_eq!(accepted_completion("@sr", "src/main.rs"), "@src/main.rs ");
+        assert_eq!(accepted_completion("/attach sr", "src/"), "src/ ");
+        assert_eq!(accepted_completion("/mo", "/model"), "/model ");
+    }
+
+    #[test]
+    fn cached_candidates_drop_the_directory_just_accepted() {
+        let cache = vec![(
+            "@sr".into(),
+            vec!["src/".into(), "src/main.rs".into(), "srv".into()],
+        )];
+        assert_eq!(
+            completion_candidates(&cache, "@src/"),
+            vec!["src/main.rs", "srv"]
+        );
+        assert_eq!(
+            completion_candidates(&cache, "@sr"),
+            vec!["src/", "src/main.rs", "srv"]
+        );
     }
 
     #[test]

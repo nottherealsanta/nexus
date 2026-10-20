@@ -78,8 +78,12 @@ exists for it).
 
 ## Client flow (Ratatui, M4)
 
-`/live` (or `Ctrl+X D`; `Ctrl+X L` was already the details sidebar) toggles a call on
-the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
+`/live` (or `Ctrl+X D`; `Ctrl+X L` was already the details sidebar) toggles a call. In the
+native clients the call is **always attached to the manager session**, whichever session is
+on screen (plan 02 §10, offline-tested only): the panel follows the manager itself, shows its
+approvals while another session is in front, and the composer keeps sending to the displayed
+session (see `ratatui-parity.md`, "Live is always on the manager"). The step list below
+predates this and describes a call on the shown session. Code: `ui/ratatui/live.py` (bridge state) over
 `ui_support/live_helper.py` (stdlib only; the desktop client and a CLI reuse it).
 
 1. `LiveStatus`. Not available (`disabled`, `unsupported`, `no_credential`, `busy`)

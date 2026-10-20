@@ -47,6 +47,7 @@ LEADER_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("t", "cycle_reasoning_effort", "Cycle root reasoning effort"),
     ("d", "toggle_live", "Start or end a GPT Live voice call"),
     ("p", "pause_live", "Pause or resume the GPT Live call (Ctrl+X F is Fork)"),
+    ("a", "toggle_manager", "Open or close the Manager (back to the session you left)"),
     ("u", "show_usage", "Provider usage and limits"),
     ("r", "reconnect", "Reconnect"),
     ("c", "context_popover", "Context popover"),

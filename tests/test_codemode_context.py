@@ -18,8 +18,8 @@ from nexus.tools.codemode.context_ns import ContextLimits, ContextLlm, ContextNa
 @pytest.fixture
 def world(tmp_path):
     db = StateDatabase(tmp_path / 'state.db')
-    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main'))
-    agents = SessionManager(store=SqliteSessionStore(db, 'project', 'agents'))
+    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main', lock_dir=tmp_path))
+    agents = SessionManager(store=SqliteSessionStore(db, 'project', 'agents', lock_dir=tmp_path))
     root.open('root').append_message(Message(role='user', content=[Text('root prompt')]))
 
     def child(parent, texts, owner_namespace='main', allow=True):

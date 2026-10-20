@@ -163,15 +163,33 @@ mod tests {
     fn code_mode_rows_number_the_program_and_colour_failed_nested_calls() {
         let p = palette();
         // `code_signal_rows` (nexus/ui_support/tool_details.py): numbered program, glyph rows.
-        assert_eq!(numbered("1  files = grep(pattern='TODO')").unwrap().0, "1  ");
-        assert_eq!(styled("out", "1  files = grep()", &p)[0].style.fg, Some(p.quiet));
         assert_eq!(
-            styled("error", "⊘ 3. write  path=\"/etc/x\" · rule Write(/etc/**)", &p)[0].style.fg,
+            numbered("1  files = grep(pattern='TODO')").unwrap().0,
+            "1  "
+        );
+        assert_eq!(
+            styled("out", "1  files = grep()", &p)[0].style.fg,
+            Some(p.quiet)
+        );
+        assert_eq!(
+            styled(
+                "error",
+                "⊘ 3. write  path=\"/etc/x\" · rule Write(/etc/**)",
+                &p
+            )[0]
+            .style
+            .fg,
             Some(p.error)
         );
         let signal = vec![
-            ("text".to_string(), "… 1. grep  pattern=\"TODO\"".to_string()),
-            ("error".to_string(), "✗ 2. read  path=\"a\" · 3 ms · 31 B".to_string()),
+            (
+                "text".to_string(),
+                "… 1. grep  pattern=\"TODO\"".to_string(),
+            ),
+            (
+                "error".to_string(),
+                "✗ 2. read  path=\"a\" · 3 ms · 31 B".to_string(),
+            ),
         ];
         let mut out = Vec::new();
         rows(&mut out, &signal, &[Span::raw("│ ")], 60, &p, &None);

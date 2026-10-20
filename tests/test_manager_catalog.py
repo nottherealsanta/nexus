@@ -1,4 +1,4 @@
-"""Manager catalog (plan 02 M3): exactly six tools, fresh approvals, bounded inputs."""
+"""Manager catalog (plan 02 M3): exactly eight tools, no approval prompts, bounded inputs."""
 from __future__ import annotations
 
 import json
@@ -27,10 +27,13 @@ from nexus.tools.manager_tools import (
     MAX_WAIT_SECONDS,
     build_manager_catalog,
 )
-from nexus.tools.permissions import Decision, Grant, Outcome
+from nexus.tools.permissions import Outcome
 from nexus.tools.spec import ToolCall
 
-SIX = ("sessions_find", "session_launch", "session_status", "session_wait", "session_result", "session_cancel")
+SIX = (
+    "sessions_find", "session_launch", "session_status", "session_wait", "session_result", "session_cancel",
+    "session_send", "session_show",
+)  # historical name: the catalog is now eight tools
 
 
 class FakePort:
@@ -59,6 +62,14 @@ class FakePort:
     async def cancel(self, session_id, reason):
         self.calls.append(("cancel", session_id, reason))
         return SimpleNamespace(id=session_id, cancelled=True)
+
+    async def send(self, session_id, message, origin_message_id):
+        self.calls.append(("send", session_id, message, origin_message_id))
+        return SimpleNamespace(id=session_id, title="T", state="queued", bytes=len(message))
+
+    async def show(self, session_id, origin_message_id):
+        self.calls.append(("show", session_id, origin_message_id))
+        return SimpleNamespace(id=session_id, title="T", state="requested")
 
 
 def catalog(port=None):
@@ -137,34 +148,40 @@ def _evaluate(turn, name, attended, **args):
     return turn.engine.evaluate(ToolCall(id="c1", name=name, input=args), prepared.spec, attended=attended)
 
 
-def test_launch_and_cancel_always_ask_and_unattended_denies(tmp_path):
+_SESSION_ACTIONS = (
+    ("session_launch", {"instruction": "fix the flaky test", "origin_message_id": "u1"}),
+    ("session_cancel", {"id": "s1", "reason": "stuck"}),
+    ("session_send", {"id": "s1", "message": "do X", "origin_message_id": "u1"}),
+    ("session_show", {"id": "s1", "origin_message_id": "u1"}),
+)
+
+
+@pytest.mark.parametrize("attended", [True, False])
+def test_launch_cancel_and_send_run_without_approval_even_unattended(tmp_path, attended):
     runtime = _runtime(tmp_path, manager_port_factory=lambda session: FakePort())
-    _, turn = _turn(runtime)
-    launch = {"instruction": "fix the flaky test", "origin_message_id": "u1"}
-    assert _evaluate(turn, "session_launch", True, **launch).outcome is Outcome.ASK
-    assert _evaluate(turn, "session_cancel", True, id="s1").outcome is Outcome.ASK
-    unattended = _evaluate(turn, "session_launch", False, **launch)
-    assert unattended.outcome is Outcome.DENY and unattended.code == "unattended_deny"
-    assert _evaluate(turn, "session_cancel", False, id="s1").outcome is Outcome.DENY
+    _, turn = _turn(runtime, attended=attended)
+    for name, args in _SESSION_ACTIONS:
+        evaluation = _evaluate(turn, name, attended, **args)
+        assert evaluation.outcome is Outcome.ALLOW, name
+        assert evaluation.code != "unattended_deny"
 
 
-def test_no_grant_pre_approves_a_launch(tmp_path):
+@pytest.mark.parametrize("attended", [True, False])
+def test_manager_gate_never_requests_permission_for_session_actions(tmp_path, attended):
     runtime = _runtime(tmp_path, manager_port_factory=lambda session: FakePort())
-    _, turn = _turn(runtime)
-    grants = (Grant("allow", "session_launch"), Grant("allow", "Bundle:manager"))
-    prepared = turn.manager.get("session_launch")
-    call_ = ToolCall(id="c1", name="session_launch", input={"instruction": "x", "origin_message_id": "u1"})
-    evaluation = turn.engine.evaluate(call_, prepared.spec, grants=grants, attended=True)
-    assert evaluation.outcome is Outcome.ASK
-    assert evaluation.decision is None or evaluation.decision is not Decision.ALLOW_ALWAYS
+    _, turn = _turn(runtime, attended=attended)
+    calls = [ToolCall(id=f"c{i}", name=name, input=args) for i, (name, args) in enumerate(_SESSION_ACTIONS)]
+    plan = turn.gate.plan(turn.manager.prepare(calls))  # the real runtime gate, as a turn uses it
+    assert [e.outcome for e in plan.evaluations] == [Outcome.ALLOW] * len(calls)
 
 
-def test_reads_are_allowed_and_anything_else_is_denied(tmp_path):
+def test_every_manager_catalog_tool_is_allowed_and_nothing_else(tmp_path):
     runtime = _runtime(tmp_path, manager_port_factory=lambda session: FakePort())
     _, turn = _turn(runtime)
     for name, args in (
         ("sessions_find", {}), ("session_status", {"ids": ["a"]}),
         ("session_wait", {"ids": ["a"]}), ("session_result", {"id": "a"}),
+        *_SESSION_ACTIONS,
     ):
         assert _evaluate(turn, name, False, **args).outcome is Outcome.ALLOW
     outsider = turn.engine.evaluate(ToolCall(id="c2", name="bash", input={"command": "ls"}), None, attended=True)
@@ -245,12 +262,8 @@ async def test_port_refusals_come_back_as_tool_errors():
     assert refused.is_error and "origin_message_id" in text(refused)
 
 
-def test_permission_key_shows_the_exact_instruction_and_target():
+def test_session_actions_are_mutating_and_exclusive_without_a_permission_key():
     tools = catalog()
-    launch_key = tools["session_launch"].spec.resolve_permission_key(
-        {"instruction": "ship it", "origin_message_id": "u1", "agent": "build"}
-    )
-    assert launch_key == "[build] ship it"
-    assert tools["session_cancel"].spec.resolve_permission_key({"id": "s1", "reason": "stuck"}) == "s1: stuck"
+    assert all(tools[name].spec.permission_key is None for name, _ in _SESSION_ACTIONS)
     assert tools["session_launch"].spec.mutates and tools["session_cancel"].spec.mutates
     assert not tools["session_wait"].spec.mutates

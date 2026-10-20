@@ -80,6 +80,10 @@ class MessageMeta(msgspec.Struct):
     turn_id: str | None = None
     cache_hit: bool = False
     redacted: bool = False
+    #: Names a harness notice (for example ``"subagent_roster"``). A notice is a
+    #: user-role tail message the model reads, but never a user prompt: titles,
+    #: prompt counts and "latest user input" skip it.
+    notice: str | None = None
 
 
 class Message(msgspec.Struct):

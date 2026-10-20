@@ -148,7 +148,8 @@ fn rows_of(dashboard: &Value) -> &[Value] {
 /// Whether the host sent a Manager entry to pin above the sessions (older hosts send none).
 pub fn has_manager(dashboard: &Value) -> bool {
     dashboard.get("manager").is_some_and(|entry| {
-        entry.get("known").and_then(Value::as_bool) == Some(true) || !text(entry, "summary").is_empty()
+        entry.get("known").and_then(Value::as_bool) == Some(true)
+            || !text(entry, "summary").is_empty()
     })
 }
 

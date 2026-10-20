@@ -942,8 +942,11 @@ async def _restore_steer_attachments(shell, blocks):
 def _tab_rows(controller, shell):
     """Tabs with the current one marked; the current tab reads "working" while its turn runs."""
     rows = []
+    manager = getattr(shell, "manager", None)
     for tab in shell.tabs:
-        current = tab["id"] == controller.session and tab.get("workspace") == shell.workspace
+        if manager is not None and manager.is_active(tab["id"]):
+            continue  # the manager is a view behind the top-bar button, never a tab
+        current =tab["id"] == controller.session and tab.get("workspace") == shell.workspace
         status = tab.get("status", "")
         if current and getattr(controller, "running", False):
             status = "working"
@@ -960,6 +963,39 @@ def _guarded(failures: list[str], label: str, build, fallback):
     except Exception as exc:
         failures.append(f"{label} could not be shown: {type(exc).__name__}: {exc}")
         return fallback
+
+
+def _prompt_of(view, failures: list[str]) -> dict | None:
+    """The permission or question prompt a reduced session view is waiting on, control-safe."""
+    prompt = None
+    def permissions(body, depth=0):
+        pending = list(body.pending_permissions)
+        if depth < 8:
+            for agent in body.agents.values():
+                pending.extend(permissions(agent.body, depth+1))
+        return pending
+    pending_permissions = _guarded(failures, "Permission prompt", lambda: permissions(view), [])
+    if pending_permissions:
+        permission = pending_permissions[0]
+        data = permission.to_dict()
+        prompt = {"kind": "permission", "id": permission.id,
+                  "lines": labelled(data),
+                  **_guarded(failures, "Permission details", lambda: permission_fields(permission), {}),
+                  "choices": [{"label": choice.label, "value": choice.value,
+                               "key": choice.key, "disabled": choice.disabled}
+                              for choice in approval_choices(data)]}
+    elif questions := pending_questions(view):
+        question = questions[0]
+        prompt = {"kind": "question", "id": question.call_id,
+                  "lines": [question.prompt],
+                  "choices": [{"label": choice.label, "value": choice.value,
+                               "key": choice.key, "disabled": False}
+                              for choice in question.choices()]}
+    if prompt:
+        prompt["lines"] = [escape_controls(line) for line in prompt["lines"]]
+        for choice in prompt["choices"]:
+            choice["label"] = escape_controls(choice["label"])
+    return prompt
 
 
 def _child_turn_blocks(shell, agent, turn, flags):
@@ -1075,38 +1111,11 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             continue
         blocks.append({"id": agent.id, "title": escape_controls(f"Agent {agent.id} · {agent.status}"), "text": escape_controls(agent.description),
                        "kind": "literal", "operation": {"kind": "agent_page", "id": agent.id}})
-    prompt = None
-    def permissions(body, depth=0):
-        pending = list(body.pending_permissions)
-        if depth < 8:
-            for agent in body.agents.values():
-                pending.extend(permissions(agent.body, depth+1))
-        return pending
-    pending_permissions = _guarded(failures, "Permission prompt", lambda: permissions(view), [])
-    if pending_permissions:
-        permission = pending_permissions[0]
-        data = permission.to_dict()
-        # A manager launch/cancel is confirmed unconditionally: Allow/Deny once only, never "always",
-        # and the whole instruction is shown (nothing is remembered for it).
-        confirmed = manager_ui.is_confirmed(data)
-        prompt = {"kind": "permission", "id": permission.id,
-                  "lines": labelled(data),
-                  **_guarded(failures, "Permission details", lambda: permission_fields(permission), {}),
-                  **(manager_ui.confirmation(data) if confirmed else {}),
-                  "choices": [{"label": choice.label, "value": choice.value,
-                               "key": choice.key, "disabled": choice.disabled}
-                              for choice in (manager_ui.approval_choices if confirmed else approval_choices)(data)]}
-    elif questions := pending_questions(view):
-        question = questions[0]
-        prompt = {"kind": "question", "id": question.call_id,
-                  "lines": [question.prompt],
-                  "choices": [{"label": choice.label, "value": choice.value,
-                               "key": choice.key, "disabled": False}
-                              for choice in question.choices()]}
-    if prompt:
-        prompt["lines"] = [escape_controls(line) for line in prompt["lines"]]
-        for choice in prompt["choices"]:
-            choice["label"] = escape_controls(choice["label"])
+    prompt = _prompt_of(view, failures)
+    if prompt is None and shell is not None and getattr(shell, "live", None) is not None:
+        # The Live call is attached to the manager: its approval reaches the user in any session.
+        prompt = shell.live.manager_prompt(getattr(controller, "session", view.session_id),
+                                           lambda manager_view: _prompt_of(manager_view, failures))
     details_panel = {} if on_agent_page else _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
     # Projection failures stay in the transcript (durable context); shell notices are toasts.
     notice = "\n".join(part for part in [error, *failures] if part)
@@ -1302,7 +1311,12 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         nonlocal revision, desktop_wire, event_sent_at, event_kind, allowed_operations, displayed_prompt, stream_turn
         if event is not False and event is not None:
             event_kind = event.type
-            stream_turn = event.turn if event.type in STREAM_EVENTS and (stream_turn in {None, event.turn}) else False
+            if event.type == "manager.show":  # before ingest: only events past the replayed cursor count
+                try:
+                    shell.manager.on_event(event, session=controller.session, fresh=event.seq > controller.cursor)
+                except Exception as exc:  # noqa: BLE001 - a bad request never breaks the stream
+                    shell.logs.add_notice("warning", f"manager.show ignored: {type(exc).__name__}")
+            stream_turn =event.turn if event.type in STREAM_EVENTS and (stream_turn in {None, event.turn}) else False
             if event.type in {"agent.spawned", "agent.completed", "agent.failed", "agent.cancelled"}:
                 try:
                     await shell.workflows.refresh_ownership()
@@ -1433,6 +1447,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         last_polled = None
         while True:
             await asyncio.sleep(.2 if shell.voice.phase != "idle" else 1 if shell.logs.open else 3)
+            shell.focus.tick()  # keeps this client's foreground claim fresh on the host
             failures = []
             async def section(label, work):
                 try:
@@ -1530,6 +1545,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         shell.breadcrumb = str(workspace)  # the branch joins it when the doctor report arrives
         await update()
         controller.resume(update)
+        shell.focus.report(controller.session)
 
         async def finish_startup():
             """Everything the first paint does not need, concurrently, each repainting when it lands."""
@@ -1634,15 +1650,16 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     current = displayed_prompt
                     if current and current["id"] == action["text"]:
                         value = action.get("value", "")
+                        target = current.get("session") or controller.session  # a Live-attached manager prompt names its session
                         allowed = [choice["value"] for choice in current["choices"] if not choice["disabled"]]
                         if current["kind"] == "permission":
                             if value not in allowed:
                                 raise ValueError("Unavailable permission choice")
-                            resolved = await shell.client.resolve_permission(controller.session, current["id"], value)
+                            resolved = await shell.client.resolve_permission(target, current["id"], value)
                             if not resolved:
                                 shell.notice = "Permission already resolved by another client"
                         else:
-                            resolved, error = await shell.client.answer_question(controller.session, current["id"], value)
+                            resolved, error = await shell.client.answer_question(target, current["id"], value)
                             if error:
                                 raise ValueError(error)
                             if not resolved:
@@ -1743,8 +1760,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.command("/model", ())
                 elif action["type"] in {"cycle_effort", "cycle_agent"} and shell.manager.is_active():
                     raise ValueError(manager_ui.REFUSED_COMMANDS["/effort" if action["type"] == "cycle_effort" else "/agent"])
-                elif action["type"] in {"manager_open", "manager_live"}:
-                    await (shell.manager.live() if action["type"] == "manager_live" else shell.manager.open())
+                elif action["type"] in {"manager_open", "manager_live", "manager_toggle"}:
+                    await {"manager_live": shell.manager.live, "manager_toggle": shell.manager.toggle,
+                           "manager_open": shell.manager.open}[action["type"]]()
                 elif action["type"] == "cycle_effort":
                     levels = [None, *controller.supported_levels]
                     index = levels.index(controller.reasoning_effort) if controller.reasoning_effort in levels else 0
@@ -1781,6 +1799,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         return await process.wait()
     finally:
         shell.workflows.close_dashboard()
+        await shell.manager.aclose()
         await background.close()
         await shell.preferences.flush()
         trace.finish()
@@ -1804,6 +1823,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             await shell.voice.discard()
         with contextlib.suppress(Exception):
             await shell.live.shutdown()
+        with contextlib.suppress(Exception):
+            await shell.focus.clear()
         if update_coalescer is not None:
             with contextlib.suppress(Exception):
                 await update_coalescer.flush()

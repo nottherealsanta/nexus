@@ -54,7 +54,7 @@ def test_everything_else_is_default_deny():
     names = {t.__name__ for t in denied}
     for must_deny in (
         "ProjectSessionsList", "ProjectSessionOpen", "SessionShell", "SettingsInventory",
-        "SettingsRead", "ProviderKeySet", "WebLaunch", "Shutdown", "SessionDelete",
+        "SettingsRead", "SkillsInstall", "SettingsMcpAdd", "ProviderKeySet", "WebLaunch", "Shutdown", "SessionDelete",
         "SessionExport", "SessionRestore", "LogsRead", "AttachmentPrepare",
     ):
         assert must_deny in names, must_deny
@@ -67,6 +67,8 @@ def test_everything_else_is_default_deny():
         p.ProjectSessionOpen(workspace="/tmp/other", session="s"),
         p.SessionShell(session="s", command="id"),
         p.SettingsInventory(scope="global"),
+        p.SkillsInstall(scope="global", source="owner/repo"),
+        p.SettingsMcpAdd(scope="global", name="x", entry={"env": {"K": "sk-secret"}, "command": "x"}),
         p.ProviderKeySet(provider="openai", key="sk-secret"),
         p.WebLaunch(),
         p.Shutdown(),

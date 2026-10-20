@@ -9,8 +9,8 @@ from nexus.events import Event
 @pytest.fixture
 def allocated(tmp_path):
     db = StateDatabase(tmp_path / 'state.db')
-    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main'))
-    agents = SessionManager(store=SqliteSessionStore(db, 'project', 'agents'))
+    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main', lock_dir=tmp_path))
+    agents = SessionManager(store=SqliteSessionStore(db, 'project', 'agents', lock_dir=tmp_path))
     root.open('root').append_message(Message(role='user', content=[Text('root')]))
     def child(parent, owner_namespace='main', allow=True):
         _, logical = root.store.reserve_child_id(parent)
@@ -51,7 +51,8 @@ def test_forged_event_and_project(allocated):
     a = child('root', allow=False)
     root.open('root').append_event(Event(type='agent.spawned', data={'id':a,'context_read':True}))
     with pytest.raises(ContextDenied): ContextAuthorizer(root).check('root', a)
-    other = SessionManager(store=SqliteSessionStore(root.store.db, "elsewhere", "main"))
+    other = SessionManager(store=SqliteSessionStore(
+        root.store.db, "elsewhere", "main", lock_dir=root.store.lock_dir))
     other.open("foreign").append_message(Message(role="user", content=[Text("foreign")]))
     with pytest.raises(ContextDenied): ContextAuthorizer(root).check("root", "foreign")
     with pytest.raises(ContextDenied): ContextAuthorizer(root).check('root', a)
@@ -118,7 +119,7 @@ def test_ended_edge_and_trash_deny_immediately(allocated):
 
 def test_managed_root_is_not_readable_by_the_manager(tmp_path):
     db = StateDatabase(tmp_path / 'state.db')
-    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main'))
+    root = SessionManager(store=SqliteSessionStore(db, 'project', 'main', lock_dir=tmp_path))
     root.open('nexus-manager', ownership={'kind': 'manager'}).append_message(Message(role='user', content=[Text('m')]))
     root.open('launched', ownership={'owner_namespace': 'main', 'owner_id': 'nexus-manager'}).append_message(
         Message(role='user', content=[Text('r')]))
@@ -130,7 +131,8 @@ def test_managed_root_is_not_readable_by_the_manager(tmp_path):
 
 def test_cross_project_denied_even_with_matching_edges(allocated):
     root, agents, child = allocated
-    other_root = SessionManager(store=SqliteSessionStore(root.store.db, 'elsewhere', 'main'))
+    other_root = SessionManager(store=SqliteSessionStore(
+        root.store.db, 'elsewhere', 'main', lock_dir=root.store.lock_dir))
     other_root.open('foreign-root').append_message(Message(role='user', content=[Text('f')]))
     auth = ContextAuthorizer(root)
     assert not _allowed(auth, 'root', 'foreign-root')

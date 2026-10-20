@@ -35,7 +35,7 @@ What the manager guarantees:
   ``explore``/``plan``/``planner`` names) are structurally denied shell and
   mutating-filesystem tools regardless of what their file declares.
 * **Built-ins are global, edits are per user.** The packaged roles are the root
-  agent ``build`` and the subagents ``advisor``, ``task`` and ``quick``. They are
+  agent ``build`` and the subagents ``advisor``, ``scout``, ``task`` and ``quick``. They are
   not copied into workspaces; editing one writes an override to
   ``~/.nexus/agents/<name>.md`` (the Settings page does this). Workspace seeding
   is opt-in (``agents.seed_roles``), writes to ``<workspace>/.agents/agents/``,
@@ -116,7 +116,7 @@ SEED_MARKER_NAME = ".seeded"
 #: record that pre-v2 seeded copies were retired.
 SEED_VERSION = 2
 #: Canonical builtins (seeded into a workspace only when ``agents.seed_roles``).
-SEEDED_ROLES = ("advisor", "build", "orchestrator", "quick", "task")
+SEEDED_ROLES = ("advisor", "build", "orchestrator", "quick", "scout", "task")
 #: ``(context, legacy name) -> canonical built-in`` used when no definition with
 #: the exact legacy name exists. Read-only legacy roles map to read-only advisor.
 LEGACY_AGENT_ALIASES: Mapping[tuple[str, str], str] = {

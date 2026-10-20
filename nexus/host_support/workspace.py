@@ -23,13 +23,17 @@ def search_files(
     limit: int = 30,
     *,
     max_entries: int = _MAX_FILE_SEARCH_ENTRIES,
+    include_directories: bool = False,
 ) -> list[str]:
     """Return bounded, visible workspace-relative file path matches.
 
     The scan never opens files. It skips hidden entries, all symlinks and,
     in a Git work tree, anything Git ignores; it enforces configured read-deny
     roots. Results rank basename-prefix matches, then basename matches, then
-    path matches, shallower paths first, as stable POSIX paths.
+    path matches, shallower paths first, as stable POSIX paths. With
+    ``include_directories`` the same visible directories whose path contains
+    the query are returned too, with a trailing ``/`` and ahead of files of
+    equal rank.
     """
     if not isinstance(query, str) or len(query) > _MAX_FILE_SEARCH_QUERY:
         raise ValueError("file search query must be a string of at most 256 characters")
@@ -106,16 +110,19 @@ def search_files(
                 continue
             if is_directory:
                 directories.append(path)
+                if include_directories and needle in relative.casefold():
+                    found.append(relative + "/")
             elif is_file and needle in relative.casefold():
                 found.append(relative)
         stack.extend(reversed(directories))
     return sorted(found, key=lambda path: _rank(path, needle))[:limit]
 
 
-def _rank(path: str, needle: str) -> tuple[int, int, str]:
-    name = path.rsplit("/", 1)[-1].casefold()
+def _rank(path: str, needle: str) -> tuple[int, int, int, str]:
+    bare = path.rstrip("/")
+    name = bare.rsplit("/", 1)[-1].casefold()
     tier = 0 if name.startswith(needle) else 1 if needle in name else 2
-    return tier, path.count("/"), path
+    return tier, bare.count("/"), 0 if path.endswith("/") else 1, path
 
 
 def _git_visible(workspace: Path) -> tuple[frozenset[str], frozenset[str]] | None:

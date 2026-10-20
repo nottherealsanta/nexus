@@ -234,7 +234,11 @@ impl QueueUi {
         if self.focus.as_ref().is_some_and(|id| !listed.contains(id)) {
             self.focus = None;
         }
-        if self.press.as_ref().is_some_and(|(id, _)| !listed.contains(id)) {
+        if self
+            .press
+            .as_ref()
+            .is_some_and(|(id, _)| !listed.contains(id))
+        {
             self.press = None;
         }
     }
@@ -260,7 +264,11 @@ pub fn queue_listed(composer: Rect, s: &Snapshot) -> Vec<usize> {
     if !s.agent_page.is_empty() {
         return Vec::new();
     }
-    above_layout(composer, s).items.into_iter().map(|(i, _)| i).collect()
+    above_layout(composer, s)
+        .items
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect()
 }
 /// Keys on the focused row (`listed` from [`queue_listed`]): Up/Down/Tab/j/k move; Enter or `s`
 /// promotes (queued -> steer, steer -> interrupt); Delete, Backspace or `x` removes; Alt+Up/Down
@@ -343,15 +351,30 @@ const FLASH_FRAMES: f32 = 12.0;
 const FLASH_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 impl QueueFlash {
     /// Notes every item whose mode changed since the last call; new items never flash.
-    pub fn observe(&mut self, items: &[crate::bridge::QueueItem], now: std::time::Instant, animate: bool) {
+    pub fn observe(
+        &mut self,
+        items: &[crate::bridge::QueueItem],
+        now: std::time::Instant,
+        animate: bool,
+    ) {
         for item in items {
-            if animate && self.seen.get(&item.id).is_some_and(|mode| *mode != item.mode) {
+            if animate
+                && self
+                    .seen
+                    .get(&item.id)
+                    .is_some_and(|mode| *mode != item.mode)
+            {
                 self.started.insert(item.id.clone(), now);
             }
         }
-        self.seen = items.iter().map(|i| (i.id.clone(), i.mode.clone())).collect();
-        self.started
-            .retain(|id, at| self.seen.contains_key(id) && now.duration_since(*at) < FLASH_FRAME.mul_f32(FLASH_FRAMES));
+        self.seen = items
+            .iter()
+            .map(|i| (i.id.clone(), i.mode.clone()))
+            .collect();
+        self.started.retain(|id, at| {
+            self.seen.contains_key(id)
+                && now.duration_since(*at) < FLASH_FRAME.mul_f32(FLASH_FRAMES)
+        });
     }
     /// True while a flash is in flight (the frame clock must keep running).
     pub fn live(&self, now: std::time::Instant, animate: bool) -> bool {
@@ -635,7 +658,11 @@ fn activity_meter_for(
     if !mono {
         return spans;
     }
-    let heavy = if crate::transcript::look::glyphs().ascii { "=" } else { "━" };
+    let heavy = if crate::transcript::look::glyphs().ascii {
+        "="
+    } else {
+        "━"
+    };
     spans
         .into_iter()
         .map(|span| {
@@ -1645,7 +1672,11 @@ fn draw_above_card(
         let style = if hot {
             Style::default().bg(p.element)
         } else if glow > 0.0 {
-            Style::default().bg(nexus_widgets::theme::mix(p.background, p.accent, 0.22 * glow))
+            Style::default().bg(nexus_widgets::theme::mix(
+                p.background,
+                p.accent,
+                0.22 * glow,
+            ))
         } else {
             Style::default()
         };
@@ -1714,7 +1745,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     }
     // The Live pane sits between the transcript and the composer. Expanded, it takes every
     // row the transcript can spare but one, so the conversation never vanishes entirely.
-    let fixed = 1 + 4 * u16::from(!dash) + composer_height;
+    let fixed = 1 + 3 * u16::from(!dash) + composer_height;
     let mut pane = if composer_height > 0 {
         crate::live_bar::pane_rows(s)
     } else {
@@ -1723,12 +1754,15 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     if pane > 1 && s.live_expanded {
         pane = pane.max(middle.height.saturating_sub(fixed + 1));
     }
-    // One empty row above the top bar (and the Sessions header) and, in a session, one below.
-    // The bar itself is three rows: the tabs, a blank row, then the workspace path and branch.
+    // One empty row above the top bar (and the Sessions header). In a session the bar is three
+    // rows: the tabs, the workspace path and branch, then a thin `─` rule. The rule stands in
+    // for the old blank row below the bar (a terminal cannot allocate half a row; the rule
+    // glyph sits mid-cell, so it reads as half a row of air plus a line), so the transcript
+    // starts on the same row as before.
     let center = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(3 * u16::from(!dash)),
-        Constraint::Length(u16::from(!dash)),
+        Constraint::Length(0),
         Constraint::Min(1),
         Constraint::Length(pane),
         Constraint::Length(composer_height),
@@ -3703,7 +3737,7 @@ mod tests {
             blocks.push(serde_json::json!({"id": format!("m{turn}"), "kind": "markdown", "text": (0..12).map(|i| format!("answer {turn} line {i}")).collect::<Vec<_>>().join("\n\n")}));
         }
         let s: Snapshot = serde_json::from_value(serde_json::json!({
-            "schema": 1, "revision": 1, "title": "T", "status": "idle", "blocks": blocks,
+            "schema": 1, "revision": 1, "title": "T", "status": "idle", "breadcrumb": "~/repo:main", "blocks": blocks,
         }))
         .unwrap();
         let bgs = std::cell::RefCell::new(Vec::new());
@@ -3744,30 +3778,37 @@ mod tests {
         };
         let mut cache = Cache::default();
         let top = screen(0, &mut cache);
+        assert!(top[0].trim().is_empty(), "spacing row above the top bar");
         assert!(
-            top[0].trim().is_empty() && top[2].trim().is_empty() && top[3].trim().is_empty(),
-            "spacing rows (row 2 is the empty workspace row)"
+            !top[1].trim().is_empty() && !top[2].trim().is_empty(),
+            "two-row top bar on rows 1-2"
         );
-        assert!(!top[1].trim().is_empty(), "top bar on row 1");
+        assert!(
+            top[3].contains('─') && top[3].trim_matches(|c| c == ' ' || c == '─').is_empty(),
+            "thin separator rule stands in for the blank row below the bar: {:?}",
+            top[3]
+        );
         assert!(cache.sticky.is_none(), "at the top there is no pin");
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
-        assert_eq!(rect.y, 5, "pinned at the top of the transcript");
-        assert!(mid[6].contains("question number 1"), "{:?}", &mid[..9]);
+        // The transcript starts right after the bar's spacing row.
+        let t = 4usize;
+        assert_eq!(rect.y as usize, t, "pinned at the top of the transcript");
+        assert!(mid[t + 1].contains("question number 1"), "{:?}", &mid[..9]);
         assert!(
-            mid[5].chars().take(78).all(|c| c == ' '),
+            mid[t].chars().take(78).all(|c| c == ' '),
             "top padding row of the band"
         );
         assert!(
-            mid[7].starts_with('░')
-                && mid[7].contains("of this turn above")
-                && !mid[7].contains("question"),
+            mid[t + 2].starts_with('░')
+                && mid[t + 2].contains("of this turn above")
+                && !mid[t + 2].contains("question"),
             "shaded bottom padding row of the pinned band, counting the turn rows above: {:?}",
-            mid[7]
+            mid[t + 2]
         );
         assert_eq!(rect.height, 3, "padding + one text row + padding");
         let band = Palette::new(false).element;
-        for y in 5..7u16 {
+        for y in t as u16..t as u16 + 2 {
             assert_eq!(
                 bgs.borrow()[y as usize],
                 band,
@@ -3776,7 +3817,11 @@ mod tests {
         }
         assert_eq!(row, cache.prompt_top("t1").unwrap());
         let later = screen(cache.prompt_top("t2").unwrap() + 3, &mut cache);
-        assert!(later[6].contains("question number 2"), "{:?}", &later[..9]);
+        assert!(
+            later[t + 1].contains("question number 2"),
+            "{:?}",
+            &later[..9]
+        );
         assert_eq!(
             later
                 .iter()
@@ -4194,7 +4239,10 @@ mod tests {
         assert!(row1_participates, "row 1 dots must participate");
         assert!(row2_participates, "row 2 dots must participate");
         assert!(row3_participates, "row 3 dots must participate");
-        assert!(row4_participates, "fourth-row dots (dots 7 and 8) must participate");
+        assert!(
+            row4_participates,
+            "fourth-row dots (dots 7 and 8) must participate"
+        );
 
         // The union of dots across all 8 perimeter frames covers all 4 rows (2x4),
         // exactly matching the completed subagent cell '⣿' (U+28FF).
@@ -4213,7 +4261,7 @@ mod tests {
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
             7,
-            "the transcript keeps its rows with a three-row top bar"
+            "the transcript keeps its rows with a two-row top bar"
         );
         let mut queued = Snapshot::default();
         queued.queue_items = vec![queue_item("q1", "Q", "a"), queue_item("s1", "S", "b")];
@@ -4299,7 +4347,7 @@ mod tests {
                         assert_eq!(buffer[(meter_area.x + 3, rows[4].y)].symbol(), "─");
                     }
                     if r.tabs.height > 0 {
-                        assert_eq!(r.tabs.height, 3, "tab row, blank row, workspace row");
+                        assert_eq!(r.tabs.height, 3, "tabs, workspace row, thin rule");
                         let row = |y: u16| -> String {
                             (r.tabs.x..r.tabs.right())
                                 .map(|x| terminal.backend().buffer()[(x, y)].symbol())
@@ -4310,15 +4358,27 @@ mod tests {
                             assert!(top.contains('≡'), "dashboard button: {top}");
                         }
                         assert!(!top.contains("/workspace"), "path left the tab row: {top}");
-                        assert!(
-                            row(r.tabs.y + 1).chars().all(|c| c == ' ' || c == '│'),
-                            "blank row under the tabs"
-                        );
-                        let crumbs = row(r.tabs.y + 2);
+                        let crumbs = row(r.tabs.y + 1);
                         assert!(
                             crumbs.contains("/workspace"),
-                            "path under the tabs: {crumbs}"
+                            "path directly under the tabs: {crumbs}"
                         );
+                        // The narrow details drawer overlays the right edge of this row; only
+                        // the bar's own columns carry the rule.
+                        let bar_right = if r.details.x > r.tabs.x && r.details.x < r.tabs.right() {
+                            r.details.x
+                        } else {
+                            r.tabs.right()
+                        };
+                        let rule: String = (r.tabs.x..bar_right)
+                            .map(|x| terminal.backend().buffer()[(x, r.tabs.y + 2)].symbol())
+                            .collect();
+                        assert!(
+                            rule.contains('─')
+                                && rule.trim_matches(|c| c == ' ' || c == '─').is_empty(),
+                            "thin rule under the workspace row: {rule}"
+                        );
+                        assert_eq!(r.transcript.y, r.tabs.bottom(), "rule is the margin");
                     }
                     assert_eq!(
                         buffer[(rows[2].x + 2, rows[2].y)].symbol(),
@@ -5543,7 +5603,10 @@ mod voice_animation_tests {
         // Animations off: the new words show at once.
         cache.animate = false;
         cache.spin = 20;
-        assert_eq!(animated_voice_preview(&mut cache, "hello wxrld"), "hello wxrld");
+        assert_eq!(
+            animated_voice_preview(&mut cache, "hello wxrld"),
+            "hello wxrld"
+        );
     }
 }
 
@@ -5967,7 +6030,10 @@ mod queue_flash_tests {
         assert!(!flash.live(later, true), "ends by itself");
         flash.observe(&[queue_item("q1", "S", "a")], later, true);
         assert!(!flash.live(later, true), "no repeat without another change");
-        assert!(!flash.live(now + Duration::from_millis(1), false), "animations off: no flash");
+        assert!(
+            !flash.live(now + Duration::from_millis(1), false),
+            "animations off: no flash"
+        );
     }
 
     #[test]
@@ -6014,12 +6080,19 @@ mod queue_focus_tests {
         let s = snapshot();
         for code in [K::Enter, K::Char('s')] {
             assert_eq!(key(&s, "q0", code, M::NONE), op("q0", "steer", Some("q0")));
-            assert_eq!(key(&s, "s0", code, M::NONE), op("s0", "interrupt", Some("s0")));
+            assert_eq!(
+                key(&s, "s0", code, M::NONE),
+                op("s0", "interrupt", Some("s0"))
+            );
         }
         let mut s = snapshot();
         s.queue_items[0].mode = "interrupt".into();
         s.queue_items[0].tag = "I".into();
-        assert_eq!(key(&s, "s0", K::Enter, M::NONE), QueueKey::Stay, "already pending");
+        assert_eq!(
+            key(&s, "s0", K::Enter, M::NONE),
+            QueueKey::Stay,
+            "already pending"
+        );
     }
 
     #[test]
@@ -6028,13 +6101,20 @@ mod queue_focus_tests {
         for code in [K::Delete, K::Backspace, K::Char('x')] {
             assert_eq!(key(&s, "q0", code, M::NONE), op("q0", "remove", Some("q1")));
         }
-        assert_eq!(key(&s, "q1", K::Delete, M::NONE), op("q1", "remove", Some("q0")), "last row: previous");
+        assert_eq!(
+            key(&s, "q1", K::Delete, M::NONE),
+            op("q1", "remove", Some("q0")),
+            "last row: previous"
+        );
         let only = {
             let mut s = snapshot();
             s.queue_items.truncate(1);
             s
         };
-        assert_eq!(queue_key(&only, &[0], "s0", K::Char('x'), M::NONE), op("s0", "remove", None));
+        assert_eq!(
+            queue_key(&only, &[0], "s0", K::Char('x'), M::NONE),
+            op("s0", "remove", None)
+        );
     }
 
     #[test]
@@ -6042,20 +6122,42 @@ mod queue_focus_tests {
         let s = snapshot();
         assert_eq!(key(&s, "q0", K::Down, M::ALT), op("q0", "down", Some("q0")));
         assert_eq!(key(&s, "q1", K::Up, M::ALT), op("q1", "up", Some("q1")));
-        assert_eq!(key(&s, "q0", K::Up, M::ALT), QueueKey::Stay, "edge: disabled move");
-        assert_eq!(key(&s, "s0", K::Down, M::ALT), QueueKey::Stay, "steering never reorders");
+        assert_eq!(
+            key(&s, "q0", K::Up, M::ALT),
+            QueueKey::Stay,
+            "edge: disabled move"
+        );
+        assert_eq!(
+            key(&s, "s0", K::Down, M::ALT),
+            QueueKey::Stay,
+            "steering never reorders"
+        );
     }
 
     #[test]
     fn arrows_move_focus_and_the_edges_hand_it_on() {
         let s = snapshot();
-        assert_eq!(key(&s, "q0", K::Down, M::NONE), QueueKey::Focus("q1".into()));
-        assert_eq!(key(&s, "q0", K::Char('k'), M::NONE), QueueKey::Focus("s0".into()));
+        assert_eq!(
+            key(&s, "q0", K::Down, M::NONE),
+            QueueKey::Focus("q1".into())
+        );
+        assert_eq!(
+            key(&s, "q0", K::Char('k'), M::NONE),
+            QueueKey::Focus("s0".into())
+        );
         assert_eq!(key(&s, "s0", K::Up, M::NONE), QueueKey::Prev);
         assert_eq!(key(&s, "q1", K::Down, M::NONE), QueueKey::Leave);
         assert_eq!(key(&s, "q1", K::Esc, M::NONE), QueueKey::Leave);
-        assert_eq!(key(&s, "q1", K::Char('a'), M::NONE), QueueKey::Pass, "typing leaves and types");
-        assert_eq!(key(&s, "q1", K::Char('s'), M::CONTROL), QueueKey::Pass, "Ctrl keys keep their meaning");
+        assert_eq!(
+            key(&s, "q1", K::Char('a'), M::NONE),
+            QueueKey::Pass,
+            "typing leaves and types"
+        );
+        assert_eq!(
+            key(&s, "q1", K::Char('s'), M::CONTROL),
+            QueueKey::Pass,
+            "Ctrl keys keep their meaning"
+        );
         assert_eq!(key(&s, "gone", K::Enter, M::NONE), QueueKey::Pass);
     }
 
@@ -6137,7 +6239,10 @@ mod queue_focus_tests {
         let find = |buffer: &ratatui::buffer::Buffer, y: u16, sym: &str| {
             (composer.x..composer.right()).find(|x| buffer[(*x, y)].symbol() == sym)
         };
-        assert!(find(&buffer, row, "✕").is_none(), "no pointer, no focus: no controls");
+        assert!(
+            find(&buffer, row, "✕").is_none(),
+            "no pointer, no focus: no controls"
+        );
         cache.queue_ui.focus = Some("q1".into());
         let (_, buffer) = paint(&s, &mut cache);
         let x = find(&buffer, row, "✕").expect("a focused row shows the controls");
@@ -6269,7 +6374,11 @@ mod animations_off_tests {
             .map(|span| span.content.to_string())
             .collect();
         assert!(shapes.contains('━') && shapes.contains('─'), "{shapes}");
-        assert_eq!(shapes.chars().filter(|c| *c == '━').count(), 4, "a fifth of 20");
+        assert_eq!(
+            shapes.chars().filter(|c| *c == '━').count(),
+            4,
+            "a fifth of 20"
+        );
     }
 
     /// With animations off nothing may depend on the frame clock: every row of a busy screen
@@ -6293,7 +6402,14 @@ mod animations_off_tests {
                 .map(|&y| {
                     rows[y]
                         .split('|')
-                        .map(|cell| cell.split("Rgb").next().unwrap_or("").split("Reset").next().unwrap_or(""))
+                        .map(|cell| {
+                            cell.split("Rgb")
+                                .next()
+                                .unwrap_or("")
+                                .split("Reset")
+                                .next()
+                                .unwrap_or("")
+                        })
                         .collect::<String>()
                 })
                 .collect::<Vec<_>>()

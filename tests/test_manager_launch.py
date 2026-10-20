@@ -113,25 +113,25 @@ async def test_tool_replies_are_not_user_prompts(tmp_path):
     root.close_all(); agents.close_all()
 
 
-async def test_unattended_manager_cannot_launch(tmp_path):
+async def test_unattended_manager_can_launch(tmp_path):
     root, agents, manager, proxy, host, port = setup(tmp_path)
     proxy.attended = False
-    with pytest.raises(LaunchRefused) as info:
-        await port.launch("do it", "m1")
-    assert info.value.reason == "denied" and not host.started
-    assert not events_of(manager, "session.linked")
+    child = (await port.launch("do it", "m1")).id
+    assert len(host.started) == 1
+    assert [e for e in events_of(manager, "session.linked") if e.data.get("child") == child]
     root.close_all(); agents.close_all()
 
 
-async def test_unattended_manager_cannot_cancel_owned_child(tmp_path):
+async def test_unattended_manager_can_cancel_owned_child_but_not_a_stranger(tmp_path):
     root, agents, manager, proxy, host, port = setup(tmp_path)
     child = (await port.launch("work", "m1")).id
     proxy.attended = False
+    await port.cancel(child, "stop")
+    assert len(host.cancelled) == 1
+    assert events_of(manager, "manager.cancelled")
     with pytest.raises(LaunchRefused) as info:
-        await port.cancel(child, "stop")
-    assert info.value.reason == "denied"
-    assert host.cancelled == []
-    assert not events_of(manager, "manager.cancelled")
+        await port.cancel("not-mine", "stop")
+    assert info.value.reason == "not_managed"
     root.close_all(); agents.close_all()
 
 

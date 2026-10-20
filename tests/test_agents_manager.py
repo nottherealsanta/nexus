@@ -500,7 +500,7 @@ def test_marker_and_non_markdown_files_are_ignored(tmp_path):
 def test_for_workspace_serves_builtins_without_touching_the_workspace(tmp_path):
     workspace = tmp_path / "ws"
     mgr = AgentManager.for_workspace(workspace)
-    assert set(mgr.names) == {"advisor", "build", "orchestrator", "quick", "task"}
+    assert set(mgr.names) == {"advisor", "build", "orchestrator", "quick", "scout", "task"}
     assert all(agent.source is AgentSource.BUILTIN for agent in mgr.agents)
     assert not (workspace / ".nexus").exists()
 
@@ -703,9 +703,12 @@ def test_builtin_roles_match_the_default_contract(tmp_path):
     mgr = AgentManager.for_workspace(tmp_path / "ws")
     assert mgr.require("build").contexts == ("root",)
     assert mgr.require("orchestrator").contexts == ("root",)
-    assert all(mgr.require(name).contexts == ("subagent",) for name in ("advisor", "task", "quick"))
+    assert all(mgr.require(name).contexts == ("subagent",) for name in ("advisor", "task", "quick", "scout"))
     assert not mgr.require("advisor").read_only  # read-only is prompt guidance only
     assert not mgr.require("task").read_only and not mgr.require("quick").read_only
+    assert not mgr.require("scout").read_only
+    scout = mgr.load_body("scout")
+    assert "path:line" in scout and "Uncertainties" in scout and "Do not edit" in scout
     # Model, provider, effort and fallbacks are unset by default.
     for agent in mgr.agents:
         assert agent.model is None and agent.provider is None
@@ -714,6 +717,16 @@ def test_builtin_roles_match_the_default_contract(tmp_path):
     for name in ("task", "quick"):
         assert "Files changed" in mgr.load_body(name)
     assert len({mgr.require(name).color for name in SEEDED_ROLES}) == len(SEEDED_ROLES)
+
+
+def test_orchestrator_prompt_has_roster_and_difficult_problem_workflow(tmp_path):
+    mgr = AgentManager.for_workspace(tmp_path / "ws")
+    body = mgr.load_body("orchestrator")
+    for role in ("scout", "quick", "task", "advisor", "build", "orchestrator"):
+        assert f"`{role}`" in body
+    assert "root agents" in body.lower() and "subagents" in body.lower()
+    assert "code tool" in body and "evidence bundle" in body
+    assert body.index("`advisor`") < body.index("actionable brief for `task`")
 
 
 def test_legacy_names_resolve_to_the_new_builtins(tmp_path):

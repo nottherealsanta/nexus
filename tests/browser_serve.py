@@ -18,7 +18,12 @@ term.textarea.setAttribute('role','textbox');
 const socket=new WebSocket('ws://'+location.host+'/terminal');
 window.__nexusSockets=[socket];socket.binaryType='arraybuffer';
 const encoder=new TextEncoder();
-socket.onmessage=e=>term.write(new Uint8Array(e.data));
+socket.onmessage=e=>{
+ if(typeof e.data==='string'){
+  const control=JSON.parse(e.data);
+  if(control.type==='resize') window.__nexusTerminalSize={width:control.width,height:control.height};
+ }else term.write(new Uint8Array(e.data));
+};
 term.onData(data=>{if(socket.readyState===1)socket.send(encoder.encode(data));});
 term.attachCustomKeyEventHandler(e=>{
  if(e.type==='keydown'&&e.key==='Enter'&&(e.shiftKey||e.ctrlKey)){
@@ -65,6 +70,8 @@ def serve(command: str, *, host: str = "127.0.0.1", port: int = 8000, title: str
                 payload = await process.stdout.readexactly(size)
                 if header[:1] == b"D":
                     await socket.send_bytes(payload)
+                elif header[:1] == b"M":
+                    await socket.send_text(payload.decode("utf-8"))
 
         async def input_():
             while True:

@@ -54,6 +54,7 @@ def freeze_geometry(page, cols, rows):
     """Pin the xterm grid and PTY to cols x rows, then size the viewport exactly to the terminal screen."""
     import math
     page.evaluate("document.fonts.ready.then(() => document.fonts.load('16px monospace'))")
+    page.wait_for_function("typeof socket !== 'undefined' && socket.readyState === WebSocket.OPEN")
     page.evaluate("([c, r]) => window.__nexusResize(c, r)", [cols, rows])
     page.wait_for_function("([c, r]) => term.cols === c && term.rows === r && window.__nexusTerminalSize"
                            " && window.__nexusTerminalSize.width === c && window.__nexusTerminalSize.height === r",
@@ -138,12 +139,6 @@ def main():
                     port = sock.getsockname()[1]
                 server = subprocess.Popen([sys.executable, "tests/browser_serve.py", "--port", str(port), "--command", f"{sys.executable} {command}"], cwd=ROOT, env=server_env(state, grok.get(name)), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
                 page = browser.new_page(viewport={"width": 1100, "height": 850})
-                page.add_init_script("""const originalSend = WebSocket.prototype.send;
-                    WebSocket.prototype.send = function(data) {
-                        if (typeof data === 'string') { try { const message=JSON.parse(data);
-                            if (message[0]==='resize') window.__nexusTerminalSize=message[1]; } catch (_) {} }
-                        return originalSend.call(this,data);
-                    };""")
                 try:
                     for attempt in range(40):
                         try:

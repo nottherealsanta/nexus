@@ -87,6 +87,26 @@ user > builtin): `<workspace>/.agents/skills/` (and legacy `.nexus/skills/`),
   declaration payload, not a reconstructed `SKILL.md`. Host text is redacted;
   body output is byte-bounded with explicit truncation and missing-snapshot
   errors. Refresh is required to observe later file changes.
+- **Add from `npx skills`** (Settings → Skills → *Add from npx skills…*, Ratatui;
+  host `SkillsInstall`, `host_support/skills_install.py`): stage, then import. `npx --yes
+  skills@<pinned> add <source> --copy -y -a claude-code [-s name…]` runs in a fresh temp
+  directory (argv only, `build_child_env` environment, own process group, 120 s timeout,
+  64 KiB output, redacted); only `<stage>/.claude/skills/*` is read. Each skill is checked on
+  its own (name grammar, strict frontmatter, no symlinks/special files, ≤256 files, ≤1 MiB
+  per file, ≤8 MiB), a top-level `tools/` folder is not imported, permission bits are
+  dropped, then it is copied under `<scope>/trash/skills-staging/` and renamed to
+  `<scope>/skills/<name>/` (project `.agents/`, global `~/.nexus/`). An existing folder is a
+  `conflict` unless *overwrite* is confirmed; then the whole folder moves to
+  `<scope>/trash/settings/<id>/item` (with `meta.json`) and is put back if the rename
+  fails. One install runs at a time; extensions reload once. Sources are `owner/repo`, an
+  `https://` URL without credentials or an absolute directory; names and sources never
+  start with `-`. Public skills whose frontmatter uses keys outside the six above (for
+  example `license`) are refused with that reason: the strict parser is not loosened.
+  The confirmation page says it downloads and runs third-party code. Not offered to
+  paired devices (gateway default-deny) or models. **Not verified live:** the pinned
+  version (`skills@1.7.2`), its flags and its `.claude/skills/` staged layout come from
+  npm/GitHub metadata read on 2026-10-20; tests use a fake `npx`. Nexus does not promise
+  compatibility with public skills' frontmatter beyond its own strict parser.
 
 ## Hooks (`hooks/`)
 
@@ -167,6 +187,41 @@ an error naming it; `${input:id}` is refused (Nexus never prompts); bare `$VAR` 
 literal. Resolved values are secrets (redacted everywhere). Not verified against
 live GitHub Copilot MCP or OAuth-only servers.
 
+## Adding an MCP server from Settings
+
+Settings → MCP servers → *Add server…* (Ratatui; one button per scope) inserts exactly
+one server into `~/.nexus/mcp.json` or `<project>/.agents/mcp.json` (host
+`SettingsMcpAdd`, `host_support/settings_inventory.py`). The editor takes one JSON
+server, `{name: entry}` or one server inside any wrapper map above, in any accepted
+dialect; a masked review (name, file, transport, command basename and argument count or
+the URL without credentials/query, env and header *names*, enabled, tool loading)
+precedes the write, and the write hot-reloads extensions. A server that starts a
+process says so: "Nexus starts this command now and in new sessions."
+
+- **Validation** is the loader's own: `parse_server_config` with every `${env:VAR}`
+  treated as set. Unknown keys, `ws`, `${input:…}`, masked placeholders (`[redacted]`,
+  `***`) anywhere, and names outside `^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$` are refused, as are names
+  that collide once `.`/`-` fold to `_` (the tool-name rule). `envFile` is type-checked, never
+  read. Siblings are not validated, so an already broken server never blocks an add.
+- **Write** is a byte-preserving JSONC insert as the last property of the first
+  existing server map (`servers`, `mcpServers`, `mcp`, `context_servers`; a new `mcpServers` when
+  none; the result says when several exist). Comments, trailing commas, CRLF and one-line
+  maps survive; a missing or blank file becomes a pretty-printed document. The entry is
+  stored as typed (literal credentials included: prefer `${env:VAR}`, and note a project
+  file may be committed). It does not go through the Settings *editor* write, so redaction
+  restoration can never copy another server's secret.
+- **Results** (`SettingsWriteResult.status`, with a `message`): `written`, `exists` (name
+  already in any map), `conflict` (stale hash, or the file changed before the replace) and
+  `legacy` (the project has only the legacy `.nexus/mcp.json`; adding to a new
+  `.agents/mcp.json` would hide those servers: copy it first). `expected_sha256`: omitted
+  = current file, `""` = the file must not exist, otherwise it must match.
+- After the reload the message notes when the same name in the other scope shadows
+  (project wins) or is replaced. Existing sessions are unaffected until they pick the
+  server up (see above).
+- **`NEXUS_HOME`:** the Settings console resolves the global scope as `~/.nexus`, while
+  the host reads `$NEXUS_HOME` when it is set. A global add therefore refuses (and says
+  so) when those differ; every other Settings category still has this pre-existing split.
+
 `InspectContext.mcp_servers` carries, per server, `scope`, `source_path`,
 `url`, `ignored_keys`, the tool filters and a `status` of `connected`,
 `disabled`, `failed`, `backoff`, `connecting` or `not connected` (lazy, never
@@ -245,3 +300,9 @@ Choices are durable events and lock after the first turn. Effective modes freeze
 in `context.mcp_loading_frozen`; subsequent config edits affect new sessions.
 Servers added to an existing session use Search. All loading retains the direct
 `mcp__server__tool` interface.
+
+Skill frontmatter supports an optional inert `license` string (at most 2048
+characters), using the existing restricted scalar grammar. Imports preserve the
+original declaration and file; license text is not executed or interpreted.
+`compatibility` and `metadata` mappings are not supported. Unknown fields,
+duplicate fields, nested values, and broader `allowed-tools` syntax remain rejected.

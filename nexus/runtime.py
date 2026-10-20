@@ -56,6 +56,7 @@ from .agents.last_choice import AgentChoiceStore
 from .model.effort_preferences import ModelEffortStore
 from .agents.model import AgentError, AgentNotFoundError
 from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
+from .tools.names import canonical_tool_name
 from .config import Config
 from .config.paths import (
     nexus_home,
@@ -298,6 +299,17 @@ def _latest_user_message_id(session: Any) -> str:
     return ""
 
 
+def _roster_digest(runner: Any) -> dict[str, str] | None:
+    """Digests of the roster ``build_task_tool(runner)`` advertises, if readable."""
+    digests = getattr(runner, "roster_digests", None)
+    if not callable(digests):
+        return None
+    try:
+        return digests().to_dict()
+    except Exception:  # noqa: BLE001 - mirrors the description's tolerance of a broken roster
+        return None
+
+
 class _ToolDispatcherAdapter:
     """Adapts :class:`~nexus.tools.manager.ToolManager` to the loop protocol."""
 
@@ -317,8 +329,13 @@ class _ToolDispatcherAdapter:
         outbound_http: OutboundHTTPService | None = None,
         local_search_http: LocalSearchHTTPService | None = None,
         questions: Any | None = None,
+        subagent_roster_digest: Mapping[str, str] | None = None,
     ) -> None:
         self.manager = manager
+        #: Digests of the tier models/efforts the ``subagent`` description in
+        #: this iteration's schemas advertises, or ``None`` when it is not
+        #: advertised. The loop reads it to record roster changes in history.
+        self.subagent_roster_digest = subagent_roster_digest
         self._workspace = Path(workspace)
         self._session_id = session_id
         self._turn_id = turn_id
@@ -1533,7 +1550,7 @@ class _ManifestEnvironmentFactory:
         if _is_manager_session(self._session) or _is_manager_session(session):
             # Second builder of the structural manager catalog: a manager turn
             # never merges a manifest (MCP, skills, extensions, hooks) into its
-            # six tools. ``_make_tool_turn`` returns no environment factory for
+            # eight tools. ``_make_tool_turn`` returns no environment factory for
             # it, so reaching this is a wiring bug, not a fallback to extend.
             raise ConfigError("manager sessions do not use the extension manifest")
         manifest = runtime._selected_manifest(lease.manifest, session)
@@ -1603,10 +1620,12 @@ class _ManifestEnvironmentFactory:
             agent_definition=self._agent_definition,
         )
         catalog = base_catalog
+        roster_digest = None
         if runner is not None:
             from .tools.builtin.task import build_task_tool
 
             catalog = (*base_catalog, build_task_tool(runner))
+            roster_digest = _roster_digest(runner)
         catalog = tuple(
             tool for tool in catalog
             if tool.name not in self._session.disabled_extensions.get("tools", ())
@@ -1667,6 +1686,9 @@ class _ManifestEnvironmentFactory:
                 runtime._question_service(session_id)
                 if hasattr(runtime, "_question_service")
                 else None
+            ),
+            subagent_roster_digest=(
+                roster_digest if "subagent" in manager.names else None
             ),
         )
         return _IterationEnv(
@@ -2207,6 +2229,7 @@ _CHILD_RELAY_SUPPRESS = frozenset(
         "context.compacted",
         "context.handoff",
         "context.degraded",
+        "context.notice",
         "permission.requested",
         "permission.resolved",
         "input.queued",
@@ -2334,7 +2357,7 @@ class _ChildRuntime:
     It is deliberately not a second :class:`Runtime`: the child borrows the
     parent's router and agent manager, gets the tools the runner already
     intersected into ``spec.tools``, inherits the parent's permission engine and
-    grants, and can spawn its own children through the runner's shared budget.
+    grants. It never spawns: ``runner`` is ``None`` for every real child.
     """
 
     def __init__(self, runtime: Runtime, spec: Any, runner: Any) -> None:
@@ -2980,7 +3003,7 @@ class Runtime:
     ) -> None:
         self.workspace = Path(workspace).resolve()
         #: ``callable(Session) -> ManagerPort | None``, injected by the host. A
-        #: manager session's six tools talk to the port it returns; ``None``
+        #: manager session's eight tools talk to the port it returns; ``None``
         #: (no factory or no port) fails the manager turn visibly. Assignable
         #: after construction because the host builds the port from the runtime.
         self.manager_port_factory = manager_port_factory
@@ -4459,7 +4482,7 @@ class Runtime:
         # an active runtime.
         if _is_manager_session(session):
             # Explicit manager branch, before any injected factory, manager or
-            # engine: a manager turn gets its own six-tool catalog and a fresh
+            # engine: a manager turn gets its own eight-tool catalog and a fresh
             # permission engine, never the runtime's shared ones.
             return self._make_manager_tool_turn(
                 config=config, session=session, turn_id=turn_id, attended=attended
@@ -4595,13 +4618,37 @@ class Runtime:
                 )
                 self._track_tool_manager(manager)
             else:
+                catalog = self._filter_web_catalog(
+                    config, manager.tools, add_available=False
+                )
+                # Code mode registers its tool inside the iteration manager, so
+                # the builtin catalog above never lists it. Select against an
+                # unrestricted iteration manager, as the per-iteration factory
+                # does, or ``code`` is dropped before it can be registered.
+                candidate = self._build_iteration_manager(
+                    config,
+                    self.manifest,
+                    catalog=catalog,
+                    path_guard=manager.path_guard,
+                )
+                selected = self._agents.select_tools(
+                    agent_definition,
+                    available=candidate.authority_names,
+                    profile=(
+                        candidate.authority_for_profile(agent_definition.profile)
+                        if agent_definition.profile
+                        else candidate.authority_names
+                    ),
+                    bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
+                    mutating=candidate.authority_mutating,
+                )
                 manager = self._build_iteration_manager(
                     config,
                     self.manifest,
-                    catalog=self._filter_web_catalog(
-                        config, manager.tools, add_available=False
+                    catalog=catalog,
+                    restrict=tuple(
+                        name for name in candidate.names if name in selected.selected
                     ),
-                    restrict=tuple(name for name in manager.names if name in selected.selected),
                     path_guard=manager.path_guard,
                 )
         if agent_definition is not None and getattr(agent_definition, "write_roots", ()):
@@ -4645,6 +4692,7 @@ class Runtime:
                 workspace=self.workspace,
             )
         runner = None
+        roster_digest = None
         if self._agents is not None and self._tools is None:
             authority = _ChildAuthority(engine=engine, path_guard=manager.path_guard)
             static_runner = self._make_subagent_runner(
@@ -4669,6 +4717,7 @@ class Runtime:
             if static_runner is not None and "subagent" in manager.names:
                 from .tools.builtin.task import build_task_tool
 
+                roster_digest = _roster_digest(static_runner)
                 manager = ToolManager(
                     config,
                     workspace=self.workspace,
@@ -4720,6 +4769,7 @@ class Runtime:
             outbound_http=self._outbound_http_service,
             local_search_http=self._local_search_http_service,
             questions=self._question_service(session.id),
+            subagent_roster_digest=roster_digest,
         )
         # Per-iteration environment path: only when the runtime (not a caller)
         # owns the tool catalog and an extension world exists. An injected
@@ -4769,11 +4819,11 @@ class Runtime:
         Structural: the catalog is :func:`build_manager_catalog` and nothing
         else, so no built-in, MCP, skill, extension or role tool and no hook can
         reach a manager turn. The permission engine is built fresh for the turn
-        (mode ``deny``; only the read tools allowed by name; launch and cancel
-        always ask, ahead of any grant or rule; unattended means deny). Session
-        grants are never read, so an earlier approval cannot pre-approve a
-        launch, and the session's own unattended fallback is pinned to deny for
-        this turn regardless of ``permissions.on_unattended``.
+        (mode ``deny``; exactly the manager catalog tools allowed by name, so
+        launch, cancel, send and show run without approval, attended or not; any other
+        tool name is denied). Session grants are never read, and the session's
+        unattended fallback is pinned to deny for this turn regardless of
+        ``permissions.on_unattended``.
         """
         if config is None:
             config = self._load_config()
@@ -4793,14 +4843,13 @@ class Runtime:
         self._track_tool_manager(manager)
         engine = PermissionEngine(
             mode="deny",
-            allow=("sessions_find", "session_status", "session_wait", "session_result"),
+            allow=tuple(MANAGER_TOOL_NAMES),
             on_unattended="deny",
             workspace=self.workspace,
             home=self._home,
         )
-        engine.require_confirmation_for(("session_launch", "session_cancel"))
-        # Frozen at turn start (after the session froze the configured policy):
-        # a viewer dropping with a launch pending resolves to deny, never allow.
+        # Pinned for this turn regardless of ``permissions.on_unattended``; every
+        # manager catalog tool is allowed by name so nothing in the catalog asks.
         session._turn_unattended = "deny"
         gate = _PermissionGateAdapter(engine, manager=manager, grants=(), attended=attended)
         dispatcher = _ToolDispatcherAdapter(
@@ -6083,7 +6132,8 @@ class Runtime:
                 budget=budget,
                 max_tier=max_tier,
                 max_concurrent=int(getattr(section, "max_concurrent", 4)),
-                max_depth=int(getattr(section, "max_depth", 3)),
+                # Only the root session spawns: values above 1 are ignored, 0 disables.
+                max_depth=min(int(getattr(section, "max_depth", 3)), 1),
                 max_fanout=getattr(section, "max_fanout", 16),
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
@@ -6097,6 +6147,7 @@ class Runtime:
                 worktree_service=self._worktree_service,
                 tier_probe=self._tier_runnable,
                 tier_candidates=self._router.tier_candidates,
+                tier_efforts=lambda: getattr(self._router, "tier_efforts", None),
                 worktree_root=expected_worktree_root,
                 worktree_root_for=self._owned_worktree_root_for,
                 runtime_supports_workspace=runtime_supports_workspace,
@@ -6385,33 +6436,12 @@ class Runtime:
             hooks = _HookService(
                 hook_manager, hook_specs, workspace=workspace
             )
-        child_sessions = self._ensure_child_sessions()
-        resolve_child = getattr(child_sessions.manager.store, "resolve_child_id", _child_session_id)
-        child_runner = self._make_subagent_runner(
-            session_id=spec.session_id,
-            parent_tools=spec.tools,
-            parent_depth=spec.depth,
-            parent_session=resolve_child(spec.session_id),
-            parent_agent_id=spec.agent_id,
-            parent_tier=spec.tier,
-            parent_model=spec.model,
-            root_turn_id=spec.root_turn_id,
-            event_sink=spec.emit,
-            budget=spec.budget,
-            permissions=authority,
-            grants=spec.grants,
-            config=config,
-            hooks=hooks,
-            workspace=Path(spec.workspace),
-            runtime_supports_workspace=self._supports_child_workspace(),
-            worktree_scope=bool(getattr(spec, "worktree_scope", False)),
-            worktree_service=self._worktree_service,
-            worktree_root=self._owned_worktree_root_for(workspace),
-        )
+        # Only the root session spawns: a child gets no runner, so neither its
+        # catalog nor its extension/code-mode context can reach ``subagent``.
         return _ChildRuntime(
             self,
             replace(spec, config=config, permissions=authority, hooks=hooks),
-            child_runner,
+            None,
         )
 
     def _child_path_guard(self, spec: Any, workspace: Path) -> PathGuard:
@@ -6597,10 +6627,9 @@ class Runtime:
             tool.name: tool
             for tool in self._filter_web_catalog(config, tuple(catalog_map.values()))
         }
-        if runner is not None:
-            from .tools.builtin.task import build_task_tool
-
-            catalog_map["subagent"] = build_task_tool(runner)
+        # Only the root session spawns, whatever the catalog or an extension offers.
+        for name in [n for n in catalog_map if canonical_tool_name(n) == "subagent"]:
+            del catalog_map[name]
         if bool(getattr(spec, "worktree_scope", False)) or bool(
             getattr(spec, "worktree", None)
         ):

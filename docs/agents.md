@@ -295,6 +295,7 @@ file tools to `~/.nexus/` and `<workspace>/.agents/`, never widens; credentials,
 sessions, cache, trash and daemon files stay blocked).
 
 **Packaged roles:** roots `build` (default) and `orchestrator`; subagents
+`scout` (read/search evidence gathering; reports `path:line` and uncertainties, no edits unless asked; read-only is prompt guidance only),
 `advisor` (advises; read-only is prompt guidance only), `task`, `quick`. They are global, not copied into
 workspaces; editing one in Settings writes an override to `~/.nexus/agents/`.
 Settings presents one shared Agents page, with no global/project selector; model,
@@ -307,9 +308,13 @@ marker). Legacy names: `general` → `task` (`build` as a root); `explore`,
 The packaged root prompts are short (a few hundred tokens): the Nexus identity
 line, then how to work (understand, change only what was asked, verify,
 delegate with self-contained briefs) and what to report. Orchestrator never
-edits code itself; it plans, delegates, and verifies subagent reports. Neither
-names a specific tool or role: those come from the tool list and the
-`subagent` roster at runtime.
+edits code itself; it plans, delegates, and verifies subagent reports. `build`
+names no specific role. `orchestrator` carries a fixed roster and workflow
+(roots `build`/`orchestrator` are not spawnable; subagents `scout` low, `quick`
+low, `task` medium/high, `advisor` medium/high). For difficult problems it
+gathers evidence with the code tool (optionally via `scout`), gives an evidence
+bundle to `advisor`, hands the recommendation to `task`, and verifies. The live
+tool list and `subagent` roster still come from runtime.
 
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
 (legacy) < `<workspace>/.agents/agents/`. Lookups are case-insensitive;
@@ -352,10 +357,22 @@ its first tier, see below), falling back to the parent's model. Surrounding whit
 overrides; whitespace inside a model reference is rejected. Permission-key
 resolution and child execution use the same normalization.
 
+**Only the root session spawns.** A child (`task`, `quick`, `advisor`, `scout`,
+or any role running in the `subagent` context) never has the `subagent` tool, so
+the tree is at most root → children. This is structural, not name-based: the
+child runtime gets no runner, `ctx.subagents` is `None` for extensions and code
+mode, `subagent` is removed from every child catalog (even one an extension
+registers), and `SubagentRunner.spawn` refuses at depth ≥ 1 with `Task:
+subagents cannot spawn subagents; only the root session may`. User-defined roles
+running at root keep the tool. Sessions recorded before this rule may contain
+nested children; they still replay and render read-only.
+
 Four bounds are computed **before** the child exists, so a child can never gain
 authority its parent lacks:
 
-1. **Tools intersect:** `parent ∩ role ∩ requested`; dropped names are reported back.
+1. **Tools intersect:** `parent ∩ role ∩ requested`, minus `ROOT_ONLY_TOOLS`
+   (`subagent`); dropped names are reported back. A role or request that names
+   `subagent` (or the legacy `Task`) has it dropped.
 2. **Permissions inherit:** the parent's snapshot and session grants pass through
    unchanged; `deny` stays absolute.
 3. **Tiers select subagent routes only.** The root's model/price does not cap
@@ -368,14 +385,16 @@ authority its parent lacks:
    instructs the caller to call the next model if a provider/model fails (passing
    along the failure and partial work). This instruction does not bypass tool
    permission checks or cause unsafe partial-stream replay.
-4. **Budgets:** a shared `SubagentBudget` bounds depth (`max_depth` 3), concurrency
+4. **Budgets:** a shared `SubagentBudget` bounds depth (`max_depth`; values above 1
+   are ignored for the root runner because children cannot spawn, `0` disables
+   spawning), concurrency
    (`max_concurrent` 4), fan-out (`max_fanout` 16) and aggregate tokens/cost
    (`token_budget`, `cost_budget`) across the whole tree.
 
 ### Tiers per role
 
 A role lists the tiers it may use: `tiers: [low, medium]`. The first is the
-default. The built-ins are `quick` `[low]`, `task` `[low, medium]` and `advisor`
+default. The built-ins are `quick` `[low]`, `scout` `[low, medium]`, `task` `[medium, high]` and `advisor`
 `[medium, high]`; roots (`build`, `orchestrator`) have none. A user-added role
 works the same way and new roles from Settings start with `[low, medium]`.
 Names are checked for shape only here; an unknown name is skipped when the tier
@@ -407,8 +426,16 @@ and the requested tier. A pinned model whose tier is not listed is not blocked:
 calls move to the nearest listed tier, and Settings points the conflict out.
 
 The roster in the `subagent` tool description shows each role's tiers
-(`task [tiers: low (default), medium]`) and a short guide on when to use each
-tier ([tools.md](tools.md)). Settings → Agents edits `tiers` for every subagent
+(`task [tiers: medium (default), high]`) and a short guide on when to use each
+tier ([tools.md](tools.md)). It also lists each tier's models in order with the
+effort each runs at (an explicit `tier_efforts` choice, else the shipped default
+for an unpinned built-in tier) and marks a role's own `reasoning_effort`, which
+wins at spawn (`reviewer [tiers: medium; effort: high]`). The budget
+(`MAX_ROLE_INDEX_CHARS`) clips whole lines only: every role name and tiers stay,
+tier lines drop from the end, then role descriptions, and
+`[Subagent roster and tier models clipped]` ends the text on its own line. When
+the advertised tier models or efforts change, a short tail notice is appended to
+history ([context.md](context.md#subagent-roster-notice-plan-06)). Settings → Agents edits `tiers` for every subagent
 ([surfaces.md](surfaces.md#settings)); `nexus doctor` hints at subagents without
 any.
 
@@ -521,7 +548,8 @@ limit would be worth its cost.
 `subagent(worktree=true)` runs the child in an isolated Git worktree on a branch
 `nexus/subagent/<…>` so parallel children cannot edit the same files. Children in
 a worktree get only `WORKTREE_CHILD_TOOLS` (read, glob, grep, edit, write,
-apply_patch, subagent, todowrite, question, skill, webfetch, websearch), no shell.
+apply_patch, todowrite, question, skill, webfetch, websearch), no shell and no
+`subagent`.
 
 Lifecycle: `active → finalized → integrated | cleanup_pending | discarded`.
 Records are authenticated and held under a service-root lock.
@@ -541,7 +569,7 @@ CLI: `nexus worktrees list|inspect|review|acknowledge|integrate|discard`; chat:
 
 The workspace manager ([manager.md](manager.md)) is deliberately **not** a role
 file. Its prompt (`agents/manager_prompt.py`, `MANAGER_PROMPT`), pinned model
-(`github-copilot/gpt-6-luna`) and six-tool catalog are packaged constants, so
+(`codex/gpt-6-luna`) and eight-tool catalog are packaged constants, so
 no user, project or extension file can extend or replace it. The grammar
 rejects `contexts: [manager]`, `bundles: [manager]` and `profile: manager`
 (reserved), and a session of kind `manager` ignores root-agent selection

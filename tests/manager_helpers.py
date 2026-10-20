@@ -45,6 +45,7 @@ class StubHost:
         self.fail = False
         self.started: list[tuple] = []
         self.cancelled: list[tuple[str, str]] = []
+        self.sent: list[tuple[str, str, dict]] = []
 
     def limits(self) -> ManagerLimits:
         return self.limit
@@ -69,6 +70,11 @@ class StubHost:
     async def cancel_root(self, session_id, reason):
         self.cancelled.append((session_id, reason))
         return True
+
+    async def send_message(self, session_id, message, *, origin):
+        if self.fail:
+            raise RuntimeError("boom api_key=sk-secret1234567")
+        self.sent.append((session_id, message, origin))
 
 
 def complete(root, session_id, answer="done", outcome="completed"):

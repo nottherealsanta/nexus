@@ -28,9 +28,18 @@ pub fn record(kind: &str, detail: &str) -> Option<PathBuf> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).ok()?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
     let text: String = detail.chars().take(64 * 1024).collect();
-    writeln!(file, "--- {kind} at unix {secs} (nexus-ratatui {})\n{text}\n", env!("CARGO_PKG_VERSION")).ok()?;
+    writeln!(
+        file,
+        "--- {kind} at unix {secs} (nexus-ratatui {})\n{text}\n",
+        env!("CARGO_PKG_VERSION")
+    )
+    .ok()?;
     Some(path)
 }
 

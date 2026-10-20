@@ -296,7 +296,9 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     Bounds every subagent tree: depth, concurrent children, the requested tier,
     fan-out, and the aggregate token/cost budget. A child can never exceed its
     parent; these values only ever clamp further. Legacy ``max_tier`` remains
-    parseable for config compatibility but is ignored by runtime wiring.
+    parseable for config compatibility but is ignored by runtime wiring. Only
+    the root session spawns, so ``max_depth`` values above 1 behave as 1; 0
+    disables spawning.
     """
 
     enabled: bool = True
@@ -974,7 +976,7 @@ class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """``[code_mode]`` (plan 03 section 5). Every numeric key is bounded."""
 
-    enabled: bool = False
+    enabled: bool = True
     #: ``read_only`` | ``all`` | list of tool names / ``mcp__server__*`` globs.
     expose: str | list[str] = "read_only"
     context: bool = False

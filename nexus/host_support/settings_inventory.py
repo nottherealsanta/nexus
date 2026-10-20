@@ -9,6 +9,7 @@ import os
 import re
 import tomllib
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -219,19 +220,38 @@ def write(runtime: object, scope: str, category: str, item_id: str, body: str, e
     if exists:
         body = _preserve_redactions(old, body)
     data = body.encode("utf-8")
+    _atomic_write(runtime, scope, category, item_id, target, data)
+    return {"status": "written", "sha256": hashlib.sha256(data).hexdigest(), "loaded": [], "unloaded": [], "failed": [], "config_reloaded": category == "config"}
+
+
+def _atomic_write(runtime: object, scope: str, category: str, item_id: str, target: Any, data: bytes,
+                  *, unchanged_from: bytes | None | bool = False) -> None:
+    """Replace ``target.path`` with ``data`` via a fsynced temp file in the same directory.
+
+    The path policy is re-checked right before the rename. ``unchanged_from`` (the bytes read
+    earlier, or ``None`` for "did not exist") additionally refuses the replace when the file
+    changed in between; the default ``False`` skips that check.
+    """
     target.path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = __import__("tempfile").mkstemp(prefix=f".{target.path.name}.", dir=target.path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data); stream.flush(); os.fsync(stream.fileno())
         settings_target(runtime, scope, category, item_id)
+        if unchanged_from is not False:
+            now = _read_bounded(target.path) if target.path.exists() else None
+            if now != unchanged_from:
+                raise _ChangedOnDisk
         os.replace(temp_name, target.path)
         directory_fd = os.open(target.path.parent, os.O_RDONLY)
         try: os.fsync(directory_fd)
         finally: os.close(directory_fd)
     finally:
         if os.path.exists(temp_name): os.unlink(temp_name)
-    return {"status": "written", "sha256": hashlib.sha256(data).hexdigest(), "loaded": [], "unloaded": [], "failed": [], "config_reloaded": category == "config"}
+
+
+class _ChangedOnDisk(Exception):
+    """The settings file changed between the read and the atomic replace."""
 
 
 def patch_mcp_loading(body: str, server: str, mode: str) -> str:
@@ -333,6 +353,383 @@ def _set_mcp_value(runtime, scope, server, value, expected_sha256, patch):
         return {"status": "conflict", "sha256": current}
     body = patch(old.decode("utf-8"), server, value)
     return write(runtime, scope, "mcp", "mcp.json", body, expected_sha256)
+
+
+# ---------------------------------------------------------------------------
+# Add one MCP server (SettingsMcpAdd)
+# ---------------------------------------------------------------------------
+
+MCP_ADD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
+MAX_MCP_ENTRY = 16 * 1024
+#: Text the Settings editor shows instead of a stored secret; never a real value.
+_MASKED = ("[redacted]", "***")
+_FOLD = re.compile(r"[.-]")
+_JSON_TOKEN = re.compile(r'\s+|//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+')
+
+
+class McpServerExists(ConfigError):
+    """The server name is already defined in the target ``mcp.json``."""
+
+
+class _AnyEnv(Mapping):
+    """Every ``${env:NAME}`` "exists": validation must not depend on the host's environment."""
+
+    def __getitem__(self, key: str) -> str:
+        return "x"
+
+    def __contains__(self, key: object) -> bool:
+        return True
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+
+def _walk_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _walk_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk_strings(item)
+
+
+def _walk_values(value: Any):
+    """Every string *value* (never a key) at any depth, including in unknown or mistyped fields."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_values(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk_values(item)
+
+
+def _draft_secrets(entry: dict) -> list[str]:
+    """Every string value in a draft entry, plus URL userinfo/query parts.
+
+    The draft is untrusted free-form JSON: a secret can sit in a field the loader rejects (unknown
+    key, wrong type), and the loader's error may echo it, so nothing is assumed to be harmless.
+    """
+    from urllib.parse import parse_qsl, urlsplit
+    found = list(_walk_values(entry))
+    for value in list(found):
+        if "://" not in value:
+            continue
+        try:
+            parts = urlsplit(value)
+            found += [parts.username or "", parts.password or "", *(item for _, item in parse_qsl(parts.query))]
+        except ValueError:
+            continue
+    return [value for value in dict.fromkeys(found) if value]
+
+
+def validate_mcp_add(name: object, entry: object, workspace: object = None) -> tuple[dict, list[str]]:
+    """Fully validate a draft ``(name, entry)`` exactly as the loader would; returns ``(entry, secrets)``.
+
+    ``envFile``/``env_file`` is type-checked but never read (it is removed before parsing), every
+    ``${env:VAR}`` counts as set, and the error text never carries a draft secret value.
+    """
+    from ..mcp.client import parse_server_config, redact_secrets, server_enabled
+    from ..mcp.errors import MCPConfigError
+    if not isinstance(name, str) or not MCP_ADD_NAME.fullmatch(name):
+        raise ConfigError("MCP server name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
+    if not isinstance(entry, dict) or not entry or any(not isinstance(key, str) for key in entry):
+        raise ConfigError("MCP server entry must be a non-empty object")
+    try:
+        text = json.dumps(entry, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        raise ConfigError("MCP server entry must be plain JSON") from None
+    if len(text.encode("utf-8")) > MAX_MCP_ENTRY:
+        raise ConfigError("MCP server entry exceeds 16 KiB")
+    secrets = _draft_secrets(entry)
+    try:
+        for string in _walk_strings(entry):
+            if any(mark in string for mark in _MASKED):
+                raise ConfigError("MCP entry contains a masked placeholder; enter the real value or a ${env:VAR} reference")
+            if "${input:" in string:
+                raise ConfigError("${input:…} prompts are not supported; use ${env:VAR}")
+        rest = dict(entry)
+        present = [key for key in ("env_file", "envFile") if key in rest]
+        if len(present) > 1:
+            raise ConfigError("set only one of env_file, envFile")
+        for key in present:
+            if not isinstance(rest.pop(key), str):
+                raise ConfigError("envFile must be a string")
+        server_enabled(name, rest)
+        workspace_arg = workspace if isinstance(workspace, (str, Path)) else None
+        parse_server_config(name, rest, environ=_AnyEnv(), workspace=workspace_arg, home="/")
+    except (ConfigError, MCPConfigError) as exc:
+        raise ConfigError(redact_secrets(str(exc), secrets, min_length=1)) from None
+    return entry, secrets
+
+
+def _json_tokens(body: str) -> list[tuple[str, int, int]]:
+    return [(match.group(), match.start(), match.end()) for match in _JSON_TOKEN.finditer(body)
+            if not match.group().isspace() and not match.group().startswith(("//", "/*"))]
+
+
+def _object_spans(tokens: list[tuple[str, int, int]]) -> dict[tuple, tuple[int, int]]:
+    """``path -> (open_index, close_index)`` of the root object and its direct object values."""
+    spans: dict[tuple, tuple[int, int]] = {}
+    cursor = 0
+
+    def value(path: tuple) -> None:
+        nonlocal cursor
+        index = cursor
+        token = tokens[cursor][0]
+        cursor += 1
+        if token in ("{", "["):
+            close = "}" if token == "{" else "]"
+            while tokens[cursor][0] != close:
+                if tokens[cursor][0] == ",":
+                    cursor += 1
+                    continue
+                if token == "{":
+                    key = json.loads(tokens[cursor][0])
+                    cursor += 2  # key and colon (syntax was already validated)
+                    value((*path, key))
+                else:
+                    value((*path, "[]"))
+            if token == "{" and len(path) <= 1:
+                spans[path] = (index, cursor)
+            cursor += 1
+
+    value(())
+    return spans
+
+
+def _insert_property(body: str, tokens: list[tuple[str, int, int]], open_index: int, close_index: int,
+                     key: str, value: Any, nl: str) -> str:
+    """Append ``"key": value`` as the last property of one object, touching no other byte.
+
+    A multi-line object gets the new property on its own line, indented like the first existing
+    one; a one-line object stays on one line. A trailing comma, if the file uses one, is kept.
+    """
+    open_token, close_token = tokens[open_index], tokens[close_index]
+    prev = tokens[close_index - 1]
+    empty = close_index - open_index == 1
+    trailing = prev[0] == ","
+    multiline = "\n" in body[open_token[1]:close_token[2]]
+    line_start = body.rfind("\n", 0, close_token[1]) + 1
+    before_close = body[line_start:close_token[1]]
+    own_line = multiline and not before_close.strip()
+    lead = before_close if own_line else re.match(r"[ \t]*", body[line_start:]).group()
+    rendered = json.dumps(value, ensure_ascii=False, indent=2 if multiline else None)
+    prop = json.dumps(key) + ": " + rendered
+    if not multiline:
+        if empty:
+            return body[:prev[2]] + prop + body[prev[2]:]
+        text = (" " + prop + ",") if trailing else ("," + " " + prop)
+        return body[:prev[2]] + text + body[prev[2]:]
+    child = lead + "  "
+    if not empty:
+        first = tokens[open_index + 1]
+        first_line = body.rfind("\n", 0, first[1]) + 1
+        indent = body[first_line:first[1]]
+        if not indent.strip():
+            child = indent
+    lines = prop.split("\n")
+    text = lines[0] + "".join(nl + child + line for line in lines[1:])
+    if own_line:
+        insert = child + text + ("," if trailing else "") + nl
+        edits = [(line_start, insert)]
+        if not trailing and not empty:
+            edits.append((prev[2], ","))
+    else:
+        edits = [(prev[2], ("" if trailing or empty else ",") + nl + child + text + ("," if trailing else ""))]
+    for position, piece in sorted(edits, reverse=True):
+        body = body[:position] + piece + body[position:]
+    return body
+
+
+def insert_mcp_server(body: str, name: str, entry: dict) -> tuple[str, str, str]:
+    """Insert one server into ``mcp.json`` text; returns ``(new_body, server_map_key, note)``.
+
+    Every other byte, comment and trailing comma is kept. The server goes into the first existing
+    map in ``_MCP_SERVER_MAPS`` order (a new ``"mcpServers"`` when there is none). An existing name,
+    in any map, raises :class:`McpServerExists`; a name that differs only in ``.``/``-`` versus ``_``
+    is refused as a tool-name collision. Siblings are never validated: an already invalid server
+    in the file does not block the add and is not modified.
+    """
+    from ..ext.manager import _MCP_SERVER_MAPS, _strict_json_object
+    if not body.strip():
+        return json.dumps({"mcpServers": {name: entry}}, indent=2, ensure_ascii=False) + "\n", "mcpServers", ""
+    refuse = "mcp.json is not valid JSONC or has duplicate keys; fix it with Edit… first"
+    try:
+        document = _strict_json_object(body)
+    except (ValueError, TypeError, RecursionError):
+        raise ConfigError(refuse) from None
+    if not isinstance(document, dict):
+        raise ConfigError("mcp.json root must be an object")
+    maps = [key for key in _MCP_SERVER_MAPS if key in document]
+    if any(not isinstance(document[key], dict) for key in maps):
+        raise ConfigError("an mcp.json server map is not an object; fix it with Edit… first")
+    folded = _FOLD.sub("_", name)
+    for key in maps:
+        for existing in document[key]:
+            if existing == name:
+                raise McpServerExists(f"MCP server {name!r} already exists in {key}")
+            if _FOLD.sub("_", existing) == folded:
+                raise ConfigError(f"MCP server {name!r} collides with {existing[:64]!r}: tool names fold '.' and '-' to '_'")
+    key = maps[0] if maps else "mcpServers"
+    note = f"mcp.json has several server maps ({', '.join(maps)}); added to {key}" if len(maps) > 1 else ""
+    nl = "\r\n" if "\r\n" in body else "\n"
+    try:
+        tokens = _json_tokens(body)
+        spans = _object_spans(tokens)
+        if maps:
+            result = _insert_property(body, tokens, *spans[(key,)], name, entry, nl)
+        else:
+            result = _insert_property(body, tokens, *spans[()], key, {name: entry}, nl)
+        expected = json.loads(json.dumps(document))
+        expected.setdefault(key, {})[name] = entry
+        if _strict_json_object(result) != json.loads(json.dumps(expected)):
+            raise ValueError("insert verification failed")
+    except (IndexError, KeyError, ValueError, TypeError, RecursionError):
+        raise ConfigError("cannot safely insert into this mcp.json; use Edit… instead") from None
+    return result, key, note
+
+
+def _check_global_root(runtime: object, target: Any) -> None:
+    """The global add must land where the host reads (``$NEXUS_HOME`` vs ``~/.nexus``)."""
+    from ..config.paths import nexus_home
+    files = getattr(getattr(runtime, "extensions", None), "mcp_config_files", None)
+    try:
+        read_root = next((Path(path).parent for scope, path, _ in files() if scope == "global"), None) if callable(files) else None
+        same = (read_root or nexus_home()).resolve() == target.root.resolve()
+    except (OSError, StopIteration, TypeError, ValueError):
+        same = False
+    if not same:
+        raise ConfigError("the host reads global MCP servers from a different folder than Settings writes (NEXUS_HOME is set); "
+                          "unset NEXUS_HOME or edit $NEXUS_HOME/mcp.json by hand")
+
+
+_ENV_REF = re.compile(r"\$\{env:[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def _literal_secret(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and not _ENV_REF.fullmatch(value)
+
+
+def mcp_add_preview(scope: str, display: str, name: str, entry: dict, secrets: list[str]) -> tuple[list[str], str]:
+    """Masked confirmation ``(lines, transport)`` for a validated draft.
+
+    No env/header value and no URL credential is ever included; terminal-control escaping is the
+    surface's job. ``display`` is the scope's root as shown to the user (``~/.nexus``).
+    """
+    from urllib.parse import urlsplit
+
+    from ..mcp.client import normalize_server_entry, redact_secrets, server_enabled
+    from ..mcp.errors import MCPConfigError
+    rest = {key: value for key, value in entry.items() if key not in ("env_file", "envFile")}
+    try:
+        data, _ = normalize_server_entry(name, rest)
+        enabled = server_enabled(name, rest)
+    except MCPConfigError as exc:
+        raise ConfigError(redact_secrets(str(exc), secrets, min_length=1)) from None
+    transport = str(data.get("transport", "stdio"))
+    lines = [f"Name: {name}", f"File: {display}/mcp.json ({scope})", f"Transport: {transport}"]
+    literal = any(_literal_secret(value) for key in ("env", "headers") if isinstance(data.get(key), dict) for value in data[key].values())
+    if transport == "stdio":
+        command = str(data.get("command") or "")
+        args = data.get("args") or ()
+        lines.append(f"Command: {command.replace(chr(92), '/').rsplit('/', 1)[-1]} · {len(args)} argument{'' if len(args) == 1 else 's'}")
+    else:
+        url = str(data.get("url") or "")
+        try:
+            parts = urlsplit(url)
+            shown = f"{parts.scheme}://{parts.hostname or ''}{':' + str(parts.port) if parts.port else ''}{parts.path}"
+            literal = literal or bool(parts.username or parts.password or parts.query)
+        except ValueError:
+            shown = "(unreadable URL)"
+        lines.append(f"URL: {shown}")
+    for key, label in (("env", "Environment"), ("headers", "Headers")):
+        names = [str(item) for item in (data.get(key) or {})]
+        if names:
+            lines.append(f"{label}: {', '.join(names[:12])}" + (f" +{len(names) - 12}" if len(names) > 12 else "") + " (values hidden)")
+    lines += [f"Enabled: {'yes' if enabled else 'no'}", f"Tool loading: {data.get('tool_loading', 'search')}"]
+    if literal:
+        lines.append("Literal secret values are saved as plain text in " + (
+            "this project file, which may be committed. Prefer ${env:VAR}." if scope == "project" else "mcp.json. Prefer ${env:VAR}."))
+    lines.append("Nexus starts this command now and in new sessions." if transport == "stdio"
+                 else "Nexus connects to this URL now and in new sessions.")
+    return lines, transport
+
+
+def _add_mcp(runtime: object, scope: str, name: str, entry: dict, expected_sha256: str | None,
+             dry_run: bool = False) -> tuple[dict[str, Any], list[str]]:
+    """Write one new server (or only check it); returns the result fields and the draft's secrets."""
+    from ..mcp.client import redact_secrets
+    target = settings_target(runtime, scope, "mcp", "mcp.json")
+    workspace = getattr(runtime, "workspace", None)
+    entry, secrets = validate_mcp_add(name, entry, workspace)
+    try:
+        if scope == "global":
+            _check_global_root(runtime, target)
+        exists = target.path.exists()
+        if exists and not target.path.is_file():
+            raise ConfigError("mcp.json is not a regular file")
+        if scope == "project" and not exists and os.path.lexists(target.root.parent / ".nexus" / "mcp.json"):
+            return {"status": "legacy", "message": "This project's servers are in the legacy .nexus/mcp.json. Adding here would "
+                    "hide them: copy that file to .agents/mcp.json (Settings → MCP → New file), then add."}, secrets
+        old = _read_bounded(target.path) if exists else b""
+        current = hashlib.sha256(old).hexdigest() if exists else ""
+        if expected_sha256 is not None and expected_sha256 != current:
+            return {"status": "conflict", "sha256": current, "message": "mcp.json changed on disk; reload and try again"}, secrets
+        try:
+            text = old.decode("utf-8")
+        except UnicodeError:
+            raise ConfigError("mcp.json is not valid UTF-8") from None
+        try:
+            body, _, note = insert_mcp_server(text, name, entry)
+        except McpServerExists as exc:
+            return {"status": "exists", "sha256": current, "message": str(exc)}, secrets
+        data = body.encode("utf-8")
+        if len(data) > MAX_BODY:
+            raise ConfigError("mcp.json would exceed 256 KiB")
+        if dry_run:
+            lines, transport = mcp_add_preview(scope, target.display, name, entry, secrets)
+            return {"status": "preview", "sha256": current, "message": note, "transport": transport, "lines": lines}, secrets
+        try:
+            _atomic_write(runtime, scope, "mcp", "mcp.json", target, data, unchanged_from=old if exists else None)
+        except _ChangedOnDisk:
+            return {"status": "conflict", "sha256": hashlib.sha256(_read_bounded(target.path)).hexdigest() if target.path.exists() else "",
+                    "message": "mcp.json changed on disk; reload and try again"}, secrets
+    except ConfigError as exc:
+        raise ConfigError(redact_secrets(str(exc), secrets, min_length=1)) from None
+    message = " · ".join(part for part in (f"{name} added to {_rel(target)}", note) if part)
+    return {"status": "written", "sha256": hashlib.sha256(data).hexdigest(), "message": message}, secrets
+
+
+def add_mcp_server(runtime: object, scope: str, name: str, entry: dict, expected_sha256: str | None = None) -> dict[str, Any]:
+    """Insert one new server into the scope's ``mcp.json`` (see :func:`_add_mcp`); no hot reload here."""
+    return _add_mcp(runtime, scope, name, entry, expected_sha256)[0]
+
+
+def _mcp_shadow_note(runtime: object, scope: str, name: str) -> str:
+    """After a reload: say when the same name in the other scope shadows or is shadowed."""
+    from ..ext.manager import _strict_json_object
+    files = getattr(getattr(runtime, "extensions", None), "mcp_config_files", None)
+    if not callable(files):
+        return ""
+    other = "project" if scope == "global" else "global"
+    try:
+        path = next(Path(path) for item, path, _ in files() if item == other)
+        document = _strict_json_object(_read_bounded(path).decode("utf-8"))
+        names = {key for block in _server_maps(document) for key in (document[block] if isinstance(document[block], dict) else {})}
+    except Exception:  # noqa: BLE001 - the note is best-effort
+        return ""
+    if name not in names:
+        return ""
+    return (f"A project server named {name!r} shadows this global one in this workspace." if scope == "global"
+            else f"This project server replaces the global {name!r} in this workspace.")
 
 
 def delete(runtime: object, scope: str, category: str, item_id: str) -> dict[str, Any]:
@@ -538,6 +935,23 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
             if callable(reload):
                 await reload(trigger="settings")
         return p.SettingsWriteResult(**result)
+    if isinstance(command, p.SettingsMcpAdd):
+        from ..mcp.client import redact_secrets as redact_draft
+        try:
+            result, secrets = _add_mcp(runtime, command.scope, command.name, command.entry, command.expected_sha256, command.dry_run)
+        except ConfigError as exc:
+            draft = _draft_secrets(command.entry) if isinstance(command.entry, dict) else []
+            raise ConfigError(redact_draft(str(exc), draft, min_length=1)) from None
+        if result.get("status") == "written":
+            reload_extensions = getattr(getattr(runtime, "extensions", None), "reload", None)
+            if callable(reload_extensions):
+                report = await reload_extensions(trigger="settings")
+                result["loaded"] = list(getattr(report, "loaded", ()) or ())
+                result["unloaded"] = list(getattr(report, "unloaded", ()) or ())
+                result["failed"] = [redact_draft(str(row), secrets, min_length=1) for row in (getattr(report, "failed", ()) or ())]
+            note = _mcp_shadow_note(runtime, command.scope, command.name)
+            result["message"] = " · ".join(part for part in (result.get("message", ""), note) if part)
+        return p.SettingsWriteResult(**result)
     if isinstance(command, p.SettingsWrite):
         result = write(runtime, command.scope, command.category, command.id, command.body, command.expected_sha256)
         if result.get("status") == "written":
@@ -558,4 +972,5 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
     return None
 
 
-__all__ = ["delete", "dispatch_settings", "inventory", "read", "remove_toml_key", "set_default_agent", "set_toml_key", "write"]
+__all__ = ["add_mcp_server", "delete", "dispatch_settings", "insert_mcp_server", "inventory", "read", "remove_toml_key",
+           "set_default_agent", "set_toml_key", "validate_mcp_add", "write"]

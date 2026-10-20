@@ -154,6 +154,13 @@ class Client:
     async def settings_mcp_enabled_set(self, scope: str, server: str, enabled: bool, expected_sha256: str) -> p.SettingsWriteResult:
         return await self._request(p.SettingsMcpEnabledSet(scope=scope, server=server, enabled=enabled, expected_sha256=expected_sha256))
 
+    async def settings_mcp_add(self, scope: str, name: str, entry: dict, expected_sha256: str | None = None) -> p.SettingsWriteResult:
+        return await self._request(p.SettingsMcpAdd(scope=scope, name=name, entry=dict(entry), expected_sha256=expected_sha256))  # type: ignore[return-value]
+
+    async def settings_mcp_add_preview(self, scope: str, name: str, entry: dict, expected_sha256: str | None = None) -> p.SettingsWriteResult:
+        command = p.SettingsMcpAdd(scope=scope, name=name, entry=dict(entry), expected_sha256=expected_sha256, dry_run=True)
+        return await self._request(command)  # type: ignore[return-value]
+
     async def select_context_mcp_loading(self, session: str, server: str, mode: str | None) -> p.ContextInspectResult:
         return await self._request(p.ContextMcpLoadingSelect(session=session, server=server, mode=mode))
 
@@ -163,8 +170,12 @@ class Client:
     async def settings_delete(self, scope: str, category: str, id: str) -> p.SettingsDeleteResult:
         return await self._request(p.SettingsDelete(scope=scope, category=category, id=id))  # type: ignore[return-value]
 
-    async def search_files(self, query: str, limit: int = 30) -> list[str]:
-        return list((await self._request(p.FileSearch(query=query, limit=limit))).paths)  # type: ignore[union-attr]
+    async def skills_install(self, scope: str, source: str, skills: list[str] | None = None, overwrite: bool = False) -> p.SkillsInstallResult:
+        return await self._request(p.SkillsInstall(scope=scope, source=source, skills=list(skills or []), overwrite=overwrite))  # type: ignore[return-value]
+
+    async def search_files(self, query: str, limit: int = 30, *, include_directories: bool = False) -> list[str]:
+        command = p.FileSearch(query=query, limit=limit, include_directories=include_directories)
+        return list((await self._request(command)).paths)  # type: ignore[union-attr]
 
     async def git_diff(self, *, staged: bool = False, ref: str = "") -> p.GitDiffResult:
         return await self._request(p.GitDiff(staged=staged, ref=ref))  # type: ignore[return-value]

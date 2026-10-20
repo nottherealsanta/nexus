@@ -73,7 +73,6 @@ from ..host_support.session_archive import (
 from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
-from ..host_support.live import dispatch_live
 from ..host_support.live_consent import read_consent
 from ..host_support.manager_port import FacadeManagerHost, HostManagerPort, scan_manager_log
 from ..host_support.provider_auth import connected as provider_connected
@@ -150,6 +149,7 @@ class HostFacade:
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
         self._owns_runtime = bool(owns_runtime)
         self._started = time.time()
+        self._foreground: dict[str, tuple[str, float]] = {}
         self._closed = False
         self._managed: set[str] = set()
         # session id -> (folded view, events consumed, the last of them); see state().
@@ -158,7 +158,7 @@ class HostFacade:
         self._worktree_lock = threading.Lock()
         self._worktree_confirmation_lock = threading.Lock()
         self._worktree_used_tokens: dict[str, int] = {}
-        # The manager's six tools reach the host only through the port this builds
+        # The manager's eight tools reach the host only through the port this builds
         # (docs/manager.md). A runtime that already has a factory (tests) keeps it.
         if getattr(runtime, "manager_port_factory", False) is None:
             runtime.manager_port_factory = self._manager_port
@@ -257,10 +257,16 @@ class HostFacade:
         if callable(kind_of) and kind_of(session_id) == MANAGER_KIND:
             raise ConfigError(f"the manager session does not support {what}")
 
-    def search_files(self, query: str, limit: int = 30) -> list[str]:
+    def search_files(
+        self, query: str, limit: int = 30, *, include_directories: bool = False
+    ) -> list[str]:
         """Return bounded, visible workspace-relative file path matches."""
         return _search_files(
-            self.runtime, query, limit, max_entries=_MAX_FILE_SEARCH_ENTRIES
+            self.runtime,
+            query,
+            limit,
+            max_entries=_MAX_FILE_SEARCH_ENTRIES,
+            include_directories=include_directories,
         )
 
     def _file_search_denied_roots(self) -> tuple[Path, ...]:
@@ -1642,15 +1648,44 @@ class HostFacade:
             await self.runtime.aclose()
         return True
 
+    def focused_clients(self, session_id: str) -> tuple[str, ...]:
+        """Bounded ephemeral foreground hints, expiring after five minutes."""
+        now = time.monotonic()
+        self._foreground = {k: v for k, v in self._foreground.items() if now - v[1] < 300}
+        return tuple(k for k, (sid, _) in self._foreground.items() if sid == session_id)
+
+    def report_focus(self, client_id: str, session: str | None) -> p.SessionFocusResult:
+        if not client_id or len(client_id) > 128 or not client_id.isascii() or any(ord(c) < 33 for c in client_id):
+            raise ValueError("Invalid focus client id")
+        self.focused_clients("")
+        if not session:
+            self._foreground.pop(client_id, None)
+        else:
+            if not self.runtime.sessions.exists(session):
+                raise ValueError("Unknown foreground session")
+            if len(self._foreground) >= 64 and client_id not in self._foreground:
+                oldest = min(self._foreground, key=lambda k: self._foreground[k][1])
+                del self._foreground[oldest]
+            self._foreground[client_id] = (session, time.monotonic())
+        return p.SessionFocusResult(session=session, client_id=client_id)
+
     # -- wire dispatch -----------------------------------------------------
 
     async def handle(self, command: p.Command) -> p.Result:
         """Dispatch one protocol command, converting failures to a redacted error."""
         try:
+            if isinstance(command, p.SessionFocus):
+                return self.report_focus(command.client_id, command.session)
             return await self._dispatch(command)
         except Exception as exc:  # noqa: BLE001 - the wire never raises a traceback
+            message = redact_secrets(str(exc))
+            if isinstance(command, p.SettingsMcpAdd) and isinstance(command.entry, dict):
+                from ..host_support.settings_inventory import _draft_secrets
+                from ..mcp.client import redact_secrets as redact_draft
+
+                message = redact_draft(message, _draft_secrets(command.entry), min_length=1)
             return p.ErrorResult(
-                kind=type(exc).__name__, message=redact_secrets(str(exc))
+                kind=type(exc).__name__, message=message
             )
 
     async def _dispatch(self, command: p.Command) -> p.Result:
@@ -1674,6 +1709,10 @@ class HostFacade:
                 command = msgspec.structs.replace(command, session=resolved.get("id") or resolved["logical_id"])
         if result := await dispatch_voice(command, self.runtime):
             return result
+        # Import lazily: host_support.live also imports the host protocol, whose
+        # package initializes this facade. Keep either import order valid.
+        from ..host_support.live import dispatch_live
+
         if result := await dispatch_live(command, self):
             return result
         if isinstance(command, p.ManagerOpen):
@@ -1698,6 +1737,10 @@ class HostFacade:
             return await dispatch_speech(command, self.runtime, view)
         if result := await dispatch_settings(command, self.runtime):
             return result
+        if isinstance(command, p.SkillsInstall):
+            from ..host_support.skills_install import dispatch_skills_install  # lazy: it imports host.protocol
+
+            return await dispatch_skills_install(command, self.runtime)
         if result := await dispatch_mock(command, self):
             return result
         if result := await dispatch_providers(command, self.runtime, lambda: not self.supervisor.running):
@@ -1778,11 +1821,12 @@ class HostFacade:
                 command.ref, namespace=command.namespace, include_retired=command.include_retired
             ))
         if isinstance(command, p.SessionTree):
-            depth = int(getattr(self.runtime._load_config().v2.agents, "max_depth", 4)) + 1
+            # Fixed, not ``agents.max_depth``: sessions recorded before spawning
+            # became root-only may nest deeper and must still render.
             return p.SessionTreeResult(
                 session=command.session,
                 tree=self.runtime.sessions.tree(
-                    command.session, namespace=command.namespace, max_depth=min(depth, 64),
+                    command.session, namespace=command.namespace, max_depth=8,
                 ),
             )
         if isinstance(command, p.SessionInspect):
@@ -1814,7 +1858,10 @@ class HostFacade:
             )
         if isinstance(command, p.FileSearch):
             paths = await asyncio.to_thread(
-                self.search_files, command.query, command.limit
+                self.search_files,
+                command.query,
+                command.limit,
+                include_directories=command.include_directories,
             )
             return p.FileSearchResult(paths=paths)
         if isinstance(command, p.GitDiff):
@@ -1895,6 +1942,12 @@ class HostFacade:
             return await self.attachments.prepare(command)
         if isinstance(command, p.AttachmentPreview):
             return await self.attachments.preview(command)
+        if isinstance(command, p.SessionEnqueue) and command.session == MANAGER_SESSION_ID:
+            # A manager draft lives in memory until its first accepted message, so a
+            # restart forgets it; recreate it through the same path as ManagerOpen
+            # (which also enforces ``[manager] enabled``) rather than refusing.
+            if not self.runtime.sessions.exists(MANAGER_SESSION_ID):
+                self.open_manager()
         if isinstance(command, (p.SessionStart, p.SessionEnqueue)) and command.client_request_id:
             from ..session.submissions import submission_digest, validate_request_id
             validate_request_id(command.client_request_id)

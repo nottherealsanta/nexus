@@ -132,6 +132,45 @@ system+tools prefix (`system_tools`) and one after the last stable history
 boundary (`history`), as content-free metadata in `ModelRequest.metadata`.
 This is why skill, MCP and root-agent choices lock after the first turn.
 
+### Subagent roster notice (plan 06)
+
+The `subagent` tool description lists each tier's models and effort. A change of
+those lines is one accepted `system_tools` miss; the notice below adds no second
+one because it lives at the tail of history, never in the system prompt or tool
+schemas.
+
+- **When:** at each loop iteration boundary, after steering is consumed and the
+  iteration environment is built, before assembly. The digests come from the same
+  runner that built the advertised `subagent` description (`SubagentRunner
+  .roster_digests()`, carried on the dispatcher as `subagent_roster_digest`), so
+  the notice follows what the next request actually advertises, including after a
+  mid-turn tier reload on the extension path. Builders and `inspect_context` never
+  write.
+- **Digests:** models and efforts are hashed separately over the tier lines
+  the description actually advertises (a line the budget dropped is not hashed). Role descriptions are not part of them.
+  Effective effort is `effective_tier_effort` (`model/tiers.py`), the router's rule:
+  an explicit `tier_efforts` selection, else the shipped default for a built-in,
+  unpinned tier, else none.
+- **State:** the latest `context.notice` event (`kind: subagent_roster`, `models`,
+  `efforts`) in the session log. The first observation writes that event only (a
+  baseline, no message). A later change appends, in one `append_batch`, a user
+  message with `MessageMeta.notice = "subagent_roster"` and its `context.notice`
+  event. A resumed or forked session compares against the stored digests and does
+  not repeat.
+- **Text:** `[Nexus notice] Settings changed: subagent tier models[ and subagent
+  effort]. The subagent tool description lists current tiers, models and effort;
+  rely on it over earlier conversation.` No model ids or effort values.
+- **Alternation:** the notice is a user-role message and may follow the prompt or a
+  tool-result message. Adapters merge adjacent user turns (Anthropic, Gemini) or
+  send them in order; OpenCode renders every trailing user message as the request.
+  `current_user_index` skips notices, so the real prompt stays in the current tail.
+- **Not a prompt:** `is_user_prompt`, titles, `message_count`, `last_user` and the
+  handoff "latest user input" ignore it. Compaction and handoff treat it as an
+  ordinary message (old notices are not stripped: that would rewrite the cached
+  prefix). Manager and child sessions never get one.
+- `MessageMeta.notice` is a new optional field; ordinary messages gain
+  `"notice": null` in their stored JSON.
+
 ## Per-turn freeze and inspection
 
 `ContextManager.for_turn(...)` snapshots config, environment and the rendered

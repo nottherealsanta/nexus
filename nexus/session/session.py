@@ -34,6 +34,7 @@ import base64
 import binascii
 import contextlib
 import os
+import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
@@ -72,6 +73,16 @@ _INTERRUPTED_TEMPLATE = (
     "Tool call {tool_use_id!r} ({name}) was interrupted before it ran because the "
     "process stopped mid-turn. It was NOT executed. Re-issue the call if you still "
     "need its result."
+)
+
+_NOTICE_EVENT = "context.notice"
+_ROSTER_NOTICE = "subagent_roster"
+_UNLOADED = object()
+#: The whole model-visible notice: it names the setting and defers to the
+#: ``subagent`` tool description, and never repeats model ids or effort values.
+_ROSTER_NOTICE_TEXT = (
+    "[Nexus notice] Settings changed: {changed}. The subagent tool description "
+    "lists current tiers, models and effort; rely on it over earlier conversation."
 )
 
 #: Error recorded on a turn or ``!`` run the process stopped before it ended.
@@ -281,6 +292,10 @@ class _Fanout:
             await self._space.wait()
         self._offer(item)
 
+    def put_nowait(self, item: Any) -> None:
+        """Non-blocking insert for synchronous emitters (may exceed the bound)."""
+        self._offer(item)
+
     async def get(self) -> Any:
         while not self._items:
             self._data.clear()
@@ -424,6 +439,7 @@ class Session:
         # User-run ``!`` shell results waiting for a safe boundary in the
         # running turn (never a turn trigger; see ``add_context``).
         self._pending_context: list[list[ContentBlock]] = []
+        self._roster_digest: dict[str, str] | None | object = _UNLOADED
         #: Set when no detached turn is running. ``wait_idle`` awaits this
         #: instead of polling, so it never busy-waits.
         self._idle = asyncio.Event()
@@ -431,6 +447,9 @@ class Session:
         #: The current detached turn's task, retained so it is not garbage
         #: collected and so callers can await it.
         self._turn_task: asyncio.Task | None = None
+        #: The running ``send`` turn's attached queue, so events the session
+        #: persists itself mid-turn still reach that stream.
+        self._attached_fanout: _Fanout | None = None
         #: Pending approval request ids observed on the event stream, so a drop
         #: to zero viewers can apply the unattended policy without a UI call.
         self._pending_permissions: set[str] = set()
@@ -1398,6 +1417,89 @@ class Session:
             self.append_message(Message(role="user", content=content,
                                         meta=MessageMeta(turn_id=self.active_turn_id)))
 
+    def _noted_roster_digest(self) -> dict[str, str] | None:
+        """The last roster digests recorded in the log (cached per handle)."""
+        if self._roster_digest is _UNLOADED:
+            latest: dict[str, str] | None = None
+            for event in self.read().events():
+                data = event.data
+                if (
+                    event.type == _NOTICE_EVENT
+                    and isinstance(data, Mapping)
+                    and data.get("kind") == _ROSTER_NOTICE
+                    and isinstance(data.get("models"), str)
+                    and isinstance(data.get("efforts"), str)
+                ):
+                    latest = {"models": data["models"], "efforts": data["efforts"]}
+            self._roster_digest = latest
+        return self._roster_digest  # type: ignore[return-value]
+
+    def note_subagent_roster(self, digest: Mapping[str, str] | None) -> bool:
+        """Record what the ``subagent`` tool description advertises for this request.
+
+        Called by the loop at an iteration boundary with the digests of the
+        tier models and efforts in the schemas it is about to send. The first
+        call only records a baseline ``context.notice`` event. A later change
+        appends one user-role notice message at the tail of history, together
+        with its ``context.notice`` event in one batch, so it never rewrites the
+        cached prefix and a resume compares against the stored digests instead
+        of repeating it. Returns whether a notice message was appended.
+        """
+        if self._retired or self.kind in ("manager", "child") or not digest:
+            return False
+        models, efforts = digest.get("models"), digest.get("efforts")
+        if not isinstance(models, str) or not isinstance(efforts, str):
+            return False
+        current = {"models": models, "efforts": efforts}
+        previous = self._noted_roster_digest()
+        if previous == current:
+            return False
+        if previous is None:
+            record = self._emit(
+                _NOTICE_EVENT, {"kind": _ROSTER_NOTICE, **current, "baseline": True}
+            )
+            if record is not None:
+                self._offer_attached(record.event)
+            self._roster_digest = current
+            return False
+        changed = [
+            label
+            for key, label in (("models", "subagent tier models"), ("efforts", "subagent effort"))
+            if previous.get(key) != current[key]
+        ]
+        text = _ROSTER_NOTICE_TEXT.format(changed=" and ".join(changed))
+        turn_id = self.active_turn_id
+        stamp = time.time()
+        records = self._store.append_batch(self._id, [
+            lambda seq: MessageRecord(
+                seq=seq, ts=stamp,
+                message=Message(role="user", content=[Text(text)],
+                                meta=MessageMeta(turn_id=turn_id, notice=_ROSTER_NOTICE)),
+            ),
+            lambda seq: EventRecord(seq=seq, ts=stamp, event=Event(
+                type=_NOTICE_EVENT, seq=seq, ts=stamp, session=self._id, turn=turn_id,
+                data={"kind": _ROSTER_NOTICE, **current, "changed": changed},
+            )),
+        ])
+        self._read = None
+        self._roster_digest = current
+        for record in records:
+            if isinstance(record, EventRecord):
+                self._observe_event(record.event)
+                self._publish(record.event)
+                self._offer_attached(record.event)
+        return True
+
+    def _offer_attached(self, event: Event) -> None:
+        """Hand an event persisted off the loop's sink to the attached ``send`` stream.
+
+        The loop only yields what its sink emits; events the session persists
+        itself mid-turn must reach the same queue or live and replay diverge.
+        """
+        fanout = self._attached_fanout
+        if fanout is not None:
+            fanout.put_nowait(event)
+
     async def consume_steering(self) -> bool:
         """Persist steering messages at a safe model boundary (plan section 4)."""
         # Shell context is appended at the boundary but does not count as
@@ -1927,7 +2029,7 @@ class Session:
         if self.kind == "manager":
             # The manager runs no hooks at all (SessionStart, UserPromptSubmit,
             # SessionEnd): a hook command is an arbitrary process and the manager's
-            # whole safety argument is its six structural tools.
+            # whole safety argument is its eight structural tools.
             return None
         try:
             return provider()
@@ -2205,6 +2307,7 @@ class Session:
     ) -> asyncio.Task:
         """Start the detached producer task for a prepared turn."""
         sink = _SessionEventSink(self, fanout)
+        self._attached_fanout = fanout
         task = asyncio.create_task(
             run_turn(
                 session=self,
@@ -2225,7 +2328,12 @@ class Session:
         )
         self._turn_task = task
         if fanout is not None:
-            task.add_done_callback(lambda _task: fanout.close())
+            def _close_fanout(_task: asyncio.Task) -> None:
+                if self._attached_fanout is fanout:
+                    self._attached_fanout = None
+                fanout.close()
+
+            task.add_done_callback(_close_fanout)
         task.add_done_callback(self._on_turn_done)
         return task
 

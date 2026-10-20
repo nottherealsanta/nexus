@@ -3,6 +3,13 @@
     "browser-use": {
       "command": "uvx",
       "args": ["--from", "browser-use[cli]", "browser-use", "--mcp"]
+    },
+    "nexus-manager-debug": {
+      "enabled": false,
+      "command": "uv",
+      "args": ["run", "python", "-m", "nexus.devtools.manager_debug_mcp"],
+      "env": {"NEXUS_DEBUG_MCP": "1"},
+      "tool_loading": "search"
     }
   }
 }

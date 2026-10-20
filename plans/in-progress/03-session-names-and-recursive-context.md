@@ -1,8 +1,12 @@
 # Plan 03: Session names, code mode, and recursive (RLM-style) context access
 
 Status: implemented offline (2026-10-19); not verified live. CM1-CM8, N1, N2 and
-C1-C5 are in the tree with offline tests; E1 (evaluation and live trials) is NOT
-done, nor are the Ratatui/desktop visual reviews. Where this plan and the code
+C1-C5 are in the tree with offline tests; E1 is partial (an offline scripted
+harness is written but not yet run, see `docs/devtools.md`; live provider trials and the RLM live trial
+are NOT done), nor are the Ratatui/desktop visual reviews. **Default changed by explicit user
+request (2026-10-19):** `[code_mode] enabled` now defaults to `true` without live trials, and
+`pydantic-monty==1.1.0` is a base dependency (the `codemode` extra is a compatibility alias).
+`expose = "read_only"` and `context = false` are unchanged. Where this plan and the code
 differ, the code and `docs/` win: the Monty pool is a per-call helper process, not
 daemon-owned (see `docs/codemode-monty-compat.md`, `docs/decisions.md`); sandbox
 names are flat, not `ctx.*`; the session name is stored in the row, not logged as
@@ -431,8 +435,9 @@ reason.
 `nexus/tools/codemode/monty_adapter.py` (new, L3 tool support) is the **only**
 module that imports `pydantic_monty`:
 
-- Depends on a **pinned** `pydantic-monty==1.1.0` (spiked §2.3); optional extra
-  `nexus[codemode]`. If not installed, `code` is absent from the catalog and
+- Depends on a **pinned** `pydantic-monty==1.1.0` (spiked §2.3); a base
+  dependency (the `nexus[codemode]` extra is a compatibility alias). If it is missing
+  or the wrong version, `code` is absent from the catalog and
   `nexus doctor` says why. `nexus doctor` also reports the Monty version and
   the `monty` binary path.
 - One API used by Nexus:
@@ -669,7 +674,7 @@ until CM8.
 | C3 | `context` namespace in code mode for `self` only | CM5, C2 | done |
 | C4 | Child targets behind `ContextQuery(<name>)` (`ask`), up-front via `targets` | C3, N1 | done |
 | C5 | `llm()` sub-calls with budgets and `code.call kind=llm` | C4 | done |
-| E1 | Evaluation: offline benchmark with `ScriptedProvider` (programs as scripted tool calls) for code mode vs direct tools on fan-out tasks (many greps/reads, MCP list-and-filter); one live trial per supported provider; one RLM trial on a long child transcript. Decide default enablement, default exposure, and U7/U8 | CM8, C5 | not done |
+| E1 | Evaluation: offline benchmark with `ScriptedProvider` (programs as scripted tool calls) for code mode vs direct tools on fan-out tasks (many greps/reads, MCP list-and-filter); one live trial per supported provider; one RLM trial on a long child transcript. Decide default enablement, default exposure, and U7/U8 | CM8, C5 | partial: offline harness written but NOT yet run or verified (`benchmark/codemode_eval.py`, `tests/test_codemode_eval.py`, `docs/devtools.md`); live trials and the decisions are NOT done |
 
 ---
 
@@ -677,8 +682,8 @@ until CM8.
 
 - Names: additive table; old clients ignore the field. Rollback = stop showing
   names; never delete the table (names must stay retired).
-- Code mode is behind `[code_mode] enabled = false` and an optional
-  dependency. With it off or Monty missing, nothing changes: no tool, no
+- Code mode is on by default (`[code_mode] enabled = true`; set `false` to
+  disable) and Monty is a base dependency. With it off or Monty missing, nothing changes: no tool, no
   catalog text, no pool. Removing it leaves only `code.*` events in logs,
   which the reducer folds as generic rows.
 - Monty upgrade policy: pin the exact version; upgrade only with the adapter
@@ -775,7 +780,7 @@ Acceptance:
 ## 8. Decisions and open questions
 
 Recommended defaults: global unique names, never reused; three words; no
-rename. Code mode off by default; Python via Monty 1.1.0 in a daemon-owned
+rename. Code mode on by default (user decision, 2026-10-19); Python via Monty 1.1.0 in a daemon-owned
 subprocess pool; one checkout per call, no REPL state; durable `store`/`load`;
 type-check against generated stubs before running; read-only exposure; direct
 tools stay; nested calls through the full pipeline and shown in full to the

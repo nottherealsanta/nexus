@@ -70,7 +70,7 @@ def availability():
     try:
         version = metadata.version('pydantic-monty')
     except metadata.PackageNotFoundError:
-        return {'available': False, 'reason': 'install nexus[codemode]', 'version': None}
+        return {'available': False, 'reason': 'reinstall nexus-harness: pydantic-monty==1.1.0 is missing', 'version': None}
     spec = util.find_spec('pydantic_monty')
     return {'available': version == '1.1.0', 'version': version,
             'reason': '' if version == '1.1.0' else 'requires pydantic-monty==1.1.0',

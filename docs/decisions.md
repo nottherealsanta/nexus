@@ -77,6 +77,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **A hook is policy, not a permission;** a `modify` is re-validated and re-gated. | Hooks cannot launder a denied call. | `hooks/` |
 | **Blocked subagents report to the root, never to the user; the root escalates.** `escalate` exists only in a child's catalog, grants nothing and is allowed in every mode; the child then ends (no pause/resume). | The root owns the conversation and the user; a human answer is the only thing that widens authority. | [agents.md](agents.md), `tools/builtin/escalate.py` |
 | **Children never exceed parents:** tools intersect, permissions inherit, tier is clamped, depth/fan-out/spend bounded. | Delegation must not be an escalation path. | [agents.md](agents.md) |
+| **Only the root session spawns subagents (plan 07).** Enforced structurally by context, not by role name: a child runtime has no runner, `subagent` is removed from every child catalog (canonical `Task` alias included), and `spawn` refuses at depth ≥ 1. `agents.max_depth` above 1 is ignored; 0 disables spawning. Session-tree reads use a fixed depth of 8 so legacy nested logs still render. A name allowlist would strip user root roles and leave custom children a hole; opting a role back into nesting needs a new recorded decision. | One rule covers built-ins, user roles, worktree children, extensions and code mode. | [agents.md](agents.md), `agents/runner.py` |
 | **Worktree integration applies frozen bytes to a clean parent with a rollback journal; no Git commit/reset/stash/checkout; the user acknowledges an exact review.** | Reviewable, recoverable, no surprise history changes. | `agents/worktree_*.py` |
 | **MCP is wrapped once (`mcp/client.py`); its output is untrusted;** a tool is mutating unless `readOnlyHint` is explicitly true; a dead server never fails a turn. | Upstream churn stays in one file; fail-safe defaults. | `mcp/` |
 | **Web tools are public-address-only with address pinning;** search results' links are never fetched. | SSRF and rebinding defence; injection surface reduction. | `net/` |
@@ -148,6 +149,14 @@ all-or-nothing in Rust, which asks the bridge to drop them again when it decline
 Keyboard focus on the list follows the transcript's focus keys (Tab/Down/Up) rather than a new
 chord; Enter/`s` promote, Delete/Backspace/`x` remove and Alt+Up/Down reorder because those
 keys have no meaning on a focused row and no existing binding applies there.
+
+## Skills from `npx skills`: stage, then import (2026-10)
+
+`npx skills add` only runs in a throwaway directory with `--copy`; Nexus validates and copies
+the result into `.agents/skills/` or `~/.nexus/skills/` itself. `~/.nexus/skills` is not a folder
+`npx skills -g` knows, its default symlinks would be refused by the resource resolver, and
+staging keeps the destination, path policy, conflicts and trash ours. Not a model tool, not
+reachable by paired devices, and the strict frontmatter parser is not loosened for public skills.
 
 ## Another project's session that fails to open is a toast, not silence
 
@@ -938,8 +947,26 @@ re-index, `ModelRouter.set_tiers`), which touches no provider. Subagent models a
 resolved at spawn, so the next spawn uses the new order; running children keep their
 model. `restart_required` remains only for runtimes with injected routes, and for
 provider-changing settings, which still need an idle runtime.
-Test: `tests/test_host_tier_hot_apply.py`. Not verified: the roster's effort labels in an
-already-running turn (they read the runner's construction-time config).
+Test: `tests/test_host_tier_hot_apply.py`. The roster's effort labels now read the
+router's live efforts (see the next entry).
+
+## `subagent` roster change notice at the history tail (2026-10, plan 06)
+
+The tool description lists tier models and effort. Changing them costs one
+`system_tools` cache miss, accepted. The model is told through a short user-role
+notice appended at the **tail** of persisted history, which adds no second miss; it
+names the setting and defers to the description (no model ids or efforts).
+Corrections to the first plan text: the notice is driven by the **request boundary**
+(the digests of the schemas about to be sent), not by `reload_tier_config`, so it
+matches what the next request advertises, including a reload during a running turn;
+and old notices are **never stripped** (that would rewrite the cached prefix), they
+age out through ordinary compaction/handoff. Digests are split (models, efforts) so
+the text is precise, taken from the advertised tier lines (not role descriptions),
+and stored as `context.notice` events, so resume and fork do not repeat. The first
+observation is a baseline event with no message. Per-role `reasoning_effort` is shown
+in the roster but is not tracked. Cost: `MessageMeta.notice` adds `"notice": null` to
+stored messages. Not verified: provider-usage evidence of the single miss.
+Tests: `tests/test_subagent_roster_notice.py`.
 
 ## Transcript keeps a 20-row bottom buffer, and following parks there (2026-10)
 
@@ -1044,7 +1071,7 @@ draws its final state at once, with the `total ... of the window` row kept (it r
 bars). `context::Anim`, `Cache.ctx` and the `main.rs` frame-clock hook are gone; the window for
 the share lives in `Cache.context_window`.
 
-## The workspace manager session: a pinned, six-tool session in the main namespace (2026-10)
+## The workspace manager session: a pinned, eight-tool session in the main namespace (2026-10)
 
 Plan 02 ([manager.md](manager.md)) adds one durable session per workspace that starts, watches and reads
 the user's root sessions. What we decided, and why:
@@ -1056,10 +1083,18 @@ the user's root sessions. What we decided, and why:
 - **Managed links are `session.linked` records in the manager's log**, not columns on the child. The edge is
   written before the root starts, so no started root lacks its link; the manager's authority to read or cancel is
   derived from that log, never from model text.
-- **A launch needs a real user prompt in the current turn, named by id, the manager attended, and passes caps**
-  (3 per turn, 8 live). Confirmation is unconditional and fresh each time (no pre-approval; unattended means deny); the
-  port re-checks attendance as a second line. A launched root is an ordinary root: workspace default model, normal
+- **A launch needs a real user prompt in the current turn, named by id, and passes caps**
+  (3 per turn, 8 live). Launch, cancel and send need **no approval** and work unattended (updated: the earlier
+  design asked the viewer every time and denied unattended); the manager permission engine allows exactly the
+  manager catalog by name and denies any other tool, and provenance, ownership and caps are the guard. A launched root is an ordinary root: workspace default model, normal
   root permissions, nothing inherited from the manager.
+- **`session_show` is a durable request, not a UI command, and needs no approval.** The host cannot reach a
+  client's screen, so it writes one `manager.show` record in the manager log (target, origin message id, turn, the
+  clients that reported the manager in front, a Live flag, an expiry 30 s ahead; no user text). A native client acts
+  only on a fresh, unreplayed record that names it and still shows the manager (or whose own Live call follows the
+  manager), and never over a modal, form, dashboard, recording or pending prompt. The tool result says `requested` or
+  `no_viewer`, never that the session is on screen. The cost: a Live call that mis-hears "show me X" can move the
+  user's screen without a prompt ([security.md](security.md)); nothing is sent, started or cancelled by it.
 - **No model override on launch.** The Live transcript carries model-authored `Voice:` lines, so "the human named
   this model" cannot be checked literally; launched roots use the workspace default.
 - **Result reads need a reason**: the manager launched the session, or the user named it in their latest message.

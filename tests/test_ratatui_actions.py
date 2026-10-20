@@ -560,6 +560,7 @@ async def test_submit_reuses_identity_after_lost_reply():
 
 
 async def test_failed_project_open_toasts_the_redacted_reason_and_keeps_the_dashboard():
+    import asyncio
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from nexus.errors import ConfigError
@@ -567,6 +568,7 @@ async def test_failed_project_open_toasts_the_redacted_reason_and_keeps_the_dash
     from nexus.host_support.errors import error_text
 
     shell = ShellActions.__new__(ShellActions)
+    shell._switch_lock = asyncio.Lock()
     shell.workspace = "/here"
     shell.attachment_draft_key = ("/here", "s")
     shell.usage_cache = None

@@ -63,7 +63,8 @@ async def test_keyboard_lists_every_shortcut_read_only(shell):
     tables = [b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "table"]
     keys = {row[1] for table in tables for row in table["rows"]}
     assert "Ctrl+B" in keys and "Ctrl+X A" in keys and "Ctrl+X X" in keys
-    # Three leader keys live only on this page: Ctrl+X X, Ctrl+X A and Ctrl+X Shift+N.
+    # Three leader keys live only on this page: Ctrl+X X, Ctrl+X Y (toast action) and Ctrl+X Shift+N.
+    assert "Ctrl+X Y" in keys
     assert sum(len(t["rows"]) for t in tables[:2]) == len(SHORTCUTS) + len(LEADER_SHORTCUTS) + 3
     assert "Ctrl+X Shift+N" in keys
     listed = [row[1] for table in tables for row in table["rows"]]

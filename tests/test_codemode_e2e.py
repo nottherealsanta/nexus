@@ -132,7 +132,7 @@ async def test_gather_of_max_nested_calls_succeeds_and_one_more_hits_limit(tmp_p
 
 async def test_unavailable_monty_runs_without_code_tool(tmp_path, monkeypatch):
     import nexus.tools.codemode.tool as code_tool
-    unavailable = {"available": False, "reason": "install nexus[codemode]", "version": None}
+    unavailable = {"available": False, "reason": "reinstall nexus-harness: pydantic-monty==1.1.0 is missing", "version": None}
     monkeypatch.setattr(code_tool, "availability", lambda: unavailable)
     provider = ScriptedProvider(text_response("hello"))
     runtime = Runtime(tmp_path, config=make_config(), providers={"scripted": provider})
@@ -146,6 +146,22 @@ async def test_unavailable_monty_runs_without_code_tool(tmp_path, monkeypatch):
         assert report["code_mode"]["enabled"] and not report["code_mode"]["available"]
         assert "unavailable" in report["code_mode"]["note"]
         assert report["code_mode"]["reason"]
+    finally:
+        await runtime.aclose()
+
+
+async def test_agent_definition_turn_keeps_code_tool(tmp_path):
+    """An inheriting root agent (``build``) must not lose ``code`` at turn start."""
+    runtime = Runtime(tmp_path, config=make_config(),
+                      providers={"scripted": ScriptedProvider(text_response("x"))})
+    try:
+        session = runtime.session("agent-code")
+        session._turn_agent_definition = runtime.agents.resolve("build", context="root")
+        turn = runtime._make_tool_turn(
+            config=make_config(), session=session, turn_id="t1", attended=False)
+        assert "code" in turn.manager.names
+        assert "code" in {schema["name"] if isinstance(schema, dict) else schema.name
+                          for schema in turn.schemas}
     finally:
         await runtime.aclose()
 

@@ -91,7 +91,7 @@ def file_menu(query: str, hits: Sequence[str], pool: Sequence[str]) -> list[str]
     """Exact hits first, then typo/fuzzy matches and padding from ``pool``."""
     seen = set(hits)
     rest = [p for p in pool if p not in seen]
-    rows = [(p, (p.rsplit("/", 1)[-1],)) for p in rest]
+    rows = [(p, (p.rstrip("/").rsplit("/", 1)[-1],)) for p in rest]
     return (list(hits) + rank_menu(query, rows, MENU_LIMIT))[:max(MENU_LIMIT, len(hits))] if len(hits) < MENU_LIMIT \
         else list(hits)
 
@@ -115,11 +115,15 @@ def filter_prefix(values: Sequence[str], query: str, limit: int = ARGUMENT_LIMIT
     return out[:limit]
 
 
-async def complete(client: Any, prefix: str, query: str, *, efforts: Sequence[str] = ()) -> list[str]:
+async def complete(
+    client: Any, prefix: str, query: str, *, efforts: Sequence[str] = (), include_directories: bool = False
+) -> list[str]:
     """Candidates for the token ``query`` at the end of composer text ``prefix``.
 
     File completions are returned without the leading ``@`` (the editor
-    re-inserts it). Host failures give an empty list, never an error.
+    re-inserts it). ``include_directories`` adds ``dir/`` rows to ``@``
+    completion only (never ``/attach``). Host failures give an empty list,
+    never an error.
     """
     head, _, _ = prefix.partition(" ")
     try:
@@ -128,17 +132,18 @@ async def complete(client: Any, prefix: str, query: str, *, efforts: Sequence[st
         if query.startswith("/"):
             return command_matches(query)
         if query.startswith("@"):
-            return await _files(client, query[1:])
+            return await _files(client, query[1:], include_directories)
     except (ClientError, TransportError, OSError, ValueError):
         return []
     return []
 
 
-async def _files(client: Any, query: str) -> list[str]:
-    hits = list(await client.search_files(query, limit=FILE_LIMIT))[:FILE_LIMIT]
+async def _files(client: Any, query: str, include_directories: bool = False) -> list[str]:
+    options = {"include_directories": True} if include_directories else {}
+    hits = list(await client.search_files(query, limit=FILE_LIMIT, **options))[:FILE_LIMIT]
     if len(hits) >= MENU_LIMIT:
         return hits
-    pool = list(await client.search_files("", limit=100))
+    pool = list(await client.search_files("", limit=100, **options))
     return file_menu(query, hits, pool)
 
 

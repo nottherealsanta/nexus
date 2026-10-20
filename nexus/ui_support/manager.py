@@ -2,32 +2,24 @@
 
 Pure helpers over the ``ManagerState`` host result: the pinned sidebar entry
 (status, model, sign-in, Live readiness), the cross-session Live notice, the
-commands a manager chat refuses, and the unconditional launch/cancel approval
-rows. Nothing here talks to the host. The constants mirror ``nexus.host.facade``
+and the commands a manager chat refuses. Nothing here talks to the host. The constants mirror ``nexus.host.facade``
 and ``nexus.agents.manager_prompt``; this layer may not import them, so
 ``tests/test_manager_ui.py`` pins the equality.
 """
 from __future__ import annotations
 
-import textwrap
-from collections.abc import Mapping
 from typing import Any
 
-from .prompts import PromptChoice
 from .text import escape_controls
 
 #: The fixed id of the workspace manager session (``nexus.host.facade.MANAGER_SESSION_ID``).
 MANAGER_SESSION_ID = "nexus-manager"
 #: The model route the manager is pinned to (``manager_prompt.MANAGER_MODEL_REF``).
-MANAGER_MODEL_REF = "github-copilot/gpt-6-luna"
-#: The manager tools whose every call is confirmed by the human, never remembered.
-CONFIRMED_TOOLS = frozenset({"session_launch", "session_cancel"})
-#: The manager bundle name; a permission request for these tools carries it.
-MANAGER_BUNDLE = "manager"
+MANAGER_MODEL_REF = "codex/gpt-6-luna"
 
 ENABLE_HINT = "Turn it on with [manager] enabled = true in nexus.toml, then restart the daemon."
 DISABLED_SUMMARY = "Off · [manager] enabled = false"
-SIGN_IN_HINT = "sign in to GitHub Copilot under Settings > Providers"
+SIGN_IN_HINT = "sign in to ChatGPT (Codex) under Settings > Providers"
 
 #: Commands that configure an ordinary session; the manager is structural, so they are refused here
 #: (the host refuses them too, this is the early, readable answer).
@@ -49,9 +41,9 @@ CONSENT_LINES: tuple[str, ...] = (
     "    (file contents and output can be inside)",
     "  - the instructions of sessions it launches",
     "",
-    "Anything said aloud to the Manager can start a",
-    "session, but launching and cancelling are always",
-    "confirmed on screen. The voice can never approve.",
+    "Anything said aloud to the Manager can start,",
+    "message or cancel a session without a further",
+    "confirmation on screen.",
     "",
     "Asked separately from the base Live notice; withdraw",
     "it with /live revoke manager (keeps the base notice).",
@@ -125,7 +117,7 @@ def entry(state: Any, *, current: str = "", error: str = "") -> dict[str, Any]:
         if not signed_in:
             notes.append(f"Opening it works; turns fail until you {sign_in}")
         notes.append(live_text)
-        notes.append('Launch: ask "Start a session to do X"; review and confirm the instruction.')
+        notes.append('Launch: ask "Start a session to do X"; it starts right away.')
         notes.append('Find: ask "What finished in the last two hours?"; /sessions opens the picker; m returns here.')
     return {
         "known": True, "enabled": enabled, "active": bool(session) and session == current,
@@ -146,7 +138,7 @@ def status_lines(state: Any) -> dict[str, str]:
         "Session": _clean(getattr(state, "session", "")) or "not created yet",
         "State": _clean(getattr(state, "state", "")) or "none",
         "Model": _clean(getattr(state, "model", "")) or MANAGER_MODEL_REF,
-        "GitHub Copilot": "signed in" if getattr(state, "signed_in", False)
+        "Codex (manager model)": "signed in" if getattr(state, "signed_in", False)
         else _clean(getattr(state, "sign_in", "")) or SIGN_IN_HINT,
         "Codex (GPT Live)": "signed in" if getattr(state, "codex_signed_in", False) else "not signed in",
         "Live notice": yes(getattr(state, "live_consent", False)),
@@ -158,65 +150,8 @@ def status_lines(state: Any) -> dict[str, str]:
     }
 
 
-# -- confirmation ------------------------------------------------------------------------
-
-
-def is_confirmed(data: Mapping[str, Any]) -> bool:
-    """Whether a permission request is a manager launch/cancel (always asked, never remembered)."""
-    tool = str(data.get("tool") or "")
-    bundle = data.get("bundle")
-    return tool in CONFIRMED_TOOLS and (bundle in (None, "", MANAGER_BUNDLE))
-
-
-def approval_choices(data: Mapping[str, Any]) -> tuple[PromptChoice, ...]:
-    """Only the one-off decisions: launch/cancel, or keep as is. No "always" row exists."""
-    cancel = str(data.get("tool") or "") == "session_cancel"
-    return (
-        PromptChoice("Stop that session" if cancel else "Launch this session", "allow_once",
-                     "this once; asked again next time", "y"),
-        PromptChoice("Keep it running" if cancel else "Do not launch", "deny_once",
-                     "the manager is told no", "n"),
-    )
-
-
-_ROW_WIDTH = 72
-_ROW_LIMIT = 40
-ASKED_EVERY_TIME = "Asked every time · this answer is never remembered"
-
-
-def _wrapped(text: str) -> list[str]:
-    rows: list[str] = []
-    for line in str(text).splitlines() or [""]:
-        rows.extend(textwrap.wrap(line, _ROW_WIDTH, replace_whitespace=False, drop_whitespace=False,
-                                  break_long_words=True) or [""])
-    return rows
-
-
-def confirmation(data: Mapping[str, Any]) -> dict[str, Any]:
-    """Prompt fields for a manager launch/cancel: ``title``, ``what`` rows, readable ``lines``.
-
-    The whole instruction (up to the host's 16 KiB) is wrapped into rows; if the rows are cut the
-    last one says how many characters were not shown. ``why`` stays empty: there is no rule to remember.
-    """
-    cancel = str(data.get("tool") or "") == "session_cancel"
-    key = escape_controls(str(data.get("key") or data.get("preview") or ""))
-    if cancel:
-        title = "Stop a session the manager launched?"
-        head = "Cancels it and drops its queued input (id: reason):"
-    else:
-        title = "Launch a new session?"
-        head = "Starts a root session with this instruction ([role] first if named):"
-    body = _wrapped(key)
-    shown = body[:_ROW_LIMIT]
-    if len(body) > _ROW_LIMIT:
-        shown.append(f"… {len(''.join(body[_ROW_LIMIT:])):,} more characters not shown (the tool call has all of it)")
-    what = [head, *shown]
-    return {"title": title, "what": what, "why": ASKED_EVERY_TIME, "what_rows": 8,
-            "lines": [title, "", *what, "", ASKED_EVERY_TIME]}
-
-
 __all__ = [
-    "ASKED_EVERY_TIME", "CONFIRMED_TOOLS", "CONSENT_LINES", "DISABLED_SUMMARY", "ENABLE_HINT", "MANAGER_BUNDLE",
+    "CONSENT_LINES", "DISABLED_SUMMARY", "ENABLE_HINT",
     "MANAGER_MODEL_REF", "MANAGER_SESSION_ID", "PRIVACY_NOTE", "REFUSED_COMMANDS", "SHELL_REFUSED",
-    "approval_choices", "confirmation", "entry", "is_confirmed", "live_line", "status_lines", "status_of",
+    "entry", "live_line", "status_lines", "status_of",
 ]

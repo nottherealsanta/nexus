@@ -268,8 +268,8 @@ Existing summary records initialize `context_head_seq`; handoff execution is a
 later phase. Doctor reports the project-local `unattached_children` count.
 
 `SessionManager.tree` and host `SessionTree` are bounded read-only projections:
-500 nodes including the explicit `unattached` collection; host depth is configured
-agent depth plus one (hard cap 64). Reads neither open handles nor recover logs,
+500 nodes including the explicit `unattached` collection; host depth is a fixed 8
+(hard cap 64), independent of `agents.max_depth`. Reads neither open handles nor recover logs,
 create lock files, or update project activity. Liveness comes from live handles
 or existing OS turn locks, never old `turn.started` events. Dead unterminated
 turns display `interrupted`. Fork relatives are not tree children. Display text

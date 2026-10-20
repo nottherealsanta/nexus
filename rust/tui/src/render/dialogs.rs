@@ -651,7 +651,9 @@ pub fn prompt_area(transcript: Rect, prompt: &crate::bridge::Prompt) -> Rect {
         prompt.lines.len().clamp(1, 6)
     } else {
         // A manager launch asks for more `what` rows so its instruction can be read in full.
-        structured.len().clamp(1, if prompt.what_rows > 0 { 16 } else { 10 })
+        structured
+            .len()
+            .clamp(1, if prompt.what_rows > 0 { 16 } else { 10 })
     } as u16;
     let extra = if prompt.kind == "question" { 1 } else { 0 };
     let height = (2 + content + prompt.choices.len() as u16 + extra + 1).min(transcript.height);
@@ -692,7 +694,12 @@ pub fn prompt_rows(prompt: &crate::bridge::Prompt) -> Vec<PromptRow> {
     if !prompt.what.is_empty() {
         rows.push(PromptRow::Heading("What happens"));
         if prompt.what.len() > limit {
-            rows.extend(prompt.what[..limit - 1].iter().cloned().map(PromptRow::Text));
+            rows.extend(
+                prompt.what[..limit - 1]
+                    .iter()
+                    .cloned()
+                    .map(PromptRow::Text),
+            );
             rows.push(PromptRow::More(prompt.what.len() - (limit - 1)));
         } else {
             rows.extend(prompt.what.iter().cloned().map(PromptRow::Text));
@@ -908,7 +915,11 @@ mod tests {
         .unwrap();
         let rows = prompt_rows(&prompt);
         // Four what rows are all shown (the default limit would clip them to three + `… 1 more`).
-        for line in ["fix the flaky sync test", "then run the suite", "and report back"] {
+        for line in [
+            "fix the flaky sync test",
+            "then run the suite",
+            "and report back",
+        ] {
             assert!(rows.contains(&PromptRow::Text(line.into())), "{line}");
         }
         assert!(!rows.iter().any(|row| matches!(row, PromptRow::More(_))));

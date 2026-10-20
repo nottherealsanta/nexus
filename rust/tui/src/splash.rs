@@ -39,8 +39,36 @@ use unicode_width::UnicodeWidthStr;
 
 /// The splash clock tick (125 Hz); redraws are paced separately at 60 fps.
 pub const FRAME: Duration = Duration::from_millis(8);
-/// The small half-block wordmark (also the particles' targets).
-pub const WORDMARK: [&str; 2] = ["█▄ █ █▀▀ ▀▄▀ █ █ █▀", "█ ▀█ ██▄ █ █ █▄█ ▄█"];
+/// The full NEXUS wordmark (also the particles' targets): every non-blank cell is a particle.
+pub const WORDMARK: [&str; 8] = [
+    "888b      88  88888888888  8b        d8  88        88   ad88888ba",
+    "8888b     88  88            Y8,    ,8P   88        88  d8\"     \"8b",
+    "88 `8b    88  88             `8b  d8'    88        88  Y8,",
+    "88  `8b   88  88aaaaa          Y88P      88        88  `Y8aaaaa,",
+    "88   `8b  88  88\"\"\"\"\"          d88b      88        88    `\"\"\"\"\"8b,",
+    "88    `8b 88  88             ,8P  Y8,    88        88          `8b",
+    "88     `8888  88            d8'    `8b   Y8a.    .a8P  Y8a     a8P",
+    "88      `888  88888888888  8P        Y8   `\"Y8888Y\"'    \"Y88888P\"",
+];
+/// The small half-block wordmark, used when the screen is too small for `WORDMARK`.
+pub const WORDMARK_SMALL: [&str; 2] = ["█▄ █ █▀▀ ▀▄▀ █ █ █▀", "█ ▀█ ██▄ █ █ █▄█ ▄█"];
+
+/// Display width of the widest row.
+fn mark_width(mark: &[&str]) -> i32 {
+    mark.iter().map(|row| row.width()).max().unwrap_or(0) as i32
+}
+
+/// The full wordmark when it fits `area` (its width, plus the blank row, bar and step name
+/// below it); otherwise the small one, which is clipped rather than panicking on tiny screens.
+fn wordmark_for(area: Rect) -> &'static [&'static str] {
+    if i32::from(area.width) >= mark_width(&WORDMARK)
+        && i32::from(area.height) >= WORDMARK.len() as i32 + 3
+    {
+        &WORDMARK
+    } else {
+        &WORDMARK_SMALL
+    }
+}
 /// Milestone names, in order. Reaching step `n` (1-based) marks the first `n` as done.
 pub const STEPS: [&str; 5] = ["daemon", "workspace", "providers", "session", "ready"];
 const BAR_SEGMENTS: usize = 30;
@@ -262,7 +290,15 @@ impl Splash {
 
     /// The ambient field: dim dots drifting across `area`, skipping `keep_clear` so the
     /// wordmark and bar stay readable. Cells it paints are exactly those `ambient_cell` gives.
-    fn ambient(&self, buf: &mut Buffer, area: Rect, frame: u32, keep_clear: Rect, ascii: bool, bg: Style) {
+    fn ambient(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        frame: u32,
+        keep_clear: Rect,
+        ascii: bool,
+        bg: Style,
+    ) {
         let count = (usize::from(area.width) * usize::from(area.height) / 48).clamp(6, 96);
         for index in 0..count {
             let (cx, cy) = Self::ambient_cell(index, frame, area.width, area.height);
@@ -302,13 +338,14 @@ impl Splash {
             _ => 0.0,
         };
         // Wordmark, a blank row, the bar row, then the step name.
-        let height = WORDMARK.len() as i32 + 3;
+        let mark = wordmark_for(area);
+        let height = mark.len() as i32 + 3;
         let top = i32::from(area.y) + (i32::from(area.height) - height).max(0) / 2;
-        let mark_width = WORDMARK[0].width() as i32;
+        let mark_width = mark_width(mark);
         let left = i32::from(area.x) + (i32::from(area.width) - mark_width).max(0) / 2;
 
         let mut targets: Vec<(i32, i32, &str)> = Vec::new();
-        for (row, text) in WORDMARK.into_iter().enumerate() {
+        for (row, text) in mark.iter().copied().enumerate() {
             for (col, (byte, ch)) in text.char_indices().enumerate() {
                 if ch != ' ' {
                     let symbol = if ascii {
@@ -323,7 +360,8 @@ impl Splash {
         // Layer 1, clock only: the ambient field behind everything, clear of the text block.
         if self.animate {
             let block = (BAR_SEGMENTS as i32 + 18).max(mark_width) + 4;
-            let clear_left = (i32::from(area.x) + (i32::from(area.width) - block).max(0) / 2).max(0);
+            let clear_left =
+                (i32::from(area.x) + (i32::from(area.width) - block).max(0) / 2).max(0);
             let keep_clear = Rect::new(
                 clear_left as u16,
                 (top - 1).max(i32::from(area.y)) as u16,
@@ -378,11 +416,10 @@ impl Splash {
         let centred = (i32::from(area.width) - segments as i32).max(0) / 2;
         let shifted = (room - segments as i32).max(0);
         let mut x = i32::from(area.x) + centred.min(shifted);
-        let y = top + WORDMARK.len() as i32 + 1;
+        let y = top + mark.len() as i32 + 1;
         // Waiting: a pulse sweeps the unfilled track (colour only, the fill is unchanged).
-        let scan = (self.waiting() && segments > filled).then(|| {
-            filled + (frame / SCAN_FRAMES) as usize % (segments - filled)
-        });
+        let scan = (self.waiting() && segments > filled)
+            .then(|| filled + (frame / SCAN_FRAMES) as usize % (segments - filled));
         for i in 0..segments {
             let (symbol, color) = match (i < filled, ascii) {
                 (true, false) => ("▰", INK),
@@ -403,7 +440,14 @@ impl Splash {
         let name_x = i32::from(area.x) + (i32::from(area.width) - name.width() as i32).max(0) / 2;
         for (i, ch) in name.chars().enumerate() {
             let mut utf8 = [0u8; 4];
-            put(buf, area, name_x + i as i32, y + 1, ch.encode_utf8(&mut utf8), bg.fg(p.muted));
+            put(
+                buf,
+                area,
+                name_x + i as i32,
+                y + 1,
+                ch.encode_utf8(&mut utf8),
+                bg.fg(p.muted),
+            );
         }
     }
 
@@ -536,7 +580,11 @@ mod tests {
     fn startup_lines_report_only_host_milestones() {
         assert_eq!(startup_step("{\"startup\":2}"), Some(2));
         assert_eq!(startup_step("{\"startup\":3}"), Some(3));
-        assert_eq!(startup_step("{\"startup\":5}"), Some(3), "never claims ready");
+        assert_eq!(
+            startup_step("{\"startup\":5}"),
+            Some(3),
+            "never claims ready"
+        );
         assert_eq!(startup_step("{\"startup\":0}"), Some(1));
         assert_eq!(startup_step("{\"schema\":3,\"startup\":2}"), None);
         assert_eq!(startup_step("{\"startup\":\"x\"}"), None);
@@ -555,7 +603,11 @@ mod tests {
         assert!((s.bar(200 + FILL_FRAMES) - 0.4).abs() < 1e-6);
         s.reach(startup_step("{\"startup\":3}").unwrap(), at(t0, 300));
         assert!((s.bar(300 + FILL_FRAMES) - 0.6).abs() < 1e-6);
-        assert_eq!(s.phase(10_000, 80), Phase::Loading, "ready still needs a snapshot");
+        assert_eq!(
+            s.phase(10_000, 80),
+            Phase::Loading,
+            "ready still needs a snapshot"
+        );
     }
 
     #[test]
@@ -566,7 +618,10 @@ mod tests {
         let buf = rendered(&s, 60, 80, 12);
         let row = text(&buf, bar_row(&buf));
         assert!(row.contains("40%"), "{row:?}");
-        assert!(!row.contains("providers"), "the name is not beside the bar: {row:?}");
+        assert!(
+            !row.contains("providers"),
+            "the name is not beside the bar: {row:?}"
+        );
         assert_eq!(row.matches('▰').count(), 12, "{row:?}");
         assert_eq!(row.matches('▱').count(), 18, "{row:?}");
     }
@@ -574,7 +629,9 @@ mod tests {
     /// Columns of the first and last bar segment and of the `%` on the bar row.
     fn bar_span(buf: &Buffer, y: u16) -> (u16, u16, u16) {
         let xs = |f: &dyn Fn(&str) -> bool| -> Vec<u16> {
-            (0..buf.area.width).filter(|&x| f(buf[(x, y)].symbol())).collect()
+            (0..buf.area.width)
+                .filter(|&x| f(buf[(x, y)].symbol()))
+                .collect()
         };
         let seg = xs(&|s| matches!(s, "▰" | "▱" | "#" | "-"));
         let pct = xs(&|s| s == "%");
@@ -591,10 +648,16 @@ mod tests {
             let y = bar_row(&buf);
             let (first, last, pct) = bar_span(&buf, y);
             assert_eq!(last - first + 1, 30);
-            assert!(first.abs_diff(w - 1 - last) <= 1, "bar centred at width {w}");
+            assert!(
+                first.abs_diff(w - 1 - last) <= 1,
+                "bar centred at width {w}"
+            );
             assert!(pct > last, "percentage right of the bar at width {w}");
             let row = text(&buf, y);
-            assert!(!row.chars().any(|c| c.is_alphabetic()), "no name on the bar row: {row:?}");
+            assert!(
+                !row.chars().any(|c| c.is_alphabetic()),
+                "no name on the bar row: {row:?}"
+            );
             let below = text(&buf, y + 1).replace(['·', '•'], " ");
             let name = below.trim();
             assert!(name == "providers", "{below:?}");
@@ -604,7 +667,10 @@ mod tests {
                 "name centred at width {w}: {below:?}"
             );
             let above = text(&buf, y - 1).replace(['·', '•'], " ");
-            assert!(above.trim().is_empty(), "blank row above the bar: {above:?}");
+            assert!(
+                above.trim().is_empty(),
+                "blank row above the bar: {above:?}"
+            );
         }
     }
 
@@ -636,13 +702,23 @@ mod tests {
         );
         assert!(s.progress(done) >= 1.0 - 1e-6);
         let settled = rendered(&s, done, 80, 12);
-        let wordmark: Vec<String> = (0..12)
-            .map(|y| mark_text(&settled, y))
-            .filter(|row| row.contains('█') || row.contains('▀') || row.contains('▄'))
-            .collect();
-        assert_eq!(wordmark.len(), 2);
-        assert_eq!(wordmark[0], WORDMARK[0]);
-        assert_eq!(wordmark[1], WORDMARK[1]);
+        // The art is drawn exactly, one row per line, at a fixed left edge.
+        let rows: Vec<String> = (0..12).map(|y| text(&settled, y)).collect();
+        let first = rows
+            .iter()
+            .position(|r| r.trim().replace(['·', '•'], " ").trim() == WORDMARK[0])
+            .expect("first art row");
+        let left = rows[first]
+            .find(WORDMARK[0].chars().next().unwrap())
+            .unwrap();
+        for (i, art) in WORDMARK.iter().enumerate() {
+            let row: String = rows[first + i]
+                .chars()
+                .skip(left)
+                .take(art.chars().count())
+                .collect();
+            assert_eq!(&row, art, "art row {i}");
+        }
         let early = rendered(&s, 1, 80, 12);
         let early_rows: Vec<String> = (0..12).map(|y| text(&early, y)).collect();
         assert!(
@@ -682,9 +758,16 @@ mod tests {
             assert_eq!(none.progress(frame), four.progress(frame), "frame {frame}");
         }
         for frame in [3u32, 30, 59, 300, 4000] {
-            let (a, b) = (rendered(&none, frame, 120, 30), rendered(&four, frame, 120, 30));
+            let (a, b) = (
+                rendered(&none, frame, 120, 30),
+                rendered(&four, frame, 120, 30),
+            );
             let bar = bar_row(&b);
-            assert_ne!(text(&a, bar), text(&b, bar), "only the bar differs ({frame})");
+            assert_ne!(
+                text(&a, bar),
+                text(&b, bar),
+                "only the bar differs ({frame})"
+            );
             for y in (0..30).filter(|&y| y != bar && y != bar + 1) {
                 assert_eq!(text(&a, y), text(&b, y), "row {y} at frame {frame}");
                 for x in 0..120 {
@@ -706,11 +789,15 @@ mod tests {
             // Ambient dots may drift along the row beside the bar; only the bar's own text
             // must hold still.
             let bar = bar_row(&buf);
-            format!("{}|{}", text(&buf, bar), text(&buf, bar + 1)).replace(['▰', '▱', '·', '•'], " ")
+            format!("{}|{}", text(&buf, bar), text(&buf, bar + 1))
+                .replace(['▰', '▱', '·', '•'], " ")
         };
         let mut frame = 100u32;
         while frame < 100 + 1250 {
-            let (a, b) = (rendered(&s, frame, 120, 30), rendered(&s, frame + 48, 120, 30));
+            let (a, b) = (
+                rendered(&s, frame, 120, 30),
+                rendered(&s, frame + 48, 120, 30),
+            );
             let bar = bar_row(&a);
             let rows = |buf: &Buffer| {
                 (0..30u16)
@@ -753,7 +840,11 @@ mod tests {
         let Color::Rgb(r, g, b) = INK else { panic!() };
         assert!(b > r && b > g && b >= 180, "INK is blue");
         let ratio = |c| (luminance(c) + 0.05) / (luminance(p.background) + 0.05);
-        assert!(ratio(INK) >= 4.5, "wordmark and bar readable: {}", ratio(INK));
+        assert!(
+            ratio(INK) >= 4.5,
+            "wordmark and bar readable: {}",
+            ratio(INK)
+        );
         assert!(ratio(DIM) >= 1.5, "ambient visible: {}", ratio(DIM));
         assert!(ratio(DIM) < ratio(INK), "ambient stays behind the ink");
         // No cell of any phase uses an orange (red above blue) foreground.
@@ -771,7 +862,10 @@ mod tests {
         }
         let mut chat = Buffer::empty(Rect::new(0, 0, 100, 20));
         s.overlay(&mut chat, at(t0, done + FLASH_FRAMES + 5), &p, false);
-        assert!(chat.content.iter().all(|c| !matches!(c.fg, Color::Rgb(r, _, b) if r > b)));
+        assert!(chat
+            .content
+            .iter()
+            .all(|c| !matches!(c.fg, Color::Rgb(r, _, b) if r > b)));
     }
 
     #[test]
@@ -788,7 +882,12 @@ mod tests {
             let bar_start = row.find(|c: char| c == '▰' || c == '▱').unwrap();
             let pct_end = row.find('%').unwrap() + 1;
             let name = text(buf, y + 1).replace(['·', '•'], " ").trim().to_string();
-            format!("{}:{}:{}", row.matches('▰').count(), &row[bar_start..pct_end], name)
+            format!(
+                "{}:{}:{}",
+                row.matches('▰').count(),
+                &row[bar_start..pct_end],
+                name
+            )
         };
         assert_eq!(pct(&a), pct(&b), "same fill, same percentage and step");
         assert!(pct(&a).contains("20%") && pct(&a).contains("workspace"));
@@ -814,7 +913,10 @@ mod tests {
             };
             let frames: Vec<_> = (0..8).map(|i| particles(1000 + i * 40)).collect();
             let distinct = frames.iter().filter(|f| **f != frames[0]).count();
-            assert!(distinct >= 4, "step {step}: particles froze ({distinct} differ)");
+            assert!(
+                distinct >= 4,
+                "step {step}: particles froze ({distinct} differ)"
+            );
         }
     }
 
@@ -823,7 +925,8 @@ mod tests {
         let t0 = Instant::now();
         let s = Splash::new(t0, true);
         let dots = |buf: &Buffer, rows: std::ops::Range<u16>| {
-            rows.map(|y| text(buf, y).matches(['·', '•']).count()).sum::<usize>()
+            rows.map(|y| text(buf, y).matches(['·', '•']).count())
+                .sum::<usize>()
         };
         let buf = rendered(&s, 500, 120, 30);
         assert!(dots(&buf, 0..30) > 10, "the field is drawn");
@@ -838,7 +941,10 @@ mod tests {
         );
         let still = Splash::new(t0, false);
         assert_eq!(dots(&rendered(&still, 500, 120, 30), 0..30), 0);
-        assert_eq!(rendered(&still, 500, 120, 30), rendered(&still, 900, 120, 30));
+        assert_eq!(
+            rendered(&still, 500, 120, 30),
+            rendered(&still, 900, 120, 30)
+        );
     }
 
     #[test]
@@ -886,7 +992,11 @@ mod tests {
         s.reach(5, at(t0, 0));
         let done = s.complete_frame().unwrap();
         let end = done + FLASH_FRAMES + (140 + CURTAIN_WIDTH) / CURTAIN_STEP + 1;
-        assert!(FRAME * end < Duration::from_millis(1100), "{:?}", FRAME * end);
+        assert!(
+            FRAME * end < Duration::from_millis(1100),
+            "{:?}",
+            FRAME * end
+        );
         assert!(s.finished(at(t0, end), 140));
         // A late milestone (a slow session) still ends the same short way, never earlier.
         let mut late = Splash::new(t0, true);
@@ -925,7 +1035,7 @@ mod tests {
             let buf = rendered(&s, frame, 80, 12);
             (0..12u16)
                 .flat_map(|y| (0..80u16).map(move |x| (x, y)))
-                .find(|&(x, y)| buf[(x, y)].symbol() == "█")
+                .find(|&(x, y)| buf[(x, y)].modifier.contains(Modifier::BOLD))
                 .map(|(x, y)| buf[(x, y)].fg)
                 .unwrap()
         };
@@ -1028,7 +1138,43 @@ mod tests {
     }
 
     #[test]
+    fn the_art_is_the_full_nexus_block_and_small_screens_get_the_small_mark() {
+        assert_eq!(WORDMARK.len(), 8);
+        let wide = mark_width(&WORDMARK);
+        assert_eq!(wide, 66, "widest art row");
+        let t0 = Instant::now();
+        let mut s = Splash::new(t0, false);
+        s.reach(2, at(t0, 0));
+        let fits = |w: u16, h: u16| {
+            let buf = rendered(&s, 0, w, h);
+            (0..h).any(|y| text(&buf, y).contains(WORDMARK[0]))
+        };
+        assert!(fits(wide as u16, 11), "exact fit uses the full art");
+        assert!(!fits(wide as u16 - 1, 11), "one column short falls back");
+        assert!(!fits(120, 10), "one row short falls back");
+        let small = rendered(&s, 0, 40, 10);
+        assert!((0..10u16).any(|y| text(&small, y).contains(WORDMARK_SMALL[0])));
+        assert!((0..10u16).any(|y| text(&small, y).contains("40%")));
+    }
+
+    #[test]
     fn renders_at_any_size_without_panicking() {
+        let t0 = Instant::now();
+        let mut s = Splash::new(t0, true);
+        s.reach(2, at(t0, 0));
+        for (w, h) in [
+            (65u16, 11u16),
+            (66, 11),
+            (66, 10),
+            (67, 12),
+            (100, 11),
+            (200, 60),
+        ] {
+            for frame in [0u32, 10, 80] {
+                let _ = rendered(&s, frame, w, h);
+                let _ = rendered_as(&s, frame, w, h, true);
+            }
+        }
         let t0 = Instant::now();
         let mut s = Splash::new(t0, true);
         for step in [0usize, 2, 5] {

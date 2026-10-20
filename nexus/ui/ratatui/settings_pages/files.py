@@ -51,8 +51,11 @@ async def file_blocks(workflows, area: str, *, empty: str = "No files yet. New f
     names = [item.id for item in items if not item.builtin and (area != "agents" or getattr(item, "overrides_builtin", False))]
     reset = {"kind": "confirm", "label": "Reset this category to default? Removed files move to trash.", "lines": names,
              "next": {"kind": "settings_reset", "scope": scope, "category": area}}
-    blocks.append(sp.buttons(f"{tag_id}file-actions", [("New file", {"kind": "settings_new", "scope": scope, "category": area}, "primary"),
-                                              ("Reset category…", reset, "ghost")]))
+    actions = [("New file", {"kind": "settings_new", "scope": scope, "category": area}, "primary"),
+               ("Reset category…", reset, "ghost")]
+    if area == "skills":
+        actions.insert(1, ("Add from npx skills…", {"kind": "skills_install_open", "scope": scope}, "secondary"))
+    blocks.append(sp.buttons(f"{tag_id}file-actions", actions))
     return blocks, inventory.root_display
 
 

@@ -197,7 +197,12 @@ TransportKind = Literal["stdio", "http", "sse"]
 # ---------------------------------------------------------------------------
 
 
-def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
+def redact_secrets(
+    text: str,
+    secrets: Iterable[str] = (),
+    *,
+    min_length: int = _MIN_SECRET_LEN,
+) -> str:
     """Return ``text`` with known secret values and credential shapes removed.
 
     Exact values are replaced first, longest first so a token that contains a
@@ -206,7 +211,7 @@ def redact_secrets(text: str, secrets: Iterable[str] = ()) -> str:
     if not isinstance(text, str):
         text = str(text)
     for secret in sorted(
-        {s for s in secrets if isinstance(s, str) and len(s) >= _MIN_SECRET_LEN},
+        {s for s in secrets if isinstance(s, str) and len(s) >= min_length and s},
         key=len,
         reverse=True,
     ):

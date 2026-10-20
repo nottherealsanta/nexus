@@ -1,4 +1,4 @@
-"""The pinned Manager entry and its launch confirmation in a real PTY (plan 02, docs/manager.md).
+"""The pinned Manager entry in a real PTY (plan 02, docs/manager.md).
 
 Build rust/tui first. This developer integration test needs controlling-TTY access.
 """
@@ -31,13 +31,13 @@ ROOTS = [
 ]
 READY = {
     "known": True, "enabled": True, "active": False, "session": "nexus-manager", "status": "idle",
-    "tone": "ok", "model": "github-copilot/gpt-6-luna", "summary": "Ready · 2 sessions launched",
+    "tone": "ok", "model": "codex/gpt-6-luna", "summary": "Ready · 2 sessions launched",
     "live": "Voice ready", "live_ready": True, "managed": 2, "can_open": True,
     "privacy": "Voice calls also share other sessions' titles, status and reports with OpenAI",
 }
 OFF = {
     "known": True, "enabled": False, "active": False, "session": "", "status": "idle", "tone": "off",
-    "model": "github-copilot/gpt-6-luna", "summary": "Off · [manager] enabled = false",
+    "model": "codex/gpt-6-luna", "summary": "Off · [manager] enabled = false",
     "notes": ["Turn it on with [manager] enabled = true in nexus.toml, then restart the daemon."],
 }
 
@@ -113,7 +113,7 @@ def test_pinned_manager_is_drawn_apart_from_the_roots_and_opens_by_key():
         text = t.text()
         assert "Manager" in text and "pinned" in text, text
         assert "Ready · 2 sessions launched" in text
-        assert "github-copilot/gpt-6-luna" in text and "Voice ready" in text, "model and Live readiness"
+        assert "codex/gpt-6-luna" in text and "Voice ready" in text, "model and Live readiness"
         assert "share other sessions' titles" in text, "the cross-session privacy line"
         assert "Voice M" in text
         # Pinned above, and separate from, the ordinary roots.
@@ -141,34 +141,5 @@ def test_disabled_manager_is_visible_with_the_fix_and_still_answers():
         assert "Voice M" not in text, "no voice while it is off"
         t.key(b"m")  # opening explains why it is off
         assert t.action()["operation"] == {"kind": "manager_open"}
-    finally:
-        t.close()
-
-
-@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_launch_confirmation_is_unconditional_and_never_offers_always():
-    t = Terminal(36, 120)
-    try:
-        t.send(prompt={
-            "kind": "permission", "id": "p1", "lines": ["Launch a new session?"], "since": 0,
-            "title": "Launch a new session?",
-            "what": ["Starts a root session with this instruction ([role] first if named):",
-                     "fix the flaky sync test", "then run the suite and report back"],
-            "why": "Asked every time · this answer is never remembered", "what_rows": 8,
-            "choices": [{"label": "Launch this session", "value": "allow_once", "key": "y", "disabled": False},
-                        {"label": "Do not launch", "value": "deny_once", "key": "n", "disabled": False}],
-        }, generation=1)
-        time.sleep(.4)
-        t.redraw()
-        text = t.text()
-        assert "Launch a new session?" in text and "fix the flaky sync test" in text, text
-        assert "then run the suite and report back" in text, "the whole instruction is readable"
-        assert "never remembered" in text
-        assert "Launch this session" in text and "Do not launch" in text
-        assert "for session" not in text and "Allow" not in text, "no remember-for-session row"
-        t.key(b"a")  # there is no "always" key, and no hidden one: nothing is sent
-        t.key(b"d")
-        t.key(b"y")
-        assert t.action() == {"type": "answer", "text": "p1", "value": "allow_once", "generation": 1}
     finally:
         t.close()

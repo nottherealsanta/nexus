@@ -226,7 +226,7 @@ def _render_content(blocks: Sequence[ContentBlock]) -> str:
 def render_prompt(req: ModelRequest) -> str:
     """Render a structured request into one ACP text prompt.
 
-    The final user message is the active request; every earlier message becomes
+    The trailing user messages are the active request; every earlier message becomes
     history. ``metadata["prompt"]`` overrides rendering entirely. Declared Nexus
     tools are named but explicitly marked uncallable, because ACP exposes only
     the agent's own tools.
@@ -237,9 +237,14 @@ def render_prompt(req: ModelRequest) -> str:
     messages = list(req.messages)
     user = ""
     prior = messages
-    if messages and messages[-1].role == "user":
-        user = _render_content(messages[-1].content)
-        prior = messages[:-1]
+    # Every trailing user message is the active request: durable history may end
+    # with several (a prompt followed by a harness notice), none may be dropped.
+    start = len(messages)
+    while start > 0 and messages[start - 1].role == "user":
+        start -= 1
+    if start < len(messages):
+        user = "\n\n".join(_render_content(m.content) for m in messages[start:])
+        prior = messages[:start]
 
     lines: list[str] = []
     if req.system:

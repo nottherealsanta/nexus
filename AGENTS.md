@@ -5,6 +5,10 @@ harness. A per-workspace daemon owns sessions and turns. Four surfaces are clien
 of it: a terminal chat client (the native Ratatui client), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app, and a Rust GPUI desktop client.
 
+> **Desktop (GPUI) development is paused right now.** Focus new UI work on the native
+> TUI (Ratatui client). Do not make desktop changes (`rust/desktop/`) unless the user
+> explicitly resumes it.
+
 **The idea of Nexus is that the context is clearly presented to the user and to
 agents.** Keep this in mind for every change: show everything that matters
 (every parameter, every output), labelled and readable, never a raw JSON dump,

@@ -117,6 +117,7 @@ _FIELDS = (
     "bundles",
     "model",
     "version",
+    "license",
 )
 _LIST_FIELDS = frozenset({"allowed-tools", "bundles"})
 _REQUIRED_FIELDS = frozenset({"name", "description"})
@@ -367,6 +368,12 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         raise SkillParseError(
             f"description must be at most {MAX_DESCRIPTION_CHARS} chars"
         )
+
+    # Informational only: validate but never interpret license declarations.
+    if "license" in fields:
+        license_text = _parse_scalar(fields["license"], "license")
+        if len(license_text) > 2048:
+            raise SkillParseError("license must be at most 2048 chars")
 
     if "allowed-tools" in fields:
         allowed_tools = _parse_list(

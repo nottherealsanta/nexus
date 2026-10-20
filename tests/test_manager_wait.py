@@ -88,14 +88,12 @@ async def test_real_cap_one_launch_wait_and_interrupt(tmp_path):
         return ()
 
     runtime = Runtime(tmp_path, home=tmp_path / 'home', config=config(True),
-                      providers={'github-copilot': ScriptedProvider([manage], text_response('ok')),
+                      providers={'codex': ScriptedProvider([manage], text_response('ok')),
                                  'scripted': ScriptedProvider([child, Wait(release), *text_response('done')])})
     facade = HostFacade(runtime, max_concurrent_turns=1)
     try:
         facade.open_manager()
-        # Session attendance, not presence alone, enables launch confirmation.
-        # The test session's auto prompt handler approves through the real broker.
-        runtime.session(MANAGER_ID).mark_attended()
+        # Deliberately unattended: a manager launch needs no approval, so none is requested.
         await facade.enqueue(MANAGER_ID, 'launch work')
         manager_task = runtime.session(MANAGER_ID)._turn_task
         try:

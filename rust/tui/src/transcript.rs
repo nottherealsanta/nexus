@@ -1589,9 +1589,19 @@ mod tests {
                 let text: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
                 // Transcript pad (1) + group gutter (4) + icon and a space: the name starts at
                 // column 7, where a tool group's verb text starts after "▸ ".
-                let icon = if status == "running" { look::SLOT } else { "\u{28ff}" };
+                let icon = if status == "running" {
+                    look::SLOT
+                } else {
+                    "\u{28ff}"
+                };
                 assert_eq!(text, format!("     {icon} {shown}  find all calls"));
-                assert_eq!(text.chars().take(7).map(|c| c.to_string().width()).sum::<usize>(), 7);
+                assert_eq!(
+                    text.chars()
+                        .take(7)
+                        .map(|c| c.to_string().width())
+                        .sum::<usize>(),
+                    7
+                );
                 for glyph in ["\u{203a}", "\u{25c6}", ">", "*"] {
                     assert!(!text.contains(glyph), "no chevron or mark: {text:?}");
                 }
@@ -1642,7 +1652,12 @@ mod tests {
         assert!(!row1.contains("external"));
         let row2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(row2, "       7 external tools · 3.2s");
-        let count = rows[1].0.spans.iter().find(|s| s.content.contains("external")).unwrap();
+        let count = rows[1]
+            .0
+            .spans
+            .iter()
+            .find(|s| s.content.contains("external"))
+            .unwrap();
         let luma = |c: Option<Color>| match c {
             Some(Color::Rgb(r, g, b)) => u32::from(r) + u32::from(g) + u32::from(b),
             other => panic!("expected rgb, got {other:?}"),
@@ -1651,13 +1666,21 @@ mod tests {
         for light in [false, true] {
             let p = Palette::new(light);
             let rows = build(&task, 80, &p);
-            let count = rows[1].0.spans.iter().find(|s| s.content.contains("external")).unwrap();
+            let count = rows[1]
+                .0
+                .spans
+                .iter()
+                .find(|s| s.content.contains("external"))
+                .unwrap();
             assert!(luma(count.style.fg) < luma(Some(p.quiet)));
         }
         assert_ne!(count.style.fg, Some(p.quiet));
         assert_ne!(count.style.fg, Some(p.muted));
 
-        let one = Content { external_tool_calls: Some(1), ..task };
+        let one = Content {
+            external_tool_calls: Some(1),
+            ..task
+        };
         let rows = build(&one, 80, &p);
         let row2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(row2.contains("1 external tool "), "{row2:?}");

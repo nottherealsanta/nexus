@@ -789,6 +789,7 @@ def test_code_mode_defaults_and_env_coercion():
     from nexus.config.schema import CodeModeSection
 
     section = CodeModeSection()
+    assert (section.enabled, section.expose, section.context) == (True, "read_only", False)
     assert (section.max_nested_calls, section.inline_budget_tokens, section.pinned) == (64, 2500, [])
     assert (section.max_sub_calls, section.max_sub_input_tokens,
             section.max_total_sub_tokens, section.max_depth, section.sub_model) == (

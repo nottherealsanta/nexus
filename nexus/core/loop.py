@@ -2241,6 +2241,14 @@ async def run_turn(
                 else hooks
             ) or hooks
 
+            # Record what this request's ``subagent`` description advertises
+            # before assembly, so a changed roster reaches history as a tail
+            # notice in the same request (never in the cached prefix).
+            roster_digest = getattr(iteration_tools, "subagent_roster_digest", None)
+            note_roster = getattr(session, "note_subagent_roster", None)
+            if isinstance(roster_digest, Mapping) and callable(note_roster):
+                await _maybe_await(note_roster(roster_digest))
+
             request = await _maybe_await(_call_assembler(iteration_assemble, session))
             if isinstance(request.metadata, dict):
                 # One stable id per conversation; gateways use it for routing/caching.

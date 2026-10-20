@@ -4,10 +4,15 @@ Status: **implemented and verified offline (2026-10-19); feature off by default;
 against the real services.** The backend (M1-M9), the Ratatui pinned manager row and chat, the
 desktop manager card and the `nexus manager` CLI are written and covered by the offline Python
 suite, the Rust TUI/desktop tests and the manager PTY flow. What remains is live-only: a real
-Copilot/GPT Live run and the soak that flips the default (M10, §7 acceptance). Behavior is
+Codex/GPT Live run and the soak that flips the default (M10, §7 acceptance). Behavior is
 documented in [docs/manager.md](../../docs/manager.md); where this plan and the code differ,
 the code wins. The high advisor review changed several first-draft decisions; this text states
 the settled ones (they are listed in §8).
+
+> **Proposed rethink (not implemented, not verified):** §10 records a new intended design in which
+> GPT Live talks only to the manager and the manager routes messages to other sessions. It reopens
+> several contracts stated below (`session_send`, launch-only, exact-ID result visibility, per-session
+> Live attach). Until §10 is accepted and built, the text above is the current behavior.
 
 Phase 2 of 3. **Requires plan 01** milestones M2–M4 (logical sessions, supervision edges,
 `SessionTree`). Plan 03 adds names the manager uses for addressing.
@@ -27,8 +32,12 @@ sessions. The human talks to it in plain language ("start a session to fix the f
    transcript).
 
 It has **no read, write, bash, web, MCP, skill or subagent tools**, and no hook runs in it. It always
-runs on the low-tier GitHub Copilot model **`github-copilot/gpt-6-luna`**, with **no silent fallback
-or upgrade**: if that route cannot run, the manager fails visibly.
+runs on the low-tier Codex (ChatGPT) model **`codex/gpt-6-luna`**, with **no silent fallback
+or upgrade**: if that route cannot run, the manager fails visibly. (Decision, superseding the original
+`github-copilot/gpt-6-luna` pin: Codex is the project default provider and the one GPT Live already needs,
+so one sign-in covers both. GitHub Copilot is not required and is not a fallback. The route is stamped
+from packaged constants each turn, so the existing `nexus-manager` session needs no data migration; a
+running daemon keeps the old pin until restarted.)
 
 ### Non-goals
 
@@ -44,14 +53,13 @@ or upgrade**: if that route cannot run, the manager fails visibly.
 
 ## 2. Current state (evidence)
 
-- Model ID. `github-copilot/gpt-6-luna` is the first `low` route in `DEFAULT_TIER_MODELS`
-  (`nexus/model/tiers.py:36-41`) and is in the vendored catalogue under `github-copilot`
-  (`nexus/model/data/models.min.json`). Live `/models` and Luna inference on Copilot were verified by
-  the project (`docs/models.md`); Luna on Copilot uses `/responses`, learned after `/chat/completions`
-  is rejected. The `codex/gpt-6-luna` fallback name in `docs/models.md` was corrected to match code.
+- Model ID. `codex/gpt-6-luna` is the workspace default (`nexus.toml` `models.default`), is a `low`
+  route in `DEFAULT_TIER_MODELS` (`nexus/model/tiers.py`) and resolves through the model registry
+  (`tests/test_model_registry.py`). The plan originally pinned `github-copilot/gpt-6-luna`
+  (first `low` route; Luna on Copilot uses `/responses`); that pin was replaced by Codex.
 - Tiers are subagent-only; main models are concrete IDs. So the manager names the **concrete**
-  `github-copilot/gpt-6-luna`, not the tier `low`; "low tier" describes the cost class, not a router
-  lookup. Resolving via tier would allow fallback to `codex/gpt-6-luna` or DeepSeek, which the
+  `codex/gpt-6-luna`, not the tier `low`; "low tier" describes the cost class, not a router
+  lookup. Resolving via tier would allow fallback to `github-copilot/gpt-6-luna` or DeepSeek, which the
   requirement forbids.
 - Fallbacks are listed by `ModelRouter.fallbacks` (agent, tier, global `model.fallback`) and the loop
   decides when to use them. The manager disables all three.
@@ -77,7 +85,7 @@ or upgrade**: if that route cannot run, the manager fails visibly.
 | --- | --- |
 | Kind | `manager` (the existing `sessions.kind` column; no schema change) |
 | Namespace | `main`, fixed id `nexus-manager`; excluded from lists, the project index and the stale-archive sweep **by kind**, so `LiveStart` and `SessionEnqueue` reach it like any session |
-| Model | `github-copilot/gpt-6-luna`, pinned; `fallback = []`; tier and global fallback disabled |
+| Model | `codex/gpt-6-luna`, pinned; `fallback = []`; tier and global fallback disabled |
 | Effort | provider default (U4); effort selection is refused |
 | Tools | exactly the manager tool set below; `subagent`, `escalate`, all file/shell/web/MCP/skill tools absent from the catalog. Built structurally at **both** runtime builders, bypassing MCP, skills and extensions |
 | Prompt | packaged constant (`agents/manager_prompt.py`), not a role file; `contexts: [manager]`, `bundles: [manager]` and `profile: manager` are rejected by the role grammar, so it cannot be selected as an ordinary root or subagent |
@@ -87,7 +95,7 @@ or upgrade**: if that route cannot run, the manager fails visibly.
 
 **No silent fallback.** The pinned policy is request metadata (`model_policy = "pinned"`):
 `ModelRouter.fallbacks` returns `()`, `EndpointFallback` (protocol dialect retry, same model) **stays
-allowed** because it does not change the model. If Copilot is not signed in, rate-limited or the model
+allowed** because it does not change the model. If Codex is not signed in, rate-limited or the model
 is missing from `/models`, the turn fails with `ManagerModelUnavailable` naming the exact model and the
 sign-in command; the UI shows it. `ManagerState` reports the sign-in state ahead of time.
 
@@ -164,7 +172,7 @@ then the instruction as the first **user** message whose `input.queued` carries 
 | Command | Purpose |
 | --- | --- |
 | `ManagerOpen()` | open or create the workspace's singleton manager session (idempotent; refused unless `[manager] enabled`) |
-| `ManagerState()` | enabled, session id and state, pinned model, Copilot and Codex sign-in with the exact fix, the two Live consents, managed roots, caps (never an error for "off") |
+| `ManagerState()` | enabled, session id and state, pinned model, Codex sign-in (manager model and Live) with the exact fix, the two Live consents, managed roots, caps (never an error for "off") |
 | `LiveConsent(scope="manager")` | the separate cross-session GPT Live notice |
 | existing `SessionEnqueue`, `SessionSubscribe`, `SessionCancel`, `LiveStart` | talk to it like any session |
 
@@ -210,7 +218,7 @@ GPT Live ──LiveStart(manager id)──▶ the same session over the delegati
 - `[manager] enabled` (default `false`) gates `ManagerOpen` and every operation on an existing manager
   session. Rollback is the flag; the manager log stays as an ordinary row (not listed, not archived).
 - Old clients do not know `ManagerOpen`; they see nothing (the kind is excluded from lists).
-- If Copilot sign-in is missing, `ManagerState` reports it and a client can offer Settings → Providers. No
+- If Codex sign-in is missing, `ManagerState` reports it and a client can offer Settings → Providers. No
   fallback (by design).
 
 ---
@@ -238,7 +246,7 @@ GPT Live ──LiveStart(manager id)──▶ the same session over the delegati
 
 ## 7. Tests and acceptance
 
-1. `test_manager_model_pinned.py`: Copilot unavailable → turn fails with `ManagerModelUnavailable`; no
+1. `test_manager_model_pinned.py`: Codex unavailable → turn fails with `ManagerModelUnavailable`; no
    `model.started` for any other route; fallback lists empty; endpoint retry on the same model allowed.
 2. `test_manager_catalog.py`: catalog equals exactly the six tools; `escalate`, `subagent`, `read`, `bash`
    absent; the role grammar rejects the reserved context, bundle and profile; launch/cancel always ask.
@@ -256,10 +264,10 @@ GPT Live ──LiveStart(manager id)──▶ the same session over the delegati
 Acceptance:
 
 - [ ] "Start a session to do X" → one approval → one new root running X, shown under the manager. (Backend
-      and UI paths tested offline; needs a real Copilot run.)
+      and UI paths tested offline; needs a real Codex run.)
 - [ ] "What finished in the last two hours?" lists only sessions from that window, with titles and status.
       (Tested offline.)
-- [x] Manager never runs a model other than `github-copilot/gpt-6-luna` (pinned, no fallback; offline tests).
+- [x] Manager never runs a model other than `codex/gpt-6-luna` (pinned, no fallback; offline tests).
 - [x] No path exists from the manager to file, shell or network tools (structural catalog; offline tests).
 
 ---
@@ -273,15 +281,15 @@ selection refused (U4); no `session_send` in v1 (U5); no model override, so the 
 
 Open:
 
-- Two provider sign-ins (Copilot for the manager, Codex for Live) and the cross-session consent are
+- One provider sign-in (Codex serves both the manager model and Live) plus the cross-session consent are
   implemented and reported by `ManagerState`; UI wording is implemented; a live soak is not verified.
-- Quota and rate-limit behavior of Luna under manager load; Copilot token expiry stops the manager (stated,
+- Quota and rate-limit behavior of Luna under manager load; Codex token expiry stops the manager (stated,
   not hidden). A small model may misparse requests (mitigated by the approval showing the exact launch).
 
 ## 9. References
 
 Workspace only (paths inline). No external sources needed for this phase.
-Not verified: live Copilot `/models` today; GPT Live with the manager; quota behavior under manager load.
+Not verified: live Codex `/models` for `gpt-6-luna` today; GPT Live with the manager; quota behavior under manager load.
 
 ### Release verification (2026-10-19)
 
@@ -290,11 +298,186 @@ Automated verification completed on macOS: full Python suite **6,872 passed,
 **161 passed** (including the built native PTY); Rust TUI **579 passed,
 2 ignored**, dashboard integration **58 passed**, desktop **111 passed**.
 `git diff --cached --check` is clean. These checks do not establish live-provider
-manual acceptance: the real Copilot/OpenAI smoke test and interactive desktop
+manual acceptance: the real Codex/OpenAI smoke test and interactive desktop
 review remain unverified. The unchecked acceptance items above are retained
 where they require that manual verification rather than inferred from mocks.
 
 Re-checked 2026-10-19 against the code (audit of §3 contracts, §4 milestones, §7 tests): the manager
 suites pass (236 tests; one fork/reserved-id test broke under in-flight plan 03 resolve work and was
 fixed by refusing the reserved `new_id` before name resolution), `cargo test` passes for `rust/tui`
-(580 + 58) and `rust/desktop` (114). Still unverified: live Copilot/GPT Live and the soak.
+(580 + 58) and `rust/desktop` (114). Still unverified: live Codex/GPT Live and the soak.
+
+---
+
+## 10. Proposed rethink: GPT Live fronts the manager, manager routes to sessions
+
+Status: **proposed target design. Not implemented, not verified, not accepted.** It states the user's
+intended direction, not current behavior. Sections 1-9 above remain the record of what was built and
+tested; where §10 conflicts with them, §10 describes the *requested* change and the earlier text stays
+authoritative until this section is accepted and implemented. No code, tests or docs outside this plan
+have been changed for it.
+
+### 10.1 User intent
+
+- Any GPT Live session opens (slides in) a **Live surface** placed "between the bottom activity bar and
+  the composer".
+- **Everything GPT Live interacts with is only the manager.** Live does not attach to, read or write any
+  other session directly.
+- The manager knows which agent/session is in the **foreground** and which session the user means, and
+  routes the right message to that session, whether it is active, idle or recently run.
+- Example: the user tells Live "there's another session about X; send it the following information".
+  The manager identifies the X session and sends that payload to it.
+- The manager has broad awareness of what all Nexus sessions are doing.
+
+**Placement needs resolving.** The phrase above is kept as the user stated it. The documented composer
+layout ([docs/surfaces.md](../../docs/surfaces.md), Composer) is: editor, then `Agent model provider
+effort`, then context usage, with the activity bar *under* it. In that order nothing lies "between" the
+activity bar and the composer in the way the phrase reads, so the phrase may refer to a different surface
+or order than the documented one. The exact slot (above the editor, between the editor and the model row,
+or below the activity bar) is an open decision (§10.9); it is not silently substituted here, and it must be
+checked against the real Ratatui and desktop layouts before building.
+
+### 10.2 Contracts this reverses or reopens
+
+| Existing statement | Where | Status under the rethink |
+| --- | --- | --- |
+| "There is no `session_send` for arbitrary steering in v1 (U5)"; the only way to give a session work is `session_launch` | §3.2, §8 | **Reopened.** A routed-message operation is proposed (§10.5) |
+| The manager can only discover, launch, monitor and read results; non-goal "does not do the work" stays, but "launch-only" input is relaxed | §1, §3.2 | **Reopened** for sending to existing sessions |
+| `session_result` only for `managed` links or a session the human named by **exact id** in the latest message | §3.4 | **Reopened.** Resolution of "the session about X" by description is needed (§10.4); whether transcript/result access widens is a separate decision (§10.3, §10.9) |
+| `session_cancel`, launch caps, "launch requires approval" | §3.2-3.3 | Unchanged, except that approval must reach the user wherever the Live panel is shown (§10.6) |
+| GPT Live is started per session (`LiveStart` against a session id, and the manager over the delegation bridge as one case) | §3.6, §3.7 | **Reversed** for the target: Live attaches only to the manager. Current Live attaches per session, which stays true until built |
+| `sessions_find` is metadata only (titles, state) | §3.4 | Kept as the baseline; foreground/focus metadata is added (§10.3) |
+| Settled decision U5 (no `session_send`) | §8 | **Reopened**; if accepted, §8 must be rewritten |
+
+### 10.3 Awareness is not transcript access
+
+The plan distinguishes three levels and the rethink only asks for the first two by default:
+
+1. **Metadata awareness**: id, title, state, kind, counts, `order_time`, `completion_seq` (today's
+   `sessions_find`/`session_status`).
+2. **Activity and focus awareness**: what a session is doing now (running/idle/needs input, last active
+   time) and which session the user is looking at (new).
+3. **Transcript/content access**: reading messages, tool output or final results. This is not implied by
+   "broad awareness". `session_result` rules (§3.4) stay as they are unless the user explicitly decides to
+   widen them (§10.9). Routing a message does not by itself grant reading the target's replies.
+
+**Focus signal (new).** Each client (Ratatui, desktop, CLI where relevant) would report which session is
+foreground and when that changes, as a host-API signal that does not travel through the model. The
+manager reads it as data. Needed properties, to be designed: per-client (a user may have several clients),
+timestamped/expiring so a stale client does not claim focus, and clearly separate from "the session the
+user *means*", which comes from the utterance. Foreground is a hint for resolving "this session"/"that
+one", never an authorisation.
+
+### 10.4 Resolving which session the user means
+
+- Inputs: the utterance, the foreground session, and bounded metadata over active, idle and recently run
+  sessions (the existing 2 h `recent` window is a starting point, not a decision).
+- Match by title, descriptions the user gave, and recent activity. Matching on content the manager cannot
+  read (level 3) is limited to what level 1-2 provides; whether any bounded topic summary may be exposed
+  for matching is open (§10.9).
+- **Ambiguity means ask, not guess.** If zero or more than one session plausibly matches, the manager asks
+  the user (naming candidates by title and id) before any send. A single weak match is also treated as
+  ambiguous when the payload is consequential.
+- A resolved target is confirmed to the user in the Live panel/chat (title, id) before or as the send
+  happens, per §10.6.
+
+### 10.5 Routed message operation (proposed)
+
+A new manager tool, working name `session_send` (name not decided), replaces the "no steering" rule for
+this one purpose.
+
+- Input: target session id, message text, `origin_message_id` (same real-user-message rule as
+  `session_launch`, §3.3 rule 1; a Live delegation counts, `Voice:` lines never do).
+- **User-message provenance:** the message is delivered to the target as a *user* message that carries
+  `origin = {kind: "manager", manager, origin_message_id}`, in the same shape as a launched root's first
+  message (§3.5), so the target and the dashboard can show "sent by manager" and an injected tool/assistant
+  text cannot pose as the user.
+- **Durable origin/link/event:** a durable `session.linked` record (new kind, e.g. `routed`, name open)
+  plus a manager-log event (e.g. `manager.routed` with `target`, `turn`, `origin_message_id`,
+  `payload_digest`, bytes) and the target's `input.queued` origin. Ids, counts and digests only, as in
+  §3.5; no payload text in the manager log events.
+- Delivery uses the existing enqueue path, so a busy target queues like any user message; whether to
+  interrupt versus queue is open (§10.9).
+- Bounds: payload size cap (to be set; `session_launch` uses 16 KiB), per-turn send cap, rate limit.
+- The payload must come from the human's request. Text taken from another session's result is never
+  auto-forwarded (extends §3.3 rule 5). Forwarding content the human explicitly asks to relay is allowed
+  only as part of that request, and the approval shows the exact payload.
+
+### 10.6 Approval, privacy and security constraints
+
+- **Approval:** following launch/cancel, routing into an existing session is permission-gated
+  unconditionally, with the exact target (title and id) and exact payload as the key, ahead of any grant
+  or rule. No pre-approval rule and no unattended send (deny). Whether low-risk sends could ever be
+  relaxed is open (§10.9); the default is the strict form.
+- **Live panel and approvals:** the Live panel is visible **while a manager call is active even when the
+  user is viewing another session**, and the panel itself **subscribes to the manager session** so
+  approval prompts, resolution questions and status reach the user wherever they are. An approval that can
+  only appear in a hidden manager view would deadlock or auto-deny, so this is a requirement, not polish.
+- **Privacy:** the existing `LiveConsent(scope="manager")` notice covers what Live reads of other
+  sessions. Widened awareness (focus, activity) and routed payloads going to OpenAI via Live need the notice
+  to be updated and re-consented; wording and consent versioning are open.
+- **Security:** manager authority stays minimal. A target receives a user-origin message and runs under its
+  own permissions, with no grants inherited from the manager. A routed message is an instruction
+  injection point: caps, provenance, approval and the no-laundering rule above are the mitigations. Routing
+  to sessions in other workspaces stays out of scope (U2). Archived/trashed, `agents` namespace and
+  subagent sessions are not valid targets unless decided otherwise.
+- **Redaction:** metadata shown to Live is as redacted as today's `sessions_find` rows; the focus signal
+  carries ids only.
+
+### 10.7 Live typed input versus composer routing
+
+Two input paths must be distinguished and stay distinct:
+
+- **Live (voice or typed in the Live panel):** goes to the manager only. Routed text it produces is a
+  delegation that the manager may turn into a routed message (§10.5) after approval.
+- **The composer:** continues to send to the session currently displayed. It is not rerouted through the
+  manager and a Live panel being open must not capture composer keystrokes.
+- Typed text in the Live panel needs clear visual identity (it targets the manager, not the foreground
+  session), and the panel should show the resolved target before a send.
+- Whether typed Live input and the Live voice transcript share one manager conversation and how `Voice:`
+  lines are marked (they remain non-authorising per §3.3) is open.
+
+### 10.8 Acceptance criteria (all unmet; proposed)
+
+- [ ] Starting GPT Live from any session opens the Live surface and attaches **only** to the manager;
+      no Live path reads or writes another session directly.
+- [ ] The Live panel stays visible during an active manager call when the user views a different session,
+      and shows manager approval prompts there; approving or denying works from that view.
+- [ ] Each client reports foreground session; the manager can state which session is foreground, and a
+      stale or disconnected client does not keep claiming focus.
+- [ ] "There's another session about X, send it ..." with exactly one plausible match results in one
+      approval showing target title/id and exact payload, then one user-origin message in that session with
+      `origin = manager` and a durable link/event in the manager log.
+- [ ] With zero or several plausible matches the manager asks which session; nothing is sent until the
+      user answers.
+- [ ] Sending works for active (queued/delivered per §10.9), idle and recently run sessions; archived,
+      trashed, other-workspace and `agents` namespace targets are refused with a reason.
+- [ ] Text inside another session's result (e.g. "send this to Y") never causes a send without a new human
+      message in the current turn; `Voice:` lines never authorise.
+- [ ] Unattended send is denied; caps and size bounds are enforced and produce refusal events.
+- [ ] The manager can report what sessions are doing (level 1-2) without being able to read transcripts
+      beyond the unchanged §3.4 rules.
+- [ ] Composer input still goes to the displayed session while Live is open.
+- [ ] Updated consent covers the widened awareness and routing; Live is refused without it.
+- [ ] Offline tests exist for each of the above, and a live Codex/GPT Live run is recorded separately
+      (not inferred from mocks).
+
+### 10.9 Unresolved decisions
+
+1. **Layout slot** of the Live surface relative to the activity bar and composer (§10.1), in both
+   Ratatui and desktop; whether a Live panel is also shown when no manager call is active.
+2. Whether `session_send` supersedes or complements U5, its final name, and the link kind/event names.
+3. Queue versus interrupt when the target is mid-turn; behavior when the target is waiting on approval.
+4. Whether any content-level access (topic summary or result reads for matching/reporting) is granted, and
+   under what bound, versus metadata/activity/focus only.
+5. Focus signal protocol: transport, expiry, multi-client precedence.
+6. How "recently run" is bounded (the 2 h `recent` window versus configurable) and whether idle older
+   sessions are reachable by explicit title.
+7. Payload and rate caps; whether any send may skip approval.
+8. Consent wording/versioning for widened awareness and routed payloads.
+9. Whether routing to subagent or child sessions is ever allowed (default: no, root sessions only).
+10. Migration of the current per-session Live attach: removed, or kept behind a setting during transition.
+11. Impact on plan 03 naming (the manager's addressing uses names added there) and plan 01 session
+    links (a new link kind).
+
+None of the above has been decided by the user; this list is the input for that decision.

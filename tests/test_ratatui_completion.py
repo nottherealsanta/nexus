@@ -45,6 +45,52 @@ async def test_argument_providers():
 
 
 @pytest.mark.asyncio
+async def test_directory_completion_is_opt_in_and_at_only():
+    c = client()
+    assert await complete(c, "@sr", "@sr") == ["src/a.py"]
+    c.search_files.assert_any_await("sr", limit=30)
+    assert all("include_directories" not in call.kwargs for call in c.search_files.await_args_list)
+
+    c = client()
+    c.search_files.return_value = ["src/", "src/a.py"]
+    rows = await complete(c, "@sr", "@sr", include_directories=True)
+    assert rows[:2] == ["src/", "src/a.py"]
+    assert all(call.kwargs["include_directories"] is True for call in c.search_files.await_args_list)
+    assert c.search_files.await_count == 2  # query and the padding pool
+
+    c = client()
+    await complete(c, "/attach ", "sr", include_directories=True)
+    assert all("include_directories" not in call.kwargs for call in c.search_files.await_args_list)
+
+
+def test_file_menu_pads_with_directory_rows_by_basename():
+    from nexus.ui_support.completion import file_menu
+
+    assert file_menu("lib", [], ["src/lib/", "other/"])[0] == "src/lib/"
+
+
+@pytest.mark.asyncio
+async def test_background_complete_reads_directories_flag():
+    from nexus.ui.ratatui.background import BackgroundActions
+
+    seen = []
+
+    async def search_files(query, limit=30, **kw):
+        seen.append(kw)
+        return ["src/"]
+
+    shell = SimpleNamespace(
+        generation=0, client=SimpleNamespace(search_files=search_files), panel_revision=0,
+        controller=SimpleNamespace(session="s", supported_levels=[]), completions=[],
+    )
+    background = BackgroundActions(shell, AsyncMock())
+    await background._run({"type": "complete", "text": "@s", "prefix": "@s", "directories": True}, 0)
+    await background._run({"type": "complete", "text": "@s", "prefix": "@s", "directories": "yes"}, 0)
+    await background._run({"type": "complete", "text": "@s", "prefix": "@s"}, 0)
+    assert seen == [{"include_directories": True}] * 2 + [{}] * 4
+
+
+@pytest.mark.asyncio
 async def test_host_failure_gives_no_candidates():
     c = client()
     c.list_models.side_effect = ValueError("boom")

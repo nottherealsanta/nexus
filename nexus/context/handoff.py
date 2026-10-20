@@ -111,11 +111,11 @@ def build_brief(messages: Sequence[Message], *, handle=None, boundary=0) -> str:
                 jobs[str(record.event.data.get("shell_id", record.seq))] = record.event.data
             elif isinstance(record, EventRecord) and record.event.type == "shell.completed":
                 jobs.pop(str(record.event.data.get("shell_id", "")), None)
-        original = next((m for m in handle.messages if m.role == "user" and any(
+        original = next((m for m in handle.messages if m.role == "user" and m.meta.notice is None and any(
             isinstance(b, Text) for b in m.content)), None)
         if original is not None:
             first = "\n".join(b.text for b in original.content if isinstance(b, Text))[:600]
-        latest = next((m for m in reversed(handle.messages) if m.role == "user" and any(
+        latest = next((m for m in reversed(handle.messages) if m.role == "user" and m.meta.notice is None and any(
             isinstance(b, Text) for b in m.content)), None)
         if latest is not None:
             state += "\nLatest user input: " + "\n".join(b.text for b in latest.content if isinstance(b, Text))[:600]

@@ -127,7 +127,7 @@ always `ask` (even under `mode = allow`; `mode = deny` still denies).
 | `mcp` | bridged MCP tools (names `mcp__<server>__<tool>`) |
 | `legacy_fs` | `ls` `multiedit` (opt-in) |
 | `legacy_shell` | `BashOutput` `KillShell` (opt-in) |
-| `manager` | `sessions_find` `session_launch` `session_status` `session_wait` `session_result` `session_cancel` (reserved, see below) |
+| `manager` | `sessions_find` `session_launch` `session_status` `session_wait` `session_result` `session_cancel` `session_send` (reserved, see below) |
 
 Profiles: `coding` (default: fs, patch, shell, task, web, ext, mcp),
 `coding_meta` (+ meta), `research` (read-only: drops every `mutates` tool,
@@ -144,7 +144,7 @@ or the `manager` context (the frontmatter grammar rejects them), and
 `config.agent.profile = "manager"` would select a profile whose tools no ordinary
 catalog contains.
 
-The six tools live in `manager_tools.py` and are bound to a `ManagerPort` by
+The eight tools live in `manager_tools.py` and are bound to a `ManagerPort` by
 `build_manager_catalog(port)`. The runtime builds that catalog **structurally**
 (`Runtime._make_manager_tool_turn`): nothing from the manifest, MCP, skills,
 extensions, hooks or the built-in catalog is merged in, and an injected
@@ -153,15 +153,16 @@ session. Bounds enforced in the tools: `session_launch` instruction ≤ 16 KiB
 (UTF-8), required `origin_message_id` (a user message id; the host port checks
 provenance), optional `agent` ≤ 64 and `title` ≤ 160 chars, **no model
 override**; `session_wait` ≤ 20 ids and ≤ 600 s; `session_cancel` reason ≤ 256
-chars. The host port enforces visibility, provenance, launch caps and
+chars; `session_send` message ≤ 16 KiB; `session_show` takes only an id and
+`origin_message_id`. The host port enforces visibility, provenance, launch caps and
 cancel-only-what-it-launched.
 
-Permissions are a fresh `PermissionEngine` per manager turn: mode `deny`, the
-four read tools allowed by name, `session_launch` and `session_cancel` forced to
-ask ahead of any grant or rule (the approval key is the exact instruction /
-target), `on_unattended = "deny"`, and the session's own unattended fallback is
-pinned to deny for the turn. Session grants and `[permissions]` rules are never
-read, so nothing pre-approves a launch.
+Permissions are a fresh `PermissionEngine` per manager turn: mode `deny`, every
+manager catalog tool (reads plus `session_launch`, `session_cancel`,
+`session_send` and `session_show`) allowed by name, so none of them ever asks, attended or not. Any
+other tool name is denied, and the session's own unattended fallback is pinned
+to deny for the turn. Session grants and `[permissions]` rules are never read.
+Provenance, ownership and caps in the host port are the guard.
 
 ## Built-in tools
 
@@ -174,7 +175,7 @@ read, so nothing pre-approves a launch.
 | `write` | yes | atomic, symlink-safe replace; parents created only with `create_parents` |
 | `apply_patch` | yes | multi-file `*** Begin Patch` format (add/update/delete/move) with `@@` anchors, hunks located by content; ≤ 1,000,000 chars, 1,000 operations; `_patch_parse` → `_patch_stage` → `_patch_commit` (validate all, stage, guarded commit with rollback) |
 | `bash` | yes | see below |
-| `subagent` | no | spawns a bounded child ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`; the description lists each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)) |
+| `subagent` | no | spawns a bounded child; root sessions only, never present in a child's catalog, extension or code-mode context ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`; the description lists each tier's models and effort, each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)); a change to the tier models or efforts appends a short tail notice to history ([context.md](context.md#subagent-roster-notice-plan-06)) |
 | `todowrite` | no | agent-scoped in-memory task list (pending/in_progress/completed); full list each call; restored per session |
 | `question` | no | asks the user one question (≤ 3 options, free text if none), waits up to 15 min; fails fast when no operator is attached |
 | `webfetch` | no | public HTTP(S) → bounded Markdown wrapped in `<<< BEGIN UNTRUSTED WEB CONTENT >>>`; PDFs/binaries unsupported |
@@ -281,8 +282,8 @@ grants keep their meaning. Filesystem targets cannot bypass path preparation.
 
 ### Code mode: the `code` tool
 
-Optional (`pip install 'nexus[codemode]'`, pinned `pydantic-monty==1.1.0`; off by
-default, `[code_mode] enabled = true`, see [config.md](config.md)). One tool,
+On by default (pinned `pydantic-monty==1.1.0` is a base dependency; disable with
+`[code_mode] enabled = false`, see [config.md](config.md)). One tool,
 `code`, runs a short Python program in the Monty sandbox so the model can fan out
 and filter tool calls without putting intermediate results in context. The user
 still sees every nested call with full input and output. Package: `nexus/tools/codemode/`.
@@ -292,6 +293,12 @@ Design history: `plans/planning/03-*.md`; Monty findings: [codemode-monty-compat
 optional `timeout_s` (<= `max_tool_seconds`), optional `targets` (<= 50 session
 names/ids, for context reads; see [context.md](context.md#recursive-context-code-mode)).
 Permission key `code`; the tool is `exclusive` when mutating tools are exposed.
+
+**Registration.** `code` is not in the builtin catalog; the runtime registers it
+when it builds an iteration manager (`coding` profile, `code_mode.enabled`, Monty
+available). A root agent definition's tool selection (`Runtime._make_tool_turn`) is
+computed against that iteration manager, not the builtin catalog, so inheriting
+roles such as `build` keep `code` in the turn's initial manager and schemas.
 
 **Sandbox names are flat.** Each exposed tool is a bare async function
 (`await read(path="README.md")`; MCP tools by their safe local name), plus

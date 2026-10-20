@@ -36,6 +36,10 @@ _PROJECTIONS: dict[str, tuple[str, str, str]] = {
     "manager.result_read": ("info", "manager.result_read", "The manager read a session result."),
     "manager.wait": ("info", "manager.wait", "The manager waited for sessions."),
     "manager.cancelled": ("info", "manager.cancelled", "The manager cancelled a session."),
+    "manager.routed": ("info", "manager.routed", "The manager sent a message to a session."),
+    "manager.send_refused": ("warning", "manager.send_refused", "A manager send was refused."),
+    "manager.show": ("info", "manager.show", "The manager asked a client to show a session."),
+    "manager.show_refused": ("warning", "manager.show_refused", "A manager show request was refused."),
     "error": ("error", "error", "An operation failed."),
 }
 

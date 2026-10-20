@@ -722,9 +722,13 @@ def builtin_parts() -> tuple[ContextPart, ...]:
 
 
 def current_user_index(messages: Sequence[Message]) -> int | None:
-    """Index of the last user message, or ``None`` when there is no user turn."""
+    """Index of the last user message, or ``None`` when there is no user turn.
+
+    A harness notice trails the real prompt (or tool results) and is never the
+    current user message: it stays in the tail with the message it follows.
+    """
     for index in range(len(messages) - 1, -1, -1):
-        if messages[index].role == "user":
+        if messages[index].role == "user" and messages[index].meta.notice is None:
             return index
     return None
 

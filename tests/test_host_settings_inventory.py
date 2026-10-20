@@ -27,7 +27,7 @@ class _Transport:
             yield None
 
 
-BUILTINS = {"advisor", "build", "orchestrator", "quick", "task"}
+BUILTINS = {"advisor", "build", "orchestrator", "quick", "scout", "task"}
 
 
 def _client(workspace: Path) -> Client:

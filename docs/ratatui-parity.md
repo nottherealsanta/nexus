@@ -231,7 +231,7 @@ replaces it; with the real card visible at the top there is no pin. Clicking the
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
 
 **Top bar spacing.** One empty row above and one below the in-session top bar (the bar is
-three rows: tabs, a blank spacer, then workspace path/branch, starting on screen row 2;
+two rows: tabs, then workspace path/branch directly beneath, starting on screen row 2;
 see "Top bar spacer row"); the Sessions page header also starts on row 2 so both screens
 line up (`regions()`).
 
@@ -336,7 +336,12 @@ need a client built from the same source; an older binary rejects them with
 `unsupported bridge schema`, so rebuild it (`cargo build --release --manifest-path rust/tui/Cargo.toml`).
 
 **Splash (design overhaul, step 12).** `rust/tui/src/splash.rs` replaces the plain word.
-The small half-block wordmark is made of particles that start at deterministic pseudo-random
+The wordmark is the full 8-row, 66-column NEXUS block art (digits and punctuation, `WORDMARK`
+in `splash.rs`, drawn exactly as supplied); every non-blank cell is a particle. It needs a
+screen of at least 66 columns by 11 rows (8 art rows, a blank row, the bar, the step name);
+anything smaller falls back to the old 2-row half-block mark (`WORDMARK_SMALL`), and tiny
+screens clip rather than panic (`renders_at_any_size_without_panicking`). In ASCII mode the
+art cells are drawn as `#`. The particles start at deterministic pseudo-random
 cells and ease (`1-(1-p)^3`) to their places, drawn `·` then `•` and blended dim → ink blue,
 while a 30-segment `▰▱` bar fills under it: the bar itself is centred horizontally, the
 percentage sits on its right, and the current step name is centred on the row below the bar
@@ -722,7 +727,7 @@ and schemas. After the first turn switches show LOCKED; inspection remains avail
 (`context_chips` rows, resolved in `main.rs`), so a click opens that chip's section and
 Enter on the strip opens the section menu. Skills and MCP chips show two unlabelled
 counts, project then global (project greyed), enclosed together in square brackets.
-Native context rows have no diamond/dot prefix: labels show counts in square brackets (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`), with readable spacing before any token estimate; token values are shown without a tilde prefix. The native top bar is three rows (tabs, a blank spacer, then workspace path/branch), with no separator row below it.
+Native context rows have no diamond/dot prefix: labels show counts in square brackets (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`), with readable spacing before any token estimate; token values are shown without a tilde prefix. The native top bar is two rows (tabs, then workspace path/branch), with no separator row below it.
 The workspace/status row no longer repeats the details-sidebar toggle beside
 `idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` marks. A finished group stays collapsed by default, including when it contains failures; folded groups omit failure and thought counts, do not animate, and use subdued headings. Expand a group to see individual tool outcomes, with failures marked on their own rows. A
 subagent row has a blank row above and below and never shows its latest tool call (see the stable card above).
@@ -1015,6 +1020,18 @@ then typo matches (adjacent swap or one substitution, so `/mew` finds `/new`), t
 padding. Python (`ui_support/completion.rank_menu`) serves desktop and `@` files; the
 TUI ranks slash commands locally with the same tiers (`rank_commands`).
 
+`@` completion in the native TUI also offers visible directories (2026-10-20, plan
+08). The TUI sends `"directories": true` on `complete` actions;
+`BackgroundActions` maps it to `complete(..., include_directories=True)` for the
+`@` branch only (not `/attach`), which asks the host `FileSearch(include_directories=true)`
+(field default `false`, protocol v3 unchanged). Directories come back as `dir/`, pass
+the same hidden/symlink/ignore/read-deny filters, rank by basename and depth, and sort
+before files of equal rank. Accepting a `@dir/` row (keyboard or mouse) inserts
+`@dir/` with no trailing space so the 120 ms debounce lists its children; files and
+other completions still end with a space. `@` stays literal text: no content is
+expanded and the prompt gets no notice. Paths containing spaces remain a limitation
+(the token ends at whitespace). Desktop and web keep files-only results.
+
 Native slash/file completion and command choice menus use the full transcript
 width directly above the composer, without borders. Agent, model, effort and
 follow-up operation menus remain in this dock; Settings retains its navigation
@@ -1256,7 +1273,8 @@ error 12 s, paused while the pointer is on a toast, same-key toasts merge (`×2`
 most three visible plus `+N more`. They float at the top-right of the conversation
 area over everything (dialogs included) and never reflow it; the countdown hairline is
 deliberately faint. Click `×` to dismiss, click the action to run its operation.
-`Ctrl+X x` dismisses all, `Ctrl+X a` runs the newest toast's action (`Ctrl+X t` stays "cycle reasoning effort"). Esc does not
+`Ctrl+X x` dismisses all, `Ctrl+X y` runs the newest toast's action when one has an action (`Ctrl+X t` stays "cycle reasoning effort"; `Ctrl+X a` is
+always the Manager toggle, see [Manager entry](#manager-entry-plan-02-native-ui)). Esc does not
 dismiss toasts (it already means stop/close). Every toast is also a `client · toast`
 line in the Logs tab (warnings and errors always, info and success with the routine
 entries), so a dismissed toast is never lost. Not done yet: toasts for the remaining
@@ -1344,8 +1362,8 @@ it once, after the page and before any panel/Settings/picker/inspector or
 permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
-Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, three rows; see "Top bar spacer row"
-below for the 2026-10 change): row 1 holds the tabs, row 2 is blank, row 3 `~/path branch worktree`
+Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, two rows; see "Top bar spacer row"
+below): row 1 holds the tabs, row 2 `~/path branch worktree`
 (the host's session title only, with `New session` while unavailable; no Nexus prefix
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
@@ -1529,7 +1547,7 @@ no Antigravity-specific feature.
 `/live [stop|pause|resume|mute|new|status|revoke]`, `Ctrl+X P` (leader `p`, pause) and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
 `LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
 `nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
-`active state phase model muted paused pause_left started in out elsewhere detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
+`active state phase model muted paused pause_left started in out elsewhere manager attention detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
 the phase strip (`LISTENING   ▁▃▅█▆▃▂▁ … 02:41`: caps phase, its animation, the clock; design
 overhaul step 11, see `docs/live.md`) as the Live pane's header row and the pane's captions; the
 composer no longer shows it; the clock is computed in Rust from the
@@ -1561,24 +1579,36 @@ script model responses, not `live.*` events. Real microphone and OpenAI behavior
 ## Manager entry (plan 02, native UI)
 
 Status: implemented and tested offline (Python, Rust unit tests, PTY); **the feature stays off by
-default (`[manager] enabled = false`) and is not soaked against real Copilot or GPT Live.** Backend
+default (`[manager] enabled = false`) and is not soaked against real Codex or GPT Live.** Backend
 and rules: [manager.md](manager.md). The terminal and the desktop client share one Python bridge
 (`nexus/ui/ratatui/manager.py`, presentation in `nexus/ui_support/manager.py`).
 
 - **Pinned entry.** The Sessions page (`≡`, `Ctrl+B`, `/sessions`) draws a Manager block between
   the search rule and the roots, closed by a rule of its own: status glyph, `Manager`, `pinned · m opens`
   (`pinned · open now` while it is the open session), a purple `Voice M` button, one status line
-  (`Ready · 2 sessions launched`, `Working`, `Needs you`, `Not signed in · sign in to GitHub Copilot under
+  (`Ready · 2 sessions launched`, `Working`, `Needs you`, `Not signed in · sign in to ChatGPT (Codex) under
   Settings > Providers`, or `Off · [manager] enabled = false`), the pinned model with Live readiness
-  (`github-copilot/gpt-6-luna · Voice ready`; while off, how to enable it) and the cross-session
+  (`codex/gpt-6-luna · Voice ready`; while off, how to enable it) and the cross-session
   privacy line. It is never a row: it does not sort, filter, count in the chips or archive. A click on any
   of its rows or `m` sends `manager_open`; the button or `M` sends `manager_live`. Older hosts send no
   entry and `m` stays a filter letter. The snapshot field `manager` (and `dashboard.manager`) comes from
   `ManagerState`, read at start, when the page opens and about every 30 s while it is open or the client
   polls; a failed read (an older daemon) is shown as the entry's text, not hidden.
+- **Top-bar toggle, not a tab.** The Manager is never in the tab strip (`switch` adds no tab for it and
+  `_tab_rows` drops it). A `◇` button sits on the right of the top bar immediately before the Sessions `≡`
+  button (drawn once the host has answered `ManagerState`, also while the manager is off, so it stays
+  discoverable). Clicking it, or `Ctrl+X A`, sends `manager_toggle`: `Manager.toggle` opens the manager view and
+  remembers `(workspace, session)` in front (`Manager.previous`); toggling again restores that session through
+  `switch_project`, or the first remaining tab if it was closed meanwhile, or `/new` if there is none. While the
+  manager is in front the button reads pressed (`◆`, accent, panel background; `manager.active`) and the top bar
+  shows no left title and the workspace row (path, branch, worktree) is blank. Closing never archives, deletes or cancels anything and never touches the Live
+  call (always on the manager, below). `/manager` and the pinned Sessions entry still open the view, and keep the
+  same way back. `Ctrl+X a` and `Ctrl+X Shift+A` are always the toggle, never context-dependent; the old
+  "run the newest toast's action" moved to `Ctrl+X y`. The shared `LEADER_SHORTCUTS` row (`a`, `toggle_manager`) lists it in
+  `Ctrl+X ?`, Settings > Keyboard and the desktop keymap.
 - **Open.** `manager_open` / `/manager [open]` call `ManagerOpen` (idempotent), switch to the returned session
-  (tab titled `Manager`) and re-read the state. While off, nothing is created: a panel explains
-  `[manager] enabled = true` and the daemon restart. Signed out of Copilot still opens (the log is readable)
+  (no tab; it records the way back for the toggle) and re-read the state. While off, nothing is created: a panel explains
+  `[manager] enabled = true` and the daemon restart. Signed out of Codex still opens (the log is readable)
   and warns with the exact fix. `/manager status` lists every `ManagerState` fact.
 - **Dedicated session.** While the manager is the open session (`manager.active`) the composer shows
   `Manager · <model>` with no `/agent`, `/model` or `/effort` hit targets; `Shift+Tab`, `Ctrl+T` and the
@@ -1588,21 +1618,52 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
 - **Live.** `manager_live` / `/manager live` open the manager, then run the ordinary `/live` bridge
   (`LiveStart(manager id)`). The manager asks its **own** consent through `LiveConsent(scope="manager")`: a dialog
   `Use GPT Live with the Manager?` that carries the base notice and the explicit cross-session text (titles, status,
-  final reports of other sessions, launch instructions go to OpenAI; confirmation stays on screen). The base notice
+  final reports of other sessions, launch instructions go to OpenAI; launches need no confirmation). The base notice
   is asked first when missing; the daemon's `live_consent_required` reopens the dialog. `/live revoke manager` withdraws
-  only the cross-session notice. Ordinary sessions never ask it.
-- **Confirmation.** A manager `session_launch` / `session_cancel` permission request is drawn by
-  `ui_support/manager.py`: title `Launch a new session?` / `Stop a session the manager launched?`, the whole
-  instruction wrapped (up to 40 rows, a cut announced with the characters not shown), two choices only
-  (`y` launch / `n` do not launch; `y` stop / `n` keep running) and `Asked every time · this answer is never
-  remembered`. There is no always-allow, always-deny or `a`/`d` key, and answers outside the displayed choices are
-  rejected by the bridge. The prompt field `what_rows` (8) tells Rust to show more rows than the usual three; its
-  `why` is then a sentence, not `rule: …`. The line CLI prompt (`ui/cli/approve.py`) drops `[a]`/`never` for these
-  tools. Ordinary tools keep the four-way prompt.
+  only the cross-session notice. Superseded for the call itself by the next bullet: every call asks it.
+- **Live is always on the manager (plan 02 §10, offline-tested, not verified live).** `/live`, `Ctrl+X D`,
+  `manager_live` and `/manager live` all start a call attached to the manager session
+  (`Manager.live_ready` reads `ManagerState`, `Manager.live_session` calls `ManagerOpen`) and **never switch the
+  session on screen**; `LiveStart` carries the manager id and the manager notice is always asked. While the
+  call is open the Live pane above the composer stays in every session (header `· in Manager`, rows from the
+  manager's call). `nexus/ui/ratatui/manager_follow.py` is the panel's own subscription to the manager stream
+  (read-only, replayed from seq 0, retried with backoff, ends with the call); `Live._view()` uses the shown
+  view when the manager is in front, the followed view otherwise. A manager approval or question that is
+  pending while another session is in front becomes the snapshot `prompt` when that session has none of its
+  own: first line and `title` are prefixed `Manager · `, the prompt carries `session` (the manager id) and the
+  `answer` action resolves it there (`resolve_permission` / `answer_question` on that session; manager
+  launch, cancel, send and show raise none). The bar adds `manager: true` and `attention`
+  (`approval waiting` / `question waiting`, drawn as a bold warning chip after the phase in the terminal header
+  and as an amber chip in the desktop bar). The composer is untouched: it sends to the displayed session and
+  the pane takes no keystrokes. Once the call ends the manager's prompts are visible only in the manager session.
+- **Focus reporting.** Each native client reports its foreground session (`nexus/ui/ratatui/focus.py`,
+  `Focus`): on start, after every `ShellActions.switch`, every 15 s while polling (so the host can expire a stale
+  client) and an empty session on exit. It calls `Client.session_focus(session, client_id)` (or
+  `SessionFocus(session=, client_id=)` through `_request`) which the host answers with an `Ack` or an error;
+  sends are background, coalesced to the latest session, an unknown-command error switches reporting off for the
+  process and other errors retry on the next heartbeat. `client_id` is `native-<random>` per process. The signal
+  carries ids only and never reaches the model. The host command is owned by the host work; until it lands this
+  is a no-op against an older daemon. `switch` reports the new session **before** replaying it, so the host
+  sees the client on the manager before the user can type to it.
+- **Show requests.** `Manager.on_event` (called from `prototype.update` before `controller.ingest`, and from
+  `ManagerFollow` for the Live follow) turns a fresh `manager.show` event into `switch_project(workspace, target)` in
+  its own retained task, then resumes the controller stream. It acts only past the reduced cursor (never on a
+  bootstrap or reconnect replay; the follow also ignores events older than its start), within 30 s and before
+  `expires_at`, once per event (64 remembered), and only when this client's `Focus.client_id` is in `clients` while the
+  manager is in front, or the event is from Live and this client's Live call follows the manager. It never replaces a
+  panel, form, Sessions dashboard, voice recording or pending prompt: a warning toast names the request instead.
+  Terminal and desktop share it; no Rust change. Tests: `tests/test_manager_show.py`; the `prototype.update`
+  hook itself is covered only through `Manager.on_event` and `ManagerFollow`, not a PTY run.
+- **No confirmation.** Manager `session_launch` / `session_cancel` / `session_send` / `session_show` run without an approval
+  request (attended or not), so there is no manager-specific prompt; `ui_support/manager.py` and
+  `ui/cli/approve.py` carry no special case and every tool keeps the ordinary four-way prompt. The Rust `what_rows`
+  / `why` prompt fields are now unused by Python.
 - Tests: `tests/test_manager_ui.py`, `tests/test_ratatui_manager.py`, `tests/test_ratatui_pty_manager.py`
-  (real binary: pinned block, `m`/`M`, disabled state, two-choice confirmation), Rust unit tests in
+  (real binary: pinned block, `m`/`M`, disabled state), Rust unit tests in
   `render/sessions.rs`, `picker.rs`, `render/dialogs.rs`, `render.rs` and `bridge.rs`. Real terminals were not
-  inspected by eye.
+  inspected by eye. The top-bar toggle: `tests/test_ratatui_manager.py` (toggle, restore, fallbacks, no tab,
+  shortcut wiring) and `render/chrome.rs` unit tests (position before `≡`, absent until reported, pressed
+  style). No PTY check of `Ctrl+X A` exists; not verified in a running terminal.
 
 ### Antigravity visibility and safe discovery
 
@@ -1734,19 +1795,23 @@ Tool verbs in verb groups and tool-detail section headings are sentence case (`R
 ## Native chrome polish (2026-10)
 
 The ordinary top bar ends with a session-list `☰` control opening the Sessions
-dashboard and an outlined split-panel `◫` control toggling the details sidebar.
+dashboard and an outlined split-panel `▯` control toggling the details sidebar.
 These Unicode icons do not require a Nerd Font. Each has a three-cell padded hit
 target, with a one-cell gap between controls and two cells of right padding;
-subagent headers use the same padded `◫` target and right margin. Drawing, hover,
+subagent headers use the same padded `▯` target and right margin. Drawing, hover,
 and clicks share the header layout.
 
 ### Top bar spacer row (TODO item 1)
 
-The in-session top bar is three rows (`Regions.tabs.height == 3`), with the empty rows kept
-above it and below it. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
+The in-session top bar is three rows (`Regions.tabs.height == 3`): tabs, workspace row, then a thin `─`
+rule (`p.border`, inset 2 cells each side; hidden in the manager view but the row stays reserved). A
+terminal cannot allocate half a row; the rule replaces the old blank row below the bar and its glyph sits
+mid-cell, so it reads as half a row of air plus a line. There is no blank spacer between tabs and workspace
+row, and the transcript still starts on the same row as before (`transcript.y == tabs.bottom()`). One empty
+row is kept above the bar. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
 right-hand controls; consecutive tabs are separated by a straight vertical `│`
-(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). Row 2 is
-intentionally blank. Row 3 (`crumb_layout`) holds the workspace path, branch and worktree,
+(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). Row 2
+(`crumb_layout`, blank in the manager view) holds the workspace path, branch and worktree,
 aligned with the first tab label and truncated to the width. Hit-testing still uses row 1
 only (`tab_cells`); the sub-agent page header and the Sessions page are unchanged (the page
 header draws on the first row of its area). Sizing, pinned-prompt rows and the composer cap
@@ -1780,7 +1845,7 @@ tests cover the distinction).
 Findings: the Ratatui buffer cannot be the source. `draw()` clears the whole frame first and
 rebuilds every widget, and the Sessions page and the details sidebar `Clear` their own
 area, so each frame's buffer is complete. Stray glyphs left after the sidebar closes can
-therefore only be in the terminal: the diff writes only changed cells, and the `☰`/`◫`/`⧉`
+therefore only be in the terminal: the diff writes only changed cells, and the `☰`/`▯`/`⧉`
 glyphs are missing from some fonts, where a fallback glyph is drawn wider than its cell and
 spills into a neighbour that is never rewritten. **This was not reproduced** (it needs a real
 terminal and font; the change below was written and checked by reading the code, and the
@@ -1929,8 +1994,8 @@ in a real terminal.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. The active header says `◇ Manager`.
-Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
@@ -1948,3 +2013,9 @@ labelled sections (`tool_detail_sections`, one `Nested call N` each with full ar
 clipping announced). Checks: `tests/test_ratatui_pty_codemode.py` (live mid-run then finished
 snapshot), `transcript::signal` unit test. Not verified: nested approval prompts highlighting the
 calling line.
+
+Subagent headers start with a three-cell `←` Back target (glyph at column 1).
+Back uses the same dismiss action as Escape/Up: nested pages return to their
+parent, otherwise to the root transcript. Agent-header hover remains disabled.
+At narrow widths model, padding, status, and then details are omitted; Back is
+retained from width 3 and details from width 7.

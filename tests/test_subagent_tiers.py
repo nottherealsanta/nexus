@@ -57,7 +57,8 @@ def test_builtin_roles_declare_their_tiers(tmp_path):
     manager = AgentManager.for_workspace(tmp_path / "ws")
     found = {agent.name: agent.tiers for agent in manager.agents}
     assert found["quick"] == ("low",)
-    assert found["task"] == ("low", "medium")
+    assert found["scout"] == ("low", "medium")
+    assert found["task"] == ("medium", "high")
     assert found["advisor"] == ("medium", "high")
     assert found["build"] == ()
 
@@ -100,14 +101,36 @@ async def test_tier_outside_the_list_moves_to_nearest_and_says_so(tmp_path):
     assert clamped["reason"] == "role" and clamped["allowed_tiers"] == ["low"]
 
 
+async def test_task_defaults_to_medium_allows_high_and_clamps_low(tmp_path):
+    outcome, spec, _ = await _spawn(tmp_path, "task")
+    assert (outcome.tier, spec.model) == ("medium", "medium") and not outcome.clamped
+    outcome, spec, _ = await _spawn(tmp_path, "task", "high")
+    assert (outcome.tier, spec.model) == ("high", "high") and not outcome.clamped
+    outcome, _spec, _ = await _spawn(tmp_path, "task", "low")
+    assert outcome.tier == "medium" and outcome.clamped
+
+
+async def test_scout_defaults_to_low(tmp_path):
+    outcome, spec, _ = await _spawn(tmp_path, "scout")
+    assert (outcome.tier, spec.model) == ("low", "low") and not outcome.clamped
+
+
 async def test_lower_than_allowed_moves_up(tmp_path):
     outcome, _spec, _ = await _spawn(tmp_path, "advisor", "low")
     assert outcome.tier == "medium" and outcome.clamped
 
 
 async def test_concrete_model_is_kept_when_its_tier_is_allowed(tmp_path):
-    _outcome, spec, _ = await _spawn(tmp_path, "task", "codex/gpt-5-mini")
-    assert spec.model == "codex/gpt-5-mini"
+    # gpt-5-mini is a low-tier model; scout allows low.
+    outcome, spec, _ = await _spawn(tmp_path, "scout", "codex/gpt-5-mini")
+    assert spec.model == "codex/gpt-5-mini" and not outcome.clamped
+
+
+async def test_concrete_low_model_is_clamped_for_task(tmp_path):
+    # task's list is [medium, high], so a low concrete model runs the medium tier.
+    outcome, spec, _ = await _spawn(tmp_path, "task", "codex/gpt-5-mini")
+    assert (outcome.tier, spec.model) == ("medium", "medium")
+    assert outcome.clamped
 
 
 async def test_concrete_model_outside_the_list_runs_the_tier(tmp_path):
@@ -166,7 +189,8 @@ def test_roster_shows_tiers_and_the_default(tmp_path):
     _write_role(tmp_path, "plain")
     lines = make_runner(tmp_path, Factory()).role_index().splitlines()
     assert any(line.startswith("quick [tiers: low]: ") for line in lines)
-    assert any(line.startswith("task [tiers: low (default), medium]: ") for line in lines)
+    assert any(line.startswith("task [tiers: medium (default), high]: ") for line in lines)
+    assert any(line.startswith("scout [tiers: low (default), medium]: ") for line in lines)
     assert any(line.startswith("advisor [tiers: medium (default), high]: ") for line in lines)
     assert any(line.startswith("custom [tiers: medium]: ") for line in lines)
     assert "plain: plain role" in lines
@@ -182,14 +206,14 @@ def test_tool_description_teaches_tier_choice_with_the_roster(tmp_path):
     spec = make_task_spec(runner)
     assert "Choosing a tier" in spec.description
     assert "Prefer the cheapest tier" in spec.description
-    assert "task [tiers: low (default), medium]" in spec.description
+    assert "task [tiers: medium (default), high]" in spec.description
     model = spec.input_schema["properties"]["model"]["description"]
     assert "nearest allowed tier" in model and "Omit it" in model
 
 
 def test_roster_budget_keeps_every_builtin_role(tmp_path):
     names = [re_name.split(" ")[0] for re_name in make_runner(tmp_path, Factory()).role_index().splitlines()]
-    assert {"quick", "task", "advisor"} <= set(names)
+    assert {"quick", "scout", "task", "advisor"} <= set(names)
 
 
 # -- doctor hint -----------------------------------------------------------

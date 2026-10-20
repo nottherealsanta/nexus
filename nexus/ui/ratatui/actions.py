@@ -83,6 +83,7 @@ class ShellActions:
 
     def __init__(self, controller):
         self.controller = controller
+        self._switch_lock = asyncio.Lock()
         self.panel_title = ""
         self.panel_layout = "modal"
         self.panel_format = "plain"
@@ -154,6 +155,8 @@ class ShellActions:
         from .live import Live
         from .logs import Logs
         from .manager import Manager
+        from .focus import Focus
+        self.focus = Focus(self)  # tells the host which session this client shows
         self.preferences = Preferences()
         self.workflows = Workflows(self)
         self.voice = Voice(self)
@@ -296,6 +299,12 @@ class ShellActions:
         stays open on the old session; the dashboard closes only once the switch succeeded
         (``switch`` hides it). The error is re-raised so callers can restore a submitted draft.
         """
+        # The main action loop and the manager's show task may both navigate: one switch at a time.
+        # ``switch`` and the helpers below never re-enter this method, so the lock cannot self-deadlock.
+        async with self._switch_lock:
+            await self._switch_project(workspace, session)
+
+    async def _switch_project(self, workspace, session):
         if self.attachment_draft_key is None:
             self.attachment_draft_key = (self.workspace, self.controller.session)
         if workspace != self.workspace:
@@ -341,7 +350,9 @@ class ShellActions:
         # The turn cache is keyed by session and bounded, so open tabs keep their rows.
         self.generation += 1
         self.logs.reset_session()
-        if not any(row["id"] == session and row["workspace"] == self.workspace for row in self.tabs):
+        # The manager is a view behind the top-bar button, never a tab (docs/manager.md).
+        if not self.manager.is_active(session) and not any(
+                row["id"] == session and row["workspace"] == self.workspace for row in self.tabs):
             self.tabs.append({"id": session, "title": "New Session", "workspace": self.workspace, "state": "idle"})
         old_key = self.attachment_draft_key or (self.workspace, self.controller.session)
         self.attachment_drafts[old_key] = (self.attachments, self.attachment_labels,
@@ -354,6 +365,9 @@ class ShellActions:
         self.preview = None
         self.preview_at = None
         await self.controller.switch_session(session)
+        # A foreground change is a host-API signal, not a model input. Sent before the replay so
+        # the host knows this client is on the manager by the time the user can type to it.
+        self.focus.report(session)
         await self.controller.bootstrap()
         self.mark_current_seen()
         # The context preview is a host round-trip the first paint does not need.

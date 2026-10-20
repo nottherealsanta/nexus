@@ -54,10 +54,32 @@ DEFAULT_TIER_EFFORTS = {
     ("high", "codex/gpt-6.1-sol"): "low",
 }
 
+def effective_tier_effort(
+    tier: str,
+    reference: str,
+    *,
+    configured: str | None,
+    pinned: bool,
+) -> str | None:
+    """The effort a ``tier`` route to ``reference`` runs at, or ``None``.
+
+    The single rule the router applies and the ``subagent`` roster advertises:
+    an explicit ``models.tier_efforts`` selection wins; otherwise the shipped
+    per-route default applies only to a built-in tier no user pin has
+    redefined. ``None`` means the provider default.
+    """
+    if configured is not None:
+        return configured
+    if tier not in DEFAULT_TIER_MODELS or pinned:
+        return None
+    return DEFAULT_TIER_EFFORTS.get((tier, reference))
+
+
 __all__ = [
     "BUILTIN_TIERS",
     "DEFAULT_TIER_MODELS",
     "DEFAULT_TIER_EFFORTS",
+    "effective_tier_effort",
     "COST_LOW_MAX",
     "COST_MEDIUM_MAX",
     "DEFAULT_TIER",

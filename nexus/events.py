@@ -48,7 +48,13 @@ TURN_EVENTS = (
     "turn.failed",
     "turn.cancelled",
 )
-CONTEXT_EVENTS = ("context.assembled", "context.compacted", "context.degraded", "context.handoff")
+CONTEXT_EVENTS = (
+    "context.assembled",
+    "context.compacted",
+    "context.degraded",
+    "context.handoff",
+    "context.notice",
+)
 MODEL_EVENTS = (
     "model.selected",
     "reasoning_effort.selected",
@@ -136,13 +142,18 @@ LIVE_EVENTS = (
 )
 
 # The workspace manager session (docs/manager.md). Durable, turn-less records in the
-# manager's own log: a refused launch, a result read, a bounded wait, a cancel.
+# manager's own log: a refused launch, a result read, a bounded wait, a cancel, a request
+# that a client switch to a session (``manager.show``).
 # They carry ids, counts and reason codes only, never instruction or result text.
 MANAGER_EVENTS = (
     "manager.launch_refused",
     "manager.result_read",
     "manager.wait",
     "manager.cancelled",
+    "manager.routed",
+    "manager.send_refused",
+    "manager.show",
+    "manager.show_refused",
 )
 
 # Presence is a subscriber count, not identity (single user, many views).

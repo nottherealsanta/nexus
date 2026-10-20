@@ -38,7 +38,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
 | `context.py` | `context_groups`, `tool_groups`, `context_summary`, `context_measure` (the one source for the context meter), `context_usage`, `thinking_status` | `ui/web/js/context-view.js` |
 | `timeline.py` | tool headings/summaries, batch glyphs, diff splitting (`split_diff_files`, `diff_sections`), thought titles | `renderTool`, `diffFiles`, `splitDiff` |
 | `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
-| `manager.py` | the pinned Manager entry (status, pinned model, sign-in fix, Live readiness), cross-session Live notice, commands a manager chat refuses, unconditional launch/cancel confirmation rows | none (no web) |
+| `manager.py` | the pinned Manager entry (status, pinned model, sign-in fix, Live readiness), cross-session Live notice, commands a manager chat refuses | none (no web) |
 | `text.py` | control-safe text | `el(tag, cls, text)` |
 | `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
 | `usage.py` | provider usage wording: thin `bar` (`━` used, `─` left, `┃` even pace), `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `reserve` / `reserve_phrase`, `summary` (`38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)`), `heading` | `ui/web/js/usage.js` |
@@ -180,6 +180,13 @@ shell turn with a `bash` row; its output is added to the model context without
 starting the agent ([tools.md](tools.md#shell-mode--in-the-composer)). The web
 client (to be deprecated) does not have it.
 
+## `@` completion contract
+
+`@` completes workspace paths through `ui_support/completion.complete`. Files-only
+is the default; the native TUI opts in to directories (`dir/` rows, accepting one
+keeps completion open without a trailing space). Desktop and web stay files-only.
+`@path` is never expanded; see [ratatui-parity.md](ratatui-parity.md#composer-command-choices-2026-10-02).
+
 ## Messages during a turn
 
 Enter **steers** the active turn at the next model step, after the current
@@ -207,7 +214,7 @@ row reads the built-in `agy -p /usage` TSV quota command (verified with agy
 failures as unavailable notes/row errors without inventing quota numbers. Settings → Providers shows Antigravity as a manual CLI
 sign-in (`agy` in a terminal); the browser client gains nothing new for it. The remaining share is the bar's
 track and is no longer repeated as `N% left`. In the
-TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), `D` (start or end a GPT Live call; `L` is the details sidebar), or
+TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), `D` (start or end a GPT Live call; `L` is the details sidebar), `A` (open or close the Manager view; native clients only), or
 an alias from `LEADER_SHORTCUTS` (`?` lists them). The model picker is one
 searchable modal with provider groups, favorites (`Ctrl+F`), recents, sort
 (`Ctrl+S`), a `↻`/`Ctrl+R` catalogue refresh (`ModelsRefresh`) and optional effort
@@ -222,11 +229,9 @@ Shown as list prompts docked above the composer (TUI `PermissionScreen` /
 While an approval is pending the background is inert. Arbitration is daemon-side
 (first responder wins); with no viewer attached `on_unattended` applies.
 
-**Manager launch and cancel are the exception** (native Ratatui and desktop, [manager.md](manager.md)): a
-`session_launch` / `session_cancel` request offers only *launch* / *do not launch* (or *stop* / *keep running*),
-`y` and `n`, and says `Asked every time · this answer is never remembered`. No "for session" row, `a` or `d` key
-exists, the whole instruction is shown (a cut is announced), and the line CLI prompt drops `[a]`/`never` for them.
-Rows come from `ui_support/manager.py`.
+Manager `session_launch` / `session_cancel` / `session_send` ([manager.md](manager.md)) never raise an approval:
+the manager's permission engine allows its whole catalog, attended or not, so no surface has a manager-specific
+prompt.
 
 ## Settings
 
@@ -245,6 +250,20 @@ commands ([extensions.md](extensions.md#settings-files-host)).
   (appearance, layout, voice, agents, file categories). Agents reset only
   overrides and the scoped default-agent choice; Tools and Skills list every
   custom item before removing it. Removed files move to settings trash.
+- **Skills install (Ratatui):** *Add from npx skills…* opens a one-line form
+  (`source [skill …]`, scope from the page's Global/Project control), then a confirmation that
+  states it downloads and runs third-party code, then `SkillsInstall` runs as a background
+  task: the page stays usable, the result is a toast (installed, skipped, failed, conflicts),
+  and conflicts offer an overwrite confirmation. A result that arrives after a session or
+  project switch only toasts. Desktop and web have no install action yet.
+- **MCP add (Ratatui):** *Add server…* under each scope of Settings → MCP servers opens a JSON
+  editor prefilled with a one-server map, then a masked confirmation (name, file, transport,
+  command basename and argument count or credential-free URL, env/header names, enabled,
+  loading; a warning for literal secrets in a project file; "Nexus starts this command now and
+  in new sessions."). Confirming runs `SettingsMcpAdd` as one background task: no input is
+  blocked, the result is a toast, and the MCP page refreshes only if it is still showing. The
+  draft stays in workflow state; the operation carries only the scope. Desktop, web and the CLI
+  have no add action yet. See `docs/extensions.md`.
   Keyboard, Workspace and Providers have no reset. Browser conversation detail
   resets session, workspace and browser preferences together; appearance resets
   to System.
@@ -421,8 +440,8 @@ not implemented by P3.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. The active header says `◇ Manager`.
-Ask “Start a session to do X” to launch through a reviewed, confirmed tool call;
+back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
 (or the desktop session picker) to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider

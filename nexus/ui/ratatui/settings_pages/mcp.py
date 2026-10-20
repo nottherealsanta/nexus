@@ -9,12 +9,65 @@ commands as before and carry the file hash, so a concurrent edit is reported, ne
 """
 from __future__ import annotations
 
+import json
+import re
+
 from ....ui_support import settings_page as sp
 from ....ui_support.settings_help import SETTINGS_HELP
 from . import files
 
 AREA = "mcp"
 LOADING = ("search", "all")
+#: One-server starter shown in the Add server editor.
+ADD_TEMPLATE = """{
+  "my-server": {
+    "command": "npx",
+    "args": ["-y", "@scope/server"]
+  }
+}
+"""
+_WRAPPERS = ("servers", "mcpServers", "mcp", "context_servers")
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")  # keep in step with host_support.settings_inventory.MCP_ADD_NAME
+
+
+def _no_duplicates(pairs):
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("Duplicate JSON key; each server and field may appear once")
+        seen[key] = value
+    return seen
+
+
+def parse_add_draft(body: str) -> tuple[str, dict]:
+    """``(name, entry)`` from the editor text: ``{name: entry}`` or exactly one server in a wrapper map.
+
+    The wrapper may be any map the loader reads (``mcpServers``, ``servers``, ``mcp``,
+    ``context_servers``). Raises ``ValueError`` with a message that never repeats the draft.
+    """
+    def bad_constant(_name):
+        raise ValueError("NaN and Infinity are not JSON")
+
+    try:
+        document = json.loads(body, object_pairs_hook=_no_duplicates, parse_constant=bad_constant)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Not valid JSON (line {exc.lineno}, column {exc.colno})") from None
+    except RecursionError:
+        raise ValueError("JSON is nested too deeply") from None
+    if not isinstance(document, dict):
+        raise ValueError("Enter one JSON object: {\"name\": {…server…}}")
+    if len(document) == 1:
+        (key, inner), = document.items()
+        if key in _WRAPPERS and isinstance(inner, dict) and inner and all(isinstance(item, dict) for item in inner.values()):
+            document = inner
+    if len(document) != 1:
+        raise ValueError(f"Add exactly one server per time (found {len(document)})")
+    (name, entry), = document.items()
+    if not _NAME.fullmatch(name):
+        raise ValueError("Server name must be 1-32 characters: letters, digits, '_', '.', '-' (starting with a letter or digit)")
+    if not isinstance(entry, dict) or not entry:
+        raise ValueError("The server must be a non-empty JSON object")
+    return name, entry
 
 
 def _tone(status: str) -> str:
@@ -106,6 +159,7 @@ async def build(workflows) -> dict:
         blocks += [_server_section(scope, r) for r in servers]
         if not mine:
             blocks.append(sp.note(f"No servers in {path}. New file creates one."))
+        blocks.append(sp.buttons(f"{scope}:mcp-add", [("Add server…", {"kind": "mcp_add_open", "scope": scope}, "primary")]))
         file_blocks, _ = await files.file_blocks(workflows, AREA, scope=scope, heading=False,
                                                  empty="No mcp.json yet. New file creates one.")
         blocks += file_blocks

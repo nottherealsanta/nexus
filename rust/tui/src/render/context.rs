@@ -177,12 +177,12 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette, window: Opti
                     title = title.add_modifier(ratatui::style::Modifier::BOLD);
                 }
                 let counts = member.counts_label();
-                let mut spans = vec![
-                    Span::raw("    "),
-                    Span::styled(member.title.clone(), title),
-                ];
+                let mut spans = vec![Span::raw("    "), Span::styled(member.title.clone(), title)];
                 if !counts.is_empty() {
-                    spans.push(Span::styled(format!(" {counts}"), Style::default().fg(tone)));
+                    spans.push(Span::styled(
+                        format!(" {counts}"),
+                        Style::default().fg(tone),
+                    ));
                 }
                 // Items are told apart by a blank row, as in the open form.
                 if index > 0 {
@@ -375,11 +375,16 @@ mod tests {
         let first = texts(&build(&block, 80, &palette, Some(10_000)));
         std::thread::sleep(std::time::Duration::from_millis(200));
         let second = texts(&build(&block, 80, &palette, Some(10_000)));
-        assert_eq!(first, second, "no animation: every tick draws the same rows");
+        assert_eq!(
+            first, second,
+            "no animation: every tick draws the same rows"
+        );
         for line in &first {
             assert!(
                 !line.chars().any(|c| "█▓▒░▚".contains(c))
-                    && !["###", "%%%", "+++", "..."].iter().any(|run| line.contains(run)),
+                    && !["###", "%%%", "+++", "..."]
+                        .iter()
+                        .any(|run| line.contains(run)),
                 "bar glyph in {line:?}"
             );
         }

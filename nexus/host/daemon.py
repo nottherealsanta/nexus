@@ -104,9 +104,10 @@ MAX_SUBSCRIPTIONS_PER_CLIENT = 64
 #: SQLite file, the others may fetch the model catalogue or the network). They
 #: run as background tasks so one slow request never holds up the connection's
 #: next frame (a session open right behind the startup Doctor poll).
+#: ``SettingsMcpAdd`` belongs here too: its hot reload starts the new server's subprocess.
 SLOW_COMMANDS = tuple(
     getattr(p, name)
-    for name in ("Doctor", "UpdateStatus", "ModelsRefresh", "ModelsList", "SetupStatus")
+    for name in ("Doctor", "UpdateStatus", "ModelsRefresh", "ModelsList", "SetupStatus", "SkillsInstall", "SettingsMcpAdd")
     if hasattr(p, name)
 )
 MAX_SLOW_COMMANDS_PER_CLIENT = 8

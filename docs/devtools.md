@@ -21,6 +21,7 @@ them); nothing touches the network or your workspace. Setup is never required.
 | Headless runner and verdict checks | `devtools/mock/runner.py`, `checks.py` |
 | Sandbox (`SEED_FILES`, `GLOBAL_SEED_FILES`, `generated_seed_files`, `ensure_sandbox`, `reset_sandbox`, `tree_hash`) | `devtools/mock/sandbox.py` |
 | Dummy MCP server (`tracker`, `docs`, `broken`) | `devtools/mock/mcp_server.py` |
+| Debug manager MCP (the manager's session tools over stdio; [manager.md](manager.md#debug-mcp-server-debug-only)) | `devtools/manager_debug_mcp.py`, `debug_mcp_port.py` |
 | Catalogue | `devtools/mock/scenarios/__init__.py` (`_MODULES`) |
 | Host dispatch | `host_support/mock.py`; commands `MockList`, `MockStart`, `MockClean` (error outside dev mode) |
 | Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/ratatui/actions.py`, `ui/web/js/mock.js` |
@@ -96,6 +97,51 @@ loads through `skill` and calls `mcp__echo__echo`, returning `benchmark-mcp-ok`.
 The runtime integration check uses a scripted model and a real stdio subprocess:
 `pytest -q tests/test_mcp_integration.py -k benchmark_skill`. It launches from
 outside the workspace to verify relative MCP script resolution.
+
+### Code-mode evaluation (offline, plan 03 E1)
+
+`benchmark/codemode_eval.py` compares two **hand-scripted strategies** through the
+real `Runtime` (real tools, `PathGuard`, permissions, nested pipeline; a real stdio
+MCP subprocess for the MCP task) with a `ScriptedProvider`: *direct* tool calls
+versus one `code` program. No network, no provider, no credentials.
+
+```sh
+.venv/bin/python benchmark/codemode_eval.py [--scenario NAME]... [--json]
+.venv/bin/python -m pytest -q tests/test_codemode_eval.py
+```
+
+| Scenario | Direct arm | Code arm |
+| --- | --- | --- |
+| `fanout_read` | 30 parallel `read` calls | one program gathers 30 reads, prints only the TODO lines |
+| `fanout_grep` | 12 parallel `grep` calls (8 narrow, 4 broad) | one program gathers them, prints a count and first hit each |
+| `mcp_list_filter` | `list_records` (200 summary rows, `benchmark/mcp_records.py`), then 4 `get_record` | one program lists, filters open and critical, fetches 4 |
+| `long_child_context` | none (a root has no tool that reads a child transcript) | child reads 24 files; the root queries it with `context_search/tool_calls/meta/report` |
+
+Output per arm: model requests, top-level and nested tool calls, bytes of tool
+results that enter the model's context (UTF-8, not tokens), bytes of tool-call
+inputs, bytes of tool definitions in the first request, tool errors, and a content
+grade (required strings must appear in what the model sees; the MCP code arm must
+not leak closed issues). For `long_child_context`: the child's tool-result bytes
+against the bytes the root's model receives. The exit status is non-zero if any arm
+fails its grade.
+
+**Interpretation.** The numbers are deterministic and mechanical: they show that
+*when a program is written correctly*, code mode keeps bulk tool output out of the
+model's context and saves model round trips, with every nested call still visible
+as `code.call` events. They do **not** show that a live model chooses code mode
+when it should, writes working programs, recovers from Monty's language limits, or
+gets better answers; the scripted "model" never errs. The code arm also pays a
+fixed cost of larger tool definitions (the `code` catalog), reported as
+`tool_definition_bytes` (direct arm: its own tool list, measured the same way).
+The long-child task proves the read path, bounding and permission flow, not that
+RLM-style recursion helps a model. Live trials (one per supported provider, and a
+live long-child trial) are not done and are the basis for default-exposure and
+U7/U8 decisions, which stay at the current defaults (`expose = "read_only"`, no `only`
+mode, no `llm()` in plain code mode). `code_mode.enabled` defaults to `true` by user
+decision, not from live trial evidence.
+
+Code arms need `pydantic-monty==1.1.0` (a base dependency); without it they are
+reported `skipped` (tests skip) and the direct arm still runs.
 
 ## Local search (`websearch/`)
 
