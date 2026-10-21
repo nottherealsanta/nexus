@@ -156,8 +156,10 @@ class ShellActions:
         from .logs import Logs
         from .manager import Manager
         from .focus import Focus
+        from .sidebar import SidebarController
         self.focus = Focus(self)  # tells the host which session this client shows
         self.preferences = Preferences()
+        self.sidebar = SidebarController(self)  # left sidebar; the terminal client turns it on in `run`
         self.workflows = Workflows(self)
         self.voice = Voice(self)
         self.live = Live(self)
@@ -449,6 +451,12 @@ class ShellActions:
     async def cancel(self):
         result = await self.controller.cancel()
         self.composer_restore = "\n\n".join(result.returned_messages)
+        # Esc ends the root turn only; background subagents keep running (docs/agents.md).
+        from ...ui_support.timeline import agent_state
+        running = sum(1 for agent in (getattr(getattr(self.controller, "view", None), "agents", None) or {}).values()
+                      if agent_state(agent) == "running")
+        if running:
+            self.toast(f"{running} subagent{'s' if running != 1 else ''} still running (/tasks to stop)", "info", key="agents-running")
 
     async def close_tab(self, workspace, session):
         """Use the native tab-close policy without deleting or cancelling work."""
@@ -783,11 +791,15 @@ class ShellActions:
             if not self.controller.view.agents:
                 self.notice = "No background tasks"
                 return True
+            from ...ui_support.timeline import agent_state, agent_state_label
             rows = []
             for agent in self.controller.view.agents.values():
-                rows.append((f"{agent.id} · {agent.status} · {agent.task or agent.description}", {"kind": "agent_page", "id": agent.id}))
-                if agent.status == "spawned":  # running: stop this one agent only, not the turn
-                    rows.append((f"  ✕ Cancel {agent.id}", {"kind": "agent_cancel", "id": agent.id}))
+                state = agent_state(agent)
+                rows.append((f"{agent.id} · {agent_state_label(agent)} · {agent.task or agent.description}", {"kind": "agent_page", "id": agent.id}))
+                if state == "running":  # stop this one run only, not the turn; the child goes idle
+                    rows.append((f"  ✕ Cancel {agent.id} (ends this run)", {"kind": "agent_cancel", "id": agent.id}))
+                if state in {"running", "idle", "interrupted"} and agent.continuable:  # close: terminal, the log is kept
+                    rows.append((f"  ■ Close {agent.id} (stop for good)", {"kind": "agent_close", "id": agent.id}))
             self.workflows.menu("Background tasks", rows)
         elif name in {"/mcp", "/skills"}:
             await self.workflows.context_extensions(name[1:])

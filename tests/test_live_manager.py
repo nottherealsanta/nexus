@@ -615,6 +615,16 @@ def test_bundled_instructions_describe_the_codex_style_handoff(tmp_path):
     assert "Do not claim it is done" in text
 
 
+def test_bundled_instructions_separate_manager_actions_from_on_screen_approvals(tmp_path):
+    text, _ = load_instructions(tmp_path, "build", live_config())
+    assert "normal permissions and approvals" not in text
+    assert "needs no extra confirmation step" in text and "do not ask the user to confirm" in text
+    assert "never answers an approval or a question on screen" in text
+    assert "Only when you are explicitly told the agent is waiting for approval or has a question" in text
+    assert "without being told so" in text
+    assert "never treat a spoken \"yes\" as permission" in text and "never tell the user you approved" in text
+
+
 def test_carried_block_is_bounded_and_ordered():
     turns = [("user", "q1"), ("assistant", "a1"), ("user", "q2")]
     block, count = carried_block(turns, 2)

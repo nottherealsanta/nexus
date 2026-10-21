@@ -6,10 +6,14 @@ import json
 import os
 from pathlib import Path
 
+from ...ui_support.sidebar import TABS, clamp_width, normalize_tab
+
 
 class Preferences:
-    DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
-                "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": []}
+    #: ``sessions_sidebar`` is the left sidebar (Projects, Sessions, Files, Git); closed until opened.
+    DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": False, "details_sidebar": True,
+                "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": [],
+                "sidebar_width": 34, "sidebar_tab": "Sessions"}
 
     def __init__(self, path=None):
         self._worker = None
@@ -28,12 +32,21 @@ class Preferences:
             pass
         if self.values["details_tab"] not in {"Session", "Files", "MCP", "Logs"}:
             self.values["details_tab"] = "Session"
+        # A stored width outside the bounds is clamped; an unknown tab falls back to Sessions.
+        self.values["sidebar_width"] = clamp_width(self.values["sidebar_width"])
+        self.values["sidebar_tab"] = normalize_tab(self.values["sidebar_tab"])
 
     def set(self, key, value):
         if key not in self.DEFAULTS or not isinstance(value, type(self.DEFAULTS[key])):
             return
         if key == "details_tab" and value not in {"Session", "Files", "MCP", "Logs"}:
             return
+        if key == "sidebar_tab" and value not in TABS:
+            return
+        if key == "sidebar_width":
+            if isinstance(value, bool):
+                return
+            value = clamp_width(value)
         if isinstance(value, list):
             value = list(dict.fromkeys(item for item in value if isinstance(item, str) and len(item) <= 256))[:100]
         self.values[key] = value

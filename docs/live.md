@@ -129,22 +129,30 @@ call's status line is the header row of the Live pane (below), drawn on `p.eleme
 `LISTENING   ▁▃▅█▆▃▂▁  gpt-live-1-codex  /live stop      02:41`, then `↑ N more` and the expand
 button at the right. The phase is in caps, bold and padded to 12 cells (`CONNECTING` muted,
 `LISTENING` blue, `WORKING` purple, `SPEAKING` accent, `MUTED`/`PAUSED`/`ENDED` quiet), followed
-by that phase's animation and the clock right-aligned:
-- connecting: `●○○ ●●○ ●●● ○●● ○○● ○○○`, one step per two frames;
-- listening: eight cells `▁…█` in blue, the newest microphone levels (the snapshot carries only the
-  current `in` level, so the client keeps a ring buffer of eight samples, one per frame, in
-  `Cache.mic`; it is emptied when the call closes);
-- working: the braille orbit `⣾⣽⣻⢿⡿⣟⣯⣷` in purple and `agent turn #N running` (`N` from the newest
-  `Sent to agent … → turn #N` row; `agent running` when no row names a turn);
-- speaking: `∿` × 8 faded accent→background by a travelling wave, its depth damped by the output
-  level (silence is a flat line);
-- muted / paused: static (`mic off`, `ends in mm:ss`), no animation.
+by that phase's motion band (`rust/tui/src/live_wave.rs`) and the clock right-aligned. The band is a
+row of block-height bars `▁▂▃▄▅▆▇█`, up to 14 cells (fewer when the line is narrow, none below 4),
+a pure function of the 30 Hz activity clock so it moves smoothly (no dots, no braille spinner):
+- connecting / working: a narrow bright shimmer travelling left to right (muted while connecting,
+  purple while working; working adds `agent turn #N running`, `N` from the newest
+  `Sent to agent … → turn #N` row, `agent running` when no row names a turn; the label is dropped,
+  not clipped, when the line cannot hold it beside at least 4 cells, and the band is 6 cells beside it);
+- listening: a calm breathing swell (about 5 s, never above roughly 30% height) in blue. The
+  microphone lifts it: the newest history on the right plus the live level, so the bars follow the
+  user's voice. The snapshot carries only the current `in` level, so the client keeps a history of
+  the newest samples (`Cache.mic`, one per 125 ms tick) and eases the levels per frame (quick
+  attack, slow release); it is emptied when the call closes;
+- speaking: a fuller two-component travelling wave in the accent colour with a soft gradient
+  (full accent in the middle, dimmer at both edges), deeper as the eased output level rises;
+- muted: a flat `▁` line then `mic off`; ended: a flat line; paused: `ends in mm:ss` text only.
 
-With Settings → Appearance animations off every phase is drawn in its final state (dots `●●●`,
-orbit `⣾`, flat wave); the mic history is data and still shows. ASCII terminals use `#-`, `_.:-=+*#`,
-`|/-\` and `~`. Pieces drop by width, in this order: the `/live stop` (`Ctrl+X P resume` while
-paused) hint, the model name, the `in <session>` note, the animation, the clock; the phase is
-truncated last. Typing during a call is ordinary steering.
+Frames at 30 Hz are requested only while the call moves (`live_wave::wants_frames`: active, not
+paused, not muted, not ended). With Settings → Appearance animations off (or `NO_COLOR`) every
+state rests in a static pose (shimmer centred, speaking a still arch, listening the mic history
+only, which is data). ASCII terminals (`NEXUS_ASCII=1`) use `_.:-=+*#` bars. Pieces drop by width, in this order: the `/live stop` (`Ctrl+X P resume` while
+paused) hint, the model name, the `in <session>` note, the motion band, the clock; the phase is
+truncated last. Text frames of every state: `artifacts/live-panel-anim/bands.txt`
+(`cargo test dump_frames -- --ignored`). Not verified in a real terminal with a real call.
+Typing during a call is ordinary steering.
 When the call is on another session or has no rows yet (still connecting) there is no row
 list, but the microphone must stay visible: the pane is then the header alone, one row above
 the composer, `LISTENING   ▁▁▁▁▁▁▁▁  in <session>  /live stop    00:12` (a connecting call reads
@@ -153,7 +161,20 @@ and the `live_pane_tests` of `render.rs`; the earlier `● Live · phase · mm:s
 are gone (not verified in a real terminal or call).
 
 **Live pane (terminal).** The native terminal draws the open call's card rows in a pane
-between the timeline and the composer, not in the timeline (`Live.pane`; `bar()["detail"]`,
+under the composer card and above the bottom bar (the activity meter row), not in the timeline; the
+vertical order is transcript, composer, Live pane, bottom bar (`Regions.live`, `Regions.bottom_bar`).
+The pane's rows come out of the transcript, never the composer, and are capped so the transcript
+keeps one row (a terminal too short for that shows no pane; not verified on real tiny terminals).
+**Opening motion** (`rust/tui/src/live_anim.rs`): the pane grows from 0 to its full height over
+260 ms (ease-out cubic) as if sliding out from beneath the composer: the header appears first, the
+text fades in with the height, and an accent band sweeps along the header for 560 ms. Closing reverses
+in 140 ms (ease-in) from a ghost of the call's last state drawn as `ENDED`. The clock is the TUI's
+frame loop (`Instant` per pass, the same loop as spinners and folds); `LiveAnim::apply` runs each
+pass, returns whether another frame is needed, and stops requesting frames once the motion and its
+settled frame are drawn. With animations off (Settings, Animate activity; `NO_COLOR`; `NEXUS_ASCII`)
+the pane jumps to its final state. Layout follows the revealed rows (`Snapshot.live_reveal`, local),
+so the composer rises as the pane grows and the bottom bar never moves. Covered by Rust unit tests;
+a real-terminal capture of the motion is not verified. Data: (`Live.pane`; `bar()["detail"]`,
 `collapsed`, `operation`). The pane is 6 rows, the call-line header and five content rows, and follows the newest rows. The mouse wheel
 over it scrolls. Clicking a row opens or closes the card (the `live_toggle` operation, the
 same as the card). A button at the header's right (` ⤢ expand ` / ` ⤡ collapse `, beside the `↑ N more` notice) expands it to nearly full screen, up to
@@ -582,6 +603,13 @@ notice does not cover. The scope is versioned separately (the base consent stays
 recording it records the base too, and revoking the base removes both. For authorising a result read, a delegation
 counts only by its request text; the `Voice:` lines of the transcript it carries never do.
 
+**Consent versus approval.** The saved data-sharing consent (base plus manager scope) is the only gate on starting
+a call; it is not a per-action approval. Manager launch, send, cancel and show run without a confirmation step, so
+the bundled instructions tell the model not to ask for one. An approval exists only when the bridge reports a real
+`permission.requested` / `question.requested` event; the model then says it needs attention on screen, and is told
+not to claim a pending approval otherwise. A spoken "yes" only clarifies intent. It is never a permission, and
+nothing in Live approves on the user's behalf. Permission enforcement is unchanged.
+
 `LiveStatusResult.reason` is `disabled`, `unsupported` (the `websockets`
 client is missing from a broken install), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)
 or `busy`.
@@ -595,6 +623,14 @@ as a compatibility alias. The audio helper `nexus-live` ships inside published p
 wheels (see [release.md](release.md#second-native-binary-nexus-live)); a source install
 without Rust, or without ALSA headers on Linux, has no helper and reports `unsupported`.
 The model id is a pinned constant, not config.
+
+In the native terminal these are edited in **Settings → GPT Live** (next to Voice & speech): enable,
+voice (`Default (sol)` or one of the nine), longest call, paused-call limit, carried turns (steppers that keep any
+valid configured number), spoken progress, an instructions-file path (up to 400 characters in the field), the
+developer raw log, and a reset. The pinned model is shown read-only. Values save into `[live]` through the
+normal config settings path (no raw TOML) and apply to the next call; the page never starts a call and has no
+consent or service management. Code: `ui/ratatui/settings_pages/live.py` over `ui_support/live_settings.py`
+(`tests/test_ratatui_settings_live.py`).
 
 **Packaging root cause (0.5.1).** The helper is an `optional` setuptools-rust bin, so
 when its Cargo build fails the wheel is built without it and no error is raised. The

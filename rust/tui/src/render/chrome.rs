@@ -64,15 +64,35 @@ pub(super) fn control_spans(
     spans
 }
 
-/// Sessions and details buttons. Plain one-cell glyphs without emoji presentation: the earlier
-/// `☰` / `◫` can fall back to a wider font glyph that overflows its cell and leaves residue
-/// after a redraw (see `needs_full_repaint`).
-const DASHBOARD_GLYPH: &str = "≡";
-const DETAILS_GLYPH: &str = "▯";
-/// The Manager toggle: hollow while another session is in front, filled (and accented) while the
-/// manager view is. One cell each, like the glyphs above.
-const MANAGER_GLYPH: &str = "◇";
-const MANAGER_OPEN_GLYPH: &str = "◆";
+/// Top-bar button glyphs: one-cell, text-presentation marks from the Geometric Shapes block
+/// (no emoji presentation, no Dingbats: those can fall back to a wider font glyph that overflows
+/// its cell and leaves residue after a redraw, see `needs_full_repaint`). `NEXUS_ASCII=1` uses
+/// plain ASCII twins. All three come from the U+25A0 squares so they share size and baseline
+/// (the earlier `◈` and block-element `▐` did not): Sessions `▤`, details sidebar `▥` (vertical panes), Manager `▣`
+/// idle and `■` while the manager view is in front. Font coverage of these
+/// shapes is not verified beyond the screenshot font.
+fn pick(ascii: bool, plain: &'static str, ascii_mark: &'static str) -> &'static str {
+    if ascii {
+        ascii_mark
+    } else {
+        plain
+    }
+}
+fn dashboard_glyph() -> &'static str {
+    pick(crate::transcript::look::glyphs().ascii, "▤", "=")
+}
+fn details_glyph() -> &'static str {
+    pick(crate::transcript::look::glyphs().ascii, "▥", "|")
+}
+fn manager_glyph(open: bool) -> &'static str {
+    let ascii = crate::transcript::look::glyphs().ascii;
+    match (open, ascii) {
+        (false, false) => "▣",
+        (true, false) => "■",
+        (false, true) => "o",
+        (true, true) => "*",
+    }
+}
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
@@ -80,11 +100,11 @@ pub enum TabHit {
     Session(usize),
     Close(usize),
     New,
-    /// `◇`: toggles the Manager view (`manager_toggle`); right before the dashboard button.
+    /// `▣`: toggles the Manager view (`manager_toggle`); right before the dashboard button.
     Manager,
-    /// `≡`: opens the Sessions dashboard (`/sessions`).
+    /// `▤`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
-    /// `▯`: toggles the details sidebar.
+    /// `▥`: toggles the details sidebar.
     Details,
     /// `◔ N`: opens the notifications drawer.
     Notifications,
@@ -130,7 +150,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
 /// `top_layout` with the working-tab spinner on animation frame `spin` (all frames are one cell
 /// wide, so geometry and click ranges do not depend on it).
 fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String, Seg)> {
-    let dash = format!(" {DASHBOARD_GLYPH} ");
+    let dash = format!(" {} ", dashboard_glyph());
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
     let sep = " │ ";
@@ -150,17 +170,13 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
             out.push((" ".into(), Seg::Gap));
         }
         if s.manager.shown() {
-            let glyph = if s.manager.active {
-                MANAGER_OPEN_GLYPH
-            } else {
-                MANAGER_GLYPH
-            };
+            let glyph = manager_glyph(s.manager.active);
             out.push((format!(" {glyph} "), Seg::Manager));
             out.push((" ".into(), Seg::Gap));
         }
         out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
-        out.push((format!(" {DETAILS_GLYPH} "), Seg::Details));
+        out.push((format!(" {} ", details_glyph()), Seg::Details));
         out.push(("  ".into(), Seg::Gap));
         out
     };
@@ -286,7 +302,7 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
     }
     out
 }
-/// The geometry the chrome buttons (`≡`, `▯`, tabs) sit in. When it changes the buttons move
+/// The geometry the chrome buttons (`▤`, `▐`, tabs) sit in. When it changes the buttons move
 /// or disappear, and the next frame must repaint every cell (see `needs_full_repaint`).
 pub type LayoutKey = (Rect, Rect, u16, u16);
 pub fn layout_key(r: &Regions) -> LayoutKey {
@@ -296,7 +312,7 @@ pub fn layout_key(r: &Regions) -> LayoutKey {
 ///
 /// Ratatui rebuilds the whole buffer every frame, so its buffer cannot hold a stale glyph; it
 /// then writes only the cells that differ from the previous frame. Residue after the buttons
-/// move (`≡`, `▯`) can therefore only live in the terminal itself, e.g. a fallback-font glyph
+/// move (`▤`, `▐`) can therefore only live in the terminal itself, e.g. a fallback-font glyph
 /// drawn wider than its cell. This was not reproduced (no terminal was available); repainting
 /// every cell when the layout moves (sidebar toggled, Sessions page opened or closed, resize)
 /// removes any such residue regardless of its source.
@@ -352,7 +368,7 @@ fn agent_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     let mut right = Vec::new();
     if width >= 7 {
         let mut end = if width >= 9 { width - 2 } else { width };
-        right.push((end - 3, format!(" {DETAILS_GLYPH} "), Seg::Details));
+        right.push((end - 3, format!(" {} ", details_glyph()), Seg::Details));
         end -= 3;
         let status = if s.status == "running" {
             "Working "
@@ -415,8 +431,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
             spans.push(Span::raw(" ".repeat(start.saturating_sub(at))));
             at = start + text.width();
             let fg = match seg {
-                Seg::Back | Seg::Path => p.muted,
-                Seg::Details => p.border_strong,
+                Seg::Back | Seg::Path | Seg::Details => p.muted,
                 _ => p.text,
             };
             spans.push(Span::styled(text, Style::default().fg(fg)));
@@ -481,14 +496,41 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         Line::from(spans)
     };
     let bar = Rect { height: 1, ..area };
+    let tabs_layout = top_layout_at(s, width, spin);
     frame.render_widget(
-        Paragraph::new(row(top_layout_at(s, width, spin))).style(background),
+        Paragraph::new(row(tabs_layout)).style(background),
         bar,
     );
-    // The workspace row sits directly under the tabs.
+    // Four rows: tabs, a thin line, the workspace row, then the closing rule. Three rows
+    // (short terminals) drop the line. The line shares the closing rule's extent; the closing rule is fainter (`rule_faint`).
+    let full = area.height > 3;
+    let inset = if width < 12 { 0 } else { 2 };
+    let hline = |y: u16, color: ratatui::style::Color| {
+        let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
+        (
+            Paragraph::new(Line::from(vec![
+                Span::styled(" ".repeat(inset), background),
+                Span::styled(
+                    glyph.repeat(width.saturating_sub(2 * inset)),
+                    background.fg(color),
+                ),
+            ]))
+            .style(background),
+            Rect {
+                y,
+                height: 1,
+                ..area
+            },
+        )
+    };
+    if full && !s.manager.active {
+        let (w, r) = hline(area.y + 1, p.border);
+        frame.render_widget(w, r);
+    }
+    // The workspace row sits under the tabs (and the line).
     if area.height > 1 {
         let crumbs = Rect {
-            y: area.y + 1,
+            y: area.y + if full { 2 } else { 1 },
             height: 1,
             ..area
         };
@@ -499,24 +541,10 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
     }
     // A thin rule closes the bar. `─` is drawn mid-cell, so the row reads as half a row of air
     // above a line. Same inset as the tabs; absent in the manager view (no workspace to divide).
-    if area.height > 2 && !s.manager.active {
-        let inset = if width < 12 { 0 } else { 2 };
-        let rule = Rect {
-            y: area.y + 2,
-            height: 1,
-            ..area
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" ".repeat(inset), background),
-                Span::styled(
-                    "─".repeat(width.saturating_sub(2 * inset)),
-                    background.fg(p.border),
-                ),
-            ]))
-            .style(background),
-            rule,
-        );
+    let rule_y = if full { 3 } else { 2 };
+    if area.height > rule_y && !s.manager.active {
+        let (w, r) = hline(area.y + rule_y, p.rule_faint);
+        frame.render_widget(w, r);
     }
 }
 /// Details sidebar rows, and for each row the modified file it toggles (if any).
@@ -759,7 +787,7 @@ mod chrome_tests {
                         let glyph = if cell.kind == TabHit::Back {
                             "←"
                         } else {
-                            DETAILS_GLYPH
+                            details_glyph()
                         };
                         assert_eq!(
                             terminal.backend().buffer()[((cell.start + 1) as u16, 0)].symbol(),
@@ -812,7 +840,7 @@ mod chrome_tests {
             let rows = bar_rows(&s, 100);
             assert!(!rows[0].contains("Manager"), "{:?}", rows[0]);
             assert!(!rows[0].contains("Fix bug"), "{:?}", rows[0]);
-            assert!(rows[0].contains('◆'), "{:?}", rows[0]);
+            assert!(rows[0].contains('■'), "{:?}", rows[0]);
             assert!(!rows[1].contains("~/repo"), "{:?}", rows[1]);
             assert!(!rows[1].contains("main"), "{:?}", rows[1]);
             assert!(crumb_layout(&s, 100).is_empty());
@@ -880,7 +908,7 @@ mod chrome_tests {
                 .take(cell.end - cell.start)
                 .collect::<String>()
         };
-        assert_eq!(glyph(manager), " ◇ ");
+        assert_eq!(glyph(manager), " ▣ ");
         // It is never a session tab.
         assert!(cells
             .iter()
@@ -911,11 +939,28 @@ mod chrome_tests {
         let p = Palette::new(false);
         let idle = paint(&manager_snapshot(false));
         let pressed = paint(&manager_snapshot(true));
-        assert_eq!(idle.symbol(), "◇");
+        assert_eq!(idle.symbol(), "▣");
         assert_eq!(idle.fg, p.muted);
-        assert_eq!(pressed.symbol(), "◆");
+        assert_eq!(pressed.symbol(), "■");
         assert_eq!(pressed.fg, p.accent);
         assert_eq!(pressed.bg, p.panel);
+    }
+
+    #[test]
+    fn closing_rule_is_fainter_than_the_line_under_the_tabs() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let s = Snapshot::default();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 4)).unwrap();
+            terminal.draw(|f| draw_top_bar(f, &s, f.area(), &p, 0)).unwrap();
+            let buf = terminal.backend().buffer();
+            assert_eq!(buf[(10, 1)].fg, p.border, "line under the tabs");
+            assert_eq!(buf[(10, 3)].fg, p.rule_faint, "closing rule");
+            assert_ne!(p.rule_faint, p.border);
+            assert_ne!(p.rule_faint, p.quiet);
+            assert_ne!(p.rule_faint, p.element);
+        }
     }
 
     #[test]
@@ -957,10 +1002,10 @@ mod chrome_tests {
             !text.contains("72K") && !text.contains('‹') && !text.contains('›'),
             "{text}"
         );
-        assert!(text.contains(DASHBOARD_GLYPH), "{text}");
-        assert!(text.contains(DETAILS_GLYPH), "{text}");
+        assert!(text.contains(dashboard_glyph()), "{text}");
+        assert!(text.contains(details_glyph()), "{text}");
         assert!(
-            !text.contains(['☰', '◫', '⧠', '◨']),
+            !text.contains(['☰', '◫', '⧠', '◨', '▐', '◈']),
             "wide/fallback-prone glyphs: {text}"
         );
         let cells = tab_cells(&s, 100);
@@ -976,9 +1021,9 @@ mod chrome_tests {
                 .skip(dash.start)
                 .take(dash.end - dash.start)
                 .collect::<String>(),
-            " ≡ "
+            " ▤ "
         );
-        assert!(text.ends_with(" ≡   ▯   "), "{text}");
+        assert!(text.ends_with(" ▤   ▥   "), "{text}");
         assert_eq!(details.start, dash.end + 1);
         assert_eq!(details.end, 98);
         let plain = Snapshot {
@@ -1186,12 +1231,12 @@ mod chrome_tests {
             );
             let _ = bar_text(&s, width.max(1));
         }
-        assert!(bar_text(&s, 30).contains(DASHBOARD_GLYPH));
+        assert!(bar_text(&s, 30).contains(dashboard_glyph()));
     }
 
     #[test]
     fn chrome_button_glyphs_are_single_cell_text_presentation() {
-        for glyph in ["←", DASHBOARD_GLYPH, DETAILS_GLYPH] {
+        for glyph in ["←", dashboard_glyph(), details_glyph()] {
             assert_eq!(glyph.chars().count(), 1, "{glyph}");
             assert_eq!(glyph.width(), 1, "{glyph}");
             assert!(!glyph.contains(['\u{fe0f}', '\u{200d}']), "{glyph}");
@@ -1225,7 +1270,7 @@ mod chrome_tests {
         };
         let text = bar_text(&s, 100);
         assert!(
-            text.contains(" ◔ 3 ") && text.ends_with(" ≡   ▯   "),
+            text.contains(" ◔ 3 ") && text.ends_with(" ▤   ▥   "),
             "{text}"
         );
         let cells = tab_cells(&s, 100);

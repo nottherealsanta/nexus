@@ -60,3 +60,13 @@ def turn_status(view) -> dict | None:
     return {"activity": escape_controls(label), "activity_since": float(since or started or 0.0),
             "turn_since": float(started or 0.0),
             "output_tokens": tokens, "output_estimated": estimated}
+
+
+def running_agents(view) -> int:
+    """Subagents with a run in flight (``status == "spawned"``, not stopped), root-level or nested.
+
+    Drawn as "N agents running" in the status row while the root itself is idle; a background
+    child keeps working after the root's turn ends (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.7).
+    """
+    agents = getattr(view, "agents", None) or {}
+    return min(9999, sum(1 for agent in agents.values() if agent.status == "spawned" and not agent.stopped))

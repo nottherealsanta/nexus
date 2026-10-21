@@ -24,7 +24,7 @@ CHILD = textwrap.dedent('''
     from pathlib import Path
     from nexus.client.protocol import Client
     from nexus.config import Config
-    from nexus.config.schema import AgentSection, ConfigV2, ModelSection, PermissionsSection, ToolsSection
+    from nexus.config.schema import AgentSection, ConfigV2, ManagerSection, ModelSection, PermissionsSection, ToolsSection
     from nexus.host import HostFacade
     from nexus.live import protocol as lp
     from nexus.live.manager import LiveManager
@@ -51,7 +51,7 @@ CHILD = textwrap.dedent('''
         workspace = Path(sys.argv[1])
         config = Config(model="scripted/native", version=2, v2=ConfigV2(
             model=ModelSection(default="scripted/native"), agent=AgentSection(profile="coding"),
-            permissions=PermissionsSection(mode="allow", on_unattended="allow"), tools=ToolsSection()))
+            permissions=PermissionsSection(mode="allow", on_unattended="allow"), tools=ToolsSection(), manager=ManagerSection(enabled=True)))
         runtime = Runtime(workspace, config=config, providers={"scripted": ScriptedProvider(text_response("ok"))})
         transport = FakeLiveTransport()
         runtime.live = LiveManager(live_config(), transport_factory=lambda **kw: transport, environ={}, flush_interval=0.0)
@@ -91,7 +91,7 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
             break
     app.key(b"/live", .4)
     app.key(b"\r", 1.0)
-    app.wait_for("Use GPT Live voice?")
+    app.wait_for("Use GPT Live with the Manager?")  # /live now connects to the manager session only
     screen = app.redraw()
     assert "ChatGPT account" in screen and "Agree and start the call" in screen, screen
     assert not consent.exists()  # asking records nothing
@@ -120,5 +120,6 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
         assert time.monotonic() < deadline, "the call bar never left"
     screen = app.redraw()
     assert "⤢ expand" not in screen  # the pane closes with the call
-    assert "gpt-live-1-codex · sol" in screen  # the ended call joins the timeline as a card
-    assert "Ended" in screen and "user" in screen  # the card records how it ended
+    # The call belongs to the manager session, so its ended card lands in that timeline, not in
+    # this tab's; this tab shows the toast. The ended card itself is not checked here.
+    assert "Live call ended" in screen, screen

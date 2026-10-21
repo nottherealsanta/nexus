@@ -92,8 +92,15 @@ pub struct Snapshot {
     /// Local: the Live pane is expanded to nearly the full height; reset when the call ends.
     #[serde(skip)]
     pub live_expanded: bool,
+    /// Local: rows of the Live panel revealed while it opens or closes (`live_anim`); `None`
+    /// is the settled, natural height.
+    #[serde(skip)]
+    pub live_reveal: Option<u16>,
     /// The running turn's status line; absent while idle.
     pub turn_status: Option<TurnStatus>,
+    /// Subagents with a run in flight; drawn as `N agents running` in the status row while the
+    /// root turn itself is idle (a background child outlives the turn).
+    pub agents_running: u64,
     /// Set while the daemon holds this session's turn back on its global concurrent-turn cap.
     pub slot_wait: Option<SlotWait>,
     pub update_notice: String,
@@ -121,6 +128,9 @@ pub struct Snapshot {
     /// The Sessions dashboard payload (rows, groups, preview), or null while it is closed.
     /// Opaque here: the dashboard module decodes it.
     pub dashboard: Option<Value>,
+    /// The left sidebar (Projects, Sessions, Files, Git); `available` is false for hosts and
+    /// fixtures that do not own one, which keep the Sessions page above.
+    pub sidebar: Sidebar,
     pub breadcrumb: String,
     /// Linked-worktree name of the workspace ("" in a main checkout).
     #[serde(default)]
@@ -148,6 +158,25 @@ pub struct Snapshot {
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
+}
+/// The sidebar block (`nexus/ui/ratatui/sidebar.py`). The tab bodies stay opaque JSON: Python
+/// writes every label and path, `sidebar.rs` only places and paints them.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Sidebar {
+    /// The host owns a sidebar: Ctrl+B and the top-bar button toggle it.
+    pub available: bool,
+    pub open: bool,
+    /// `Projects`, `Sessions`, `Files` or `Git`.
+    pub tab: String,
+    /// Preferred width in columns; the client clamps it and yields to the conversation.
+    pub width: u16,
+    /// Bumped by the host when the sidebar should take keyboard focus.
+    pub focus: u64,
+    pub sessions: Option<Value>,
+    pub projects: Value,
+    pub files: Value,
+    pub git: Value,
 }
 /// `⋯ Waiting for a free turn slot (4 of 4 running)`: parked messages, running turns, the cap.
 #[derive(Clone, Default, Deserialize)]
@@ -598,6 +627,9 @@ pub struct Content {
     pub task: String,
     pub effort: String,
     pub tool_calls: Option<u64>,
+    /// `task`: the persistent child's state beyond running (`idle · run 2`, `stopped by system:
+    /// …`); empty for a plain running or finished child.
+    pub state: String,
     /// `task`: tools an external worker (Claude Code/Antigravity) ran itself, on the second row
     /// in dark grey; `None` hides it.
     pub external_tool_calls: Option<u64>,
@@ -605,6 +637,9 @@ pub struct Content {
     /// drawn in the agent colour.
     pub model: String,
     pub tier: String,
+    /// `task`: the quota-aware routing decision when a candidate was skipped (`agent.routed`);
+    /// `None` (the host omits it) draws nothing.
+    pub route: Option<SubagentRoute>,
     /// Header chip counts: `[total]`, or `[project, global]` for skills and MCP.
     pub counts: Vec<usize>,
     pub members: Vec<Content>,
@@ -691,6 +726,33 @@ impl Content {
             shown.signal = self.signal.clone();
         }
     }
+}
+
+/// A sub-agent's quota-aware routing decision: the tier or model asked for, the first
+/// candidate, the one chosen, and each candidate skipped below its usage threshold.
+#[derive(Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SubagentRoute {
+    pub requested: Option<String>,
+    pub first: String,
+    pub chosen: String,
+    pub all_blocked: bool,
+    pub skipped: Vec<SkippedCandidate>,
+}
+
+/// One candidate skipped because its plan quota was at or below the threshold.
+#[derive(Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SkippedCandidate {
+    pub reference: String,
+    pub quota: String,
+    /// `monthly`, `weekly` or `five_hour`.
+    pub kind: String,
+    pub label: String,
+    pub remaining_percent: f64,
+    pub threshold_percent: f64,
+    /// Epoch seconds when the quota resets, when known.
+    pub resets_at: Option<i64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -850,6 +912,9 @@ impl Snapshot {
         if !present.contains_key("turn_status") {
             self.turn_status = previous.turn_status.take();
         }
+        if !present.contains_key("agents_running") {
+            self.agents_running = previous.agents_running;
+        }
         if !present.contains_key("slot_wait") {
             self.slot_wait = previous.slot_wait.take();
         }
@@ -899,6 +964,9 @@ impl Snapshot {
         }
         if !present.contains_key("dashboard") {
             self.dashboard = std::mem::take(&mut previous.dashboard);
+        }
+        if !present.contains_key("sidebar") {
+            self.sidebar = std::mem::take(&mut previous.sidebar);
         }
         if !present.contains_key("last_opened") {
             self.last_opened = previous.last_opened.clone();

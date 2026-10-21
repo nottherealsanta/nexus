@@ -1,9 +1,11 @@
 //! The GPT Live call line (P-LIV): `LISTENING   ▁▃▅█▆▃▂▁  gpt-live-1-codex  /live stop   02:41`.
 //!
-//! While a call is open it is the header row of the Live pane above the composer, with
+//! While a call is open it is the header row of the Live pane under the composer, with
 //! `↑ N more` and the expand button on its right. The phase is in caps and bold, padded to 12
-//! cells and followed by that phase's animation (a connecting dot sweep, the newest mic levels,
-//! an orbit spinner with the agent turn, a damped wave while the voice speaks); the clock is
+//! cells and followed by that phase's motion band (`live_wave`: a travelling shimmer while
+//! connecting or while the agent works (with the agent turn), a breathing swell lifted by the
+//! mic while listening, a fuller accent wave while the voice speaks, a flat line when muted or
+//! ended); the clock is
 //! right-aligned. Under the header, `PANE_ROWS - 1` scrollable rows of the call (`pane_rows`,
 //! `pane_window`, drawn by `captions`); expanded, the pane grows to just below the top bar.
 //! With no rows to show (still connecting, or the call is on another session so the mic is open
@@ -14,7 +16,6 @@
 use crate::bridge::LiveBar;
 use crate::render::Palette;
 use crate::transcript::Rows;
-use nexus_widgets::{anim::wave, theme::mix};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::Span,
@@ -24,27 +25,30 @@ use unicode_width::UnicodeWidthStr;
 
 /// Cells of the phase column, the mic history and the speaking wave.
 const PHASE_WIDTH: usize = 12;
-const MIC_CELLS: usize = 8;
-const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-const ASCII_LEVELS: [char; 8] = ['_', '.', ':', '-', '=', '+', '*', '#'];
-/// Connecting sweep, one step per two frames.
-const CONNECT: [&str; 6] = ["●○○", "●●○", "●●●", "○●●", "○○●", "○○○"];
-const CONNECT_ASCII: [&str; 6] = ["#--", "##-", "###", "-##", "--#", "---"];
-const ORBIT: [char; 8] = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
-const ORBIT_ASCII: [char; 4] = ['|', '/', '-', '\\'];
+const MIC_CELLS: usize = crate::live_wave::MAX_CELLS;
 
 /// Height of the Live pane above the composer: one header row and five rows of the call.
 pub const PANE_ROWS: u16 = 6;
 
 /// Rows reserved for the pane: only while a call is open, on a conversation page (not
 /// Sessions or a sub agent page). `PANE_ROWS` with rows to show, else the header alone (1).
-pub fn pane_rows(s: &crate::bridge::Snapshot) -> u16 {
+pub fn pane_target(s: &crate::bridge::Snapshot) -> u16 {
     if !s.live.active || s.dashboard.is_some() || !s.agent_page.is_empty() {
         0
     } else if s.live.detail.is_empty() {
         1
     } else {
         PANE_ROWS
+    }
+}
+
+/// Rows the layout gives the pane right now: `pane_target`, or the rows revealed so far while
+/// it opens or closes (`live_anim`, which also keeps a closing pane alive for a moment).
+pub fn pane_rows(s: &crate::bridge::Snapshot) -> u16 {
+    match s.live_reveal {
+        Some(rows) if s.dashboard.is_none() && s.agent_page.is_empty() => rows,
+        Some(_) => 0,
+        None => pane_target(s),
     }
 }
 
@@ -86,41 +90,64 @@ pub fn now_epoch() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// The newest microphone levels (0..1, RMS), one per frame while a call is open. The snapshot
-/// only carries the current `level_in`, so the history the listening meter draws is kept here.
+/// The newest microphone levels (0..1, RMS), one per slow frame while a call is open, plus the
+/// mic and voice levels eased per 30 Hz frame (quick attack, slow release) so the bars never
+/// jump. The snapshot only carries the current levels, so the history is kept here.
 #[derive(Default)]
 pub struct Mic {
     levels: Vec<f32>,
     tick: Option<usize>,
+    frame: Option<usize>,
+    eased_in: f32,
+    eased_out: f32,
+}
+
+fn ease(current: f32, target: f32, steps: usize) -> f32 {
+    (0..steps).fold(current, |c, _| {
+        c + (target - c) * if target > c { 0.45 } else { 0.12 }
+    })
 }
 
 impl Mic {
-    /// Record `level` once per frame `tick` (redraws inside a frame do not add samples); a
-    /// closed call forgets its history.
-    pub fn observe(&mut self, live: &LiveBar, tick: usize) {
+    /// Record `level_in` once per slow tick (redraws inside a tick do not add samples) and ease
+    /// the levels once per `frame`; a closed call forgets its history.
+    pub fn observe(&mut self, live: &LiveBar, tick: usize, frame: usize) {
         if !live.active {
-            self.levels.clear();
-            self.tick = None;
-        } else if self.tick != Some(tick) {
+            *self = Mic::default();
+            return;
+        }
+        if self.tick != Some(tick) {
             self.tick = Some(tick);
             self.levels.push(live.level_in.clamp(0.0, 1.0) as f32);
             if self.levels.len() > MIC_CELLS {
                 self.levels.remove(0);
             }
         }
+        if self.frame != Some(frame) {
+            let steps = self.frame.map_or(1, |f| frame.saturating_sub(f).clamp(1, 8));
+            self.frame = Some(frame);
+            self.eased_in = ease(self.eased_in, live.level_in.clamp(0.0, 1.0) as f32, steps);
+            self.eased_out = ease(self.eased_out, live.level_out.clamp(0.0, 1.0) as f32, steps);
+        }
     }
     pub fn levels(&self) -> &[f32] {
         &self.levels
     }
-}
-
-/// A level as one of eight bars. RMS of speech is small, so the scale is a square root.
-fn level_cell(level: f32, ascii: bool) -> char {
-    let at = (level.clamp(0.0, 1.0).sqrt() * 7.0).round() as usize;
-    if ascii {
-        ASCII_LEVELS[at.min(7)]
-    } else {
-        LEVELS[at.min(7)]
+    fn inputs(&self) -> crate::live_wave::Inputs<'_> {
+        crate::live_wave::Inputs {
+            history: &self.levels,
+            level_in: self.eased_in,
+            level_out: self.eased_out,
+        }
+    }
+    #[cfg(test)]
+    pub fn from_levels(levels: &[f32], level_out: f32) -> Mic {
+        Mic {
+            levels: levels.to_vec(),
+            eased_in: levels.last().copied().unwrap_or(0.0),
+            eased_out: level_out,
+            ..Mic::default()
+        }
     }
 }
 
@@ -173,87 +200,67 @@ fn phase_tone(phase: &str, p: &Palette) -> Color {
     }
 }
 
-/// The phase's animation. With animation off it is drawn in its final state; the mic history is
-/// data and is always shown.
+/// The phase's motion band and label, fitted to `room` columns (nothing when it does not fit,
+/// never clipped). With animation off each state is drawn in its resting pose; the mic history
+/// is data and is always shown.
 fn animation(
     live: &LiveBar,
     phase: &str,
     p: &Palette,
-    tick: usize,
+    frame: usize,
     animate: bool,
-    mic: &[f32],
+    mic: &Mic,
     ascii: bool,
+    room: usize,
 ) -> Vec<Span<'static>> {
+    use crate::live_wave::{band, cells_for, kind_for, Kind};
     let on = |fg: Color| Style::default().fg(fg).bg(p.element);
-    match phase {
-        "connecting" => {
-            let frames = if ascii { CONNECT_ASCII } else { CONNECT };
-            let at = if animate { tick / 2 % frames.len() } else { 2 };
-            vec![Span::styled(frames[at], on(p.muted))]
-        }
-        "listening" => {
-            let recent = &mic[mic.len().saturating_sub(MIC_CELLS)..];
-            let cells: String = std::iter::repeat(0.0)
-                .take(MIC_CELLS - recent.len())
-                .chain(recent.iter().copied())
-                .map(|level| level_cell(level, ascii))
-                .collect();
-            vec![Span::styled(cells, on(p.blue))]
-        }
-        "working" => {
-            let glyph = match (animate, ascii) {
-                (false, true) => ORBIT_ASCII[0],
-                (false, false) => ORBIT[0],
-                (true, true) => ORBIT_ASCII[tick % ORBIT_ASCII.len()],
-                (true, false) => ORBIT[tick % ORBIT.len()],
-            };
-            let label = match latest_turn(&live.detail) {
-                Some(turn) => format!(" agent turn #{turn} running"),
-                None => " agent running".to_string(),
-            };
-            vec![
-                Span::styled(glyph.to_string(), on(p.purple)),
-                Span::styled(label, on(p.quiet)),
-            ]
-        }
-        "speaking" => {
-            // The louder the voice, the deeper the wave; silence leaves a flat line.
-            let depth = live.level_out.clamp(0.0, 1.0).sqrt() as f32;
-            (0..MIC_CELLS)
-                .map(|i| {
-                    let amount = if animate {
-                        wave(tick as u64, i as u16, MIC_CELLS as u16, 0.4) * depth
-                    } else {
-                        0.0
-                    };
-                    Span::styled(
-                        if ascii { "~" } else { "∿" },
-                        on(mix(p.accent, p.element, amount)),
-                    )
-                })
-                .collect()
-        }
-        "paused" => vec![Span::styled(
-            format!("ends in {}", clock(live.pause_left.max(0.0).ceil() as u64)),
-            on(p.quiet),
-        )],
-        "muted" => vec![Span::styled("mic off", on(p.quiet))],
-        _ => Vec::new(),
+    let Some(kind) = kind_for(phase) else {
+        return match phase {
+            "paused" => vec![Span::styled(
+                format!("ends in {}", clock(live.pause_left.max(0.0).ceil() as u64)),
+                on(p.quiet),
+            )],
+            _ => Vec::new(),
+        };
+    };
+    let tone = phase_tone(phase, p);
+    // Words after the band, kept only when they fit beside a band of at least `MIN_CELLS`.
+    let label = match phase {
+        "working" => match latest_turn(&live.detail) {
+            Some(turn) => format!(" agent turn #{turn} running"),
+            None => " agent running".to_string(),
+        },
+        "muted" => " mic off".to_string(),
+        _ => String::new(),
+    };
+    let label_room = room.saturating_sub(crate::live_wave::MIN_CELLS);
+    let label = if label.width() <= label_room { label } else { String::new() };
+    let cells = cells_for(room - label.width().min(room));
+    let cells = if kind == Kind::Shimmer && !label.is_empty() {
+        cells.min(6)
+    } else {
+        cells
+    };
+    let mut out = band(kind, cells, frame, animate, ascii, tone, p, &mic.inputs());
+    if !label.is_empty() {
+        out.push(Span::styled(label, on(p.quiet)));
     }
+    out
 }
 
 /// The call line's spans: exactly `width` columns on `p.element`. Pieces drop in this order
 /// until it fits: the `/live stop` hint, the model name, the session the call is in, the
-/// phase's animation, the clock (the phase is shortened last). `tick` is the frame clock,
-/// `mic` the newest input levels (`Mic::levels`).
+/// phase's motion band, the clock (the phase is shortened last). `frame` is the 30 Hz activity
+/// clock, `mic` the input history and eased levels.
 pub fn spans(
     live: &LiveBar,
     p: &Palette,
-    tick: usize,
+    frame: usize,
     now: f64,
     width: usize,
     animate: bool,
-    mic: &[f32],
+    mic: &Mic,
 ) -> Vec<Span<'static>> {
     let ascii = crate::transcript::look::glyphs().ascii;
     let on = |fg: Color| Style::default().fg(fg).bg(p.element);
@@ -289,9 +296,18 @@ pub fn spans(
             padded,
             on(phase_tone(&phase, p)).add_modifier(Modifier::BOLD),
         ));
-        let motion = animation(live, &phase, p, tick, animate, mic, ascii);
-        let motion_width: usize = motion.iter().map(|span| span.content.width()).sum();
         let gap = usize::from(column == caps.width());
+        let motion = animation(
+            live,
+            &phase,
+            p,
+            frame,
+            animate,
+            mic,
+            ascii,
+            room.saturating_sub(used + gap),
+        );
+        let motion_width: usize = motion.iter().map(|span| span.content.width()).sum();
         if motion_width > 0 && used + gap + motion_width <= room {
             if gap == 1 {
                 out.push(Span::styled(" ", on(p.quiet)));
@@ -523,7 +539,7 @@ mod tests {
             1161.0,
             width,
             animate,
-            mic,
+            &Mic::from_levels(mic, 0.0),
         )
     }
 
@@ -677,85 +693,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn connecting_steps_every_second_frame_and_rests_on_the_last_dots_without_animation() {
-        let mut live = bar();
-        live.phase = "connecting".into();
-        let dots = |tick, animate| {
-            text(&header(&live, tick, 60, animate, &[]))
-                .chars()
-                .filter(|c| "●○".contains(*c))
-                .collect::<String>()
-        };
-        assert_eq!(dots(0, true), "●○○");
-        assert_eq!(dots(1, true), "●○○", "one step per two frames");
-        assert_eq!(dots(2, true), "●●○");
-        assert_eq!(dots(10, true), "○○○");
-        assert_eq!(dots(12, true), "●○○", "the sweep repeats");
-        assert_eq!(dots(0, false), "●●●");
-        assert_eq!(dots(7, false), "●●●");
-    }
+    const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
     #[test]
-    fn listening_meter_reads_the_ring_buffer_newest_last() {
-        let live = bar();
-        let meter = |mic: &[f32]| {
-            text(&header(&live, 0, 60, true, mic))
+    fn connecting_and_working_shimmer_and_rest_without_animation() {
+        let mut live = bar();
+        live.phase = "connecting".into();
+        let band = |live: &LiveBar, frame, animate| {
+            text(&header(live, frame, 60, animate, &[]))
                 .chars()
                 .filter(|c| LEVELS.contains(c))
                 .collect::<String>()
         };
-        assert_eq!(meter(&[]), "▁▁▁▁▁▁▁▁", "silence before any sample");
-        assert_eq!(
-            meter(&[1.0]),
-            "▁▁▁▁▁▁▁█",
-            "the newest sample is the rightmost"
-        );
-        assert_eq!(
-            meter(&[0.0, 0.25, 1.0, 0.0, 1.0, 0.0, 0.25, 1.0]),
-            "▁▅█▁█▁▅█"
-        );
-        let long = [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-        assert_eq!(meter(&long), "████████", "only the newest eight cells");
-        let blue = header(&live, 0, 60, true, &[1.0]);
-        assert!(blue
-            .iter()
-            .any(|s| s.style.fg == Some(Palette::new(false).blue)));
-    }
-
-    #[test]
-    fn mic_history_keeps_eight_samples_one_per_frame_and_resets_with_the_call() {
-        let mut mic = Mic::default();
-        let mut live = bar();
-        for tick in 0..12 {
-            live.level_in = tick as f64 / 20.0;
-            mic.observe(&live, tick);
-            mic.observe(&live, tick); // a second draw inside the frame adds nothing
-        }
-        assert_eq!(mic.levels().len(), MIC_CELLS);
-        assert!(
-            (mic.levels()[7] - 0.55).abs() < 1e-6,
-            "newest last: {:?}",
-            mic.levels()
-        );
-        live.active = false;
-        mic.observe(&live, 13);
-        assert!(mic.levels().is_empty());
-        live.active = true;
-        mic.observe(&live, 13);
-        assert_eq!(mic.levels().len(), 1);
-    }
-
-    #[test]
-    fn working_shows_the_orbit_and_the_agent_turn() {
-        let mut live = bar();
+        assert_eq!(band(&live, 0, true).chars().count(), crate::live_wave::MAX_CELLS);
+        assert_ne!(band(&live, 0, true), band(&live, 20, true));
+        assert_eq!(band(&live, 0, false), band(&live, 20, false));
+        assert!(!text(&header(&live, 3, 60, true, &[])).contains(['●', '○', '⣾']), "no dots");
         live.phase = "working".into();
-        let line = text(&header(&live, 0, 80, true, &[]));
-        assert!(line.contains("⣾ agent running"), "{line}");
         live.detail = "sent\tSent to agent (steer)\tfix it  → turn #7".into();
         let line = text(&header(&live, 1, 80, true, &[]));
-        assert!(line.contains("⣽ agent turn #7 running"), "{line}");
-        assert!(text(&header(&live, 5, 80, false, &[])).contains("⣾ agent turn #7 running"));
+        assert!(line.contains("agent turn #7 running"), "{line}");
+        assert!(!line.contains(['⣾', '⣽', '⣻']), "no braille dots: {line}");
+        assert_eq!(band(&live, 5, true).chars().count(), 6, "narrow band beside the label");
         assert_eq!(
             latest_turn("sent\tSent to agent\ta → turn #2\nsent\tx\tb → turn #11"),
             Some(11)
@@ -764,38 +723,96 @@ mod tests {
     }
 
     #[test]
-    fn speaking_wave_is_damped_by_the_output_level() {
+    fn listening_band_shows_the_mic_history_newest_last_when_still() {
+        let live = bar();
+        let meter = |mic: &[f32]| {
+            text(&header(&live, 0, 60, false, mic))
+                .chars()
+                .filter(|c| LEVELS.contains(c))
+                .collect::<String>()
+        };
+        let cells = crate::live_wave::MAX_CELLS;
+        assert_eq!(meter(&[]), "▁".repeat(cells), "silence before any sample");
+        assert_eq!(meter(&[1.0]), format!("{}█", "▁".repeat(cells - 1)));
+        assert_eq!(meter(&[1.0; 20]), "█".repeat(cells));
+        // Animated and quiet it breathes instead of sitting flat.
+        assert_ne!(
+            text(&header(&live, 0, 60, true, &[])),
+            text(&header(&live, 40, 60, true, &[]))
+        );
+    }
+
+    #[test]
+    fn mic_history_keeps_the_newest_samples_one_per_tick_and_resets_with_the_call() {
+        let mut mic = Mic::default();
+        let mut live = bar();
+        for tick in 0..30 {
+            live.level_in = tick as f64 / 40.0;
+            mic.observe(&live, tick, tick * 4);
+            mic.observe(&live, tick, tick * 4); // a second draw inside the tick adds nothing
+        }
+        assert_eq!(mic.levels().len(), MIC_CELLS);
+        assert!(
+            (mic.levels()[MIC_CELLS - 1] - 29.0 / 40.0).abs() < 1e-6,
+            "newest last: {:?}",
+            mic.levels()
+        );
+        assert!(mic.eased_in > 0.5 && mic.eased_in < 29.0 / 40.0 + 1e-3);
+        live.active = false;
+        mic.observe(&live, 31, 200);
+        assert!(mic.levels().is_empty());
+        live.active = true;
+        mic.observe(&live, 32, 201);
+        assert_eq!(mic.levels().len(), 1);
+    }
+
+    #[test]
+    fn speaking_band_is_an_accent_gradient_that_moves_and_deepens_with_the_voice() {
         let p = Palette::new(false);
         let mut live = bar();
         live.phase = "speaking".into();
-        let mut tones = |level: f64, tick: usize, animate: bool| {
-            live.level_out = level;
-            header(&live, tick, 60, animate, &[])
+        let line = |level: f32, frame: usize, animate: bool| {
+            spans(&live, &p, frame, 1161.0, 60, animate, &Mic::from_levels(&[], level))
+        };
+        let bars = |spans: &[Span]| {
+            spans
                 .iter()
-                .filter(|s| s.content.as_ref() == "∿")
-                .map(|s| s.style.fg)
+                .filter(|s| !s.content.is_empty() && s.content.chars().all(|c| LEVELS.contains(&c)))
+                .map(|s| (s.content.to_string(), s.style.fg))
                 .collect::<Vec<_>>()
         };
-        let silent = tones(0.0, 3, true);
-        assert_eq!(silent.len(), 8);
-        assert!(
-            silent.iter().all(|c| *c == Some(p.accent)),
-            "silence is a flat accent line"
-        );
-        let loud = tones(1.0, 3, true);
-        assert!(
-            loud.iter().any(|c| *c != Some(p.accent)),
-            "speech makes the wave"
-        );
-        assert!(
-            loud.windows(2).any(|pair| pair[0] != pair[1]),
-            "cells differ along the wave"
-        );
-        assert_ne!(loud, tones(1.0, 9, true), "it moves with the frame");
-        assert!(
-            tones(1.0, 9, false).iter().all(|c| *c == Some(p.accent)),
-            "still without animation"
-        );
+        let a = bars(&line(1.0, 3, true));
+        assert_eq!(a.len(), crate::live_wave::MAX_CELLS);
+        assert_ne!(a, bars(&line(1.0, 9, true)), "it moves with the frame");
+        assert_eq!(bars(&line(1.0, 3, false)), bars(&line(1.0, 9, false)), "still without animation");
+        assert_ne!(a.first().unwrap().1, a[a.len() / 2].1, "dimmer at the edges");
+        let sum = |level| {
+            bars(&line(level, 3, true))
+                .iter()
+                .map(|(g, _)| LEVELS.iter().position(|c| g.starts_with(*c)).unwrap())
+                .sum::<usize>()
+        };
+        assert!(sum(1.0) > sum(0.0), "louder voice, deeper wave");
+    }
+
+    #[test]
+    fn band_fits_the_room_and_ascii_mode_has_no_blocks() {
+        let p = Palette::new(false);
+        let mut live = bar();
+        for phase in ["listening", "speaking", "connecting", "working", "muted", "ended", "paused"] {
+            live.phase = phase.into();
+            for width in 1..90 {
+                let used: usize = header(&live, 7, width, true, &[0.4])
+                    .iter()
+                    .map(|s| s.content.width())
+                    .sum();
+                assert_eq!(used, width, "{phase} at {width}");
+            }
+        }
+        live.phase = "speaking".into();
+        let ascii = animation(&live, "speaking", &p, 5, true, &Mic::from_levels(&[], 0.5), true, 30);
+        let t = text(&ascii);
+        assert!(t.is_ascii() && !t.is_empty(), "{t:?}");
     }
 
     #[test]
@@ -809,7 +826,10 @@ mod tests {
             text(&header(&live, 9, 70, true, &[0.9; 8])),
             "no animation"
         );
-        assert!(a.starts_with(&format!("{:<12}mic off", "MUTED")), "{a:?}");
+        assert!(
+            a.starts_with(&format!("{:<12}{} mic off", "MUTED", "▁".repeat(14))),
+            "a flat line, not a moving band: {a:?}"
+        );
         live.paused = true;
         live.pause_left = 95.0;
         live.phase = "paused".into();

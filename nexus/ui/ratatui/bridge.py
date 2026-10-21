@@ -72,6 +72,9 @@ class SessionDashboard:
         self.query = ""
         self.rows_query = ""
         self.list_generation = 0
+        #: Seconds between list refreshes while visible; ``None`` uses ``POLL_SECONDS``
+        #: (the sidebar, which stays open for long stretches, polls less often).
+        self.poll_seconds = None
 
     async def open(self):
         self.close()
@@ -127,7 +130,7 @@ class SessionDashboard:
 
     async def _poll(self):
         while self.visible:
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(POLL_SECONDS if self.poll_seconds is None else self.poll_seconds)
             if not self.visible:
                 return
             before = repr(self.snapshot())

@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 
 #: Areas that are one page. Others still use the older menu pages until they migrate.
-PAGE_AREAS = ("appearance", "layout", "keys", "providers", "models", "voice", "agents", "tools", "mcp", "skills")
+PAGE_AREAS = ("appearance", "layout", "keys", "providers", "models", "voice", "live", "agents", "tools", "mcp", "skills")
 
 
 def page_module(area: str):

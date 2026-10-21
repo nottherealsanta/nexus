@@ -253,6 +253,7 @@ Expanded activity members show their full heading (`✱ Grep …`, `→ Read …
 call renders as a stable two-line row (P-AGT) with a blank row between agents:
 - **Line 1:** the tool-group gutter (4 columns) plus two plain spaces where a group shows `▸ `, so the name starts at screen column 7 (after the 1-column transcript pad), exactly where a group's verb text starts; then the capitalised agent name in the agent colour (`p.error` on failure), two spaces, and the task phrase in `p.text` while running and `p.muted` when done (`· <provider> (external, own tools)` for external workers). A subagent row is not expandable, so there is no chevron or other mark. The name is never shortened to a fixed width; it is only clipped by the terminal width.
 - **Line 2:** the same indent (under the name, column 7) in `p.quiet`, joined by ` · `: `model-effort (tier)` (effort and full tier name omitted when unknown), `N tools` (omitted when not reported), compact `N tokens` (omitted when unknown), `N external tools` (Claude Code/Antigravity activity; `Content.external_tool_calls`, omitted when absent) in `p.quiet` scaled to 75% (darker than `p.quiet` on both themes; ANSI `DarkGray` is not darker on the night theme), and duration (`p.muted` live ticking duration while running, `p.quiet` total duration when done).
+- **Route line (when `route` is sent, `transcript/route.rs`):** one wrapped line under line 2 at the same indent, `low → openai-codex/gpt-6-luna · skipped github-copilot/gpt-6-luna (monthly 1.5% left ≤ 2%, resets Nov 1)` in `p.quiet`; when `all_blocked`, `all candidates below usage threshold · using <chosen>` plus the skipped details in `p.warning`. Percentages drop needless decimals; reset dates are UTC. Absent `route` draws nothing.
 The agent presentation colour is stable across runtimes and sessions, keyed on the definition name (or explicit definition `color`), never run IDs.
 A subagent page opens with its task as a prompt card whose rail uses the agent's colour (no context-header strip, so the child's context chips are not shown there). The dark background is `#0B0B0B`.
 Covered by Rust transcript tests, `tests/test_ratatui_projection.py`, and `tests/test_ratatui_agent_color.py`; not
@@ -652,10 +653,11 @@ sends that file's diff lines (`ui_support/details.diff_preview_lines`, headers
 removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
 sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.
 
-The earlier left sessions sidebar (project chips, worktree grouping, filter) no longer
-exists; see "Grok chrome" below. Worktree and project data stay on the Sessions rows.
-Per-session delete is not in the native sidebar (use the right-click session
-actions).
+The earlier left sessions sidebar (project chips, worktree grouping, filter) was removed;
+see "Grok chrome" below. A new left sidebar with Projects, Sessions, Files and Git tabs
+replaced it: see "Left sidebar" at the end of this file. Worktree and project data stay on
+the Sessions rows. Per-session delete is not in the native sidebar (use the right-click
+session actions).
 
 Assistant Markdown (`rust/tui/src/markdown.rs`) follows the `.timeline-assistant`
 rules: headings coloured by level (accent, purple, success, warning), inline code
@@ -1058,11 +1060,12 @@ helpers keep canonical projection behavior.
 
 Sidebars occupy the full terminal height: Sessions is 30 columns, details is 40,
 and both fit from 130 columns. Below that, the last opened sidebar wins; the
-right sidebar overlays the conversation below 100 columns. Preferences survive
+right sidebar still opens below 100 columns, but the conversation column stops at its
+left edge and rows wrap there, so it no longer covers text. Preferences survive
 resizing. Sessions pins its heading and filter, marks open tabs with `◦`, and
 removes the redundant center tab row while visible. Details pins Session, Files,
 MCP and Logs tabs. Brackets change tabs when focused, `c` copies the session ID,
-and Escape closes the narrow overlay. Ctrl+E opens Logs. Logs pins daemon/client
+and Escape closes the narrow drawer. Ctrl+E opens Logs. Logs pins daemon/client
 identity, follows the tail, folds routine entries, and polls only while visible.
 
 The composer has no reserved blank context row. Its controls end in ten slanted
@@ -1292,7 +1295,7 @@ dismissed toasts are not recorded twice). It is visual state, not durable: it st
 after a restart of the client. Events that are not toasts today (sub-agent finished, tests
 passed) are not added.
 
-- **Counter** in the top bar, left of `≡`: ` ◔ N ` in the warning colour while N > 0, quiet
+- **Counter** in the top bar, left of `▤`: ` ◔ N ` in the warning colour while N > 0, quiet
   at 0 (`o N` with `NEXUS_ASCII=1`; `99+` caps the label). N counts toasts recorded since the
   drawer was last opened. When it changes it pops for 4 frames (320 ms) as `(◔ N)`, bold, in
   the text colour (the plan's "peak colour" has no separate palette entry); the width never
@@ -1346,8 +1349,10 @@ focus, right-click actions, the `sessions_request` snapshot field and the
 Settings → Layout row). Sessions replaces it: `/session`,
 `/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Sessions]` all send
 `/sessions`. The right details sidebar (`Ctrl+L`) stays, on the Sessions page too. The saved
-`sessions_sidebar` preference and snapshot key remain only because the GPUI
-desktop client still reads them; the native TUI ignores them.
+`sessions_sidebar` preference and snapshot key were kept for the GPUI desktop client and are
+now the open/closed state of the new left sidebar ("Left sidebar" at the end of this file,
+which supersedes the `/sessions`, `Ctrl+B` and `▤` wiring above for hosts that send a
+`sidebar` block).
 
 Palette: dark is Grok Night (`#141414` page, `#e1e1e1` text, composer `#1c1c1c`,
 element `#242424`), light is Grok Day (`#f5f5f5` page, `#262626` text), the Nexus
@@ -1362,8 +1367,8 @@ it once, after the page and before any panel/Settings/picker/inspector or
 permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
-Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, two rows; see "Top bar spacer row"
-below): row 1 holds the tabs, row 2 `~/path branch worktree`
+Top bar (`render/chrome.rs::top_layout` and `crumb_layout`, four rows; see "Top bar spacer row"
+below): row 1 holds the tabs, row 2 is a thin line, row 3 `~/path branch worktree`
 (the host's session title only, with `New session` while unavailable; no Nexus prefix
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
@@ -1394,6 +1399,8 @@ stale page is never drawn over another dialog. Text from the host is control-saf
 bounded; an unknown block type is shown as a visible note, never dropped.
 
 Areas: Appearance, Layout, Keyboard (read-only), Providers, Models, Voice & speech,
+GPT Live (the `[live]` options: enable, voice, longest call, paused-call limit, carried turns, spoken progress,
+instructions path, developer raw log, reset; the model is pinned and read-only; global, applies to the next call),
 Agents, Tools, MCP servers, Skills. `/settings` opens on Appearance. **Scope** (the
 Global/Project control and per-row badges) appears only on Tools and Skills, the
 per-file areas that can differ per project; MCP servers has no scope tab and shows
@@ -1499,8 +1506,8 @@ draws the new block kind `external`.
   whole, not truncated). Every value is flattened to one line (newlines become spaces)
   so a multi-line error or instruction cannot start an unlabelled row. No `claude --resume` hint is shown: a startup block
   never created a session, and resuming outside Nexus would drop the worker's policy. Fields are clipped at 4000 characters with an announced count.
-- **Cancel:** the `/tasks` menu adds `Cancel <agent>` under each running agent
-  (host `AgentCancel`). No handoff into the live Claude terminal.
+- **Cancel:** the `/tasks` menu adds `Cancel <agent> (ends this run)` under each running agent
+  (host `AgentCancel`; a persistent child then goes idle). No handoff into the live Claude terminal.
 - **Settings:** Settings -> Models has a CLAUDE CODE section with the
   `Allow Claude Code as a main model` toggle and the scope note, and a
   `Claude Code subagents run via` segmented choice (`Interactive worker (ZMX)` |
@@ -1548,17 +1555,20 @@ no Antigravity-specific feature.
 `LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
 `nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
 `active state phase model muted paused pause_left started in out elsewhere manager attention detail collapsed operation`. `rust/tui/src/live_bar.rs` formats
-the phase strip (`LISTENING   ▁▃▅█▆▃▂▁ … 02:41`: caps phase, its animation, the clock; design
+the phase strip (`LISTENING   ▁▃▅█▆▃▂▁ … 02:41`: caps phase, its motion band from `live_wave.rs`, the clock; design
 overhaul step 11, see `docs/live.md`) as the Live pane's header row and the pane's captions; the
 composer no longer shows it; the clock is computed in Rust from the
 call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the
-snapshot every 250 ms while a call is open so the mic levels move (the client keeps the last eight). Covered by Python tests
+snapshot every 250 ms while a call is open so the mic levels move (the client keeps the newest samples and eases them per frame). The band's bars (breathing listening swell lifted by the mic, accent gradient wave while speaking, left-to-right shimmer while connecting or working, flat line when muted or ended) replace the former dots, braille orbit and `∿` ripple; they run on the 30 Hz activity clock only while the call moves, rest static with animations off and use `_.:-=+*#` in ASCII. Covered by Python tests
 (`tests/test_ratatui_live.py`, fake helper and fake transport) and Rust unit tests; real terminal,
 microphone and call behavior are not verified. The desktop route for `Ctrl+X D` lands with M5
 (`tests/test_desktop_keymap_parity.py` lists it as pending).
 
-While a call is open, the terminal draws the card rows in a Live pane between the timeline and the
-composer, not in the timeline (`bar()["detail"]`, `collapsed`, `operation`). The pane is 6 rows (the call-line header above, then five content rows) and follows the newest rows; the wheel scrolls it, clicking a row sends `live_toggle`, a button at its top
+While a call is open, the terminal draws the card rows in a Live pane under the composer card and above
+the bottom bar (activity meter row; order: transcript, composer, Live pane, bottom bar), not in the timeline.
+It opens by growing from 0 rows over 260 ms (ease-out cubic, header first, text fading in, an accent sweep
+along the header) and closes in 140 ms; the frame loop's clock drives it (`live_anim.rs`), frames stop when it
+settles, and it jumps to the final state with animations off (`docs/live.md`) (`bar()["detail"]`, `collapsed`, `operation`). The pane is 6 rows (the call-line header above, then five content rows) and follows the newest rows; the wheel scrolls it, clicking a row sends `live_toggle`, a button at its top
 right (` ⤢ expand ` / ` ⤡ collapse `) expands it to nearly full screen (up to just below the top bar,
 leaving the timeline one row) and collapses it again, and
 hidden rows are announced. The expanded state is local to the terminal client and resets when the call
@@ -1583,7 +1593,7 @@ default (`[manager] enabled = false`) and is not soaked against real Codex or GP
 and rules: [manager.md](manager.md). The terminal and the desktop client share one Python bridge
 (`nexus/ui/ratatui/manager.py`, presentation in `nexus/ui_support/manager.py`).
 
-- **Pinned entry.** The Sessions page (`≡`, `Ctrl+B`, `/sessions`) draws a Manager block between
+- **Pinned entry.** The Sessions page (`▤`, `Ctrl+B`, `/sessions`) draws a Manager block between
   the search rule and the roots, closed by a rule of its own: status glyph, `Manager`, `pinned · m opens`
   (`pinned · open now` while it is the open session), a purple `Voice M` button, one status line
   (`Ready · 2 sessions launched`, `Working`, `Needs you`, `Not signed in · sign in to ChatGPT (Codex) under
@@ -1595,7 +1605,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   `ManagerState`, read at start, when the page opens and about every 30 s while it is open or the client
   polls; a failed read (an older daemon) is shown as the entry's text, not hidden.
 - **Top-bar toggle, not a tab.** The Manager is never in the tab strip (`switch` adds no tab for it and
-  `_tab_rows` drops it). A `◇` button sits on the right of the top bar immediately before the Sessions `≡`
+  `_tab_rows` drops it). A `◈` button (`◆` while the manager view is in front; `o`/`*` under `NEXUS_ASCII=1`) sits on the right of the top bar immediately before the Sessions `▤`
   button (drawn once the host has answered `ManagerState`, also while the manager is off, so it stays
   discoverable). Clicking it, or `Ctrl+X A`, sends `manager_toggle`: `Manager.toggle` opens the manager view and
   remembers `(workspace, session)` in front (`Manager.previous`); toggling again restores that session through
@@ -1625,7 +1635,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   `manager_live` and `/manager live` all start a call attached to the manager session
   (`Manager.live_ready` reads `ManagerState`, `Manager.live_session` calls `ManagerOpen`) and **never switch the
   session on screen**; `LiveStart` carries the manager id and the manager notice is always asked. While the
-  call is open the Live pane above the composer stays in every session (header `· in Manager`, rows from the
+  call is open the Live pane under the composer stays in every session (header `· in Manager`, rows from the
   manager's call). `nexus/ui/ratatui/manager_follow.py` is the panel's own subscription to the manager stream
   (read-only, replayed from seq 0, retried with backoff, ends with the call); `Live._view()` uses the shown
   view when the manager is in front, the followed view otherwise. A manager approval or question that is
@@ -1662,7 +1672,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   (real binary: pinned block, `m`/`M`, disabled state), Rust unit tests in
   `render/sessions.rs`, `picker.rs`, `render/dialogs.rs`, `render.rs` and `bridge.rs`. Real terminals were not
   inspected by eye. The top-bar toggle: `tests/test_ratatui_manager.py` (toggle, restore, fallbacks, no tab,
-  shortcut wiring) and `render/chrome.rs` unit tests (position before `≡`, absent until reported, pressed
+  shortcut wiring) and `render/chrome.rs` unit tests (position before `▤`, absent until reported, pressed
   style). No PTY check of `Ctrl+X A` exists; not verified in a running terminal.
 
 ### Antigravity visibility and safe discovery
@@ -1795,31 +1805,49 @@ Tool verbs in verb groups and tool-detail section headings are sentence case (`R
 ## Native chrome polish (2026-10)
 
 The ordinary top bar ends with a session-list `☰` control opening the Sessions
-dashboard and an outlined split-panel `▯` control toggling the details sidebar.
+dashboard and an split-panel `▐` control toggling the details sidebar.
 These Unicode icons do not require a Nerd Font. Each has a three-cell padded hit
 target, with a one-cell gap between controls and two cells of right padding;
-subagent headers use the same padded `▯` target and right margin. Drawing, hover,
+subagent headers use the same padded `▐` target and right margin. Drawing, hover,
 and clicks share the header layout.
 
 ### Top bar spacer row (TODO item 1)
 
-The in-session top bar is three rows (`Regions.tabs.height == 3`): tabs, workspace row, then a thin `─`
-rule (`p.border`, inset 2 cells each side; hidden in the manager view but the row stays reserved). A
-terminal cannot allocate half a row; the rule replaces the old blank row below the bar and its glyph sits
-mid-cell, so it reads as half a row of air plus a line. There is no blank spacer between tabs and workspace
-row, and the transcript still starts on the same row as before (`transcript.y == tabs.bottom()`). One empty
+The in-session top bar is four rows (`Regions.tabs.height == 4`): tabs, a thin `─` line, the
+workspace row, then the closing `─` rule (`p.border`, inset 2 cells each side, `-` under
+`NEXUS_ASCII=1`; both hidden in the manager view but the rows stay reserved). Terminals shorter than
+`render::TOP_LINE_MIN_HEIGHT` (24 rows) drop the line and the bar is three rows (tabs, crumbs,
+rule); the extra row always comes out of the transcript. Reason: a terminal cannot draw a half-height gap
+without a filled shape, and a full blank row between the tabs and the crumbs read as too much empty
+space, so that row carries a line instead. The line shares the closing rule's colour and x-extent
+(the bar's own columns, so the narrow details drawer and the centered layout are respected), and
+does not join the active tab. The transcript starts right after the rule (`transcript.y == tabs.bottom()`). One empty
 row is kept above the bar. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
 right-hand controls; consecutive tabs are separated by a straight vertical `│`
-(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). Row 2
+(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). The workspace row
 (`crumb_layout`, blank in the manager view) holds the workspace path, branch and worktree,
 aligned with the first tab label and truncated to the width. Hit-testing still uses row 1
 only (`tab_cells`); the sub-agent page header and the Sessions page are unchanged (the page
-header draws on the first row of its area). Sizing, pinned-prompt rows and the composer cap
-account for the extra row (`regions()`, `composer_height()`). The workspace branch is
+header draws on the first row of its area). The workspace branch is
 polled asynchronously about every three seconds; it is not an instantaneous filesystem
 watch, though a shell command submission triggers a refresh. Background refresh results
 are discarded if the selected workspace changed meanwhile. Covered by focused Python and
 Rust tests; not a claim of full visual verification.
+
+### Top bar button glyphs (2026-10)
+
+Right-hand buttons, all one cell, all from the U+25A0 geometric squares so they share size,
+vertical metrics and weight (`render/chrome.rs`): `▣` toggles the Manager view (`■`, accented,
+while it is in front); `▤` opens the Sessions dashboard (`/sessions`); `▥` toggles the details
+sidebar. Idle icons all use the muted colour. The first pass used `◈`, `▤` and the block element
+`▐`; `◈` drew small and centred and `▐` filled the whole cell height, so they did not align. Block
+elements (`▐ ▌ █`) are avoided for icons. `NEXUS_ASCII=1` uses `o`/`*`, `=` and `|`. `☰`, `◫`, `⧠`,
+`◨` stay banned (can fall back to a wide font glyph). Alignment was checked in the screenshot font
+only.
+
+The top bar's closing rule (under the crumbs) uses the `rule_faint` palette token (dark `32,32,35`,
+light `227,227,230`), about 40% of the way from the background to `border`; the line under the tabs
+stays `border` (dark `50,50,55`, light `200,200,205`).
 
 ### Context-header rail removal (2026-10)
 
@@ -2019,3 +2047,82 @@ Back uses the same dismiss action as Escape/Up: nested pages return to their
 parent, otherwise to the root transcript. Agent-header hover remains disabled.
 At narrow widths model, padding, status, and then details are omitted; Back is
 retained from width 3 and details from width 7.
+
+## Background subagents (persistent children)
+
+Non-blocking, persistent subagents (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md phase 7).
+Everything is derived from the reduced `AgentView` the host subscription carries
+(`ui_support/timeline.py::agent_state` / `agent_state_label`); the client reads no session files and
+has no list or send command.
+
+| Where | What the user sees |
+| --- | --- |
+| `subagent` card (`task` block) | The spinner and `running` follow the child (`status == "spawned"`), not the tool call: an acked background call keeps spinning until the run ends. Line two starts with the new `state` field when the child is not plainly running or finished: `idle · run 2`, `interrupted · run 1`, `stopped by system: <reason>` (warning tone for stopped and interrupted), `running · run 2` for a continued child. A finished (not continuable) child shows no state. |
+| Status row | While the root turn is idle and children run: `⋯ 2 agents running · /tasks to open or stop` (snapshot field `agents_running`, `turn_status.running_agents`). Hidden on a subagent page; a running turn keeps its own status line. |
+| Root transcript, delivered report | A user message with `origin.kind == "subagent_report"` is a notification card tagged `subagent report`, titled `report · <agent> · <role> · run <n> · <status>` (a batch: `reports · N subagents · a:1, b:2`), with the whole wrapped report as the body (the pool already announces its clips). It never takes `#N`, and a wake turn made only of reports is unnumbered. Enter opens the child's page. |
+| Subagent page | A follow-up (`origin.kind == "root_followup"`) is a card tagged `from root`, titled `follow-up from root · <agent> · run <n>`, with the message. A stopped child ends with `Subagent stopped · by <who>` and `Reason: …` (also `by system` for an automatic eviction); an idle or interrupted one ends with a state row saying what the root can do. |
+| `/tasks` | `<agent> · <state label> · <task>`; `Cancel <agent> (ends this run)` (`AgentCancel`) for a running child, `Close <agent> (stop for good)` (`AgentClose`) for a running, idle or interrupted continuable child. |
+| Esc | Ends the root turn only; if children still run a toast says `N subagents still running (/tasks to stop)`. |
+| Paused delivery | `context.notice` / `subagent_wake_paused` (kept by the reducer as a diagnostic) is a literal row `Subagent reports paused` with the message, placed by time among the turns. |
+
+Checks: `tests/test_ratatui_agents.py` (projection, `/tasks`, Esc toast, replay),
+`tests/test_ratatui_pty_background.py` (real binary in a PTY), Rust unit tests in `transcript.rs` and
+`render.rs`. The browser client ignores the new fields and origins (no web change). Not verified:
+a live daemon run with a real provider.
+
+## Left sidebar (Projects, Sessions, Files, Git)
+
+A docked column on the left, beside the conversation, with four tabs: **Projects**,
+**Sessions**, **Files**, **Git**. `/sessions` (and `Ctrl+O`/`Ctrl+S`) opens it on the
+Sessions tab and gives it keyboard focus instead of replacing the conversation with the old
+full-page dashboard; `Ctrl+B` and the top bar's `▤` toggle it. Snapshot block `sidebar`
+(`{available, open, tab, width, focus, sessions, projects, files, git}`), built by
+`ui/ratatui/sidebar.py` from host results through `ui_support/sidebar.py`; drawn and
+hit-tested by `rust/tui/src/sidebar.rs`. A host that sends no `sidebar.available` (the
+desktop bridge, old snapshots, fixtures) keeps the legacy Sessions page.
+
+| Tab | Shows | Source |
+| --- | --- | --- |
+| Projects | Main repositories, each with its linked worktrees (`main` first) as foldable children; counts, newest age, a needs-you/working mark. Enter or a click folds a repository, or opens the newest session of a checkout. | `ProjectSessionsList` (limit 300): `repo`, `worktree`, `workspace` of each row |
+| Sessions | The dashboard in a column: filter, groups, status marks, rename, archive with confirmation, permission answers, `+ New Agent`. The workspace manager session is not listed and its pinned entry is not drawn. | `SessionDashboard` (the same host rows and operations as the legacy page; polled every 2 s while open) |
+| Files | The current project's directory, navigable: folders first, `↑ ..` below the root, sizes, links shown and never followed. | `DirectoryList` |
+| Git | Read-only labelled status: `branch → upstream · ahead/behind`, then Conflicts, Staged changes, Changes and Untracked sections with a word per file (`modified`, `added`, `deleted`, `untracked`, …). Nothing here can change the repository. | `GitStatus` |
+
+Layout. `render::regions` carves the column off the conversation's left edge after the details
+sidebar/drawer. The width is the saved preference bounded to 24..60 columns (default 34) and the
+column hides rather than leave the conversation under 56 columns
+(`sidebar::width_for`, `render::sidebar_available`); the top bar, transcript and composer all start
+at `Regions.sidebar.right()`, so painting and mouse hit-testing share one geometry. Tab labels
+(` Projects `, ` Sessions `, ` Files `, ` Git `) wrap onto more rows when the column is narrow
+(`sidebar::tab_cells`, used by painting and hit-testing alike).
+
+Resize. The divider is the sidebar's right border column. Press it and drag: the width follows the
+pointer immediately (bounded by 24, 60 and the room left for the conversation) and a single
+`{"type":"sidebar","op":"width"}` is sent on release; Python clamps again and saves
+`sidebar_width` in `~/.config/nexus/tui.json`. A snapshot arriving mid-drag does not move the
+divider.
+
+Keys and mouse. Focus comes from `/sessions`, `Ctrl+B`, or a click in the column; `Esc` (outside a
+filter, rename or archive confirmation) or a click elsewhere returns it, as does typing in a tab that
+has no text field. While focused: `Tab`/`Shift+Tab` change tab; `↑ ↓ PgUp PgDn Home End` move;
+`Enter`/`→` open or fold, `←`/`Backspace` go up a folder, `r` refreshes; on Sessions the dashboard
+keys apply (`/` filter, `r` rename, `d` archive, `a`/`d` answer a permission, `n` new) while the
+composer is empty. The wheel scrolls the tab under it; the hover highlight on Sessions rows is the
+dashboard's.
+
+State and safety. Open/closed, tab and width persist as `sessions_sidebar` (kept from the old
+sidebar, now default closed), `sidebar_tab` and `sidebar_width`. Files and Git describe the current
+project and reload when it changes; every answer carries a sequence and the workspace it was asked
+for, so a slow or stale one is dropped. The client can only open a folder the last listing offered
+and a session the last Projects list showed; the host re-validates paths (no absolute paths, `..`,
+hidden segments, symlink crossings or read-deny roots) and bounds entries, bytes and time
+(`docs/host.md`). Text is control-escaped in Python and the host redacts file and path names.
+
+Checks (written, **not run**: this change was made in a session without a shell, so nothing below
+has been compiled or executed): `tests/test_host_workspace_browse.py` (listing order, safety,
+bounds, deny roots, Git status parse/labels/limits), `tests/test_ratatui_sidebar.py` (projection,
+manager filter, Projects grouping, actions, stale answers, preferences, Rust constant mirror),
+`tests/test_ratatui_pty_sidebar.py` (real binary: tabs, wrapping, tab clicks, Ctrl+B, drag and
+bounds, hiding), Rust tests in `sidebar.rs` (width bounds and room, wrapping, tab hits, drag,
+keys, each tab, regions and a full `render::draw` frame). Not done: a native screenshot, a run
+against a live daemon, a Windows terminal, and mouse-wheel behaviour over a real touchpad.

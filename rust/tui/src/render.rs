@@ -38,6 +38,9 @@ pub struct Palette {
     pub element_hi: Color,
     pub dialog: Color,
     pub border: Color,
+    /// The top bar's closing rule: about 40% of the way from the background to `border`, so it
+    /// sits closer to the background than the line under the tabs.
+    pub rule_faint: Color,
     pub border_strong: Color,
     pub diff_del: Color,
     pub diff_add: Color,
@@ -67,6 +70,7 @@ impl Palette {
                 element_hi: rgb(218, 218, 218),
                 dialog: rgb(245, 245, 245),
                 border: rgb(200, 200, 205),
+                rule_faint: rgb(227, 227, 230),
                 border_strong: rgb(165, 165, 175),
                 diff_del: rgb(245, 218, 222),
                 diff_add: rgb(218, 242, 220),
@@ -92,6 +96,7 @@ impl Palette {
                 element_hi: rgb(44, 44, 44),
                 dialog: rgb(20, 20, 20),
                 border: rgb(50, 50, 55),
+                rule_faint: rgb(32, 32, 35),
                 border_strong: rgb(80, 80, 88),
                 diff_del: rgb(66, 14, 20),
                 diff_add: rgb(6, 56, 6),
@@ -430,6 +435,8 @@ pub struct Cache {
     pub live_max_back: usize,
     /// The pane's `expand`/`collapse` button from the last frame.
     pub live_button: Option<Rect>,
+    /// Open/close motion of the Live panel (`live_anim`).
+    pub live_anim: crate::live_anim::LiveAnim,
     /// Offset actually drawn in the last frame (pinned prompt, live bottom or frozen scroll).
     pub current_offset: usize,
     pub prompt_pin: crate::session::PromptPin,
@@ -479,6 +486,8 @@ pub struct Cache {
     pub page_state: crate::settings_page::PageState,
     /// Sessions dashboard state (query, selection, scroll); reset whenever the host hides it.
     pub dashboard: crate::picker::Dashboard,
+    /// The left sidebar's presentation state (focus, drag, selections, Sessions filter).
+    pub sidebar: crate::sidebar::SidebarUi,
     /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
     pub voice_levels: Vec<f32>,
     pub voice_elapsed: u64,
@@ -1174,10 +1183,16 @@ pub struct Regions {
     pub transcript: Rect,
     pub composer: Rect,
     pub details: Rect,
+    /// The left sidebar column (zero width while closed or when the conversation has no room).
+    pub sidebar: Rect,
     pub tabs: Rect,
     pub context: Rect,
-    /// The Live pane below the composer (zero height when no call's rows are on screen).
+    /// The GPT Live panel between the composer and the bottom bar (zero height when no call
+    /// is open; while it opens or closes only the revealed rows).
     pub live: Rect,
+    /// The bottom bar under everything else: the activity meter row (empty on the Sessions
+    /// dashboard and sub agent pages).
+    pub bottom_bar: Rect,
 }
 /// Composer height: the editor grows with its wrapped content up to the terminal's
 /// `max-height: 22` (9-row resting layout), leaving the
@@ -1188,6 +1203,7 @@ const QUEUE_VISIBLE: usize = 4;
 pub fn status_visible(s: &Snapshot) -> bool {
     s.agent_page.is_empty()
         && (slot_waiting(s)
+            || s.agents_running > 0
             || s.turn_status
                 .as_ref()
                 .is_some_and(|t| !t.activity.is_empty()))
@@ -1530,6 +1546,22 @@ fn draw_status_line(
         return;
     }
     if s.turn_status.is_none() {
+        // The root is idle but background subagents still run: say so, and where to stop them.
+        if s.agents_running > 0 {
+            let noun = if s.agents_running == 1 { "agent" } else { "agents" };
+            let text = crate::transcript::truncate(
+                &format!("{} {noun} running · /tasks to open or stop", s.agents_running),
+                usize::from(row.width).saturating_sub(2),
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled("⋯", Style::default().fg(p.quiet)),
+                    Span::raw(" "),
+                    Span::styled(text, Style::default().fg(p.quiet)),
+                ])),
+                row,
+            );
+        }
         return;
     }
     let now = crate::live_bar::now_epoch();
@@ -1728,6 +1760,23 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
 }
 /// Settings → Layout → Centered conversation: the widest the conversation column gets.
 pub const CENTERED_WIDTH: u16 = 80;
+/// Terminals shorter than this drop the thin line between the tabs and the workspace row.
+pub const TOP_LINE_MIN_HEIGHT: u16 = 24;
+/// Columns the left sidebar and the conversation share: everything left of the details sidebar
+/// (or its drawer). The sidebar's drag bound and `regions` both start from it.
+pub fn sidebar_available(area: Rect, s: &Snapshot) -> u16 {
+    if !s.details_sidebar {
+        return area.width;
+    }
+    if area.width >= 100 {
+        return area.width - 40;
+    }
+    let drawer = area
+        .width
+        .min(40)
+        .min(area.width.saturating_sub(24.min(area.width)));
+    area.width - drawer
+}
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
     // The Sessions dashboard draws its own header on row 0 and takes the width the details
     // sidebar leaves.
@@ -1738,22 +1787,56 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         0
     };
     let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(right)]).split(area);
+    // Below 100 columns the details drawer takes the right edge, and the conversation reflows
+    // into the column to its left so no row is clipped. A tiny terminal shrinks the drawer so
+    // the conversation keeps at least 24 columns.
+    let drawer = s.details_sidebar && area.width < 100;
+    let drawer_width = if drawer {
+        area.width
+            .min(40)
+            .min(area.width.saturating_sub(24.min(area.width)))
+    } else {
+        0
+    };
     let mut middle = columns[0];
+    if drawer {
+        middle.width = area.width - drawer_width;
+    }
+    // The left sidebar takes its columns off the conversation's left edge and never leaves the
+    // conversation narrower than `sidebar::MIN_CONVERSATION` (it hides instead).
+    let side = crate::sidebar::width_for(s, middle.width);
+    let sidebar = Rect::new(middle.x, middle.y, side, middle.height);
+    middle.x += side;
+    middle.width -= side;
     if s.centered_layout && middle.width > CENTERED_WIDTH && !dash {
         middle.x += (middle.width - CENTERED_WIDTH) / 2;
         middle.width = CENTERED_WIDTH;
     }
-    // The Live pane sits between the transcript and the composer. Expanded, it takes every
-    // row the transcript can spare but one, so the conversation never vanishes entirely.
-    let fixed = 1 + 3 * u16::from(!dash) + composer_height;
+    // The Live panel sits under the composer card, above the bottom bar (the activity meter
+    // row). Its rows come out of the transcript, never the composer: it is capped so the
+    // transcript keeps one row, and expanded it takes every row the transcript can spare.
+    // The session bar is four rows (tabs, thin line, workspace row, thin rule), three on short
+    // terminals (no line); the dashboard has none.
+    let bar: u16 = if dash {
+        0
+    } else if area.height < TOP_LINE_MIN_HEIGHT {
+        3
+    } else {
+        4
+    };
+    let foot = u16::from(composer_height > 3);
+    let fixed = 1 + bar + composer_height;
+    let spare = middle.height.saturating_sub(fixed + 1);
     let mut pane = if composer_height > 0 {
         crate::live_bar::pane_rows(s)
     } else {
         0
     };
-    if pane > 1 && s.live_expanded {
-        pane = pane.max(middle.height.saturating_sub(fixed + 1));
-    }
+    pane = if pane > 1 && s.live_expanded {
+        pane.max(spare)
+    } else {
+        pane.min(spare)
+    };
     // One empty row above the top bar (and the Sessions header). In a session the bar is three
     // rows: the tabs, the workspace path and branch, then a thin `─` rule. The rule stands in
     // for the old blank row below the bar (a terminal cannot allocate half a row; the rule
@@ -1761,30 +1844,169 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     // starts on the same row as before.
     let center = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(3 * u16::from(!dash)),
+        Constraint::Length(bar),
         Constraint::Length(0),
         Constraint::Min(1),
+        Constraint::Length(composer_height - foot),
         Constraint::Length(pane),
-        Constraint::Length(composer_height),
+        Constraint::Length(foot),
     ])
     .split(middle);
-    let drawer = s.details_sidebar && area.width < 100;
     Regions {
         tabs: center[1],
+        sidebar,
         details: if drawer {
-            Rect::new(
-                area.right().saturating_sub(area.width.min(40)),
-                area.y,
-                area.width.min(40),
-                area.height,
-            )
+            Rect::new(area.right() - drawer_width, area.y, drawer_width, area.height)
         } else {
             columns[1]
         },
         context: Rect::default(),
         transcript: center[3],
-        composer: center[5],
-        live: center[4],
+        composer: center[4],
+        live: center[5],
+        bottom_bar: center[6],
+    }
+}
+/// The GPT Live panel under the composer card. It is laid out at its full height off screen and
+/// only the revealed top rows are copied in, so opening slides it out from beneath the composer
+/// header first (`live_anim`); while it moves its text fades in and an accent band sweeps along
+/// the header. The pane scroll state (`live_back`, `live_button`) belongs to the full layout.
+fn draw_live_panel(
+    frame: &mut Frame,
+    s: &Snapshot,
+    live: &crate::bridge::LiveBar,
+    r: &Regions,
+    p: &Palette,
+    spin: usize,
+    cache: &mut Cache,
+) {
+    use ratatui::widgets::Widget as _;
+    let target = if s.live_reveal.is_some() {
+        cache.live_anim.target.max(r.live.height)
+    } else {
+        r.live.height
+    };
+    let full = Rect::new(r.live.x, r.live.y, r.live.width, target);
+    let mut buf = ratatui::buffer::Buffer::empty(full);
+    Block::default()
+        .style(Style::default().bg(p.background).fg(p.text))
+        .render(full, &mut buf);
+    let rows = composer_rows(r.composer, s);
+    let x = rows[1].x + 2;
+    let width = rows[1].width.saturating_sub(4);
+    let now_epoch = crate::live_bar::now_epoch();
+    // The motion band runs on the smooth 30 Hz clock, and rests at frame 0 without animation.
+    let motion = if cache.animate { cache.activity_frame } else { 0 };
+    if target == 1 {
+        // No rows to show (connecting, or the call is on another session): the header alone.
+        Paragraph::new(Line::from(crate::live_bar::spans(
+            live,
+            p,
+            motion,
+            now_epoch,
+            usize::from(width),
+            cache.animate,
+            &cache.mic,
+        )))
+        .style(Style::default().bg(p.element))
+        .render(Rect::new(x, full.y, width, 1), &mut buf);
+    } else {
+        // The open call's rows: a header (label, `↑ N more`, expand button) and a scrollable
+        // pane below it, in line with the composer card.
+        let all = crate::live_bar::captions(
+            &live.detail,
+            p.purple,
+            usize::from(width),
+            p,
+            &live.operation,
+        );
+        let body = Rect::new(x, full.y + 1, width, target - 1);
+        let (back, start) =
+            crate::live_bar::pane_window(all.len(), usize::from(body.height), cache.live_back);
+        cache.live_back = back;
+        cache.live_max_back = all.len().saturating_sub(usize::from(body.height));
+        let header = Rect::new(x, full.y, width, 1);
+        let label = if s.live_expanded {
+            "⤡ collapse"
+        } else {
+            "⤢ expand"
+        };
+        let bw = (label.width() as u16 + 2).min(header.width);
+        let button = Rect::new(header.right() - bw, header.y, bw, 1);
+        cache.live_button = Some(button);
+        let more = if start > 0 {
+            format!("↑ {start} more  ")
+        } else {
+            String::new()
+        };
+        // The call's phase strip (phase, animation, clock) takes what the right side leaves.
+        let left_width =
+            usize::from(header.width).saturating_sub(more.width() + usize::from(bw) + 1);
+        let mut head = crate::live_bar::spans(
+            live,
+            p,
+            motion,
+            now_epoch,
+            left_width,
+            cache.animate,
+            &cache.mic,
+        );
+        let used: usize = head.iter().map(|span| span.width()).sum();
+        let gap = usize::from(header.width).saturating_sub(used + more.width() + usize::from(bw));
+        head.push(Span::raw(" ".repeat(gap)));
+        head.push(Span::styled(more, Style::default().fg(p.quiet)));
+        Paragraph::new(Line::from(head))
+            .style(Style::default().bg(p.element))
+            .render(header, &mut buf);
+        Paragraph::new(Span::styled(
+            format!(" {label} "),
+            Style::default().fg(p.muted).bg(p.element_hi),
+        ))
+        .render(button, &mut buf);
+        let end = (start + usize::from(body.height)).min(all.len());
+        let lines: Vec<Line> = all[start..end]
+            .iter()
+            .map(|(line, _)| line.clone())
+            .collect();
+        Paragraph::new(lines).render(body, &mut buf);
+        let below = all.len() - end;
+        if below > 0 {
+            let text = format!("↓ {below} newer");
+            let w = (text.width() as u16).min(body.width);
+            let rect = Rect::new(body.right() - w, body.bottom() - 1, w, 1);
+            Clear.render(rect, &mut buf);
+            Paragraph::new(Span::styled(text, Style::default().fg(p.quiet))).render(rect, &mut buf);
+        }
+    }
+    if cache.animate {
+        let now = std::time::Instant::now();
+        let progress = cache.live_anim.progress(now);
+        if progress < 1.0 {
+            // Text fades in (out on close) with the height.
+            for cell in buf.content.iter_mut() {
+                cell.fg = nexus_widgets::theme::mix(p.background, cell.fg, progress);
+            }
+        }
+        if let Some(t) = cache.live_anim.sweep(now) {
+            // An accent band runs along the header, brightest at the start and fading out.
+            let span = f32::from(width) + 8.0;
+            let centre = t * span - 4.0;
+            for col in 0..width {
+                let d = (f32::from(col) - centre).abs();
+                if d < 4.0 {
+                    let strength = (1.0 - d / 4.0) * (1.0 - t * 0.6);
+                    let cell = &mut buf[(x + col, full.y)];
+                    cell.bg = nexus_widgets::theme::mix(cell.bg, p.accent, 0.6 * strength);
+                    cell.fg = nexus_widgets::theme::mix(cell.fg, p.text, 0.5 * strength);
+                }
+            }
+        }
+    }
+    let out = frame.buffer_mut();
+    for y in r.live.y..r.live.bottom().min(full.bottom()) {
+        for col in r.live.x..r.live.right() {
+            out[(col, y)] = buf[(col, y)].clone();
+        }
     }
 }
 pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line<'static>> {
@@ -2356,7 +2578,7 @@ pub fn draw(
                 .style(Style::default().bg(cp.panel)),
                 controls,
             );
-            let meter_area = inset(rows[4], 2, 2);
+            let meter_area = inset(r.bottom_bar, 2, 2);
             let spans = activity_meter_for(
                 s,
                 &p,
@@ -2377,106 +2599,24 @@ pub fn draw(
             frame.render_widget(Paragraph::new(Line::from(spans)), meter_area);
         }
     }
-    cache.mic.observe(&s.live, cache.spin);
+    // While the panel closes the call is already over: the ghost of its last state stays drawn
+    // (as `ended`) until the rows are gone (`live_anim`).
+    let ghost = if s.live.active {
+        None
+    } else {
+        cache.live_anim.ghost().cloned()
+    };
+    let live = ghost.as_ref().unwrap_or(&s.live);
+    cache.mic.observe(live, cache.spin, cache.activity_frame);
     cache.live_button = None;
-    if r.live.height == 1 {
-        // No rows to show (connecting, or the call is on another session): the header alone.
-        cache.live_back = 0;
-        cache.live_max_back = 0;
-        let rows = composer_rows(r.composer, s);
-        let (x, width) = (rows[1].x + 2, rows[1].width.saturating_sub(4));
-        frame.render_widget(
-            Paragraph::new(Line::from(crate::live_bar::spans(
-                &s.live,
-                &p,
-                spin,
-                crate::live_bar::now_epoch(),
-                usize::from(width),
-                cache.animate,
-                cache.mic.levels(),
-            )))
-            .style(Style::default().bg(p.element)),
-            Rect::new(x, r.live.y, width, 1),
-        );
-    } else if r.live.height > 1 {
-        // The open call's rows: a header (label, `↑ N more`, expand button) and a scrollable
-        // pane directly above the composer, in line with the composer card.
-        let rows = composer_rows(r.composer, s);
-        let x = rows[1].x + 2;
-        let width = rows[1].width.saturating_sub(4);
-        let all = crate::live_bar::captions(
-            &s.live.detail,
-            p.purple,
-            usize::from(width),
-            &p,
-            &s.live.operation,
-        );
-        let body = Rect::new(x, r.live.y + 1, width, r.live.height - 1);
-        let (back, start) =
-            crate::live_bar::pane_window(all.len(), usize::from(body.height), cache.live_back);
-        cache.live_back = back;
-        cache.live_max_back = all.len().saturating_sub(usize::from(body.height));
-        let header = Rect::new(x, r.live.y, width, 1);
-        let label = if s.live_expanded {
-            "⤡ collapse"
-        } else {
-            "⤢ expand"
-        };
-        let bw = (label.width() as u16 + 2).min(header.width);
-        let button = Rect::new(header.right() - bw, header.y, bw, 1);
-        cache.live_button = Some(button);
-        let more = if start > 0 {
-            format!("↑ {start} more  ")
-        } else {
-            String::new()
-        };
-        // The call's phase strip (phase, animation, clock) takes what the right side leaves.
-        let left_width =
-            usize::from(header.width).saturating_sub(more.width() + usize::from(bw) + 1);
-        let mut head = crate::live_bar::spans(
-            &s.live,
-            &p,
-            spin,
-            crate::live_bar::now_epoch(),
-            left_width,
-            cache.animate,
-            cache.mic.levels(),
-        );
-        let used: usize = head.iter().map(|span| span.width()).sum();
-        let gap = usize::from(header.width).saturating_sub(used + more.width() + usize::from(bw));
-        head.push(Span::raw(" ".repeat(gap)));
-        head.push(Span::styled(more, Style::default().fg(p.quiet)));
-        frame.render_widget(
-            Paragraph::new(Line::from(head)).style(Style::default().bg(p.element)),
-            header,
-        );
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!(" {label} "),
-                Style::default().fg(p.muted).bg(p.element_hi),
-            )),
-            button,
-        );
-        let end = (start + usize::from(body.height)).min(all.len());
-        let lines: Vec<Line> = all[start..end]
-            .iter()
-            .map(|(line, _)| line.clone())
-            .collect();
-        frame.render_widget(Paragraph::new(lines), body);
-        let below = all.len() - end;
-        if below > 0 {
-            let text = format!("↓ {below} newer");
-            let w = (text.width() as u16).min(body.width);
-            let rect = Rect::new(body.right() - w, body.bottom() - 1, w, 1);
-            frame.render_widget(Clear, rect);
-            frame.render_widget(
-                Paragraph::new(Span::styled(text, Style::default().fg(p.quiet))),
-                rect,
-            );
-        }
+    if r.live.height > 0 && s.dashboard.is_none() && r.live.width > 0 {
+        draw_live_panel(frame, s, live, &r, &p, spin, cache);
     } else {
         cache.live_back = 0;
         cache.live_max_back = 0;
+    }
+    if r.sidebar.width > 0 {
+        cache.sidebar.draw(frame, r.sidebar, s, &p, spin, cache.mono);
     }
     if r.details.width > 0 {
         frame.render_widget(Clear, r.details);
@@ -3780,19 +3920,21 @@ mod tests {
         let top = screen(0, &mut cache);
         assert!(top[0].trim().is_empty(), "spacing row above the top bar");
         assert!(
-            !top[1].trim().is_empty() && !top[2].trim().is_empty(),
-            "two-row top bar on rows 1-2"
+            !top[1].trim().is_empty() && !top[3].trim().is_empty(),
+            "tabs on row 1 and the workspace row on row 3"
         );
-        assert!(
-            top[3].contains('─') && top[3].trim_matches(|c| c == ' ' || c == '─').is_empty(),
-            "thin separator rule stands in for the blank row below the bar: {:?}",
-            top[3]
-        );
+        for y in [2, 4] {
+            assert!(
+                top[y].contains('─') && top[y].trim_matches(|c| c == ' ' || c == '─').is_empty(),
+                "thin line on row {y} (between the tabs and the crumbs, and closing the bar): {:?}",
+                top[y]
+            );
+        }
         assert!(cache.sticky.is_none(), "at the top there is no pin");
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
         // The transcript starts right after the bar's spacing row.
-        let t = 4usize;
+        let t = 5usize;
         assert_eq!(rect.y as usize, t, "pinned at the top of the transcript");
         assert!(mid[t + 1].contains("question number 1"), "{:?}", &mid[..9]);
         assert!(
@@ -3893,14 +4035,19 @@ mod tests {
                     "{at}: the prompt is always reachable"
                 );
                 assert!(screen.contains("Allow once"), "{at}");
-                assert!(screen.contains("Build"), "{at}: the runtime row");
+                // Below 100 columns the details drawer leaves the conversation 24 columns, which
+                // truncates the agent name ("B…"); the full name needs the wider layouts.
+                assert!(
+                    screen.contains(if width < 100 { "B…" } else { "Build" }),
+                    "{at}: the runtime row"
+                );
                 if width >= 170 {
                     assert!(
                         screen.contains("Fix the parser"),
                         "{at}: active session tab"
                     );
                     assert!(!screen.contains('‹'), "{at}: no session arrows");
-                    assert!(screen.contains('≡'), "{at}: dashboard button");
+                    assert!(screen.contains('▤'), "{at}: dashboard button");
                 }
                 assert!(!screen.contains("SESSIONS"), "{at}: no sessions sidebar");
                 if width >= 170 {
@@ -3956,10 +4103,10 @@ mod tests {
             false,
         );
         let rows = composer_rows(r.composer, &s);
-        let meter_area = inset(rows[4], 2, 2);
+        let meter_area = inset(r.bottom_bar, 2, 2);
 
         // (a) no '■' inside the composer card area (rows[0]..=rows[3])
-        for y in r.composer.y..rows[4].y {
+        for y in r.composer.y..r.bottom_bar.y {
             for x in r.composer.x..r.composer.right() {
                 assert_ne!(
                     terminal.backend().buffer()[(x, y)].symbol(),
@@ -4305,9 +4452,10 @@ mod tests {
                         false,
                     );
                     let rows = composer_rows(r.composer, &s);
-                    assert_eq!(rows.len(), 5, "no spacer row under the card");
-                    assert_eq!(rows[3].bottom(), rows[4].y);
-                    assert_eq!(rows[4].bottom(), r.composer.bottom());
+                    assert_eq!(rows.len(), 4, "no spacer row under the card");
+                    assert_eq!(rows[3].bottom(), r.composer.bottom());
+                    assert_eq!(r.composer.bottom(), r.bottom_bar.y);
+                    assert_eq!(r.bottom_bar.height, 1);
                     let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
                     let mut cache = Cache::default();
                     cache.voice_elapsed = 7;
@@ -4333,21 +4481,21 @@ mod tests {
                             );
                         })
                         .unwrap();
-                    let meter_area = inset(rows[4], 2, 2);
+                    let meter_area = inset(r.bottom_bar, 2, 2);
                     let buffer = terminal.backend().buffer();
                     if recording {
-                        assert_eq!(buffer[(meter_area.x + 2, rows[4].y)].symbol(), "■");
-                        assert_eq!(buffer[(meter_area.x + 3, rows[4].y)].symbol(), "─");
+                        assert_eq!(buffer[(meter_area.x + 2, r.bottom_bar.y)].symbol(), "■");
+                        assert_eq!(buffer[(meter_area.x + 3, r.bottom_bar.y)].symbol(), "─");
                         let time: String = (4..=8)
-                            .map(|i| buffer[(meter_area.x + i, rows[4].y)].symbol().to_string())
+                            .map(|i| buffer[(meter_area.x + i, r.bottom_bar.y)].symbol().to_string())
                             .collect();
                         assert_eq!(time, "00:07");
                     } else {
-                        assert_eq!(buffer[(meter_area.x + 2, rows[4].y)].symbol(), "─");
-                        assert_eq!(buffer[(meter_area.x + 3, rows[4].y)].symbol(), "─");
+                        assert_eq!(buffer[(meter_area.x + 2, r.bottom_bar.y)].symbol(), "─");
+                        assert_eq!(buffer[(meter_area.x + 3, r.bottom_bar.y)].symbol(), "─");
                     }
                     if r.tabs.height > 0 {
-                        assert_eq!(r.tabs.height, 3, "tabs, workspace row, thin rule");
+                        assert_eq!(r.tabs.height, 4);
                         let row = |y: u16| -> String {
                             (r.tabs.x..r.tabs.right())
                                 .map(|x| terminal.backend().buffer()[(x, y)].symbol())
@@ -4355,15 +4503,15 @@ mod tests {
                         };
                         let top = row(r.tabs.y);
                         if r.details.width == 0 {
-                            assert!(top.contains('≡'), "dashboard button: {top}");
+                            assert!(top.contains('▤'), "dashboard button: {top}");
                         }
                         assert!(!top.contains("/workspace"), "path left the tab row: {top}");
-                        let crumbs = row(r.tabs.y + 1);
+                        let crumbs = row(r.tabs.y + 2);
                         assert!(
                             crumbs.contains("/workspace"),
-                            "path directly under the tabs: {crumbs}"
+                            "path under the tabs : {crumbs}"
                         );
-                        // The narrow details drawer overlays the right edge of this row; only
+                        // The narrow details drawer sits beside the bar, never over it; only
                         // the bar's own columns carry the rule.
                         let bar_right = if r.details.x > r.tabs.x && r.details.x < r.tabs.right() {
                             r.details.x
@@ -4371,7 +4519,7 @@ mod tests {
                             r.tabs.right()
                         };
                         let rule: String = (r.tabs.x..bar_right)
-                            .map(|x| terminal.backend().buffer()[(x, r.tabs.y + 2)].symbol())
+                            .map(|x| terminal.backend().buffer()[(x, r.tabs.y + 3)].symbol())
                             .collect();
                         assert!(
                             rule.contains('─')
@@ -4386,6 +4534,58 @@ mod tests {
                         "card has no left colour rail"
                     );
                     assert_eq!(buffer[(rows[2].x + 5, rows[2].y)].symbol(), "A");
+                }
+            }
+        }
+    }
+    #[test]
+    fn top_bar_line_sits_between_the_tabs_and_the_crumbs() {
+        let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
+        for light in [false, true] {
+            let p = Palette::new(light);
+            for centered in [false, true] {
+                for (width, height) in [(60u16, 24u16), (100, 30), (140, 40), (100, 23), (100, 12)] {
+                    let s = Snapshot {
+                        title: "Test".into(),
+                        breadcrumb: "/workspace · main".into(),
+                        theme: if light { "nexus-light" } else { "nexus-dark" }.into(),
+                        centered_layout: centered,
+                        ..Default::default()
+                    };
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    let mut cache = Cache::default();
+                    let mut regions_out = None;
+                    terminal
+                        .draw(|frame| {
+                            regions_out = Some(draw(
+                                frame, &s, &Editor::default(), &Editor::default(),
+                                &Editor::default(), "", 0, 0, 0, &mut cache, true, false,
+                                false, false, 0, 0,
+                            ));
+                        })
+                        .unwrap();
+                    let r = regions_out.unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let row = |y: u16| -> String {
+                        (r.tabs.x..r.tabs.right()).map(|x| buffer[(x, y)].symbol()).collect()
+                    };
+                    let ctx = format!("light={light} centered={centered} {width}x{height}");
+                    if height < TOP_LINE_MIN_HEIGHT {
+                        assert_eq!(r.tabs.height, 3, "{ctx}: line row dropped");
+                        assert!(row(r.tabs.y + 1).contains("/workspace"), "{ctx}: crumbs move up");
+                        continue;
+                    }
+                    assert_eq!(r.tabs.height, 4, "{ctx}");
+                    let line = row(r.tabs.y + 1);
+                    assert!(
+                        line.contains(glyph) && line.trim_matches(|c| c == ' ' || c == glyph.chars().next().unwrap()).is_empty(),
+                        "{ctx}: line row {line:?}"
+                    );
+                    let x = r.tabs.x + r.tabs.width / 2;
+                    assert_eq!(buffer[(x, r.tabs.y + 1)].fg, p.border, "{ctx}: rule colour");
+                    assert_eq!(buffer[(x, r.tabs.y + 3)].fg, p.rule_faint, "{ctx}: closing rule colour");
+                    assert!(!row(r.tabs.y).contains(glyph), "{ctx}: tabs row has no line");
+                    assert!(row(r.tabs.y + 2).contains("/workspace"), "{ctx}: crumbs under the line");
                 }
             }
         }
@@ -5100,6 +5300,16 @@ mod editor_layout_tests {
     }
 
     #[test]
+    fn idle_root_with_running_agents_shows_the_agents_status_row() {
+        let mut s = Snapshot::default();
+        assert!(!status_visible(&s));
+        s.agents_running = 2;
+        assert!(status_visible(&s), "the row appears with no turn running");
+        s.agent_page = "child".into();
+        assert!(!status_visible(&s), "not on a subagent page");
+    }
+
+    #[test]
     fn one_blank_row_separates_the_status_line_from_the_composer() {
         use ratatui::{backend::TestBackend, Terminal};
         let now = crate::live_bar::now_epoch();
@@ -5369,7 +5579,6 @@ pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
         Constraint::Min(3),
         Constraint::Length(1),
         Constraint::Length(1), // the card's bottom padding row
-        Constraint::Length(1), // the activity meter, directly under the card
     ])
     .split(area)
     .to_vec()
@@ -5938,6 +6147,26 @@ mod selection_highlight_tests {
         );
     }
     #[test]
+    fn narrow_details_drawer_keeps_the_conversation_beside_it() {
+        let mut s = Snapshot {
+            details_sidebar: true,
+            ..Default::default()
+        };
+        let r = regions(Rect::new(0, 0, 80, 24), &s, 8, false);
+        assert_eq!((r.details.width, r.transcript.width), (40, 40));
+        for part in [r.transcript, r.composer, r.tabs] {
+            assert!(part.right() <= r.details.x, "{part:?} vs {:?}", r.details);
+        }
+        let r = regions(Rect::new(0, 0, 120, 24), &s, 8, false);
+        assert_eq!((r.details.width, r.transcript.width), (40, 80));
+        let r = regions(Rect::new(0, 0, 50, 24), &s, 8, false);
+        assert!(r.transcript.width >= 24);
+        assert!(r.transcript.right() <= r.details.x);
+        s.details_sidebar = false;
+        let r = regions(Rect::new(0, 0, 60, 24), &s, 8, false);
+        assert_eq!(r.transcript.width, 60);
+    }
+    #[test]
     fn details_sidebar_shows_beside_the_sessions_dashboard() {
         let area = Rect::new(0, 0, 160, 40);
         let mut s = Snapshot {
@@ -6485,15 +6714,18 @@ mod live_pane_tests {
     }
 
     #[test]
-    fn pane_sits_directly_above_the_composer_and_shrinks_the_transcript() {
+    fn pane_sits_between_the_composer_and_the_bottom_bar_and_shrinks_the_transcript() {
         let area = Rect::new(0, 0, 100, 40);
         let mut s = Snapshot::default();
         let before = regions(area, &s, 8, false);
         s = call(3);
         let r = regions(area, &s, 8, false);
         assert_eq!(r.live.height, crate::live_bar::PANE_ROWS);
-        assert_eq!(r.live.bottom(), r.composer.y);
-        assert_eq!(r.transcript.bottom(), r.live.y);
+        assert_eq!(r.transcript.bottom(), r.composer.y, "the transcript pays, not the composer");
+        assert_eq!(r.live.y, r.composer.bottom(), "directly under the composer");
+        assert_eq!(r.live.bottom(), r.bottom_bar.y, "directly above the bottom bar");
+        assert!(r.live.bottom() <= r.bottom_bar.y && r.bottom_bar.height == 1);
+        assert_eq!(r.composer.height, before.composer.height);
         assert_eq!(
             r.transcript.height + crate::live_bar::PANE_ROWS,
             before.transcript.height
@@ -6507,8 +6739,9 @@ mod live_pane_tests {
         s.live_expanded = true;
         let r = regions(area, &s, 8, false);
         assert_eq!(r.transcript.height, 1);
-        assert_eq!(r.live.y, r.transcript.bottom());
-        assert_eq!(r.live.bottom(), r.composer.y);
+        assert_eq!(r.composer.y, r.transcript.bottom());
+        assert_eq!(r.live.y, r.composer.bottom());
+        assert_eq!(r.live.bottom(), r.bottom_bar.y);
         assert!(r.live.height > crate::live_bar::PANE_ROWS);
     }
 
@@ -6532,6 +6765,71 @@ mod live_pane_tests {
         assert!(lines[usize::from(r.live.y + 1)].contains("row number 0"));
         assert!(lines[usize::from(r.live.bottom() - 1)].contains("↓ 7 newer"));
         assert!(!lines[usize::from(r.live.y)].contains("more"));
+    }
+
+    #[test]
+    fn revealed_rows_come_from_the_transcript_and_show_the_header_first() {
+        let area = Rect::new(0, 0, 100, 40);
+        let mut s = call(12);
+        let full = regions(area, &s, 8, false);
+        for shown in 1..crate::live_bar::PANE_ROWS {
+            s.live_reveal = Some(shown);
+            let r = regions(area, &s, 8, false);
+            assert_eq!(r.live.height, shown);
+            assert_eq!(r.live.y, r.composer.bottom());
+            assert_eq!(r.live.bottom(), r.bottom_bar.y);
+            assert_eq!(r.composer.height, full.composer.height);
+            assert_eq!(r.bottom_bar, full.bottom_bar, "the bottom bar never moves");
+            assert_eq!(r.composer.bottom() + shown, r.bottom_bar.y, "the composer rises as it grows");
+            assert_eq!(r.transcript.height, full.transcript.height + (6 - shown));
+        }
+        let mut cache = Cache::default();
+        s.live_reveal = Some(2);
+        cache.live_anim.target = crate::live_bar::PANE_ROWS;
+        let (r, lines) = paint(&s, &mut cache);
+        assert!(lines[usize::from(r.live.y)].contains("LISTENING"));
+        assert!(lines[usize::from(r.live.y + 1)].contains("row number 7"), "top rows first");
+        assert!(!lines.iter().any(|l| l.contains("row number 11")), "the rest is still hidden");
+        assert!(lines[usize::from(r.bottom_bar.y)].contains('─'), "the bottom bar stays put");
+        s.live_reveal = Some(0);
+        assert_eq!(regions(area, &s, 8, false).live.height, 0);
+    }
+
+    #[test]
+    fn tiny_terminals_keep_the_composer_and_bar_on_screen() {
+        for light in [false, true] {
+            for centered in [false, true] {
+                for drawer in [false, true] {
+                    for (w, h) in [(40u16, 10u16), (60, 12), (60, 20), (100, 24)] {
+                        let mut s = call(12);
+                        s.theme = if light { "nexus-light" } else { "nexus-dark" }.into();
+                        s.centered_layout = centered;
+                        s.details_sidebar = drawer;
+                        let area = Rect::new(0, 0, w, h);
+                        let ch = composer_height(area, &Editor::default(), &s);
+                        let r = regions(area, &s, ch, false);
+                        if h >= 12 {
+                            assert!(r.live.bottom() <= r.bottom_bar.y, "{w}x{h}");
+                            assert!(r.bottom_bar.bottom() <= h, "{w}x{h} bar on screen");
+                            assert!(r.transcript.height >= 1, "{w}x{h} transcript keeps a row");
+                            assert_eq!(r.live.y, r.composer.bottom(), "{w}x{h}");
+                            assert_eq!(r.composer.height + r.bottom_bar.height, ch, "{w}x{h}");
+                        }
+                        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                        let mut cache = Cache::default();
+                        terminal
+                            .draw(|f| {
+                                draw(
+                                    f, &s, &Editor::default(), &Editor::default(),
+                                    &Editor::default(), "", 0, 0, 0, &mut cache, true, false,
+                                    false, false, 0, 0,
+                                );
+                            })
+                            .unwrap();
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -6589,7 +6887,7 @@ mod live_pane_tests {
         s.live.started = crate::live_bar::now_epoch() - 12.0;
         let (r, lines) = paint(&s, &mut cache);
         assert_eq!(r.live.height, 1);
-        assert_eq!(r.live.bottom(), r.composer.y);
+        assert_eq!(r.live.y, r.composer.bottom());
         let head = &lines[usize::from(r.live.y)];
         assert!(
             head.contains("LISTENING") && head.contains("in work") && head.contains("/live stop"),

@@ -176,7 +176,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[<0;10;13M")  # first item row (inside the modal frame); moves with the composer height
+        os.write(master, b"\x1b[<0;10;12M")  # first item row (inside the modal frame); moves with the composer height and the top bar (4 rows at 24+ terminal rows)
         assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
         os.write(master, b"\x1b[<0;1;1M")
         assert read_action() == {"type": "dismiss", "text": ""}

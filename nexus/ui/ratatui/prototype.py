@@ -25,7 +25,7 @@ from ...ui_support.completion import root_agents
 from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
 from .verb_groups import CHANGE_TOOLS, activity_entries, format_time
-from .turn_status import turn_status
+from .turn_status import running_agents, turn_status
 from ...host_support.errors import error_text
 from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
@@ -123,11 +123,25 @@ def _dashboard_hidden(shell, prompt) -> bool:
 
 
 def _dashboard_state(shell, prompt=None):
-    """The ``dashboard`` snapshot field: the visible Sessions dashboard, else ``None``."""
+    """The ``dashboard`` snapshot field: the visible Sessions dashboard, else ``None``.
+
+    Always ``None`` where the left sidebar is enabled: its Sessions tab carries the list
+    (``sidebar.sessions``), so the conversation is never replaced by a page.
+    """
+    sidebar = getattr(shell, "sidebar", None) if shell else None
+    if getattr(sidebar, "enabled", False) is True:
+        return None
     dashboard = getattr(shell.workflows, "dashboard", None) if shell else None
     if dashboard is None or _dashboard_hidden(shell, prompt):
         return None
     return dashboard.snapshot()
+
+
+def _sidebar_state(shell) -> dict:
+    """The ``sidebar`` snapshot field; ``available`` is false for hosts that do not own a sidebar."""
+    from .sidebar import SidebarController
+    sidebar = getattr(shell, "sidebar", None) if shell else None
+    return sidebar.snapshot() if isinstance(sidebar, SidebarController) else {"available": False, "open": False}
 
 
 def _block_operations(blocks):
@@ -288,6 +302,16 @@ def _agent_card_model(agent) -> tuple[str, str, str]:
     return model, effort, tier
 
 
+def _agent_card_route(route: dict) -> dict:
+    """A sub-agent's quota routing decision (``agent.routed``) with its text control-escaped."""
+    def text(value):
+        return escape_controls(value) if isinstance(value, str) else value
+    skipped = [{**item, **{key: text(item.get(key)) for key in ("reference", "quota", "kind", "label")}}
+               for item in route.get("skipped") or [] if isinstance(item, dict)]
+    return {**route, "requested": text(route.get("requested")), "first": text(route.get("first")),
+            "chosen": text(route.get("chosen")), "skipped": skipped}
+
+
 def _agent_card_metrics(agent) -> tuple[int | None, int | None]:
     """Return reported tool-call and token counts, preserving unknown values."""
     if agent is None:
@@ -349,15 +373,54 @@ def _chip_operations(message, count):
     return operations[:count] + [{"kind": "message_page", "id": message.id}] * (count - len(operations))
 
 
+def _is_prompt(message) -> bool:
+    """A user message with content that a person (or Live) sent: not a subagent report or follow-up."""
+    from ...ui_support.timeline import _has_message_content
+    return (message.role == "user" and _has_message_content(message)
+            and (message.origin or {}).get("kind") not in {"subagent_report", "root_followup"})
+
+
+def _agent_origin_row(message, agents) -> tuple[str, str, dict | None] | None:
+    """``(title, tag, operation)`` for a delivered subagent report or a root follow-up row.
+
+    ``report · <agent> · <role> · run <n> · <status>`` (a batch lists every ``id:run``);
+    ``follow-up from root · <agent> · run <n>`` on the child's page. The body stays the card text.
+    """
+    origin = message.origin or {}
+    kind = origin.get("kind")
+    if kind not in {"subagent_report", "root_followup"}:
+        return None
+    agents = agents or {}
+    def name(agent_id):
+        child = agents.get(agent_id)
+        return escape_controls(str(agent_id))[:80], escape_controls(str((child.type if child and child.type else "") or ""))[:40]
+    batch = [item for item in (origin.get("agents") or []) if isinstance(item, str)]
+    agent_id = str(origin.get("agent") or "")
+    run = origin.get("run")
+    if kind == "root_followup":
+        label, role = name(agent_id)
+        title = " · ".join(part for part in ("follow-up from root", label, f"run {run}" if run else "") if part)
+        return title, "followup", None
+    status = escape_controls(str(origin.get("status") or ""))[:40]
+    if len(batch) > 1:
+        title = f"reports · {len(batch)} subagents · " + ", ".join(escape_controls(item)[:60] for item in batch[:8])
+        if len(batch) > 8:
+            title += f", +{len(batch) - 8} more"
+        return title, "report", None
+    label, role = name(agent_id)
+    title = " · ".join(part for part in ("report", label, role, f"run {run}" if run else "", status) if part)
+    operation = {"kind": "agent_page", "id": agent_id} if agent_id in agents else None
+    return title, "report", operation
+
+
 def _turn_number(turns, turn):
     """``#N`` of ``turn``: user-initiated turns before it plus one (0 for shell or prompt-less turns)."""
-    from ...ui_support.timeline import _has_message_content
     ordinal = 0
     for item in turns:
-        if item.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in item.messages):
+        if item.kind != "shell" and any(_is_prompt(m) for m in item.messages):
             ordinal += 1
         if item.id == turn.id:
-            return ordinal if item.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in item.messages) else 0
+            return ordinal if item.kind != "shell" and any(_is_prompt(m) for m in item.messages) else 0
     return 0
 
 
@@ -412,6 +475,17 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 # A consumed steer lands after the turn's own prompt (reduce appends it; the
                 # view keeps no per-message mode), so any later user card is a steer.
                 block["status"] = "steer"  # drawn as "steer" beside the card
+            agent_row = _agent_origin_row(message, agents)
+            if agent_row is not None:
+                # Not typed by the user: a labelled subagent notification. It never takes #N, and the
+                # body (the whole report, clipped by the pool with the clip announced) stays readable.
+                block.update(title=agent_row[0], text=message.text if collapsed is False else "",
+                             status=agent_row[1], number=0)
+                if agent_row[2] is not None:
+                    block["operation"] = agent_row[2]
+                block.pop("chips", None)
+                entries.append((message.event_seq, 2, block, 0, 0, "user"))
+                continue
             numbered = True
             if (message.origin or {}).get("kind") == "live":
                 block["status"] = "live"  # drawn as "via voice" beside the turn number
@@ -494,7 +568,8 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 or (args.get("agent") if isinstance(args, dict) else "")
                 or "task"
             )
-            started_ms = int(child.spawned_ts * 1000) if child and child.spawned_ts else 0
+            run_start = child.last_run_ts if child and child.runs > 1 and child.status == "spawned" and child.last_run_ts else (child.spawned_ts if child else None)
+            started_ms = int(run_start * 1000) if run_start else 0
             elapsed_ms = int((child.completed_ts - child.spawned_ts) * 1000) if child and child.completed_ts and child.spawned_ts else 0
             if elapsed_ms < 0:
                 elapsed_ms = 0
@@ -508,13 +583,19 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 phrase = f"{phrase}{ext_note}"
                 title += ext_note
                 detail = "\n".join(part for part in (task_note(child.body.external), detail) if part)
+            from ...ui_support.timeline import agent_state, agent_state_label
+            state = agent_state(child)
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
+                     # `idle · run 2` / `stopped by system: …`; empty for a plain running or finished child.
+                     "state": agent_state_label(child) if state in {"idle", "interrupted", "stopped"} or (state == "running" and child.runs > 1) else "",
                      "model": model, "effort": effort, "tier": tier, "metrics": "",
                      "agent_name": agent_name, "task": phrase,
                      "tool_calls": tool_calls, "external_tool_calls": _agent_card_external_tools(child), "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
                      "color": _agent_color(shell, agent_name), "operation": operation,
                      "text": "", "detail": detail, "inspect_operation": inspect}
+            if child is not None and child.route:
+                block["route"] = _agent_card_route(child.route)
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
             continue
         if tool.name.casefold() in STANDALONE_TOOLS and tool.name.casefold() not in CHANGE_TOOLS:
@@ -998,6 +1079,23 @@ def _prompt_of(view, failures: list[str]) -> dict | None:
     return prompt
 
 
+def _agent_state_blocks(agent) -> list[dict]:
+    """The labelled end-of-page state of a subagent that is not running and not plainly finished."""
+    from ...ui_support.timeline import agent_state, agent_state_label
+    state = agent_state(agent)
+    if state == "stopped":
+        by = escape_controls(agent.stopped_by or "unknown")
+        reason = escape_controls(agent.stopped_reason or "no reason recorded")
+        return [{"id": agent.id + ":state", "kind": "literal", "title": f"Subagent stopped · by {by}",
+                 "text": f"Reason: {reason}\nThe conversation log is kept; the agent cannot be continued.", "gap": 1}]
+    if state in {"idle", "interrupted"}:
+        why = ("The root can continue it with subagent_send, or close it with subagent_stop (/tasks)."
+               if state == "idle" else "The run was cut short by a daemon restart; the root can continue it with subagent_send.")
+        return [{"id": agent.id + ":state", "kind": "literal", "title": f"Subagent {agent_state_label(agent)}",
+                 "text": why, "gap": 1}]
+    return []
+
+
 def _child_turn_blocks(shell, agent, turn, flags):
     """Control-safe, hashed blocks of one subagent turn, reused until the turn changes.
 
@@ -1012,7 +1110,7 @@ def _child_turn_blocks(shell, agent, turn, flags):
     if cached and cached[0] is turn and cached[1] == turn_flags:
         return cached[3]
     _, projected = _project_turn(turn, shell, body.agents, literal=False)
-    blocks = _safe_blocks([b for b in projected if b.get("kind") != "user"])
+    blocks = _safe_blocks([b for b in projected if b.get("kind") != "user" or b.get("status") == "followup"])
     if cached:
         shell.turn_cache_bytes -= cached[4]
     size = len(json.dumps(blocks, ensure_ascii=False).encode())
@@ -1066,14 +1164,27 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         while live_cards and live_cards[0][0] <= moment:
             blocks.append({**live_cards.pop(0)[1], "gap": 1})
 
+    # `context.notice` events the reducer keeps as diagnostics (e.g. paused subagent-report
+    # delivery) draw as labelled rows placed by time among the turns, never hidden.
+    notices = [] if on_agent_page else sorted(
+        ((d.ts if d.ts is not None else 0.0, d) for d in view.diagnostics if d.type == "context.notice"
+         and isinstance(d.data, dict) and d.data.get("message")), key=lambda item: item[0])
+
+    def notices_before(moment):
+        while notices and notices[0][0] <= moment:
+            _, diagnostic = notices.pop(0)
+            title = {"subagent_wake_paused": "Subagent reports paused"}.get(str(diagnostic.data.get("kind")), "Notice")
+            blocks.append({"id": f"notice:{diagnostic.seq}", "kind": "literal", "title": title,
+                           "text": escape_controls(str(diagnostic.data.get("message"))[:600]), "gap": 1})
+
     ordinal = 0  # user-initiated turns so far (shell turns and turns without a prompt don't count)
     for turn in () if on_agent_page else view.turns:
         number = 0
-        from ...ui_support.timeline import _has_message_content
-        if turn.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in turn.messages):
+        if turn.kind != "shell" and any(_is_prompt(m) for m in turn.messages):
             ordinal += 1
             number = ordinal
         cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
+        notices_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies), number)
@@ -1105,11 +1216,13 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             turn_blocks = [first, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
     cards_before(float("inf"))
+    notices_before(float("inf"))
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
+    from ...ui_support.timeline import agent_state_label
     for agent in () if on_agent_page else view.agents.values():
         if agent.id in linked:  # shown by its Task card
             continue
-        blocks.append({"id": agent.id, "title": escape_controls(f"Agent {agent.id} · {agent.status}"), "text": escape_controls(agent.description),
+        blocks.append({"id": agent.id, "title": escape_controls(f"Agent {agent.id} · {agent_state_label(agent)}"), "text": escape_controls(agent.description),
                        "kind": "literal", "operation": {"kind": "agent_page", "id": agent.id}})
     prompt = _prompt_of(view, failures)
     if prompt is None and shell is not None and getattr(shell, "live", None) is not None:
@@ -1151,6 +1264,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "queue_items": _queue_items(view, slot_wait),
             "slot_wait": slot_wait,
             "turn_status": turn_status(view),
+            "agents_running": running_agents(view),
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
             "update_notice": "",  # announced once as a toast, never pinned to the footer
@@ -1170,6 +1284,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
             "dashboard": _dashboard_state(shell, prompt),
+            "sidebar": _sidebar_state(shell),
             "settings_page": (shell.workflows.settings_page if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "settings_overview": (shell.workflows.settings_overview if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "tabs": _tab_rows(controller, shell) if shell else [],
@@ -1245,6 +1360,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             for turn in agent.body.turns:
                 child_blocks.extend(_child_turn_blocks(shell, agent, turn, flags))
             child_blocks.extend(_safe_blocks(external_foot))
+            child_blocks.extend(_safe_blocks(_agent_state_blocks(agent)))
             from dataclasses import replace
             # The page's context meter is the child's own accounting; never the root's counters.
             child_display = _context_display_view(agent.body, child_shell)
@@ -1284,6 +1400,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
     shell.command_help = {spec.name: spec.summary for spec in SPECS if not spec.hidden}
     shell.local_transcript = not desktop
+    shell.sidebar.enabled = not desktop  # the left sidebar is a terminal feature
     shell.live.pane = not desktop  # the terminal shows the open call above the composer
     shell.ui_ack = 0
     shell.inline_images_enabled = desktop
@@ -1366,6 +1483,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             stream_turn = None
             # The streamed tail reuses the last full snapshot; the dashboard is never stale.
             snapshot["dashboard"] = _dashboard_state(shell, snapshot.get("prompt"))
+            snapshot["sidebar"] = _sidebar_state(shell)
             trace.elapsed("project", started)
             snapshot["event_sent_at"] = event_sent_at if trace.enabled else 0
             snapshot["event_kind"] = event_kind if trace.enabled else ""
@@ -1441,7 +1559,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                      shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
-                     shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines))
+                     shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines,
+                     shell.sidebar.fingerprint()))
     async def poll():
         preview_cursor = -1
         last_polled = None
@@ -1517,7 +1636,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 if shell.manager.due():
                     await shell.manager.refresh()  # failures are kept as the entry's text, never raised
             for label, work in (("Sessions", sessions), ("Branch", lambda: refresh_branch(shell)), ("Dictation", dictation),
-                                ("Health", health), ("Context", context), ("Logs", logs), ("Manager", manager)):
+                                ("Health", health), ("Context", context), ("Logs", logs), ("Manager", manager),
+                                ("Sidebar", shell.sidebar.poll)):
                 await section(label, work)
             if failures:
                 shell.notice = "; ".join(failures)
@@ -1577,7 +1697,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             async def manager():
                 await shell.manager.refresh()  # the pinned entry and the manager chat chrome
 
-            await asyncio.gather(step(breadcrumb), step(model_names), step(setup), step(manager), return_exceptions=True)
+            async def sidebar():
+                await shell.sidebar.activate()  # a sidebar left open last time is live again; closed does nothing
+
+            await asyncio.gather(step(breadcrumb), step(model_names), step(setup), step(manager), step(sidebar),
+                                 return_exceptions=True)
 
         startup_task = asyncio.create_task(finish_startup())
         poll_task = asyncio.create_task(poll())
@@ -1703,11 +1827,15 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     key = action.get("key")
                     if key in {"system", "agents", "tools", "skills", "mcp"}:
                         await shell.workflows.operate({"kind": "context_show", "key": key})
+                elif action["type"] == "sidebar":
+                    await shell.sidebar.handle(action)
                 elif action["type"] == "toggle":
                     key = action.get("key")
                     if key in {"sessions_sidebar", "details_sidebar", "context_preview"}:
                         shell.preferences.set(key, bool(action.get("value", not shell.preferences.values[key])))
                         shell.logs.open = shell.preferences.values["details_sidebar"] and shell.preferences.values["details_tab"] == "Logs"
+                        if key == "sessions_sidebar":
+                            await shell.sidebar.sync()
                 elif action["type"] == "file_toggle":
                     path = action["text"]
                     if not action.get("value", path not in shell.open_files):
@@ -1798,7 +1926,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await update()
         return await process.wait()
     finally:
-        shell.workflows.close_dashboard()
+        shell.workflows.close_dashboard(force=True)
+        for task in list(shell.sidebar.tasks):
+            task.cancel()
         await shell.manager.aclose()
         await background.close()
         await shell.preferences.flush()

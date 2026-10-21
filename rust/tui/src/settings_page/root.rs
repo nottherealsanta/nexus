@@ -71,6 +71,7 @@ fn area_desc(key: &str) -> &'static str {
         "providers" => "Sign in to model providers and see their usage.",
         "models" => "Default models, tiers and fallbacks.",
         "voice" => "Local speech and dictation.",
+        "live" => "GPT Live voice calls: voice, limits and instructions.",
         "agents" => "Build, advisor, task and quick agents and their models.",
         "tools" => "Python tools the agent can call.",
         "mcp" => "External tools connected through MCP servers.",

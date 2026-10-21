@@ -7,7 +7,9 @@ mod editor;
 mod graphics;
 mod input;
 mod jump;
+mod live_anim;
 mod live_bar;
+mod live_wave;
 mod local_ui;
 mod markdown;
 mod mermaid;
@@ -16,6 +18,7 @@ mod picker;
 mod render;
 mod session;
 mod settings_page;
+mod sidebar;
 mod splash;
 mod sticky;
 mod trace;
@@ -666,6 +669,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 details_index = 0;
             }
             next.last_opened = s.last_opened.clone();
+            // The host asks for sidebar focus by bumping a counter (`/sessions`, Ctrl+B); a
+            // divider drag in flight keeps its width until the button is released.
+            if next.sidebar.open && next.sidebar.focus != s.sidebar.focus {
+                cache.sidebar.focus = true;
+            }
+            if cache.sidebar.dragging {
+                next.sidebar.width = s.sidebar.width;
+            }
             next.queue_collapsed = s.queue_collapsed;
             next.live_expanded = s.live_expanded && next.live.active;
             // The completion cue is played by the Python shell
@@ -686,6 +697,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             // The dashboard's working rows spin.
             animating = render::animating(&s)
+                || sidebar::animating(&s)
                 || s.dashboard.as_ref().is_some_and(|dashboard| {
                     dashboard["rows"].as_array().is_some_and(|rows| {
                         // Working rows spin; a Needs you row's "waiting mm:ss" ticks.
@@ -750,6 +762,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         dirty |= cache.component_hover.needs_redraw(Instant::now());
+        cache.sidebar.sync(&s);
         // Local dashboard view state lives only while the host shows the dashboard.
         if s.dashboard.is_none() {
             cache.dashboard = picker::Dashboard::default();
@@ -949,7 +962,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // a continuous wheel or pointer stream keeps `poll` returning true, which
         // used to freeze the spinner and activity bar while scrolling.
         // A finished tool group settling is an animation too; it ends by itself.
-        let folding = cache.folding() || cache.queue_flash.live(Instant::now(), cache.animate);
+        // The Live panel opening or closing under the composer: each pass sets the rows revealed
+        // so far and asks for frames only until the motion (and its settled frame) is drawn.
+        let live_moving = cache.live_anim.apply(&mut s, Instant::now(), cache.animate);
+        let folding = cache.folding()
+            || cache.queue_flash.live(Instant::now(), cache.animate)
+            || live_moving;
         if folding {
             dirty = true;
         }
@@ -957,7 +975,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let elapsed = spin_clock.elapsed();
             let frame = (elapsed.as_nanos() * 30 / 1_000_000_000) as usize;
             if (frame != cache.activity_frame
-                && matches!(s.status.as_str(), "running" | "active" | "working"))
+                && (matches!(s.status.as_str(), "running" | "active" | "working")
+                    // The Live motion band wants smooth frames only while the call moves.
+                    || (cache.animate && live_wave::wants_frames(&s.live))))
                 || (elapsed.as_millis() / 125) as usize != cache.spin
             {
                 cache.activity_frame = frame;
@@ -1057,6 +1077,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         action("quit", "")?;
                         break 'app;
+                    }
+                    // The left sidebar owns the keys while it has focus; a key it does not
+                    // want (typing, composer shortcuts) falls through to the composer.
+                    if cache.sidebar.focus
+                        && drawn_regions.sidebar.width > 0
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
+                    {
+                        let out = cache.sidebar.key(key, &s, draft.text.is_empty());
+                        if let Some(operation) = out.operation {
+                            send(
+                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                            )?;
+                        }
+                        if let Some(message) = out.action {
+                            send(message)?;
+                        }
+                        if out.consumed {
+                            dirty = true;
+                            continue;
+                        }
                     }
                     // The Sessions dashboard has no composer. Search, rename and archive
                     // confirmation own every key; otherwise the list shortcuts apply and any
@@ -1924,6 +1966,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+B toggles the left sidebar when the host owns one.
+                        if key.code == KeyCode::Char('b') && s.sidebar.available {
+                            send(json!({"type":"sidebar","op":"toggle"}))?;
+                            continue;
+                        }
                         // Ctrl+S, Ctrl+O and Ctrl+B open the Sessions dashboard;
                         // Settings stays on Ctrl+X S.
                         let command = match key.code {
@@ -2142,6 +2189,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     dirty = true;
                 }
                 Event::Mouse(mouse) => {
+                    // The left sidebar owns clicks, hover, the wheel and its divider drag over
+                    // its column; everything else falls through to the conversation below.
+                    if s.sidebar.available
+                        && (drawn_regions.sidebar.width > 0 || cache.sidebar.dragging)
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
+                    {
+                        let size = terminal.size()?;
+                        let available = render::sidebar_available(
+                            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                            &s,
+                        );
+                        let out = cache
+                            .sidebar
+                            .mouse(mouse, &s, drawn_regions.sidebar, available);
+                        if let Some(width) = out.width {
+                            s.sidebar.width = width;
+                        }
+                        if let Some(mut operation) = out.operation {
+                            take_new_session_text(&mut operation, &mut draft);
+                            send(
+                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                            )?;
+                        }
+                        if let Some(message) = out.action {
+                            send(message)?;
+                        }
+                        if out.consumed {
+                            cache.pointer = Some((mouse.column, mouse.row));
+                            dirty = true;
+                            continue;
+                        }
+                    }
                     // The Sessions dashboard owns clicks, hover and the wheel over its region.
                     // The composer below that region is unchanged.
                     let dashboard_open = s.dashboard.is_some()
@@ -2952,11 +3033,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     Some(render::TabHit::New) => action("command", "/new")?,
-                                    // `◇` toggles the Manager view (not a tab).
+                                    // `▣` toggles the Manager view (not a tab).
                                     Some(render::TabHit::Manager) => action("manager_toggle", "")?,
-                                    // `≡` is `/sessions`.
+                                    // `▤` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
-                                        action("command", "/sessions")?
+                                        if s.sidebar.available {
+                                            send(json!({"type":"sidebar","op":"toggle"}))?;
+                                        } else {
+                                            action("command", "/sessions")?
+                                        }
                                     }
                                     Some(render::TabHit::Notifications) => {
                                         cache.toasts.notes.open(Instant::now());

@@ -1,0 +1,1858 @@
+//! Left sidebar: Projects, Sessions, Files and Git tabs beside the conversation.
+//!
+//! Python owns every datum (`nexus/ui/ratatui/sidebar.py`) and sends it in the `sidebar`
+//! snapshot block; this module only places, paints and hit-tests it, and turns keys and
+//! clicks into `{"type":"sidebar",...}` actions or Sessions-dashboard operations. It never
+//! reads the filesystem or runs Git. The Sessions tab reuses `picker::Dashboard` for
+//! filtering, selection, rename and archive confirmation. Painting records the geometry
+//! (tab cells, list rows, divider) that mouse handling uses, so both share one layout.
+use crate::bridge::Snapshot;
+use crate::picker::{self, Dashboard};
+use crate::render::Palette;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::{
+    layout::{Position, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
+    Frame,
+};
+use serde_json::{json, Value};
+use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
+
+pub const TABS: [&str; 4] = ["Projects", "Sessions", "Files", "Git"];
+/// Mirrors `nexus/ui_support/sidebar.py` (pinned by `tests/test_ratatui_sidebar.py`).
+pub const MIN_WIDTH: u16 = 24;
+pub const MAX_WIDTH: u16 = 60;
+pub const DEFAULT_WIDTH: u16 = 34;
+/// The conversation never gets narrower than this because of the sidebar.
+pub const MIN_CONVERSATION: u16 = 56;
+
+const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A stored or dragged width, bounded to `MIN_WIDTH..=MAX_WIDTH` (0 means "not set").
+pub fn clamp_width(width: u16) -> u16 {
+    if width == 0 {
+        DEFAULT_WIDTH
+    } else {
+        width.clamp(MIN_WIDTH, MAX_WIDTH)
+    }
+}
+
+/// Columns the sidebar takes out of `available` (the columns left of the details sidebar):
+/// 0 while closed, or when the conversation would drop below `MIN_CONVERSATION`.
+pub fn width_for(s: &Snapshot, available: u16) -> u16 {
+    if !s.sidebar.open {
+        return 0;
+    }
+    let room = available.saturating_sub(MIN_CONVERSATION);
+    let width = clamp_width(s.sidebar.width).min(room);
+    if width < MIN_WIDTH {
+        0
+    } else {
+        width
+    }
+}
+
+/// The widest the sidebar may be dragged given `available` columns.
+pub fn max_width(available: u16) -> u16 {
+    available
+        .saturating_sub(MIN_CONVERSATION)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+}
+
+/// The width a drag to terminal `column` asks for (the divider sits on the last column).
+pub fn width_at(column: u16, area: Rect, available: u16) -> u16 {
+    column
+        .saturating_sub(area.x)
+        .saturating_add(1)
+        .clamp(MIN_WIDTH, max_width(available))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabCell {
+    pub tab: usize,
+    pub row: u16,
+    pub x: u16,
+    pub width: u16,
+}
+
+/// Tab labels (` Label `, one column apart) wrapped onto as many rows as the width needs.
+/// Painting and hit-testing both read this, so a click lands on what is drawn.
+pub fn tab_cells(inner: u16) -> (Vec<TabCell>, u16) {
+    let mut cells = Vec::new();
+    let (mut x, mut row) = (0u16, 0u16);
+    for (tab, label) in TABS.iter().enumerate() {
+        let width = label.width() as u16 + 2;
+        if x > 0 && x.saturating_add(width) > inner {
+            row += 1;
+            x = 0;
+        }
+        cells.push(TabCell {
+            tab,
+            row,
+            x,
+            width: width.min(inner.saturating_sub(x)),
+        });
+        x = x.saturating_add(width + 1);
+    }
+    (cells, row + 1)
+}
+
+fn tab_index(s: &Snapshot) -> usize {
+    TABS.iter()
+        .position(|tab| *tab == s.sidebar.tab)
+        .unwrap_or(1)
+}
+
+fn act(op: &str) -> Value {
+    json!({"type":"sidebar","op":op})
+}
+
+fn tab_message(tab: &str) -> Value {
+    json!({"type":"sidebar","op":"tab","tab":tab})
+}
+
+/// What an input event did: whether the sidebar consumed it, a bridge action to send, a
+/// Sessions-dashboard operation to send (with the generation) and a width to show right now.
+#[derive(Default)]
+pub struct Out {
+    pub consumed: bool,
+    pub action: Option<Value>,
+    pub operation: Option<Value>,
+    pub width: Option<u16>,
+}
+
+impl Out {
+    fn eat() -> Self {
+        Self {
+            consumed: true,
+            ..Self::default()
+        }
+    }
+    fn action(value: Value) -> Self {
+        Self {
+            consumed: true,
+            action: Some(value),
+            ..Self::default()
+        }
+    }
+    fn operation(value: Value) -> Self {
+        Self {
+            consumed: true,
+            operation: Some(value),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SidebarUi {
+    /// Keys go to the sidebar first (set by `/sessions`, Ctrl+B or a click; Esc leaves).
+    pub focus: bool,
+    /// The divider is being dragged.
+    pub dragging: bool,
+    divider_hot: bool,
+    /// The Sessions tab's presentation state (query, selection, rename, archive confirmation).
+    pub dash: Dashboard,
+    divider: Rect,
+    tab_hits: Vec<(Rect, usize)>,
+    list: Rect,
+    line_items: Vec<Option<usize>>,
+    collapsed: HashSet<String>,
+    proj_sel: usize,
+    proj_top: usize,
+    file_sel: usize,
+    file_top: usize,
+    file_path: String,
+    git_top: usize,
+}
+
+fn rows_of(value: &Value) -> &[Value] {
+    value
+        .get("rows")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+    picker::text(value, key)
+}
+
+fn flag(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool) == Some(true)
+}
+
+fn fit(value: &str, width: usize) -> String {
+    if value.width() <= width {
+        return value.to_owned();
+    }
+    let mut out = String::new();
+    for c in value.chars() {
+        if out.width() + 1 >= width {
+            break;
+        }
+        out.push(c);
+    }
+    if width > 0 {
+        out.push('…');
+    }
+    out
+}
+
+/// Whether anything in the open sidebar animates (working rows spin, waits tick).
+pub fn animating(s: &Snapshot) -> bool {
+    if !s.sidebar.open {
+        return false;
+    }
+    let sessions = s.sidebar.sessions.as_ref().is_some_and(|dashboard| {
+        rows_of(dashboard)
+            .iter()
+            .any(|row| text(row, "status") == "working" || picker::pending(row).is_some())
+    });
+    let projects = rows_of(&s.sidebar.projects)
+        .iter()
+        .any(|row| row.get("rank").and_then(Value::as_u64) == Some(1));
+    sessions || projects
+}
+
+/// One list line: `prefix`, the truncated `main` text, then `right` flush right (dropped when
+/// there is no room). `bg` fills the whole line; `bar` replaces the first column with the
+/// focus bar so a selection survives monochrome.
+#[allow(clippy::too_many_arguments)]
+fn row_line(
+    mut prefix: Vec<Span<'static>>,
+    main: &str,
+    main_style: Style,
+    right: &str,
+    right_style: Style,
+    width: usize,
+    bg: Option<Color>,
+    bar: bool,
+) -> Line<'static> {
+    let prefix_width: usize = prefix.iter().map(|span| span.content.width()).sum();
+    let right = if !right.is_empty() && prefix_width + right.width() + 1 < width {
+        right
+    } else {
+        ""
+    };
+    let reserved = if right.is_empty() {
+        0
+    } else {
+        right.width() + 1
+    };
+    let main = fit(main, width.saturating_sub(prefix_width + reserved));
+    let used = prefix_width + main.width() + right.width();
+    if bar {
+        if let Some(first) = prefix.first_mut() {
+            *first = Span::styled(
+                nexus_widgets::Glyphs::from_env().focus_bar,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+        }
+    }
+    let mut spans = prefix;
+    spans.push(Span::styled(main, main_style));
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    if !right.is_empty() {
+        spans.push(Span::styled(right.to_owned(), right_style));
+    }
+    if let Some(bg) = bg {
+        for span in &mut spans {
+            span.style = span.style.bg(bg);
+        }
+    }
+    Line::from(spans)
+}
+
+/// The status mark of a project or session row: needs-you, working (spinner), idle.
+fn mark(rank: u64, spin: usize, p: &Palette) -> Span<'static> {
+    let ascii = nexus_widgets::Glyphs::from_env().ascii;
+    match rank {
+        0 => Span::styled(
+            if ascii { "!" } else { "◆" },
+            Style::default().fg(p.warning),
+        ),
+        1 => {
+            let frame = if ascii {
+                let frames = nexus_widgets::Glyphs::ascii().spinner;
+                frames[spin % frames.len()]
+            } else {
+                SPIN[spin % SPIN.len()]
+            };
+            Span::styled(frame, Style::default().fg(p.purple))
+        }
+        _ => Span::styled(if ascii { "o" } else { "◇" }, Style::default().fg(p.quiet)),
+    }
+}
+
+fn session_rank(row: &Value) -> u64 {
+    match text(row, "status") {
+        "input" => 0,
+        "working" => 1,
+        _ => 2,
+    }
+}
+
+/// Moves `sel` for a navigation key over `len` items; false when `code` is not one.
+fn move_selection(sel: &mut usize, len: usize, code: KeyCode) -> bool {
+    let nav = matches!(
+        code,
+        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+    );
+    if !nav || len == 0 {
+        return nav;
+    }
+    *sel = (*sel).min(len - 1);
+    match code {
+        KeyCode::Up => *sel = sel.saturating_sub(1),
+        KeyCode::Down => *sel = (*sel + 1).min(len - 1),
+        KeyCode::PageUp => *sel = sel.saturating_sub(10),
+        KeyCode::PageDown => *sel = (*sel + 10).min(len - 1),
+        KeyCode::Home => *sel = 0,
+        _ => *sel = len - 1,
+    }
+    true
+}
+
+impl SidebarUi {
+    /// Called every loop: local state lives only while the host shows the sidebar.
+    pub fn sync(&mut self, s: &Snapshot) {
+        if !s.sidebar.open {
+            if self.focus || self.dragging {
+                self.focus = false;
+                self.dragging = false;
+            }
+            if self.dash.selected_id.is_empty() && self.dash.query.is_empty() {
+                return;
+            }
+            self.dash = Dashboard::default();
+        } else if s.sidebar.sessions.is_none() {
+            self.dash = Dashboard::default();
+        }
+    }
+
+    /// Projects shown now: checkouts under a collapsed project are hidden.
+    fn visible_projects<'a>(&self, s: &'a Snapshot) -> Vec<&'a Value> {
+        rows_of(&s.sidebar.projects)
+            .iter()
+            .filter(|row| {
+                !(text(row, "kind") == "checkout" && self.collapsed.contains(text(row, "parent")))
+            })
+            .collect()
+    }
+
+    // ----- keys -----------------------------------------------------------------------
+
+    /// One key while the sidebar has focus. `draft_empty` lets the Sessions list own letters
+    /// only when the composer has nothing to type into.
+    pub fn key(&mut self, key: KeyEvent, s: &Snapshot, draft_empty: bool) -> Out {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if control && key.code == KeyCode::Char('b') {
+            return Out::action(act("toggle"));
+        }
+        let tab = s.sidebar.tab.as_str();
+        let editing = tab == "Sessions"
+            && (self.dash.searching
+                || self.dash.rename.is_some()
+                || self.dash.confirm_archive.is_some());
+        if !editing {
+            match key.code {
+                KeyCode::Tab => {
+                    return Out::action(tab_message(TABS[(tab_index(s) + 1) % TABS.len()]))
+                }
+                KeyCode::BackTab => {
+                    return Out::action(tab_message(
+                        TABS[(tab_index(s) + TABS.len() - 1) % TABS.len()],
+                    ))
+                }
+                KeyCode::Esc if !(tab == "Sessions" && !self.dash.query.is_empty()) => {
+                    self.focus = false;
+                    return Out::eat();
+                }
+                _ => {}
+            }
+        }
+        match tab {
+            "Projects" => self.projects_key(key, s),
+            "Files" => self.files_key(key, s),
+            "Git" => self.git_key(key),
+            _ => {
+                let Some(dashboard) = s.sidebar.sessions.as_ref() else {
+                    return self.unowned(&key);
+                };
+                if self.dash.owns(&key, draft_empty) {
+                    return match self.dash.key(key, dashboard) {
+                        Some(operation) => Out::operation(operation),
+                        None => Out::eat(),
+                    };
+                }
+                self.unowned(&key)
+            }
+        }
+    }
+
+    /// A key no tab wants: typing hands focus back to the composer and falls through to it.
+    fn unowned(&mut self, key: &KeyEvent) -> Out {
+        if let KeyCode::Char(_) = key.code {
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                self.focus = false;
+            }
+        }
+        Out::default()
+    }
+
+    fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
+        let rows = self.visible_projects(s);
+        if move_selection(&mut self.proj_sel, rows.len(), key.code) {
+            return Out::eat();
+        }
+        let row = rows.get(self.proj_sel).copied();
+        match key.code {
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match row {
+                Some(row) => self.activate_project(row),
+                None => Out::eat(),
+            },
+            KeyCode::Left => {
+                if let Some(row) = row {
+                    if text(row, "kind") == "checkout" {
+                        let parent = text(row, "parent");
+                        if let Some(at) = rows.iter().position(|r| text(r, "key") == parent) {
+                            self.proj_sel = at;
+                        }
+                    } else if flag(row, "expandable") {
+                        self.collapsed.insert(text(row, "key").to_owned());
+                    }
+                }
+                Out::eat()
+            }
+            KeyCode::Char('r') if key.modifiers.is_empty() => Out::action(act("refresh")),
+            _ => self.unowned(&key),
+        }
+    }
+
+    /// Enter or a click on a project row: fold it, or open its newest session.
+    fn activate_project(&mut self, row: &Value) -> Out {
+        let key = text(row, "key");
+        if flag(row, "expandable") {
+            if !self.collapsed.remove(key) {
+                self.collapsed.insert(key.to_owned());
+            }
+            return Out::eat();
+        }
+        let (workspace, session) = (text(row, "workspace"), text(row, "session"));
+        if workspace.is_empty() || session.is_empty() {
+            return Out::eat();
+        }
+        Out::action(
+            json!({"type":"sidebar","op":"open_session","workspace":workspace,"session":session}),
+        )
+    }
+
+    fn files_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
+        let rows = rows_of(&s.sidebar.files);
+        if move_selection(&mut self.file_sel, rows.len(), key.code) {
+            return Out::eat();
+        }
+        match key.code {
+            KeyCode::Enter | KeyCode::Right => match rows.get(self.file_sel) {
+                Some(row) => self.open_directory(row),
+                None => Out::eat(),
+            },
+            KeyCode::Left | KeyCode::Backspace => {
+                match rows.iter().find(|row| text(row, "kind") == "up") {
+                    Some(row) => self.open_directory(row),
+                    None => Out::eat(),
+                }
+            }
+            KeyCode::Char('r') if key.modifiers.is_empty() => Out::action(act("refresh")),
+            _ => self.unowned(&key),
+        }
+    }
+
+    /// Opens a listed folder (or the parent row); files and links do nothing.
+    fn open_directory(&mut self, row: &Value) -> Out {
+        if matches!(text(row, "kind"), "dir" | "up") {
+            return Out::action(
+                json!({"type":"sidebar","op":"dir","path":text(row, "path")}),
+            );
+        }
+        Out::eat()
+    }
+
+    fn git_key(&mut self, key: KeyEvent) -> Out {
+        match key.code {
+            KeyCode::Up => self.git_top = self.git_top.saturating_sub(1),
+            KeyCode::Down => self.git_top += 1,
+            KeyCode::PageUp => self.git_top = self.git_top.saturating_sub(10),
+            KeyCode::PageDown => self.git_top += 10,
+            KeyCode::Home => self.git_top = 0,
+            KeyCode::End => self.git_top = usize::MAX / 2,
+            KeyCode::Char('r') if key.modifiers.is_empty() => {
+                return Out::action(act("refresh"))
+            }
+            _ => return self.unowned(&key),
+        }
+        Out::eat()
+    }
+
+    // ----- mouse ----------------------------------------------------------------------
+
+    /// One mouse event. `area` is the sidebar column of the last frame and `available` the
+    /// columns it may share with the conversation (for the drag bound).
+    pub fn mouse(&mut self, ev: MouseEvent, s: &Snapshot, area: Rect, available: u16) -> Out {
+        let at = Position::new(ev.column, ev.row);
+        if self.dragging {
+            match ev.kind {
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved => {
+                    return Out {
+                        consumed: true,
+                        width: Some(width_at(ev.column, area, available)),
+                        ..Out::default()
+                    };
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.dragging = false;
+                    let width = width_at(ev.column, area, available);
+                    return Out {
+                        consumed: true,
+                        width: Some(width),
+                        action: Some(json!({"type":"sidebar","op":"width","width":width})),
+                        ..Out::default()
+                    };
+                }
+                _ => {}
+            }
+        }
+        let hot = self.divider.contains(at);
+        let changed = hot != self.divider_hot;
+        self.divider_hot = hot;
+        if !area.contains(at) {
+            if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.focus = false;
+            }
+            if !self.dash.hovered_id.is_empty() {
+                self.dash.leave();
+            }
+            return if changed { Out::eat() } else { Out::default() };
+        }
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.focus = true;
+                if hot {
+                    self.dragging = true;
+                    return Out::eat();
+                }
+                if let Some((_, tab)) = self.tab_hits.iter().find(|(rect, _)| rect.contains(at)) {
+                    return Out::action(tab_message(TABS[*tab]));
+                }
+                self.click(ev, s)
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.wheel(matches!(ev.kind, MouseEventKind::ScrollDown), ev, s)
+            }
+            MouseEventKind::Moved => {
+                if s.sidebar.tab == "Sessions" {
+                    if let Some(dashboard) = s.sidebar.sessions.as_ref() {
+                        self.dash.hover(ev.column, ev.row, dashboard);
+                    }
+                }
+                Out::eat()
+            }
+            _ => Out::eat(),
+        }
+    }
+
+    fn list_row_at(&self, x: u16, y: u16) -> Option<usize> {
+        if !self.list.contains(Position::new(x, y)) {
+            return None;
+        }
+        self.line_items
+            .get(usize::from(y - self.list.y))
+            .copied()
+            .flatten()
+    }
+
+    fn click(&mut self, ev: MouseEvent, s: &Snapshot) -> Out {
+        match s.sidebar.tab.as_str() {
+            "Projects" => {
+                if let Some(index) = self.list_row_at(ev.column, ev.row) {
+                    self.proj_sel = index;
+                    let rows = self.visible_projects(s);
+                    if let Some(row) = rows.get(index).copied() {
+                        return self.activate_project(row);
+                    }
+                }
+                Out::eat()
+            }
+            "Files" => {
+                if let Some(index) = self.list_row_at(ev.column, ev.row) {
+                    self.file_sel = index;
+                    if let Some(row) = rows_of(&s.sidebar.files).get(index) {
+                        return self.open_directory(row);
+                    }
+                }
+                Out::eat()
+            }
+            "Git" => Out::eat(),
+            _ => match s.sidebar.sessions.as_ref() {
+                Some(dashboard) => match self.dash.click(ev.column, ev.row, dashboard) {
+                    Some(operation) => Out::operation(operation),
+                    None => Out::eat(),
+                },
+                None => Out::eat(),
+            },
+        }
+    }
+
+    fn wheel(&mut self, down: bool, ev: MouseEvent, s: &Snapshot) -> Out {
+        match s.sidebar.tab.as_str() {
+            "Projects" => {
+                let len = self.visible_projects(s).len();
+                self.proj_sel = Self::scrolled(self.proj_sel, len, down);
+            }
+            "Files" => {
+                self.file_sel = Self::scrolled(self.file_sel, rows_of(&s.sidebar.files).len(), down);
+            }
+            "Git" => {
+                self.git_top = if down {
+                    self.git_top + 3
+                } else {
+                    self.git_top.saturating_sub(3)
+                };
+            }
+            _ => {
+                if let Some(dashboard) = s.sidebar.sessions.as_ref() {
+                    self.dash.wheel(ev.column, ev.row, down, dashboard);
+                }
+            }
+        }
+        Out::eat()
+    }
+
+    fn scrolled(sel: usize, len: usize, down: bool) -> usize {
+        if len == 0 {
+            0
+        } else if down {
+            (sel + 3).min(len - 1)
+        } else {
+            sel.saturating_sub(3)
+        }
+    }
+
+    // ----- drawing --------------------------------------------------------------------
+
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        s: &Snapshot,
+        p: &Palette,
+        spin: usize,
+        mono: bool,
+    ) {
+        self.divider = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
+        self.tab_hits.clear();
+        self.list = Rect::default();
+        self.line_items.clear();
+        frame.render_widget(Clear, area);
+        let edge = if self.dragging || self.divider_hot {
+            p.accent
+        } else {
+            p.border_strong
+        };
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::RIGHT)
+                .border_style(Style::default().fg(edge))
+                .style(Style::default().bg(p.panel)),
+            area,
+        );
+        let inner = Rect {
+            x: area.x + 1,
+            y: area.y,
+            width: area.width.saturating_sub(2),
+            height: area.height,
+        };
+        if inner.width < 8 || inner.height < 6 {
+            return;
+        }
+        let (cells, rows) = tab_cells(inner.width);
+        let active = tab_index(s);
+        for cell in &cells {
+            let rect = Rect::new(
+                inner.x + cell.x,
+                inner.y + 1 + cell.row,
+                cell.width,
+                1,
+            );
+            let style = if cell.tab == active {
+                let mut style = Style::default()
+                    .fg(p.text)
+                    .bg(p.element)
+                    .add_modifier(Modifier::BOLD);
+                if mono {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
+                style
+            } else {
+                Style::default().fg(p.muted)
+            };
+            frame.render_widget(
+                Paragraph::new(Span::styled(format!(" {} ", TABS[cell.tab]), style)),
+                rect,
+            );
+            self.tab_hits.push((rect, cell.tab));
+        }
+        let rule_y = inner.y + 1 + rows;
+        let body_y = rule_y + 1;
+        let footer_y = area.bottom().saturating_sub(1);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                "─".repeat(usize::from(inner.width)),
+                Style::default().fg(p.border),
+            )),
+            Rect::new(inner.x, rule_y, inner.width, 1),
+        );
+        let hint = self.hint(s);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                fit(hint, usize::from(inner.width)),
+                Style::default().fg(p.quiet),
+            )),
+            Rect::new(inner.x, footer_y, inner.width, 1),
+        );
+        if footer_y <= body_y {
+            return;
+        }
+        let body = Rect::new(inner.x, body_y, inner.width, footer_y - body_y);
+        match s.sidebar.tab.as_str() {
+            "Projects" => self.draw_projects(frame, body, s, p, spin, mono),
+            "Files" => self.draw_files(frame, body, s, p, mono),
+            "Git" => self.draw_git(frame, body, s, p),
+            _ => self.draw_sessions(frame, body, s, p, spin, mono),
+        }
+    }
+
+    fn hint(&self, s: &Snapshot) -> &'static str {
+        if !self.focus {
+            return "Click to focus · Ctrl+B hides";
+        }
+        match s.sidebar.tab.as_str() {
+            "Projects" => "↑↓ move · Enter open/fold · Tab tab · Esc back",
+            "Files" => "↑↓ move · Enter open · ← up · r refresh · Esc back",
+            "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
+            _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
+        }
+    }
+
+    fn note(frame: &mut Frame, body: Rect, message: &str, style: Style) {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                fit(message, usize::from(body.width)),
+                style,
+            )),
+            Rect::new(body.x, body.y, body.width, 1),
+        );
+    }
+
+    /// Scrolls `lines` so the selected line shows, paints the window and records the rows.
+    fn paint_list(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        lines: Vec<(Line<'static>, Option<usize>)>,
+        selected: Option<usize>,
+        top: usize,
+    ) -> usize {
+        let height = usize::from(body.height).max(1);
+        let mut top = top.min(lines.len().saturating_sub(height));
+        if let Some(line) = selected {
+            if line < top {
+                top = line;
+            } else if line >= top + height {
+                top = line + 1 - height;
+            }
+        }
+        let visible: Vec<_> = lines.into_iter().skip(top).take(height).collect();
+        self.list = body;
+        self.line_items = visible.iter().map(|(_, item)| *item).collect();
+        frame.render_widget(
+            Paragraph::new(visible.into_iter().map(|(line, _)| line).collect::<Vec<_>>()),
+            body,
+        );
+        top
+    }
+
+    fn draw_projects(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        s: &Snapshot,
+        p: &Palette,
+        spin: usize,
+        mono: bool,
+    ) {
+        let data = &s.sidebar.projects;
+        let quiet = Style::default().fg(p.quiet);
+        let rows = self.visible_projects(s);
+        let error = text(data, "error");
+        if rows.is_empty() {
+            let (message, style) = if !error.is_empty() {
+                (format!("Error: {error}"), Style::default().fg(p.error))
+            } else if flag(data, "loaded") {
+                ("No projects yet · start a session".to_owned(), quiet)
+            } else {
+                ("Loading projects…".to_owned(), quiet)
+            };
+            Self::note(frame, body, &message, style);
+            return;
+        }
+        self.proj_sel = self.proj_sel.min(rows.len() - 1);
+        let width = usize::from(body.width);
+        let glyphs = nexus_widgets::Glyphs::from_env();
+        let mut lines: Vec<(Line<'static>, Option<usize>)> = Vec::new();
+        if !error.is_empty() {
+            lines.push((
+                Line::styled(
+                    fit(&format!("Error: {error}"), width),
+                    Style::default().fg(p.error),
+                ),
+                None,
+            ));
+        }
+        let mut selected_line = None;
+        for (index, row) in rows.iter().enumerate() {
+            let is_selected = index == self.proj_sel;
+            let depth = row.get("depth").and_then(Value::as_u64).unwrap_or(0);
+            let status = mark(row.get("rank").and_then(Value::as_u64).unwrap_or(2), spin, p);
+            let mut prefix = Vec::new();
+            if depth == 0 {
+                let chevron = if !flag(row, "expandable") {
+                    "  "
+                } else if self.collapsed.contains(text(row, "key")) {
+                    glyphs.closed
+                } else {
+                    glyphs.open
+                };
+                prefix.push(Span::styled(
+                    format!("{chevron:<2}"),
+                    Style::default().fg(p.muted),
+                ));
+            } else {
+                prefix.push(Span::raw("   "));
+            }
+            prefix.push(status);
+            prefix.push(Span::raw(" "));
+            let current = flag(row, "current");
+            let main_style = if current {
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
+            } else if depth == 0 {
+                Style::default().fg(p.text)
+            } else {
+                Style::default().fg(p.muted)
+            };
+            let count = row.get("count").and_then(Value::as_u64).unwrap_or(0);
+            let age = text(row, "age");
+            let right = if age.is_empty() {
+                count.to_string()
+            } else {
+                format!("{count} · {age}")
+            };
+            let bg = if is_selected { Some(p.element) } else { None };
+            if is_selected {
+                selected_line = Some(lines.len());
+            }
+            lines.push((
+                row_line(
+                    prefix,
+                    text(row, "label"),
+                    main_style,
+                    &right,
+                    quiet,
+                    width,
+                    bg,
+                    mono && is_selected,
+                ),
+                Some(index),
+            ));
+        }
+        if flag(data, "truncated") {
+            lines.push((Line::styled("… older sessions not listed", quiet), None));
+        }
+        let top = self.paint_list(frame, body, lines, selected_line, self.proj_top);
+        self.proj_top = top;
+    }
+
+    fn draw_files(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette, mono: bool) {
+        let data = &s.sidebar.files;
+        let quiet = Style::default().fg(p.quiet);
+        let rows = rows_of(data);
+        let error = text(data, "error");
+        if rows.is_empty() && !flag(data, "loaded") {
+            Self::note(frame, body, "Loading files…", quiet);
+            return;
+        }
+        if text(data, "path") != self.file_path {
+            self.file_path = text(data, "path").to_owned();
+            self.file_sel = 0;
+            self.file_top = 0;
+        }
+        let width = usize::from(body.width);
+        let glyphs = nexus_widgets::Glyphs::from_env();
+        let mut lines: Vec<(Line<'static>, Option<usize>)> = vec![(
+            Line::styled(
+                fit(text(data, "label"), width),
+                Style::default().fg(p.muted),
+            ),
+            None,
+        )];
+        if !error.is_empty() {
+            lines.push((
+                Line::styled(
+                    fit(&format!("Error: {error}"), width),
+                    Style::default().fg(p.error),
+                ),
+                None,
+            ));
+        }
+        if rows.is_empty() && error.is_empty() {
+            lines.push((Line::styled("Empty folder", quiet), None));
+        }
+        self.file_sel = self.file_sel.min(rows.len().saturating_sub(1));
+        let mut selected_line = None;
+        for (index, row) in rows.iter().enumerate() {
+            let is_selected = index == self.file_sel;
+            let (marker, main_style) = match text(row, "kind") {
+                "up" => ("↑ ".to_owned(), Style::default().fg(p.muted)),
+                "dir" => (format!("{} ", glyphs.closed), Style::default().fg(p.text)),
+                "link" => ("↪ ".to_owned(), quiet),
+                _ => ("  ".to_owned(), Style::default().fg(p.muted)),
+            };
+            let name = if text(row, "kind") == "dir" {
+                format!("{}/", text(row, "name"))
+            } else {
+                text(row, "name").to_owned()
+            };
+            let bg = if is_selected { Some(p.element) } else { None };
+            if is_selected {
+                selected_line = Some(lines.len());
+            }
+            lines.push((
+                row_line(
+                    vec![Span::styled(marker, Style::default().fg(p.accent))],
+                    &name,
+                    main_style,
+                    text(row, "size"),
+                    quiet,
+                    width,
+                    bg,
+                    mono && is_selected,
+                ),
+                Some(index),
+            ));
+        }
+        if flag(data, "truncated") {
+            lines.push((Line::styled("… more entries not shown", quiet), None));
+        }
+        let top = self.paint_list(frame, body, lines, selected_line, self.file_top);
+        self.file_top = top;
+    }
+
+    fn draw_git(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette) {
+        let data = &s.sidebar.git;
+        let quiet = Style::default().fg(p.quiet);
+        if !flag(data, "loaded") {
+            Self::note(frame, body, "Loading status…", quiet);
+            return;
+        }
+        let width = usize::from(body.width);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let error = text(data, "error");
+        if !error.is_empty() {
+            lines.push(Line::styled(
+                fit(&format!("Error: {error}"), width),
+                Style::default().fg(p.error),
+            ));
+        }
+        if !flag(data, "available") {
+            let message = text(data, "message");
+            lines.push(Line::styled(
+                fit(
+                    if message.is_empty() {
+                        "Git status is unavailable"
+                    } else {
+                        message
+                    },
+                    width,
+                ),
+                Style::default().fg(p.muted),
+            ));
+        } else {
+            lines.push(Line::styled(
+                fit(text(data, "summary"), width),
+                Style::default().fg(p.text),
+            ));
+            if rows_of(data).is_empty() {
+                lines.push(Line::styled(fit(text(data, "message"), width), quiet));
+            }
+            lines.push(Line::raw(""));
+            for row in rows_of(data) {
+                if text(row, "kind") == "heading" {
+                    lines.push(Line::styled(
+                        fit(text(row, "text"), width),
+                        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+                    ));
+                    continue;
+                }
+                let tone = match text(row, "code") {
+                    "A" => p.success,
+                    "M" | "T" | "R" | "C" => p.warning,
+                    "D" | "U" => p.error,
+                    _ => p.quiet,
+                };
+                let label = format!("{:<10}", text(row, "label"));
+                let room = width.saturating_sub(label.width() + 1);
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(tone)),
+                    Span::raw(" "),
+                    Span::styled(
+                        fit(text(row, "path"), room),
+                        Style::default().fg(p.text),
+                    ),
+                ]));
+            }
+            if flag(data, "truncated") {
+                lines.push(Line::styled("… more changes not shown", quiet));
+            }
+        }
+        let height = usize::from(body.height).max(1);
+        self.git_top = self.git_top.min(lines.len().saturating_sub(height));
+        let visible: Vec<_> = lines.into_iter().skip(self.git_top).take(height).collect();
+        frame.render_widget(Paragraph::new(visible), body);
+    }
+
+    fn draw_sessions(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        s: &Snapshot,
+        p: &Palette,
+        spin: usize,
+        mono: bool,
+    ) {
+        let quiet = Style::default().fg(p.quiet);
+        let muted = Style::default().fg(p.muted);
+        let dash = &mut self.dash;
+        dash.list_area = Rect::default();
+        dash.line_rows.clear();
+        dash.line_headings.clear();
+        dash.search_hit = Rect::default();
+        dash.new_hit = Rect::default();
+        dash.archive_hit = Rect::default();
+        dash.worktree_hit = Rect::default();
+        dash.choose_hit = Rect::default();
+        dash.manager_hit = Rect::default();
+        dash.manager_live_hit = Rect::default();
+        let Some(dashboard) = s.sidebar.sessions.as_ref() else {
+            Self::note(frame, body, "Loading sessions…", quiet);
+            return;
+        };
+        if body.height < 4 {
+            return;
+        }
+        dash.sync(dashboard);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        let width = usize::from(body.width);
+        let shown = dash.filtered(rows_of(dashboard));
+        let selected_title = shown
+            .iter()
+            .find(|row| text(row, "id") == dash.selected_id)
+            .map_or("", |row| text(row, "title"));
+        let footer = if let Some(draft) = &dash.rename {
+            Some(Line::from(vec![
+                Span::styled("Rename: ", Style::default().fg(p.accent)),
+                Span::raw(draft.clone()),
+                Span::styled("▏", Style::default().fg(p.accent)),
+            ]))
+        } else if dash.confirm_archive.is_some() {
+            Some(Line::styled(
+                fit(
+                    &format!("Archive “{}”? y/Enter confirms", fit(selected_title, 20)),
+                    width,
+                ),
+                Style::default().fg(p.accent),
+            ))
+        } else if !dash.notice.is_empty() {
+            Some(Line::styled(
+                fit(&dash.notice, width),
+                Style::default().fg(p.accent),
+            ))
+        } else {
+            dashboard
+                .get("error")
+                .and_then(Value::as_str)
+                .filter(|e| !e.is_empty())
+                .map(|e| Line::styled(fit(&format!("Error: {e}"), width), quiet))
+        };
+
+        let search = if dash.searching {
+            Line::from(vec![
+                Span::styled("/ ", Style::default().fg(p.accent)),
+                Span::raw(dash.query.clone()),
+                Span::styled("▏", Style::default().fg(p.accent)),
+            ])
+        } else if !dash.query.is_empty() {
+            Line::from(vec![
+                Span::styled("/ ", quiet),
+                Span::raw(fit(&dash.query, width.saturating_sub(14))),
+                Span::styled(format!("  ({}) Esc", shown.len()), quiet),
+            ])
+        } else {
+            Line::styled("/ Search sessions", quiet)
+        };
+        let search_rect = Rect::new(body.x, body.y, body.width, 1);
+        frame.render_widget(Paragraph::new(search), search_rect);
+        dash.search_hit = search_rect;
+        let new_label = "+ New Agent";
+        let new_rect = Rect::new(
+            body.x,
+            body.y + 1,
+            (new_label.width() as u16).min(body.width),
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                new_label,
+                Style::default().fg(p.purple).add_modifier(Modifier::BOLD),
+            )),
+            new_rect,
+        );
+        dash.new_hit = new_rect;
+
+        let footer_rows = u16::from(footer.is_some());
+        let list_top_y = body.y + 2;
+        let list_bottom = body.bottom().saturating_sub(footer_rows);
+        if list_bottom <= list_top_y {
+            return;
+        }
+        let list = Rect::new(body.x, list_top_y, body.width, list_bottom - list_top_y);
+
+        type RowLine = (Line<'static>, Option<usize>, Option<String>);
+        let mut lines: Vec<RowLine> = Vec::new();
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for (index, row) in shown.iter().enumerate() {
+            let key = dash.group_key(row);
+            if groups.last().is_none_or(|(name, _)| name != &key) {
+                groups.push((key, Vec::new()));
+            }
+            groups.last_mut().unwrap().1.push(index);
+        }
+        let glyphs = nexus_widgets::Glyphs::from_env();
+        for (key, members) in &groups {
+            let collapsed = dash.is_collapsed(key);
+            let chevron = if collapsed { glyphs.closed } else { glyphs.open };
+            lines.push((
+                Line::from(vec![
+                    Span::styled(format!("{chevron} {key}"), muted),
+                    Span::styled(format!(" {}", members.len()), quiet),
+                ]),
+                None,
+                Some(key.clone()),
+            ));
+            if collapsed {
+                continue;
+            }
+            for index in members {
+                let row = shown[*index];
+                let id = text(row, "id");
+                let is_selected = id == dash.selected_id;
+                let is_hover = !is_selected && id == dash.hovered_id;
+                let bg = if is_selected {
+                    Some(p.element)
+                } else if is_hover {
+                    Some(p.element_hi)
+                } else {
+                    None
+                };
+                let renaming = is_selected.then(|| dash.rename.clone()).flatten();
+                let title = match &renaming {
+                    Some(draft) => format!("{draft}▏"),
+                    None => text(row, "title").to_owned(),
+                };
+                let done = matches!(text(row, "status"), "done" | "archived");
+                let glyph = if done {
+                    Span::styled(
+                        if glyphs.ascii { "*" } else { "●" },
+                        Style::default().fg(p.muted),
+                    )
+                } else {
+                    mark(session_rank(row), spin, p)
+                };
+                let age = {
+                    let age = text(row, "age");
+                    if age.is_empty() {
+                        text(row, "sub")
+                    } else {
+                        age
+                    }
+                };
+                let children = row
+                    .get("running_children")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let right = if children > 0 {
+                    format!("{children} running · {age}")
+                } else {
+                    age.to_owned()
+                };
+                let style = if done {
+                    Style::default().fg(p.muted)
+                } else {
+                    Style::default().fg(p.text)
+                };
+                lines.push((
+                    row_line(
+                        vec![Span::raw(" "), glyph, Span::raw(" ")],
+                        &title,
+                        style,
+                        &right,
+                        quiet,
+                        width,
+                        bg,
+                        mono && is_selected,
+                    ),
+                    Some(*index),
+                    None,
+                ));
+                if let Some(request) = picker::pending(row).filter(|_| picker::section(row) == 0) {
+                    let wait = format!(
+                        "waiting {}",
+                        picker::clock(picker::waited(
+                            request.get("ts").and_then(Value::as_f64).unwrap_or(0.0),
+                            now
+                        ))
+                    );
+                    lines.push((
+                        row_line(
+                            vec![Span::raw("   ")],
+                            text(request, "summary"),
+                            Style::default().fg(p.text),
+                            &wait,
+                            quiet,
+                            width,
+                            bg,
+                            false,
+                        ),
+                        Some(*index),
+                        None,
+                    ));
+                    lines.push((
+                        row_line(
+                            vec![Span::raw("   ")],
+                            "Enter open  a allow once  d deny",
+                            quiet,
+                            "",
+                            quiet,
+                            width,
+                            bg,
+                            false,
+                        ),
+                        Some(*index),
+                        None,
+                    ));
+                }
+            }
+        }
+        if lines.is_empty() {
+            let empty = if dash.query.is_empty() {
+                "No sessions yet · n starts one"
+            } else {
+                "No session matches the filter"
+            };
+            lines.push((Line::styled(empty, muted), None, None));
+        }
+
+        let height = usize::from(list.height).max(1);
+        let selected_line = lines
+            .iter()
+            .position(|(_, index, _)| {
+                index.is_some_and(|i| {
+                    shown
+                        .get(i)
+                        .is_some_and(|row| text(row, "id") == dash.selected_id)
+                })
+            })
+            .unwrap_or(0);
+        let mut selected_end = selected_line;
+        if lines.get(selected_line).and_then(|(_, index, _)| *index).is_some() {
+            while selected_end + 1 < lines.len()
+                && lines[selected_end + 1].1 == lines[selected_line].1
+            {
+                selected_end += 1;
+            }
+        }
+        let wanted = if selected_line > 0 && lines[selected_line - 1].2.is_some() {
+            selected_line - 1
+        } else {
+            selected_line
+        };
+        if wanted < dash.list_top {
+            dash.list_top = wanted;
+        } else if selected_end >= dash.list_top + height {
+            dash.list_top = selected_end + 1 - height;
+        }
+        dash.list_top = dash.list_top.min(lines.len().saturating_sub(height));
+        let visible: Vec<_> = lines.into_iter().skip(dash.list_top).take(height).collect();
+        dash.line_rows = visible.iter().map(|(_, index, _)| *index).collect();
+        dash.line_headings = visible
+            .iter()
+            .map(|(_, _, heading)| heading.clone())
+            .collect();
+        dash.list_area = list;
+        frame.render_widget(
+            Paragraph::new(
+                visible
+                    .into_iter()
+                    .map(|(line, _, _)| line)
+                    .collect::<Vec<_>>(),
+            ),
+            list,
+        );
+        if let Some(line) = footer {
+            frame.render_widget(
+                Paragraph::new(line),
+                Rect::new(body.x, body.bottom() - 1, body.width, 1),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::Sidebar;
+    use crossterm::event::KeyEventKind;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn open(tab: &str, width: u16) -> Snapshot {
+        Snapshot {
+            sidebar: Sidebar {
+                available: true,
+                open: true,
+                tab: tab.into(),
+                width,
+                ..Sidebar::default()
+            },
+            ..Snapshot::default()
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        let mut event = KeyEvent::new(code, KeyModifiers::NONE);
+        event.kind = KeyEventKind::Press;
+        event
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn screen(ui: &mut SidebarUi, s: &Snapshot, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                ui.draw(frame, area, s, &Palette::new(false), 0, false);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn width_is_bounded_and_yields_to_the_conversation() {
+        let mut s = open("Sessions", 34);
+        assert_eq!(width_for(&s, 200), 34);
+        s.sidebar.width = 5;
+        assert_eq!(width_for(&s, 200), MIN_WIDTH, "a stored width below the minimum is raised");
+        s.sidebar.width = 500;
+        assert_eq!(width_for(&s, 200), MAX_WIDTH, "and one above the maximum is lowered");
+        s.sidebar.width = 0;
+        assert_eq!(width_for(&s, 200), DEFAULT_WIDTH, "no stored width uses the default");
+        for available in 0..=200u16 {
+            s.sidebar.width = 60;
+            let width = width_for(&s, available);
+            assert!(
+                width == 0 || available - width >= MIN_CONVERSATION,
+                "{available}: sidebar {width}"
+            );
+            assert!(width == 0 || width >= MIN_WIDTH);
+        }
+        assert_eq!(width_for(&s, MIN_CONVERSATION + MIN_WIDTH - 1), 0, "no room: hidden");
+        assert_eq!(width_for(&s, MIN_CONVERSATION + MIN_WIDTH), MIN_WIDTH);
+        s.sidebar.open = false;
+        assert_eq!(width_for(&s, 200), 0, "closed takes no columns");
+    }
+
+    #[test]
+    fn dragging_is_bounded_by_the_room_left_for_the_conversation() {
+        let area = Rect::new(0, 0, 34, 30);
+        assert_eq!(width_at(33, area, 200), 34, "the divider column is the last one");
+        assert_eq!(width_at(0, area, 200), MIN_WIDTH);
+        assert_eq!(width_at(150, area, 200), MAX_WIDTH);
+        assert_eq!(width_at(150, area, 100), 100 - MIN_CONVERSATION);
+    }
+
+    #[test]
+    fn tab_labels_wrap_to_fit_and_never_overlap() {
+        for inner in 10..=60u16 {
+            let (cells, rows) = tab_cells(inner);
+            assert_eq!(cells.len(), TABS.len());
+            assert_eq!(rows, cells.iter().map(|c| c.row).max().unwrap() + 1);
+            for cell in &cells {
+                assert!(cell.x + cell.width <= inner, "{inner}: {cell:?} past the edge");
+                assert_eq!(cell.width, TABS[cell.tab].width() as u16 + 2, "{inner}: label clipped");
+            }
+            for a in &cells {
+                for b in &cells {
+                    if a.tab < b.tab && a.row == b.row {
+                        assert!(a.x + a.width < b.x, "{inner}: {a:?} touches {b:?}");
+                    }
+                }
+            }
+        }
+        assert_eq!(tab_cells(60).1, 1, "wide sidebars keep one row");
+        assert!(tab_cells(24).1 >= 2, "a narrow one wraps");
+    }
+
+    #[test]
+    fn painted_tabs_and_hit_cells_agree() {
+        let s = open("Projects", 28);
+        let mut ui = SidebarUi::default();
+        let text = screen(&mut ui, &s, 28, 24);
+        let (cells, _) = tab_cells(26);
+        for cell in &cells {
+            let rect = ui.tab_hits[cell.tab].0;
+            assert_eq!((rect.x, rect.width), (1 + cell.x, cell.width));
+            assert_eq!(usize::from(rect.y), 1 + usize::from(cell.row));
+            let row: Vec<char> = text.lines().nth(usize::from(rect.y)).unwrap().chars().collect();
+            let drawn: String = row[usize::from(rect.x)..usize::from(rect.right())].iter().collect();
+            assert_eq!(drawn, format!(" {} ", TABS[cell.tab]));
+        }
+    }
+
+    #[test]
+    fn clicking_a_tab_label_asks_for_that_tab() {
+        let s = open("Projects", 34);
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        let area = Rect::new(0, 0, 34, 24);
+        for index in 0..TABS.len() {
+            let rect = ui.tab_hits[index].0;
+            let out = ui.mouse(
+                mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 1, rect.y),
+                &s,
+                area,
+                200,
+            );
+            assert!(out.consumed);
+            assert_eq!(out.action, Some(tab_message(TABS[index])));
+            assert!(ui.focus, "a click focuses the sidebar");
+        }
+    }
+
+    #[test]
+    fn dragging_the_divider_resizes_within_bounds_and_saves_on_release() {
+        let s = open("Sessions", 34);
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        let area = Rect::new(0, 0, 34, 24);
+        let down = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 33, 5), &s, area, 200);
+        assert!(down.consumed && ui.dragging && down.action.is_none());
+        let drag = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 80, 9), &s, area, 200);
+        assert_eq!(drag.width, Some(MAX_WIDTH));
+        let drag = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, 9), &s, area, 200);
+        assert_eq!(drag.width, Some(MIN_WIDTH));
+        let up = ui.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 40, 9), &s, area, 200);
+        assert!(!ui.dragging);
+        assert_eq!(
+            up.action,
+            Some(json!({"type":"sidebar","op":"width","width":41}))
+        );
+        let narrow = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 33, 5), &s, area, 90);
+        assert!(narrow.consumed);
+        let up = ui.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 70, 5), &s, area, 90);
+        assert_eq!(up.width, Some(90 - MIN_CONVERSATION));
+    }
+
+    #[test]
+    fn a_click_outside_drops_focus_and_is_not_consumed() {
+        let s = open("Sessions", 34);
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        ui.focus = true;
+        let out = ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 60, 5),
+            &s,
+            Rect::new(0, 0, 34, 24),
+            200,
+        );
+        assert!(!out.consumed && !ui.focus);
+    }
+
+    #[test]
+    fn keys_switch_tabs_and_escape_leaves() {
+        let s = open("Projects", 34);
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        assert_eq!(ui.key(key(KeyCode::Tab), &s, true).action, Some(tab_message("Sessions")));
+        assert_eq!(
+            ui.key(key(KeyCode::BackTab), &s, true).action,
+            Some(tab_message("Git")),
+            "Shift+Tab wraps backwards"
+        );
+        let esc = ui.key(key(KeyCode::Esc), &s, true);
+        assert!(esc.consumed && !ui.focus);
+        let ctrl_b = ui.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL), &s, true);
+        assert_eq!(ctrl_b.action, Some(act("toggle")));
+    }
+
+    #[test]
+    fn typing_in_a_list_tab_returns_focus_to_the_composer() {
+        let s = open("Git", 34);
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        let out = ui.key(key(KeyCode::Char('x')), &s, true);
+        assert!(!out.consumed, "the composer gets the character");
+        assert!(!ui.focus);
+    }
+
+    fn sessions_snapshot() -> Snapshot {
+        let mut s = open("Sessions", 34);
+        s.sidebar.sessions = Some(json!({"rows":[
+            {"id":"a","title":"Alpha","workspace":"/w","status":"idle","age":"2m","updated":2.0},
+            {"id":"b","title":"Beta","workspace":"/w","status":"working","age":"now","updated":3.0},
+        ],"selected":"a","query":""}));
+        s
+    }
+
+    #[test]
+    fn sessions_tab_filters_selects_and_opens_through_the_dashboard() {
+        let s = sessions_snapshot();
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        let text = screen(&mut ui, &s, 34, 24);
+        assert!(text.contains("Alpha") && text.contains("Beta") && text.contains("Search sessions"));
+        let out = ui.key(key(KeyCode::Char('/')), &s, true);
+        assert!(out.consumed && ui.dash.searching, "/ starts the filter");
+        let out = ui.key(key(KeyCode::Char('b')), &s, true);
+        assert_eq!(
+            out.operation,
+            Some(json!({"kind":"sessions_search","query":"b"}))
+        );
+        ui.key(key(KeyCode::Esc), &s, true);
+        assert!(!ui.dash.searching);
+        let open = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(
+            open.operation,
+            Some(json!({"kind":"session_open","id":"a","workspace":"/w"}))
+        );
+        assert!(
+            !ui.key(key(KeyCode::Down), &s, false).consumed,
+            "a draft in the composer keeps its arrow keys"
+        );
+    }
+
+    #[test]
+    fn sessions_rows_are_clickable_where_they_are_drawn() {
+        let s = sessions_snapshot();
+        let mut ui = SidebarUi::default();
+        let text = screen(&mut ui, &s, 34, 24);
+        let row = text.lines().position(|line| line.contains("Beta")).unwrap() as u16;
+        let area = Rect::new(0, 0, 34, 24);
+        let first = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, row), &s, area, 200);
+        assert!(first.consumed && first.operation.is_none());
+        assert_eq!(ui.dash.selected_id, "b");
+        let new = ui.mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                ui.dash.new_hit.x + 1,
+                ui.dash.new_hit.y,
+            ),
+            &s,
+            area,
+            200,
+        );
+        assert_eq!(new.operation, Some(json!({"kind":"session_new"})));
+    }
+
+    fn projects_snapshot() -> Snapshot {
+        let mut s = open("Projects", 34);
+        s.sidebar.projects = json!({"loaded":true,"rows":[
+            {"kind":"project","key":"/repo","depth":0,"label":"repo","count":3,"age":"5m","rank":1,"expandable":true,"current":true},
+            {"kind":"checkout","key":"/repo|/repo","parent":"/repo","depth":1,"label":"main","count":2,"age":"5m","rank":1,"workspace":"/repo","session":"s1"},
+            {"kind":"checkout","key":"/repo|/wt","parent":"/repo","depth":1,"label":"feature-x","count":1,"age":"1h","rank":2,"workspace":"/wt","session":"s2"},
+            {"kind":"project","key":"/solo","depth":0,"label":"solo","count":1,"age":"2d","rank":2,"expandable":false,"workspace":"/solo","session":"s3"},
+        ]});
+        s
+    }
+
+    #[test]
+    fn projects_group_repositories_with_their_worktrees() {
+        let s = projects_snapshot();
+        let mut ui = SidebarUi::default();
+        let text = screen(&mut ui, &s, 40, 24);
+        let lines: Vec<&str> = text.lines().collect();
+        let at = |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap();
+        assert!(at("repo") < at("main") && at("main") < at("feature-x") && at("feature-x") < at("solo"));
+        let column = |line: &str, needle: &str| line[..line.find(needle).unwrap()].chars().count();
+        assert!(
+            column(lines[at("feature-x")], "feature-x") > column(lines[at("repo")], "repo"),
+            "worktrees are indented"
+        );
+        // Folding the repository hides its checkouts; a lone project opens its session.
+        ui.focus = true;
+        assert!(ui.key(key(KeyCode::Enter), &s, true).consumed);
+        let text = screen(&mut ui, &s, 40, 24);
+        assert!(!text.contains("feature-x") && text.contains("solo"));
+        ui.key(key(KeyCode::Down), &s, true);
+        let open = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(
+            open.action,
+            Some(json!({"type":"sidebar","op":"open_session","workspace":"/solo","session":"s3"}))
+        );
+    }
+
+    #[test]
+    fn files_navigate_through_listed_folders_only() {
+        let mut s = open("Files", 34);
+        s.sidebar.files = json!({"loaded":true,"path":"src","label":"repo/src","rows":[
+            {"name":"..","path":"","kind":"up","size":""},
+            {"name":"core","path":"src/core","kind":"dir","size":""},
+            {"name":"main.rs","path":"src/main.rs","kind":"file","size":"2K"},
+            {"name":"link","path":"src/link","kind":"link","size":""},
+        ]});
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        let text = screen(&mut ui, &s, 34, 24);
+        assert!(text.contains("repo/src") && text.contains("core/") && text.contains("main.rs") && text.contains("2K"));
+        ui.key(key(KeyCode::Down), &s, true);
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"dir","path":"src/core"}))
+        );
+        ui.key(key(KeyCode::Down), &s, true);
+        assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none(), "files do not navigate");
+        ui.key(key(KeyCode::Down), &s, true);
+        assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none(), "links are never followed");
+        assert_eq!(
+            ui.key(key(KeyCode::Backspace), &s, true).action,
+            Some(json!({"type":"sidebar","op":"dir","path":""})),
+            "Backspace goes to the parent"
+        );
+    }
+
+    #[test]
+    fn git_status_is_labelled_and_read_only() {
+        let mut s = open("Git", 40);
+        s.sidebar.git = json!({"loaded":true,"available":true,"summary":"main → origin/main · ahead 1 · behind 0",
+            "rows":[
+                {"kind":"heading","text":"Staged changes · 1"},
+                {"kind":"entry","code":"A","label":"added","path":"new.rs"},
+                {"kind":"heading","text":"Untracked · 1"},
+                {"kind":"entry","code":"?","label":"untracked","path":"notes.txt"},
+            ]});
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        let text = screen(&mut ui, &s, 44, 24);
+        for want in ["main → origin/main", "Staged changes · 1", "added", "new.rs", "untracked", "notes.txt"] {
+            assert!(text.contains(want), "{want:?} missing:\n{text}");
+        }
+        // Every key either scrolls, refreshes or is ignored: nothing can change the repository.
+        for code in [KeyCode::Enter, KeyCode::Delete, KeyCode::Char('d'), KeyCode::Char('a')] {
+            let out = ui.key(key(code), &s, true);
+            assert!(out.action.is_none() && out.operation.is_none(), "{code:?}");
+        }
+        s.sidebar.git = json!({"loaded":true,"available":false,"message":"This workspace is not a Git repository"});
+        assert!(screen(&mut ui, &s, 44, 24).contains("not a Git repository"));
+    }
+
+    #[test]
+    fn narrow_and_tiny_columns_do_not_panic() {
+        let s = sessions_snapshot();
+        for (width, height) in [(0u16, 0u16), (3, 3), (9, 5), (12, 8), (24, 7), (60, 40)] {
+            let mut ui = SidebarUi::default();
+            for tab in TABS {
+                let mut s = s.clone_for_test();
+                s.sidebar.tab = tab.into();
+                let mut terminal = Terminal::new(TestBackend::new(width.max(1), height.max(1))).unwrap();
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        ui.draw(frame, area, &s, &Palette::new(false), 0, false);
+                    })
+                    .unwrap();
+            }
+        }
+    }
+
+    /// A whole frame through `render::draw`, as the event loop paints it.
+    fn paint_all(
+        s: &Snapshot,
+        width: u16,
+        height: u16,
+        cache: &mut crate::render::Cache,
+    ) -> (crate::render::Regions, Vec<String>) {
+        use crate::editor::Editor;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut regions = crate::render::Regions::default();
+        terminal
+            .draw(|frame| {
+                regions = crate::render::draw(
+                    frame,
+                    s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let lines = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        (regions, lines)
+    }
+
+    #[test]
+    fn regions_reserve_the_left_edge_and_the_conversation_keeps_its_minimum() {
+        let mut s = open("Sessions", 34);
+        s.details_sidebar = true;
+        let r = crate::render::regions(Rect::new(0, 0, 200, 40), &s, 8, false);
+        assert_eq!((r.sidebar.x, r.sidebar.width, r.sidebar.height), (0, 34, 40));
+        assert_eq!(r.transcript.x, 34);
+        assert_eq!(r.tabs.x, r.sidebar.right());
+        assert_eq!(r.composer.x, r.sidebar.right());
+        assert_eq!(r.transcript.width, 200 - 34 - 40);
+        assert_eq!(r.details.right(), 200);
+        for width in 20..=240u16 {
+            for details in [false, true] {
+                s.details_sidebar = details;
+                let r = crate::render::regions(Rect::new(0, 0, width, 40), &s, 8, false);
+                if r.sidebar.width == 0 {
+                    assert_eq!(r.transcript.x, 0, "{width}: a hidden sidebar moves nothing");
+                    continue;
+                }
+                assert!(r.sidebar.width >= MIN_WIDTH && r.sidebar.width <= MAX_WIDTH);
+                assert!(
+                    r.transcript.width >= MIN_CONVERSATION,
+                    "{width} details={details}: conversation {} < minimum",
+                    r.transcript.width
+                );
+                assert_eq!(r.transcript.x, r.sidebar.right(), "{width}");
+                assert!(
+                    r.details.width == 0 || r.transcript.right() <= r.details.x,
+                    "{width}: conversation runs under the details sidebar"
+                );
+            }
+        }
+        s.details_sidebar = true;
+        s.sidebar.open = false;
+        let closed = crate::render::regions(Rect::new(0, 0, 200, 40), &s, 8, false);
+        assert_eq!((closed.sidebar.width, closed.transcript.x), (0, 0));
+    }
+
+    #[test]
+    fn the_available_width_matches_what_regions_shares() {
+        let mut s = open("Sessions", 60);
+        for width in [60u16, 99, 100, 140, 200] {
+            for details in [false, true] {
+                s.details_sidebar = details;
+                let area = Rect::new(0, 0, width, 30);
+                let r = crate::render::regions(area, &s, 8, false);
+                let shared = r.sidebar.width + r.transcript.width;
+                assert_eq!(
+                    shared,
+                    crate::render::sidebar_available(area, &s),
+                    "{width} details={details}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_sidebar_paints_where_it_is_hit_tested_and_the_conversation_stays_right_of_it() {
+        let mut s = open("Files", 34);
+        s.title = "A conversation".into();
+        s.sidebar.files = json!({"loaded":true,"path":"","label":"repo/","rows":[
+            {"name":"src","path":"src","kind":"dir","size":""},
+            {"name":"README.md","path":"README.md","kind":"file","size":"1K"},
+        ]});
+        let mut cache = crate::render::Cache::default();
+        let (drawn, lines) = paint_all(&s, 140, 40, &mut cache);
+        assert_eq!(drawn.sidebar, crate::render::regions(Rect::new(0, 0, 140, 40), &s, crate::render::composer_height(Rect::new(0, 0, 140, 40), &crate::editor::Editor::default(), &s), false).sidebar);
+        assert_eq!(drawn.sidebar.width, 34);
+        let left = |y: usize| lines[y].chars().take(34).collect::<String>();
+        let tab_row = usize::from(cache.sidebar.tab_hits[0].0.y);
+        assert!(left(tab_row).contains("Projects"), "tabs paint in the sidebar: {}", left(tab_row));
+        let all = lines.join("\n");
+        assert!(all.contains("src/") && all.contains("README.md") && all.contains("repo/"));
+        for (y, line) in lines.iter().enumerate() {
+            let right: String = line.chars().skip(34).collect();
+            assert!(!right.contains("README.md") && !right.contains("Projects"), "row {y} leaks: {right}");
+        }
+        // Every tab cell lies inside the painted column.
+        for (rect, _) in &cache.sidebar.tab_hits {
+            assert!(rect.x >= drawn.sidebar.x && rect.right() <= drawn.sidebar.right());
+        }
+        // A closed sidebar paints nothing and moves nothing.
+        s.sidebar.open = false;
+        let (drawn, lines) = paint_all(&s, 140, 40, &mut cache);
+        assert_eq!(drawn.sidebar.width, 0);
+        assert!(!lines.join("\n").contains("README.md"));
+    }
+
+    impl Snapshot {
+        fn clone_for_test(&self) -> Snapshot {
+            Snapshot {
+                sidebar: self.sidebar.clone(),
+                ..Snapshot::default()
+            }
+        }
+    }
+}

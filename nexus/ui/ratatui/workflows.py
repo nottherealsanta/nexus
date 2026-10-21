@@ -544,6 +544,10 @@ class Workflows(TierPages, SpeakPages):
             result = await self.client.agent_cancel(self.shell.controller.session, operation["id"])
             self.shell.flash(result.message or ("Cancellation requested" if result.cancelled else "Agent is not running"),
                              "success" if result.cancelled else "warning")
+        elif kind == "agent_close":
+            result = await self.client.close_agent(self.shell.controller.session, operation["id"])
+            self.shell.flash(result.message or ("Subagent closed" if result.closed else "Subagent is already closed"),
+                             "success" if result.closed else "warning")
         elif kind == "agent_page":
             session, generation = self.shell.controller.session, self.shell.generation
             result = await self.client.agent_transcript(session, operation["id"])
@@ -629,7 +633,11 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "sessions":
             await self.sessions()
         elif kind == "sessions_close":
-            self.close_dashboard()
+            sidebar = getattr(self.shell, "sidebar", None)
+            if sidebar is not None and sidebar.enabled:
+                await sidebar.close()
+            else:
+                self.close_dashboard()
         elif kind == "sessions_refresh":
             await self.dashboard.refresh()
         elif kind == "sessions_search":
@@ -1173,13 +1181,28 @@ class Workflows(TierPages, SpeakPages):
                       "workspace": self.shell.workspace}) for row in result]
             self.menu("Sessions", rows, ["Choose a root session for its ownership tree"], layout="list")
             return
+        sidebar = getattr(self.shell, "sidebar", None)
+        if sidebar is not None and sidebar.enabled:
+            await sidebar.show("Sessions")  # the left sidebar's Sessions tab, not a page over the conversation
+            return
+        await self.open_dashboard()
+
+    async def open_dashboard(self):
+        """Create (once) and open the Sessions list; the sidebar and the legacy page both feed on it."""
         from .bridge import SessionDashboard
         if not hasattr(self, "dashboard"):
             self.dashboard = SessionDashboard(self.shell)
         await self.dashboard.open()
 
-    def close_dashboard(self):
-        """Hide the dashboard (idempotent): dismissed, replaced by a session switch, or shutdown."""
+    def close_dashboard(self, force=False):
+        """Hide the dashboard (idempotent): dismissed, replaced by a session switch, or shutdown.
+
+        While the left sidebar is open its Sessions tab keeps the list alive across session
+        switches and panels; only ``force`` (closing the sidebar, shutdown) stops it.
+        """
+        sidebar = getattr(getattr(self, "shell", None), "sidebar", None)
+        if not force and sidebar is not None and sidebar.enabled and sidebar.open:
+            return
         dashboard = getattr(self, "dashboard", None)
         if dashboard is not None:
             dashboard.close()

@@ -319,6 +319,19 @@ def test_project_task_card_carries_external_tool_calls_for_external_workers(tmp_
     assert all(block.get("external_tool_calls") is None for block in native)
 
 
+def test_agent_card_route_keeps_every_field_and_escapes_text():
+    from nexus.ui.ratatui.prototype import _agent_card_route
+    route = {"requested": "low\x1b", "first": "a/b", "chosen": "c/d", "all_blocked": True,
+             "skipped": [{"reference": "x\x07/y", "quota": "q", "kind": "monthly", "label": "Monthly",
+                          "remaining_percent": 1.5, "threshold_percent": 2.0, "resets_at": 1793491200},
+                         "junk"]}
+    out = _agent_card_route(route)
+    assert "\x1b" not in out["requested"] and "\x07" not in out["skipped"][0]["reference"]
+    assert out["first"] == "a/b" and out["chosen"] == "c/d" and out["all_blocked"] is True
+    assert out["skipped"] == [{**route["skipped"][0], "reference": out["skipped"][0]["reference"]}]
+    assert out["skipped"][0]["remaining_percent"] == 1.5 and out["skipped"][0]["resets_at"] == 1793491200
+
+
 def test_agent_model_label_prefers_actual_over_tier_and_spawn_reference():
     from nexus.ui_support.timeline import agent_model_label
     actual = _agent(tier="low", model="openai/spawn-ref", resolved_model="anthropic/claude-x")

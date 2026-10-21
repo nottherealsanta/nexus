@@ -299,6 +299,7 @@ impl Hover {
             }
             let selected = match cell.kind {
                 super::TabHit::Details => s.details_sidebar,
+                super::TabHit::Dashboard => s.sidebar.open,
                 super::TabHit::Manager => s.manager.active,
                 super::TabHit::Session(index) | super::TabHit::Close(index) => {
                     s.tabs.get(index).is_some_and(|tab| tab.active)

@@ -108,7 +108,7 @@ def test_there_is_no_sessions_sidebar_and_the_top_bar_opens_the_dashboard():
         # The second tab is deliberately a session named "Refresh docs for models"; it is
         # expected in the top bar, but should not reappear in the removed sidebar.
         assert "SESSIONS" not in text and "Filter sessions" not in text
-        assert "Fix token refresh" in text and "≡" in text and "▯" in text and "1/2" not in text, "top bar"
+        assert "Fix token refresh" in text and "▤" in text and "▥" in text and "1/2" not in text, "top bar"
         assert text.index("~/w") < text.index("main"), "path comes before the branch"
         click(t, 113, 2)  # inside the session-list icon's padded hit target
         assert t.action() == {"type": "command", "text": "/sessions"}

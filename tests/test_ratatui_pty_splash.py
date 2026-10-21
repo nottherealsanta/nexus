@@ -78,7 +78,7 @@ def test_splash_shows_wordmark_and_bar_then_wipes_into_the_chat(monkeypatch):
         process.stdin.flush()
         # Bar completes, the particles settle into the wordmark, it flashes, the curtain wipes the chat in.
         wait_for("100%", timeout=5)
-        wait_for("█▀▀")
+        wait_for("88aaaaa")  # the full NEXUS wordmark (30x120 fits it; the small █▀▀ mark is for tiny screens)
         wait_for("Splash title", timeout=8)
         # Regression: input used to stay held for seconds after the chat appeared; once the
         # wipe has finished typed text must reach the composer.

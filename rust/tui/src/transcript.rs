@@ -10,6 +10,7 @@ pub(crate) mod fold;
 pub(crate) mod groups;
 mod header;
 pub mod look;
+mod route;
 mod signal;
 mod thought;
 mod tools;
@@ -232,6 +233,10 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         tags.push("via voice".to_string());
     } else if b.status == "steer" {
         tags.push("steer".to_string());
+    } else if b.status == "report" {
+        tags.push("subagent report".to_string());
+    } else if b.status == "followup" {
+        tags.push("from root".to_string());
     }
     if b.number > 0 {
         tags.push(format!("#{}", b.number));
@@ -965,6 +970,15 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             };
 
             let mut pieces: Vec<(String, Style)> = Vec::new();
+            if !b.state.is_empty() {
+                // The child outlives its runs: say whether it is idle, stopped or interrupted.
+                let tone = if b.state.starts_with("stopped") || b.state.starts_with("interrupted") {
+                    p.warning
+                } else {
+                    p.muted
+                };
+                pieces.push((b.state.clone(), Style::default().fg(tone)));
+            }
             if !model_part.is_empty() {
                 pieces.push((model_part, Style::default().fg(p.quiet)));
             }
@@ -1024,6 +1038,9 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             }
             if line2_spans.len() > 1 {
                 out.push((Line::from(line2_spans), op.clone()));
+            }
+            if let Some(route) = &b.route {
+                route::draw(&mut out, route, width, p, op);
             }
 
             for text in b.detail.lines() {
@@ -1297,6 +1314,97 @@ mod tests {
         assert_eq!(lines, ["aaaaa", "aaaaa", "aa"]);
         let wide = text(&wrap(&[Span::raw("日本語日本語")], 5));
         assert!(wide.iter().all(|l| l.width() <= 5));
+    }
+
+    fn member(kind: &str, status: &str, title: &str, text: &str) -> Content {
+        Content {
+            kind: kind.into(),
+            status: status.into(),
+            title: title.into(),
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rows_stay_inside_the_pane_and_wrap_at_words() {
+        let p = Palette::new(false);
+        let sentence = "The spawn path and settings surface are laid against the edge of the pane and must wrap.";
+        let markdown = Content {
+            kind: "markdown".into(),
+            text: format!("{sentence}\n\n- {sentence}\n\n> {sentence}\n\n```\n{sentence}\n{sentence}\n```"),
+            ..Default::default()
+        };
+        let running = Content {
+            kind: "tool_group".into(),
+            status: "running".into(),
+            running_label: "Working".into(),
+            members: vec![
+                member("tool", "completed", "Glob", "pattern=nexus/**/events*.py path=/Users/santa/repos/nexus"),
+                member("tool", "running", "Bash", "rg -n \"router.resol|router_resolve|resolve_route\" nexus rust"),
+            ],
+            ..Default::default()
+        };
+        let finished = Content {
+            kind: "tool_group".into(),
+            status: "completed".into(),
+            collapsed: true,
+            text: "Read 2 files, Ran 1 command, Searched 3 patterns, Listed 4 folders".into(),
+            elapsed_label: "6.6s".into(),
+            ..Default::default()
+        };
+        let signal = Content {
+            kind: "tool".into(),
+            status: "failed".into(),
+            text: "Code code purpose=Locate usage, router, resolver and spawn paths".into(),
+            signal: vec![
+                ("text".into(), "… 1. grep path=\"nexus\", pattern=\"def resolve_router_target\"".into()),
+                ("out".into(), "1  files = grep(path=\"nexus\", pattern=\"def resolve_router\")".into()),
+                ("error".into(), "ToolError (line 4): Not a directory: nexus/router/resolve.py/__init__".into()),
+            ],
+            ..Default::default()
+        };
+        let detail = Content {
+            kind: "tool".into(),
+            text: "$ cargo test".into(),
+            detail: "  Command: cargo test --workspace --offline -- --nocapture transcript\nplain row that is quite long and must wrap too".into(),
+            ..Default::default()
+        };
+        let mut group = running.clone();
+        group.collapsed = false;
+        group.members[0].signal = signal.signal.clone();
+        group.members[0].heading = "→ Glob".into();
+        let blocks = [markdown, running, finished, signal, detail, group];
+        for width in [40u16, 60, 80, 100] {
+            for block in &blocks {
+                for (row, _) in build(block, width, &p) {
+                    assert!(
+                        row.width() <= usize::from(width),
+                        "{} at {width}: {:?} is {} wide",
+                        block.kind,
+                        row.to_string(),
+                        row.width()
+                    );
+                }
+            }
+            let rows = build(&blocks[0], width, &p);
+            let joined: Vec<String> = rows.iter().map(|(l, _)| l.to_string()).collect();
+            let words: Vec<&str> = sentence.split(' ').collect();
+            let flat = joined.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+            assert!(flat.contains(&words[words.len() - 2..].join(" ")), "{flat}");
+            for line in &joined {
+                for word in line.split_whitespace() {
+                    // Rows may break after whitespace or start with a bullet/quote marker, but
+                    // a word must never be split ("settin" / "gs").
+                    assert!(
+                        words.contains(&word)
+                            || word.starts_with(['-', '>', '│', '•'])
+                            || word.chars().count() < 3,
+                        "{word:?} broke mid-word at {width}: {joined:#?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2009,5 +2117,45 @@ mod tests {
         block.status = "live".into();
         let text = plain(&build(&block, 60, &p)).join("\n");
         assert!(text.contains("via voice · #3"), "{text}");
+    }
+
+    #[test]
+    fn user_card_labels_a_subagent_report_and_a_root_follow_up() {
+        let p = Palette::new(false);
+        let mut block = Content {
+            kind: "user".into(),
+            title: "report · build-1 · explorer · run 2 · completed".into(),
+            status: "report".into(),
+            ..Default::default()
+        };
+        let text = plain(&build(&block, 80, &p)).join("\n");
+        assert!(text.contains("report · build-1 · explorer · run 2 · completed"), "{text}");
+        assert!(text.contains("subagent report"), "{text}");
+        assert!(!text.contains('#'), "a report takes no turn number: {text}");
+        block.status = "followup".into();
+        block.title = "follow-up from root · build-1 · run 2".into();
+        let text = plain(&build(&block, 80, &p)).join("\n");
+        assert!(text.contains("from root"), "{text}");
+    }
+
+    #[test]
+    fn task_card_names_the_state_of_an_idle_or_stopped_child() {
+        let p = Palette::new(false);
+        let mut task = Content {
+            kind: "task".into(),
+            agent_name: "explorer".into(),
+            task: "search".into(),
+            model: "gpt-6-mini".into(),
+            status: "done".into(),
+            state: "idle · run 2".into(),
+            ..Default::default()
+        };
+        let rows = build(&task, 80, &p);
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line2.contains("idle · run 2 · gpt-6-mini"), "{line2}");
+        task.state = "stopped by system: evicted".into();
+        let rows = build(&task, 80, &p);
+        let line2: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line2.contains("stopped by system: evicted"), "{line2}");
     }
 }
