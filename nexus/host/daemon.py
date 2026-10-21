@@ -624,6 +624,7 @@ class Daemon:
                 owns_runtime=True,
                 emit=self._emit,
             )
+            self._facade.start_usage_polling()
             stranded = await self._facade.recover_admissions()
             if stranded:
                 self._log(

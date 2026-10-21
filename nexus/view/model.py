@@ -101,6 +101,7 @@ def _dump(value: object) -> Any:
                 (item.name == "provenance" and isinstance(value, ToolCallView) and field_value is None)
                 or (item.name == "usage_unknown" and isinstance(value, AgentView) and not field_value)
                 or (item.name == "resolved_model" and isinstance(value, AgentView) and field_value is None)
+                or (item.name == "route" and isinstance(value, AgentView) and field_value is None)
                 or (item.name == "external" and isinstance(value, ConversationView) and field_value is None)
             ):
                 continue
@@ -542,6 +543,9 @@ class AgentView(_View):
     resolved_model: str | None = None
     #: Concrete selected route, distinct from a model that actually started.
     selected_model: str | None = None
+    #: Quota-aware routing decision (``agent.routed``): requested, first,
+    #: chosen, all_blocked, skipped. ``None`` until one is recorded.
+    route: dict[str, Any] | None = None
     tools: list[str] = field(default_factory=list)
     dropped_tools: list[str] = field(default_factory=list)
     clamped: bool = False
@@ -564,6 +568,20 @@ class AgentView(_View):
     #: True when the child's token/cost usage is unknown rather than zero
     #: (an external worker reports no accounting).
     usage_unknown: bool = False
+    #: Persistent children (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.4).
+    #: ``status == "spawned"`` still means a run is in flight; these say what a
+    #: finished child can do next. ``runs`` counts started runs (spawn is run 1).
+    runs: int = 1
+    #: The root may ``subagent_send`` to it after a run ends (false for external workers).
+    continuable: bool = False
+    #: Closed by ``agent.stopped``; terminal.
+    stopped: bool = False
+    stopped_by: str | None = None
+    stopped_reason: str | None = None
+    #: Time of the latest ``agent.spawned``/``agent.resumed``/``agent.completed``.
+    last_run_ts: float | None = None
+    #: Started without waiting (the tool call returned before the child ended).
+    background: bool = False
 
 @dataclass
 class ConversationView(_View):

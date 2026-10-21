@@ -436,6 +436,12 @@ class SessionState(msgspec.Struct, tag=True, frozen=True):
     from_seq: int = 0
 
 
+class SessionActivity(msgspec.Struct, tag=True, frozen=True):
+    """Is the session quiescent? Used by one-shot runs that wait for background subagents."""
+
+    session: str
+
+
 class LogsRead(msgspec.Struct, tag=True, frozen=True):
     """Read bounded, redacted daemon and session lifecycle diagnostics."""
 
@@ -450,6 +456,18 @@ class AgentCancel(msgspec.Struct, tag=True, frozen=True):
 
     An external Claude Code worker's process group is killed by its own
     cancellation path; the parent turn continues with a ``cancelled`` result.
+    """
+
+    session: str
+    agent_id: str
+    reason: str = ""
+
+
+class AgentClose(msgspec.Struct, tag=True, frozen=True):
+    """Close one child agent for good (``agent.stopped``), cancelling a run in flight.
+
+    Unlike ``AgentCancel`` (which ends the current run and leaves the child idle),
+    a closed child cannot be continued and gives its live slot back. Idempotent.
     """
 
     session: str
@@ -756,6 +774,21 @@ class GitDiff(msgspec.Struct, tag=True, frozen=True):
     ref: str = ""
 
 
+class DirectoryList(msgspec.Struct, tag=True, frozen=True):
+    """List one workspace directory for the sidebar Files tab (read-only, bounded).
+
+    ``path`` is workspace-relative POSIX (``""`` is the root); the host refuses absolute
+    paths, ``..``, hidden segments, symlink crossings and read-deny roots.
+    """
+
+    path: str = ""
+    limit: int = 200
+
+
+class GitStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read-only, bounded ``git status`` of the current workspace for the sidebar Git tab."""
+
+
 class WorktreeList(msgspec.Struct, tag=True, frozen=True):
     """List daemon-owned agent worktrees using sanitized metadata only."""
 
@@ -1043,9 +1076,11 @@ Command = (
     | SessionSubscribe
     | SessionFocus
     | SessionState
+    | SessionActivity
     | LogsRead
     | AgentTranscript
     | AgentCancel
+    | AgentClose
     | SessionFork
     | SessionDelete
     | SessionRestore
@@ -1086,6 +1121,8 @@ Command = (
     | ContextExtensionSelect
     | FileSearch
     | GitDiff
+    | DirectoryList
+    | GitStatus
     | WorktreeList
     | WorktreeInspect
     | WorktreeReview
@@ -1165,9 +1202,11 @@ COMMANDS: tuple[type, ...] = (
     SessionSubscribe,
     SessionFocus,
     SessionState,
+    SessionActivity,
     LogsRead,
     AgentTranscript,
     AgentCancel,
+    AgentClose,
     SessionFork,
     SessionDelete,
     SessionRestore,
@@ -1208,6 +1247,8 @@ COMMANDS: tuple[type, ...] = (
     ContextExtensionSelect,
     FileSearch,
     GitDiff,
+    DirectoryList,
+    GitStatus,
     WorktreeList,
     WorktreeInspect,
     WorktreeReview,
@@ -1441,6 +1482,21 @@ class SessionStateResult(msgspec.Struct, tag=True, frozen=True):
     view: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
+class SessionActivityResult(msgspec.Struct, tag=True, frozen=True):
+    """What keeps a session busy after its turn ended (plan 3.8).
+
+    ``wait_seconds`` is the effective ``[agents] oneshot_wait_seconds``: how long a
+    one-shot run may follow the session; ``0`` keeps the old exit-at-first-terminal.
+    """
+
+    session: str
+    turn_active: bool = False
+    queued: int = 0
+    running_agents: int = 0
+    reports_pending: int = 0
+    wait_seconds: int = 0
+
+
 class LogEntry(msgspec.Struct, frozen=True):
     """One allowlisted log projection; never a raw session event."""
 
@@ -1476,6 +1532,14 @@ class AgentCancelResult(msgspec.Struct, tag=True, frozen=True):
     agent_id: str
     #: True when a running child was signalled; False when it was not running.
     cancelled: bool = False
+    message: str = ""
+
+
+class AgentCloseResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    agent_id: str
+    #: True when the child is now closed (including one that already was).
+    closed: bool = False
     message: str = ""
 
 
@@ -1667,7 +1731,7 @@ class AgentsListResult(msgspec.Struct, tag=True, frozen=True):
     generation: int = 0
     agents: list[dict[str, Any]] = msgspec.field(default_factory=list)
     #: The root agent a new session starts with (``[agent] name``).
-    default: str = "build"
+    default: str = "orchestrator"
 
 
 class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
@@ -1679,7 +1743,7 @@ class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
     """
 
     session: str
-    name: str = "build"
+    name: str = "orchestrator"
     source: str = "default"
     color: str | None = None
     provider: str | None = None
@@ -1693,7 +1757,7 @@ class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
 
 class AgentSelectResult(msgspec.Struct, tag=True, frozen=True):
     session: str
-    name: str = "build"
+    name: str = "orchestrator"
     source: str = "session"
     apply_next_turn: bool = True
 
@@ -1790,6 +1854,28 @@ class FileSearchResult(msgspec.Struct, tag=True, frozen=True):
 
 class GitDiffResult(msgspec.Struct, tag=True, frozen=True):
     patch: str = ""
+    truncated: bool = False
+
+
+class DirectoryListResult(msgspec.Struct, tag=True, frozen=True):
+    #: The canonical listed path (``""`` for the root).
+    path: str = ""
+    #: ``{name, path, kind: dir|file|link, size}``; directories first, hidden entries omitted.
+    entries: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    truncated: bool = False
+
+
+class GitStatusResult(msgspec.Struct, tag=True, frozen=True):
+    #: False outside a Git work tree (``message`` says why).
+    available: bool = False
+    message: str = ""
+    branch: str = ""
+    upstream: str = ""
+    ahead: int = 0
+    behind: int = 0
+    #: ``{group: staged|unstaged|untracked|conflicts, code, label, path, from}`` rows, bounded.
+    rows: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    counts: dict[str, int] = msgspec.field(default_factory=dict)
     truncated: bool = False
 
 
@@ -2058,9 +2144,11 @@ Result = (
     | SessionSubscribeResult
     | SessionFocusResult
     | SessionStateResult
+    | SessionActivityResult
     | LogsReadResult
     | AgentTranscriptResult
     | AgentCancelResult
+    | AgentCloseResult
     | SessionForkResult
     | SessionDeleteResult
     | SessionRestoreResult
@@ -2092,6 +2180,8 @@ Result = (
     | McpServerRestartResult
     | FileSearchResult
     | GitDiffResult
+    | DirectoryListResult
+    | GitStatusResult
     | WorktreeListResult
     | WorktreeInspectResult
     | WorktreeReviewResult
@@ -2159,9 +2249,11 @@ RESULTS: tuple[type, ...] = (
     SessionSubscribeResult,
     SessionFocusResult,
     SessionStateResult,
+    SessionActivityResult,
     LogsReadResult,
     AgentTranscriptResult,
     AgentCancelResult,
+    AgentCloseResult,
     SessionForkResult,
     SessionDeleteResult,
     SessionRestoreResult,
@@ -2193,6 +2285,8 @@ RESULTS: tuple[type, ...] = (
     McpServerRestartResult,
     FileSearchResult,
     GitDiffResult,
+    DirectoryListResult,
+    GitStatusResult,
     WorktreeListResult,
     WorktreeInspectResult,
     WorktreeReviewResult,
@@ -2259,6 +2353,8 @@ __all__ = [
     "AgentSelectResult",
     "AgentCancel",
     "AgentCancelResult",
+    "AgentClose",
+    "AgentCloseResult",
     "AgentTranscript",
     "AgentTranscriptResult",
     "AgentsList",
@@ -2287,6 +2383,10 @@ __all__ = [
     "FileSearchResult",
     "GitDiff",
     "GitDiffResult",
+    "DirectoryList",
+    "DirectoryListResult",
+    "GitStatus",
+    "GitStatusResult",
     "Health",
     "HealthResult",
     "LogEntry",
@@ -2390,6 +2490,8 @@ __all__ = [
     "SessionSearchResult",
     "SessionStart",
     "SessionStartResult",
+    "SessionActivity",
+    "SessionActivityResult",
     "SessionState",
     "SessionStateResult",
     "SessionSubscribe",

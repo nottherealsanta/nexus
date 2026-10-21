@@ -243,9 +243,9 @@ def test_default_agent_setting_applies_to_new_sessions(tmp_path, monkeypatch):
     async def scenario():
         facade = HostFacade(Runtime(workspace, home=home))
         listing = await facade.handle(p.AgentsList())
-        assert listing.default == "build"
+        assert listing.default == "orchestrator"
         facade.open_session("before", create=True, recover=True)
-        assert (await facade.handle(p.AgentCurrent(session="before"))).name == "build"
+        assert (await facade.handle(p.AgentCurrent(session="before"))).name == "orchestrator"
 
         result = await facade.handle(p.AgentDefaultSet(name="reviewer", scope="project"))
         assert isinstance(result, p.AgentDefaultSetResult), result

@@ -106,6 +106,14 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   full new `order`; `remove_queued(id)` appends `input.dropped`
   (`reason: "removed by user"`). Replay (`_rehydrate_queue`, the reducer) applies
   both, so an edited queue survives a reopen.
+  **Origin.** `input.queued` may carry `origin` (`{"kind": "live", ...}` for GPT Live,
+  `{"kind": "subagent_report", "agent", "run", "status", "agents": [...]}` for a
+  background subagent report). It is bounded (strings clip at 200, ints and string lists
+  survive), kept on the queued item and restored by `_rehydrate_queue`. A
+  `subagent_report` item skips the `UserPromptSubmit` hooks, is appended with
+  `MessageMeta(notice="subagent_report")`, and **survives `cancel(drop_queue=True)`**
+  (`retained_queued_ids`; the supervisor leaves it queued and uncounted). The count of
+  reports waiting is `queued_report_count`.
 - **Crash recovery.** `recover_dangling_tool_uses()` appends an error
   `ToolResult` for every unresolved `ToolUse`, executing nothing. Under the
   exclusive lock it also closes what a stopped process left open, once per
@@ -121,6 +129,10 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   also gets `agent.completed` with status `interrupted`, unknown usage and an
   interruption error, before the parent's `turn.failed`. Native/nested children
   close in reverse spawn order, retaining `parent_agent_id` for replay routing.
+  A background child that is running in this process (registered by the agent pool
+  with `register_live_agent`) is skipped, so a second handle never closes it; an
+  `agent.resumed` with no later `agent.completed` is an open run like an unclosed
+  spawn, and an `agent.stopped` child has nothing left to close. The `agent.completed(interrupted)` it writes names the run (`run`: 1 for the spawn, the `agent.resumed` run number otherwise). A continuation (`subagent_send`) reopens the child's own log with recovery on, so a child log a crash left behind (an open turn, a tool call with no result) is repaired before the new turn appends to it.
   This covers crashes before child promotion or `turn.started` too. This
   parent-log recovery runs alongside owned-log recovery: proven child rows
   are traversed recursively using the project-scoped ownership index, and each

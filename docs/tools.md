@@ -120,7 +120,7 @@ always `ask` (even under `mode = allow`; `mode = deny` still denies).
 | `fs` | `read` `glob` `grep` `edit` `write` |
 | `patch` | `apply_patch` |
 | `shell` | `bash` |
-| `task` | `subagent` `todowrite` `question` |
+| `task` | `subagent` `subagent_send` `subagent_stop` `subagent_list` `todowrite` `question` |
 | `web` | `webfetch` `websearch` |
 | `ext` | `skill` |
 | `meta` | `ReloadExtensions` `ListExtensions` `WriteTool` |
@@ -175,7 +175,10 @@ Provenance, ownership and caps in the host port are the guard.
 | `write` | yes | atomic, symlink-safe replace; parents created only with `create_parents` |
 | `apply_patch` | yes | multi-file `*** Begin Patch` format (add/update/delete/move) with `@@` anchors, hunks located by content; ≤ 1,000,000 chars, 1,000 operations; `_patch_parse` → `_patch_stage` → `_patch_commit` (validate all, stage, guarded commit with rollback) |
 | `bash` | yes | see below |
-| `subagent` | no | spawns a bounded child; root sessions only, never present in a child's catalog, extension or code-mode context ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`; the description lists each tier's models and effort, each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)); a change to the tier models or efforts appends a short tail notice to history ([context.md](context.md#subagent-roster-notice-plan-06)) |
+| `subagent` | no | spawns a bounded child; root sessions only, never present in a child's catalog, extension or code-mode context ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`, `wait` (true = block for the report; with `agents.background` on, the default, and `wait` unset the call returns an acknowledgement at once and the child runs on in the background, [agents.md](agents.md#background-start-and-wait-agentsbackground-default-on)); the description lists each tier's models and effort, each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)); a change to the tier models or efforts appends a short tail notice to history ([context.md](context.md#subagent-roster-notice-plan-06)) |
+| `subagent_send` | no | continues a persistent subagent: params `agent_id`, `message` (≤ `agents.max_followup_chars`, over the limit is an error), `wait`; appends the message to the child's own conversation and runs another child turn, in the background unless `wait`; refused while it runs, once stopped, for external workers and for a worktree that cannot be reopened. Offered only with `agents.background` on (the default); root sessions only (as `subagent`); gate key is the **child's** `<role>:<tier>` and `Task(...)` rules apply ([agents.md](agents.md#persistent-children-subagent_send-subagent_stop-subagent_list)) |
+| `subagent_stop` | no | cancels a running subagent and closes it for good (`agent.stopped`, slot freed; an idle child is also closed automatically, `by system`, when a new spawn needs its slot); params `agent_id`, `reason`; idempotent; same gating and key as `subagent_send` |
+| `subagent_list` | no | one labelled row per subagent (id, role, model/tier, state, runs, last status, worktree, tokens, age, report pending), bounded to `agents.max_live` rows; read-only, allowed in every permission mode unless a `deny` rule names it |
 | `todowrite` | no | agent-scoped in-memory task list (pending/in_progress/completed); full list each call; restored per session |
 | `question` | no | asks the user one question (≤ 3 options, free text if none), waits up to 15 min; fails fast when no operator is attached |
 | `webfetch` | no | public HTTP(S) → bounded Markdown wrapped in `<<< BEGIN UNTRUSTED WEB CONTENT >>>`; PDFs/binaries unsupported |
@@ -317,7 +320,7 @@ inheritance), so `except ToolError` also catches any `RuntimeError`.
 | `all` | Every enabled tool, including mutating ones (each still permission-gated) |
 | a list | Tool names and `mcp__server__*` globs; still limited to what the session has enabled |
 
-Never callable, whatever the setting: `code`, `subagent`, `question`, `todowrite`, `skill`,
+Never callable, whatever the setting: `code`, `subagent`, `subagent_send`, `subagent_stop`, `subagent_list`, `question`, `todowrite`, `skill`,
 `McpSearch`/`McpCall`, and the `meta` and `manager` bundles (`catalog.EXCLUDED`). They drive the
 loop, the user or the agent tree and stay visible as top-level rows.
 

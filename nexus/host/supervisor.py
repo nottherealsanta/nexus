@@ -252,13 +252,18 @@ class Supervisor:
         # queue is not mirrored in the supervisor's parked queue.
         durable_ids: set[str] = set()
         durable_depth = 0
+        # Subagent reports survive a cancel (plan 3.7): the session keeps them
+        # queued, so they are neither dropped nor counted as dropped. They wait for
+        # the next turn start rather than waking the root straight after an Esc.
+        kept: set[str] = set()
         if session is not None and drop_queue:
-            durable_ids = set(getattr(session, "queued_ids", ()) or ())
-            durable_depth = getattr(session, "queue_depth", 0)
+            kept = set(getattr(session, "retained_queued_ids", ()) or ())
+            durable_ids = set(getattr(session, "queued_ids", ()) or ()) - kept
+            durable_depth = max(0, getattr(session, "queue_depth", 0) - len(kept))
         parked_extra = 0
         if drop_queue:
             queue = self._queues.pop(session_id, None)
-            parked = list(queue) if queue else []
+            parked = [pending for pending in (queue or ()) if pending.queued_id not in kept]
             self._rotation = deque(name for name in self._rotation if name != session_id)
             # A parked pending that mirrors a durable submission is counted once
             # via the durable queue; the rest are supervisor-only submissions.

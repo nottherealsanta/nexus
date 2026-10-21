@@ -36,7 +36,7 @@ import contextlib
 import os
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self
 
@@ -91,6 +91,23 @@ INTERRUPTED_ERROR = "Interrupted: Nexus stopped before this finished"
 #: ``!`` runs (``shell_id``) this process is running now. Process-wide, so a
 #: run is never recovered as interrupted while a live task still owns it.
 _LIVE_SHELLS: set[str] = set()
+#: ``(root session id, agent id)`` of background subagent runs in flight in this
+#: process. The agent pool registers a run for its whole duration so a second
+#: handle opening the root never closes a live child as ``interrupted``
+#: (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.3).
+_LIVE_AGENTS: set[tuple[str, str]] = set()
+
+
+def register_live_agent(root_session: str, agent_id: str) -> None:
+    _LIVE_AGENTS.add((root_session, agent_id))
+
+
+def unregister_live_agent(root_session: str, agent_id: str) -> None:
+    _LIVE_AGENTS.discard((root_session, agent_id))
+
+
+def is_live_agent(root_session: str, agent_id: str) -> bool:
+    return (root_session, agent_id) in _LIVE_AGENTS
 
 
 def _pid_alive(pid: object) -> bool:
@@ -249,6 +266,47 @@ class _QueuedInput:
     queued_id: str
     content: list[ContentBlock]
     mode: str = "queue"
+    #: The ``input.queued`` origin label (``None`` for typed input). A
+    #: ``subagent_report`` input is data from work already paid for: it skips the
+    #: ``UserPromptSubmit`` hooks and survives a queue-dropping cancel.
+    origin: dict[str, Any] | None = None
+
+    @property
+    def is_report(self) -> bool:
+        return bool(self.origin) and self.origin.get("kind") == REPORT_ORIGIN_KIND
+
+
+#: ``origin.kind`` of a subagent report delivered through the root's input queue
+#: (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.1).
+REPORT_ORIGIN_KIND = "subagent_report"
+_REPORT_NOTICE = "subagent_report"
+_MAX_ORIGIN_LIST = 32
+
+
+def _clean_origin(origin: Mapping[str, Any]) -> dict[str, Any]:
+    """Bound an origin label: strings clip at 200, ints and string lists survive."""
+    cleaned: dict[str, Any] = {}
+    for key, value in origin.items():
+        name = str(key)[:40]
+        if isinstance(value, bool):
+            cleaned[name] = str(value)[:200]
+        elif isinstance(value, int):
+            cleaned[name] = value
+        elif isinstance(value, (list, tuple)):
+            cleaned[name] = [str(item)[:200] for item in value[:_MAX_ORIGIN_LIST]]
+        else:
+            cleaned[name] = str(value)[:200]
+    return cleaned
+
+
+def _join_items(items: Sequence[_QueuedInput]) -> list[ContentBlock]:
+    """Queue items as one content list, separated by a blank line."""
+    content: list[ContentBlock] = []
+    for index, item in enumerate(items):
+        if index:
+            content.append(Text(text="\n\n"))
+        content.extend(item.content)
+    return content
 
 
 class _Fanout:
@@ -1224,6 +1282,24 @@ class Session:
             _LIVE_SHELLS.add(shell_id)
         return record
 
+    def emit_agent_event(self, event: Event) -> EventRecord | None:
+        """Persist and publish an ``agent.*`` or relayed child event, idle or mid-turn.
+
+        The background agent pool's root event port (plan 3.3). Mirrors how
+        :meth:`note_subagent_roster` persists events off the loop's sink:
+        append, observe, publish to subscribers, and offer to an attached
+        ``send`` stream so live and replay stay identical. Returns ``None`` once
+        the handle is retired (a deleted session must not be recreated).
+        """
+        if self._retired:
+            return None
+        self._ensure_writable()
+        record = self.append_event(event)
+        self._observe_event(record.event)
+        self._publish(record.event)
+        self._offer_attached(record.event)
+        return record
+
     def _events_after(self, from_seq: int) -> list[Event]:
         """All persisted events with ``seq > from_seq`` (append-only, ordered)."""
         return [
@@ -1341,7 +1417,7 @@ class Session:
         })
         if origin:
             event = msgspec.structs.replace(event, data={
-                **event.data, "origin": {str(k)[:40]: str(v)[:200] for k, v in origin.items()},
+                **event.data, "origin": _clean_origin(origin),
             })
         records = self._store.append_batch(self._id, [lambda seq: EventRecord(
             seq=seq, ts=stamp, event=msgspec.structs.replace(event, seq=seq),
@@ -1378,15 +1454,15 @@ class Session:
         self._ensure_writable()
         content = _coerce_user_input(user_input)
         queued_id = new_id()
-        item = _QueuedInput(queued_id, content, mode)
+        item = _QueuedInput(queued_id, content, mode, _clean_origin(origin) if origin else None)
         payload: dict[str, Any] = {
             "queued_id": queued_id,
             "content": _encode_queued_content(content),
             "queue_depth": len(self._queue) + 1,
             "mode": mode,
         }
-        if origin:
-            payload["origin"] = {str(key)[:40]: str(value)[:200] for key, value in origin.items()}
+        if item.origin:
+            payload["origin"] = item.origin
         self._emit("input.queued", payload)
         if mode == "interrupt":
             self._queue.appendleft(item)
@@ -1508,7 +1584,11 @@ class Session:
         items = [item for item in self._queue if item.mode == "steer"]
         consumed = False
         for item in items:
-            content, blocked = await self._gate_user_prompt(item.content)
+            # A subagent report is data, not a user prompt: the hook never sees it.
+            content, blocked = (
+                (item.content, None) if item.is_report
+                else await self._gate_user_prompt(item.content)
+            )
             if item not in self._queue:
                 continue
             if blocked:
@@ -1519,8 +1599,13 @@ class Session:
                        "turn": self.active_turn_id, "mode": "steer",
                        "content": _encode_queued_content(content)})
             self._remove_queued(item)
-            self.append_message(Message(role="user", content=content,
-                                        meta=MessageMeta(turn_id=self.active_turn_id)))
+            self.append_message(Message(
+                role="user", content=content,
+                meta=MessageMeta(
+                    turn_id=self.active_turn_id,
+                    notice=_REPORT_NOTICE if item.is_report else None,
+                ),
+            ))
             consumed = True
         return consumed
 
@@ -1584,12 +1669,37 @@ class Session:
         return True
 
     def _drop_queue(self, reason: str | None = None) -> None:
+        """Drop typed submissions; keep subagent reports (plan 3.7).
+
+        A report is information from work already paid for, so a cancel never
+        drops it: it stays queued and reaches the root at its next turn.
+        """
+        kept: deque[_QueuedInput] = deque()
         while self._queue:
             item = self._queue.popleft()
+            if item.is_report:
+                kept.append(item)
+                continue
             self._emit(
                 "input.dropped",
                 {"queued_id": item.queued_id, "reason": reason or "dropped"},
             )
+        self._queue = kept
+
+    @property
+    def retained_queued_ids(self) -> tuple[str, ...]:
+        """Pending ids a cancel does not drop (subagent reports), in FIFO order."""
+        return tuple(item.queued_id for item in self._queue if item.is_report)
+
+    @property
+    def queued_report_count(self) -> int:
+        """How many subagent reports wait in the queue (a batch counts its reports)."""
+        total = 0
+        for item in self._queue:
+            if item.is_report:
+                agents = (item.origin or {}).get("agents")
+                total += len(agents) if isinstance(agents, list) and agents else 1
+        return total
 
     def _rehydrate_queue(self) -> None:
         """Rebuild the pending input FIFO from the append-only input events.
@@ -1632,7 +1742,11 @@ class Session:
                 content = _decode_queued_content(data.get("content"))
                 if content is None:
                     continue
-                item = _QueuedInput(queued_id, content, str(data.get("mode", "queue")))
+                raw_origin = data.get("origin")
+                item = _QueuedInput(
+                    queued_id, content, str(data.get("mode", "queue")),
+                    _clean_origin(raw_origin) if isinstance(raw_origin, Mapping) else None,
+                )
                 if item.mode == "interrupt":
                     pending = {queued_id: item, **pending}
                 else:
@@ -1808,6 +1922,9 @@ class Session:
         workers: dict[tuple[str | None, str], Event] = {}
         agents: dict[str, Event] = {}
         completed_agents: set[str] = set()
+        spawned_events: dict[str, Event] = {}
+        #: Latest run number per child (1 = the spawn), so a run closed here says which.
+        runs: dict[str, int] = {}
         for event in self.read().events():
             if event.type == "turn.started":
                 turn_open, open_turn = True, event.turn
@@ -1834,7 +1951,28 @@ class Session:
                 agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
                 if isinstance(agent_id, str):
                     agents[agent_id] = event
+                    spawned_events[agent_id] = event
+                    runs[agent_id] = 1
                     completed_agents.discard(agent_id)
+            elif event.type == "agent.resumed" and isinstance(event.data, dict):
+                # A follow-up run is open until its own ``agent.completed``.
+                meta = event.data.get("agent")
+                agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
+                if isinstance(agent_id, str) and agent_id in spawned_events:
+                    agents[agent_id] = spawned_events[agent_id]
+                    completed_agents.discard(agent_id)
+                    run = event.data.get("run")
+                    runs[agent_id] = (
+                        run if isinstance(run, int) and not isinstance(run, bool) and run > 0
+                        else runs.get(agent_id, 1) + 1
+                    )
+            elif event.type == "agent.stopped" and isinstance(event.data, dict):
+                meta = event.data.get("agent")
+                agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
+                if isinstance(agent_id, str):
+                    # A stopped child has nothing left to close.
+                    agents.pop(agent_id, None)
+                    completed_agents.add(agent_id)
             elif event.type == "agent.completed" and isinstance(event.data, dict):
                 meta = event.data.get("agent")
                 agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
@@ -1842,6 +1980,8 @@ class Session:
                     agents.pop(agent_id, None)
                     completed_agents.add(agent_id)
         for (agent_id, worker_session), started in workers.items():
+            if agent_id and is_live_agent(self._id, agent_id):
+                continue
             # The lease covers a worker's whole lifetime, including the window
             # after external.started but before turn.started in a child session.
             record = self.append_event(Event(
@@ -1862,6 +2002,7 @@ class Session:
                 record = self.append_event(Event(
                     type="agent.completed",
                     data={"agent": started.data["agent"], "status": "interrupted",
+                          "run": runs.get(agent_id, 1),
                           "error": INTERRUPTED_ERROR, "reason": "interrupted",
                           "usage": {}, "usage_unknown": True, "ok": False, "is_error": True},
                     session=self._id, turn=started.turn,
@@ -1870,7 +2011,7 @@ class Session:
                 self._publish(record.event)
                 completed_agents.add(agent_id)
         for agent_id, spawned in sorted(agents.items(), key=lambda item: item[1].seq, reverse=True):
-            if agent_id in completed_agents:
+            if agent_id in completed_agents or is_live_agent(self._id, agent_id):
                 continue
             meta = spawned.data.get("agent")
             if not isinstance(meta, dict):
@@ -1878,6 +2019,7 @@ class Session:
             record = self.append_event(Event(
                 type="agent.completed",
                 data={**meta, "agent": meta, "status": "interrupted",
+                      "run": runs.get(agent_id, 1),
                       "error": INTERRUPTED_ERROR, "reason": "interrupted",
                       "usage": {}, "usage_unknown": True, "ok": False, "is_error": True},
                 session=self._id, turn=spawned.turn,
@@ -2018,6 +2160,30 @@ class Session:
                 del self._queue[index]
                 return True
         return False
+
+    async def _gate_queue_content(
+        self, content: list[ContentBlock], items: tuple[_QueuedInput, ...]
+    ) -> tuple[list[ContentBlock], str | None]:
+        """Run the prompt hooks over a queue snapshot, but never over reports.
+
+        Typed items are gated together; report items pass untouched (plan 3.2).
+        A hook that leaves the typed content as is keeps the original order; a
+        modify puts the reports first, then the modified typed content. A block
+        reason applies to the typed items only (see the callers).
+        """
+        reports = [item for item in items if item.is_report]
+        if not reports:
+            return await self._gate_user_prompt(content)
+        typed = [item for item in items if not item.is_report]
+        if not typed:
+            return content, None
+        typed_content = _join_items(typed)
+        gated, blocked = await self._gate_user_prompt(typed_content)
+        if blocked is not None:
+            return content, blocked
+        if gated == typed_content:
+            return content, None
+        return _join_items(reports) + [Text(text="\n\n"), *gated], None
 
     # -- lifecycle hooks ---------------------------------------------------
 
@@ -2281,7 +2447,14 @@ class Session:
                 Message(
                     role="user",
                     content=content,
-                    meta=MessageMeta(turn_id=lease.turn_id),
+                    meta=MessageMeta(
+                        turn_id=lease.turn_id,
+                        notice=(
+                            _REPORT_NOTICE
+                            if queued_items and all(item.is_report for item in queued_items)
+                            else None
+                        ),
+                    ),
                 )
             )
         except BaseException:
@@ -2417,15 +2590,11 @@ class Session:
         """Run hooks for the queue snapshot and launch its batched turn."""
         if self._active is not None:
             return
-        content: list[ContentBlock] = []
-        for index, item in enumerate(items):
-            if index:
-                content.append(Text(text="\n\n"))
-            content.extend(item.content)
-        content, block_reason = await self._gate_user_prompt(content)
+        content = _join_items(items)
+        content, block_reason = await self._gate_queue_content(content, items)
         if block_reason is not None:
             for item in items:
-                if self._remove_queued(item):
+                if not item.is_report and self._remove_queued(item):
                     self._emit(
                         "input.dropped",
                         {
@@ -2466,10 +2635,10 @@ class Session:
         # readiness seam yields, and a retired handle must never write.
         self._ensure_writable()
         content, queued_items = self._resolve_turn_input(user_input)
-        content, block_reason = await self._gate_user_prompt(content)
+        content, block_reason = await self._gate_queue_content(content, queued_items)
         if block_reason is not None:
             for queued_item in queued_items:
-                if self._remove_queued(queued_item):
+                if not queued_item.is_report and self._remove_queued(queued_item):
                     self._emit(
                         "input.dropped",
                         {
@@ -2613,10 +2782,10 @@ class Session:
         # ``UserPromptSubmit`` runs before anything is durable; capture the log
         # watermark so the blocked path can yield exactly the events it emitted.
         watermark = self.next_seq() - 1
-        content, block_reason = await self._gate_user_prompt(content)
+        content, block_reason = await self._gate_queue_content(content, queued_items)
         if block_reason is not None:
             for item in queued_items:
-                if self._remove_queued(item):
+                if not item.is_report and self._remove_queued(item):
                     self._emit(
                         "input.dropped",
                         {"queued_id": item.queued_id,

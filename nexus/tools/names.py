@@ -26,6 +26,8 @@ LEGACY_TOOL_NAMES = {
     "MultiEdit": "multiedit",
     "WriteTool": "WriteTool",
 }
+#: Root-only tools that steer persistent subagents; offered with ``subagent``.
+SUBAGENT_CONTROL_TOOLS = frozenset({"subagent_send", "subagent_stop", "subagent_list"})
 UNIFIED_BASH_ALIASES = frozenset({"BashOutput", "KillShell"})
 
 # Historical job permissions translate only to these unified ``bash`` actions.
@@ -97,6 +99,7 @@ __all__ = [
     "LEGACY_BASH_PERMISSION_ACTIONS",
     "LEGACY_TOOL_NAMES",
     "PERMISSION_BUNDLE_UNIONS",
+    "SUBAGENT_CONTROL_TOOLS",
     "UNIFIED_BASH_ALIASES",
     "canonical_permission_rule",
     "canonical_tool_name",

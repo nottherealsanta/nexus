@@ -70,6 +70,8 @@ from .model import (
 
 __all__ = [
     "AGENT_CLAMPED",
+    "AGENT_ROUTED",
+    "AGENT_RESUMED",
     "AGENT_COMPLETED",
     "AGENT_SPAWNED",
     "CHILD_SESSION_SEGMENT",
@@ -77,7 +79,9 @@ __all__ = [
     "DEFAULT_MAX_CONCURRENT",
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_FANOUT",
+    "DEFAULT_MAX_FOLLOWUP_CHARS",
     "DEFAULT_MAX_TIER",
+    "ContinuationRefused",
     "TierDecision",
     "MAX_REPORTED_FILES",
     "MAX_ROLE_INDEX_CHARS",
@@ -90,6 +94,8 @@ __all__ = [
     "DefaultSessionFacade",
     "RuntimeFactory",
     "SessionFacade",
+    "PreparedChild",
+    "StartedChild",
     "SubagentBudget",
     "SubagentError",
     "SubagentOutcome",
@@ -125,12 +131,21 @@ def qualify_model(provider: object, model: object) -> str | None:
 AGENT_SPAWNED = "agent.spawned"
 AGENT_COMPLETED = "agent.completed"
 AGENT_CLAMPED = "agent.clamped"
+#: Quota-aware routing decision for one child (docs/models.md); recorded only when
+#: a candidate was skipped or every candidate was blocked.
+AGENT_ROUTED = "agent.routed"
+#: The root sent a follow-up: a new run of an existing child (plan 3.4).
+AGENT_RESUMED = "agent.resumed"
 
 #: Defaults for the four bounding rules (plan section 15.8).
 DEFAULT_MAX_TIER = "high"
 DEFAULT_MAX_CONCURRENT = 4
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
+#: Longest follow-up ``subagent_send`` accepts (``agents.max_followup_chars``).
+DEFAULT_MAX_FOLLOWUP_CHARS = 20_000
+#: Longest follow-up text copied into the root's ``agent.resumed`` event.
+RESUMED_EVENT_CHARS = 3_900
 #: The role an ad-hoc ``Task`` request uses when none is named.
 DEFAULT_CHILD_TYPE = "task"
 #: Namespace a model may prefix onto requested tool names (OpenAI Responses).
@@ -190,13 +205,17 @@ WORKTREE_CHILD_TOOLS = frozenset(
     }
 )
 #: Tools only the root session may hold; a child never gets them.
-ROOT_ONLY_TOOLS = frozenset({"subagent"})
+ROOT_ONLY_TOOLS = frozenset({"subagent", "subagent_send", "subagent_stop", "subagent_list"})
 #: The child session path segment: ``<parent>/sub/<n>``.
 CHILD_SESSION_SEGMENT = "sub"
 
 
 class SubagentError(NexusError, ValueError):
     """A subagent request, definition, or bounding rule is invalid."""
+
+
+class ContinuationRefused(SubagentError):
+    """``subagent_send`` was refused; the message is written for the root model."""
 
 
 class _WorktreeRefusal(SubagentError):
@@ -427,6 +446,9 @@ class SubagentOutcome:
     #: events. Empty means unavailable (never started, or an external worker
     #: started without reporting a model), not "the tier's model".
     models: tuple[str, ...] = ()
+    #: The root can continue this child with ``subagent_send`` (changes the
+    #: wording of the model-facing hints in :meth:`render`).
+    continuable: bool = False
 
     @property
     def ok(self) -> bool:
@@ -558,16 +580,53 @@ class SubagentOutcome:
             lines.append(f"[note: {self.metrics['files_changed_note']}]")
         if self.handoff:
             where = f"saved at {self.handoff_path}" if self.handoff_path else "not saved to disk"
+            again = (
+                f"continue it with subagent_send (agent_id {self.session_id or self.agent})"
+                if self.continuable
+                else "start a new subagent and put what it needs from this report in its prompt"
+            )
             lines.append(
                 f"[{self.agent} did not finish (stop reason: {self.stop_reason or 'error'}). "
-                f"The digest below is {where}. If the work "
-                "still matters, start a new task and put what it needs from this report "
-                "in the prompt.]"
+                f"The digest below is {where}. If the work still matters, {again}.]"
             )
             lines.append(self.handoff)
         if len(lines) == 1:
             lines.append(f"{label}: no report")
         return "\n".join(lines)
+
+    def render_report(
+        self,
+        *,
+        run: int = 1,
+        role: str = "",
+        model: str | None = None,
+        max_chars: int | None = None,
+    ) -> str:
+        """The message a finished background run delivers to the root (plan 3.2).
+
+        A fixed header (agent, role, route, run, status) and the statement that this
+        is an automated report, not a user message and not authority, then
+        :meth:`render`. ``max_chars`` clips the body with an announced clip.
+        """
+        from .pool import format_report
+
+        return format_report(self.as_report(run=run, role=role, model=model), max_chars=max_chars)
+
+    def as_report(
+        self, *, run: int = 1, role: str = "", model: str | None = None, agent_id: str = ""
+    ) -> Any:
+        """This outcome as a pool ``AgentReport`` (unclipped body).
+
+        ``agent_id`` is the child's id (its session id, what ``subagent_send`` takes);
+        ``self.agent`` is only the role name.
+        """
+        from .pool import AgentReport
+
+        return AgentReport(
+            agent_id=agent_id or self.session_id or self.agent, run=run, status=self.status, role=role,
+            model=self.actual_model or model, tier=self.tier,
+            session_id=self.session_id, body=self.render(), continuable=self.continuable,
+        )
 
 
 #: Alias for callers that name the final report a "result".
@@ -658,7 +717,12 @@ class SubagentBudget:
         max_fanout: int | None = DEFAULT_MAX_FANOUT,
         token_budget: int | None = None,
         cost_budget: float | None = None,
+        max_live: int | None = None,
     ) -> None:
+        if max_live is not None and (
+            isinstance(max_live, bool) or not isinstance(max_live, int) or max_live < 1
+        ):
+            raise SubagentError("max_live must be a positive integer or None")
         if (
             isinstance(max_concurrent, bool)
             or not isinstance(max_concurrent, int)
@@ -696,7 +760,11 @@ class SubagentBudget:
         self.max_fanout = max_fanout
         self.token_budget = token_budget
         self.cost_budget = None if cost_budget is None else float(cost_budget)
+        #: Most children held at once (running, or idle once children persist);
+        #: ``None`` = unbounded. Unlike the per-window counters it spans turns.
+        self.max_live = max_live
 
+        self._live = 0
         self._slots = asyncio.Semaphore(max_concurrent)
         self._lock = asyncio.Lock()
         self._active = 0
@@ -714,8 +782,34 @@ class SubagentBudget:
 
     @property
     def children(self) -> int:
-        """Total children admitted to the tree so far."""
+        """Total children admitted to the tree so far (this window)."""
         return self._children
+
+    @property
+    def live(self) -> int:
+        """Children admitted and not yet released; spans windows."""
+        return self._live
+
+    def begin_window(self) -> None:
+        """Start a new root-turn window: spend and fan-out reset, live children stay.
+
+        The pool owns one budget per root session so concurrency and the live
+        count follow children across turns; the token/cost/fan-out counters keep
+        their per-root-turn meaning. A child's usage is charged to the window in
+        which it settles, and reservations stay held until then.
+        """
+        self._children = 0
+        self._spent_tokens = 0
+        self._spent_cost = 0.0
+
+    def release_live(self) -> None:
+        if self._live > 0:
+            self._live -= 1
+
+    def adopt_live(self, count: int) -> None:
+        """Charge ``count`` slots for children rebuilt from a log (idle, held)."""
+        if count > 0:
+            self._live += count
 
     @property
     def spent_tokens(self) -> int:
@@ -750,6 +844,8 @@ class SubagentBudget:
             "max_depth": self.max_depth,
             "max_concurrent": self.max_concurrent,
             "max_fanout": self.max_fanout,
+            "max_live": self.max_live,
+            "live": self._live,
             "children": self._children,
             "active": self._active,
             "token_budget": self.token_budget,
@@ -761,7 +857,7 @@ class SubagentBudget:
     # -- admission ---------------------------------------------------------
 
     async def reserve(
-        self, *, tokens: int = 0, cost: float = 0.0
+        self, *, tokens: int = 0, cost: float = 0.0, live: bool = True
     ) -> SubagentReservation | None:
         """Admit one child and charge an estimate, or return ``None``.
 
@@ -770,6 +866,9 @@ class SubagentBudget:
         child runs is what keeps the aggregate budget honest under concurrency.
         """
         async with self._lock:
+            # A continuation reuses the live slot its child already holds.
+            if live and self.max_live is not None and self._live >= self.max_live:
+                return None
             if self.max_fanout is not None and self._children >= self.max_fanout:
                 return None
             if (
@@ -789,6 +888,8 @@ class SubagentBudget:
             ):
                 return None
             self._children += 1
+            if live:
+                self._live += 1
             self._reserved_tokens += max(0, tokens)
             self._reserved_cost += max(0.0, cost)
             return SubagentReservation(tokens=max(0, tokens), cost=max(0.0, cost))
@@ -889,6 +990,11 @@ class ChildSpec:
     fallback: tuple[str, ...] = ()
     #: Model-facing note when the role's tiers or ``max_tier`` moved the request.
     clamp_note: str = ""
+    #: ``0`` for the first run; the run number of a continuation, whose
+    #: ``follow_up`` (also ``prompt``) is the root's message appended to the
+    #: child's existing conversation.
+    resume: int = 0
+    follow_up: str = ""
 
 
 class ChildRuntime(Protocol):
@@ -1080,6 +1186,89 @@ class TierDecision:
         return "max_tier" if self.resolution.clamped else ""
 
 
+@dataclass
+class PreparedChild:
+    """A child that is admitted, routed and announced but not yet running.
+
+    Produced by :meth:`SubagentRunner._prepare` (everything through
+    ``agent.spawned``) and consumed by :meth:`SubagentRunner._execute`. ``error``
+    carries a failure that happened while preparing; ``_execute`` re-raises it so
+    the one set of handlers settles budget, worktree and ``agent.completed``.
+    """
+
+    req: TaskRequest
+    role: Any
+    depth: int
+    selection: Any
+    decision: Any
+    resolution: Any
+    tier: str
+    child_model: str | None
+    child_provider: str | None
+    clamped: bool
+    clamp_note: str
+    dropped: tuple[str, ...]
+    sink: object | None
+    session_id: str
+    task_id: str
+    agent_id: str
+    parent_cancel: object | None
+    cancel: _ChildCancel
+    meta: dict[str, Any]
+    relay: _ChildRelay
+    reservation: SubagentReservation
+    call_id: str
+    worktree: Mapping[str, Any] | None
+    worktree_root: Path | None
+    mark_finished: Any
+    child_workspace: Path
+    spawn_event: object | None
+    error: BaseException | None
+    index: int
+    #: True for a ``start()`` child: its report is delivered to the root.
+    detached: bool = False
+    #: The spawn-time authority a continuation is held to (the parent's own
+    #: objects at spawn); ``None`` means "this runner's current ones".
+    permissions: object | None = None
+    grants: tuple[object, ...] | None = None
+    #: Run number (1 = spawn) and, for a continuation, the root's message.
+    run: int = 1
+    resume: bool = False
+    follow_up: str = ""
+    #: The child may be continued after this run (persistent, Nexus-native).
+    continuable: bool = False
+    #: Why not, in words for the root.
+    not_continuable: str = ""
+
+
+@dataclass(frozen=True)
+class StartedChild:
+    """What :meth:`SubagentRunner.start` returns.
+
+    When the child was refused or failed before launch ``outcome`` is set and
+    nothing runs; otherwise ``agent_id`` names the running child.
+    """
+
+    outcome: SubagentOutcome | None = None
+    agent_id: str = ""
+    session_id: str = ""
+    role: str = ""
+    model: str | None = None
+    tier: str | None = None
+    description: str = ""
+    workspace: str = ""
+    worktree: Mapping[str, Any] | None = None
+    dropped_tools: tuple[str, ...] = ()
+    clamp_note: str = ""
+    tools: tuple[str, ...] = ()
+    #: Run number (1 for a spawn, more for a continuation).
+    run: int = 1
+
+    @property
+    def started(self) -> bool:
+        return self.outcome is None
+
+
 class SubagentRunner:
     """Compute child authority, bound the tree, and run children via a factory."""
 
@@ -1125,6 +1314,11 @@ class SubagentRunner:
         tier_probe: Callable[[str], bool] | None = None,
         tier_candidates: Callable[[str], Sequence[str]] | None = None,
         tier_efforts: Callable[[], Mapping[str, Mapping[str, str]]] | None = None,
+        route_gate: Callable[[str], Any] | None = None,
+        pool: Any | None = None,
+        persistent: bool | None = None,
+        continuation_blocker: Callable[[str | None, str | None], str | None] | None = None,
+        max_followup_chars: int | None = None,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -1174,6 +1368,19 @@ class SubagentRunner:
         #: next request will run even when ``config`` is an older generation.
         self._tier_efforts = tier_efforts
         self._tier_candidates = tier_candidates
+        #: ``tier -> RouteDecision | None``: skips providers whose plan quota is
+        #: nearly spent. Absent (tests, static wiring) the tier runs as configured.
+        self._route_gate = route_gate
+        #: The session's agent pool (``nexus.agents.pool.RootAgents``); ``start``
+        #: needs it, ``spawn`` does not.
+        self._pool = pool
+        #: Children outlive their run (idle, continuable with ``resume``) when the
+        #: pool exists and ``agents.background`` is on (or ``persistent`` says so).
+        self._persistent_override = persistent
+        #: ``(model, provider) -> reason | None``: why a child on that route could
+        #: not be continued (an external worker), else ``None``.
+        self._continuation_blocker = continuation_blocker
+        self._max_followup_chars = max_followup_chars
         self._sessions: SessionFacade = (
             sessions if sessions is not None else DefaultSessionFacade(
                 segment=child_session_segment
@@ -1220,6 +1427,30 @@ class SubagentRunner:
     @property
     def default_type(self) -> str:
         return self._default_type
+
+    @property
+    def background(self) -> bool:
+        """Whether ``subagent`` returns at once (``agents.background``)."""
+        section = getattr(getattr(self._config, "v2", None), "agents", None)
+        return self._pool is not None and getattr(section, "background", False) is True
+
+    @property
+    def persistent(self) -> bool:
+        """Whether a child keeps its slot and can be continued after its run."""
+        if self._pool is None:
+            return False
+        if self._persistent_override is not None:
+            return self._persistent_override is True
+        section = getattr(getattr(self._config, "v2", None), "agents", None)
+        return getattr(section, "background", False) is True
+
+    @property
+    def max_followup_chars(self) -> int:
+        if self._max_followup_chars is not None:
+            return self._max_followup_chars
+        section = getattr(getattr(self._config, "v2", None), "agents", None)
+        value = getattr(section, "max_followup_chars", DEFAULT_MAX_FOLLOWUP_CHARS)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else DEFAULT_MAX_FOLLOWUP_CHARS
 
     @property
     def agents(self) -> AgentManager:
@@ -1641,11 +1872,415 @@ class SubagentRunner:
         emit: object | None = None,
         call_id: str = "",
     ) -> SubagentOutcome:
-        """Spawn one child, bounded and authority-intersected.
+        """Spawn one child, bounded and authority-intersected, and wait for it.
 
         Expected refusals (unknown role, depth/fan-out/budget, a factory error)
         come back as an error :class:`SubagentOutcome` so the model can see why;
         only cancellation raises :class:`~nexus.errors.OperationCancelled`.
+        This is :meth:`_prepare` followed by an awaited :meth:`_execute`; the
+        background path is :meth:`start`.
+        """
+        prepared = await self._prepare(request, cancel=cancel, emit=emit, call_id=call_id)
+        if isinstance(prepared, SubagentOutcome):
+            return prepared
+        pool = self._pool
+        if pool is not None and self.persistent and prepared.error is None:
+            # A persistent child is a pool record even when the caller waits, so
+            # the root can list, continue and stop it later.
+            record = self._register(prepared)
+            return await pool.run_inline(record, self._execute(prepared))
+        return await self._execute(prepared)
+
+    def _register(self, prepared: PreparedChild) -> Any:
+        """Create the pool record of a prepared child (it holds a live slot)."""
+        assert self._pool is not None
+        return self._pool.register(
+            agent_id=prepared.agent_id,
+            session_id=prepared.session_id,
+            role=prepared.role.name,
+            model=prepared.child_model,
+            tier=prepared.tier,
+            tools=tuple(sorted(prepared.selection.selected)),
+            cancel=prepared.cancel,
+            worktree=prepared.worktree,
+            continuable=prepared.continuable,
+            recipe=prepared,
+            meta=prepared.meta,
+            description=prepared.req.description or prepared.role.description,
+            not_continuable=prepared.not_continuable,
+            budget=self._budget,
+        )
+
+    async def start(
+        self,
+        request: object,
+        *,
+        emit: object | None = None,
+        call_id: str = "",
+    ) -> StartedChild:
+        """Spawn one child and return as soon as it is running in the background.
+
+        Everything up to and including ``agent.spawned`` happens here, through
+        ``emit`` (the spawning tool call's emitter, so the launch orders inside
+        it). The run itself is a task owned by the session's agent pool: it has
+        its own cancel token (no parent token, so ending the root turn does not
+        cancel it) and reports its events through the root event port. A refusal
+        or a failure before launch comes back as ``StartedChild.outcome`` with
+        nothing running.
+        """
+        pool = self._pool
+        if pool is None:
+            raise SubagentError("no agent pool is configured; use spawn() to wait for the child")
+        prepared = await self._prepare(
+            request, cancel=None, emit=emit, call_id=call_id,
+            detached_sink=pool.event_sink,
+        )
+        if isinstance(prepared, SubagentOutcome):
+            return StartedChild(outcome=prepared)
+        if prepared.error is not None:
+            # Failed before launch: conclude inline so the caller sees why.
+            return StartedChild(outcome=await self._execute(prepared))
+        selected = prepared.selection
+        started = StartedChild(
+            agent_id=prepared.agent_id,
+            session_id=prepared.session_id,
+            role=prepared.role.name,
+            model=prepared.child_model,
+            tier=prepared.tier,
+            description=prepared.req.description or prepared.role.description,
+            workspace=str(prepared.child_workspace),
+            worktree=dict(prepared.worktree) if prepared.worktree is not None else None,
+            dropped_tools=prepared.dropped,
+            clamp_note=prepared.clamp_note,
+            tools=tuple(sorted(selected.selected)),
+        )
+        pool.start_run(self._register(prepared), self._execute(prepared))
+        return started
+
+    # -- continuation, stop, list ---------------------------------------------
+
+    async def _evict_idle_for_slot(self) -> None:
+        """Close the least-recently-run idle child when a spawn would exceed ``max_live``.
+
+        Idle children hold a slot until ``subagent_stop``; a root that never stops
+        them would otherwise lock itself out. Only children that are not running are
+        evicted (``agent.stopped`` with ``by="system"``, the reason names the
+        eviction); when every live child is running the spawn is refused as before.
+        """
+        pool = self._pool
+        budget = self._budget
+        if pool is None or not self.persistent or budget.max_live is None:
+            return
+        if budget.live < budget.max_live:
+            return
+        victim = pool.eviction_candidate()
+        if victim is None:
+            return
+        await pool.stop(
+            victim.agent_id,
+            by="system",
+            reason=(
+                f"evicted to make room for a new subagent: {budget.live} of "
+                f"{budget.max_live} live slots were in use and this was the "
+                "least recently run idle subagent"
+            ),
+        )
+
+    def _rebuilt_pool(self) -> Any:
+        pool = self._pool
+        if pool is None:
+            raise ContinuationRefused(
+                "no agent pool is configured, so there are no persistent subagents"
+            )
+        pool.ensure_rebuilt(self._budget)
+        return pool
+
+    def agent_permission_key(self, agent_id: object) -> str:
+        """The gate key of an existing child, ``"<role>:<tier>"``: what spawning it was keyed on.
+
+        ``deny = ["Task(*:high)"]`` therefore also blocks continuing or stopping a
+        high-tier child. An unknown id gets a key no rule names, and the tool
+        refuses it anyway.
+        """
+        pool = self._pool
+        if pool is not None and isinstance(agent_id, str):
+            pool.ensure_rebuilt(self._budget)
+            record = pool.get(agent_id)
+            if record is not None:
+                return f"{record.role}:{record.tier or 'inherit'}"
+        return "unknown:unknown"
+
+    def list_agents(self) -> list[Any]:
+        """One row per subagent of this session, bounded to ``max_live`` rows."""
+        pool = self._pool
+        if pool is None:
+            return []
+        pool.ensure_rebuilt(self._budget)
+        limit = self._budget.max_live or 16
+        return pool.rows(limit=limit)
+
+    @property
+    def wake_paused(self) -> bool:
+        """Report delivery is paused after repeated automatic wake-ups."""
+        return bool(self._pool.wake_paused) if self._pool is not None else False
+
+    async def stop(self, agent_id: object, *, reason: str = "", by: str = "root") -> Any:
+        """Cancel a running child or close an idle one for good (idempotent)."""
+        pool = self._rebuilt_pool()
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ContinuationRefused("'agent_id' must be a non-empty string")
+        return await pool.stop(agent_id.strip(), by=by, reason=reason)
+
+    def _recipe_from_record(self, record: Any) -> PreparedChild:
+        """Rebuild the spawn recipe of a child this process did not start (after a restart).
+
+        Authority is derived afresh through the same path as spawn:
+        ``current root ceiling & role & recorded tools``; a continuation can only
+        shrink, never widen, relative to the spawn.
+        """
+        data = record.spawn_data or {}
+        meta = dict(record.meta)
+        try:
+            role = self._agents.resolve(record.role or str(meta.get("type") or ""), context="subagent")
+        except AgentNotFoundError as exc:
+            raise ContinuationRefused(
+                f"the role {record.role!r} of subagent {record.agent_id} no longer exists, so it "
+                "cannot be continued; start a new subagent and put what it needs in the prompt"
+            ) from exc
+        requested = data.get("requested_tier")
+        req = TaskRequest(
+            prompt="(continuation)",
+            subagent_type=role.name,
+            tools=tuple(record.tools),
+            model=requested if isinstance(requested, str) and requested.strip() else None,
+            description=record.description or None,
+            worktree=record.worktree is not None,
+        )
+        selection = self.select_tools(role, req)
+        decision = self.tier_decision(req)
+        resolution = decision.resolution
+        worktree = dict(record.worktree) if record.worktree is not None else None
+        worktree_root = None
+        child_workspace = self._workspace
+        mark_finished = None
+        if worktree is not None:
+            worktree_root = self._worktree_root
+            if self._worktree_root_for is not None:
+                worktree_root = Path(self._worktree_root_for(self._workspace))
+            mark_finished = getattr(self._worktree_service, "mark_finished", None)
+            child_workspace = Path(str(worktree.get("path") or self._workspace))
+        task_id = str(meta.get("task") or new_id())
+        index = meta.get("index")
+        return PreparedChild(
+            req=req, role=role, depth=self._depth + 1, selection=selection, decision=decision,
+            resolution=resolution, tier=str(record.tier or resolution.tier),
+            child_model=record.model or str(resolution.tier),
+            child_provider=self.role_provider(req), clamped=bool(data.get("clamped")),
+            clamp_note="", dropped=tuple(str(n) for n in (data.get("dropped_tools") or ())),
+            sink=None, session_id=record.session_id, task_id=task_id, agent_id=record.agent_id,
+            parent_cancel=None, cancel=_ChildCancel(None), meta=meta,
+            relay=_ChildRelay(None, meta, record.session_id),
+            reservation=SubagentReservation(), call_id="", worktree=worktree,
+            worktree_root=worktree_root, mark_finished=mark_finished,
+            child_workspace=child_workspace, spawn_event=None, error=None,
+            index=index if isinstance(index, int) and not isinstance(index, bool) else 0,
+            continuable=True,
+        )
+
+    async def resume(
+        self,
+        agent_id: object,
+        message: object,
+        *,
+        wait: bool = False,
+        emit: object | None = None,
+        cancel: object | None = None,
+        call_id: str = "",
+    ) -> StartedChild:
+        """Run another turn on an existing child, with ``message`` as the new user input.
+
+        The child keeps its id, session (so it sees everything it saw and did
+        before), model route, role and worktree. Authority is the spawn-time
+        ceiling: its recorded tools, permission snapshot and grants; it never
+        widens. ``agent.resumed`` goes through ``emit`` (the calling tool's
+        emitter) so it orders inside the call; the run is a pool task reporting
+        through the root event port, or, with ``wait``, awaited here with the
+        caller's ``cancel`` token. Every refusal raises
+        :class:`ContinuationRefused` with a message for the root model.
+        """
+        if self._depth >= 1:
+            raise ContinuationRefused("subagents cannot continue subagents; only the root session may")
+        pool = self._pool
+        if pool is None or not self.persistent:
+            raise ContinuationRefused(
+                "subagents are not persistent here (agents.background = false): a "
+                "subagent ends with its report; start a new one instead"
+            )
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ContinuationRefused("'agent_id' must be a non-empty string")
+        agent_id = agent_id.strip()
+        if not isinstance(message, str) or not message.strip():
+            raise ContinuationRefused("'message' must be a non-empty string")
+        limit = self.max_followup_chars
+        if len(message) > limit:
+            raise ContinuationRefused(
+                f"the follow-up is {len(message)} characters; the limit is {limit} "
+                "(agents.max_followup_chars). Shorten it, or put the long material in a "
+                "file and tell the subagent where to read it."
+            )
+        pool.ensure_rebuilt(self._budget)
+        record = pool.get(agent_id)
+        if record is None:
+            raise ContinuationRefused(
+                f"no subagent {agent_id!r} in this session; subagent_list shows the ones you started"
+            )
+        if record.state == "stopped":
+            raise ContinuationRefused(
+                f"subagent {agent_id} was stopped"
+                + (f" ({record.stopped_reason})" if record.stopped_reason else "")
+                + "; start a new subagent and put what it needs in the prompt"
+            )
+        if record.state == "running":
+            raise ContinuationRefused(
+                f"subagent {agent_id} is still running (run {record.runs}). Its report arrives "
+                "when it finishes; wait for it, or stop it with subagent_stop and then send."
+            )
+        if not record.continuable:
+            raise ContinuationRefused(
+                f"subagent {agent_id} cannot be continued: "
+                f"{record.not_continuable or 'it is not continuable'}"
+            )
+        recipe: PreparedChild = record.recipe or self._recipe_from_record(record)
+        try:
+            role = self._agents.resolve(recipe.role.name, context="subagent")
+        except AgentNotFoundError as exc:
+            raise ContinuationRefused(
+                f"the role {recipe.role.name!r} no longer exists; start a new subagent"
+            ) from exc
+
+        parent_cancel = cancel if wait else None
+        child_cancel = _ChildCancel(parent_cancel)
+        pool.begin_run(record, cancel=child_cancel)
+        run = record.runs
+        launch_sink = emit if emit is not None else self._event_sink
+        sink = launch_sink if wait else pool.event_sink
+        meta = dict(recipe.meta)
+        worktree = dict(recipe.worktree) if recipe.worktree is not None else None
+        reservation: SubagentReservation | None = None
+        reopened = False
+        try:
+            reservation = await self._budget.reserve(
+                tokens=self._reserved_tokens, cost=self._reserved_cost, live=False
+            )
+            if reservation is None:
+                raise ContinuationRefused(
+                    "the subagent tree budget is exhausted "
+                    f"({_budget_label(self._budget)}); the follow-up was not sent"
+                )
+            if worktree is not None:
+                reopen = getattr(self._worktree_service, "reopen", None)
+                if not callable(reopen) or recipe.worktree_root is None:
+                    raise ContinuationRefused("this subagent's worktree cannot be reopened here")
+                try:
+                    reopened_record = await _maybe_await(
+                        reopen(record.session_id, root=recipe.worktree_root)
+                    )
+                except OperationCancelled:
+                    raise
+                except Exception as exc:
+                    raise ContinuationRefused(
+                        f"the worktree of subagent {agent_id} cannot be reopened: {_safe(exc)}"
+                    ) from exc
+                reopened = True
+                worktree = {**worktree, **_worktree_record(reopened_record)}
+                worktree.update(base=worktree.get("base_commit"), owner=worktree.get("owner_uid"))
+                meta["worktree"] = dict(worktree)
+            shown = message[:RESUMED_EVENT_CHARS]
+            if len(message) > len(shown):
+                shown += (
+                    f"\n[follow-up clipped: showed {len(shown)} of {len(message)} characters; "
+                    "the subagent received all of it]"
+                )
+            await _forward(
+                launch_sink,
+                AGENT_RESUMED,
+                {
+                    "agent": dict(meta), **meta, "run": run, "from": "root", "message": shown,
+                    "message_chars": len(message), "background": not wait, "continuable": True,
+                    "worktree": dict(worktree) if worktree is not None else None,
+                },
+                session=self._parent_session,
+                durable=True,
+            )
+        except BaseException:
+            pool.abort_run(record)
+            if reservation is not None:
+                with contextlib.suppress(Exception):
+                    await self._budget.release_reservation(reservation)
+            if reopened and recipe.mark_finished is not None:
+                with contextlib.suppress(Exception):
+                    await _maybe_await(
+                        recipe.mark_finished(
+                            record.session_id, {"status": "cancelled"}, root=recipe.worktree_root
+                        )
+                    )
+            raise
+        _LIVE_CHILDREN[agent_id] = child_cancel
+        prepared = replace(
+            recipe,
+            role=role, sink=sink, cancel=child_cancel, parent_cancel=parent_cancel, meta=meta,
+            relay=_ChildRelay(sink, meta, record.session_id), reservation=reservation,
+            call_id=call_id if isinstance(call_id, str) else "", worktree=worktree, error=None,
+            detached=not wait, run=run, resume=True, follow_up=message, continuable=True,
+            not_continuable="",
+        )
+        record.recipe = prepared
+        record.meta = meta
+        if worktree is not None:
+            record.worktree = worktree
+        if wait:
+            outcome = await pool.run_inline(record, self._execute(prepared))
+            return StartedChild(outcome=outcome, agent_id=agent_id, run=run)
+        pool.start_run(record, self._execute(prepared))
+        return StartedChild(
+            agent_id=agent_id, session_id=record.session_id, role=role.name,
+            model=prepared.child_model, tier=prepared.tier,
+            description=record.description, workspace=str(prepared.child_workspace),
+            worktree=dict(worktree) if worktree is not None else None,
+            tools=tuple(sorted(prepared.selection.selected)), run=run,
+        )
+
+    def _blocker_for(self, model: str | None, provider: str | None) -> str | None:
+        """Why a child on this route cannot be continued (``None`` when it can)."""
+        if self._pool is None or not self.persistent:
+            return (
+                "persistent subagents are off (agents.background = false): this "
+                "subagent ended with its report"
+            )
+        if self._continuation_blocker is not None:
+            try:
+                return self._continuation_blocker(model, provider)
+            except Exception:  # noqa: BLE001 - an unreadable route is not continuable
+                return "its route could not be checked, so it is not continued"
+        return None
+
+    async def _prepare(
+        self,
+        request: object,
+        *,
+        cancel: object | None,
+        emit: object | None,
+        call_id: str,
+        detached_sink: object | None = None,
+    ) -> PreparedChild | SubagentOutcome:
+        """Validate, route, reserve budget, create the worktree, emit ``agent.spawned``.
+
+        Returns a refusal :class:`SubagentOutcome` for an expected refusal, else a
+        :class:`PreparedChild`. A failure after the reservation is captured in
+        ``PreparedChild.error`` and re-raised by :meth:`_execute`, so one set of
+        handlers settles budget, worktree and ``agent.completed`` for both the
+        blocking and the detached path. ``detached_sink`` (the root event port)
+        carries every event after launch; the launch events still use ``emit``.
         """
         try:
             req = TaskRequest.from_value(request)
@@ -1717,13 +2352,25 @@ class SubagentRunner:
                 else self._parent_model
             )
         child_provider = self.role_provider(req)
+        route_decision = None
         if child_model in self._tiers.order:
             child_provider = None
+            if self._route_gate is not None:
+                try:
+                    route_decision = self._route_gate(child_model)
+                except Exception:  # noqa: BLE001 - routing never fails a spawn
+                    route_decision = None
+                if route_decision is not None and route_decision.rerouted:
+                    # Pin this child to the chosen route; the tier stays its label.
+                    child_model = route_decision.chosen
         clamped = decision.clamped
         clamp_note = self._clamp_note(role, decision)
         dropped = tuple(sorted(selection.dropped))
+        blocker = self._blocker_for(child_model, child_provider)
 
-        sink = emit if emit is not None else self._event_sink
+        launch_sink = emit if emit is not None else self._event_sink
+        #: A detached child reports through the root event port, never the turn's emitter.
+        sink = detached_sink if detached_sink is not None else launch_sink
         index, session_id = await self._next_child_id()
         manager = getattr(self._sessions, "manager", None)
         store = getattr(manager, "store", None)
@@ -1761,6 +2408,10 @@ class SubagentRunner:
             "session": session_id,
         }
         relay = _ChildRelay(sink, meta, session_id)
+        if self._pool is not None and self.persistent:
+            # Children started before this process knew them hold slots too.
+            self._pool.ensure_rebuilt(self._budget)
+        await self._evict_idle_for_slot()
         reservation = await self._budget.reserve(
             tokens=self._reserved_tokens, cost=self._reserved_cost
         )
@@ -1774,20 +2425,16 @@ class SubagentRunner:
                 request=req,
                 session_id=session_id,
             )
-            await self._emit_completed(sink, meta, outcome)
+            await self._emit_completed(launch_sink, meta, outcome)
             return outcome
 
         _LIVE_CHILDREN[agent_id] = cancel
-        acquired = False
-        reservation_done = False
-        release_reservation_on_exit = False
-        outcome: SubagentOutcome | None = None
         worktree: Mapping[str, Any] | None = None
-        spec: ChildSpec | None = None
         child_workspace = self._workspace
-        cancellation: OperationCancelled | None = None
-        task_cancelled = False
         mark_finished = None
+        worktree_root: Path | None = None
+        spawn_event: object | None = None
+        error: BaseException | None = None
         try:
             if req.worktree:
                 if not self._runtime_supports_workspace:
@@ -1826,7 +2473,7 @@ class SubagentRunner:
                 child_workspace = Path(str(worktree["path"]))
                 meta["worktree"] = dict(worktree)
             spawn_event = await _forward(
-                sink,
+                launch_sink,
                 AGENT_SPAWNED,
                 {
                     "agent": dict(meta),
@@ -1841,12 +2488,14 @@ class SubagentRunner:
                     "tools": sorted(selection.selected),
                     "dropped_tools": list(dropped),
                     "worktree": dict(worktree) if worktree is not None else None,
+                    "background": detached_sink is not None,
+                    "continuable": blocker is None,
                 },
                 session=self._parent_session,
             )
             if clamped:
                 await _forward(
-                    sink,
+                    launch_sink,
                     AGENT_CLAMPED,
                     {
                         "agent": dict(meta),
@@ -1861,6 +2510,53 @@ class SubagentRunner:
                     },
                     session=self._parent_session,
                 )
+            if route_decision is not None and (route_decision.skipped or route_decision.all_blocked):
+                await _forward(
+                    launch_sink,
+                    AGENT_ROUTED,
+                    {"agent": dict(meta), **meta, **route_decision.to_event()},
+                    session=self._parent_session,
+                )
+        except (Exception, asyncio.CancelledError) as exc:
+            error = exc
+        return PreparedChild(
+            req=req, role=role, depth=depth, selection=selection, decision=decision,
+            resolution=resolution, tier=tier, child_model=child_model,
+            child_provider=child_provider, clamped=clamped, clamp_note=clamp_note,
+            dropped=dropped, sink=sink, session_id=session_id, task_id=task_id,
+            agent_id=agent_id, parent_cancel=parent_cancel, cancel=cancel, meta=meta,
+            relay=relay, reservation=reservation, call_id=call_id, worktree=worktree,
+            worktree_root=worktree_root, mark_finished=mark_finished,
+            child_workspace=child_workspace, spawn_event=spawn_event, error=error,
+            index=index, detached=detached_sink is not None,
+            permissions=self._permissions, grants=self._grants,
+            continuable=blocker is None, not_continuable=blocker or "",
+        )
+
+    async def _execute(self, p: PreparedChild) -> SubagentOutcome:
+        """Run a prepared child, finalize its worktree, settle budget, emit ``agent.completed``."""
+        req, role, depth, selection = p.req, p.role, p.depth, p.selection
+        decision, resolution, tier = p.decision, p.resolution, p.tier
+        child_model, child_provider = p.child_model, p.child_provider
+        clamped, clamp_note, dropped, sink = p.clamped, p.clamp_note, p.dropped, p.sink
+        session_id, task_id, agent_id = p.session_id, p.task_id, p.agent_id
+        parent_cancel, cancel, meta, relay = p.parent_cancel, p.cancel, p.meta, p.relay
+        reservation, call_id, worktree = p.reservation, p.call_id, p.worktree
+        worktree_root, mark_finished = p.worktree_root, p.mark_finished
+        child_workspace, spawn_event = p.child_workspace, p.spawn_event
+        acquired = False
+        reservation_done = False
+        release_reservation_on_exit = False
+        outcome: SubagentOutcome | None = None
+        spec: ChildSpec | None = None
+        #: Set once the child runtime exists (so a session/log exists to continue).
+        built: dict[str, bool] = {"child": False}
+        run = p.run
+        cancellation: OperationCancelled | None = None
+        task_cancelled = False
+        try:
+            if p.error is not None:
+                raise p.error
             await self._budget.acquire()
             acquired = True
             if _is_cancelled(cancel):
@@ -1872,7 +2568,9 @@ class SubagentRunner:
                 agent=role.name,
                 description=req.description or role.description,
                 system_prompt=system_prompt,
-                prompt=req.prompt,
+                prompt=p.follow_up if p.resume else req.prompt,
+                resume=run if p.resume else 0,
+                follow_up=p.follow_up if p.resume else "",
                 session_id=session_id,
                 parent_session=self._parent_session,
                 parent_agent_id=self._parent_agent_id,
@@ -1905,8 +2603,8 @@ class SubagentRunner:
                 worktree=worktree,
                 worktree_scope=self._worktree_scope or req.worktree,
                 config=self._config,
-                permissions=self._permissions,
-                grants=self._grants,
+                permissions=p.permissions if p.permissions is not None else self._permissions,
+                grants=tuple(p.grants) if p.grants is not None else self._grants,
                 budget=self._budget,
                 cancel=cancel,
                 emit=relay.emit,
@@ -1918,7 +2616,7 @@ class SubagentRunner:
                     "worktree": dict(worktree) if worktree is not None else None,
                 },
             )
-            outcome = await self._run_child(spec, cancel)
+            outcome = await self._run_child(spec, cancel, built)
         except OperationCancelled:
             release_reservation_on_exit = True
             cancellation = OperationCancelled(
@@ -2061,6 +2759,11 @@ class SubagentRunner:
                 )
             if acquired:
                 self._budget.release()
+            # A continuable child keeps its live slot while idle; it is freed by
+            # ``stop`` (or now, for a run that leaves nothing to continue).
+            continuable, blocker = self._continuation_after(p, outcome, built["child"])
+            if not continuable:
+                self._release_live(agent_id, blocker)
             if not reservation_done:
                 accounting = (
                     self._budget.release_reservation(reservation)
@@ -2075,7 +2778,14 @@ class SubagentRunner:
             raise SubagentError("subagent run produced no outcome")
         if not outcome.models and relay.models:
             outcome = replace(outcome, models=relay.models)
-        await self._emit_completed(sink, meta, outcome)
+        outcome = replace(outcome, continuable=continuable)
+        await self._emit_completed(sink, meta, outcome, run=run, continuable=continuable)
+        if p.detached and self._pool is not None:
+            # ``agent.completed`` is durable: the pool delivers the report to the
+            # root when this run's task settles.
+            self._pool.stash_report(
+                agent_id, outcome.as_report(run=run, role=role.name, model=child_model, agent_id=agent_id)
+            )
         if task_cancelled:
             raise asyncio.CancelledError
         if cancellation is not None and (
@@ -2088,10 +2798,13 @@ class SubagentRunner:
         self,
         spec: ChildSpec,
         cancel: object | None,
+        built: dict[str, bool] | None = None,
     ) -> SubagentOutcome:
         child = await _maybe_await(self._factory(spec))
         if child is None:
             raise SubagentError("runtime_factory returned no child runtime")
+        if built is not None:
+            built["child"] = True
         run_task = asyncio.ensure_future(_maybe_await(child.run()))
         cancel_task: asyncio.Task | None = None
         try:
@@ -2127,6 +2840,9 @@ class SubagentRunner:
         sink: object | None,
         meta: Mapping[str, Any],
         outcome: SubagentOutcome,
+        *,
+        run: int = 1,
+        continuable: bool = False,
     ) -> None:
         await _forward(
             sink,
@@ -2134,6 +2850,8 @@ class SubagentRunner:
             {
                 "agent": dict(meta),
                 **dict(meta),
+                "run": run,
+                "continuable": continuable,
                 "status": outcome.status,
                 "ok": outcome.ok,
                 "is_error": outcome.is_error,
@@ -2160,6 +2878,31 @@ class SubagentRunner:
             },
             session=self._parent_session,
         )
+
+    def _continuation_after(
+        self, p: PreparedChild, outcome: SubagentOutcome | None, child_built: bool
+    ) -> tuple[bool, str]:
+        """Can the child be continued after this run, and if not, why."""
+        if not p.continuable:
+            return False, p.not_continuable
+        if not (p.resume or child_built):
+            return False, "it never started, so there is no conversation to continue"
+        if outcome is not None and (outcome.usage_unknown or "external_kind" in outcome.metrics):
+            label = outcome.metrics.get("external_label") or "Claude Code"
+            return False, (
+                f"{label} workers run one assignment per session; start a new "
+                "subagent and put what it needs from the report in the prompt"
+            )
+        return True, ""
+
+    def _release_live(self, agent_id: str, blocker: str = "") -> None:
+        """Give back a child's ``max_live`` slot (the record, when there is one, knows)."""
+        pool = self._pool
+        if pool is not None and pool.get(agent_id) is not None:
+            pool.set_continuable(agent_id, False, blocker)
+            pool.release_slot(agent_id)  # a no-op when the slot is already free
+            return
+        self._budget.release_live()
 
     # -- helpers -----------------------------------------------------------
 
@@ -2209,6 +2952,8 @@ def _budget_label(budget: SubagentBudget) -> str:
         parts.append(f"cost {budget.spent_cost:g}/{budget.cost_budget:g}")
     if budget.max_fanout is not None:
         parts.append(f"children {budget.children}/{budget.max_fanout}")
+    if budget.max_live is not None:
+        parts.append(f"live {budget.live}/{budget.max_live}")
     return ", ".join(parts) or "limit reached"
 
 

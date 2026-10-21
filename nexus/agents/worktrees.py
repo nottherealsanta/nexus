@@ -167,6 +167,20 @@ class WorktreeService:
             runtime_ownership=self._runtime_ownership,
         )
 
+    def reopen(self, child_id: str, *, root: str | Path) -> WorktreeRecord:
+        """Return a finalized checkout to ``active`` so its child can keep working.
+
+        Used when the root continues an idle subagent. Every review and
+        acknowledgement made before the reopen is voided; the child must be
+        finalized and reviewed again. Refused for integrated, cleanup-pending
+        and discarded records, and for legacy-format records.
+        """
+        return _reopen(
+            child_id,
+            root=root,
+            runtime_ownership=self._runtime_ownership,
+        )
+
     def review(
         self,
         child_id: str,
@@ -1199,6 +1213,71 @@ def _mark_finished(
         _replace_record(path, finalized, key)
         # Confirm that the newly published authenticated state still belongs to
         # this checkout/root before returning it to the caller.
+        return _verify(_read_record(path, child_id, key), service_root, key)
+
+
+def _reopen(
+    child_id: str,
+    *,
+    root: str | Path,
+    runtime_ownership: Callable[[str], bool | None] | None,
+) -> WorktreeRecord:
+    """``finalized -> active`` under the service lock, voiding all review state.
+
+    The record keeps its checkout, branch and base. The old ``current_review_*``
+    and ``acknowledged_*`` are cleared so no earlier review artifact or
+    acknowledgement can be presented to ``integrate`` or ``discard`` after the
+    child has been given the chance to change the checkout again; the next
+    ``mark_finished`` and ``review`` produce a fresh, unacknowledged review.
+    """
+    child_id = _validate_child_id(child_id)
+    service_root, records_dir = _service_layout(root)
+    with _locked(service_root):
+        key = _load_key(service_root, create=False)
+        path = records_dir / _record_name(child_id)
+        if not path.exists():
+            raise WorktreeError(f"no owned worktree record for child {child_id!r}")
+        record = _verify(_read_record(path, child_id, key), service_root, key)
+        if _record_version(path) == _LEGACY_FORMAT_VERSION:
+            raise WorktreeError("a legacy-format worktree record cannot be reopened")
+        if record.lifecycle == "active":
+            return record
+        if record.lifecycle != "finalized":
+            raise WorktreeError(f"cannot reopen worktree in lifecycle {record.lifecycle!r}")
+        if any(
+            value is not None
+            for value in (
+                record.integrated_at,
+                record.integrated_review_id,
+                record.integrated_digest,
+                record.integration_transaction_id,
+                record.discard_expected_oid,
+                record.discard_state,
+            )
+        ):
+            raise WorktreeError("cannot reopen a worktree that was integrated or is being discarded")
+        from .worktree_integrate import _integrated_journals
+
+        if _integrated_journals(service_root / "transactions", record):
+            # A completed integration whose lifecycle promotion is still pending
+            # (recover_pending) must finish as integrated, never become active.
+            raise WorktreeError("cannot reopen a worktree with a completed integration journal")
+        reopened = replace(
+            record,
+            lifecycle="active",
+            final_status=None,
+            final_dirty_status=None,
+            finalized_at=None,
+            review_status=None,
+            reviewed_at=None,
+            reviewer=None,
+            current_review_id=None,
+            current_review_digest=None,
+            acknowledged_review_id=None,
+            acknowledged_digest=None,
+            acknowledged_at=None,
+        )
+        _replace_record(path, reopened, key)
         return _verify(_read_record(path, child_id, key), service_root, key)
 
 

@@ -42,22 +42,22 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 
 | Section | Key fields (defaults) |
 | --- | --- |
-| `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
+| `[agent]` | `name` orchestrator, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
-| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback` |
+| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback`, `subagent_usage` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
 | `[context]` | `max_tokens` (unset = model window, 180000 if unknown), `safety_margin_tokens` 4000, `compaction` hybrid, `compact_at_fraction` 0.85, `on_overflow` `handoff` (durable same-session context cutover, see [context.md](context.md); set `compact` to opt out and keep in-prompt compaction only; with no config or only v1 layers it stays `compact` (env overrides do not promote), and any v2 layer promotes to `handoff`), `handoff_keep_fraction` 0.25 (verbatim history kept after a handoff, as a fraction of the input budget, in (0, 1)), `handoff_brief` `deterministic` (or `summarized`: optional session-model recall, falls back to deterministic), `[context.limits]` memory 8000, agents_md 8000, skills_index 4000, environment 2000, attachments 20000 |
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
 | `[tools]` | `bash_timeout_s` 120, `bash_yield_s`, `bash_max_s` 3600, `grep_timeout_s` 5.0, `max_result_tokens` 25000, `max_parallel` 8, `[tools.web]` (local search on, `searxng_instances`, `allowed_origins`, fetch on, timeouts, `max_results` 5, `max_output_bytes` 512000) |
 | `[ext]` | `enabled`, `watch_interval_ms` 500 (0 disables), `dirs` (`.agents/tools`, `.nexus/tools`, `~/.nexus/tools`), `quarantine` true, `max_file_bytes` 262144 |
-| `[agents]` | `enabled`, `default_type` task, `max_depth` 3 (values above 1 behave as 1 because only the root session spawns; 0 disables spawning), `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles` |
+| `[agents]` | `enabled`, `default_type` task, `max_depth` 3 (values above 1 behave as 1 because only the root session spawns; 0 disables spawning), `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles`; background subagents (default **on**; `background = false` restores blocking, non-persistent children): `background` true, `max_live` 8 (children held at once, 1-64), `max_pending_reports` 32, `max_report_batch` 16, `max_report_chars` 24000, `report_coalesce_ms` 750 (0-60000), `max_auto_wakes` 20 (0 = never wake the root), `max_followup_chars` 20000, `oneshot_wait_seconds` 600 (0 = old one-shot behavior). All integers are range-checked and reject booleans. A workspace file may lower `max_live` and the report/follow-up/wake/one-shot bounds, never raise them (`config/layers.py`). `background`, `max_live` and the report keys (`max_pending_reports`, `max_report_batch`, `max_report_chars`, `report_coalesce_ms`, `max_auto_wakes`) and `oneshot_wait_seconds` are live ([agents.md](agents.md#reports-and-waking-the-root)); `max_followup_chars` bounds `subagent_send` messages ([agents.md](agents.md#persistent-children-subagent_send-subagent_stop-subagent_list)). `background = true` also makes children persistent (idle and continuable after a run, holding a `max_live` slot until stopped; when a spawn would exceed `max_live` the least-recently-run idle child is closed automatically, `agent.stopped` by `system`) and offers `subagent_send`/`stop`/`list` ([plan](../plans/done/NONBLOCKING_SUBAGENTS_PLAN.md)) |
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
 | `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
-| `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `pause_seconds` 120 (5-3600: a paused call ends after this long, see [live.md](live.md#pause-vs-stop)), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Experimental, see [live.md](live.md) |
+| `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `pause_seconds` 120 (5-3600: a paused call ends after this long, see [live.md](live.md#pause-vs-stop)), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Editable in the native terminal under Settings → GPT Live (the model `gpt-live-1-codex` is pinned and shown read-only). Experimental, see [live.md](live.md) |
 | `[manager]` | `enabled` **false**, `max_launches_per_turn` 3 (1-20), `max_live_managed` 8 (1-50). Gates `ManagerOpen` and every operation on the workspace manager session; the caps bound its `session_launch` ([manager.md](manager.md)). Env: `NEXUS_MANAGER__ENABLED`, `NEXUS_MANAGER__MAX_LAUNCHES_PER_TURN`, `NEXUS_MANAGER__MAX_LIVE_MANAGED`. The model is not configurable: it is pinned to `codex/gpt-6-luna` |
 | `[updates]` | `check` true |
 
@@ -100,6 +100,35 @@ that says main selection uses the Agent SDK and subagents are configured per rol
 or the Agent SDK inside a normal Nexus child with Nexus tools and permissions
 ([agents.md](agents.md#external-claude-code-workers)). Settings -> Models shows it as
 `Claude Code subagents run via` with a note on what each backend mediates.
+
+### `[models.subagent_usage]`
+
+Gates subagent launches on the provider's remaining usage quota. On by default.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Turn the gate off. User config only. |
+| `five_hour_min_remaining` | `10` | Minimum percent (0-100) left in the 5-hour window. |
+| `weekly_min_remaining` | `5` | Minimum percent (0-100) left in the weekly window. |
+| `monthly_min_remaining` | `2` | Minimum percent (0-100) left in the monthly window. |
+| `refresh_seconds` | `180` | How often usage is re-read (60-3600). User config only. |
+| `providers.<name>` | none | Per-provider overrides of the three thresholds; unset ones inherit. |
+
+A project file (`nexus.toml`, `.agents/nexus.toml`) may only raise a threshold, so
+the higher of the user and project values wins, including per-provider overrides.
+Setting `enabled` or `refresh_seconds` in a project file is a config error.
+
+```toml
+[models.subagent_usage]
+enabled = true
+five_hour_min_remaining = 10
+weekly_min_remaining = 5
+monthly_min_remaining = 2
+refresh_seconds = 180
+
+[models.subagent_usage.providers.github-copilot]
+monthly_min_remaining = 10
+```
 
 ## Antigravity worker keys
 

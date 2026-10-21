@@ -91,7 +91,16 @@ EXT_EVENTS = (
 )
 MCP_EVENTS = ("mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_changed")
 SKILL_EVENTS = ("skill.invoked", "skill.completed")
-AGENT_EVENTS = ("agent.spawned", "agent.completed", "agent.clamped")
+AGENT_EVENTS = (
+    "agent.spawned",
+    "agent.completed",
+    "agent.clamped",
+    "agent.routed",
+    # Persistent children (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.4):
+    # the root sent a follow-up that starts another run / the child was closed.
+    "agent.resumed",
+    "agent.stopped",
+)
 HOOK_EVENTS = ("hook.fired", "hook.blocked")
 # An external worker (Claude Code with its OWN tools, outside the Nexus
 # dispatcher): launch authority, each tool call/result read from its transcript,

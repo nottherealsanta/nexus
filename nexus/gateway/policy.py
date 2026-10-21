@@ -37,7 +37,7 @@ _READ = (
 _PROMPT = (
     p.SessionOpen, p.SessionStart, p.SessionEnqueue, p.SessionCancel,
     p.SessionQueueMove, p.SessionQueueRemove, p.SessionQueueSetMode, p.ModelSelect,
-    p.ReasoningEffortSelect, p.AgentSelect, p.AgentCancel, p.SessionArchive,
+    p.ReasoningEffortSelect, p.AgentSelect, p.AgentCancel, p.AgentClose, p.SessionArchive,
     p.SessionUnarchive,
 )
 _APPROVE = (p.PermissionResolve, p.QuestionAnswer)
@@ -187,7 +187,7 @@ def _validate(command: p.Command, device_id: str) -> p.Command:  # noqa: C901 - 
         case p.AgentSelect():
             _session(command.session)
             _line(command.name, 128, "agent name", allow_empty=False)
-        case p.AgentCancel():
+        case p.AgentCancel() | p.AgentClose():
             _session(command.session)
             _ident(command.agent_id, "agent id")
             _line(command.reason, 200, "reason")

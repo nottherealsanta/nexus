@@ -116,6 +116,7 @@ def build_runtime(workspace: Path, gate: MockGate | None = None) -> tuple[Runtim
             "subagent_type": "general",
             "tools": ["Read"],
             "description": "Verify the edited fixture",
+            "wait": True,
         })),
         tool_response(("child-read", "Read", {"path": FIXTURE_NAME})),
         [child_final],

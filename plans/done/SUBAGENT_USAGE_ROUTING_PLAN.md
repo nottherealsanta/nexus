@@ -1,6 +1,6 @@
 # Live tiers and usage-aware sub-agent routing
 
-Status: proposed; not implemented or verified. Replaces
+Status: steps B-E implemented and tested offline (window kinds, config, usage gate and snapshot service, spawn-time routing, `agent.routed` event and reducer); not verified live. Built as `host_support/usage_snapshot.py` plus `Runtime.route_subagent` (the walk happens in the runner at spawn, not inside `ModelRouter`). Steps A, F (TUI/GPUI rendering), G, H and I (remaining docs) are open. Replaces
 `PROVIDER_USAGE_THRESHOLDS_PLAN.md` (deleted), whose fail-closed, per-request
 design was narrowed by the decisions in §2.
 
@@ -179,15 +179,15 @@ verdicts, `all_blocked`) alongside `ResolvedModel`.
   roster read live tiers/efforts. Tests: edit during a running turn → next spawn
   uses the new list; `restart_required` false; roster reflects new efforts.
   Ship on its own.
-- [ ] **B. Window kinds.** Add `kind` to usage windows for every provider, with
+- [x] **B. Window kinds.** Add `kind` to usage windows for every provider, with
   recorded fixtures (Codex 5 h + weekly, Claude session + weekly, Copilot monthly
   only, OpenCode rolling/weekly/monthly, xAI weekly or monthly, Antigravity).
-- [ ] **C. Config.** `models.subagent_usage` schema, validation, defaults, merge
+- [x] **C. Config.** `models.subagent_usage` schema, validation, defaults, merge
   rule (stricter wins), `docs/config.md`.
-- [ ] **D. Snapshot service + verdict.** `host_support/usage_gate.py` poller and
+- [x] **D. Snapshot service + verdict.** `host_support/usage_gate.py` poller and
   cache; `model/usage_gate.py` pure verdict; `ProvidersUsage` reads the shared
   cache; alias → quota identity table.
-- [ ] **E. Routing.** Child-only filtering in `resolve` / `fallbacks`; external
+- [x] **E. Routing.** Child-only filtering in `resolve` / `fallbacks`; external
   worker launch path; `RouteDecision`.
 - [ ] **F. Durable decision event** + reducer + Ratatui/GPUI rendering on the
   sub-agent row.

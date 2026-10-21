@@ -430,3 +430,59 @@ def test_f3_second_holder_keeps_child_running_until_it_dies(crash):
     assert [r.event.type for r in after[len(before):] if isinstance(r, EventRecord)] == ["turn.failed"]
     _children_never_running(manager)
     assert {n["id"]: n for n in flatten(manager.tree("root"))}["root"]["running_children"] == 0
+
+
+# -- background children: the pool's live set guards recovery ------------------
+
+
+def _spawned_root(home: Path, *, resumed: bool = False):
+    """A root log with one spawned (and optionally completed then resumed) child."""
+    from nexus.events import Event
+
+    meta = {"id": "child", "parent": "root", "depth": 1, "type": "task", "task": "t", "session": "child"}
+    session = SessionManager(home).open("root")
+    session.append_message(Message(role="user", content=[Text(text="delegate")]))
+    session.append_event(Event(type="agent.spawned", session="root", data={"agent": meta, **meta}))
+    if resumed:
+        session.append_event(Event(type="agent.completed", session="root",
+                                   data={"agent": meta, **meta, "status": "completed"}))
+        session.append_event(Event(type="agent.resumed", session="root",
+                                   data={"agent": meta, **meta, "run": 2, "message": "more"}))
+    return session
+
+
+def _completed_statuses(home: Path) -> list[str]:
+    session = SessionManager(home).open("root", recover=False)
+    return [e.data["status"] for e in session.events if e.type == "agent.completed"]
+
+
+def test_live_agent_is_not_closed_as_interrupted_by_a_second_handle(tmp_path):
+    from nexus.session.session import register_live_agent, unregister_live_agent
+
+    home = tmp_path / "home"
+    _spawned_root(home)
+    register_live_agent("root", "child")
+    try:
+        SessionManager(home).open("root")  # a second handle's recovery pass
+        assert _completed_statuses(home) == []
+    finally:
+        unregister_live_agent("root", "child")
+    # Once the run is no longer live, the next open closes it as before.
+    SessionManager(home).open("root")
+    assert _completed_statuses(home) == ["interrupted"]
+
+
+def test_resumed_run_without_completion_is_recovered_and_stopped_child_is_not(tmp_path):
+    home = tmp_path / "home"
+    _spawned_root(home, resumed=True)
+    SessionManager(home).open("root")
+    assert _completed_statuses(home) == ["completed", "interrupted"]
+
+    from nexus.events import Event
+
+    other = tmp_path / "other"
+    session = _spawned_root(other)
+    meta = {"id": "child"}
+    session.append_event(Event(type="agent.stopped", session="root", data={"agent": meta, "by": "root"}))
+    SessionManager(other).open("root")
+    assert _completed_statuses(other) == []

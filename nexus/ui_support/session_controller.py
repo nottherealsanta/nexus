@@ -40,7 +40,7 @@ class SessionController:
         self.completion_seq = 0
         # Live-only notification count; replay and session switches leave it alone.
         self.completion_bell = 0
-        self.agent_name = "build"
+        self.agent_name = "orchestrator"
         self.agent_source = "default"
         self.agent_color: str | None = None
         self.provider: str | None = None
@@ -97,7 +97,7 @@ class SessionController:
             )
         ):
             return current
-        self.agent_name = str(getattr(current, "name", "build"))
+        self.agent_name = str(getattr(current, "name", "orchestrator"))
         self.agent_source = str(getattr(current, "source", "default"))
         self.agent_color = getattr(current, "color", None)
         self.provider = getattr(current, "provider", None)
@@ -254,7 +254,7 @@ class SessionController:
         resumed = self._parked.pop(session, None)
         self.view, self.cursor, self.completion_seq = resumed or (initial_state(session), 0, 0)
         self._resume_cursor = resumed is not None
-        self.agent_name = "build"
+        self.agent_name = "orchestrator"
         self.agent_source = "default"
         self.agent_color = None
         self.provider = None

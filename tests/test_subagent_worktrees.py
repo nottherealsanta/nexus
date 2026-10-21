@@ -558,3 +558,144 @@ def test_service_review_pagination_is_bounded_and_validates_cursor(tmp_path: Pat
         service.review("paged", first.review_id, cursor=-1, root=root)
     with pytest.raises(worktrees.WorktreeError, match="final page"):
         service.review("paged", first.review_id, cursor=100, root=root)
+
+
+# ---------------------------------------------------------------------------
+# reopen: a continued child works in the same checkout, and nothing reviewed
+# before the reopen can be used afterwards (plan 3.9)
+# ---------------------------------------------------------------------------
+
+
+def _reviewed(tmp_path: Path, name: str = "reopen"):
+    parent = repository(tmp_path / "parent")
+    root = tmp_path / "daemon"
+    service = worktrees.WorktreeService(runtime_ownership=lambda _child: False)
+    record = service.create(parent, name, root=root)
+    (record.path / "change.txt").write_text("first\n", encoding="utf-8")
+    service.mark_finished(name, {"status": "completed"}, root=root)
+    page = service.review(name, root=root)
+    service.acknowledge(name, page.review_id, page.digest, root=root)
+    return parent, root, service, record, page
+
+
+def test_reopen_returns_a_finalized_child_to_active_in_the_same_checkout(tmp_path: Path) -> None:
+    parent, root, service, record, _page = _reviewed(tmp_path)
+    reopened = service.reopen("reopen", root=root)
+
+    assert reopened.lifecycle == "active"
+    assert reopened.path == record.path and reopened.branch == record.branch
+    assert reopened.base_commit == record.base_commit
+    assert reopened.final_status is None and reopened.final_dirty_status is None
+    assert reopened.finalized_at is None
+    assert reopened.current_review_id is None and reopened.current_review_digest is None
+    assert reopened.acknowledged_review_id is None and reopened.acknowledged_digest is None
+    assert (record.path / "change.txt").read_text(encoding="utf-8") == "first\n"
+    assert worktrees.WorktreeService().get("reopen", root=root) == reopened      # durable
+    assert service.reopen("reopen", root=root) == reopened                       # idempotent
+
+    (record.path / "more.txt").write_text("second\n", encoding="utf-8")
+    again = service.mark_finished("reopen", {"status": "completed"}, root=root)
+    assert again.lifecycle == "finalized" and again.finalized_at != record.finalized_at
+    assert "more.txt" in again.final_dirty_status
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""   # parent untouched
+
+
+def test_review_and_acknowledgement_before_reopen_are_unusable_after_new_edits(tmp_path: Path) -> None:
+    parent, root, service, record, old = _reviewed(tmp_path)
+    service.reopen("reopen", root=root)
+
+    # While the child is active again nothing can be integrated, acknowledged or discarded.
+    with pytest.raises(worktrees.WorktreeError, match="active"):
+        service.integrate("reopen", old.review_id, old.digest, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="active"):
+        service.acknowledge("reopen", old.review_id, old.digest, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="active"):
+        service.discard("reopen", root=root, acknowledged_review_id=old.review_id)
+
+    (record.path / "change.txt").write_text("edited after the reopen\n", encoding="utf-8")
+    service.mark_finished("reopen", {"status": "completed"}, root=root)
+
+    # Finalized again, but the old review id is not the current one and was never re-acknowledged.
+    with pytest.raises(worktrees.WorktreeError, match="acknowledged"):
+        service.integrate("reopen", old.review_id, old.digest, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="not the child's current review"):
+        service.acknowledge("reopen", old.review_id, old.digest, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="current acknowledged review"):
+        service.discard("reopen", root=root, acknowledged_review_id=old.review_id)
+
+    new = service.review("reopen", root=root)
+    assert new.review_id != old.review_id and new.digest != old.digest
+    assert service.get("reopen", root=root).acknowledged_review_id is None
+    with pytest.raises(worktrees.WorktreeError, match="acknowledged"):
+        service.integrate("reopen", new.review_id, new.digest, root=root)       # fresh but unacknowledged
+    with pytest.raises(worktrees.WorktreeError, match="acknowledged"):
+        service.integrate("reopen", old.review_id, old.digest, root=root)
+    assert not (parent / "change.txt").exists()                                   # nothing was applied
+
+    service.acknowledge("reopen", new.review_id, new.digest, root=root)
+    assert service.integrate("reopen", new.review_id, new.digest, root=root).status == "integrated"
+    assert (parent / "change.txt").read_text(encoding="utf-8") == "edited after the reopen\n"
+
+
+def test_a_reopen_without_edits_still_needs_a_fresh_acknowledgement(tmp_path: Path) -> None:
+    _parent, root, service, _record, old = _reviewed(tmp_path)
+    service.reopen("reopen", root=root)
+    service.mark_finished("reopen", {"status": "completed"}, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="acknowledged"):
+        service.integrate("reopen", old.review_id, old.digest, root=root)
+    again = service.review("reopen", root=root)
+    assert service.get("reopen", root=root).acknowledged_review_id is None
+    with pytest.raises(worktrees.WorktreeError, match="acknowledged"):
+        service.integrate("reopen", again.review_id, again.digest, root=root)
+
+
+def test_reopen_is_refused_once_integrated_discarded_or_for_legacy_records(tmp_path: Path) -> None:
+    parent, root, service, record, page = _reviewed(tmp_path, "done")
+    other = service.create(parent, "gone", root=root)
+    (other.path / "x.txt").write_text("x\n", encoding="utf-8")
+    service.mark_finished("gone", {"status": "completed"}, root=root)
+    service.discard("gone", root=root, force=True)
+    with pytest.raises(worktrees.WorktreeError, match="discarded"):
+        service.reopen("gone", root=root)
+
+    service.integrate("done", page.review_id, page.digest, root=root)
+    with pytest.raises(worktrees.WorktreeError, match="integrated"):
+        service.reopen("done", root=root)
+    assert service.get("done", root=root).lifecycle == "integrated"
+
+    with pytest.raises(worktrees.WorktreeError, match="no owned worktree record"):
+        service.reopen("never-created", root=root)
+
+    legacy_parent = repository(tmp_path / "legacy-parent")
+    legacy_root = tmp_path / "legacy-daemon"
+    worktrees.create(legacy_parent, "legacy", root=legacy_root)
+    record_file = legacy_root / "records" / worktrees._record_name("legacy")
+    envelope = json.loads(record_file.read_text(encoding="utf-8"))
+    payload = envelope["record"]
+    payload["version"] = 1
+    for field in ("lifecycle", "final_status", "final_dirty_status", "finalized_at",
+                  "review_status", "reviewed_at", "reviewer"):
+        payload.pop(field)
+    key = (legacy_root / ".ownership-key").read_bytes()
+    envelope["mac"] = hmac.new(
+        key, json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256
+    ).hexdigest()
+    record_file.write_text(json.dumps(envelope), encoding="utf-8")
+    record_file.chmod(0o600)
+    with pytest.raises(worktrees.WorktreeError, match="legacy"):
+        worktrees.WorktreeService(runtime_ownership=lambda _c: False).reopen("legacy", root=legacy_root)
+
+
+def test_reopen_refuses_a_tampered_record(tmp_path: Path) -> None:
+    _parent, root, service, _record, _page = _reviewed(tmp_path, "pending")
+    record_file = root / "records" / worktrees._record_name("pending")
+    original = record_file.read_bytes()
+    envelope = json.loads(original)
+    envelope["record"]["lifecycle"] = "active"            # a forged state change, MAC unchanged
+    record_file.write_text(json.dumps(envelope), encoding="utf-8")
+    record_file.chmod(0o600)
+    with pytest.raises(worktrees.WorktreeError):
+        service.reopen("pending", root=root)
+    record_file.write_bytes(original)
+    record_file.chmod(0o600)
+    assert service.reopen("pending", root=root).lifecycle == "active"

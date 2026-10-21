@@ -275,6 +275,36 @@ First run: `SetupStatus` offers packaged candidate models; `SetupSave` writes
 picks the provider's newest tool-calling model). Credentials never enter setup
 commands. Claude.ai login is detected without exposing credentials.
 
+### Usage-aware sub-agent routing
+
+A sub-agent never starts on a provider whose plan quota is nearly spent
+(`[models.subagent_usage]`, [config.md](config.md)). `host_support/usage_snapshot.py`
+(`UsageSnapshotService`, owned by `HostFacade`) polls `providers_usage` every
+`refresh_seconds` (a 30 s ticker that rate-limits itself) and pushes a frozen
+`UsageSnapshot` into the runtime with `Runtime.set_usage_snapshot`; the usage panel's
+`ProvidersUsage` result is ingested into the same snapshot, so both show the same
+numbers. The runtime reads it through `model/usage_gate.py` (pure, no I/O):
+`Runtime.usage_headroom(reference)` maps a route or provider to its quota
+(`quota_identity`: Claude adapters share `claude-agent`, Antigravity is `antigravity`)
+and returns `ok`, `blocked` or `unknown`. A provider is blocked when any window it
+reports (`five_hour`, `weekly`, `monthly`; `other` never gates) has remaining percent at
+or below that kind's threshold.
+
+At child spawn the runner calls `Runtime.route_subagent(tier)`: `choose_route` walks
+`ModelRouter.tier_candidates(tier)` (only candidates a Nexus provider can run, or an
+external Claude Code/Antigravity worker), takes the first not blocked, and the child is
+pinned to that concrete route (its tier stays the label; external workers go through the
+same walk before launch). If every candidate is blocked the first is used and the
+decision is `all_blocked`. When a candidate was skipped or all were blocked the runner
+records `agent.routed` in the parent session right after `agent.spawned`
+(`AgentView.route`). A child's own router is wrapped in `GatedFallbacks`, so
+provider-error fallbacks skip blocked providers too (never emptying the chain).
+The roster still lists the configured order, so usage changes do not churn the prompt
+cache. Root, title and compaction requests never consult the gate, and a running child
+is never switched.
+Not implemented here: settings and tier badges, the usage-panel threshold marks and the
+main-agent toast (plan steps G-H); the Ratatui row for the route is the plan's step F.
+
 ### Claude SDK tool handoff
 
 The isolated worker registers the request's Nexus tool schemas on an in-process

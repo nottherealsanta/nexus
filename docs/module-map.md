@@ -77,7 +77,8 @@ here, so add a row when you add a file.
 | `manager.py` | AgentManager: deterministic subagent discovery, seeding, and tool selection |
 | `manager_prompt.py` | Packaged constants of the workspace manager session: kind, the pinned `codex/gpt-6-luna` route, sign-in hint and system prompt; code, not a role file, so nothing user-supplied can extend it ([manager.md](manager.md)) |
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
-| `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
+| `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions; `spawn` (wait) and `start` (background) share `_prepare`/`_execute` |
+| `pool.py` | AgentPool/RootAgents: background child runs that outlive a turn, persistent (idle, continuable) child records with their live slots, stop/list rows and rebuild from the root log, the pool-owned tree budget with per-root-turn windows, the root event port, report batching (coalescing, bounds, the auto-wake cap) |
 | `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
 | `antigravity_worker.py` | **NEW.** External Antigravity (`agy`) worker: one headless `agy --input-format stream-json --output-format stream-json` process per assignment running agy's own tools; stdin user event, NDJSON `init`/`step_update`/`result` readback, refuses tool/MCP/restriction fields and bypass modes; same duck contract as `claude_code_worker.py` |
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
@@ -210,6 +211,7 @@ here, so add a row when you add a file.
 | `facade.py` | The single surface API: `HostFacade` over one :class:`Runtime`; also opens the manager session (`ManagerOpen`/`ManagerState`) and injects its tool port |
 | `presence.py` | Host-level presence: client attachment and first-responder permission leases |
 | `protocol.py` | Transport-neutral wire contract for the host facade |
+| `reports.py` | Delivery of background-subagent reports to the root through its own input queue: sink, wake, reconcile on open, one-shot activity |
 | `session_diagnostics.py` | Compatibility module path for the session diagnostics implementation |
 | `supervisor.py` | Turn scheduling across sessions under one global concurrency cap |
 | `web.py` | Browser-only HTTP routes and short-lived launch/session credentials |
@@ -255,6 +257,7 @@ here, so add a row when you add a file.
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `skills_install.py` | `SkillsInstall`: run pinned `npx skills add --copy` in a temp stage, validate each skill, import into the scope's `skills/` with conflict, trash and rollback handling |
 | `setup.py` | First-run setup behind the host boundary |
+| `usage_snapshot.py` | Background refresh of the plan-usage snapshot the usage gate reads (coalesced, rate-limited, fail-open) |
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
@@ -263,6 +266,7 @@ here, so add a row when you add a file.
 | `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command; separate `manager` scope for the cross-session notice |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
+| `workspace_browse.py` | Bounded, read-only `DirectoryList` (path-checked, symlinks listed but never followed, read-deny roots and hidden entries omitted) and `GitStatus` (porcelain v2, deadline and byte cap) for the native sidebar's Files and Git tabs |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |
 
 ### `nexus/mcp/`
@@ -294,6 +298,7 @@ here, so add a row when you add a file.
 | `stream.py` | Normalized streaming events and the shared tool-call accumulator |
 | `tiers.py` | Tier resolution for model references |
 | `tokenizer.py` | Token accounting |
+| `usage_gate.py` | Pure plan-usage gate: window kinds, thresholds, per-quota verdicts, route choice and the blocked-provider fallback filter |
 
 ### `nexus/model/providers/`
 
@@ -423,6 +428,7 @@ here, so add a row when you add a file.
 | `read.py` | Built-in `Read` and the private helpers shared by the fs tools |
 | `skill.py` | `Skill`: progressive disclosure of a skill body or bundled resource |
 | `task.py` | `subagent` (legacy name `Task`): spawn a bounded subagent (bundle `task`) |
+| `subagent_control.py` | `subagent_send` / `subagent_stop` / `subagent_list`: continue, close and list persistent subagents (bundle `task`, root only, offered with `agents.background`) |
 | `todo.py` | `TodoWrite`: agent-scoped in-memory task list (bundle `task`) |
 | `webfetch.py` | Fetch a public web page and return bounded, explicitly untrusted Markdown |
 | `websearch.py` | Search configured SearXNG instances and return bounded untrusted results |
@@ -495,6 +501,7 @@ here, so add a row when you add a file.
 | `settings_help.py` | One-line help per Settings area, shared by both consoles |
 | `settings_page.py` | The typed one-page Settings model (blocks, controls, operations); control-safe and bounded |
 | `shortcuts.py` | Shared terminal shortcut and leader reference |
+| `sidebar.py` | Toolkit-free data of the native left sidebar: tab/width bounds (mirrored in `rust/tui/src/sidebar.rs`), manager-session filter, Projects grouping of repositories and worktrees, and control-safe Files and Git payloads from host results |
 | `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
 | `speech_settings.py` | Host-backed `/speak` settings (single Paradee voice) with safe `[speech]` TOML updates |
 | `text.py` | Control-safe, credential-redacted text for terminal presentation |
@@ -507,6 +514,7 @@ here, so add a row when you add a file.
 | `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal, desktop and CLI clients |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
+| `live_settings.py` | Host-backed GPT Live `[live]` settings (mirrored bounds, voices, pinned model) with safe TOML updates and reset |
 
 ### `nexus/view/`
 
@@ -559,6 +567,7 @@ here, so add a row when you add a file.
 | `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted); change tools group apart from other tools; compact labels above 5 members; `Working` and the newest-5 member window while running |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
+| `sidebar.py` | Native left sidebar controller: open/tab/width state, host-backed Projects, Files and Git loads with stale-result guards, validated client actions, the `sidebar` snapshot block; its Sessions tab reuses `bridge.py` |
 | `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
 | `turn_status.py` | Running-turn status line fields (activity, since, tokens) for the native client |
 | `transcript_data.py` | Bounded immutable-tool presentation cache |
@@ -586,6 +595,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `settings_pages/models.py` | Settings → Models: default chain, session titles, tier tabs, subagent limit, catalogue |
 | `settings_pages/providers.py` | Settings → Providers: one section per provider with in-place sign-in, API key and sign-out |
 | `settings_pages/voice.py` | Settings → Voice & speech: local dictation and Paradee speech with consent-gated downloads |
+| `settings_pages/live.py` | Settings → GPT Live: voice, limits, progress, instructions path, raw log and reset for `[live]` |
 | `settings_pages/appearance.py` | Settings → Appearance (theme) |
 | `settings_pages/layout.py` | Settings → Layout (sidebars and context header) |
 | `settings_pages/keys.py` | Settings → Keyboard: every shortcut, read-only, from the shared table |
@@ -608,13 +618,16 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
 | `rust/tui/src/graphics.rs` | One-shot `/dev/tty` probe choosing the `ratatui-image` protocol (Kitty, Sixel, iTerm2, half blocks) and cell size; `NEXUS_IMAGE_PROTOCOL` override |
-| `rust/tui/src/live_bar.rs` | GPT Live pane header and captions: caps phase + its animation (connecting dots, mic-level history, orbit, speaking wave) + clock, `Mic` ring buffer, chip/word-by-word caption rows |
+| `rust/tui/src/live_anim.rs` | GPT Live panel open/close motion: height 0 to full in 260 ms (ease-out cubic), 140 ms close from a ghost of the last call state, header accent sweep, frame request only while moving, jump to final state with animations off |
+| `rust/tui/src/live_wave.rs` | GPT Live motion band: block-height bars per state (breathing/mic-driven listening, accent gradient speaking, shimmer connecting/working, flat muted/ended), 30 Hz pure function of the frame, static and ASCII fallbacks, `wants_frames` |
+| `rust/tui/src/live_bar.rs` | GPT Live pane header and captions: caps phase + its motion band (`live_wave.rs`) + clock, `Mic` history and eased levels, chip/word-by-word caption rows |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 | `rust/tui/src/config.rs` | Optional local UI appearance preferences (`tui.json`), including `animate_activity` |
 | `rust/tui/src/mermaid.rs` | Self-contained Mermaid renderer (flowchart, sequence, state) as Unicode art; unsupported or oversized diagrams return `None` for the code-block fallback. Registered and called from `markdown.rs`; behaviour is unverified end to end |
 | `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
 | `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
+| `rust/tui/src/sidebar.rs` | Left sidebar: bounded width and room for the conversation, wrapping tab cells shared by painting and hit-testing, Projects/Sessions/Files/Git tabs, divider drag, focus and key routing; the Sessions tab drives `picker::Dashboard` |
 | `rust/tui/src/render/sessions.rs` | Compact centered, bordered Sessions page (max 72 columns, content height): time groups, one line per session (status glyph, name, last-used age), header actions |
 | `rust/tui/src/transcript/groups.rs` | Verb-group header (`▾ Working` while running), the running grey member tree and expanded member boxes |
 | `rust/tui/src/transcript/fold.rs` | Fold transient of a finished tool group: rows leave one per frame, then the header flash (pure over an `Instant`) |

@@ -735,6 +735,11 @@ def _on_code(state: ConversationView, event: Event, data: Mapping[str, Any]) -> 
                     {**row, "status": "cancelled"} if row.get("status") == "running" else row
                     for row in tool.nested_calls
                 ]
+            if tool.started_ts is None and tool.status in {"requested", "running"}:
+                # No tool.started ever named this id (older sessions persisted the id redacted
+                # as "***"): a placeholder row that no tool.completed will close.
+                changes["status"] = "completed" if data.get("status") == "ok" else "failed"
+                changes["is_error"] = data.get("status") != "ok"
             turn = _update_tool(turn, call_id, **changes)
         break
     return _put(state, index, replace(turn, updated_ts=event.ts))
@@ -1069,6 +1074,11 @@ def _user_blocks(content: object) -> list[BlockView]:
             blocks.append(BlockView(kind="text", text=block["text"], finalized=True))
     return blocks
 
+#: ``origin.kind`` values that carry ``agent``/``run``/``status``/``agents``.
+_AGENT_ORIGIN_KINDS = frozenset({"subagent_report", "root_followup"})
+_MAX_ORIGIN_AGENTS = 32
+
+
 def _origin(value: object) -> dict[str, Any] | None:
     """A bounded label for a non-typed user message.
 
@@ -1090,6 +1100,23 @@ def _origin(value: object) -> dict[str, Any] | None:
             text = _as_str(value.get(key))
             if text:
                 origin[key] = text[:200]
+    if kind in _AGENT_ORIGIN_KINDS:
+        # A subagent report delivered to the root, or a root follow-up shown on
+        # the child's page (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.1).
+        agent = _as_str(value.get("agent"))
+        if agent:
+            origin["agent"] = agent[:200]
+        run = value.get("run")
+        if isinstance(run, int) and not isinstance(run, bool) and 0 <= run <= 1_000_000:
+            origin["run"] = run
+        status = _as_str(value.get("status"))
+        if status:
+            origin["status"] = status[:40]
+        agents = value.get("agents")
+        if isinstance(agents, list):
+            origin["agents"] = [
+                item[:200] for item in agents[:_MAX_ORIGIN_AGENTS] if isinstance(item, str) and item
+            ]
     return origin
 
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -1490,6 +1517,9 @@ def _on_agent_spawned(state: ConversationView, event: Event, data: Mapping[str, 
             task=_as_str(meta.get("task")) or agent.task,
             session=_as_str(meta.get("session")) or agent.session,
             depth=_as_int(meta.get("depth"), agent.depth),
+            continuable=bool(data.get("continuable")) if "continuable" in data else agent.continuable,
+            background=bool(data.get("background")) if "background" in data else agent.background,
+            last_run_ts=agent.last_run_ts if agent.last_run_ts is not None else event.ts,
         )
         agents = dict(state.agents)
         agents[agent_id] = merged
@@ -1526,6 +1556,10 @@ def _on_agent_spawned(state: ConversationView, event: Event, data: Mapping[str, 
         status="spawned",
         body=body,
         spawned_ts=event.ts,
+        runs=1,
+        continuable=bool(data.get("continuable")),
+        background=bool(data.get("background")),
+        last_run_ts=event.ts,
     )
     agents = dict(state.agents)
     agents[agent_id] = agent
@@ -1571,6 +1605,78 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
         selected_model=_qualified_model(None, data.get("selected_model")) or agent.selected_model,
         body=body,
         completed_ts=event.ts,
+        runs=max(agent.runs, _as_int(data.get("run"), agent.runs)),
+        continuable=bool(data.get("continuable")) if "continuable" in data else agent.continuable,
+        last_run_ts=event.ts,
+    )
+    agents = dict(state.agents)
+    agents[agent_id] = agent
+    return replace(state, agents=agents, agent_order=list(state.agent_order))
+
+
+#: Longest follow-up text kept on a child page; the event already clips it.
+_FOLLOWUP_ROW_CHARS = 4000
+
+
+def _on_agent_resumed(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """The root sent a follow-up: a new run starts on the same child."""
+    meta = _agent_meta(data) or dict(data)
+    agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
+    if not agent_id or agent_id not in state.agents:
+        return _diagnostic(state, event, data)
+    agent = state.agents[agent_id]
+    run = _as_int(data.get("run"), agent.runs + 1)
+    body = agent.body
+    message = (_as_str(data.get("message")) or "")[:_FOLLOWUP_ROW_CHARS]
+    row = MessageView(
+        id=f"message:followup:{agent_id}:{run}",
+        event_seq=event.seq,
+        role="user",
+        blocks=[BlockView(kind="text", text=message, finalized=True)] if message else [],
+        done=True,
+        origin={"kind": "root_followup", "agent": agent_id[:200], "run": max(0, min(run, 1_000_000))},
+        sent_ts=_opt_float(event.ts),
+    )
+    turn = TurnView(
+        id=f"{agent.task or agent_id}:run{run}",
+        index=len(body.turns),
+        phase="active",
+        started_ts=event.ts,
+        updated_ts=event.ts,
+        user_ts=_opt_float(event.ts),
+        messages=[row],
+    )
+    body = _recompute_phase(replace(body, turns=[*body.turns, turn]))
+    agent = replace(
+        agent,
+        status="spawned",
+        ok=None,
+        is_error=None,
+        error=None,
+        stop_reason=None,
+        completed_ts=None,
+        runs=max(agent.runs, run),
+        last_run_ts=event.ts,
+        body=body,
+    )
+    agents = dict(state.agents)
+    agents[agent_id] = agent
+    return replace(state, agents=agents, agent_order=list(state.agent_order))
+
+
+def _on_agent_stopped(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """The child was closed (root, user or limit); terminal, the log is kept."""
+    meta = _agent_meta(data) or dict(data)
+    agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
+    if not agent_id or agent_id not in state.agents:
+        return _diagnostic(state, event, data)
+    agent = state.agents[agent_id]
+    agent = replace(
+        agent,
+        stopped=True,
+        stopped_by=(_as_str(data.get("by")) or "")[:40] or None,
+        stopped_reason=(_as_str(data.get("reason")) or "")[:500] or None,
+        last_run_ts=event.ts,
     )
     agents = dict(state.agents)
     agents[agent_id] = agent
@@ -1589,6 +1695,31 @@ def _on_agent_clamped(state: ConversationView, event: Event, data: Mapping[str, 
         requested_tier=_as_str(data.get("requested_tier")) or agent.requested_tier,
         diagnostics=[*agent.diagnostics, *_str_list(data.get("diagnostics"))],
     )
+    agents = dict(state.agents)
+    agents[agent_id] = agent
+    return replace(state, agents=agents, agent_order=list(state.agent_order))
+
+
+def _on_agent_routed(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    meta = _agent_meta(data) or dict(data)
+    agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
+    if not agent_id or agent_id not in state.agents:
+        return _diagnostic(state, event, data)
+    agent = state.agents[agent_id]
+    first = _as_str(data.get("first"))
+    chosen = _as_str(data.get("chosen"))
+    skipped = data.get("skipped")
+    route = {
+        "requested": _as_str(data.get("requested")),
+        "first": first,
+        "chosen": chosen,
+        "all_blocked": data.get("all_blocked") is True,
+        "skipped": [dict(item) for item in skipped[:8] if isinstance(item, Mapping)]
+        if isinstance(skipped, (list, tuple))
+        else [],
+    }
+    selected = chosen if chosen and chosen != first else agent.selected_model
+    agent = replace(agent, route=route, selected_model=selected)
     agents = dict(state.agents)
     agents[agent_id] = agent
     return replace(state, agents=agents, agent_order=list(state.agent_order))
@@ -1635,6 +1766,7 @@ def _update_agent_body(
     spawn: bool = False,
     complete: bool = False,
     clamp: bool = False,
+    route: bool = False,
 ) -> ConversationView:
     """Route lifecycle/content events to their owning conversation recursively."""
     if agent_id in state.agents:
@@ -1646,6 +1778,8 @@ def _update_agent_body(
             body = _on_agent_completed(owner.body, event, event.data)
         elif clamp:
             body = _on_agent_clamped(owner.body, event, event.data)
+        elif route:
+            body = _on_agent_routed(owner.body, event, event.data)
         else:
             body = apply(owner.body, body_event)
         agents = dict(state.agents)
@@ -1664,6 +1798,7 @@ def _update_agent_body(
             spawn=spawn,
             complete=complete,
             clamp=clamp,
+            route=route,
         )
         if updated is not parent.body:
             agents = dict(state.agents)
@@ -1871,6 +2006,10 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         if agent_id and agent_id not in state.agents and _find_agent(state, agent_id):
             return _update_agent_body(state, agent_id, event, complete=True)
         return _on_agent_completed(state, event, data)
+    if event_type == "agent.resumed":
+        return _on_agent_resumed(state, event, data)
+    if event_type == "agent.stopped":
+        return _on_agent_stopped(state, event, data)
     if event_type == "agent.clamped":
         meta = _agent_meta(data) or {}
         owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))
@@ -1879,6 +2018,14 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
             if routed is not state:
                 return routed
         return _on_agent_clamped(state, event, data)
+    if event_type == "agent.routed":
+        meta = _agent_meta(data) or {}
+        owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))
+        if owner and _find_agent(state, owner) is not None:
+            routed = _update_agent_body(state, owner, event, route=True)
+            if routed is not state:
+                return routed
+        return _on_agent_routed(state, event, data)
 
     meta = _agent_meta(data)
     if meta is not None:

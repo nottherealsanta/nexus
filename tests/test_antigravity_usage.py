@@ -63,6 +63,7 @@ async def test_row_fetches_built_in_usage_with_configured_fake_cli(tmp_path):
         "Gemini Models · Weekly", "Gemini Models · 5-hour", "Claude and GPT models · Weekly"]
     assert [w["used_percent"] for w in row["windows"]] == [25.0, 87.5, 0.0]
     assert [w["period_seconds"] for w in row["windows"]] == [604800, 18000, 604800]
+    assert [w["kind"] for w in row["windows"]] == ["weekly", "five_hour", "weekly"]
     assert row["windows"][0]["resets_at"] == 1792552808
     assert log.read_text().split("\n") == ["-p /usage", ""]
     assert "Antigravity" not in result["not_connected"]

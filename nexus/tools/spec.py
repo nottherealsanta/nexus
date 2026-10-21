@@ -272,6 +272,14 @@ class SubagentServiceView(Protocol):
         call_id: str = ...,
     ) -> object: ...
 
+    # Optional (background subagents): a service that can run a child detached
+    # also exposes ``background`` (a bool) and ``start``, which returns as soon
+    # as the child runs. The tool uses them only when present, ``background`` is
+    # true and the call did not pass ``wait: true``; ``start`` returns an object
+    # whose ``outcome`` is set when nothing was started (a refusal) and whose
+    # ``agent_id``/``role``/``model``/``tier``/``workspace`` describe the child
+    # otherwise. Probed with ``getattr``, so older doubles need not implement it.
+
 
 #: How a tool declares what a permission rule matches against.
 PermissionKeyFn = Callable[[dict[str, Any]], str]

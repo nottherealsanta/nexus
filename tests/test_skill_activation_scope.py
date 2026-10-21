@@ -120,7 +120,7 @@ async def test_declared_tools_narrow_the_next_iteration(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[0])) == 13  # includes runtime web tools
+    assert len(names(provider.requests[0])) == 16  # includes runtime web tools
     assert names(provider.requests[1]) == ["read"]
     await runtime.aclose()
 
@@ -166,7 +166,7 @@ async def test_declaration_of_nothing_does_not_narrow(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[1])) == 13  # no skill declaration narrows
+    assert len(names(provider.requests[1])) == 16  # no skill declaration narrows
     await runtime.aclose()
 
 
@@ -218,7 +218,7 @@ async def test_activation_does_not_leak_to_another_session(tmp_path):
 
     await b.start_turn("go")
     await wait_until_idle(b)
-    assert len(recorded["b_tools"]) == 13  # B's catalog is unaffected by A
+    assert len(recorded["b_tools"]) == 16  # B's catalog is unaffected by A
 
     release.set()
     await wait_until_idle(a)
@@ -272,6 +272,7 @@ async def test_bundle_declaration_cannot_widen_explore_child_catalog(tmp_path):
         tool_response(("root-task", "subagent", {
             "prompt": "inspect safely",
             "subagent_type": "explore",
+            "wait": True,
         })),
         tool_response(("child-skill", "skill", {"name": "shell-helper"})),
         text_response("read-only result"),
@@ -306,7 +307,7 @@ async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
     assert runtime._activations.get(session.id) is None
 
     await drain(session)
-    assert len(names(provider.requests[2])) == 13  # fresh turn restores base catalog
+    assert len(names(provider.requests[2])) == 16  # fresh turn restores base catalog
     await runtime.aclose()
 
 

@@ -38,6 +38,7 @@ import inspect
 import json
 import re
 import subprocess
+import time
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -50,13 +51,14 @@ import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .agents.runner import qualify_model
+from .agents.pool import AgentPool, ReportBatch, ReportLimits
 from .agents.handoff import build_handoff, write_handoff
 from .agents.handoff import digest as handoff_digest
 from .agents.last_choice import AgentChoiceStore
 from .model.effort_preferences import ModelEffortStore
 from .agents.model import AgentError, AgentNotFoundError
-from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
-from .tools.names import canonical_tool_name
+from .agents.runner import ROOT_ONLY_TOOLS, WORKTREE_CHILD_TOOLS, files_changed
+from .tools.names import SUBAGENT_CONTROL_TOOLS, canonical_tool_name
 from .config import Config
 from .config.paths import (
     nexus_home,
@@ -107,6 +109,16 @@ from .model.registry import (
 )
 from .model.request import REASONING_EFFORT_ORDER, ModelRequest, ToolSchema
 from .model.router import ModelRouter
+from .model.usage_gate import (
+    GatedFallbacks,
+    RouteDecision,
+    UsagePolicy,
+    UsageSnapshot,
+    UsageVerdict,
+    choose_route,
+    quota_identity,
+    verdict as usage_verdict,
+)
 from .model.reasoning_effort import ReasoningEffortSelection
 from .model.selection import ModelSelection
 from .model.tiers import (
@@ -1005,7 +1017,7 @@ class _ContextCoordinator:
                 pass
         selection = getattr(session, "agent_selection", None)
         configured_name = getattr(
-            getattr(getattr(config, "v2", None), "agent", None), "name", "build"
+            getattr(getattr(config, "v2", None), "agent", None), "name", "orchestrator"
         )
         name = getattr(selection, "name", None) or configured_name
         try:
@@ -1158,7 +1170,7 @@ class _ContextCoordinator:
         config = self.effective_config()
         selection = getattr(session, "agent_selection", None) if session is not None else None
         configured_name = getattr(
-            getattr(getattr(config, "v2", None), "agent", None), "name", "build"
+            getattr(getattr(config, "v2", None), "agent", None), "name", "orchestrator"
         )
         if self._agents is not None:
             self._agents.refresh()
@@ -1624,7 +1636,9 @@ class _ManifestEnvironmentFactory:
         if runner is not None:
             from .tools.builtin.task import build_task_tool
 
-            catalog = (*base_catalog, build_task_tool(runner))
+            from .tools.builtin.subagent_control import build_agent_control_tools
+
+            catalog = (*base_catalog, build_task_tool(runner), *build_agent_control_tools(runner))
             roster_digest = _roster_digest(runner)
         catalog = tuple(
             tool for tool in catalog
@@ -2406,6 +2420,10 @@ class _ChildRuntime:
                 fallback=runtime._router.fallback, registry=runtime._registry, tiers=runtime._tiers,
                 tier_efforts=getattr(getattr(getattr(getattr(spec, "config", None), "v2", None), "models", None), "tier_efforts", {}),
             )
+        headroom = getattr(runtime, "usage_headroom", None)
+        if callable(headroom):
+            # Provider-error fallbacks of this child skip providers whose quota is spent.
+            self._router = GatedFallbacks(self._router, headroom)
         if Runtime._adapter_kind(provider_name, section) == ADAPTER_ANTIGRAVITY:
             self._refuse_inherited_external(
                 runtime, spec, label=_ANTIGRAVITY_LABEL, route=f"{provider_name}")
@@ -2560,15 +2578,24 @@ class _ChildRuntime:
             skip_permissions=policy.skip_permissions)
 
     async def run(self) -> SubagentOutcome:
+        resume = int(getattr(self._spec, "resume", 0) or 0)
         if self._external is not None:
+            if resume:
+                # Defence in depth: the runner never marks an external worker continuable.
+                raise ConfigError(
+                    f"{self._external.label} workers run one assignment per session; start a "
+                    "new subagent and put what it needs from the report in the prompt")
             return await self._run_external()
         runtime = self._runtime
         spec = self._spec
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
         real_id = facade.manager.store.resolve_child_id(spec.session_id)
+        # A continuation reopens the child's own durable log. ``recover=True`` repairs a
+        # log a crash left behind (an open turn, a tool call with no result) before the
+        # new turn appends to it; the first run creates the session.
         session = facade.manager.open(
-            real_id, create=True, recover=False, ownership=_child_ownership(spec),
+            real_id, create=not resume, recover=bool(resume), ownership=_child_ownership(spec),
         )
         # A Nexus-run child on a ``spawned`` edge is readable by its ancestors
         # through the context namespace (plan 03 section 3.2 rule 3); external
@@ -2645,7 +2672,7 @@ class _ChildRuntime:
             try:
                 outcome = await run_turn(
                     session=session,
-                    user_input=spec.prompt,
+                    user_input=(spec.follow_up or spec.prompt) if resume else spec.prompt,
                     assemble=assembler,
                     provider_for=self._router,
                     emit=sink,
@@ -2677,6 +2704,10 @@ class _ChildRuntime:
             return result
         finally:
             self._drop_escalations()
+            kick = getattr(runtime, "usage_kick", None)
+            if callable(kick):  # the child spent quota: refresh (rate-limited) for the next spawn
+                with contextlib.suppress(Exception):
+                    kick()
             store = runtime._effective_todo_store()
             clear_session = getattr(store, "clear_session", None)
             if callable(clear_session):
@@ -3139,6 +3170,11 @@ class Runtime:
             self._router = router
         else:
             self._router = self._build_router(initial)
+        #: Plan-usage gate for sub-agent spawns (docs/models.md). The host injects
+        #: the snapshot (``set_usage_snapshot``) and a cheap ``usage_kick``.
+        self._usage_snapshot: UsageSnapshot | None = None
+        self._usage_policy: UsagePolicy = self._build_usage_policy(initial)
+        self.usage_kick: Callable[[], None] | None = None
         #: Only routes built here from config can be rebuilt by ``reload_model_routes``.
         self._owns_routes = providers is None and router is None and registry is None and tiers is None
         self._context = (
@@ -3201,6 +3237,13 @@ class Runtime:
         self._assembler._agents = self._agents
         self._hooks = self._build_hook_manager(initial, hooks, owns_hooks)
         self._child_sessions: _ChildSessionFacade | None = None
+        #: Background subagent runs that outlive a turn, one ``RootAgents`` per root session.
+        self.agent_pool = AgentPool()
+        # Plain-queue report delivery for a runtime without a host facade (tests,
+        # embedders); the facade replaces all three with its supervised versions.
+        self.agent_pool.report_sink = self._enqueue_report
+        self.agent_pool.root_active = self._root_turn_active
+        self.agent_pool.report_backlog = self._queued_report_count
         from .agents.worktrees import WorktreeService
 
         # One canonical registry per active parent checkout. Child runtimes
@@ -3710,8 +3753,11 @@ class Runtime:
             selection_manager = self._build_iteration_manager(assembler.effective_config(), manifest)
             _, unavailable_tools = self._web_tool_availability(assembler.effective_config())
             selectable_tools = set(selection_manager.authority_names) | set(unavailable_tools)
-            if getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None) is not None:
+            turn_runner = getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None)
+            if turn_runner is not None:
                 selectable_tools.add("subagent")
+                if getattr(turn_runner, "persistent", False) is True:
+                    selectable_tools.update(SUBAGENT_CONTROL_TOOLS)
             if agent is not None:
                 from .tools.bundles import BUNDLES
 
@@ -3779,6 +3825,10 @@ class Runtime:
 
                 task_tool = build_task_tool(runner)
                 tool_definitions[task_tool.name] = task_tool
+                from .tools.builtin.subagent_control import build_agent_control_tools
+
+                for control in build_agent_control_tools(runner):
+                    tool_definitions[control.name] = control
 
             def tool_row(schema, *, enabled, config_enabled):
                 tool = tool_definitions.get(schema.name)
@@ -4254,23 +4304,23 @@ class Runtime:
     def effective_session_agent(self, handle: Session) -> tuple[str, str]:
         selection = getattr(handle, "agent_selection", None)
         if selection is not None:
-            return selection.name or "build", "session"
+            return selection.name or "orchestrator", "session"
         return self.default_root_agent(), "config"
 
     def default_root_agent(self) -> str:
         """The root agent a session without a selection runs: ``[agent] name``.
 
-        New sessions start with it (``build`` unless configured otherwise).
+        New sessions start with it (``orchestrator`` unless configured otherwise).
         Read from disk on each call, so a Settings change applies at once.
         """
         config = self._load_config()
-        name = getattr(getattr(getattr(config, "v2", None), "agent", None), "name", "build")
+        name = getattr(getattr(getattr(config, "v2", None), "agent", None), "name", "orchestrator")
         if self._agents is not None:
             try:
                 name = self._agents.resolve(name, context="root").name
             except Exception:  # noqa: BLE001, S110 - an unresolvable name is still reported
                 pass
-        return str(name or "build")
+        return str(name or "orchestrator")
 
     def _validate_model_selection(self, reference: str) -> ModelSelection:
         """Resolve and validate one model/tier reference, or raise ``ConfigError``.
@@ -4383,6 +4433,7 @@ class Runtime:
                     await handle.aclose()
                 closed = True
         await self.close_session_jobs(session_id)
+        self.agent_pool.discard_if_idle(session_id)
         return closed
 
     async def close_session(self, session_id: str) -> bool:
@@ -4711,21 +4762,26 @@ class Runtime:
                 config=config,
                 catalog=manager.tools,
                 hooks=hooks_service,
-                budget=self._new_subagent_budget(config),
+                budget=self._turn_subagent_budget(session.id, turn_id, config),
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
             if static_runner is not None and "subagent" in manager.names:
+                from .tools.builtin.subagent_control import build_agent_control_tools
                 from .tools.builtin.task import build_task_tool
 
                 roster_digest = _roster_digest(static_runner)
+                controls = build_agent_control_tools(static_runner)
                 manager = ToolManager(
                     config,
                     workspace=self.workspace,
-                    tools=tuple(
-                        build_task_tool(static_runner) if tool.name == "subagent" else tool
-                        for tool in manager.tools
+                    tools=(
+                        *(
+                            build_task_tool(static_runner) if tool.name == "subagent" else tool
+                            for tool in manager.tools
+                        ),
+                        *controls,
                     ),
-                    restrict=manager.names,
+                    restrict=(*manager.names, *(tool.name for tool in controls)),
                     job_registry=self._job_registry,
                     todo_store=self._effective_todo_store(),
                     path_guard=manager.path_guard,
@@ -4747,7 +4803,7 @@ class Runtime:
                 config=config,
                 catalog=manager.tools,
                 hooks=hooks_service,
-                budget=self._new_subagent_budget(config),
+                budget=self._turn_subagent_budget(session.id, turn_id, config),
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
         gate.bind_manager(manager)
@@ -4787,7 +4843,7 @@ class Runtime:
                 # write roots / read denyroots mid-turn.
                 path_guard=manager.path_guard,
                 permissions=getattr(getattr(config, "v2", None), "permissions", None),
-                budget=self._new_subagent_budget(config),
+                budget=self._turn_subagent_budget(session.id, turn_id, config),
                 model_selection=model_selection,
                 agent_definition=agent_definition,
             )
@@ -5773,6 +5829,7 @@ class Runtime:
             # builtin; include it so a role may declare it without a false
             # ``unknown_tool`` diagnostic.
             known_tools.add("subagent")
+            known_tools.update(SUBAGENT_CONTROL_TOOLS)
             manager = AgentManager.for_workspace(
                 self.workspace,
                 home=self._home,
@@ -5977,7 +6034,89 @@ class Runtime:
                     names.add(name)
         return tuple(sorted(names))
 
-    def _new_subagent_budget(self, config: Config | None) -> Any | None:
+    async def _enqueue_report(self, batch: ReportBatch) -> bool:
+        """Default report sink: queue the batch as a ``steer`` input, no wake.
+
+        A running root consumes it at its next iteration boundary; an idle root
+        keeps it queued until its next turn. The host facade installs a sink that
+        also wakes the root (plan 3.1).
+        """
+        handle = self._sessions.open(batch.root_session, create=False, recover=False)
+        handle.enqueue(batch.render(), mode="steer", origin=batch.origin())
+        return False
+
+    def _root_turn_active(self, session_id: str) -> bool:
+        handle = self._sessions.open(session_id, create=False, recover=False)
+        return bool(getattr(handle, "active", False))
+
+    def _queued_report_count(self, session_id: str) -> int:
+        handle = self._sessions.open(session_id, create=False, recover=False)
+        return int(getattr(handle, "queued_report_count", 0))
+
+    def _root_agents(self, session_id: str, section: Any = None) -> Any:
+        """The pool entry for a root session, wired to its event port and live set."""
+        from .session.session import register_live_agent, unregister_live_agent
+
+        def port(event: Event) -> Any:
+            handle = self._sessions.open(session_id, create=False, recover=False)
+            return handle.emit_agent_event(event)
+
+        def live(agent_id: str, running: bool) -> None:
+            (register_live_agent if running else unregister_live_agent)(session_id, agent_id)
+
+        def history() -> Any:
+            handle = self._sessions.open(session_id, create=False, recover=False)
+            return handle.read().events()
+
+        limits = ReportLimits.from_section(section) if section is not None else None
+        return self.agent_pool.root(
+            session_id, event_port=port, live_hook=live, limits=limits, history=history
+        )
+
+    async def close_agent(
+        self, session_id: str, agent_id: str, *, reason: str = "", by: str = "user"
+    ) -> tuple[bool, str]:
+        """Stop one subagent of a root session for good (host ``AgentClose``).
+
+        A running child is cancelled first (its own token only), then closed; an
+        idle one is just closed. The children are rebuilt from the root log when
+        this process does not know them yet. Returns ``(closed, message)``.
+        """
+        section = self._agents_section(self._load_config())
+        root = self._root_agents(session_id, section)
+        root.ensure_rebuilt()
+        result = await root.stop(agent_id, by=by, reason=reason)
+        return result.stopped, result.message
+
+    def _turn_subagent_budget(
+        self, session_id: str, turn_id: str, config: Config | None
+    ) -> Any | None:
+        """The root session's pool-owned budget, its window reset once per root turn.
+
+        Concurrency and the live-child count span turns (a background child
+        outlives its turn); tokens, cost and fan-out reset at each root turn
+        start, as the per-turn budget did.
+        """
+        if self._agents is None:
+            return None
+        effective = config if isinstance(config, Config) else self._load_config()
+        section = self._agents_section(effective)
+        if section is None or not getattr(section, "enabled", True):
+            return None
+        signature = tuple(
+            getattr(section, name, None)
+            for name in ("max_concurrent", "max_depth", "max_fanout", "token_budget",
+                         "cost_budget", "max_live")
+        )
+        return self._root_agents(session_id, section).budget_window(
+            turn_id,
+            signature=signature,
+            factory=lambda: self._new_subagent_budget(effective, max_live=True),
+        )
+
+    def _new_subagent_budget(
+        self, config: Config | None, *, max_live: bool = False
+    ) -> Any | None:
         """Build the turn-scoped subagent tree budget, or ``None``.
 
         One budget per turn (shared across iterations, children, and
@@ -5999,6 +6138,9 @@ class Runtime:
                 max_fanout=getattr(section, "max_fanout", 16),
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
+                # Only the session-owned budget bounds held children; a code-mode
+                # or one-off budget has no live cap.
+                max_live=getattr(section, "max_live", None) if max_live else None,
             )
         except Exception:  # noqa: BLE001 - an invalid config disables the budget
             return None
@@ -6146,15 +6288,47 @@ class Runtime:
                 hooks=hooks,
                 worktree_service=self._worktree_service,
                 tier_probe=self._tier_runnable,
+                route_gate=self.route_subagent,
                 tier_candidates=self._router.tier_candidates,
                 tier_efforts=lambda: getattr(self._router, "tier_efforts", None),
                 worktree_root=expected_worktree_root,
                 worktree_root_for=self._owned_worktree_root_for,
                 runtime_supports_workspace=runtime_supports_workspace,
                 worktree_scope=worktree_scope,
+                pool=self._root_agents(parent_session or session_id, section),
+                continuation_blocker=self._continuation_blocker,
             )
         except Exception:  # noqa: BLE001 - an invalid agents config disables Task
             return None
+
+    def _continuation_blocker(self, model: str | None, provider: str | None) -> str | None:
+        """Why a child on this route could never be continued, else ``None``.
+
+        Mirrors the route decision ``_ChildRuntime`` makes: Claude Code and
+        Antigravity workers run one assignment per session (the Agent SDK backend
+        for ``claude-code`` is a normal Nexus child and continues like one).
+        """
+        v2 = getattr(self._config, "v2", None)
+        sections = getattr(v2, "providers", None) or {}
+        sdk_backend = getattr(getattr(v2, "models", None), "claude_code_subagent_backend", "worker") == "sdk"
+        reference = str(model or "")
+        if reference in self._tiers.order:
+            reference = self._external_tier_route(reference, claude=not sdk_backend) or reference
+        head, sep, _tail = reference.partition("/")
+        provider_name = head if sep else provider
+        if not provider_name:
+            return None
+        kind = Runtime._adapter_kind(provider_name, sections.get(provider_name))
+        if kind == ADAPTER_ANTIGRAVITY:
+            label = _ANTIGRAVITY_LABEL
+        elif kind == ADAPTER_CLAUDE_CODE and not sdk_backend:
+            label = "Claude Code"
+        else:
+            return None
+        return (
+            f"{label} workers run one assignment per session; start a new subagent and "
+            "put what it needs from the report in the prompt"
+        )
 
     def _worktree_root_for(self, workspace: str | Path) -> Path:
         """Resolve one stable, Runtime-owned registry root per parent checkout."""
@@ -6360,6 +6534,70 @@ class Runtime:
         if missing is not None:
             raise missing
         raise WorktreeError(f"no owned worktree record for child {child_id!r}")
+
+    # -- plan-usage gate (sub-agents only) ---------------------------------
+
+    def _build_usage_policy(self, config: Any = None) -> UsagePolicy:
+        try:
+            config = config if config is not None else self._load_config()
+            section = getattr(getattr(getattr(config, "v2", None), "models", None), "subagent_usage", None)
+            return UsagePolicy.from_section(section) if section is not None else UsagePolicy()
+        except Exception:  # noqa: BLE001 - a bad config must never block delegation
+            return UsagePolicy()
+
+    def _usage_sections(self) -> Mapping[str, Any]:
+        try:
+            config = self._config if self._config is not None else self._load_config()
+            return getattr(getattr(config, "v2", None), "providers", None) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def set_usage_snapshot(self, snapshot: UsageSnapshot | None) -> None:
+        """Replace the plan-usage snapshot (pushed by the host's snapshot service)."""
+        self._usage_snapshot = snapshot
+
+    def usage_policy(self) -> UsagePolicy:
+        """The current ``[models.subagent_usage]`` policy, rebuilt from live config."""
+        self._usage_policy = self._build_usage_policy()
+        return self._usage_policy
+
+    def usage_headroom(self, reference: str) -> UsageVerdict:
+        """The quota verdict for a route reference (``provider/model``) or a bare provider name."""
+        provider = str(reference).split("/", 1)[0]
+        sections = self._usage_sections()
+        kind = Runtime._adapter_kind(provider, sections.get(provider))
+        quota = quota_identity(provider, kind)
+        return usage_verdict(self._usage_snapshot, quota, self._usage_policy, now=time.time())
+
+    def _route_candidate_eligible(self, reference: str) -> bool:
+        """Whether a tier candidate could start a child: a runnable Nexus provider or an external worker."""
+        head = reference.split("/", 1)[0]
+        sections = self._usage_sections()
+        if Runtime._adapter_kind(head, sections.get(head)) in (ADAPTER_ANTIGRAVITY, ADAPTER_CLAUDE_CODE):
+            return "/" in reference
+        info = self._router._registry_lookup(reference)
+        return info is not None and getattr(info, "provider", None) in self._router._providers
+
+    def route_subagent(self, tier: str) -> RouteDecision | None:
+        """Walk ``tier``'s candidates skipping providers whose quota is nearly spent.
+
+        Spawn-time and sub-agents only: callers are the runner's child spawn and
+        the child runtime, never a root, title or compaction request. ``None``
+        when the gate is off or the tier has no candidate to choose between.
+        """
+        kick = self.usage_kick
+        if callable(kick):
+            with contextlib.suppress(Exception):
+                kick()
+        policy = self.usage_policy()
+        if not policy.enabled:
+            return None
+        try:
+            candidates = tuple(self._router.tier_candidates(tier))
+            return choose_route(tier, candidates, self.usage_headroom,
+                                eligible=self._route_candidate_eligible, observed_at=time.time())
+        except Exception:  # noqa: BLE001 - fail open: routing never fails a spawn
+            return None
 
     def _tier_runnable(self, tier: str) -> bool:
         """Whether ``tier`` currently resolves to a model a provider can run."""
@@ -6628,7 +6866,7 @@ class Runtime:
             for tool in self._filter_web_catalog(config, tuple(catalog_map.values()))
         }
         # Only the root session spawns, whatever the catalog or an extension offers.
-        for name in [n for n in catalog_map if canonical_tool_name(n) == "subagent"]:
+        for name in [n for n in catalog_map if canonical_tool_name(n) in ROOT_ONLY_TOOLS]:
             del catalog_map[name]
         if bool(getattr(spec, "worktree_scope", False)) or bool(
             getattr(spec, "worktree", None)
@@ -6938,6 +7176,7 @@ class Runtime:
             self._registry.retier(tiers)
         self._router.set_tiers(tiers, tier_efforts=efforts)
         self._assembler._tiers = tiers
+        self._usage_policy = self._build_usage_policy(config)
         return True
 
     async def reload_model_routes(self) -> bool:
@@ -6973,6 +7212,7 @@ class Runtime:
             fallback=fresh.fallback, registry=fresh.registry, tiers=fresh.tiers,
         )
         self._assembler._tiers, self._assembler._registry = self._tiers, self._registry
+        self._usage_policy = self._build_usage_policy(config)
         for provider in previous:
             aclose = getattr(provider, "aclose", None)
             if aclose is not None:
@@ -7041,6 +7281,10 @@ class Runtime:
         if self._closed:
             return
         self._closed = True
+        # Background children first: cancel them and drain their tasks while the
+        # session handles and child sessions they write to are still open.
+        with contextlib.suppress(Exception):
+            await self.agent_pool.aclose()
         await self.voice.shutdown()
         code_runner = getattr(self, "_code_runner", None)
         if code_runner is not None:

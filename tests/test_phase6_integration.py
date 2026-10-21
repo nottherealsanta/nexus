@@ -93,6 +93,7 @@ def make_config(
                 token_budget=token_budget,
                 cost_budget=cost_budget,
                 seed_roles=seed_roles,
+                background=False,  # these tests are about the blocking result
             ),
             context=ContextSection(
                 max_tokens=max_tokens,

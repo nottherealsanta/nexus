@@ -690,10 +690,11 @@ async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     assert "SOUL-A" in provider.requests[0].system
     assert "SOUL-B" in provider.requests[1].system
     assert "reader: read things" in provider.requests[1].system
-    assert len(provider.requests[0].tools) == 16
+    assert len(provider.requests[0].tools) == 19
     next_tools = set(names(provider.requests[1]))
     assert next_tools == {
-        "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"
+        "read", "glob", "grep", "subagent", "subagent_send", "subagent_stop", "subagent_list",
+        "todowrite", "question", "webfetch", "websearch", "skill",
     }
     assert not (next_tools & {"write", "edit", "multiedit", "bash"})
     await runtime.aclose()

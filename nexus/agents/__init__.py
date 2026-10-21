@@ -99,6 +99,7 @@ from .model import (
     split_frontmatter,
     validate_agent_name,
 )
+from .pool import AgentPool, AgentRecord, AgentReport, ReportBatch, RootAgents
 from .runner import (
     AGENT_CLAMPED,
     AGENT_COMPLETED,
@@ -121,12 +122,19 @@ from .runner import (
     SubagentReservation,
     SubagentResult,
     SubagentRunner,
+    StartedChild,
     SubagentUsage,
     TaskRequest,
     files_changed,
 )
 
 __all__ = [
+    "AgentPool",
+    "AgentRecord",
+    "AgentReport",
+    "ReportBatch",
+    "RootAgents",
+    "StartedChild",
     "AGENT_CLAMPED",
     "AGENT_COMPLETED",
     "AGENT_CONTEXTS",

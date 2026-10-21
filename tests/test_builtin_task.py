@@ -115,6 +115,7 @@ def test_task_spec_shape_and_bundle():
         "model",
         "description",
         "worktree",
+        "wait",
     }
 
 

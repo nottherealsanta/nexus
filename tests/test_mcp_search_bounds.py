@@ -95,7 +95,7 @@ async def test_child_agent_inherits_frozen_modes_and_fixed_proxy_tools(tmp_path)
     from test_mcp_search_tools import setup
 
     runtime, provider = setup(tmp_path,
-        tool_response(("t", "subagent", {"prompt": "read it", "subagent_type": "general"})),
+        tool_response(("t", "subagent", {"prompt": "read it", "subagent_type": "general", "wait": True})),
         tool_response(("s", "McpSearch", {"queries": [{"query": "select:read_file,write_file"}]})),
         tool_response(("c", "McpCall", {"tool": "fs/read_file", "arguments": {"path": "hello.txt"}})),
         text_response("child done"), text_response("parent done"))

@@ -344,9 +344,11 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionCancel(session="s"),
         p.SessionSubscribe(session="s", from_seq=3),
         p.SessionState(session="s", from_seq=1),
+        p.SessionActivity(session="s"),
         p.LogsRead(session="s"),
         p.AgentTranscript(session="s", agent_id="s/sub/1"),
         p.AgentCancel(session="s", agent_id="s/sub/1", reason="stop"),
+        p.AgentClose(session="s", agent_id="s/sub/1", reason="done"),
         p.SessionFork(session="s", at_seq=2, new_id="c"),
         p.SessionDelete(session="s", force=True),
         p.SessionRestore(trash_id="t"),
@@ -378,6 +380,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ReasoningEffortSelect(session="s", effort="high"),
         p.FileSearch(query="src"),
         p.GitDiff(staged=True, ref="HEAD"),
+        p.DirectoryList(path="src", limit=5),
+        p.GitStatus(),
         p.WorktreeList(),
         p.WorktreeInspect(child_id="s/sub/1"),
         p.WorktreeReview(child_id="s/sub/1", review_id="a" * 32, cursor=2, limit=8),
@@ -466,6 +470,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionQueueEditResult(session="s", changed=True),
         p.SessionSubscribeResult(session="s", from_seq=0),
         p.SessionStateResult(session="s", seq=4, view={"session_id": "s"}),
+        p.SessionActivityResult(session="s", turn_active=True, queued=1, running_agents=2,
+                                reports_pending=3, wait_seconds=600),
         p.LogsReadResult(
             daemon=p.DaemonLogPage(), session=p.SessionLogPage()
         ),
@@ -489,6 +495,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
         p.ClaudeCodeSettingsResult(main_enabled=True, message="note"),
         p.AgentCancelResult(session="s", agent_id="s/sub/1", cancelled=True),
+        p.AgentCloseResult(session="s", agent_id="s/sub/1", closed=True, message="Stopped"),
         p.SpeechStatusResult(state="absent", bytes_total=25_000_000),
         p.AttachmentPreviewResult(attachment_id="att-1", media_type="image/png", data=b"png"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
@@ -498,6 +505,8 @@ def test_protocol_round_trips_every_command_and_result():
         ),
         p.FileSearchResult(paths=["src/main.py"]),
         p.GitDiffResult(patch="+line", truncated=False),
+        p.DirectoryListResult(path="src", entries=[{"name": "a.py", "path": "src/a.py", "kind": "file", "size": 1}]),
+        p.GitStatusResult(available=True, branch="main", rows=[{"group": "unstaged", "code": "M", "label": "modified", "path": "a.py", "from": ""}], counts={"unstaged": 1}),
         p.WorktreeListResult(worktrees=[{"child_id": "s/sub/1"}]),
         p.WorktreeInspectResult(child_id="s/sub/1", status="finalized"),
         p.WorktreeReviewResult(
@@ -700,7 +709,7 @@ async def test_context_inspect_is_a_read_only_current_request_projection(tmp_pat
         await runtime.aclose()
 
 
-async def test_new_workspace_context_includes_packaged_build_prompt(tmp_path):
+async def test_new_workspace_context_includes_packaged_default_prompt(tmp_path):
     workspace = tmp_path / "elsewhere"
     workspace.mkdir()
     config = Config.load(workspace, home=tmp_path / "home", environ={})
@@ -711,7 +720,7 @@ async def test_new_workspace_context_includes_packaged_build_prompt(tmp_path):
         facade.open_session("new-session")
         result = await facade.handle(p.ContextInspect(session="new-session"))
         assert isinstance(result, p.ContextInspectResult)
-        assert result.agent["name"] == "build"
+        assert result.agent["name"] == "orchestrator"
         assert result.agent["instructions_included"] is True
         assert "You are an expert coding assistant operating inside Nexus" in (result.system_text or "")
     finally:

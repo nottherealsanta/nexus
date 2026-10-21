@@ -75,7 +75,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Tool names are lowercase; legacy names map one-way** and never widen rules. | Stable public vocabulary with compatibility for old rules. | `tools/names.py` |
 | **Agent questions are data, not grants** (separate event group). | An answer must never be mistaken for an approval. | `events.py` |
 | **A hook is policy, not a permission;** a `modify` is re-validated and re-gated. | Hooks cannot launder a denied call. | `hooks/` |
-| **Blocked subagents report to the root, never to the user; the root escalates.** `escalate` exists only in a child's catalog, grants nothing and is allowed in every mode; the child then ends (no pause/resume). | The root owns the conversation and the user; a human answer is the only thing that widens authority. | [agents.md](agents.md), `tools/builtin/escalate.py` |
+| **Blocked subagents report to the root, never to the user; the root escalates.** `escalate` exists only in a child's catalog, grants nothing and is allowed in every mode; the child's run then ends and the child goes idle: the root can continue it with `subagent_send` after resolving the block (see [agents.md](agents.md), "Reports and continuation"). A child never pauses mid-run waiting for an answer. | The root owns the conversation and the user; a human answer is the only thing that widens authority. | [agents.md](agents.md), `tools/builtin/escalate.py` |
 | **Children never exceed parents:** tools intersect, permissions inherit, tier is clamped, depth/fan-out/spend bounded. | Delegation must not be an escalation path. | [agents.md](agents.md) |
 | **Only the root session spawns subagents (plan 07).** Enforced structurally by context, not by role name: a child runtime has no runner, `subagent` is removed from every child catalog (canonical `Task` alias included), and `spawn` refuses at depth ≥ 1. `agents.max_depth` above 1 is ignored; 0 disables spawning. Session-tree reads use a fixed depth of 8 so legacy nested logs still render. A name allowlist would strip user root roles and leave custom children a hole; opting a role back into nesting needs a new recorded decision. | One rule covers built-ins, user roles, worktree children, extensions and code mode. | [agents.md](agents.md), `agents/runner.py` |
 | **Worktree integration applies frozen bytes to a clean parent with a rollback journal; no Git commit/reset/stash/checkout; the user acknowledges an exact review.** | Reviewable, recoverable, no surprise history changes. | `agents/worktree_*.py` |
@@ -100,6 +100,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Antigravity's permission bypass is an explicit, user-level opt-in (`worker_dangerously_skip_permissions`, default `false`).** | The user accepted agy's `--dangerously-skip-permissions`, but it auto-approves ALL tools outside PathGuard, so it is never default, never written into agy's own settings, rejected at load in project config layers (a cloned repo must not grant itself full authority), refused on other kinds, preflight-checked against `agy --help`, and disclosed in authority text, events, results and the UI. With it on, a configured `auto` mode is passed as the documented `accept-edits` (explicit `accept-edits`/`plan` stay). The Claude interactive worker (historical "ZMX") is not a substitute. | `agents/antigravity_worker.py`, `config/layers.py` |
 | **Antigravity sign-in and quota are manual and honest.** | `agy` has no `auth` subcommand, so Nexus can prove only that the CLI exists, never that it is signed in; Settings says to run `agy`. Usage is shown as unavailable (no windows) with a note to run `/usage` in `agy`: its output format is unverified, so `agy -p /usage` is not run and no numbers are invented. | `host_support/provider_auth.py`, `host_support/provider_usage.py` |
 | **"Read-only" is system-prompt guidance only; Nexus never enforces it on any role, child or provider (user decision, 2026-10-17).** | `READ_ONLY_ROLES` is empty, so `advisor` and the legacy `explore`/`plan`/`planner` keep the parent's tool ceiling (write, edit, patch and shell included) and their prompts say to avoid writing unless asked. Antigravity and Claude Code workers are planned with `read_only=False`: no refusal, no `--tools Read,Grep,Glob` restriction and no tier fallback for a "read-only" child; a Task call with `tools: []` is likewise ordinary. Earlier narrower fixes (empty tool list is not read-only) are superseded. Untouched on purpose: the `research` tool profile (a user-chosen profile that drops mutating tools, `tools/bundles.py`) and the gateway's `is_read_only` (HTTP idempotency). | `agents/model.py:READ_ONLY_ROLES`, `runtime.py:_plan_antigravity`, `agents/data/advisor.md` |
+| **Sub-agent usage routing fails open, applies at spawn only, and touches sub-agents only.** | A broken or stale usage endpoint must never block delegation, so unknown usage counts as available. Switching a running child loses cache and reasoning state, so only the next sibling spawn routes around a spent quota; the main agent, title and compaction requests are never rerouted. If every candidate is blocked the first is used (a spawn never fails for quota) and the event says so. The route is chosen in the runner at spawn and pinned as a concrete reference; the router itself stays usage-free. | `model/usage_gate.py`, `runtime.py:route_subagent`, `agents/runner.py`, `host_support/usage_snapshot.py` |
 | **Provider usage reuses the credentials Nexus already holds;** Claude's comes from `claude -p /usage`, not the `api/oauth/usage` endpoint CodexBar calls. | Reading Claude Code's OAuth token from its keychain item would break "the CLI owns the credential store"; `/usage` is a local command that costs no tokens. Its text format is unversioned, so a CLI change shows as a row error rather than wrong numbers. | `host_support/provider_usage.py` |
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
 | **`Ctrl+U` opens usage even in the composer.** | One direct key in both surfaces; the TUI composer loses readline's delete-to-line-start (`Cmd+Backspace` still works). | `ui/ratatui/actions.py` |
@@ -306,7 +307,8 @@ stop is labelled in the turn footer.
 
 Tool grouping is a pure helper consumed by native projection. Full-height sidebars replace the lower
 Logs pane. At constrained widths the most recently opened sidebar takes priority,
-with a narrow right overlay; saved visibility remains intact across resizing.
+with a narrow right overlay; saved visibility remains intact across resizing. The narrow
+drawer used to cover the conversation; the conversation now reflows beside it so nothing is clipped.
 Open sessions are marked in the Sessions list when its presence removes center tabs.
 
 Context inspections can be refused during a turn. Keep the last successful preview
@@ -776,6 +778,32 @@ gone. The web client keeps its sidebar (it is being deprecated, not changed).
 Modals share one backdrop dim (`render::dim_backdrop`) instead of each drawing its
 own scrim. Not verified: native screenshots of every modal kind over the dim.
 
+## The native TUI gets a left sidebar again, with Projects, Sessions, Files and Git (2026-10)
+
+The 2026-10 removal above stands for the *old* sidebar (a second, narrower copy of the
+dashboard). The new one is a different surface: a docked column beside the conversation with
+four tabs, so `/sessions` no longer replaces the conversation with a page. Decisions:
+
+- **One list, two views.** The Sessions tab reuses `picker::Dashboard` and the host-side
+  `SessionDashboard` (filter, rename, archive, permission answers) rather than a second
+  implementation; Projects groups the same host rows by `repo`/`worktree` (`ProjectSessionsList`).
+  `WorktreeList` is not used: it lists daemon-owned *agent* worktrees of the current workspace, not
+  user checkouts.
+- **The manager is not a row.** The host never lists it, and the presentation filters its identity
+  again (`ui_support/sidebar.py::is_manager_row`) so a host change cannot leak it into the list.
+- **New host commands instead of UI I/O.** Files and Git need data the UI must not read itself, so
+  `DirectoryList` and `GitStatus` return bounded, redacted, path-checked results (`docs/host.md`).
+  Refused: reusing `FileSearch` (a flat ranked search, not navigation) and `GitDiff` (a patch, not status).
+- **Python owns state, Rust draws.** Open/closed, tab and width persist as `sessions_sidebar`,
+  `sidebar_tab`, `sidebar_width` (default closed; the old preference key is kept). The drag is
+  optimistic in Rust and saved once on release. The client yields to the conversation: the sidebar
+  hides rather than leaving it under 56 columns, and its width is 24..60 (mirrored constants, pinned
+  by `tests/test_ratatui_sidebar.py`).
+- **Legacy page kept.** Hosts and fixtures that send no `sidebar.available` (the desktop bridge, old
+  snapshots, existing tests) keep the full-page Sessions dashboard.
+- Not verified: this change was written without a compiler or a terminal; see "Left sidebar" in
+  `ratatui-parity.md` for what was and was not run.
+
 # In-progress Grok TUI implementation notes
 
 - The widget-role foundation is implemented as methods, not role constants.
@@ -1182,3 +1210,101 @@ no "only" mode (U7). Context is root-sessions-only in v1.
 of 3-9 letters so a `-99` suffix fits 32 characters. Display identity only, not a
 secret. Why the name is in the row and not the log: see "Session names live in the
 row, not the log" above.
+
+## A subagent report is a root input, not a new event
+
+Phase 3 of the non-blocking plan delivers a background child's report as an ordinary
+root input (`steer`, `origin.kind = "subagent_report"`, `client_request_id =
+"subagent-report-<agent>-<run>"`; the plan's `:` is outside the request-id charset).
+The delivery record is the `input.queued`/`input.consumed` pair plus `agent.completed`;
+there is no `agent.reported`. Trust: the text is a user-role message but is wrapped in
+a fixed header saying it is an automated report that cannot grant permission or
+authority; the permission engine ignores message roles; `UserPromptSubmit` hooks do
+not run on it; the human sees the origin label. Its trust level is unchanged from the
+tool result it replaces. Esc keeps queued reports (typed input is dropped) and does not
+wake the root; it never cancelled children once they became detached. The auto-wake
+cap (`agents.max_auto_wakes`, consecutive report-initiated wakes without a human
+message) pauses delivery with a durable `context.notice` rather than dropping anything;
+the next human message resumes it. A restart never starts model calls on its own:
+reconciled `interrupted`/`cancelled` runs are queued without a wake. The one-shot wait
+is decided by the daemon (`SessionActivity.wait_seconds`) so a client needs no config.
+
+## Background subagents reuse the root's input queue (2026-10-20)
+
+Reports from finished children will be delivered as root inputs (`mode = steer`,
+`origin = {"kind": "subagent_report", ...}`) through the existing durable queue, not
+through a new `agent.reported` event or a context-injection block. The queue already
+survives restart and replay, is consumed at every iteration boundary, wakes an idle
+root through the supervisor and batches for free. Phase 1 and 2 of
+`plans/done/NONBLOCKING_SUBAGENTS_PLAN.md` land only the inert half: the
+`agent.resumed`/`agent.stopped` events, the `AgentView` fields, the `origin` kinds,
+the `[agents]` keys and the agent pool; phase 6 then made non-blocking the default.
+
+## Background children are owned by a per-session pool, not the turn (2026-10-20)
+
+A detached child needs a runner, budget, event sink and cancel token that outlive
+the turn, so `AgentPool` (`nexus/agents/pool.py`) owns the run task, the tree budget
+and the root event port. Ending or interrupting the root turn deliberately does not
+cancel children (the point of non-blocking); `AgentCancel` and shutdown do. The
+token/cost/fan-out counters stay per root turn (`begin_window()`), matching the old
+per-turn budget; concurrency and `max_live` span turns. Per-session token/cost
+budgets are an open question (plan Q2). `agent.spawned`/`agent.completed` are
+emitted for blocking children too, with `background` and `run` fields.
+
+## Subagents persist and can be continued; authority never widens on a continuation (2026-10-20)
+
+A Nexus-native child goes idle when its run ends instead of dying (`agents.background`
+on, the default since phase 6), and the root continues it with `subagent_send`: the
+child's own durable session already is "the full prior conversation", so a continuation
+is `run_turn` on the same session with a new user input (`ChildSpec.resume`). It holds
+its `max_live` slot until `subagent_stop`/`AgentClose`. Reasons for the shape:
+
+- **A continuation can only shrink.** It reuses the spawn-time tool ceiling, permission
+  snapshot and grants (`PreparedChild`). After a restart the recipe is rebuilt from the
+  root log through the same `select_tools` path with `tools = recorded`, i.e. `current
+  root ceiling ∩ role ∩ recorded`. Rejected: re-deriving from the role alone (a role edit
+  could widen) and trusting the log's tool list over the live ceiling (a tightened
+  ceiling would not apply).
+- **`send` and `stop` are keyed by the child's own `<role>:<tier>`** and share `Task(...)`
+  rules, so `deny Task(*:high)` also blocks continuing a high-tier child; `list` is
+  read-only and always allowed.
+- **External workers are not continuable in v1** (Claude Code starts a fresh
+  `--session-id` per run and Nexus does not check `--resume`; Antigravity closes stdin at
+  the end of a run). `continuable = false` on `agent.spawned/completed`; the error tells
+  the model to start a new subagent. `claude_code_subagent_backend = "sdk"` children are
+  normal Nexus children and continue. Spike: plan Q7.
+- **A send to a running child is refused, not queued** (plan Q3): queueing needs
+  child-side steering; the refusal says to wait for the report or stop it.
+- **A worktree child is reopened (`finalized -> active`) and every review and
+  acknowledgement is voided**, because the child can change the checkout again; the old
+  `review_id` must never be usable for `integrate` or `discard`. Integrated, discarded,
+  cleanup-pending and legacy records refuse.
+- **The root log is the authority after a restart.** The pool rebuilds records from
+  `agent.*` events (`records_from_events`), not from a reduced view, and re-charges the
+  `max_live` slots of children that can still be continued. An `agent.spawned` with no
+  later `agent.completed` that this process does not run is `interrupted` (continuable),
+  and its report is queued without waking the root.
+- **Persistence follows `agents.background`**: with it off the tool schema is unchanged
+  and a child releases its slot at the end of its run. Phase 6 turned it on by default.
+
+### Subagents are non-blocking and persistent by default (plan phase 6)
+
+- **`agents.background` defaults to true.** The root agent should keep working while a
+  child runs, and a finished child should stay available for follow-ups. `background =
+  false` restores the blocking result and non-persistent children. `wait: true` on a
+  call blocks for that one child (and the child is still persistent).
+- **The model is taught, not just enabled.** Without prompt text a model polls or
+  re-spawns. The `subagent` description, the three control tools and the `build` and
+  `orchestrator` role bodies say: start independent children together, keep working or
+  end the turn, never poll, `wait: true` only when the answer is needed now, continue
+  with `subagent_send`, close with `subagent_stop`.
+- **Idle children hold `max_live` slots, so a lazy root could lock itself out. The
+  harness evicts instead of refusing.** When a spawn would exceed `max_live` and a child
+  is idle or interrupted, the least-recently-run one is closed (`agent.stopped`, `by =
+  "system"`, a reason naming the eviction) and the spawn proceeds. Refusal only when every
+  live child is running. Reason: an idle child costs nothing to lose (its log and worktree
+  are kept, and a new subagent can be started from its report), whereas a refusal stalls
+  the root until it remembers `subagent_stop`. Eviction is visible in the timeline, one per
+  spawn, and never touches a running child.
+- **`nexus run` waits for children** up to `oneshot_wait_seconds` (phase 3), so the new
+  default does not make one-shot runs exit before the report.

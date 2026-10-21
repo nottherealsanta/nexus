@@ -131,7 +131,7 @@ def make_runtime(workspace, **kwargs):
         agent=AgentSection(profile="coding"),
         permissions=PermissionsSection(mode="allow", on_unattended="allow", write_roots=["./"]),
         tools=ToolsSection(),
-        agents=AgentsSection(max_tier="medium", max_depth=3, max_concurrent=4, seed_roles=False),
+        agents=AgentsSection(max_tier="medium", max_depth=3, max_concurrent=4, seed_roles=False, background=False),
         sessions=SessionsSection(auto_title=False),
     ))
     return Runtime(

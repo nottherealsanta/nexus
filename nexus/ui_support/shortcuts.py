@@ -11,7 +11,7 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
     ("ctrl+o", "list_sessions", "Open Sessions"),
     ("ctrl+f", "fork_session", "Fork session"),
     ("ctrl+g", "pick_agent", "Open the root-agent picker"),
-    ("ctrl+b", "toggle_sessions", "Open Sessions (same as Ctrl+O)"),
+    ("ctrl+b", "toggle_sessions", "Toggle the left sidebar (Projects, Sessions, Files, Git)"),
     ("ctrl+k", None, "Search sessions (in Sessions)"),
     ("ctrl+l", "toggle_details", "Toggle the details sidebar"),
     ("ctrl+s", "open_settings", "Settings"),

@@ -68,6 +68,33 @@ def test_parse_codex_maps_windows_extra_limits_and_notes():
                                "Credits balance: 12.5", "Usage reset credits available: 3"]
 
 
+def test_parse_codex_kinds_only_gate_on_the_main_rate_limit():
+    data = {**CODEX, "code_review_rate_limit": {"primary_window": {
+        "used_percent": 1, "limit_window_seconds": 604800, "reset_at": 1791372916}}}
+    kinds = [(w["label"], w["kind"]) for w in parse_codex(data)["windows"]]
+    assert kinds == [("5-hour", "five_hour"), ("Weekly", "weekly"),
+                     ("GPT-5.3-Codex-Spark 5-hour", "other"), ("Code review Weekly", "other")]
+
+
+def test_parse_copilot_kind_is_monthly_even_without_a_reset():
+    assert [w["kind"] for w in parse_copilot(COPILOT)["windows"]] == ["monthly"]
+    undated = {**COPILOT, "quota_reset_date_utc": None}
+    [window] = parse_copilot(undated)["windows"]
+    assert window["resets_at"] is None and window["kind"] == "monthly"
+
+
+def test_parse_opencode_go_kinds():
+    data = {"usage": {"rolling": {"usagePercent": 1, "resetInSec": 60}, "weekly": {"usagePercent": 1, "resetInSec": 60},
+                      "monthly": {"usagePercent": 1, "resetInSec": 60}}}
+    assert [w["kind"] for w in parse_opencode_go(data, now=1000.0)["windows"]] == ["five_hour", "weekly", "monthly"]
+
+
+def test_parse_claude_kinds_scoped_weekly_is_other():
+    assert [w["kind"] for w in parse_claude(CLAUDE_TEXT)["windows"]] == ["five_hour", "weekly", "other"]
+    bare = parse_claude("Current session: 10% used\nCurrent week: 20% used\n")
+    assert [w["kind"] for w in bare["windows"]] == ["five_hour", "weekly"]
+
+
 def test_parse_copilot_reports_monthly_quota_and_unlimited_notes():
     result = parse_copilot(COPILOT)
     assert result["plan"] == "Business"
@@ -262,6 +289,7 @@ def test_parse_xai_uses_the_current_period_and_credit_percent():
     result = parse_xai(XAI_BILLING, "SuperGrok Lite", now=XAI_NOW)
     [window] = result["windows"]
     assert (window["label"], window["used_percent"], window["period_seconds"]) == ("Weekly", 37.5, 7 * 86_400)
+    assert window["kind"] == "weekly"
     assert window["resets_at"] == 1_792_546_788  # 2026-10-21T01:39:48Z, never the billing period's end
     assert result["plan"] == "SuperGrok Lite"
     assert result["notes"] == ["GrokBuild: 30% of credits", "GrokChat: 7.5% of credits", "Prepaid credits: $14.46"]
@@ -281,6 +309,7 @@ def test_parse_xai_reads_an_omitted_zero_and_on_demand_fallback():
     monthly = parse_xai({"config": {"billingPeriodStart": "2026-10-01T00:00:00Z", "billingPeriodEnd": "2026-11-01T00:00:00Z",
                                     "creditUsagePercent": 10}}, now=XAI_NOW)
     assert monthly["windows"][0]["label"] == "Monthly" and monthly["windows"][0]["period_seconds"] == 31 * 86_400
+    assert monthly["windows"][0]["kind"] == "monthly"
     with pytest.raises(provider_usage.UsageError):
         parse_xai({"config": {}})
 

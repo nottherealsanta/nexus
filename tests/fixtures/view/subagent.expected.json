@@ -4,6 +4,7 @@
   ],
   "agents": [
     {
+      "background": false,
       "body": {
         "agent_order": [],
         "agents": {},
@@ -33,6 +34,7 @@
         },
         "registry": null,
         "session_id": "s1/sub/1",
+        "session_name": null,
         "turns": [
           {
             "context": [],
@@ -41,6 +43,7 @@
             "id": "task-1",
             "index": 0,
             "iteration": 0,
+            "kind": "agent",
             "limits": {},
             "messages": [
               {
@@ -77,14 +80,13 @@
               "input_tokens": 5,
               "output_tokens": 2,
               "reasoning_tokens": 0
-            },
-            "kind": "agent"
+            }
           }
-        ],
-        "session_name": null
+        ]
       },
       "clamped": true,
       "completed_ts": 12.0,
+      "continuable": false,
       "depth": 1,
       "description": "explore the repo",
       "diagnostics": [
@@ -98,16 +100,22 @@
       "index": 1,
       "is_error": false,
       "iterations": 1,
+      "last_run_ts": 12.0,
       "max_tier": "medium",
       "model": "claude-small",
       "ok": true,
       "parent": "s1",
       "requested_tier": "high",
       "resolved_model": "anthropic/claude-small",
+      "runs": 1,
+      "selected_model": null,
       "session": "s1/sub/1",
       "spawned_ts": 4.0,
       "status": "completed",
       "stop_reason": "end_turn",
+      "stopped": false,
+      "stopped_by": null,
+      "stopped_reason": null,
       "task": "task-1",
       "tier": "medium",
       "tools": [
@@ -121,8 +129,7 @@
         "input_tokens": 5,
         "output_tokens": 2,
         "reasoning_tokens": 0
-      },
-      "selected_model": null
+      }
     }
   ],
   "closed": false,
@@ -164,14 +171,17 @@
   },
   "registry": null,
   "session_id": "s1",
+  "session_name": null,
   "turns": [
     {
+      "completed_ts": 14.0,
       "context": [],
       "error": null,
       "hooks": [],
       "id": "t1",
       "index": 0,
       "iteration": 0,
+      "kind": "agent",
       "limits": {},
       "messages": [
         {
@@ -211,15 +221,13 @@
         }
       ],
       "updated_ts": 14.0,
-      "completed_ts": 14.0,
       "usage": {
         "cache_read_tokens": 0,
         "cache_write_tokens": 0,
         "input_tokens": 9,
         "output_tokens": 3,
         "reasoning_tokens": 0
-      },
-      "kind": "agent"
+      }
     }
   ],
   "usage": {
@@ -228,6 +236,5 @@
     "input_tokens": 9,
     "output_tokens": 3,
     "reasoning_tokens": 0
-  },
-  "session_name": null
+  }
 }

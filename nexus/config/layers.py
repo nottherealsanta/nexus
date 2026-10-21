@@ -13,6 +13,7 @@ v2-configured home, and a v1 home still contributes to a v2 workspace.
 """
 from __future__ import annotations
 
+import math
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from .paths import (
     workspace_config_path,
     workspace_settings_config_path,
 )
-from .schema import ConfigV2
+from .schema import AgentsSection, ConfigV2, SubagentUsageSection
 
 LEGACY_KEYS = frozenset(
     {
@@ -126,6 +127,14 @@ _V2_NUMERIC = {
     "agents.max_fanout": int,
     "agents.token_budget": int,
     "agents.cost_budget": float,
+    "agents.max_live": int,
+    "agents.max_pending_reports": int,
+    "agents.max_report_batch": int,
+    "agents.max_report_chars": int,
+    "agents.report_coalesce_ms": int,
+    "agents.max_auto_wakes": int,
+    "agents.max_followup_chars": int,
+    "agents.oneshot_wait_seconds": int,
     "mcp.connect_timeout_s": float,
     "mcp.restart_max": int,
     "session.snapshot_every": int,
@@ -143,6 +152,7 @@ _V2_BOOL = frozenset(
         "ext.quarantine",
         "agents.enabled",
         "agents.seed_roles",
+        "agents.background",
         "hooks.enabled",
         "mcp.enabled",
         "models.offline",
@@ -390,6 +400,125 @@ def _reject_project_user_only_keys(doc: Mapping[str, Any], source: str) -> None:
                         f"(~/.nexus/config.toml), never in a project file")
 
 
+#: ``[models.subagent_usage]`` keys a project file may not set at all.
+USER_ONLY_SUBAGENT_USAGE_KEYS = ("enabled", "refresh_seconds")
+_SUBAGENT_USAGE_THRESHOLDS = (
+    "five_hour_min_remaining",
+    "weekly_min_remaining",
+    "monthly_min_remaining",
+)
+
+
+def _reject_project_subagent_usage_keys(doc: Mapping[str, Any], source: str) -> None:
+    models = doc.get("models")
+    section = models.get("subagent_usage") if isinstance(models, Mapping) else None
+    if not isinstance(section, Mapping):
+        return
+    for key in USER_ONLY_SUBAGENT_USAGE_KEYS:
+        if key in section:
+            raise ConfigError(
+                f"{source}: models.subagent_usage.{key} may only be set in the user-level "
+                f"config (~/.nexus/config.toml), never in a project file")
+
+
+def _is_valid_threshold(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 <= value <= 100
+    )
+
+
+#: ``[agents]`` bounds a project file may lower but never raise (background
+#: subagents, plans/done/NONBLOCKING_SUBAGENTS_PLAN.md phase 1).
+_AGENTS_LOWER_ONLY = (
+    "max_live",
+    "max_pending_reports",
+    "max_report_batch",
+    "max_report_chars",
+    "max_auto_wakes",
+    "max_followup_chars",
+    "oneshot_wait_seconds",
+)
+
+
+def _clamp_project_agents(
+    merged: Mapping[str, Any], doc: Mapping[str, Any], result: dict[str, Any]
+) -> None:
+    project = doc.get("agents")
+    if not isinstance(project, Mapping):
+        return
+    prior = merged.get("agents")
+    prior = prior if isinstance(prior, Mapping) else {}
+    defaults = AgentsSection()
+    section = dict(result["agents"])
+    for key in _AGENTS_LOWER_ONLY:
+        if key not in project:
+            continue
+        val, current = project[key], prior.get(key, getattr(defaults, key))
+        if (
+            isinstance(val, int) and not isinstance(val, bool)
+            and isinstance(current, int) and not isinstance(current, bool)
+        ):
+            section[key] = min(current, val)
+    result["agents"] = section
+
+
+def _merge_project_doc(merged: Mapping[str, Any], doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge a project layer; ``models.subagent_usage`` thresholds may only rise.
+
+    ``[agents]`` background bounds (``max_live``, report and follow-up limits) may
+    only fall.
+    """
+    result = deep_merge(merged, doc)
+    _clamp_project_agents(merged, doc, result)
+    models = doc.get("models")
+    project = models.get("subagent_usage") if isinstance(models, Mapping) else None
+    if not isinstance(project, Mapping):
+        return result
+    defaults = SubagentUsageSection()
+    prior_models = merged.get("models")
+    prior = prior_models.get("subagent_usage") if isinstance(prior_models, Mapping) else None
+    prior = prior if isinstance(prior, Mapping) else {}
+    section = dict(result["models"]["subagent_usage"])
+    for key in _SUBAGENT_USAGE_THRESHOLDS:
+        if key in project:
+            val = project[key]
+            current = prior.get(key, getattr(defaults, key))
+            if _is_valid_threshold(val) and _is_valid_threshold(current):
+                section[key] = max(current, val)
+            else:
+                section[key] = val
+    project_providers = project.get("providers")
+    prior_providers = prior.get("providers")
+    if isinstance(project_providers, Mapping):
+        providers = dict(section.get("providers") or {})
+        for name, override in project_providers.items():
+            if not isinstance(override, Mapping):
+                continue
+            existing = (
+                prior_providers.get(name) if isinstance(prior_providers, Mapping) else None
+            )
+            existing = existing if isinstance(existing, Mapping) else {}
+            merged_override = dict(providers.get(name) or {})
+            for key in _SUBAGENT_USAGE_THRESHOLDS:
+                if key in override:
+                    val = override[key]
+                    # Without a provider override the floor is the section value.
+                    floor = existing.get(key)
+                    if floor is None:
+                        floor = section.get(key, getattr(defaults, key))
+                    if _is_valid_threshold(val) and _is_valid_threshold(floor):
+                        merged_override[key] = max(floor, val)
+                    else:
+                        merged_override[key] = val
+            providers[name] = merged_override
+        section["providers"] = providers
+    result["models"] = {**result["models"], "subagent_usage": section}
+    return result
+
+
 def _read_docs(
     workspace: Path, home: Path
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -413,6 +542,7 @@ def _read_docs(
     for path in project:
         doc = read_toml(path)
         _reject_project_user_only_keys(doc, str(path))
+        _reject_project_subagent_usage_keys(doc, str(path))
         docs.append((str(path), doc))
     return docs
 
@@ -438,11 +568,15 @@ def load_effective(
 
     if version == 2:
         merged = builtin_defaults()
+        user_source = str(user_config_path(Path(home)))
         for doc_source, doc, doc_version in shapes:
             if doc_version == 1:
                 validate_v1(doc, source=doc_source)
                 doc = normalize_v1_to_v2(doc)
-            merged = deep_merge(merged, doc)
+            if doc_source == user_source:
+                merged = deep_merge(merged, doc)
+            else:
+                merged = _merge_project_doc(merged, doc)
         merged = deep_merge(merged, normalize_v1_to_v2(env_overlay_v1(environ)))
         merged = deep_merge(merged, env_overlay_v2(environ))
         if flags:

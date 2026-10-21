@@ -777,8 +777,11 @@ active.
 ## Subagents (`Task`)
 
 `Task` spawns a nested runtime with its own session, tool set, and model. Its
-events re-emit on the parent bus with an agent field; its final report returns
-as a tool result.
+events re-emit on the parent bus with an agent field. By default the call returns at
+once and the child runs in the background; its report arrives later as a labelled
+"Subagent report" message (waking an idle root), the child stays idle and can be
+continued with `subagent_send` or closed with `subagent_stop`. Pass `wait: true` on
+the call, or set `agents.background = false`, to get the report as the tool result.
 
 ```toml
 [agents]

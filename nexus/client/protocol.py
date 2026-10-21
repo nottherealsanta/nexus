@@ -180,6 +180,12 @@ class Client:
     async def git_diff(self, *, staged: bool = False, ref: str = "") -> p.GitDiffResult:
         return await self._request(p.GitDiff(staged=staged, ref=ref))  # type: ignore[return-value]
 
+    async def list_directory(self, path: str = "", limit: int = 200) -> p.DirectoryListResult:
+        return await self._request(p.DirectoryList(path=path, limit=limit))  # type: ignore[return-value]
+
+    async def git_status(self) -> p.GitStatusResult:
+        return await self._request(p.GitStatus())  # type: ignore[return-value]
+
     async def list_worktrees(self) -> p.WorktreeListResult: return await self._request(p.WorktreeList())  # type: ignore[return-value]
 
     async def inspect_worktree(self, child_id: str) -> p.WorktreeInspectResult: return await self._request(p.WorktreeInspect(child_id=child_id))  # type: ignore[return-value]
@@ -267,6 +273,9 @@ class Client:
     async def state(self, session: str, from_seq: int = 0) -> tuple[dict[str, Any], int]:
         result = await self._request(p.SessionState(session=session, from_seq=from_seq))
         return dict(result.view), result.seq  # type: ignore[union-attr]
+
+    async def session_activity(self, session: str) -> p.SessionActivityResult:
+        return await self._request(p.SessionActivity(session=session))  # type: ignore[return-value]
 
     async def read_logs(self, session: str | None = None, *, daemon_cursor: str | None = None,
                         session_cursor: int | None = None, limit: int = 50) -> p.LogsReadResult:
@@ -377,6 +386,12 @@ class Client:
         """Cancel one running child agent without stopping its parent turn."""
         return await self._request(
             p.AgentCancel(session=session, agent_id=agent_id, reason=reason)
+        )  # type: ignore[return-value]
+
+    async def close_agent(self, session: str, agent_id: str, *, reason: str = "") -> p.AgentCloseResult:
+        """Close one child agent for good (cancelling a run in flight); it cannot be continued."""
+        return await self._request(
+            p.AgentClose(session=session, agent_id=agent_id, reason=reason)
         )  # type: ignore[return-value]
 
     async def resolve_permission(self, session: str, request_id: str, decision: str) -> bool:

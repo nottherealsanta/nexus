@@ -46,6 +46,10 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
 
 ## Layout (both surfaces)
 
+- The native TUI's left sidebar (Projects, Sessions, Files, Git; `Ctrl+B`, `/sessions`) is
+  specified in [ratatui-parity.md](ratatui-parity.md#left-sidebar-projects-sessions-files-git).
+  Its data comes only from host commands (`ProjectSessionsList`, `DirectoryList`, `GitStatus`); the
+  pure data helpers are `ui_support/sidebar.py` (the web and desktop have their own sidebars).
 - Two-row **top bar**. Row 1, **session tabs**: `▌` toggles the sessions
   sidebar (`Ctrl+B`), then one tab per active session (status glyph, the
   title's first 36 characters, `×`), `+` new session, `▐` toggles the details
@@ -126,6 +130,23 @@ footers share the same left inset in both surfaces.
   request it actually sent, a grey Task block, a read-only composer, details
   panel); Esc returns. All subagent activity stays inline at the initiating
   call.
+- **Agent states every client shows** (persistent subagents; all derived from the
+  reduced `AgentView`, never from the tool call): *running* (`status == "spawned"`, a
+  run is in flight, including a run started by `subagent_send`), *idle* (`status`
+  `completed`/`failed`/`needs_attention`/`cancelled`, `continuable`, not `stopped`),
+  *interrupted* (the run was cut off by a daemon restart; still continuable), *finished*
+  (`continuable == false`: an external worker, or a child that failed before it started;
+  it cannot be continued) and *stopped* (`stopped`, with `stopped_by` and
+  `stopped_reason`; terminal). `runs` counts the runs (`idle · run 2`), `last_run_ts`
+  orders them and `background` says the spawning call returned before the child ended.
+  A follow-up from the root is a user row on the child page labelled by
+  `origin.kind == "root_followup"`; a delivered report in the root transcript is a row
+  labelled by `origin.kind == "subagent_report"`. A tool call whose child still runs
+  keeps its spinner. The one host action beyond `AgentCancel` is `AgentClose` (close an
+  idle or running child for good); a surface needs no list or send command. The native
+  client's rendering of these states is in
+  [ratatui-parity.md](ratatui-parity.md#background-subagents-persistent-children); the
+  browser client does not draw the new labels (it tolerates the fields and origins).
 - **Tool groups** (native projection, `ui/ratatui/verb_groups.py`): a run of tool calls
   and thoughts is one group, except that file-change tools (edit, write, apply_patch, …)
   group only with each other and a lone change keeps its own row. The label drops its

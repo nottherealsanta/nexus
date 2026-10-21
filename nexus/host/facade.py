@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -64,6 +65,8 @@ from ..host_support.doctor import doctor_report
 from ..host_support.update_check import claim_announcement, update_status
 from ..host_support.git_diff import git_diff
 from ..host_support.git_head import git_head
+from ..host_support.workspace_browse import git_status as workspace_git_status
+from ..host_support.workspace_browse import list_directory
 from ..host_support.mock import dispatch_mock
 from ..host_support.provider_auth import dispatch_providers
 from ..host_support.session_archive import (
@@ -108,7 +111,9 @@ from ..view import (
 )
 from . import protocol as p
 from .presence import Presence
+from .reports import ReportDelivery
 from .supervisor import Supervisor
+from ..host_support.usage_snapshot import UsageSnapshotService
 
 _MAX_WORKTREE_LIST = 100
 _MAX_WORKTREE_REVIEW_PAGE = 8
@@ -117,6 +122,7 @@ _WORKTREE_CONFIRMATION_TTL = 120
 _MAX_FILE_SEARCH_ENTRIES = 50_000
 
 #: Default global cap when the caller does not supply one.
+USAGE_POLL_TICK_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENT_TURNS = 4
 
 #: The workspace manager's fixed session id (plan 02, docs/manager.md). Reserved: no
@@ -146,7 +152,17 @@ class HostFacade:
         self.titles = AutoTitler(runtime)
         self.shells = UserShells(runtime)
         self.presence = Presence()
+        # Plan-usage snapshot for sub-agent routing (docs/host.md): the runtime reads it,
+        # this service keeps it fresh and shares the usage panel's fetches.
+        self.usage = UsageSnapshotService(runtime)
+        self._usage_poller: asyncio.Task[None] | None = None
+        if getattr(runtime, "usage_kick", False) is None:
+            runtime.usage_kick = self.usage.kick
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
+        # Background subagent reports reach the root through its own input queue
+        # (docs/agents.md "Reports and waking the root").
+        self._reports = ReportDelivery(self)
+        self._reports.install()
         self._owns_runtime = bool(owns_runtime)
         self._started = time.time()
         self._foreground: dict[str, tuple[str, float]] = {}
@@ -743,6 +759,14 @@ class HostFacade:
 
     # -- turns and the input queue ----------------------------------------
 
+    async def deliver_report(self, batch: Any) -> bool:
+        """Admit a ``ReportBatch`` as a ``steer`` input on its root; ``True`` if it woke it."""
+        return await self._reports.deliver(batch)
+
+    def session_activity(self, session_id: str) -> p.SessionActivityResult:
+        """What keeps ``session_id`` busy after its turn ended (one-shot quiescence wait)."""
+        return self._reports.activity(session_id)
+
     async def start_turn(self, session_id: str, content: Any, *, client_request_id: str = "") -> str:
         """Schedule one turn for ``session_id``; return its pre-assigned id."""
         if client_request_id:
@@ -752,7 +776,9 @@ class HostFacade:
             )
             return turn_id
         handle = self._session(session_id)
-        return await self.supervisor.submit(session_id, handle, content)
+        turn_id = await self.supervisor.submit(session_id, handle, content)
+        self._reports.human_input(session_id)
+        return turn_id
 
     async def enqueue(
         self,
@@ -805,6 +831,7 @@ class HostFacade:
                     priority=mode == "interrupt", turn_id=turn_id,
                 )
                 self.titles.start(session_id, title)
+                self._reports.human_input(session_id, origin)
             return queued_id, turn_id
         if mode == "interrupt":
             await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
@@ -814,6 +841,7 @@ class HostFacade:
             session_id, handle, None, queued_id=queued_id, priority=mode == "interrupt"
         )
         self.titles.start(session_id, title)
+        self._reports.human_input(session_id, origin)
         return queued_id, turn_id
 
     def move_queued(self, session_id: str, queued_id: str, offset: int) -> bool:
@@ -1433,7 +1461,7 @@ class HostFacade:
         params = getattr(getattr(v2, "model", None), "params", None)
         budget = getattr(params, "thinking_budget", None)
         return {
-            "name": self._agent_text(name, limit=80) or "build",
+            "name": self._agent_text(name, limit=80) or "orchestrator",
             "source": self._agent_text(source, limit=40) or "default",
             "color": color,
             "provider": self._agent_text(route.get("provider"), limit=80) or None,
@@ -1628,6 +1656,23 @@ class HostFacade:
             "dev": dev_enabled(),
         }
 
+    def start_usage_polling(self) -> None:
+        """Refresh plan usage in the background (the daemon calls this once)."""
+        if self._usage_poller is None and not self._closed:
+            self._usage_poller = asyncio.get_running_loop().create_task(self._poll_usage())
+
+    async def stop_usage_polling(self) -> None:
+        task, self._usage_poller = self._usage_poller, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _poll_usage(self) -> None:
+        # ``kick`` rate-limits itself to the configured ``refresh_seconds``.
+        while True:
+            self.usage.kick()
+            await asyncio.sleep(USAGE_POLL_TICK_SECONDS)
+
     async def shutdown(self, reason: str = "") -> bool:
         """Stop scheduling, close every session, and (if owned) the runtime."""
         if self._closed:
@@ -1638,6 +1683,14 @@ class HostFacade:
         live = getattr(self.runtime, "live", None)
         if live is not None:
             await live.shutdown()
+        # No report may wake a root while the host is closing; unreported runs are
+        # reconciled when their session is next opened.
+        pool = getattr(self.runtime, "agent_pool", None)
+        if pool is not None:
+            pool.closed = True
+        await self._reports.aclose()
+        await self.stop_usage_polling()
+        await self.usage.aclose()
         await self.titles.aclose()
         await self.shells.aclose()
         await self.supervisor.aclose()
@@ -1746,6 +1799,9 @@ class HostFacade:
         if result := await dispatch_providers(command, self.runtime, lambda: not self.supervisor.running):
             if isinstance(result, p.ProvidersStatusResult):
                 return p.ProvidersStatusResult(providers=_with_antigravity_row(result.providers))
+            if isinstance(result, p.ProvidersUsageResult):
+                # The panel's fresh numbers are the routing gate's numbers too.
+                self.usage.ingest({"providers": result.providers, "fetched_at": result.fetched_at})
             return result
         if isinstance(command, (
             p.SessionArchive, p.SessionUnarchive, p.SessionListArchived,
@@ -1869,6 +1925,13 @@ class HostFacade:
                 self.runtime.workspace, staged=command.staged, ref=command.ref
             )
             return p.GitDiffResult(patch=patch, truncated=truncated)
+        if isinstance(command, p.DirectoryList):
+            path, entries, truncated = await asyncio.to_thread(
+                list_directory, self.runtime, command.path, command.limit
+            )
+            return p.DirectoryListResult(path=path, entries=entries, truncated=truncated)
+        if isinstance(command, p.GitStatus):
+            return p.GitStatusResult(**await workspace_git_status(Path(self.runtime.workspace)))
         if isinstance(command, p.WorktreeList):
             rows, has_more = await asyncio.to_thread(self.list_worktrees)
             return p.WorktreeListResult(worktrees=rows, has_more=has_more)
@@ -2055,6 +2118,8 @@ class HostFacade:
             return p.SessionStateResult(
                 session=command.session, seq=seq, view=view.to_dict()
             )
+        if isinstance(command, p.SessionActivity):
+            return self.session_activity(command.session)
         if isinstance(command, p.LogsRead):
             pages = await asyncio.to_thread(
                 self.read_logs,
@@ -2091,8 +2156,25 @@ class HostFacade:
                 session=command.session, agent_id=command.agent_id, cancelled=cancelled,
                 message=(
                     "Cancellation requested for this agent only; its parent turn continues."
-                    if cancelled else f"Agent is not running (status: {found['status']})."
+                    if cancelled else (
+                        f"Agent is not running (status: {found['status']}). "
+                        "AgentClose closes an idle agent for good."
+                    )
                 ),
+            )
+        if isinstance(command, p.AgentClose):
+            found = self.agent_transcript(command.session, command.agent_id)
+            if not found["found"]:
+                return p.AgentCloseResult(
+                    session=command.session, agent_id=command.agent_id,
+                    message="No such agent in this session.",
+                )
+            reason = (command.reason or "closed by user")[:200]
+            closed, message = await self.runtime.close_agent(
+                command.session, command.agent_id, reason=reason, by="user"
+            )
+            return p.AgentCloseResult(
+                session=command.session, agent_id=command.agent_id, closed=closed, message=message,
             )
         if isinstance(command, p.SessionFork):
             return p.SessionForkResult(
@@ -2297,7 +2379,7 @@ class HostFacade:
             return p.AgentsListResult(
                 generation=getattr(agents, "generation", 0),
                 agents=self.list_agents(),
-                default=getattr(self.runtime, "default_root_agent", lambda: "build")(),
+                default=getattr(self.runtime, "default_root_agent", lambda: "orchestrator")(),
             )
         if isinstance(command, p.AgentCurrent):
             metadata = self.current_agent_metadata(command.session)
@@ -2466,6 +2548,10 @@ class HostFacade:
                 # auto-consume the queue and bypass the global cap.
                 bind(auto_start_queued=False)
             self._managed.add(session_id)
+            # First open by this host: deliver background runs that ended without a
+            # report reaching the root (a daemon that died in between).
+            with contextlib.suppress(Exception):
+                self._reports.reconcile(session_id, handle)
         return handle
 
 

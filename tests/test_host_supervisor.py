@@ -674,3 +674,57 @@ async def test_lent_slot_is_a_noop_without_an_active_turn_and_is_released_on_err
             raise RuntimeError("wait failed")
     assert sup.slots_used == 1
     await drive(sup, manager)
+
+
+class _ReportSession(_FakeSession):
+    """A fake session whose durable queue holds typed input and subagent reports."""
+
+    def __init__(self, name, clock):
+        super().__init__(name, clock)
+        self.queue: dict[str, bool] = {}  # queued_id -> is_report
+
+    @property
+    def queued_ids(self):
+        return tuple(self.queue)
+
+    @property
+    def queue_depth(self):
+        return len(self.queue)
+
+    @property
+    def retained_queued_ids(self):
+        return tuple(qid for qid, report in self.queue.items() if report)
+
+    def cancel(self, reason=None, drop_queue=True):
+        super().cancel(reason, drop_queue)
+        if drop_queue:
+            self.queue = {qid: report for qid, report in self.queue.items() if report}
+
+
+async def test_report_submissions_obey_the_global_cap_and_stay_fair():
+    clock = _Clock()
+    sup = Supervisor(max_concurrent=1)
+    a, b = _ReportSession("a", clock), _ReportSession("b", clock)
+    for session in (a, b):
+        session.queue["report-" + session.name] = True
+    await sup.submit("a", a, None, queued_id="report-a")
+    await sup.submit("b", b, None, queued_id="report-b")
+    await asyncio.sleep(0)
+    assert sup.running == 1 and len(a.started) == 1 and b.started == []  # a report is no cap bypass
+    await drive(sup, a, b)
+    assert clock.max_live == 1 and clock.order == ["+a", "-a", "+b", "-b"]
+
+
+async def test_cancel_with_drop_queue_leaves_reports_queued_and_uncounted():
+    clock = _Clock()
+    sup = Supervisor(max_concurrent=1)
+    a = _ReportSession("a", clock)
+    await sup.submit("a", a, "running turn")
+    a.queue.update({"typed-1": False, "report-1": True, "typed-2": False})
+    for qid in ("typed-1", "report-1", "typed-2"):
+        await sup.submit("a", a, None, queued_id=qid)
+    cancelled, dropped = await sup.cancel("a", reason="esc")
+    assert cancelled and dropped == 2  # the two typed messages, not the report
+    assert a.queued_ids == ("report-1",)
+    # The parked turn for the report is gone too: nothing wakes the root after Esc.
+    assert sup.queued_for("a") == 0

@@ -50,7 +50,7 @@ and then loads `code-review` (last, because its `allowed-tools` narrows later ca
 **Scenarios** (`nexus mock list`): `hello`, `tool_marathon`, `parallel_tools`,
 `parallel_subagents`, `agent_limits`, `streaming_rich`, `errors`,
 `provider_failure`, `cancel`, `question`, `context_pressure`, `diff_review`,
-`stress`, `bash_wait`, `extensions`. Interactive ones (`cancel`, `provider_failure`, `question`)
+`stress`, `bash_wait`, `extensions`. `parallel_subagents` and `agent_limits` pass `wait: true` to every `subagent` call, because they assert blocking results in the same turn (subagents are non-blocking by default; reports would otherwise arrive as later messages). Interactive ones (`cancel`, `provider_failure`, `question`)
 need a person; `stress` is slow.
 
 **Use:**

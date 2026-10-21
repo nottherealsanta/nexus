@@ -1440,6 +1440,28 @@ def _safe_tool_input(value: object, *, tool: str | None = None) -> dict[str, Any
     return safe if isinstance(safe, dict) else {}
 
 
+#: Identity fields of a ``code.*`` event: opaque, bounded, never secrets. The long-token
+#: redaction mangled ``call_id`` (``call-<uuid>-N`` is 40+ characters) and the program digest
+#: to ``***``, which made the reducer open a phantom ``code`` row that never finished.
+_CODE_EVENT_IDENTITY = ("call_id", "nested_id", "program_digest")
+
+
+def _safe_code_event(data: Mapping[str, Any]) -> dict[str, Any]:
+    """``_safe_tool_input`` for ``code.*`` events, keeping ids and numeric counters intact.
+
+    Redaction still applies to every string value except the identity fields, and to nested
+    maps (``args``, ``result``); only top-level numbers (``sub_tokens``, ``input_tokens``...)
+    survive a secret-looking key name, because a number cannot carry a credential.
+    """
+    safe = _safe_tool_input(data)
+    for key, value in data.items():
+        if key in _CODE_EVENT_IDENTITY and isinstance(value, str) and len(value) <= 256:
+            safe[key] = value
+        elif isinstance(value, (bool, int, float)) and key in safe:
+            safe[key] = value
+    return safe
+
+
 def _safe_tool_diff(value: object) -> dict[str, Any] | None:
     """Defensively bound the Edit transcript artifact from a persisted result."""
     if not isinstance(value, Mapping):
@@ -2137,7 +2159,7 @@ async def run_turn(
 
     async def _tool_emit(event_type: str, data: dict[str, Any] | None) -> object:
         """Preserve the durable event acknowledgement across the tool seam."""
-        return await emitter.emit(event_type, _safe_tool_input(data or {}) if event_type.startswith("code.") else data)
+        return await emitter.emit(event_type, _safe_code_event(data or {}) if event_type.startswith("code.") else data)
 
     state = lease.state
     started = clock()

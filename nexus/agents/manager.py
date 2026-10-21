@@ -68,7 +68,7 @@ from ..config.paths import (
     project_agents_dir,
     project_state_dir,
 )
-from ..tools.names import canonical_tool_name, canonical_tool_names
+from ..tools.names import SUBAGENT_CONTROL_TOOLS, canonical_tool_name, canonical_tool_names
 from .model import (
     MAX_AGENT_FILE_BYTES,
     MAX_FRONTMATTER_BYTES,
@@ -800,6 +800,10 @@ class AgentManager:
         )
         excluded = frozenset(name for name in ceiling for pattern in resolved.excluded_tools if fnmatchcase(name, pattern))
         selected -= excluded
+        if "subagent" in selected:
+            # The tools that steer persistent subagents come with ``subagent``; a
+            # definition that lists only ``subagent`` must not lose them.
+            selected |= (ceiling & SUBAGENT_CONTROL_TOOLS) - excluded
         stripped = frozenset()
         if any(name.startswith("mcp__") for name in selected):
             selected |= (ceiling & {"McpSearch", "McpCall"}) - excluded

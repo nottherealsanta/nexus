@@ -23,6 +23,8 @@ FORBIDDEN_PREFIXES = (
     "nexus.tools",
     "nexus.agent",
     "nexus.cli",
+    "nexus.host",
+    "nexus.ui",
 )
 
 

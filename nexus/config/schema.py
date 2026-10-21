@@ -137,7 +137,7 @@ class ModelParams(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    name: str = "build"
+    name: str = "orchestrator"
     profile: str = "coding"
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
@@ -167,6 +167,68 @@ class ModelSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         ):
             raise ValueError(
                 "model.fallback must be a list of non-empty model references"
+            )
+
+
+def _check_remaining_percent(label: str, value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= 100
+    ):
+        raise ValueError(f"{label} must be a finite number between 0 and 100")
+
+
+class SubagentUsageOverride(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Per-provider thresholds; ``None`` inherits the section default."""
+
+    five_hour_min_remaining: float | None = None
+    weekly_min_remaining: float | None = None
+    monthly_min_remaining: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "five_hour_min_remaining",
+            "weekly_min_remaining",
+            "monthly_min_remaining",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _check_remaining_percent(f"models.subagent_usage.providers.{name}", value)
+
+
+class SubagentUsageSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """``[models.subagent_usage]``: gate subagent launches on remaining quota.
+
+    Thresholds are the minimum percent of each usage window that must remain.
+    ``enabled`` and ``refresh_seconds`` are user-level only (enforced in the
+    layer loader); a project file may only raise thresholds.
+    """
+
+    enabled: bool = True
+    five_hour_min_remaining: float = 10.0
+    weekly_min_remaining: float = 5.0
+    monthly_min_remaining: float = 2.0
+    refresh_seconds: int = 180
+    providers: dict[str, SubagentUsageOverride] = msgspec.field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "five_hour_min_remaining",
+            "weekly_min_remaining",
+            "monthly_min_remaining",
+        ):
+            _check_remaining_percent(
+                f"models.subagent_usage.{name}", getattr(self, name)
+            )
+        refresh = self.refresh_seconds
+        if isinstance(refresh, bool) or not isinstance(refresh, int) or not (
+            60 <= refresh <= 3600
+        ):
+            raise ValueError(
+                "models.subagent_usage.refresh_seconds must be an integer "
+                "between 60 and 3600"
             )
 
 
@@ -203,6 +265,9 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: *before* any output has streamed (plan section 8). A refusal or a partial
     #: stream never falls back.
     fallback: list[str] = msgspec.field(default_factory=list)
+    subagent_usage: SubagentUsageSection = msgspec.field(
+        default_factory=SubagentUsageSection
+    )
 
     def __post_init__(self) -> None:
         for name in ("default", "fast", "plan"):
@@ -290,6 +355,19 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                     raise ValueError("models.tier_efforts contains an unknown effort")
 
 
+#: ``(key, minimum, maximum)`` for the integer ``[agents]`` background keys.
+_AGENTS_BACKGROUND_BOUNDS = (
+    ("max_live", 1, 64),
+    ("max_pending_reports", 1, 1024),
+    ("max_report_batch", 1, 256),
+    ("max_report_chars", 1000, 1_000_000),
+    ("report_coalesce_ms", 0, 60_000),
+    ("max_auto_wakes", 0, 1000),
+    ("max_followup_chars", 1, 200_000),
+    ("oneshot_wait_seconds", 0, 86_400),
+)
+
+
 class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Canonical ``[agents]`` section (plan sections 5.6, 15.8).
 
@@ -310,8 +388,33 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     token_budget: int | None = None
     cost_budget: float | None = None
     seed_roles: bool = False
+    #: Background subagents (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md). When
+    #: true (the default since plan phase 6) ``subagent`` returns at once and the
+    #: report arrives later; false restores the blocking tool result.
+    background: bool = True
+    #: Most children (running or idle, not stopped) one root session may hold.
+    max_live: int = 8
+    #: Reports queued to the root before further completions are held in the pool.
+    max_pending_reports: int = 32
+    #: Reports coalesced into one root input, and their total characters.
+    max_report_batch: int = 16
+    max_report_chars: int = 24000
+    #: How long an idle root waits to coalesce reports before waking.
+    report_coalesce_ms: int = 750
+    #: Consecutive report-initiated root turns without a human message.
+    max_auto_wakes: int = 20
+    #: Longest ``subagent_send`` message; over-limit is an error, never truncation.
+    max_followup_chars: int = 20000
+    #: ``nexus run`` waits this long for background children; 0 = exit at once.
+    oneshot_wait_seconds: int = 600
 
     def __post_init__(self) -> None:
+        if not isinstance(self.background, bool):
+            raise ValueError("agents.background must be a boolean")
+        for name, low, high in _AGENTS_BACKGROUND_BOUNDS:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ValueError(f"agents.{name} must be an integer from {low} to {high}")
         if not isinstance(self.default_type, str) or not self.default_type.strip():
             raise ValueError("agents.default_type must be a nonempty string")
         if not isinstance(self.max_tier, str) or not self.max_tier.strip():

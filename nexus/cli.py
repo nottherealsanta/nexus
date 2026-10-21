@@ -31,7 +31,7 @@ DEFAULT_CONFIG = '''# Nexus reloads configuration before each turn. Unknown keys
 config_version = 2
 
 [agent]
-name = "build"
+name = "orchestrator"
 profile = "coding"
 instructions_file = "SOUL.md"
 memory_file = "MEMORY.md"

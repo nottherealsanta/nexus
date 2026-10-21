@@ -82,7 +82,8 @@ _TOPIC_FIELDS = {
     "prompt": {"prompt"},
     "history": {"history"},
 }
-_EXCLUDED_FIELDS = {"schema", "revision", "generation", "blocks", "blocks_from"}
+# ``sidebar`` is the terminal client's left sidebar; the desktop has its own sidebar.
+_EXCLUDED_FIELDS = {"schema", "revision", "generation", "blocks", "blocks_from", "sidebar"}
 _IMAGE_LIMIT = 9  # eight inline images and one panel preview
 _IMAGE_BYTES_LIMIT = 4 * 1024 * 1024
 _IMAGE_TOTAL_BYTES_LIMIT = 4 * 1024 * 1024 * _IMAGE_LIMIT

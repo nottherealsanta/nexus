@@ -42,7 +42,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `client/protocol.py` | `Client`: typed, transport-neutral methods over the host protocol (one per command), `Transport` protocol, `handshake` |
 | `client/turn_stream.py` | `turn_events`: attach to a turn's stream before starting it, so no event is missed |
 | `ui/cli/uds.py` | UDS transport for the CLI |
-| `ui/cli/run.py` | one-shot `nexus run` |
+| `ui/cli/run.py` | one-shot `nexus run`; with background subagents it keeps following the session until they have reported (`SessionActivity`, `[agents] oneshot_wait_seconds`) and exits with the last turn's code |
 | `ui/cli/live.py` | `nexus live`: consent, the call, labelled output, hang-up ([live.md](live.md)) |
 | `ui/cli/render.py` | `TerminalRenderer`: events → terminal text, per-session replay dedup |
 | `ui/cli/approve.py` | terminal approval prompt (`y`/`a`/`n`/`never`); input exhaustion falls back to deny-once, never allow |
@@ -69,7 +69,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/attach` | `<path> \| clear` | | attach an image or document |
 | `/new` | `[id]` | `/clear` | start a new session |
 | `/open` | `<name\|id>` | | switch to a session by its immutable name (e.g. `quiet-cobalt-otter`) or id; trashed or unknown refs only show a notice |
-| `/sessions` | `[id]` | `/session` | switch to `[id]`, or (native TUI) open Sessions, the same surface as `Ctrl+B` |
+| `/sessions` | `[id]` | `/session` | switch to `[id]`, or (native TUI) open the left sidebar on its Sessions tab (`Ctrl+B` toggles the sidebar) |
 | `/model` | `[list\|tier\|provider/model\|id]` | | list models or set this session's model |
 | `/effort` | `[LEVEL]` | `/reasoning` | reasoning effort |
 | `/agent` | `[list\|current\|reset\|NAME]` | | root agent |

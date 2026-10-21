@@ -12,6 +12,7 @@ import asyncio
 from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
+    AgentsSection,
     ConfigV2,
     ModelSection,
     PermissionsSection,
@@ -49,6 +50,7 @@ def _config(mode: str = "ask") -> Config:
             agent=AgentSection(profile="coding"),
             permissions=PermissionsSection(mode=mode, on_unattended="deny"),
             tools=ToolsSection(),
+            agents=AgentsSection(background=False),
         ),
     )
 

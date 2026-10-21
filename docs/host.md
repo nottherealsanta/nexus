@@ -14,7 +14,8 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 | `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (3); `decode_command`; `ErrorResult` |
 | `facade.py` | `HostFacade`: implements every command (`handle`), `subscribe`, `state`, `web_snapshot`, `subscribe_web`, `subscribe_workspace` |
 | `daemon.py` | `Daemon`: lifecycle, socket, handshake, idle shutdown, `web_launch`, `ensure_daemon`/`status`/`stop`/`logs`, daemon entrypoint |
-| `supervisor.py` | `Supervisor`: turn scheduling under a global cap |
+| `supervisor.py` | `Supervisor`: turn scheduling under a global cap; a cancel keeps queued subagent reports |
+| `reports.py` | `ReportDelivery`: the facade's seams for background-subagent reports (sink, probes, reconcile on open, `SessionActivity`) |
 | `presence.py` | `Presence`: attached views and first-responder approval leases |
 | `transports/__init__.py` | shared frames (`Hello`, `Welcome`, `CommandFrame`, `ResultFrame`, `EventFrame`, `Ping`/`Pong`, `Reject`, `Bye`, `SubscribeDone`, `Unsubscribe`), `MAX_FRAME_BYTES` (16 MiB), error taxonomy |
 | `transports/uds.py` | client half of the Unix-socket link (`UDSClient.connect(...).call(cmd)`) |
@@ -32,25 +33,35 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
 | Claude Code | `ClaudeCodeSettings` `ClaudeCodeSettingsSet` |
 | Attachments | `AttachmentPrepare` `AttachmentPreview` |
 | Speech | `Speak` `SpeakStop` `SpeechStatus` `SpeechPrepare` |
-| Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` `AgentCancel` |
+| Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` `AgentCancel` `AgentClose` |
 | Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
-| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `LogsRead` |
+| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `DirectoryList` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
 | Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
+
+`DirectoryList` and `GitStatus` feed the native sidebar's Files and Git tabs
+(`host_support/workspace_browse.py`; the UI never touches the filesystem or runs Git):
+
+| Command | Contract |
+| --- | --- |
+| `DirectoryList(path="", limit=200)` | One workspace directory → `DirectoryListResult(path, entries, truncated)`. `path` is workspace-relative POSIX; absolute paths, `..`, empty or hidden segments, backslashes, NUL/control characters and paths over 1,024 characters are refused, as is any path through a symlink or under a configured read-deny root. Entries are `{name, path, kind: dir\|file\|link, size}`, directories first, then case-insensitive names. Symlinks are listed (`link`) and never followed; hidden entries, special files, control-character names and credential-looking names are omitted. `limit` is 1..500 (default 200); at most 5,000 directory entries are read; `truncated` says when either cut applied. |
+| `GitStatus()` | Read-only `git status --porcelain=v2` of the workspace (no shell, `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, 5 s deadline, 512 KiB output cap) → `GitStatusResult(available, message, branch, upstream, ahead, behind, rows, counts, truncated)`. Rows are `{group: conflicts\|staged\|unstaged\|untracked, code, label, path, from}`, at most 500, paths redacted and relative to the repository root. Outside a work tree `available` is false with a `message`. |
+
+Neither command is available to paired gateway devices (the gateway policy is default-deny).
 
 The manager session (kind `manager`, id `nexus-manager`) is never listed by
 `SessionList`, `ProjectSessionsList` or the archive commands; `ManagerState` returns its id.
@@ -150,6 +161,18 @@ snapshot fits; `detail` carries availability notices and resource templates.
   the submission first (`input.queued`), then the supervisor decides *when*, so
   the global cap applies to queued work; `mode` is `queue`, `steer` or
   `interrupt`.
+- **Subagent reports** (`reports.py`, [agents.md](agents.md#reports-and-waking-the-root)).
+  The facade installs `AgentPool.report_sink = deliver_report`: a `ReportBatch` is
+  admitted with `admit_submission(mode="steer", origin=..., request_id=...)` and, when
+  it should wake the root, `supervisor.submit(session, handle, None, queued_id=...)`
+  (no title is derived). A non-report `enqueue`/`start_turn` calls `human_input`, which
+  resets the pool's consecutive-wake counter and releases held reports. The first time
+  the facade opens a root it reconciles background runs that ended without a delivered
+  report (interrupted and cancelled ones queue without a wake). `SessionActivity`
+  answers `SessionActivityResult(turn_active, queued, running_agents, reports_pending,
+  wait_seconds)`; `nexus run` and the JSONL stream poll it after the first terminal
+  event to follow the session until quiescent, bounded by `wait_seconds`
+  (`[agents] oneshot_wait_seconds`, 0 = exit at once with a "still running" note).
 - `subscribe(session, from_seq)` registers a view in `Presence`, catches up from
   the log and follows live; closing it frees the view's approval leases.
 - Session summaries retain `last_seq` for stream cursors and expose
@@ -378,7 +401,18 @@ confirmation `lines` (no env/header value, no URL credential) and the structured
 `SkillsInstall` for the global scope is likewise refused when `NEXUS_HOME` points away from
 `~/.nexus`, the folder Settings writes.
 
-### Cancelling one child agent
+### Plan-usage snapshot
+
+`HostFacade.usage` is a `UsageSnapshotService` (`host_support/usage_snapshot.py`). The
+daemon starts a 30 s ticker (`start_usage_polling`) whose `kick()` refreshes at most once
+per `[models.subagent_usage] refresh_seconds`; the runtime also kicks it before a
+sub-agent spawn and after a child ends. It is closed in `shutdown`. A `ProvidersUsage`
+result is ingested into the same snapshot. The runtime only receives the snapshot
+(`set_usage_snapshot`) and a `usage_kick` callable, so `runtime.py` imports nothing from
+`host_support`. A failed fetch keeps the previous snapshot and fails open
+([models.md](models.md#usage-aware-sub-agent-routing)).
+
+### Cancelling or closing one child agent
 
 `AgentCancel(session, agent_id, reason="")` stops one running child (including an
 external Claude Code worker, whose process group is killed by its own cancellation
@@ -393,6 +427,24 @@ to that session (`No such agent in this session.`) or is no longer running; the
 reason is clipped to 200 characters. The native client reaches it from the `/tasks`
 menu (a `Cancel <agent>` row under each running agent). Human handoff into the live
 Claude PTY is not implemented.
+
+`AgentClose(session, agent_id, reason="")` -> `AgentCloseResult(session, agent_id, closed,
+message)` closes one child **for good** (the same thing the root's `subagent_stop` does):
+a running child is cancelled first through its own token (`AgentCancel` semantics; the
+cancelled run is not reported to the root), then the pool records `agent.stopped`
+(`by: "user"`, the reason clipped to 200 characters), frees the child's `max_live` slot,
+and the child can no longer be continued. Its log and any worktree are kept and stay
+reviewable. Where `AgentCancel` ends a run and leaves the child idle, `AgentClose`
+makes it terminal. Idempotent (`closed` is true with "already stopped" for a stopped
+child); `closed` is false with `No such agent in this session.` for an unknown id. A
+child the process does not know yet (after a daemon restart) is rebuilt from the root
+log first (`Runtime.close_agent`). The command is in the gateway's `prompt` scope with
+`AgentCancel`; client method `Client.close_agent(session, agent_id, reason="")`.
+There is deliberately no `AgentList`/`AgentSend` command: surfaces read agent state
+(running, idle, stopped, `runs`, `continuable`) from the reduced `ConversationView`
+they already subscribe to, and only the root sends follow-ups (a human typing into a
+child page is the plan's open question Q4). `AgentCancel`'s "not running" message
+points at `AgentClose`.
 
 ### Claude Code settings
 

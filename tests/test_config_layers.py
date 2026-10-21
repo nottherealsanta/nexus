@@ -212,7 +212,7 @@ timeout_seconds = 42
     assert config.version == 2
     assert config.v2 is not None
     assert config.v2.agent.max_iterations == 12
-    assert config.v2.agent.name == "build"
+    assert config.v2.agent.name == "orchestrator"
     assert config.v2.context.max_tokens == 100000
     assert config.instructions_file == "GUIDE.md"
     assert config.memory_file == "NOTES.md"

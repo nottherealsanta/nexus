@@ -13,7 +13,8 @@ from fnmatch import fnmatchcase
 from ...model.tokenizer import DEFAULT_TOKENIZER
 from .stubs import HEADER, identifier, stub
 
-EXCLUDED = frozenset({'code', 'subagent', 'question', 'todowrite', 'skill',
+EXCLUDED = frozenset({'code', 'subagent', 'subagent_send', 'subagent_stop', 'subagent_list',
+                      'question', 'todowrite', 'skill',
                       'McpCall', 'McpSearch', 'mcp_call', 'mcp_search'})
 RESERVED = frozenset({'search_tools', 'describe_tool', 'store', 'load', 'llm',
                       'targets', 'context_meta', 'context_messages',

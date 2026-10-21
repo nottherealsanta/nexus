@@ -654,7 +654,7 @@ def test_recovery_closes_native_spawn_before_child_promotion(tmp_path):
     assert len(completed) == 1
     event = completed[0]
     assert event.session == "main" and event.turn == "t"
-    assert event.data == {**meta, "agent": meta, "status": "interrupted",
+    assert event.data == {**meta, "agent": meta, "status": "interrupted", "run": 1,
                           "error": INTERRUPTED_ERROR, "reason": "interrupted",
                           "usage": {}, "usage_unknown": True, "ok": False, "is_error": True}
     assert [e.type for e in reopened.events][-2:] == ["agent.completed", "turn.failed"]

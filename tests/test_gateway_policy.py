@@ -20,7 +20,7 @@ EXPECTED_ALLOWED = {
     "prompt": {
         "SessionOpen", "SessionStart", "SessionEnqueue", "SessionCancel",
         "SessionQueueMove", "SessionQueueRemove", "SessionQueueSetMode", "ModelSelect",
-        "ReasoningEffortSelect", "AgentSelect", "AgentCancel", "SessionArchive",
+        "ReasoningEffortSelect", "AgentSelect", "AgentCancel", "AgentClose", "SessionArchive",
         "SessionUnarchive",
     },
     "approve": {"PermissionResolve", "QuestionAnswer"},
@@ -215,6 +215,8 @@ def test_single_line_fields_refuse_newlines_and_oversize():
     assert policy.authorize(p.ReasoningEffortSelect(session="s", effort=None), ("prompt",), "d")
     invalid(p.AgentSelect(session="s", name=""))
     invalid(p.AgentCancel(session="s", agent_id="a/b"))
+    invalid(p.AgentClose(session="s", agent_id="a/b"))
+    invalid(p.AgentClose(session="s", agent_id="a", reason="x" * 201))
     invalid(p.GitDiff(ref="x" * 201), ("read",))
     invalid(p.ModelsList(search="a\nb"), ("read",))
 

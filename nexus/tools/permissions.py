@@ -1176,6 +1176,13 @@ _NEVER_ASK_TOOLS = frozenset({"question"})
 #: every mode (a blocked child must always be able to say so). An explicit
 #: ``deny`` rule is evaluated earlier and still wins.
 _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
+#: Tools whose rules are the ``Task(...)`` rules: continuing or stopping a
+#: subagent is keyed ``"<role>:<tier>"`` like spawning it, so one rule governs
+#: all three (``deny = ["Task(*:high)"]`` also blocks ``subagent_send`` to a high child).
+_RULE_FAMILY = {"subagent_send": "subagent", "subagent_stop": "subagent"}
+#: Read-only introspection of the session's own subagents; allowed in every mode
+#: unless a ``deny`` rule names it.
+_READ_ONLY_TOOLS = frozenset({"subagent_list"})
 #: Families whose mode fallback is ``ask`` even under ``mode = "allow"``: reading
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
@@ -1329,6 +1336,11 @@ class PermissionEngine:
         denied = self._first_match(
             self._deny, public_name, key, bundle, input_data=call.input
         )
+        rule_name = _RULE_FAMILY.get(public_name)
+        if denied is None and rule_name is not None:
+            denied = self._first_match(
+                self._deny, rule_name, key, bundle, input_data=call.input
+            )
         if denied is not None:
             return self._verdict(
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
@@ -1356,10 +1368,20 @@ class PermissionEngine:
         allowed = self._first_match(
             self._allow, public_name, key, bundle, input_data=call.input
         )
+        if allowed is None and rule_name is not None:
+            allowed = self._first_match(
+                self._allow, rule_name, key, bundle, input_data=call.input
+            )
         if allowed is not None:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, allowed, "allow",
                 f"Allowed by rule {allowed.raw!r}", suggestions,
+            )
+
+        if public_name in _READ_ONLY_TOOLS:
+            return self._verdict(
+                call, spec, key, Outcome.ALLOW, None, "read_only",
+                "Listing your own subagents changes nothing", suggestions,
             )
 
         if public_name in _ALWAYS_ALLOWED_TOOLS:
@@ -1379,6 +1401,10 @@ class PermissionEngine:
         ask = self._first_match(
             self._ask, public_name, key, bundle, input_data=call.input
         )
+        if ask is None and rule_name is not None:
+            ask = self._first_match(
+                self._ask, rule_name, key, bundle, input_data=call.input
+            )
         if ask is not None:
             return self._ask_verdict(call, spec, key, ask, attended, suggestions)
 

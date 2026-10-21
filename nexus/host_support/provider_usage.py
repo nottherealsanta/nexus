@@ -33,7 +33,10 @@ Only connected providers are fetched, concurrently, each bounded in time and
 response size. A failure becomes that row's redacted ``error``; nothing here
 returns a credential. Row shape: ``id``, ``label``, ``plan``, ``source``,
 ``windows`` (``label``, ``used_percent``, ``resets_at`` epoch seconds or
-``None``, ``reset_text``, ``detail``, ``period_seconds``), ``notes``, ``error``.
+``None``, ``reset_text``, ``detail``, ``period_seconds``, ``kind``), ``notes``,
+``error``. ``kind`` is ``five_hour``, ``weekly``, ``monthly`` or ``other``
+(:func:`nexus.model.usage_gate.window_kind`); per-model and per-feature side
+quotas are ``other`` and never gate the provider.
 
 ``period_seconds`` is the window's length when it is known (Codex reports it;
 OpenCode Go and Claude windows have fixed lengths; a monthly window runs one
@@ -59,6 +62,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from ..model.providers.antigravity_cli import AntigravityError
+from ..model.usage_gate import window_kind
 from ..util import redact_secrets
 from . import provider_auth
 
@@ -150,10 +154,11 @@ def month_before(resets_at: int | None) -> int | None:
 
 
 def _window(label: str, used: float | None, resets_at: int | None = None, reset_text: str = "", detail: str = "",
-            period: float | None = None) -> dict[str, Any]:
+            period: float | None = None, kind: str | None = None) -> dict[str, Any]:
     period_seconds = int(period) if period is not None and math.isfinite(period) and period > 0 else None
     return {"label": _text(label, 80) or "Limit", "used_percent": used, "resets_at": resets_at,
-            "reset_text": _text(reset_text, 120), "detail": _text(detail), "period_seconds": period_seconds}
+            "reset_text": _text(reset_text, 120), "detail": _text(detail), "period_seconds": period_seconds,
+            "kind": kind or window_kind(period_seconds)}
 
 
 def _json(response: httpx.Response) -> Mapping[str, Any]:
@@ -175,7 +180,7 @@ def _json(response: httpx.Response) -> Mapping[str, Any]:
 def parse_codex(data: Mapping[str, Any]) -> dict[str, Any]:
     windows: list[dict[str, Any]] = []
 
-    def add(limits: Any, prefix: str = "") -> None:
+    def add(limits: Any, prefix: str = "", kind: str | None = None) -> None:
         if not isinstance(limits, Mapping):
             return
         for key in ("primary_window", "secondary_window"):
@@ -183,15 +188,16 @@ def parse_codex(data: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(item, Mapping):
                 label = window_label(item.get("limit_window_seconds"))
                 windows.append(_window(f"{prefix}{label}", _percent(item.get("used_percent")), _epoch(item.get("reset_at")),
-                                       period=_number(item.get("limit_window_seconds"))))
+                                       period=_number(item.get("limit_window_seconds")), kind=kind))
 
     add(data.get("rate_limit"))
+    # Per-model and per-feature side quotas never gate the whole provider.
     extra = data.get("additional_rate_limits")
     for item in extra[:8] if isinstance(extra, list) else ():
         if isinstance(item, Mapping):
             name = _text(item.get("limit_name") or item.get("metered_feature"), 60)
-            add(item.get("rate_limit"), f"{name} " if name else "")
-    add(data.get("code_review_rate_limit"), "Code review ")
+            add(item.get("rate_limit"), f"{name} " if name else "", kind="other")
+    add(data.get("code_review_rate_limit"), "Code review ", kind="other")
     notes: list[str] = []
     limits = data.get("rate_limit")
     if isinstance(limits, Mapping) and limits.get("limit_reached") is True:
@@ -232,7 +238,7 @@ def parse_copilot(data: Mapping[str, Any]) -> dict[str, Any]:
         if (used := _number(item.get("overage_count"))):
             detail = f"{detail} · {used:,.0f} over quota".lstrip(" ·")
         windows.append(_window(f"{label} (monthly)", None if remaining_percent is None else round(100 - remaining_percent, 2),
-                               resets_at, detail=detail, period=month_before(resets_at)))
+                               resets_at, detail=detail, period=month_before(resets_at), kind="monthly"))
     credits = _number((snapshots.get("premium_interactions") or {}).get("credits_used") if isinstance(snapshots.get("premium_interactions"), Mapping) else None)
     if data.get("token_based_billing") is True and credits is not None:
         notes.append(f"AI credits used this period: {credits:,.0f}")
@@ -265,7 +271,8 @@ def parse_opencode_go(data: Mapping[str, Any], now: float | None = None) -> dict
         reset_in = _number(_first(item, _GO_RESET_IN))
         resets_at = int(now + reset_in) if reset_in is not None and reset_in >= 0 else _epoch(_first(item, _GO_RESET_AT))
         period = {"rolling": FIVE_HOURS, "weekly": WEEK}.get(key) or month_before(resets_at)
-        windows.append(_window(label, used, resets_at, period=period))
+        kind = {"rolling": "five_hour", "weekly": "weekly", "monthly": "monthly"}[key]
+        windows.append(_window(label, used, resets_at, period=period, kind=kind))
     if not windows:
         raise UsageError("the OpenCode Go response had no usage windows")
     return {"plan": "", "windows": windows, "notes": []}
@@ -380,6 +387,16 @@ def _claude_period(label: str) -> int | None:
     return FIVE_HOURS if lowered.startswith("5-hour") else WEEK if lowered.startswith("weekly") else None
 
 
+def _claude_kind(label: str) -> str:
+    """The label is the only signal: a scoped weekly window (``(Sonnet only)``) is a side quota."""
+    lowered = label.casefold()
+    if lowered.startswith("5-hour"):
+        return "five_hour"
+    if lowered in ("weekly", "weekly (all models)"):
+        return "weekly"
+    return "other"
+
+
 def parse_claude(text: str, now: float | None = None) -> dict[str, Any]:
     from ..model.providers.claude_agent_auth import parse_usage
 
@@ -387,7 +404,7 @@ def parse_claude(text: str, now: float | None = None) -> dict[str, Any]:
     for row in parse_usage(text):
         label = claude_label(row["label"])
         windows.append(_window(label, row["used_percent"], claude_reset_at(row["reset_text"], now), row["reset_text"],
-                               period=_claude_period(label)))
+                               period=_claude_period(label), kind=_claude_kind(label)))
     if not windows:
         line = next((line.strip() for line in text.splitlines() if line.strip()), "")
         raise UsageError(_text(line) or "the Claude CLI printed no usage limits")
@@ -490,6 +507,9 @@ async def _antigravity_row(runtime: object) -> dict[str, Any]:
         cli = provider_auth._antigravity(runtime)
         async with asyncio.timeout(_TOTAL_TIMEOUT):
             row.update(await cli.usage())
+        for w in row["windows"]:
+            if isinstance(w, dict):
+                w.setdefault("kind", window_kind(w.get("period_seconds")))
     except AntigravityError as exc:
         row["error"] = _text(exc, 240)
     except TimeoutError:

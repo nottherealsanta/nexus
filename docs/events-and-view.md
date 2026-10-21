@@ -42,7 +42,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 | ext | `ext.loaded` `ext.unloaded` `ext.failed` `ext.tool_shadowed` `ext.manifest_changed` |
 | mcp | `mcp.connected` `mcp.disconnected` `mcp.failed` `mcp.tools_changed` |
 | skill | `skill.invoked` `skill.completed` |
-| agent | `agent.spawned` `agent.completed` `agent.clamped` (and `agent.selected`) |
+| agent | `agent.spawned` `agent.completed` `agent.clamped` `agent.routed` `agent.resumed` `agent.stopped` (and `agent.selected`); see [Persistent children](#persistent-children) |
 | hook | `hook.fired` `hook.blocked` |
 | external | `external.started` `external.tool` `external.finished` ([below](#external-worker-events)) |
 | input | `input.started` `input.queued` `input.moved` `input.mode_changed` (`{queued_id, mode, order}`: a promotion, queue→steer→interrupt; the reducer sets the item's mode and applies `order`) `input.consumed` `input.dropped` |
@@ -103,6 +103,11 @@ context. The reducer folds them into the outer `ToolCallView` (`view/reduce.py:_
   and again final; the later event merges over the earlier one, so rows appear live and replay
   equals live. When `code.finished` arrives, rows still `running` become `cancelled` (the
   program was cut off by a cancel, limit or crash), so a replayed log never shows a spinner.
+  The loop must persist `call_id`, `nested_id` and `program_digest` of `code.*` events verbatim
+  (`_safe_code_event`): the long-token redaction once turned the 44-character call id into
+  `***`, so the events opened a phantom `code` row that never finished (an endless spinner and
+  a `Working` header that kept animating). Replaying such old logs, a `code.finished` closes a
+  row that no `tool.started` ever named.
 - `ConversationView.code_store`: the reduced store (`set` / `delete`, only on success). The outer
   tool's `metrics["code.store"]` holds `entries` (whole store), `set` and `delete` of that call;
   `tool.completed` keeps it when it replaces the result metrics.
@@ -144,14 +149,44 @@ and delta accumulation. It imports only `nexus.events`.
 time while the request is pending (a prompt counts "waiting" from it) and the resolution
 time once resolved.
 
+### Persistent children
+
+A child run ending is not the child dying (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md
+3.4; the root-side tools land in later phases, the events and fields exist now).
+`agent.completed` means "a run ended" and gains `run` (1-based) and `continuable`;
+`agent.spawned` gains `background` (the tool call returned before the child ended)
+and `continuable`. New events, both in the **root** log:
+
+| Event | Data |
+| --- | --- |
+| `agent.resumed` | `{agent, run, from: "root", message, message_chars, background, continuable, worktree}`; written by `subagent_send` through the calling tool's emitter. `message` is clipped to 3900 characters with the clip announced inside the text, the full text is the first user message of the child's new turn in its own log; `background` is false when the send waited |
+| `agent.stopped` | `{agent, by: "root"/"user"/"limit", reason, run}`; written through the root event port by `subagent_stop` (`by: "root"`) or host `AgentClose` (`by: "user"`); terminal, the child log is kept. A running child's cancelled `agent.completed` precedes it |
+
+`AgentView.status` keeps its meaning (`spawned` = a run is in flight; `/tasks` and
+crash recovery key off it). It gains `runs` (spawn is run 1; `agent.resumed` and
+`agent.completed` take the larger value), `continuable`, `stopped` (+ `stopped_by`,
+`stopped_reason`), `last_run_ts` (latest spawn/resume/completion) and `background`.
+Derived display state: running = `status == "spawned"`; idle = ended and
+`continuable` and not `stopped`; stopped; interrupted (`status == "interrupted"`).
+The reducer handles `agent.resumed` by setting `status` back to `spawned`, clearing
+the last result and appending a new active turn to `AgentView.body` whose user row
+carries `origin = {"kind": "root_followup", "agent", "run"}`; the child's own relayed
+events then land in that turn. Agent events carry no root turn id, so they never open
+a phantom root turn (tested). An `agent.resumed`/`agent.stopped` for an unknown agent
+is a diagnostic, as for `agent.completed`.
+
 A user `MessageView` and a `QueuedInputView` carry an optional `origin`
 (`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is
 recorded on `input.queued` only, so the prompt text and the turn are unchanged
 (omitted from the wire when absent). A root launched by the manager carries
 `{"kind": "manager", "manager": <manager id>, "origin_message_id": ...}` (the reducer keeps those two
-extra keys for that kind only), so a client can say "launched by manager". `session.linked` and every
+extra keys for that kind only), so a client can say "launched by manager". Two more kinds carry
+`agent`, `run`, `status` and `agents` (a bounded list of at most 32 agent ids, each at most 200
+characters; `run` is a non-negative integer, anything else is dropped): `subagent_report` (a
+finished child's report delivered to the root through its input queue; `agents` lists `"<agent id>:<run>"` for every report in the batch, and the queue keeps ints and string lists in an origin instead of stringifying them) and `root_followup` (the
+root's follow-up shown on a child's page). Unknown kinds keep only `kind`. `session.linked` and every
 `manager.*` event fold to nothing in the view: they are audit metadata, not conversation, so they
-add no diagnostic row. `LogsRead` projects each with a fixed summary and no event data.
+add no diagnostic row. A durable `context.notice` with `kind: "subagent_wake_paused"` (`message`, `pending`, `wakes`) records that the auto-wake cap paused report delivery; the reducer does not draw it yet. `LogsRead` projects each with a fixed summary and no event data.
 
 A user `MessageView` and a `QueuedInputView` also carry `sent_ts`: the `input.queued`
 event time (a consumed queued item keeps it, not the later consume time), or the

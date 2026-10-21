@@ -580,6 +580,48 @@ def agent_model_label(agent: AgentView | None) -> str:
     return f"tier {tier} · {state}"
 
 
+def agent_state(agent: AgentView | None) -> str:
+    """Display state of a subagent: running, idle, interrupted, stopped or finished.
+
+    ``status == "spawned"`` stays the only "a run is in flight" signal (the reducer and crash
+    recovery key off it); the rest is derived from ``continuable``/``stopped``
+    (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.4).
+    """
+    if agent is None:
+        return "finished"
+    if agent.stopped:
+        return "stopped"
+    if agent.status == "spawned":
+        return "running"
+    if agent.continuable:
+        return "interrupted" if agent.status == "interrupted" else "idle"
+    return "finished"
+
+
+def agent_state_label(agent: AgentView | None) -> str:
+    """The labelled state: ``running · run 2``, ``idle · run 2``, ``stopped by system: why``.
+
+    A finished (not continuable) child keeps its plain status word, as before.
+    """
+    if agent is None:
+        return ""
+    state = agent_state(agent)
+    runs = max(1, int(agent.runs or 1))
+    if state == "finished":
+        return _text(agent.status, 24)
+    if state == "stopped":
+        by = _text(agent.stopped_by or "", 24)
+        label = "stopped" + (f" by {by}" if by else "")
+        reason = _text(agent.stopped_reason or "", 120)
+        return f"{label}: {reason}" if reason else label
+    label = state
+    if state != "running" or runs > 1:
+        label += f" · run {runs}"
+    if state == "idle" and agent.status not in {"completed", "spawned"}:
+        label += f" · last run {_text(agent.status, 24)}"
+    return label
+
+
 def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int, *, with_model: bool = True) -> tuple[str, bool]:
     marker = tool_status(tool)
     kind = (
@@ -590,12 +632,16 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
         else None
     ) or "General"
     kind = _text(str(kind), 32).title()
-    running = marker == "running" and (agent is None or agent.status == "spawned")
+    # The card derives its state from the child: an acked background `subagent` call is
+    # complete, but its spinner runs for as long as the child's run is in flight.
+    running = marker == "running" if agent is None else agent.status == "spawned" and not agent.stopped
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     mark = spinner[spinner_index] if running else "·"
     model = f" · {agent_model_label(agent)}" if with_model else ""
-    return f"{mark} {kind} · {phrase}{model}", running
+    state = agent_state(agent)
+    note = f" · {agent_state_label(agent)}" if state in {"idle", "interrupted", "stopped"} or (state == "running" and agent.runs > 1) else ""
+    return f"{mark} {kind} · {phrase}{model}{note}", running
 
 
 def _task_child_activity(agent: AgentView) -> str:
@@ -634,7 +680,7 @@ def _task_metrics(tool: ToolCallView, agent: AgentView | None, running: bool) ->
 def _task_child_details(agents: tuple[AgentView, ...]) -> list[str]:
     return [
         f"{_text(agent.type or agent.id, 48)} · {_text(agent.task or agent.description, 96)}"
-        f" · {_text(agent.status, 24)} · {agent_model_label(agent)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
+        f" · {agent_state_label(agent)} · {agent_model_label(agent)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
         for agent in agents
     ]
 
@@ -649,7 +695,7 @@ def _agent_link_label(agent: AgentView) -> str:
         activity += f" · {tool_status(tool)}"
     return (
         f"{_text(agent.type or agent.id, 36)} · "
-        f"{_text(agent.status, 18)} · {agent_model_label(agent)} · {_agent_metrics(agent)} · {activity}"
+        f"{agent_state_label(agent)} · {agent_model_label(agent)} · {_agent_metrics(agent)} · {activity}"
     )
 
 
@@ -823,6 +869,8 @@ __all__ = [
     "_DETAIL_LIMIT",
     "DiffSection",
     "_agent_link_label",
+    "agent_state",
+    "agent_state_label",
     "_agent_metrics",
     "agent_actual_model",
     "agent_model_label",

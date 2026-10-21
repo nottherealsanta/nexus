@@ -300,7 +300,8 @@ async def run_long_child(workspace: Path) -> dict:
 
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "scan data/ for the finding",
-                                          "subagent_type": "task"})),
+                                          "subagent_type": "task",
+                                          "wait": True})),
         reads,
         text_response(f"CHILD-REPORT found {NEEDLE} in the middle file"),
         text_response("delegated"),

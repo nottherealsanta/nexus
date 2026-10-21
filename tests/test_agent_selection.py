@@ -4,6 +4,7 @@ from __future__ import annotations
 from nexus.model.message import Message, Text
 from nexus.config import Config
 from nexus.config.schema import (
+    AgentsSection,
     AgentSection,
     ConfigV2,
     ModelSection,
@@ -20,7 +21,7 @@ from nexus.runtime import Runtime
 CHILD_ONLY = frozenset({"escalate"})
 
 
-def _config(name: str = "general", *, web: WebSection | None = None) -> Config:
+def _config(name: str = "general", *, web: WebSection | None = None, background: bool = True) -> Config:
     return Config(
         model="scripted/m",
         version=2,
@@ -29,6 +30,7 @@ def _config(name: str = "general", *, web: WebSection | None = None) -> Config:
             model=ModelSection(default="scripted/m"),
             permissions=PermissionsSection(mode="allow"),
             tools=ToolsSection(web=web or WebSection()),
+            agents=AgentsSection(background=background),
         ),
     )
 
@@ -136,7 +138,8 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
 
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_send", "subagent_stop", "subagent_list",
+        "todowrite", "question", "webfetch", "websearch", "skill", "code",
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
@@ -189,7 +192,7 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
         text_response("child report"),
         text_response("root report"),
     )
-    runtime = Runtime(tmp_path, config=_config(web=configured), providers={"scripted": provider})
+    runtime = Runtime(tmp_path, config=_config(web=configured, background=False), providers={"scripted": provider})
     [event async for event in runtime.session("web-tree").send("delegate")]
 
     expected = {
@@ -220,7 +223,7 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     )
     runtime = Runtime(
         tmp_path,
-        config=_config("general", web=configured),
+        config=_config("general", web=configured, background=False),
         providers={"scripted": provider},
     )
     # The workspace role is read-only and selects the research profile.
@@ -256,7 +259,7 @@ async def test_explore_keeps_its_declared_tools_within_the_parent_ceiling(tmp_pa
         text_response("findings"),
         text_response("done"),
     )
-    runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
+    runtime = Runtime(tmp_path, config=_config(background=False), providers={"scripted": provider})
     [event async for event in runtime.session("explore-ceiling").send("delegate")]
     spawned = next(event for event in runtime.session("explore-ceiling").events if event.type == "agent.spawned")
     # Read-only is prompt guidance only: declared bash/write are kept; the
@@ -281,7 +284,7 @@ async def test_child_catalog_inherits_parent_authority_minus_subagent(tmp_path):
         text_response("root report"),
     )
     _write_plan_agent(tmp_path)
-    runtime = Runtime(tmp_path, config=_config("plan"), providers={"scripted": provider})
+    runtime = Runtime(tmp_path, config=_config("plan", background=False), providers={"scripted": provider})
     [event async for event in runtime.session("tree").send("delegate")]
 
     expected = {"read", "glob", "grep", "edit", "write", "subagent", "todowrite", "question", "skill"}
@@ -317,7 +320,7 @@ async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
         text_response("plan report"),
         text_response("root report"),
     )
-    runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
+    runtime = Runtime(tmp_path, config=_config(background=False), providers={"scripted": provider})
     # The root catalog contains the full coding authority; the role's own
     # declarations are kept (nothing is stripped) but never add to it.
     [event async for event in runtime.session("readonly-ceiling").send("delegate")]
@@ -366,7 +369,7 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
         text_response("explored"),
         text_response("root report"),
     )
-    runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
+    runtime = Runtime(tmp_path, config=_config(background=False), providers={"scripted": provider})
     [event async for event in runtime.session("skill-ceiling").send("delegate")]
 
     expected = {

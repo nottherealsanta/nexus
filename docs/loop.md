@@ -120,6 +120,13 @@ operation), `interrupt` (cancels the active turn without dropping other queued
 input, then runs first). `input.started` / `input.consumed` / `input.dropped`
 record the lifecycle. See [surfaces.md](surfaces.md#messages-during-a-turn).
 
+A finished **background subagent's report** is a `steer` input with
+`origin.kind = "subagent_report"`, so the same `consume_steering` path appends it as a
+user-role message (`notice="subagent_report"`) at the next iteration boundary, before
+the next model request; a steer consumed at the final iteration keeps a finishing turn
+running, so a report that arrives at turn end is not stranded. The prompt hooks are
+skipped for it, and a cancel does not drop it ([agents.md](agents.md#reports-and-waking-the-root)).
+
 A waiting message can be **promoted** but never demoted (`SessionQueueSetMode`,
 `HostFacade.set_queued_mode`): `queue → steer`, `steer → interrupt`, or
 `queue → interrupt`. The session appends `input.mode_changed` `{queued_id, mode, order}`
@@ -183,6 +190,16 @@ about 1800 s after it started. That was the old 30-minute default of
 `max_turn_seconds`. A parent's clock includes time spent waiting on subagents, so
 long subagent work hit it most. The default is now 0 (unlimited), and subagents
 have no wall clock at all (2026-10-17; see `docs/decisions.md`).
+
+## Background subagents outlive the turn
+
+With `agents.background` on, a `subagent` call returns before the child ends and the
+child keeps running after the turn completes or is cancelled. The loop is unchanged:
+it never awaits the child. Child events reach the root log through the root event
+port rather than the turn's emitter ([agents.md](agents.md#background-start-and-wait-agentsbackground-default-on)).
+The subagent tree budget is owned per root session, not per turn: its token, cost and
+fan-out counters are reset by `begin_window()` at the start of each root turn, while
+concurrency and the live-child count span turns.
 
 ## Changing the loop
 
