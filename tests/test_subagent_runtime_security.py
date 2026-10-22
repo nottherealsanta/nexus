@@ -35,7 +35,7 @@ async def test_extension_child_context_has_no_subagents_and_forged_spawn_makes_n
     _write_probe_tool(workspace, log)
     provider = ScriptedProvider(
         tool_response(("root-probe", "ProbeCtx", {})),
-        tool_response(("spawn", "subagent", {"prompt": "delegate", "subagent_type": "general", "wait": True})),
+        tool_response(("spawn", "subagent", {"prompt": "delegate", "subagent_type": "general"})),
         tool_response(
             ("child-probe", "ProbeCtx", {}),
             ("forged-subagent", "subagent", {"prompt": "nested", "subagent_type": "general"}),

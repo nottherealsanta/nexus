@@ -212,6 +212,76 @@ fn user(out: &mut Rows, b: &Content, full: usize, p: &Palette) {
     }
 }
 
+/// A delivered background subagent report: agent, task and status on one heading row, then at
+/// most two preview rows (each clipped with `…`) and a hint naming what was left out. Every row
+/// opens the full report (`operation`).
+fn agent_report(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
+    const LEAD: &str = "  ⮑ ";
+    let op = &b.operation;
+    // Preview rows and the hint sit under the heading content, right after the icon.
+    let body = " ".repeat(LEAD.width());
+    let room = width.saturating_sub(body.width() + 1).max(1);
+    let name = if b.agent_name.is_empty() {
+        "subagent"
+    } else {
+        b.agent_name.as_str()
+    };
+    // Same name treatment as a subagent call's first line: capitalized, in the agent's colour
+    // (error tint on failure), then the task two columns after it.
+    let failed = b.status == "failed";
+    let name_color = if failed { p.error } else { color(&b.color, p.blue, p) };
+    let shown_name = capitalize(name);
+    let used = LEAD.width() + shown_name.width();
+    let mut head = vec![
+        Span::styled(LEAD, Style::default().fg(p.quiet)),
+        Span::styled(shown_name, Style::default().fg(name_color)),
+    ];
+    let mut tail = String::new();
+    if !b.task.is_empty() {
+        tail.push_str("  ");
+        tail.push_str(&b.task);
+    }
+    if !b.status.is_empty() {
+        tail.push_str(" · ");
+        tail.push_str(&b.status);
+    }
+    head.push(Span::styled(
+        truncate(&tail, width.saturating_sub(used + 1)),
+        Style::default().fg(p.muted),
+    ));
+    out.push((Line::from(head), op.clone()));
+    let mut clipped = b.count;
+    for text in b.text.lines().map(str::trim).filter(|l| !l.is_empty()).take(2) {
+        let shown = truncate(text, room);
+        clipped += usize::from(shown != text);
+        out.push((
+            Line::from(vec![
+                Span::raw(body.clone()),
+                Span::styled(shown, Style::default().fg(p.text)),
+            ]),
+            op.clone(),
+        ));
+    }
+    if clipped > 0 {
+        let hint = if b.count > 0 {
+            format!(
+                "… {} more line{} · open for the full report",
+                b.count,
+                if b.count == 1 { "" } else { "s" }
+            )
+        } else {
+            "… clipped · open for the full report".to_string()
+        };
+        out.push((
+            Line::from(vec![
+                Span::raw(body),
+                Span::styled(truncate(&hint, room), Style::default().fg(p.quiet)),
+            ]),
+            op.clone(),
+        ));
+    }
+}
+
 fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let base = Style::default().fg(p.text).bg(p.element);
     // The composer's card shape: panel background and padding, no coloured left rail.
@@ -764,6 +834,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
     let op = &b.operation;
     match b.kind.as_str() {
         "user" => user(&mut out, b, width, p),
+        "agent_report" => agent_report(&mut out, b, width, p),
         "context_header" => header::draw(&mut out, b, viewport_width, p),
         "live" => live_card(&mut out, b, width, p),
         "context" => header::chip(&mut out, b, width, p),
@@ -2136,6 +2207,53 @@ mod tests {
         block.title = "follow-up from root · build-1 · run 2".into();
         let text = plain(&build(&block, 80, &p)).join("\n");
         assert!(text.contains("from root"), "{text}");
+    }
+
+    #[test]
+    fn agent_report_is_compact_names_the_agent_and_announces_the_clip() {
+        let p = Palette::new(false);
+        let op = serde_json::json!({"kind":"message_page","id":"m"});
+        let mut block = Content {
+            kind: "agent_report".into(),
+            agent_name: "explorer".into(),
+            task: "find the loader".into(),
+            status: "completed".into(),
+            text: "first line\nsecond line".into(),
+            count: 5,
+            operation: Some(op.clone()),
+            ..Default::default()
+        };
+        let rows = build(&block, 60, &p);
+        let text = plain(&rows);
+        assert_eq!(rows.len(), 4, "heading, two preview rows, clip hint: {text:?}");
+        assert!(text[0].contains("Explorer  find the loader · completed"), "{text:?}");
+        assert!(text[1].contains("first line") && text[2].contains("second line"));
+        assert!(text[3].contains("5 more lines"), "{text:?}");
+        assert!(!text.join("\n").contains('#'), "no turn number");
+        assert!(rows.iter().all(|(_, o)| o.as_ref() == Some(&op)), "every row opens the report");
+        // `build` adds one outer pad column before the icon.
+        assert!(text[0].starts_with("   ⮑ Explorer"), "{text:?}");
+        let name_col = text[0][..text[0].find("Explorer").unwrap()].width();
+        for row in &text[1..] {
+            let content = row.trim_start();
+            assert_eq!(row.width() - content.width(), name_col, "aligned under the name: {text:?}");
+        }
+        let span = rows[0].0.spans.iter().find(|s| s.content == "Explorer").unwrap();
+        assert_eq!(span.style.fg, Some(p.blue), "unset colour falls back like a task row");
+        block.color = "$nx-purple".into();
+        let rows = build(&block, 60, &p);
+        let span = rows[0].0.spans.iter().find(|s| s.content == "Explorer").unwrap();
+        assert_eq!(span.style.fg, Some(p.purple), "agent colour");
+        block.text = "   padded first\n\n      padded second".into();
+        let text = plain(&build(&block, 60, &p));
+        assert!(text[1].starts_with("     padded first"), "{text:?}");
+        assert!(text[2].starts_with("     padded second"), "{text:?}");
+        block.count = 0;
+        block.text = "only".into();
+        assert_eq!(build(&block, 60, &p).len(), 2, "nothing clipped, no hint");
+        block.text = "x".repeat(200);
+        let text = plain(&build(&block, 40, &p));
+        assert!(text[1].ends_with('…') && text[2].contains("clipped"), "{text:?}");
     }
 
     #[test]

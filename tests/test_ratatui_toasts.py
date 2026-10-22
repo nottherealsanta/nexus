@@ -21,7 +21,7 @@ def _shell(tmp_path, monkeypatch):
     ("No session matching zzz", "warning"), ("UI background actions busy; try again", "warning"),
     ("Display update failed: ValueError: x", "error"), ("Conflict: the agent file changed on disk.", "error"),
     ("Sessions could not be shown: boom", "error"), ("Full tool output previews on", "info"),
-    ("No background tasks", "info"),
+    ("No subagents", "info"),
 ])
 def test_legacy_notice_text_maps_to_a_level(text, level):
     assert notice_level(text) == level

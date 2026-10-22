@@ -210,3 +210,22 @@ The live test first skipped even though the sign-in worked: `tests/conftest.py`
 gives every test a private `NEXUS_HOME`, so a manager built inside a test reads
 an empty credential file. A live test must resolve the real credential path at
 import time and inject it (`FileSecretStore(path=…)`, `xai_auth_factory=`).
+
+### Hosted vendor/model IDs: NVIDIA regression
+
+A slash in a catalogue ID does not necessarily denote a Nexus route. NVIDIA's
+models.dev IDs are opaque wire IDs, including when the namespace is `nvidia`
+or `openai`. Registry canonicalization keeps these entries under NVIDIA instead
+of merging them into a direct vendor listing. Setup already writes
+`f"{provider}/{model}"`; the router strips only that routing prefix. Thus raw
+`nvidia/llama-3.1-nemotron-ultra-253b-v1` becomes config
+`nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1`, then the exact raw ID on the wire.
+Do not “simplify” the doubled namespace.
+
+The bundled snapshot includes two unmodified tool-capable text chat records
+from `.nexus/cache/models.dev.json` (models.dev API cache), preserved in
+`tests/fixtures/nvidia-models-dev.json`. Record metadata is catalogue evidence,
+not proof of current live availability or tool behavior. Offline tests cover
+no-cache first-run setup, saved config, routing, and the HTTP request model;
+other providers retain their intentional alias behavior. No key/network was
+used for these checks.

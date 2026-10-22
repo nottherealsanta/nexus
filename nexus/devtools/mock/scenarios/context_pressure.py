@@ -4,7 +4,7 @@ from ..dsl import Scenario, call, calls, verdict
 
 
 def _steps():
-    steps = [calls(call("bash", command="python3 -c \"print('x' * 200000)\""), text="Producing a huge output.")]
+    steps = [calls(call("shell", command="python3 -c \"print('x' * 200000)\""), text="Producing a huge output.")]
     for i in range(1, 9):
         steps.append(calls(call("read", path="notes/long.txt"), text=f"Re-reading a big file ({i}/8).",
                            usage=(20_000 * i, 500)))

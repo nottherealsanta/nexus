@@ -61,15 +61,15 @@ attachments = 20000
 
 [permissions]
 mode = "ask"                       # default for unmatched: allow | ask | deny
-allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "Bash(git status)", "Bash(git diff*)"]
+allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "shell(git status)", "shell(git diff*)"]
 ask = ["Write(**)", "Edit(**)"]
-deny = ["Bash(rm -rf*)", "Read(**/.env)", "Read(**/credentials*)"]
+deny = ["shell(rm -rf*)", "Read(**/.env)", "Read(**/credentials*)"]
 write_roots = ["./"]               # hard boundary for any mutating fs tool
 read_denyroots = ["~/.ssh", "~/.nexus/credentials.json"]
 on_unattended = "deny"             # deny | allow | fail_turn
 
 [tools]
-bash_timeout_s = 120
+shell_yield_s = 120                # foreground shell commands move to the background after this
 grep_timeout_s = 5.0
 max_result_tokens = 25000
 max_parallel = 8

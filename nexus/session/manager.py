@@ -67,10 +67,10 @@ from ..events import Event
 from . import export as export_mod
 from . import snapshot as snapshot_mod
 from .db import SqliteSessionStore, StateDatabase
-from .ids import validate_session_id
+from .ids import is_valid_session_id, validate_session_id
 from .lock import SessionLock
 from .records import EventRecord, ReadResult
-from .session import DEFAULT_EVENT_BUFFER, Session
+from .session import DEFAULT_EVENT_BUFFER, Session, has_live_agents
 
 #: ``kind`` of the workspace manager row (plan 02). Kept literal here so the session
 #: layer imports nothing from ``agents``; ``nexus.agents.manager_prompt.MANAGER_KIND``
@@ -88,6 +88,9 @@ DEFAULT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 #: Bound on one ``archive_stale`` sweep, matching the old file-store cap.
 _ARCHIVE_MAX_SWEEP = 500
+
+#: A session is auto-archived once idle strictly longer than this (one hour).
+AUTO_ARCHIVE_IDLE_SECONDS = 60 * 60
 
 SessionState = Literal["idle", "running", "awaiting_input", "awaiting_permission"]
 
@@ -204,6 +207,8 @@ class SessionManager:
         turn_cleanup: Callable[[str, str], None] | None = None,
         hooks: Callable[[], Any] | None = None,
         retention_seconds: float = DEFAULT_RETENTION_SECONDS,
+        busy_check: Callable[[str], bool] | None = None,
+        job_probe: Callable[[str, str], bool] | None = None,
     ):
         if store is not None:
             self.store = store
@@ -248,6 +253,13 @@ class SessionManager:
         self._ensure_ready = ensure_ready
         self._turn_cleanup = turn_cleanup
         self._hooks = hooks
+        #: Opaque "does this session still own running background work" predicate
+        #: (the runtime injects its shell-job check), so this layer imports nothing
+        #: from ``tools``. A busy session is neither evicted nor archived.
+        self._busy_check = busy_check
+        #: ``(session_id, job_id) -> may it still run``: lets a reopened session
+        #: close the ``shell`` jobs a dead process left behind (SHELL_PLAN P7).
+        self._job_probe = job_probe
         #: One live :class:`Session` handle per id, so every caller that reaches
         #: the same session through this manager shares one bus, presence count,
         #: input queue, and active turn.
@@ -340,6 +352,7 @@ class SessionManager:
             ensure_ready=self._ensure_ready,
             turn_cleanup=self._turn_cleanup,
             hooks=self._hooks,
+            job_probe=self._job_probe,
         )
 
     def evict(self, session_id: str) -> Session | None:
@@ -352,15 +365,37 @@ class SessionManager:
             session = self._handles.get(session_id)
             if session is None:
                 return None
-            if session.active or session.viewers > 0:
+            self._check_not_in_use(session_id, session)
+            if self._has_background_work(session_id):
                 raise SessionBusy(
-                    f"Session {session_id!r} is in use "
-                    f"(active={session.active}, viewers={session.viewers}); "
+                    f"Session {session_id!r} has running background work; "
                     "refusing to evict"
                 )
             evicted = self._handles.pop(session_id)
         self._schedule_session_end(evicted)
         return evicted
+
+    @staticmethod
+    def _check_not_in_use(session_id: str, session: Session) -> None:
+        if session.active or session.viewers > 0:
+            raise SessionBusy(
+                f"Session {session_id!r} is in use "
+                f"(active={session.active}, viewers={session.viewers}); "
+                "refusing to evict"
+            )
+
+    def ensure_closable(self, session_id: str) -> None:
+        """Raise ``SessionBusy`` if :meth:`evict` would refuse for a *turn or viewer*.
+
+        Running background work is deliberately not checked: the caller
+        (``Runtime.aclose_session``) stops that itself, but only after this
+        passes, so a refused close leaves the session's jobs running.
+        """
+        session_id = validate_session_id(session_id)
+        with self._handles_lock:
+            session = self._handles.get(session_id)
+            if session is not None:
+                self._check_not_in_use(session_id, session)
 
     def close(self, session_id: str) -> bool:
         """Alias for :meth:`evict` returning whether a handle was dropped."""
@@ -410,6 +445,78 @@ class SessionManager:
     def _live_handle(self, session_id: str) -> Session | None:
         with self._handles_lock:
             return self._handles.get(session_id)
+
+    def _has_background_work(self, session_id: str) -> bool:
+        """Whether the injected predicate says ``session_id`` has running jobs.
+
+        A predicate that raises is treated as busy: refusing to evict or archive
+        is the safe failure.
+        """
+        check = self._busy_check
+        if check is None:
+            return False
+        try:
+            return bool(check(session_id))
+        except Exception:  # noqa: BLE001 - fail closed
+            return True
+
+    def emit_session_event(
+        self, session_id: str, event_type: str, data: Mapping[str, Any] | None = None
+    ) -> bool:
+        """Persist a turn-less event through the session's **live** handle.
+
+        For work that outlives a tool call (``shell.job_*``). It never opens a
+        handle: an unopened session is not resurrected (and not unarchived) by a
+        late event, and a retired (deleted) handle refuses the write. Returns
+        whether the event was recorded.
+        """
+        if not is_valid_session_id(session_id):
+            return False
+        handle = self._live_handle(session_id)
+        if handle is None:
+            return False
+        try:
+            return handle.emit_session_event(event_type, dict(data or {})) is not None
+        except SessionError:
+            return False
+
+    def record_job_completion(
+        self,
+        session_id: str,
+        data: Mapping[str, Any],
+        text: str,
+        *,
+        max_auto_wakes: int = 10,
+    ) -> Any | None:
+        """Record a background job's exit and queue its notification atomically.
+
+        Live handle only, like :meth:`emit_session_event`. Returns the session's
+        ``JobAdmission`` or ``None`` when nothing was recorded (no live handle,
+        a retired one, or a failed write).
+        """
+        if not is_valid_session_id(session_id):
+            return None
+        handle = self._live_handle(session_id)
+        if handle is None:
+            return None
+        try:
+            return handle.record_job_completion(
+                data, text, max_auto_wakes=max_auto_wakes
+            )
+        except Exception:  # noqa: BLE001 - the registry falls back to a plain exit
+            return None
+
+    def retract_job_completion(self, session_id: str, job_id: str) -> bool:
+        """Drop a pending completion notification the model got another way."""
+        if not is_valid_session_id(session_id):
+            return False
+        handle = self._live_handle(session_id)
+        if handle is None:
+            return False
+        try:
+            return bool(handle.retract_job_completion(job_id))
+        except Exception:  # noqa: BLE001
+            return False
 
     # -- archive ---------------------------------------------------------
 
@@ -470,17 +577,24 @@ class SessionManager:
         return self.store.unarchive(session_id)
 
     def archive_stale(
-        self, *, now: float | None = None, older_than: float
+        self, *, now: float | None = None, older_than: float = AUTO_ARCHIVE_IDLE_SECONDS
     ) -> list[ArchiveRecord]:
-        """Archive up to 500 old, idle, unopened sessions."""
+        """Archive up to 500 sessions idle strictly longer than ``older_than`` seconds.
+
+        Idleness is the durable ``last_activity`` (newest appended record), which
+        reads, listings and presence events never advance. Running, queued,
+        awaiting-approval or subagent-hosting sessions and the workspace manager
+        are skipped. A session that is merely open in a viewer is not exempt,
+        and neither is an idle cached handle; the caller evicts the handles of
+        the returned records (``aclose_session``).
+        """
         if isinstance(older_than, bool) or not isinstance(older_than, (int, float)) or older_than < 0:
             raise ValueError("older_than must be a non-negative number of seconds")
         moment = time.time() if now is None else float(now)
         threshold = moment - float(older_than)
-        open_ids = set(self.live_sessions)
         candidates = []
         for session_id in self.store.stale_candidates(threshold=threshold, limit=_ARCHIVE_MAX_SWEEP):
-            if session_id in open_ids:
+            if has_live_agents(session_id):
                 continue
             try:
                 summary = self.summary(session_id)
@@ -488,8 +602,7 @@ class SessionManager:
                 continue
             if (
                 summary.state == "idle"
-                and summary.viewers == 0
-                and summary.last_activity <= threshold
+                and summary.last_activity < threshold
                 and not self._has_pending_work(session_id)
             ):
                 candidates.append(session_id)
@@ -503,6 +616,8 @@ class SessionManager:
 
     def _has_pending_work(self, session_id: str) -> bool:
         """Inspect durable queue/approval/turn markers without opening a handle."""
+        if self._has_background_work(session_id):
+            return True
         try:
             events = tuple(self._consistent_read(session_id).events())
         except (SessionError, OSError, ValueError):
@@ -689,7 +804,8 @@ class SessionManager:
         submission. A session with live viewers is refused unless
         ``force=True`` (which detaches them; it does not cancel anything). The
         exclusive session lock is taken non-blocking, so a turn running in
-        another process is refused too.
+        another process is refused too. Running background work (shell jobs) is
+        refused even with ``force``, like archive: stop it first.
         """
         session_id = validate_session_id(session_id)
         self._refuse_manager(session_id, "deleted")
@@ -750,6 +866,11 @@ class SessionManager:
             raise SessionBusy(
                 f"Session {session_id!r} has {handle.queue_depth} queued input(s); "
                 "drop them explicitly before deleting (delete never drops a queue)"
+            )
+        if self._has_background_work(session_id):
+            raise SessionBusy(
+                f"Session {session_id!r} has running shell jobs; stop them "
+                "before deleting (delete never kills background work)"
             )
         if not viewers_checked and handle is not None and handle.viewers > 0 and not force:
             raise SessionBusy(

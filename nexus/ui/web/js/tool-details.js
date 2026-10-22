@@ -16,7 +16,7 @@ export function toolDetailSections(tool, redact = s => s) {
       const grouped = value.every(item => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).length);
       return value.flatMap((item, i) => {
         const name = prefix ? `${prefix}[${i}]` : `#${i + 1}`;
-        // Each object becomes a headed group: `todos[0]` then its fields.
+        // Each object becomes a headed group: `items[0]` then its fields.
         return grouped ? [{label: name, value: '', header: true}, ...flatten(item, '', depth + 1).map(r => ({...r, indent: (r.indent || 0) + 1}))] : flatten(item, name, depth + 1);
       });
     }
@@ -55,11 +55,6 @@ export function toolDetailSections(tool, redact = s => s) {
   }
   if (tool.error) sections.push({title: 'Error', rows: [block('error', tool.error)]});
   if (tool.context_note) sections.push({title: 'Context', rows: [block('note', tool.context_note)]});
-  const todos = tool.metrics?.todos;
-  if (Array.isArray(todos) && todos.length && todos.every(t => t && typeof t === 'object')) {
-    const glyph = {completed: '[x]', in_progress: '[~]', pending: '[ ]', cancelled: '[-]'};
-    sections.push({title: 'Todo list', rows: bounded(todos.map((t, i) => ({label: `${glyph[String(t.status)] || '[?]'} ${t.id ?? i + 1}`, value: [clean(t.content ?? '', 2000), t.priority ? `(${t.priority})` : ''].filter(Boolean).join(' ')})))});
-  }
   if (tool.metrics && Object.keys(tool.metrics).length) sections.push({title: 'Metrics', rows: bounded(flatten(tool.metrics))});
   if (tool.diff && typeof tool.diff === 'object') {
     const d = tool.diff, rows = [row('Path', d.path || 'edit'), row('Added lines', d.added_lines ?? 0), row('Removed lines', d.removed_lines ?? 0)];

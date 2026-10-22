@@ -1333,7 +1333,9 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
     group = f"{head} · {day}" if project else day
     ordered = _order_time(summary)
     age = relative_time(ordered, now).removesuffix(" ago")
-    return {"id": summary.id, "name": getattr(summary, "name", None), "title": escape_controls(summary.title or "New Session"),
+    return {"id": summary.id, "kind": getattr(summary, "kind", "root"),
+            "namespace": getattr(summary, "namespace", "main"),
+            "name": getattr(summary, "name", None), "title": escape_controls(summary.title or "New Session"),
             "workspace": entry.workspace, "state": summary.state, "group": escape_controls(group),
             "project": escape_controls(project), "day": escape_controls(day),
             "repo": _repo_of(entry), "worktree": escape_controls(tree),

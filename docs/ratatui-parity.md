@@ -179,18 +179,29 @@ expands the full group; another toggle explicitly collapses it even while live.
 Member toggles retain all labelled parameters, results, reasoning and diffs;
 `/verbose` reveals everything. Group identity follows its first durable member.
 
+Closed member rows name the target, not the output: `Read path (lines 1–120)`
+(never the file's first line) and `Bash <command>` clipped to 40 display cells; the
+seconds end the row. An opened member is `┌ head  0.8s`, its relevant rows behind a
+`│` rail that closes as `╰` on the last row; every row carries the member's toggle
+and `inspect_operation`, so focus highlights it as one unit. A running Bash counts up
+from `started_ms` (the Rust client reads the clock; the projection has none). Opened
+shell output shows the command and clean stdout/stderr: the `job_id:`/`status:`/
+`exit_code:` header (and a leading `stdout:` label) is stripped in the projection only
+when the result opens with that exact header; the full text stays under `i`.
+
 The transcript auto-scrolls only while the reader is at the bottom: scrolling up
 (wheel, PageUp) stops following, and any scroll that lands back on the last row
 (wheel, PageDown, Down) resumes it, including overshooting into the blank tail: the
 last content row need only be visible, not aligned exactly with the viewport bottom.
 Upward scrolling always pauses follow, even if the last row remains visible or the
 conversation is shorter than the viewport; only scrolling downward resumes it.
-A transcript taller than the viewport has a **bottom buffer** of `session::BOTTOM_BUFFER` (20) blank
-rows below the last content row, clamped to (viewport height - 4) on short viewports, so the last reply
-never sits against the composer. The bottom position (`session::live_offset` = last row at the bottom
+A transcript that fills the viewport (content >= height) has a **bottom buffer** of `session::BOTTOM_BUFFER` (20) blank
+rows below the last content row, clamped to (viewport height - 4) on short viewports but never below one row, so the last
+reply or active turn never sits against the composer. The bottom position (`session::live_offset` = last row at the bottom
 plus the buffer) is where scrolling down stops, where following parks (new output stays readable with
 room above the composer), and where a scroll that arrives re-arms following without a jump. A transcript
-that fits the viewport gets no buffer (no pointless scrolling). The pinned-prompt tail padding is
+that leaves a blank row in the viewport already has its padding and gets no buffer (no pointless scrolling).
+The Context pane is transcript rows, so it shares this padding (`session::tests::the_last_row_always_has_a_blank_row_below_it`). The pinned-prompt tail padding is
 **(viewport height - 2) / 2** rows; the reachable maximum (`max_scroll`) is the larger of the two, so a
 pinned prompt can still reach the top. Scrolling down never snaps back up from beyond the bottom position
 (a pinned prompt's offset), and the scrollbar spans `live_scroll.max(offset)` -- the same value that
@@ -555,9 +566,15 @@ Slash/file completion uses explicit palette colors and follows the actual
 composer position as the editor grows.
 
 `Ctrl+U` and `/usage` open immediately with the last fetched report, or a loading
-state on the first open. A bounded background request refreshes the same modal;
-`r` refreshes, errors retain cached data, and stale panel/session responses do not
-replace another view. The cache holds one host report and resets across workspace
+state on the first open. Every open starts a fresh 30 s-bounded `ProvidersUsage` fetch
+(never only the cache) that updates the same modal while the loading marker shows;
+`r` refreshes, a failed fetch keeps the cached report under a red "may be out of date"
+line plus the error (the report is never presented as fresh), and stale panel/session
+responses do not replace another view. Esc or an outside click closes the modal even
+while that fetch is pending (every other loading panel ignores dismiss); the late result
+is dropped by the panel-revision guard. The daemon also refreshes usage every
+`[models] usage_refresh_seconds` (default 300) in the background; Settings → Providers has
+a `Refresh plan usage` selector for it. The cache holds one host report and resets across workspace
 changes. `AGENTS.md` preserves its included body/newlines and source label and
 uses the existing Markdown renderer; the system prompt remains literal text.
 Context usage shows shared accounting and the assembled request in
@@ -762,7 +779,12 @@ connected, red failed, otherwise quiet), numbered model lists whose effort picke
 selected or hovered row only, and quiet Keyboard tables with a bold keys column. No accent fills; warning
 notes are quiet. The footer is a centred italic `Tip · …` line and the key hints valid on that page plus `←/Esc back`. Settings stays open for every operation except an explicit close
 (`close_panel`, `context_show`); `Workflows.NAV_KEEP` no longer exists. Clicks and
-keys are ignored while a page is loading. Models lists the default model chain and each
+keys are ignored while a page is loading. Bracketed paste targets the active or focused
+Settings text editor only (secret fields remain masked), and commits only on Enter;
+Escape cancels. Single-line fields discard control characters, including newlines and
+tabs, and typing/paste share a 512-character limit matching API keys. Non-text controls,
+Settings navigation, and other panels ignore paste rather than leaking it into the chat
+composer; ordinary composer paste is unchanged. Models lists the default model chain and each
 tier in the order the router runs it (`ModelRouter.tier_candidates`), with `in use`,
 `fallback` and skipped statuses; Alt+Up/Alt+Down reorder and Delete removes. An agent
 opens with a `Run on` row (Session model, Specific model, and for subagents Tier);
@@ -1349,10 +1371,9 @@ focus, right-click actions, the `sessions_request` snapshot field and the
 Settings → Layout row). Sessions replaces it: `/session`,
 `/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Sessions]` all send
 `/sessions`. The right details sidebar (`Ctrl+L`) stays, on the Sessions page too. The saved
-`sessions_sidebar` preference and snapshot key were kept for the GPUI desktop client and are
-now the open/closed state of the new left sidebar ("Left sidebar" at the end of this file,
-which supersedes the `/sessions`, `Ctrl+B` and `▤` wiring above for hosts that send a
-`sidebar` block).
+`sessions_sidebar` preference and snapshot key stay for the GPUI desktop client only. A new
+left sidebar ("Left sidebar" at the end of this file) supersedes the `/sessions`, `Ctrl+B` and
+`▤` wiring above for hosts that send a `sidebar` block.
 
 Palette: dark is Grok Night (`#141414` page, `#e1e1e1` text, composer `#1c1c1c`,
 element `#242424`), light is Grok Day (`#f5f5f5` page, `#262626` text), the Nexus
@@ -1507,7 +1528,7 @@ draws the new block kind `external`.
   so a multi-line error or instruction cannot start an unlabelled row. No `claude --resume` hint is shown: a startup block
   never created a session, and resuming outside Nexus would drop the worker's policy. Fields are clipped at 4000 characters with an announced count.
 - **Cancel:** the `/tasks` menu adds `Cancel <agent> (ends this run)` under each running agent
-  (host `AgentCancel`; a persistent child then goes idle). No handoff into the live Claude terminal.
+  (host `AgentCancel`). No handoff into the live Claude terminal.
 - **Settings:** Settings -> Models has a CLAUDE CODE section with the
   `Allow Claude Code as a main model` toggle and the scope note, and a
   `Claude Code subagents run via` segmented choice (`Interactive worker (ZMX)` |
@@ -2050,18 +2071,20 @@ retained from width 3 and details from width 7.
 
 ## Background subagents (persistent children)
 
-Non-blocking, persistent subagents (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md phase 7).
+Subagents are foreground-only now ([decisions](decisions.md#subagents-are-foreground-only-supersedes-the-background-flow));
+this section describes how **historical** background and persistent children (old session logs) still
+render. A completed legacy child reads as finished, never idle, and the UI offers no continue guidance.
 Everything is derived from the reduced `AgentView` the host subscription carries
 (`ui_support/timeline.py::agent_state` / `agent_state_label`); the client reads no session files and
 has no list or send command.
 
 | Where | What the user sees |
 | --- | --- |
-| `subagent` card (`task` block) | The spinner and `running` follow the child (`status == "spawned"`), not the tool call: an acked background call keeps spinning until the run ends. Line two starts with the new `state` field when the child is not plainly running or finished: `idle · run 2`, `interrupted · run 1`, `stopped by system: <reason>` (warning tone for stopped and interrupted), `running · run 2` for a continued child. A finished (not continuable) child shows no state. |
+| `subagent` card (`task` block) | The spinner and `running` follow the child (`status == "spawned"`), not the tool call: an acked background call keeps spinning until the run ends. Line two starts with the new `state` field when the child is not plainly running or finished: `interrupted · run 1`, `stopped by system: <reason>` (warning tone for stopped and interrupted), `running · run 2` for a continued legacy child. A finished child (including a legacy one whose last run completed) shows no state. |
 | Status row | While the root turn is idle and children run: `⋯ 2 agents running · /tasks to open or stop` (snapshot field `agents_running`, `turn_status.running_agents`). Hidden on a subagent page; a running turn keeps its own status line. |
-| Root transcript, delivered report | A user message with `origin.kind == "subagent_report"` is a notification card tagged `subagent report`, titled `report · <agent> · <role> · run <n> · <status>` (a batch: `reports · N subagents · a:1, b:2`), with the whole wrapped report as the body (the pool already announces its clips). It never takes `#N`, and a wake turn made only of reports is unnumbered. Enter opens the child's page. |
-| Subagent page | A follow-up (`origin.kind == "root_followup"`) is a card tagged `from root`, titled `follow-up from root · <agent> · run <n>`, with the message. A stopped child ends with `Subagent stopped · by <who>` and `Reason: …` (also `by system` for an automatic eviction); an idle or interrupted one ends with a state row saying what the root can do. |
-| `/tasks` | `<agent> · <state label> · <task>`; `Cancel <agent> (ends this run)` (`AgentCancel`) for a running child, `Close <agent> (stop for good)` (`AgentClose`) for a running, idle or interrupted continuable child. |
+| Root transcript, delivered report | A user message with `origin.kind == "subagent_report"` is not a user card but a compact `agent_report` block: one heading row `⮑ <Agent>  <task title> · <status>` styled like a subagent call's first line (capitalized agent name in the agent's colour, the same `_agent_color` mapping as the task card, error tint on `failed`; blue when unset; a batch: `N subagents · a:1, b:2`), at most two preview rows of the report body (trimmed and aligned under the agent name, the `[Subagent report: …]` header line is skipped, each row clipped with `…`) and, when anything was left out, a hint `… N more lines · open for the full report`. It never takes `#N`, and a wake turn made only of reports is unnumbered. Clicking any row opens the whole message (`message_page`, every content block); `i` opens the child's page (`inspect_operation`, single-agent reports only). A root follow-up on a child page stays a user card. Ordinary user messages are unchanged. |
+| Subagent page | A follow-up (`origin.kind == "root_followup"`) is a card tagged `from root`, titled `follow-up from root · <agent> · run <n>`, with the message. A stopped child ends with `Subagent stopped · by <who>` and `Reason: …` (also `by system` for an automatic eviction); an interrupted one ends with a state row noting the daemon restart. |
+| `/tasks` | `<agent> · <state label> · <task>`; `Cancel <agent> (ends this run)` (`AgentCancel`) for a running child, `Close <agent> (stop for good)` (`AgentClose`) for a running or interrupted continuable legacy child. |
 | Esc | Ends the root turn only; if children still run a toast says `N subagents still running (/tasks to stop)`. |
 | Paused delivery | `context.notice` / `subagent_wake_paused` (kept by the reducer as a diagnostic) is a literal row `Subagent reports paused` with the message, placed by time among the turns. |
 
@@ -2074,8 +2097,8 @@ a live daemon run with a real provider.
 
 A docked column on the left, beside the conversation, with four tabs: **Projects**,
 **Sessions**, **Files**, **Git**. `/sessions` (and `Ctrl+O`/`Ctrl+S`) opens it on the
-Sessions tab and gives it keyboard focus instead of replacing the conversation with the old
-full-page dashboard; `Ctrl+B` and the top bar's `▤` toggle it. Snapshot block `sidebar`
+Sessions tab instead of replacing the conversation with the old full-page dashboard. Opening
+never steals keyboard focus (the composer keeps the keys; a click focuses the column); `Ctrl+B` and the top bar's `▤` toggle it. Snapshot block `sidebar`
 (`{available, open, tab, width, focus, sessions, projects, files, git}`), built by
 `ui/ratatui/sidebar.py` from host results through `ui_support/sidebar.py`; drawn and
 hit-tested by `rust/tui/src/sidebar.rs`. A host that sends no `sidebar.available` (the
@@ -2083,10 +2106,10 @@ desktop bridge, old snapshots, fixtures) keeps the legacy Sessions page.
 
 | Tab | Shows | Source |
 | --- | --- | --- |
-| Projects | Main repositories, each with its linked worktrees (`main` first) as foldable children; counts, newest age, a needs-you/working mark. Enter or a click folds a repository, or opens the newest session of a checkout. | `ProjectSessionsList` (limit 300): `repo`, `worktree`, `workspace` of each row |
-| Sessions | The dashboard in a column: filter, groups, status marks, rename, archive with confirmation, permission answers, `+ New Agent`. The workspace manager session is not listed and its pinned entry is not drawn. | `SessionDashboard` (the same host rows and operations as the legacy page; polled every 2 s while open) |
-| Files | The current project's directory, navigable: folders first, `↑ ..` below the root, sizes, links shown and never followed. | `DirectoryList` |
-| Git | Read-only labelled status: `branch → upstream · ahead/behind`, then Conflicts, Staged changes, Changes and Untracked sections with a word per file (`modified`, `added`, `deleted`, `untracked`, …). Nothing here can change the repository. | `GitStatus` |
+| Projects | Main repositories, each with its linked worktrees (`main` first) as foldable children; counts, newest age, a needs-you/working mark. Enter or a click folds a repository, or opens the newest session of a checkout. | `ProjectSessionsList` (limit 300, `projects` 300): `repo`, `worktree`, `workspace` of each row; projects with an eligible session, archived included (current always first), stay listed with count 0 and no session to open when all their sessions are archived; ordered by newest activity (`ProjectEntry.updated`); historical roots missing on disk (`exists` false) are omitted |
+| Sessions | The dashboard in a column: filter, groups, status marks, rename, archive with confirmation, permission answers, `+ New Agent`. Only root sessions are listed (the Projects counts too): the workspace manager session and subagent children are not, and the manager's pinned entry is not drawn. | `SessionDashboard` (the same host rows and operations as the legacy page; polled every 2 s while open) |
+| Files | The current project's directory, navigable: folders first, `↑ ..` below the root, names only (sizes omitted), links shown and never followed. A click selects a file; a double-click on the same file row (within 500 ms) or Enter opens its start in the read-only modal (below). | `DirectoryList`, `FilePreview` |
+| Git | Read-only labelled status: `branch → upstream · ahead/behind`, then Conflicts, Staged changes, Changes and Untracked sections with a word per file (`modified`, `added`, `deleted`, `untracked`, …) and the file's base name (`config.md`, a rename `old.py → new.py`; rows keep the full `path` and the client draws `name`). Nothing here can change the repository. | `GitStatus` |
 
 Layout. `render::regions` carves the column off the conversation's left edge after the details
 sidebar/drawer. The width is the saved preference bounded to 24..60 columns (default 34) and the
@@ -2102,16 +2125,29 @@ pointer immediately (bounded by 24, 60 and the room left for the conversation) a
 `sidebar_width` in `~/.config/nexus/tui.json`. A snapshot arriving mid-drag does not move the
 divider.
 
-Keys and mouse. Focus comes from `/sessions`, `Ctrl+B`, or a click in the column; `Esc` (outside a
+Keys and mouse. Focus comes from a click in the column (opening via `/sessions` or `Ctrl+B` does
+not move it; the client ignores a `focus` bump that arrives with the opening snapshot); `Esc` (outside a
 filter, rename or archive confirmation) or a click elsewhere returns it, as does typing in a tab that
 has no text field. While focused: `Tab`/`Shift+Tab` change tab; `↑ ↓ PgUp PgDn Home End` move;
-`Enter`/`→` open or fold, `←`/`Backspace` go up a folder, `r` refreshes; on Sessions the dashboard
+`Enter`/`→` open or fold (`Enter` on a file previews it), `←`/`Backspace` go up a folder, `r` refreshes; on Sessions the dashboard
 keys apply (`/` filter, `r` rename, `d` archive, `a`/`d` answer a permission, `n` new) while the
 composer is empty. The wheel scrolls the tab under it; the hover highlight on Sessions rows is the
 dashboard's.
 
-State and safety. Open/closed, tab and width persist as `sessions_sidebar` (kept from the old
-sidebar, now default closed), `sidebar_tab` and `sidebar_width`. Files and Git describe the current
+File preview. Enter on a file row, or a second click on the same file row within 500 ms, sends
+`{"type":"sidebar","op":"file","path"}`; Python accepts only a regular file the last listing offered,
+asks the host (`FilePreview`, never a surface filesystem read) and shows the ordinary modal panel
+titled `File · <path>` with `Path:`, `Size:` and a clipping line (`Showing the whole file`,
+`Clipped: showing the first N of M bytes`, `Not shown: …` for binary, `The file is empty`), then the
+control-escaped text. A host refusal (symlink, outside the workspace, unreadable, vanished) opens the
+same modal with `Error: …`. A single click, a click on another row, folders (which still open on one
+click) and links never preview. Esc, ↑/↓/PgUp/PgDn and the wheel are the generic modal's; no external
+editor is started. A preview that returns after the project changed or a newer one was asked for is
+dropped.
+
+State and safety. Open/closed, tab and width persist as `sidebar_open` (default closed),
+`sidebar_tab` and `sidebar_width`; the older `sessions_sidebar` key belongs to the desktop and is
+untouched. Files and Git describe the current
 project and reload when it changes; every answer carries a sequence and the workspace it was asked
 for, so a slow or stale one is dropped. The client can only open a folder the last listing offered
 and a session the last Projects list showed; the host re-validates paths (no absolute paths, `..`,
@@ -2126,3 +2162,60 @@ manager filter, Projects grouping, actions, stale answers, preferences, Rust con
 bounds, hiding), Rust tests in `sidebar.rs` (width bounds and room, wrapping, tab hits, drag,
 keys, each tab, regions and a full `render::draw` frame). Not done: a native screenshot, a run
 against a live daemon, a Windows terminal, and mouse-wheel behaviour over a real touchpad.
+
+### Right details sidebar
+
+The right sidebar (`Ctrl+L`, `Ctrl+X L`) is drawn like the left one by `rust/tui/src/details_sidebar.rs`:
+wrapped ` Label ` tabs **Session · Changes · MCP · Jobs · Logs** (the active tab on the `element` background,
+underlined in monochrome), a rule, the body and a hint row. The Changes tab is stored as `Files`
+(`details_tab`; `Changes` is accepted as an alias and normalised), so saved preferences stay valid.
+The divider is the sidebar's first column: it lights up on hover and drags the width; the new width
+shows at once and is sent as `{"type":"details_width","width":N}` on release. It persists as
+`details_width` (default 40, bounds 24..=60, `nexus/ui_support/details.py` mirrors the Rust constants)
+and is projected as `details_panel.width`. A snapshot arriving mid-drag does not move the divider.
+
+Layout is unchanged in kind: from 100 columns the sidebar is docked and the conversation never drops
+below 56 columns (the stored width yields); below 100 it is the drawer, which keeps 24 columns for the
+conversation. The left sidebar takes its columns from what the right one leaves, so the two never
+overlap and the left one hides first (`render::sidebar_available` is the room it may drag into).
+
+Each tab builds its own rows (no text-prefix slicing of a combined list, which once left Changes
+empty and put the changes list into Session): Session metadata; Changes with the file/line counts,
+expandable diffs and the summary; MCP servers with their notes; Logs with the Session/daemon header
+above the tail. Tabs, the Logs copy-ID line (`⧉`) and Changes rows are hit-tested from the same
+pure `details_sidebar::geometry` that paints them, so wrapped tabs shift the body and the clicks
+together. Clicking a Changes row, `Enter` on the selected file, `[` `]`, `Esc`, `c` (copy the session
+ID on Session and Logs), wheel and arrow scrolling, and Logs visibility reporting are unchanged.
+
+#### Jobs tab
+
+The fifth tab, **Jobs** (stored id `Jobs`, between MCP and Logs; five tabs wrap onto two rows at the
+default 40-column width), lists the session's `shell` jobs and shows one bounded log tail. It uses only
+the existing host commands through the client (`session_jobs`, `session_job_log`, `session_job_stop`,
+`session_job_background`); the UI never signals a process or reads a log file. Python
+(`nexus/ui/ratatui/jobs.py`, `details_panel.jobs`) owns the data and the selection; Rust
+(`details_sidebar::jobs_rows`) only paints it.
+
+- **Rows**: command (clipped), a status word (running, done, failed, timed out, stopped), agent or
+  you, foreground/background, elapsed time, exit code or signal and log size. The working directory,
+  pid and log path are never projected, and no raw reply or JSON is shown.
+- **Keys** (sidebar focused): `↑`/`↓` select, `Enter` or `l` opens the log, `s` stops a running job,
+  `b` hands a foreground job to the background (only when the host reports `can_background`), `[` `]`
+  change tab. In the log, `↑`/`↓` scroll, `Esc` returns to the list (a second `Esc` closes the drawer).
+  Mouse-wheel scrolling works; clicking a job row does not select it yet.
+- **Log**: the last 120 lines (each clipped, controls escaped), opened scrolled to the end; a clipped
+  start shows `… earlier output not shown`; `unavailable`/`unknown` replies show the host's reason.
+  It refreshes with the list while open and closes when the job leaves the list or the tab changes.
+- **Polling**: Rust reports `{"type":"details_visible","open":<Logs drawn>,"jobs":<Jobs drawn>}`;
+  Python polls (about once a second, plus once on becoming visible) only while the sidebar is drawn,
+  open and on Jobs. Job actions carry the snapshot `generation` (stale ones are dropped by the
+  existing guard), and every reply is discarded if the session or generation changed meanwhile; state
+  for another session is reset.
+
+Checks (written, **not run**: no shell was available when this was made): Rust tests in
+`details_sidebar.rs` (width bounds and drawer, drag and persistence, wrapped tab paint/hit
+agreement, tab isolation, row hits under scroll, Logs copy target, both sidebars at every width, the
+Jobs list and log viewer) and `tests/test_ratatui_details_sidebar.py` (constants, preferences,
+projection), `tests/test_ratatui_projection.py` (Jobs polling gate, projection without paths, bounded
+log, stop/background gating, session-change drops). Not done: a native screenshot and a live-daemon
+run.

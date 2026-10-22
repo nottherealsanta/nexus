@@ -1,0 +1,48 @@
+{
+  "nvidia": {
+    "id": "nvidia",
+    "env": [
+      "NVIDIA_API_KEY"
+    ],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://integrate.api.nvidia.com/v1",
+    "name": "Nvidia",
+    "doc": "https://docs.api.nvidia.com/nim/",
+    "models": {
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1": {
+        "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        "name": "Llama 3.1 Nemotron Ultra 253B",
+        "description": "Flagship Nemotron model for high-throughput reasoning and complex agents",
+        "family": "nemotron",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2025-04-07",
+        "last_updated": "2025-04-07",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    }
+  }
+}

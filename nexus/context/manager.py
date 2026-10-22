@@ -275,6 +275,38 @@ def _system_file_text(system_files: Any, name: str) -> str | None:
     return content if isinstance(content, str) else ""
 
 
+def _present_legacy_shell_history(messages: Any) -> tuple[Any, ...]:
+    """Show old ``bash``/``Bash`` tool calls to the model as ``shell`` calls.
+
+    The durable log is untouched; only the assembled copy changes, so a session
+    recorded before the rename keeps a history that names a tool the request still
+    declares (and old argument names the ``shell`` schema no longer lists).
+    """
+    from ..tools.names import LEGACY_SHELL_CALL_NAMES, translate_legacy_shell_input
+
+    out: list[Any] = []
+    for message in messages:
+        content = getattr(message, "content", None)
+        if not isinstance(content, list) or not any(
+            isinstance(block, ToolUse) and block.name in LEGACY_SHELL_CALL_NAMES
+            for block in content
+        ):
+            out.append(message)
+            continue
+        blocks = [
+            ToolUse(
+                id=block.id,
+                name="shell",
+                input=translate_legacy_shell_input(block.name, block.input),
+            )
+            if isinstance(block, ToolUse) and block.name in LEGACY_SHELL_CALL_NAMES
+            else block
+            for block in content
+        ]
+        out.append(Message(role=message.role, content=blocks, meta=message.meta))
+    return tuple(out)
+
+
 def _invoke_counter(counter: Any, text: str) -> Any:
     if counter is None:
         return DEFAULT_TOKENIZER.count_tokens(text)
@@ -1085,7 +1117,7 @@ class ContextManager:
     def _make_context(
         self, env: AssemblyEnvironment, messages: Any, session: Any = None
     ) -> AssemblyContext:
-        snapshot = tuple(messages)
+        snapshot = _present_legacy_shell_history(messages)
         return AssemblyContext(
             workspace=env.workspace,
             config=env.config,

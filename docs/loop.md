@@ -120,12 +120,10 @@ operation), `interrupt` (cancels the active turn without dropping other queued
 input, then runs first). `input.started` / `input.consumed` / `input.dropped`
 record the lifecycle. See [surfaces.md](surfaces.md#messages-during-a-turn).
 
-A finished **background subagent's report** is a `steer` input with
-`origin.kind = "subagent_report"`, so the same `consume_steering` path appends it as a
-user-role message (`notice="subagent_report"`) at the next iteration boundary, before
-the next model request; a steer consumed at the final iteration keeps a finishing turn
-running, so a report that arrives at turn end is not stranded. The prompt hooks are
-skipped for it, and a cancel does not drop it ([agents.md](agents.md#reports-and-waking-the-root)).
+Historical logs may hold a **background subagent's report** as a `steer` input with
+`origin.kind = "subagent_report"`; it replays through the same `consume_steering` path as
+a user-role message (`notice="subagent_report"`). New sessions create none: subagent
+reports come back as the blocking `subagent` call's result ([agents.md](agents.md#foreground-only)).
 
 A waiting message can be **promoted** but never demoted (`SessionQueueSetMode`,
 `HostFacade.set_queued_mode`): `queue → steer`, `steer → interrupt`, or
@@ -159,9 +157,9 @@ duplicating the final aggregate. Summaries are provider-supplied and may be
 absent; no duration is invented. The Claude Agent SDK bridge buffers text and
 exposes no live thoughts. Mapping rules: [provider-onboarding.md](provider-onboarding.md).
 
-## Long-running `bash`
+## Long-running `shell`
 
-A foreground `bash` blocks until exit, the yield window (`tools.bash_yield_s`,
+A foreground `shell` (formerly `bash`) blocks until exit, the yield window (`tools.shell_yield_s`,
 default 120s) or cancel. At the window a running command is **yielded**: it
 becomes a background job and the result says `status: running` with a `job_id`.
 See [tools.md](tools.md#shell-jobs).
@@ -191,15 +189,13 @@ about 1800 s after it started. That was the old 30-minute default of
 long subagent work hit it most. The default is now 0 (unlimited), and subagents
 have no wall clock at all (2026-10-17; see `docs/decisions.md`).
 
-## Background subagents outlive the turn
+## Subagent calls block the turn
 
-With `agents.background` on, a `subagent` call returns before the child ends and the
-child keeps running after the turn completes or is cancelled. The loop is unchanged:
-it never awaits the child. Child events reach the root log through the root event
-port rather than the turn's emitter ([agents.md](agents.md#background-start-and-wait-agentsbackground-default-on)).
-The subagent tree budget is owned per root session, not per turn: its token, cost and
-fan-out counters are reset by `begin_window()` at the start of each root turn, while
-concurrency and the live-child count span turns.
+A `subagent` call is an ordinary blocking tool call: it returns the child's report as its
+result, and independent calls issued together run concurrently ([agents.md](agents.md#foreground-only)).
+Ending or cancelling the turn cancels its children; nothing is delivered after the turn.
+The subagent tree budget is owned per root session: its token, cost and fan-out counters
+are reset by `begin_window()` at the start of each root turn.
 
 ## Changing the loop
 

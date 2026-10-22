@@ -9,8 +9,8 @@ The catalog order is the bundle order declared in
 :mod:`nexus.tools.bundles` (``fs``, ``patch``, ``shell``, ``task``, ``meta``, ``ext``),
 which keeps ``schemas()`` deterministic. ``Task`` (subagents, Phase 6) is built
 per turn by the runtime (its permission key and authority are bound to the live
-``SubagentRunner``), so ``BUILTIN_TOOLS`` ships the static ``TodoWrite`` only and
-the runtime appends ``Task`` to the iteration catalog.
+``SubagentRunner``), so ``BUILTIN_TOOLS`` ships the static ``question`` tool only
+and the runtime appends ``Task`` to the iteration catalog.
 """
 from __future__ import annotations
 
@@ -31,14 +31,13 @@ from . import (
     multiedit,
     question,
     read,
+    shell,
     skill,
-    todo,
     webfetch,
     websearch,
     write,
 )
 from .apply_patch import SPEC as APPLY_PATCH_SPEC
-from .bash import SPEC as BASH_SPEC
 from .bash_output import SPEC as BASH_OUTPUT_SPEC
 from .edit import SPEC as EDIT_SPEC
 from .glob import SPEC as GLOB_SPEC
@@ -49,8 +48,8 @@ from .meta import LIST_EXTENSIONS_SPEC, RELOAD_EXTENSIONS_SPEC, WRITE_TOOL_SPEC
 from .multiedit import SPEC as MULTIEDIT_SPEC
 from .question import SPEC as QUESTION_SPEC
 from .read import SPEC as READ_SPEC
+from .shell import SPEC as SHELL_SPEC
 from .skill import SKILL_SPEC
-from .todo import TODO_SPEC
 from .webfetch import SPEC as WEBFETCH_SPEC
 from .websearch import SPEC as WEBSEARCH_SPEC
 from .write import SPEC as WRITE_SPEC
@@ -94,11 +93,13 @@ LEGACY_FS_TOOLS = (
 )
 
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("shell")``.
-SHELL_SPECS = (BASH_SPEC,)
+SHELL_SPECS = (SHELL_SPEC,)
+#: The pre-rename name of ``SHELL_SPEC`` (``bash`` is a model-facing alias).
+BASH_SPEC = SHELL_SPEC
 
 SHELL_RUNNERS = MappingProxyType(
     {
-        BASH_SPEC.name: bash.run,
+        SHELL_SPEC.name: shell.run,
         BASH_OUTPUT_SPEC.name: bash_output.run,
         KILL_SHELL_SPEC.name: kill_shell.run,
     }
@@ -115,11 +116,9 @@ LEGACY_SHELL_TOOLS = (
 
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("task")`` minus
 #: the Phase 6 ``Task`` tool.
-TASK_SPECS = (TODO_SPEC, QUESTION_SPEC)
+TASK_SPECS = (QUESTION_SPEC,)
 
-TASK_RUNNERS = MappingProxyType(
-    {TODO_SPEC.name: todo.run, QUESTION_SPEC.name: question.run}
-)
+TASK_RUNNERS = MappingProxyType({QUESTION_SPEC.name: question.run})
 
 TASK_TOOLS = tuple(
     RegisteredTool(spec=spec, run=TASK_RUNNERS[spec.name], origin="builtin")
@@ -197,13 +196,13 @@ __all__ = [
     "READ_SPEC",
     "RELOAD_EXTENSIONS_SPEC",
     "SHELL_RUNNERS",
+    "SHELL_SPEC",
     "SHELL_SPECS",
     "SHELL_TOOLS",
     "SKILL_SPEC",
     "TASK_RUNNERS",
     "TASK_SPECS",
     "TASK_TOOLS",
-    "TODO_SPEC",
     "WEBFETCH_SPEC",
     "WEBSEARCH_SPEC",
     "WEB_SPECS",
@@ -222,8 +221,8 @@ __all__ = [
     "meta",
     "multiedit",
     "read",
+    "shell",
     "skill",
-    "todo",
     "webfetch",
     "websearch",
     "write",

@@ -22,6 +22,7 @@ from .model import (
     ErrorView,
     ExtensionView,
     HookView,
+    JobView,
     LiveAppendView,
     LiveCallView,
     LiveDelegationView,
@@ -43,7 +44,7 @@ from .reduce import apply, apply_many, initial_state
 
 __all__ = [
     "AgentView", "BlockView", "ContextView", "ConversationView", "DiagnosticView",
-    "ErrorView", "ExtensionView", "HookView", "LiveAppendView", "LiveCallView",
+    "ErrorView", "ExtensionView", "HookView", "JobView", "LiveAppendView", "LiveCallView",
     "LiveDelegationView", "LiveTurnView", "McpView", "MessageView",
     "PermissionView", "PresenceView", "QueuedInputView", "RegistryView",
     "RetryView", "SkillView", "ToolCallView", "TurnView", "UsageTotals",

@@ -131,7 +131,19 @@ INPUT_EVENTS = (
 
 # Composer ``!`` shell mode: a user-run command. Turn-less and durable; the
 # output is added to model context without starting a turn.
-SHELL_EVENTS = ("shell.started", "shell.completed")
+#
+# ``shell.job_*`` are the lifecycle of a ``shell`` tool job, which outlives its tool
+# call (plans/SHELL_PLAN.md P4). Durable and turn-less. ``job_started`` follows a
+# successful spawn, ``job_yielded`` records the one foreground-to-background move
+# (``reason``: ``yield_window`` or ``user``) and ``job_exited`` is written exactly
+# once. They carry ids, status and counts only, never output or environment.
+SHELL_EVENTS = (
+    "shell.started",
+    "shell.completed",
+    "shell.job_started",
+    "shell.job_yielded",
+    "shell.job_exited",
+)
 
 # GPT Live voice calls (docs/live.md). Durable, session-scoped and turn-less like
 # ``shell.*``. ``live.levels`` is reserved for an ephemeral meter and is never

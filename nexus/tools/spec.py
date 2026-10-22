@@ -132,23 +132,6 @@ class JobRegistryView(Protocol):
     async def aclose(self) -> None: ...
 
 
-class TodoStoreView(Protocol):
-    """The agent-scoped todo-state seam injected through :class:`ToolContext`.
-
-    Implemented structurally by :class:`nexus.tools.builtin.todo.TodoStore`; the
-    manager owns one and injects it so ``TodoWrite`` never writes a workspace
-    file and the state survives across calls in a session.
-    """
-
-    def get(self, session_id: str, agent_id: str = ...) -> tuple[object, ...]: ...
-
-    def replace(
-        self, session_id: str, items: object, agent_id: str = ...
-    ) -> tuple[object, ...]: ...
-
-    def clear(self, session_id: str, agent_id: str = ...) -> None: ...
-
-
 class SkillServiceView(Protocol):
     """The narrow slice of ``SkillManager`` the ``Skill`` builtin may reach.
 
@@ -271,14 +254,6 @@ class SubagentServiceView(Protocol):
         emit: object = ...,
         call_id: str = ...,
     ) -> object: ...
-
-    # Optional (background subagents): a service that can run a child detached
-    # also exposes ``background`` (a bool) and ``start``, which returns as soon
-    # as the child runs. The tool uses them only when present, ``background`` is
-    # true and the call did not pass ``wait: true``; ``start`` returns an object
-    # whose ``outcome`` is set when nothing was started (a refusal) and whose
-    # ``agent_id``/``role``/``model``/``tier``/``workspace`` describe the child
-    # otherwise. Probed with ``getattr``, so older doubles need not implement it.
 
 
 #: How a tool declares what a permission rule matches against.
@@ -692,7 +667,6 @@ class ToolContext:
     authorize_nested: Callable[..., Awaitable[NestedAuthorization]] | None = None
     #: Explicit service seams injected by the tool manager (never a Runtime).
     job_registry: JobRegistryView | None = None
-    todo_store: TodoStoreView | None = None
     #: Phase 4 meta/skill seams. ``None`` means the capability is unavailable
     #: for this call; the builtins report an actionable error rather than
     #: silently doing nothing. ``skills``/``extensions`` are structural views of
@@ -714,6 +688,10 @@ class ToolContext:
     #: child adapters use the runner-assigned ChildSpec.agent_id.
     agent_id: str = "root"
     tool_authority: tuple[str, ...] | None = None
+    #: True when this ``shell`` call arrived as a legacy ``bash`` call with
+    #: ``run_in_background`` and no ``timeout_s``: its background job keeps the
+    #: ``tools.shell_max_s`` lifetime cap and is never a persistent job.
+    legacy_capped_background: bool = False
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""
@@ -804,7 +782,6 @@ __all__ = [
     "SkillActivationSink",
     "SkillServiceView",
     "SubagentServiceView",
-    "TodoStoreView",
     "ToolCall",
     "ToolContext",
     "ToolExecutionResult",

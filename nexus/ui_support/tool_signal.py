@@ -153,6 +153,79 @@ def strip_workspace(command: str, workspace: str | None) -> str:
     return command
 
 
+_JOB_HEADER = re.compile(r"(?:job_id|status|exit_code|signal|stdout_offset|stderr_offset): [^\n]*")
+SHELL_TOOLS = frozenset({"shell", "bash", "run"})
+COMMAND_CELLS = 40  # display cells of a command on a closed row
+
+
+def strip_job_header(text: str) -> str:
+    """Drop the ``job_id:``/``status:``/``exit_code:`` header a shell result opens with.
+
+    Only a result that starts exactly ``job_id: …`` then ``status: …`` is touched, and only
+    its leading header lines and a first ``stdout:`` label go; everything else, including
+    a ``stderr:`` label and any program output that merely looks like a header, stays.
+    """
+    lines = text.split("\n")
+    if len(lines) < 2 or not lines[0].startswith("job_id: ") or not lines[1].startswith("status: "):
+        return text
+    index = 0
+    while index < len(lines) and _JOB_HEADER.fullmatch(lines[index]):
+        index += 1
+    rest = lines[index:]
+    if rest and rest[0] == "stdout:":
+        rest = rest[1:]
+    return "\n".join(rest)
+
+
+def clip_cells(text: str, limit: int = COMMAND_CELLS) -> str:
+    """``text`` cut to ``limit`` display cells (wide characters count two), ending in ``…``."""
+    import unicodedata
+
+    def cells(char: str) -> int:
+        return 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+
+    if sum(cells(c) for c in text) <= limit:
+        return text
+    used, kept = 1, []
+    for char in text:
+        used += cells(char)
+        if used > limit:
+            break
+        kept.append(char)
+    return "".join(kept).rstrip() + "…"
+
+
+def _read_span(tool: ToolCallView, out: str, failed: bool) -> str:
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    start = args.get("offset") if isinstance(args.get("offset"), int) and args.get("offset") >= 1 else 1
+    count = len(_lines(out))
+    return f" (lines {start}–{start + count - 1})" if count and not failed else ""
+
+
+def closed_summary(tool: ToolCallView) -> str | None:
+    """What a closed row says after its verb, or ``None`` to keep the generic summary.
+
+    ``Read``: ``path (lines 1–120)``, never the file's first line. Shells: the command's
+    first line clipped to :data:`COMMAND_CELLS`; the duration is the row's own time column.
+    The full command and output stay in the signal rows and behind ``inspect_operation``.
+    """
+    name = tool.name.casefold()
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    if name == "read":
+        path = _path(tool)
+        if not path:
+            return None
+        if tool_status(tool) != "completed":  # no range until the excerpt exists
+            return path
+        return path + _read_span(tool, _result_text(tool), False)
+    if name in SHELL_TOOLS:
+        command = escape_controls(str(args.get("command") or args.get("cmd") or "")).strip()
+        if not command:
+            return None
+        return clip_cells(command.split("\n", 1)[0])
+    return None
+
+
 def _failure(tool: ToolCallView) -> str:
     """``exit 2`` / ``timed out after 120s`` for a failed shell call, else the error text."""
     metrics = tool.metrics if isinstance(tool.metrics, Mapping) else {}
@@ -228,9 +301,7 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
         args = tool.input if isinstance(tool.input, Mapping) else {}
         start = args.get("offset") if isinstance(args.get("offset"), int) and args.get("offset") >= 1 else 1
         lines = _lines(out)
-        count = len(lines)
-        span = f" (lines {start}–{start + count - 1})" if count and not failed else ""
-        summary = f"Read {path}{span}".rstrip()
+        summary = f"Read {path}{_read_span(tool, out, failed)}".rstrip()
         if not failed:
             rows, omitted = _excerpt("out", lines, start)
     elif name == "write":
@@ -240,7 +311,8 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
         summary = f"Wrote {path}" + (f" ({len(lines)} lines)" if lines else "")
         if not failed:
             rows, omitted = _excerpt("add", lines, 1)
-    elif name in {"bash", "run"}:
+    elif name in SHELL_TOOLS:
+        out = strip_job_header(out)
         args = tool.input if isinstance(tool.input, Mapping) else {}
         command = strip_workspace(_clean(args.get("command") or args.get("cmd") or "", cuts=cuts), workspace)
         suffix = f" · {tool.duration_ms / 1000:.1f}s" if tool.duration_ms is not None and not failed else ""
@@ -274,7 +346,7 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
         looks_markdown = bool(re.search(r"(?m)^(#{1,6} |\s*[-*] |```)", out))
         rows += [SignalRow("md" if looks_markdown else "text", line) for line in _lines(out)]
     if failed:
-        if name in {"bash", "run"}:  # `$ command`, its output, then the red `exit 2` line
+        if name in {"shell", "bash", "run"}:  # `$ command`, its output, then the red `exit 2` line
             rows = [*rows, SignalRow("error", _failure(tool))]
         else:  # the error text first, then whatever output exists
             rows = [SignalRow("error", _clean(tool.error, 2_000) if tool.error else "failed"), *rows]
@@ -285,4 +357,4 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
     return SignalView(summary=summary, rows=bounded, clipped=omitted + extra)
 
 
-__all__ = ["SignalRow", "SignalView", "strip_workspace", "tool_signal"]
+__all__ = ["SignalRow", "SignalView", "clip_cells", "closed_summary", "strip_job_header", "strip_workspace", "tool_signal"]

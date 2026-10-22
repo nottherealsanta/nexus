@@ -160,7 +160,7 @@ def test_read_only_role_refuses_wider_configuration(config):
 
 
 def test_read_only_detection_from_nexus_tools():
-    assert cw.nexus_child_is_read_only(("read", "grep", "glob", "todowrite"))
+    assert cw.nexus_child_is_read_only(("read", "grep", "glob", "question"))
     assert cw.nexus_child_is_read_only(("write",), flagged=True)
     assert not cw.nexus_child_is_read_only(("read", "edit"))
     assert not cw.nexus_child_is_read_only(("read", "bash"))

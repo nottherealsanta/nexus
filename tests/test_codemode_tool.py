@@ -257,6 +257,30 @@ async def test_bash_exit_code_and_structured_metrics():
     assert got == [{'exit_code': 3, 'output': 'out'}]
 
 
+@pytest.mark.parametrize('name,kwargs', [('shell', {'command': 'sleep 9', 'background': True}),
+                                         ('bash', {'command': 'sleep 9', 'run_in_background': True})])
+async def test_background_shell_jobs_are_refused_without_dispatch(name, kwargs):
+    catalog = build_catalog([tool(name, mutates=True)], 'all')
+    dispatched = []
+    raised = []
+
+    async def script(f):
+        try:
+            await f[name](**kwargs)
+        except CodeToolError as exc:
+            raised.append(str(exc))
+        return done()
+
+    def invoke(tool_name, args):
+        dispatched.append(tool_name)
+        return ok('x')
+
+    registered = register(FakeRunner(script), catalog, NS(**{**CONFIG.__dict__, 'expose': 'all'}))
+    await registered.run({'program': '1', 'purpose': 'p'}, make_ctx({name: invoke}, []))
+    assert dispatched == []
+    assert raised and 'background shell jobs are not available inside code' in raised[0]
+
+
 async def test_result_clipping_is_announced():
     async def script(f):
         return done('v' * 300_000)

@@ -232,7 +232,7 @@ assembly. Required brief/tail overflow is an actionable `ContextOverflow`, not
 a rollover loop. The PreCompact gate may block the write.
 
 A version-1 deterministic, secret-redacted brief records bounded user intent,
-recent decisions/previous brief, todos, child ownership, shell state, queue IDs,
+recent decisions/previous brief, child ownership, shell state, queue IDs,
 tool errors and tool-derived changed paths. It is capped below 24 KiB and marks
 truncation. `handoff_brief = "summarized"` additionally calls the session's
 selected provider/model in the foreground with a 10% output reserve, no tools,

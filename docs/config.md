@@ -44,16 +44,16 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | --- | --- |
 | `[agent]` | `name` orchestrator, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
-| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback`, `subagent_usage` |
+| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `usage_refresh_seconds` 300 (60-3600), `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback`, `subagent_usage` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
 | `[context]` | `max_tokens` (unset = model window, 180000 if unknown), `safety_margin_tokens` 4000, `compaction` hybrid, `compact_at_fraction` 0.85, `on_overflow` `handoff` (durable same-session context cutover, see [context.md](context.md); set `compact` to opt out and keep in-prompt compaction only; with no config or only v1 layers it stays `compact` (env overrides do not promote), and any v2 layer promotes to `handoff`), `handoff_keep_fraction` 0.25 (verbatim history kept after a handoff, as a fraction of the input budget, in (0, 1)), `handoff_brief` `deterministic` (or `summarized`: optional session-model recall, falls back to deterministic), `[context.limits]` memory 8000, agents_md 8000, skills_index 4000, environment 2000, attachments 20000 |
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
-| `[tools]` | `bash_timeout_s` 120, `bash_yield_s`, `bash_max_s` 3600, `grep_timeout_s` 5.0, `max_result_tokens` 25000, `max_parallel` 8, `[tools.web]` (local search on, `searxng_instances`, `allowed_origins`, fetch on, timeouts, `max_results` 5, `max_output_bytes` 512000) |
+| `[tools]` | `shell_yield_s` (default 120: how long a foreground `shell` run blocks before moving to the background), `shell_max_s` (default 3600: hard limit for any shell job), `shell_log_max_bytes` 512 MiB per job (`0` = unlimited), `shell_log_total_bytes` 2 GiB per project, `shell_log_retention_days` 7, `shell_max_auto_wakes` 10 (consecutive turns a background job's completion may start without a human message), `shell_max_persistent_per_session` 4 and `shell_max_persistent` 8 (running persistent jobs: `shell` with `background` and no `timeout_s`), `shell_orphan_s` 3600 (the daemon stops persistent jobs and exits after this long with no viewer and no turn; `0` = never); deprecated aliases `bash_timeout_s` 120, `bash_yield_s`, `bash_max_s` 3600, each used only while its `shell_*` key is unset; `grep_timeout_s` 5.0, `max_result_tokens` 25000, `max_parallel` 8, `[tools.web]` (local search on, `searxng_instances`, `allowed_origins`, fetch on, timeouts, `max_results` 5, `max_output_bytes` 512000) |
 | `[ext]` | `enabled`, `watch_interval_ms` 500 (0 disables), `dirs` (`.agents/tools`, `.nexus/tools`, `~/.nexus/tools`), `quarantine` true, `max_file_bytes` 262144 |
-| `[agents]` | `enabled`, `default_type` task, `max_depth` 3 (values above 1 behave as 1 because only the root session spawns; 0 disables spawning), `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles`; background subagents (default **on**; `background = false` restores blocking, non-persistent children): `background` true, `max_live` 8 (children held at once, 1-64), `max_pending_reports` 32, `max_report_batch` 16, `max_report_chars` 24000, `report_coalesce_ms` 750 (0-60000), `max_auto_wakes` 20 (0 = never wake the root), `max_followup_chars` 20000, `oneshot_wait_seconds` 600 (0 = old one-shot behavior). All integers are range-checked and reject booleans. A workspace file may lower `max_live` and the report/follow-up/wake/one-shot bounds, never raise them (`config/layers.py`). `background`, `max_live` and the report keys (`max_pending_reports`, `max_report_batch`, `max_report_chars`, `report_coalesce_ms`, `max_auto_wakes`) and `oneshot_wait_seconds` are live ([agents.md](agents.md#reports-and-waking-the-root)); `max_followup_chars` bounds `subagent_send` messages ([agents.md](agents.md#persistent-children-subagent_send-subagent_stop-subagent_list)). `background = true` also makes children persistent (idle and continuable after a run, holding a `max_live` slot until stopped; when a spawn would exceed `max_live` the least-recently-run idle child is closed automatically, `agent.stopped` by `system`) and offers `subagent_send`/`stop`/`list` ([plan](../plans/done/NONBLOCKING_SUBAGENTS_PLAN.md)) |
+| `[agents]` | `enabled`, `default_type` task, `max_depth` 3 (values above 1 behave as 1 because only the root session spawns; 0 disables spawning), `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles`; `max_live` 8 (children held at once, 1-64). Subagents are foreground-only ([agents.md](agents.md#foreground-only)): the deprecated background keys `background`, `max_pending_reports`, `max_report_batch`, `max_report_chars`, `report_coalesce_ms`, `max_auto_wakes`, `max_followup_chars` and `oneshot_wait_seconds` still parse so existing config files load, and are ignored. All integers are range-checked and reject booleans. A workspace file may lower `max_live`, never raise it (`config/layers.py`) |
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
-| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
+| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_idle_seconds` 3600 (idle time before a session is auto-archived; 0 disables, ≤ 315360000), `auto_archive_days` 2 (legacy: no longer a threshold; 0 still disables auto-archive, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
@@ -101,6 +101,16 @@ or the Agent SDK inside a normal Nexus child with Nexus tools and permissions
 ([agents.md](agents.md#external-claude-code-workers)). Settings -> Models shows it as
 `Claude Code subagents run via` with a note on what each backend mediates.
 
+### `[models] usage_refresh_seconds`
+
+How often the daemon re-reads every connected provider's plan usage in the background,
+whether or not the subagent usage gate below is on and whether or not a client is looking.
+Default `300` (5 minutes); a whole number from `60` to `3600`, anything else is a config
+error. User config only: a project file that sets it is a config error. Settings → Providers
+has a `Refresh plan usage` selector (`UsageRefreshSettingsSet`) that writes it; the running
+poll reads it on its next 30 s tick, so no restart is needed. Opening the usage panel
+(`Ctrl+U`, `/usage`) always fetches fresh numbers regardless of this interval.
+
 ### `[models.subagent_usage]`
 
 Gates subagent launches on the provider's remaining usage quota. On by default.
@@ -111,7 +121,7 @@ Gates subagent launches on the provider's remaining usage quota. On by default.
 | `five_hour_min_remaining` | `10` | Minimum percent (0-100) left in the 5-hour window. |
 | `weekly_min_remaining` | `5` | Minimum percent (0-100) left in the weekly window. |
 | `monthly_min_remaining` | `2` | Minimum percent (0-100) left in the monthly window. |
-| `refresh_seconds` | `180` | How often usage is re-read (60-3600). User config only. |
+| `refresh_seconds` | `180` | Minimum gap between the refreshes the gate itself triggers before a subagent spawn (60-3600). User config only. The idle poll is `[models] usage_refresh_seconds`. |
 | `providers.<name>` | none | Per-provider overrides of the three thresholds; unset ones inherit. |
 
 A project file (`nexus.toml`, `.agents/nexus.toml`) may only raise a threshold, so

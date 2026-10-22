@@ -14,7 +14,7 @@ def tool(name, *, mutates=False, bundle='fs', schema=None):
 
 
 TOOLS = [tool('read'), tool('edit', mutates=True), tool('code', bundle='code'),
-         tool('subagent'), tool('question'), tool('todowrite'), tool('skill'),
+         tool('subagent'), tool('question'), tool('skill'),
          tool('McpCall'), tool('McpSearch'), tool('ReloadExtensions', bundle='meta'),
          tool('mcp__gh__search', bundle='mcp'), tool('mcp__gh__create', bundle='mcp', mutates=True),
          tool('mcp__fs__read', bundle='mcp')]
@@ -27,7 +27,7 @@ def test_read_only_default_excludes_mutating_and_loop_tools():
 def test_all_includes_mutating_but_never_excluded_set():
     names = set(build_catalog(TOOLS, 'all'))
     assert {'edit', 'mcp__gh__create'} <= names
-    assert not names & {'code', 'subagent', 'question', 'todowrite', 'skill', 'McpCall',
+    assert not names & {'code', 'subagent', 'question', 'skill', 'McpCall',
                         'McpSearch', 'ReloadExtensions'}
 
 

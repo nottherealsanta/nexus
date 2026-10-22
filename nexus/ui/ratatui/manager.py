@@ -228,7 +228,9 @@ class Manager:
         view = shell.controller.view
         if flows.form is not None or shell.panel_title or shell.items or flows.stack:
             return "a panel is open"
-        if dashboard is not None and dashboard.visible:
+        # The sidebar's Sessions list stays open beside the conversation; only the full page blocks.
+        sidebar_on = getattr(getattr(shell, "sidebar", None), "enabled", False) is True
+        if dashboard is not None and dashboard.visible and not sidebar_on:
             return "the Sessions dashboard is open"
         if shell.voice.phase != "idle":
             return "voice input is active"

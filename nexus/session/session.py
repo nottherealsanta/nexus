@@ -110,6 +110,11 @@ def is_live_agent(root_session: str, agent_id: str) -> bool:
     return (root_session, agent_id) in _LIVE_AGENTS
 
 
+def has_live_agents(root_session: str) -> bool:
+    """Whether any background subagent run of ``root_session`` is in flight here."""
+    return any(root == root_session for root, _agent in _LIVE_AGENTS)
+
+
 def _pid_alive(pid: object) -> bool:
     """Whether ``pid`` names a running process (best effort; reuse is possible)."""
     if not isinstance(pid, int) or pid <= 0:
@@ -275,11 +280,49 @@ class _QueuedInput:
     def is_report(self) -> bool:
         return bool(self.origin) and self.origin.get("kind") == REPORT_ORIGIN_KIND
 
+    @property
+    def is_shell_job(self) -> bool:
+        return bool(self.origin) and self.origin.get("kind") == SHELL_JOB_ORIGIN_KIND
+
+    @property
+    def is_automated(self) -> bool:
+        """Not typed by a human: skips prompt hooks and survives a Stop."""
+        return self.is_report or self.is_shell_job
+
+    @property
+    def notice(self) -> str | None:
+        """The ``MessageMeta.notice`` its user message carries, if automated."""
+        if self.is_report:
+            return _REPORT_NOTICE
+        return _SHELL_JOB_NOTICE if self.is_shell_job else None
+
 
 #: ``origin.kind`` of a subagent report delivered through the root's input queue
 #: (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.1).
 REPORT_ORIGIN_KIND = "subagent_report"
 _REPORT_NOTICE = "subagent_report"
+#: ``origin.kind`` of a background shell job's completion notification
+#: (plans/SHELL_PLAN.md 3.5). Automated: it never counts as a human message.
+SHELL_JOB_ORIGIN_KIND = "shell_job"
+_SHELL_JOB_NOTICE = "shell_job"
+#: ``context.notice`` kind recorded when automatic wake-ups pause.
+_WAKE_PAUSED_NOTICE = "shell_wake_paused"
+#: Consecutive completion-started turns allowed without a human message.
+DEFAULT_MAX_AUTO_WAKES = 10
+
+
+@dataclass(frozen=True)
+class JobAdmission:
+    """Outcome of :meth:`Session.record_job_completion`."""
+
+    queued_id: str
+    turn_id: str
+    #: False when the completion was already admitted (a repeat is a no-op).
+    fresh: bool
+    #: True when the host should start a turn for an idle session.
+    wake: bool
+    #: ``queued`` (steer, may wake) or ``paused`` (queue, never wakes).
+    delivery: str
 _MAX_ORIGIN_LIST = 32
 
 
@@ -297,6 +340,10 @@ def _clean_origin(origin: Mapping[str, Any]) -> dict[str, Any]:
         else:
             cleaned[name] = str(value)[:200]
     return cleaned
+
+
+def _is_automated_origin(origin: Mapping[str, Any] | None) -> bool:
+    return bool(origin) and origin.get("kind") in (REPORT_ORIGIN_KIND, SHELL_JOB_ORIGIN_KIND)
 
 
 def _join_items(items: Sequence[_QueuedInput]) -> list[ContentBlock]:
@@ -461,9 +508,14 @@ class Session:
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
         hooks: Callable[[], Any] | None = None,
+        job_probe: Callable[[str, str], bool] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
+        #: ``(session_id, job_id) -> may the job still be running``. Injected by
+        #: the runtime (this layer imports nothing from ``tools``); ``None`` means
+        #: nothing can prove a job dead, so no recovery event is ever written.
+        self._job_probe = job_probe
         self._kind: str | None = None
         self._lock = lock if lock is not None else SessionLock(store.lock_path(self._id))
         self._read: ReadResult | None = None
@@ -580,6 +632,11 @@ class Session:
         self._agent_selection: AgentSelection | None = None
         self._reasoning_effort_selection: ReasoningEffortSelection | None = None
         self._turn_agent_definition: Any | None = None
+        #: Automatic wake-ups from shell completions are paused (a user Stop or
+        #: the consecutive-wake cap) until the next human message.
+        self._wake_paused = False
+        #: Completion-started turns since the last human message.
+        self._auto_wakes = 0
         # A crash can leave a submission durable as ``input.queued`` but absent
         # from memory; rebuilding the FIFO here means a reopened handle resumes
         # exactly where the previous process stopped.
@@ -1280,6 +1337,10 @@ class Session:
         record = self._emit(event_type, data)
         if event_type == "shell.started" and record is not None and isinstance(shell_id, str):
             _LIVE_SHELLS.add(shell_id)
+        if record is not None and event_type.startswith("shell.job_"):
+            # A job's lifecycle inside a streamed turn must reach that stream too,
+            # or live and replay diverge (SHELL_PLAN P4).
+            self._offer_attached(record.event)
         return record
 
     def emit_agent_event(self, event: Event) -> EventRecord | None:
@@ -1399,13 +1460,23 @@ class Session:
 
     # -- input queue -------------------------------------------------------
 
-    def admit_submission(self, content, *, request_id, digest, mode="queue", turn_id="", origin=None):
-        """Durably admit once; observation and queue publication follow COMMIT."""
+    def admit_submission(
+        self, content, *, request_id, digest, mode="queue", turn_id="", origin=None,
+        preceding_events=(),
+    ):
+        """Durably admit once; observation and queue publication follow COMMIT.
+
+        ``preceding_events`` are written in the **same batch**, ahead of the
+        ``input.queued`` record, so they are durable if and only if the
+        submission is. A repeated ``request_id`` writes none of them.
+        """
         from .submissions import validate_request_id
         validate_request_id(request_id)
         if mode not in {"queue", "steer", "interrupt"}:
             raise ValueError("mode must be queue, steer, or interrupt")
         self._ensure_writable()
+        if not _is_automated_origin(origin):
+            self._note_human_input()
         blocks = _coerce_user_input(content)
         queued_id, turn_id = new_id(), turn_id or new_id()
         stamp = Event(type="input.queued").ts
@@ -1419,18 +1490,122 @@ class Session:
             event = msgspec.structs.replace(event, data={
                 **event.data, "origin": _clean_origin(origin),
             })
-        records = self._store.append_batch(self._id, [lambda seq: EventRecord(
+        builders = [
+            (lambda seq, pre=pre: EventRecord(
+                seq=seq, ts=stamp, event=msgspec.structs.replace(pre, seq=seq, session=self._id),
+            ))
+            for pre in preceding_events
+        ]
+        builders.append(lambda seq: EventRecord(
             seq=seq, ts=stamp, event=msgspec.structs.replace(event, seq=seq),
-        )], index_rows=[dict(request_id=request_id, content_digest=digest,
-                            queued_id=queued_id, turn_id=turn_id, created_at=stamp)])
+        ))
+        records = self._store.append_batch(self._id, builders, index_rows=[dict(
+            request_id=request_id, content_digest=digest,
+            queued_id=queued_id, turn_id=turn_id, created_at=stamp)])
         if not records:
             row = self._store.submission(self._id, request_id, digest)
             return row[3], row[2], False
         self._read = None
         self._rehydrate_queue()
-        self._observe_event(records[0].event)
-        self._publish(records[0].event)
+        for record in records:
+            self._observe_event(record.event)
+            self._publish(record.event)
+            if record.event.type == "shell.job_exited":
+                self._offer_attached(record.event)
         return queued_id, turn_id, True
+
+    def record_job_completion(
+        self,
+        data: Mapping[str, Any],
+        text: str | None,
+        *,
+        max_auto_wakes: int = DEFAULT_MAX_AUTO_WAKES,
+    ) -> JobAdmission:
+        """Record a background job's exit and queue its notification, atomically.
+
+        ``shell.job_exited`` and the ``input.queued`` notification are one
+        ``append_batch`` keyed by ``shell-job-<job_id>``: there is no moment where
+        the exit is durable and the notification is not, and a repeat admission
+        returns the same queued id without writing again. ``text`` is ``None``
+        for the repeat/redelivery of an exit that is already recorded.
+
+        The notification is a ``steer`` (consumed at the active turn's next
+        boundary, or it starts one turn when idle). While automatic wake-ups
+        are paused it is a plain ``queue`` entry that starts nothing; the next
+        human turn sees it first.
+        """
+        if self.kind in ("child", "manager"):
+            # Children never auto-wake (their turn is the blocking call that
+            # started them) and the manager has no ``shell`` tool.
+            raise SessionError(f"a {self.kind} session does not take job completions")
+        job_id = str(data.get("job_id", ""))
+        request_id = f"shell-job-{job_id}"
+        if self._wake_paused is False and self._auto_wakes >= max(1, int(max_auto_wakes)):
+            self.pause_auto_wake("max_auto_wakes")
+        paused = self._wake_paused
+        delivery = "paused" if paused else "queued"
+        origin = {
+            "kind": SHELL_JOB_ORIGIN_KIND,
+            "job_id": job_id,
+            "status": str(data.get("status", "")),
+        }
+        if isinstance(data.get("exit_code"), int):
+            origin["exit_code"] = data["exit_code"]
+        preceding: list[Event] = []
+        if not data.get("redelivery"):
+            preceding.append(Event(
+                type="shell.job_exited", session=self._id,
+                data={**dict(data), "delivery": delivery},
+            ))
+        from .submissions import submission_digest
+        queued_id, turn_id, fresh = self.admit_submission(
+            text or "", request_id=request_id,
+            digest=submission_digest("shell_job", job_id, "completion"),
+            mode="queue" if paused else "steer", origin=origin,
+            preceding_events=preceding,
+        )
+        return JobAdmission(
+            queued_id=queued_id, turn_id=turn_id, fresh=fresh,
+            wake=fresh and not paused, delivery=delivery,
+        )
+
+    def retract_job_completion(self, job_id: str) -> bool:
+        """Drop a still-pending completion notification the model already got.
+
+        ``False`` when none is pending (already consumed, or never queued).
+        """
+        item = next(
+            (item for item in self._queue
+             if item.is_shell_job and (item.origin or {}).get("job_id") == job_id),
+            None,
+        )
+        if item is None:
+            return False
+        return self.remove_queued(item.queued_id, reason="claimed by a shell result")
+
+    def pause_auto_wake(self, reason: str = "stop") -> bool:
+        """Stop completions from waking this session until the next human message.
+
+        Records a durable ``context.notice`` (``shell_wake_paused``). Returns
+        ``False`` when wake-ups were already paused.
+        """
+        if self._wake_paused or self._retired:
+            return False
+        self._wake_paused = True
+        self._emit(_NOTICE_EVENT, {"kind": _WAKE_PAUSED_NOTICE, "reason": reason})
+        return True
+
+    @property
+    def auto_wake_paused(self) -> bool:
+        return self._wake_paused
+
+    def _note_human_input(self) -> None:
+        """A human message resumes automatic wake-ups and resets the wake count."""
+        self._wake_paused = False
+        self._auto_wakes = 0
+
+    def _pending_automated_shell_jobs(self) -> tuple[_QueuedInput, ...]:
+        return tuple(item for item in self._queue if item.is_shell_job)
 
     def enqueue(
         self,
@@ -1453,6 +1628,8 @@ class Session:
         """
         self._ensure_writable()
         content = _coerce_user_input(user_input)
+        if not _is_automated_origin(origin):
+            self._note_human_input()
         queued_id = new_id()
         item = _QueuedInput(queued_id, content, mode, _clean_origin(origin) if origin else None)
         payload: dict[str, Any] = {
@@ -1586,7 +1763,7 @@ class Session:
         for item in items:
             # A subagent report is data, not a user prompt: the hook never sees it.
             content, blocked = (
-                (item.content, None) if item.is_report
+                (item.content, None) if item.is_automated
                 else await self._gate_user_prompt(item.content)
             )
             if item not in self._queue:
@@ -1603,7 +1780,7 @@ class Session:
                 role="user", content=content,
                 meta=MessageMeta(
                     turn_id=self.active_turn_id,
-                    notice=_REPORT_NOTICE if item.is_report else None,
+                    notice=item.notice,
                 ),
             ))
             consumed = True
@@ -1677,7 +1854,7 @@ class Session:
         kept: deque[_QueuedInput] = deque()
         while self._queue:
             item = self._queue.popleft()
-            if item.is_report:
+            if item.is_automated:
                 kept.append(item)
                 continue
             self._emit(
@@ -1689,7 +1866,7 @@ class Session:
     @property
     def retained_queued_ids(self) -> tuple[str, ...]:
         """Pending ids a cancel does not drop (subagent reports), in FIFO order."""
-        return tuple(item.queued_id for item in self._queue if item.is_report)
+        return tuple(item.queued_id for item in self._queue if item.is_automated)
 
     @property
     def queued_report_count(self) -> int:
@@ -1919,6 +2096,8 @@ class Session:
         open_turn: str | None = None
         turn_open = False
         shells: dict[str, Mapping[str, Any]] = {}
+        #: Announced ``shell`` jobs that were started and never recorded as exited.
+        open_jobs: dict[str, Mapping[str, Any]] = {}
         workers: dict[tuple[str | None, str], Event] = {}
         agents: dict[str, Event] = {}
         completed_agents: set[str] = set()
@@ -1936,6 +2115,12 @@ class Session:
                     shells[shell_id] = event.data
             elif event.type == "shell.completed" and isinstance(event.data, dict):
                 shells.pop(event.data.get("shell_id"), None)  # type: ignore[arg-type]
+            elif event.type == "shell.job_started" and isinstance(event.data, dict):
+                job_id = event.data.get("job_id")
+                if isinstance(job_id, str) and 0 < len(job_id) <= 64:
+                    open_jobs[job_id] = event.data
+            elif event.type == "shell.job_exited" and isinstance(event.data, dict):
+                open_jobs.pop(event.data.get("job_id"), None)  # type: ignore[arg-type]
             elif event.type in ("external.started", "external.finished") and isinstance(event.data, dict):
                 worker_session = event.data.get("session")
                 if isinstance(worker_session, str) and worker_session:
@@ -2046,7 +2231,47 @@ class Session:
                 "exit_code": None, "duration_ms": None,
                 "output": f"[{INTERRUPTED_ERROR}; the output was not kept]", "context": "none",
             })
+        self._recover_shell_jobs(open_jobs)
         self._interrupted_checked = True
+
+    #: Most recovery exits written for one session per open; the rest wait for the next.
+    _MAX_JOB_RECOVERIES = 64
+
+    def _recover_shell_jobs(self, open_jobs: Mapping[str, Mapping[str, Any]]) -> None:
+        """Close ``shell`` jobs whose owner is provably gone (SHELL_PLAN P7).
+
+        One ``shell.job_exited`` (``interrupted``, ``delivery: none``) per job,
+        written under the exclusive session lock the caller holds. It is a plain
+        event: no queue admission, no notification, nothing that can start a turn.
+        Without a ``job_probe`` -- or when it raises or says the job may still be
+        running -- nothing is written, so a live job is never reported as exited.
+        Idempotent: the exit it writes is what the next open finds.
+        """
+        probe = self._job_probe
+        if probe is None or not open_jobs:
+            return
+        for job_id, started in list(open_jobs.items())[: self._MAX_JOB_RECOVERIES]:
+            try:
+                may_be_live = bool(probe(self._id, job_id))
+            except Exception:  # noqa: BLE001 - an unprovable job is left alone
+                may_be_live = True
+            if may_be_live:
+                continue
+            data: dict[str, Any] = {
+                "job_id": job_id,
+                "status": "interrupted",
+                "exit_code": None,
+                "signal": None,
+                "background": bool(started.get("background")),
+                "delivery": "none",
+                "recovered": True,
+                "reason": "interrupted",
+                "error": INTERRUPTED_ERROR,
+            }
+            started_at = started.get("started_at")
+            if isinstance(started_at, (int, float)) and not isinstance(started_at, bool):
+                data["duration_ms"] = max(0, int((time.time() - started_at) * 1000))
+            self._emit("shell.job_exited", data)
 
     def _recover_locked(self) -> list[MessageRecord]:
         issued: dict[str, ToolUse] = {}
@@ -2171,10 +2396,10 @@ class Session:
         modify puts the reports first, then the modified typed content. A block
         reason applies to the typed items only (see the callers).
         """
-        reports = [item for item in items if item.is_report]
+        reports = [item for item in items if item.is_automated]
         if not reports:
             return await self._gate_user_prompt(content)
-        typed = [item for item in items if not item.is_report]
+        typed = [item for item in items if not item.is_automated]
         if not typed:
             return content, None
         typed_content = _join_items(typed)
@@ -2378,8 +2603,12 @@ class Session:
         limits: TurnLimits | None,
         *,
         queued_items: tuple[_QueuedInput, ...] = (),
+        preface: tuple[_QueuedInput, ...] = (),
     ) -> tuple[TurnLease, Any, Any]:
         """Claim the lease, snapshot config, and persist the user message.
+
+        ``preface`` are pending automated notifications a typed turn consumes
+        first, so the human message sees them before it.
 
         Synchronous by design: the lease is claimed and the log is mutated with
         no intervening ``await``, so a concurrent turn can never observe a
@@ -2434,6 +2663,12 @@ class Session:
             raise
         self._active_tools = tool_turn
         try:
+            if queued_items and all(item.is_automated for item in queued_items):
+                # A turn started by notifications alone counts toward the cap.
+                if any(item.is_shell_job for item in queued_items):
+                    self._auto_wakes += 1
+            else:
+                self._note_human_input()
             for queued_item in queued_items:
                 # Emit before removing: if the durable event fails, the item
                 # stays queued and memory still matches the log.
@@ -2443,6 +2678,16 @@ class Session:
                 )
                 self._remove_queued(queued_item)
             self.recover_dangling_tool_uses(lock=False)
+            for earlier in preface:
+                self._emit(
+                    "input.consumed",
+                    {"queued_id": earlier.queued_id, "turn": lease.turn_id},
+                )
+                self._remove_queued(earlier)
+                self.append_message(Message(
+                    role="user", content=earlier.content,
+                    meta=MessageMeta(turn_id=lease.turn_id, notice=earlier.notice),
+                ))
             self.append_message(
                 Message(
                     role="user",
@@ -2450,8 +2695,8 @@ class Session:
                     meta=MessageMeta(
                         turn_id=lease.turn_id,
                         notice=(
-                            _REPORT_NOTICE
-                            if queued_items and all(item.is_report for item in queued_items)
+                            queued_items[0].notice
+                            if queued_items and all(item.is_automated for item in queued_items)
                             else None
                         ),
                     ),
@@ -2542,6 +2787,8 @@ class Session:
             return
         if self._active is not None or not self._queue:
             return
+        if self._wake_paused and all(item.is_automated for item in self._queue):
+            return  # a Stop or the wake cap: only a human message resumes
         if self._queued_task is not None and not self._queued_task.done():
             return
         content, items = self._resolve_turn_input(None)
@@ -2590,11 +2837,20 @@ class Session:
         """Run hooks for the queue snapshot and launch its batched turn."""
         if self._active is not None:
             return
-        content = _join_items(items)
-        content, block_reason = await self._gate_queue_content(content, items)
+        while True:
+            content = _join_items(items)
+            content, block_reason = await self._gate_queue_content(content, items)
+            # The hooks yield: a retraction or removal can drop snapshot items
+            # meanwhile. Never start content that is no longer pending.
+            live = tuple(item for item in items if any(item is q for q in self._queue))
+            if len(live) == len(items):
+                break
+            if not live or self._active is not None:
+                return
+            items = live
         if block_reason is not None:
             for item in items:
-                if not item.is_report and self._remove_queued(item):
+                if not item.is_automated and self._remove_queued(item):
                     self._emit(
                         "input.dropped",
                         {
@@ -2638,7 +2894,7 @@ class Session:
         content, block_reason = await self._gate_queue_content(content, queued_items)
         if block_reason is not None:
             for queued_item in queued_items:
-                if not queued_item.is_report and self._remove_queued(queued_item):
+                if not queued_item.is_automated and self._remove_queued(queued_item):
                     self._emit(
                         "input.dropped",
                         {
@@ -2654,6 +2910,7 @@ class Session:
             turn_id,
             limits,
             queued_items=queued_items,
+            preface=self._pending_automated_shell_jobs() if user_input is not None else (),
         )
         try:
             self._launch_turn(
@@ -2785,7 +3042,7 @@ class Session:
         content, block_reason = await self._gate_queue_content(content, queued_items)
         if block_reason is not None:
             for item in queued_items:
-                if not item.is_report and self._remove_queued(item):
+                if not item.is_automated and self._remove_queued(item):
                     self._emit(
                         "input.dropped",
                         {"queued_id": item.queued_id,
@@ -2800,7 +3057,8 @@ class Session:
         effective = self._attended if attended is None else bool(attended)
         fanout = _Fanout(self._event_buffer)
         lease, assembler, tool_turn = self._prepare_turn(
-            content, effective, None, None, queued_items=queued_items
+            content, effective, None, None, queued_items=queued_items,
+            preface=self._pending_automated_shell_jobs() if user_input is not None else (),
         )
         # Every event persisted before the producer started (the gate's hook
         # events, and a queued ``input.consumed``) is replayed first, because the

@@ -13,8 +13,8 @@ Design rules:
   dependency is injected, the runtime does not own or replace it.
 * **Owned lifecycle.** Providers the runtime builds from configuration are owned
   and closed by :meth:`aclose`; injected providers are the caller's to close. The
-  runtime also owns the shell ``JobRegistry`` and ``TodoStore`` it creates (they
-  are shared across per-turn tool snapshots and closed on :meth:`aclose`).
+  runtime also owns the shell ``JobRegistry`` it creates (it is shared across
+  per-turn tool snapshots and closed on :meth:`aclose`).
 * **Frozen per turn.** One config load feeds the context snapshot and the tool
   snapshot, so catalog, schemas, path guard, permission policy, and result limits
   cannot change mid-turn; the next turn reloads.
@@ -51,14 +51,14 @@ import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .agents.runner import qualify_model
-from .agents.pool import AgentPool, ReportBatch, ReportLimits
+from .agents.pool import AgentPool
 from .agents.handoff import build_handoff, write_handoff
 from .agents.handoff import digest as handoff_digest
 from .agents.last_choice import AgentChoiceStore
 from .model.effort_preferences import ModelEffortStore
 from .agents.model import AgentError, AgentNotFoundError
-from .agents.runner import ROOT_ONLY_TOOLS, WORKTREE_CHILD_TOOLS, files_changed
-from .tools.names import SUBAGENT_CONTROL_TOOLS, canonical_tool_name
+from .agents.runner import ROOT_ONLY_TOOLS, WORKTREE_CHILD_TOOLS, cancel_child, files_changed
+from .tools.names import canonical_tool_name
 from .config import Config
 from .config.paths import (
     nexus_home,
@@ -102,6 +102,7 @@ from .model.registry import (
     ADAPTER_OLLAMA,
     ADAPTER_OPENAI,
     ADAPTER_OPENCODE,
+    ADAPTER_NVIDIA,
     ADAPTER_XAI,
     OPENAI_COMPATIBLE,
     ModelRegistry,
@@ -131,9 +132,9 @@ from .session.agent_selection import AgentSelection
 from .session.db import StateDatabase
 from .session.export import is_user_prompt
 from .session.records import MessageRecord
+from .tools.builtin._job_recovery import OWNERS_DIRNAME
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
-from .tools.builtin.todo import TodoStore
 from .session.context_authz import ContextDenied
 from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES, get_profile
 from .tools.manager import ToolManager
@@ -176,6 +177,7 @@ _CORE_ADAPTERS: dict[str, str] = {
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
     "xai": ADAPTER_XAI,
+    "nvidia": ADAPTER_NVIDIA,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,
@@ -1636,9 +1638,7 @@ class _ManifestEnvironmentFactory:
         if runner is not None:
             from .tools.builtin.task import build_task_tool
 
-            from .tools.builtin.subagent_control import build_agent_control_tools
-
-            catalog = (*base_catalog, build_task_tool(runner), *build_agent_control_tools(runner))
+            catalog = (*base_catalog, build_task_tool(runner))
             roster_digest = _roster_digest(runner)
         catalog = tuple(
             tool for tool in catalog
@@ -2295,30 +2295,23 @@ class _ChildEventSink:
         except Exception as exc:  # noqa: BLE001 - do not expose exception text
             persistence_error = exc
         if self._relay is None or event.type in _CHILD_RELAY_SUPPRESS:
-            if persistence_error is not None and event.type == "todo.updated":
-                raise persistence_error
             return event
         async def relay(event_type: str, data: Mapping[str, Any]) -> None:
             outcome = self._relay(event_type, data)
             if inspect.isawaitable(outcome):
                 await outcome
 
-        if event.type == "todo.updated":
+        with contextlib.suppress(Exception):
             await relay(event.type, dict(event.data))
-        else:
-            with contextlib.suppress(Exception):
-                await relay(event.type, dict(event.data))
         if persistence_error is not None:
-            # The owner log gets a stable, non-sensitive diagnostic. Ordinary
-            # observation can fail without killing the child; todo state cannot.
+            # The owner log gets a stable, non-sensitive diagnostic. Observation
+            # can fail without killing the child.
             with contextlib.suppress(Exception):
                 await relay("error", {
                     "code": "child_log_persist_failed",
                     "message": "Could not persist a child event in its session log.",
                     "event_type": event.type,
                 })
-            if event.type == "todo.updated":
-                raise persistence_error
         return event
 
 
@@ -2578,24 +2571,15 @@ class _ChildRuntime:
             skip_permissions=policy.skip_permissions)
 
     async def run(self) -> SubagentOutcome:
-        resume = int(getattr(self._spec, "resume", 0) or 0)
         if self._external is not None:
-            if resume:
-                # Defence in depth: the runner never marks an external worker continuable.
-                raise ConfigError(
-                    f"{self._external.label} workers run one assignment per session; start a "
-                    "new subagent and put what it needs from the report in the prompt")
             return await self._run_external()
         runtime = self._runtime
         spec = self._spec
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
         real_id = facade.manager.store.resolve_child_id(spec.session_id)
-        # A continuation reopens the child's own durable log. ``recover=True`` repairs a
-        # log a crash left behind (an open turn, a tool call with no result) before the
-        # new turn appends to it; the first run creates the session.
         session = facade.manager.open(
-            real_id, create=not resume, recover=bool(resume), ownership=_child_ownership(spec),
+            real_id, create=True, recover=False, ownership=_child_ownership(spec),
         )
         # A Nexus-run child on a ``spawned`` edge is readable by its ancestors
         # through the context namespace (plan 03 section 3.2 rule 3); external
@@ -2605,7 +2589,6 @@ class _ChildRuntime:
             with contextlib.suppress(SessionError):
                 grant(spec.session_id, allowed=True)
         try:
-            runtime._restore_todos(session)
             config = (
                 spec.config
                 if isinstance(getattr(spec, "config", None), Config)
@@ -2652,7 +2635,7 @@ class _ChildRuntime:
                 turn_id="",
                 config=config,
                 agent_id=spec.agent_id,
-                subagents=self._runner,
+                subagents=None,
                 outbound_http=getattr(runtime, "_outbound_http_service", None),
                 local_search_http=getattr(runtime, "_local_search_http_service", None),
                 questions=(
@@ -2672,7 +2655,7 @@ class _ChildRuntime:
             try:
                 outcome = await run_turn(
                     session=session,
-                    user_input=(spec.follow_up or spec.prompt) if resume else spec.prompt,
+                    user_input=spec.prompt,
                     assemble=assembler,
                     provider_for=self._router,
                     emit=sink,
@@ -2708,10 +2691,6 @@ class _ChildRuntime:
             if callable(kick):  # the child spent quota: refresh (rate-limited) for the next spawn
                 with contextlib.suppress(Exception):
                     kick()
-            store = runtime._effective_todo_store()
-            clear_session = getattr(store, "clear_session", None)
-            if callable(clear_session):
-                clear_session(real_id)
 
     def _drop_escalations(self) -> None:
         """Forget this child's recorded escalations (failure and cancel paths never read them)."""
@@ -2818,103 +2797,97 @@ class _ChildRuntime:
         session = facade.manager.open(
             real_id, create=True, recover=False, ownership=_child_ownership(spec),
         )
+        # External workers have no wall-clock deadline; only cancellation stops them.
+        limits = TurnLimits(max_iterations=0, max_seconds=0.0)
+        lease = session.begin_turn(limits=limits)
+        sink = _ChildEventSink(session, spec.emit)
+
+        async def emit(kind: str, data: dict[str, Any]) -> None:
+            await sink.emit(Event(type=kind, data=dict(data), session=real_id, turn=lease.turn_id))
+
+        terminal = False
+        result = None
+        crash: Exception | None = None
+        before = after = None
         try:
-            # External workers have no wall-clock deadline; only cancellation stops them.
-            limits = TurnLimits(max_iterations=0, max_seconds=0.0)
-            lease = session.begin_turn(limits=limits)
-            sink = _ChildEventSink(session, spec.emit)
-
-            async def emit(kind: str, data: dict[str, Any]) -> None:
-                await sink.emit(Event(type=kind, data=dict(data), session=real_id, turn=lease.turn_id))
-
-            terminal = False
-            result = None
-            crash: Exception | None = None
-            before = after = None
+            await emit("turn.started", {"limits": {"max_iterations": 0, "max_seconds": 0.0}})
+            # Claude Code has no system-prompt channel here, so the role's
+            # instructions travel as a labelled prefix of the one prompt it gets.
+            instructions = str(getattr(spec, "system_prompt", "") or "").strip()
+            prompt = (f"Role instructions (Nexus agent role {spec.agent!r}):\n{instructions}\n\n"
+                      f"Task:\n{spec.prompt}") if instructions else spec.prompt
+            await emit("context.assembled", self._context_snapshot(instructions, workspace))
+            session.append_message(Message(
+                role="user", content=[Text(spec.prompt)], meta=MessageMeta(turn_id=lease.turn_id)))
+            with contextlib.suppress(Exception):
+                before = await asyncio.to_thread(snapshot_workspace, workspace)
             try:
-                await emit("turn.started", {"limits": {"max_iterations": 0, "max_seconds": 0.0}})
-                # Claude Code has no system-prompt channel here, so the role's
-                # instructions travel as a labelled prefix of the one prompt it gets.
-                instructions = str(getattr(spec, "system_prompt", "") or "").strip()
-                prompt = (f"Role instructions (Nexus agent role {spec.agent!r}):\n{instructions}\n\n"
-                          f"Task:\n{spec.prompt}") if instructions else spec.prompt
-                await emit("context.assembled", self._context_snapshot(instructions, workspace))
+                result = await external.worker.run(
+                    prompt=prompt, model=external.model, workspace=workspace,
+                    policy=external.policy,
+                    cancel=getattr(spec, "cancel", None), emit=emit)
+            except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
+                crash = exc
+            with contextlib.suppress(Exception):
+                after = await asyncio.to_thread(snapshot_workspace, workspace, before)
+            if result is not None and result.text:
                 session.append_message(Message(
-                    role="user", content=[Text(spec.prompt)], meta=MessageMeta(turn_id=lease.turn_id)))
-                with contextlib.suppress(Exception):
-                    before = await asyncio.to_thread(snapshot_workspace, workspace)
-                try:
-                    result = await external.worker.run(
-                        prompt=prompt, model=external.model, workspace=workspace,
-                        policy=external.policy,
-                        cancel=getattr(spec, "cancel", None), emit=emit)
-                except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
-                    crash = exc
-                with contextlib.suppress(Exception):
-                    after = await asyncio.to_thread(snapshot_workspace, workspace, before)
-                if result is not None and result.text:
-                    session.append_message(Message(
-                        role="assistant", content=[Text(result.text)],
-                        meta=MessageMeta(provider=external.provider, model=external.model,
-                                         turn_id=lease.turn_id)))
-                if crash is None and result is not None:
-                    if result.status == "completed":
-                        reported = (_reported_usage(getattr(result, "usage", None))
-                                    if external.kind != ADAPTER_CLAUDE_CODE else None)
-                        await emit("turn.completed", {
-                            "stop_reason": "end_turn", "iterations": 0,
-                            "usage": reported.to_dict() if reported else {},
-                            **({} if reported else {"usage_unknown": True})})
-                    elif result.status == "cancelled":
-                        await emit("turn.cancelled", {"reason": result.error, "iterations": 0})
-                    else:
-                        await emit("turn.failed", {
-                            "error": redact_secrets(result.error or result.status)[:500], "iterations": 0})
-                    terminal = True
-            except asyncio.CancelledError:
-                with contextlib.suppress(Exception):
-                    await emit("turn.cancelled", {"reason": "cancelled", "iterations": 0})
+                    role="assistant", content=[Text(result.text)],
+                    meta=MessageMeta(provider=external.provider, model=external.model,
+                                     turn_id=lease.turn_id)))
+            if crash is None and result is not None:
+                if result.status == "completed":
+                    reported = (_reported_usage(getattr(result, "usage", None))
+                                if external.kind != ADAPTER_CLAUDE_CODE else None)
+                    await emit("turn.completed", {
+                        "stop_reason": "end_turn", "iterations": 0,
+                        "usage": reported.to_dict() if reported else {},
+                        **({} if reported else {"usage_unknown": True})})
+                elif result.status == "cancelled":
+                    await emit("turn.cancelled", {"reason": result.error, "iterations": 0})
+                else:
+                    await emit("turn.failed", {
+                        "error": redact_secrets(result.error or result.status)[:500], "iterations": 0})
                 terminal = True
-                # The runner builds the cancelled outcome; hand it the disclosure it
-                # would otherwise lose (authority, unknown usage, verified file changes).
-                with contextlib.suppress(Exception):
-                    after = await asyncio.to_thread(snapshot_workspace, workspace, before)
-                with contextlib.suppress(Exception):
-                    changed, metrics = self._external_report(workspace, before, after, None)
-                    spec.metadata["external_partial"] = {
-                        "metrics": metrics, "files_changed": tuple(changed[:MAX_REPORTED_FILES])}
-                raise
-            finally:
-                if not terminal:
-                    with contextlib.suppress(Exception):
-                        await emit("turn.failed", {
-                            "error": redact_secrets(str(crash))[:500] if crash else "interrupted", "iterations": 0})
-                with contextlib.suppress(Exception):
-                    lease.release()
-            changed, metrics = self._external_report(workspace, before, after, result)
-            if crash is not None or result is None:
-                return self._failed(
-                    spec, session, f"{type(crash).__name__}: {crash}" if crash else "no result",
-                    metrics=metrics, files_changed=tuple(changed[:MAX_REPORTED_FILES]))
-            outcome = SubagentOutcome(
-                agent=spec.agent, session_id=spec.session_id, status=result.status,
-                text=result.text, is_error=result.is_error,
-                usage=(_reported_usage(getattr(result, "usage", None)) if metrics.get("usage") == "reported" else None)
-                or SubagentUsage(),
-                stop_reason=_EXTERNAL_STOP_REASON.get(result.status, "error"),
-                dropped_tools=tuple(spec.dropped_tools), clamped=bool(spec.clamped), tier=spec.tier,
-                requested_tier=spec.requested_tier, error=result.error, metrics=metrics,
-                files_changed=tuple(changed[:MAX_REPORTED_FILES]),
-                models=_child_models(session),
-            )
-            if outcome.status in ("failed", "interrupted"):
-                outcome = self._with_handoff(outcome, spec, session)
-            return outcome
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await emit("turn.cancelled", {"reason": "cancelled", "iterations": 0})
+            terminal = True
+            # The runner builds the cancelled outcome; hand it the disclosure it
+            # would otherwise lose (authority, unknown usage, verified file changes).
+            with contextlib.suppress(Exception):
+                after = await asyncio.to_thread(snapshot_workspace, workspace, before)
+            with contextlib.suppress(Exception):
+                changed, metrics = self._external_report(workspace, before, after, None)
+                spec.metadata["external_partial"] = {
+                    "metrics": metrics, "files_changed": tuple(changed[:MAX_REPORTED_FILES])}
+            raise
         finally:
-            store = runtime._effective_todo_store()
-            clear_session = getattr(store, "clear_session", None)
-            if callable(clear_session):
-                clear_session(real_id)
+            if not terminal:
+                with contextlib.suppress(Exception):
+                    await emit("turn.failed", {
+                        "error": redact_secrets(str(crash))[:500] if crash else "interrupted", "iterations": 0})
+            with contextlib.suppress(Exception):
+                lease.release()
+        changed, metrics = self._external_report(workspace, before, after, result)
+        if crash is not None or result is None:
+            return self._failed(
+                spec, session, f"{type(crash).__name__}: {crash}" if crash else "no result",
+                metrics=metrics, files_changed=tuple(changed[:MAX_REPORTED_FILES]))
+        outcome = SubagentOutcome(
+            agent=spec.agent, session_id=spec.session_id, status=result.status,
+            text=result.text, is_error=result.is_error,
+            usage=(_reported_usage(getattr(result, "usage", None)) if metrics.get("usage") == "reported" else None)
+            or SubagentUsage(),
+            stop_reason=_EXTERNAL_STOP_REASON.get(result.status, "error"),
+            dropped_tools=tuple(spec.dropped_tools), clamped=bool(spec.clamped), tier=spec.tier,
+            requested_tier=spec.requested_tier, error=result.error, metrics=metrics,
+            files_changed=tuple(changed[:MAX_REPORTED_FILES]),
+            models=_child_models(session),
+        )
+        if outcome.status in ("failed", "interrupted"):
+            outcome = self._with_handoff(outcome, spec, session)
+        return outcome
 
     def _with_handoff(
         self, result: SubagentOutcome, spec: Any, session: Any, *, detail: str = ""
@@ -3012,7 +2985,6 @@ class Runtime:
         permissions: PermissionEngine | None = None,
         tool_factory: Callable[..., ToolTurn] | None = None,
         job_registry: Any | None = None,
-        todo_store: Any | None = None,
         extensions: ExtensionManager | None = None,
         owns_extensions: bool | None = None,
         skills: SkillManager | None = None,
@@ -3064,15 +3036,14 @@ class Runtime:
         # Tool infrastructure. A caller may inject a ready ToolManager, a
         # PermissionEngine, or a full per-turn factory; otherwise the runtime
         # builds a fresh ToolManager snapshot per turn while sharing one owned
-        # JobRegistry/TodoStore across turns (so shell jobs and todos survive
-        # between turns without a mutable runtime-global manager).
+        # JobRegistry across turns (so shell jobs survive between turns
+        # without a mutable runtime-global manager).
         self._tools = tools
         self._permissions = permissions
         self._tool_factory = tool_factory
         self._job_registry = job_registry
         #: ``escalate`` reports of running children, keyed by logical child session id.
         self._child_escalations: dict[str, list[str]] = {}
-        self._todo_store = todo_store
         #: One broker for every root session's operator questions. Answers are
         #: routed by (root session, question id), never by turn or agent alone.
         self._questions = QuestionBroker(timeout_s=ANSWER_WINDOW_S)
@@ -3089,10 +3060,17 @@ class Runtime:
             self._owned_tools.append(tools)
         if tools is None and tool_factory is None:
             if self._job_registry is None:
-                self._job_registry = JobRegistry(environ=self._environ)
+                self._job_registry = JobRegistry(
+                    environ=self._environ,
+                    event_sink=self._emit_job_event,
+                    completion_sink=self._deliver_job_completion,
+                    claim_sink=self._retract_job_completion,
+                    # Rooted like the session database and locks: the daemon's
+                    # ``home`` override (or ``$NEXUS_HOME``) plus the project key.
+                    state_dir=project_state_dir(self.workspace, self._home)
+                    / OWNERS_DIRNAME,
+                )
                 self._owns_job_registry = True
-            if self._todo_store is None:
-                self._todo_store = TodoStore()
 
         # Load the effective config at most once during construction: the
         # provider set and the router must agree on one snapshot. Per-turn
@@ -3237,13 +3215,8 @@ class Runtime:
         self._assembler._agents = self._agents
         self._hooks = self._build_hook_manager(initial, hooks, owns_hooks)
         self._child_sessions: _ChildSessionFacade | None = None
-        #: Background subagent runs that outlive a turn, one ``RootAgents`` per root session.
+        #: One subagent tree budget per root session, its window reset each root turn.
         self.agent_pool = AgentPool()
-        # Plain-queue report delivery for a runtime without a host facade (tests,
-        # embedders); the facade replaces all three with its supervised versions.
-        self.agent_pool.report_sink = self._enqueue_report
-        self.agent_pool.root_active = self._root_turn_active
-        self.agent_pool.report_backlog = self._queued_report_count
         from .agents.worktrees import WorktreeService
 
         # One canonical registry per active parent checkout. Child runtimes
@@ -3316,6 +3289,8 @@ class Runtime:
                 ensure_ready=self.ensure_started,
                 turn_cleanup=self._clear_activation,
                 hooks=self._session_hooks,
+                busy_check=self.session_has_active_jobs,
+                job_probe=self.shell_job_may_be_live,
             )
             self._owns_sessions = True
         else:
@@ -3334,6 +3309,8 @@ class Runtime:
                 ensure_ready=self.ensure_started,
                 turn_cleanup=self._clear_activation,
                 hooks=self._session_hooks,
+                busy_check=self.session_has_active_jobs,
+                job_probe=self.shell_job_may_be_live,
             )
             self._owns_sessions = True
 
@@ -3395,11 +3372,6 @@ class Runtime:
     def job_registry(self) -> Any | None:
         """The runtime-owned shell job registry (shared across turns)."""
         return self._job_registry
-
-    @property
-    def todo_store(self) -> Any | None:
-        """The runtime-owned todo store (keyed by session and agent id)."""
-        return self._todo_store
 
     @property
     def questions(self) -> QuestionBroker:
@@ -3596,9 +3568,7 @@ class Runtime:
                 tools=self._filter_web_catalog(
                     config, ToolManager._builtin_catalog()
                 ),
-                job_registry=self._job_registry,
-                todo_store=self._effective_todo_store(),
-            )
+                job_registry=self._job_registry,            )
             self._track_tool_manager(manager)
         specs = {spec.name: spec for spec in manager.specs}
         rows: list[dict[str, Any]] = []
@@ -3756,8 +3726,6 @@ class Runtime:
             turn_runner = getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None)
             if turn_runner is not None:
                 selectable_tools.add("subagent")
-                if getattr(turn_runner, "persistent", False) is True:
-                    selectable_tools.update(SUBAGENT_CONTROL_TOOLS)
             if agent is not None:
                 from .tools.bundles import BUNDLES
 
@@ -3825,10 +3793,6 @@ class Runtime:
 
                 task_tool = build_task_tool(runner)
                 tool_definitions[task_tool.name] = task_tool
-                from .tools.builtin.subagent_control import build_agent_control_tools
-
-                for control in build_agent_control_tools(runner):
-                    tool_definitions[control.name] = control
 
             def tool_row(schema, *, enabled, config_enabled):
                 tool = tool_definitions.get(schema.name)
@@ -4113,28 +4077,7 @@ class Runtime:
         self, session_id: str, *, create: bool = True, recover: bool = True
     ) -> Session:
         """Open (and migrate, and recover) a session ready for ``send``."""
-        session = self._sessions.open(session_id, create=create, recover=recover)
-        self._restore_todos(session)
-        return session
-
-    def _restore_todos(self, session: Any) -> None:
-        """Replay durable todo state for one actual session log, if available."""
-        store = self._effective_todo_store()
-        replay = getattr(store, "replay", None)
-        if callable(replay):
-            replay(session)
-
-    def _effective_todo_store(self) -> Any | None:
-        """Return the shared store, borrowing it from injected tools if needed.
-
-        Borrowing the store does not transfer ownership of the injected manager
-        or its services to this runtime or to managers rebuilt for a turn.
-        """
-        if self._todo_store is not None:
-            return self._todo_store
-        if self._tools is not None:
-            return getattr(self._tools, "todo_store", None)
-        return None
+        return self._sessions.open(session_id, create=create, recover=recover)
 
     # -- per-session model selection ---------------------------------------
 
@@ -4397,6 +4340,142 @@ class Runtime:
             provider_name=selection.provider,
         )
 
+    def session_has_active_jobs(self, session_id: str) -> bool:
+        """Whether ``session_id`` still owns a running shell job (this runtime only).
+
+        The session manager's eviction/archive guard: a job outlives its tool
+        call, so its session must stay open until the job ends or is stopped.
+        """
+        active = getattr(self._job_registry, "active", None)
+        if not callable(active) or not isinstance(session_id, str):
+            return False
+        return bool(active(session_id=session_id))
+
+    def shell_job_may_be_live(self, session_id: str, job_id: str) -> bool:
+        """Whether a started ``shell`` job may still be running (fail closed).
+
+        The session manager's probe for restart recovery: ``False`` only when this
+        runtime's registry proves nobody owns the job any more. A registry without
+        recovery support (injected, or no state directory) answers ``True``.
+        """
+        probe = getattr(self._job_registry, "job_may_be_live", None)
+        if not callable(probe):
+            return True
+        return bool(probe(session_id, job_id))
+
+    async def recover_shell_orphans(self) -> dict[str, int] | None:
+        """Stop the process groups a dead daemon left behind (call once at start).
+
+        Verified, bounded and best effort (see ``tools/builtin/_job_recovery.py``).
+        Returns plain counts for the daemon log, or ``None`` when recovery is off.
+        """
+        recover = getattr(self._job_registry, "recover_orphans", None)
+        if not callable(recover):
+            return None
+        result = await recover()
+        if result is None:
+            return None
+        return {
+            "live_owners": result.live_owners,
+            "dead_owners": result.dead_owners,
+            "invalid": result.invalid,
+            "jobs": result.jobs,
+            "gone": result.gone,
+            "terminated": result.terminated,
+            "killed": result.killed,
+            "failed": result.failed,
+            "unverified": result.unverified,
+        }
+
+    def has_active_shell_jobs(self) -> bool:
+        """Whether any session has a running shell job (the daemon idle guard)."""
+        probe = getattr(self._job_registry, "has_active", None)
+        return bool(probe()) if callable(probe) else False
+
+    def persistent_shell_jobs(self, limit: int = 16) -> tuple[int, list[dict[str, Any]]]:
+        """``(total, rows)`` for the running persistent jobs (daemon status, orphan policy).
+
+        Plain, bounded rows: ids, a short redacted command, cwd, pid, start time.
+        """
+        probe = getattr(self._job_registry, "persistent_jobs", None)
+        if not callable(probe):
+            return 0, []
+        jobs = probe()
+        rows = [
+            {
+                "session": key,
+                "job_id": job.job_id,
+                "command": redact_secrets(job.command)[:120],
+                "cwd": str(job.cwd),
+                "pid": job.pid,
+                "started_at": job.created_at,
+            }
+            for key, job in jobs[:limit]
+        ]
+        return len(jobs), rows
+
+    def shell_orphan_seconds(self) -> float:
+        """``tools.shell_orphan_s``: idle seconds before persistent jobs are stopped (0 = never)."""
+        try:
+            value = float(self._load_config().v2.tools.shell_orphan_s)
+        except Exception:  # noqa: BLE001 - an unreadable config must not stop jobs
+            return 0.0
+        return value if value > 0 else 0.0
+
+    async def stop_persistent_shell_jobs(self, reason: str) -> int:
+        """Stop every running persistent job, recording ``reason`` on its exit event."""
+        stopper = getattr(self._job_registry, "stop_persistent", None)
+        return int(await stopper(reason)) if callable(stopper) else 0
+
+    def _emit_job_event(
+        self, session_id: str, event_type: str, data: dict[str, Any]
+    ) -> None:
+        """Registry sink: record a ``shell.job_*`` event on the owning live session.
+
+        Best effort by design. A session with no live handle (a sub-agent's, a
+        deleted one) records nothing; the registry itself stays the live truth.
+        """
+        emit = getattr(self._sessions, "emit_session_event", None)
+        if not callable(emit):
+            return
+        with contextlib.suppress(Exception):
+            emit(session_id, event_type, data)
+
+    #: Host seam for a recorded completion: ``(session_id, admission)``. The host
+    #: facade installs it to start a turn for an idle session; without one the
+    #: notification simply waits in the session queue for the next turn.
+    job_completion_notifier: Callable[[str, Any], None] | None = None
+
+    def _deliver_job_completion(
+        self, session_id: str, data: dict[str, Any], text: str
+    ) -> bool:
+        """Registry sink: record the exit and queue its notification atomically.
+
+        Returns whether the owning live session took it. ``False`` makes the
+        registry record the exit as a plain ``shell.job_exited`` instead.
+        """
+        record = getattr(self._sessions, "record_job_completion", None)
+        if not callable(record):
+            return False
+        try:
+            limit = int(self._load_config().v2.tools.shell_max_auto_wakes)
+        except Exception:  # noqa: BLE001 - fall back to the default cap
+            limit = 10
+        admission = record(session_id, data, text, max_auto_wakes=limit)
+        if admission is None:
+            return False
+        notifier = self.job_completion_notifier
+        if notifier is not None and getattr(admission, "wake", False):
+            with contextlib.suppress(Exception):
+                notifier(session_id, admission)
+        return True
+
+    def _retract_job_completion(self, session_id: str, job_id: str) -> None:
+        retract = getattr(self._sessions, "retract_job_completion", None)
+        if callable(retract):
+            with contextlib.suppress(Exception):
+                retract(session_id, job_id)
+
     async def close_session_jobs(self, session_id: str) -> bool:
         """Terminate and reap the shell jobs owned by one session.
 
@@ -4421,7 +4500,19 @@ class Runtime:
         The ``SessionEnd`` hook runs against the pinned manifest and its events
         are persisted before the session bus closes. Idempotent; a session with
         no live handle returns ``False``.
+
+        The session's shell jobs are stopped **first**: their ``shell.job_exited``
+        events need the live handle, and the manager refuses to evict a session
+        that still has running jobs.
+
+        A session the manager would refuse to close (active turn, live viewers)
+        raises ``SessionBusy`` **before** any job is stopped, so a refused close
+        leaves its jobs running.
         """
+        precheck = getattr(self._sessions, "ensure_closable", None)
+        if callable(precheck):
+            precheck(session_id)
+        await self.close_session_jobs(session_id)
         closer = getattr(self._sessions, "aclose_session", None)
         closed = False
         if callable(closer):
@@ -4432,7 +4523,6 @@ class Runtime:
                 with contextlib.suppress(Exception):
                     await handle.aclose()
                 closed = True
-        await self.close_session_jobs(session_id)
         self.agent_pool.discard_if_idle(session_id)
         return closed
 
@@ -4487,6 +4577,37 @@ class Runtime:
         value = getattr(section, "auto_archive_days", 2)
         return value if type(value) is int and 0 <= value <= 3650 else 14
 
+    def auto_archive_idle_seconds(self) -> int:
+        """Idle seconds before a session is auto-archived; ``0`` means disabled.
+
+        The legacy ``auto_archive_days = 0`` still disables the sweep.
+        """
+        section = getattr(getattr(self._load_config(), "v2", None), "sessions", None)
+        days = getattr(section, "auto_archive_days", 2)
+        seconds = getattr(section, "auto_archive_idle_seconds", 3600)
+        if days == 0:
+            return 0
+        if type(seconds) is int and 0 <= seconds <= 3650 * 86400:
+            return seconds
+        return 3600
+
+    def usage_refresh_seconds(self) -> int:
+        """Seconds between background plan-usage reads, from live config (so a Settings save applies at once)."""
+        from .config.schema import (
+            DEFAULT_USAGE_REFRESH_SECONDS,
+            MAX_USAGE_REFRESH_SECONDS,
+            MIN_USAGE_REFRESH_SECONDS,
+        )
+
+        try:
+            section = getattr(getattr(self._load_config(), "v2", None), "models", None)
+            value = getattr(section, "usage_refresh_seconds", DEFAULT_USAGE_REFRESH_SECONDS)
+        except Exception:  # noqa: BLE001 - a bad config falls back to the default cadence
+            return DEFAULT_USAGE_REFRESH_SECONDS
+        if type(value) is int and MIN_USAGE_REFRESH_SECONDS <= value <= MAX_USAGE_REFRESH_SECONDS:
+            return value
+        return DEFAULT_USAGE_REFRESH_SECONDS
+
     def update_check_enabled(self) -> bool:
         """Whether ``[updates] check`` allows the daily release lookup."""
         section = getattr(getattr(self._load_config(), "v2", None), "updates", None)
@@ -4527,10 +4648,6 @@ class Runtime:
         Unknown profiles fail closed here, before the session appends anything.
         An injected ``tool_factory`` fully overrides this path (tests).
         """
-        # Runtime.sessions is public, so callers can bypass Runtime.session().
-        # Reconcile again at the actual turn boundary; TodoStore.replay only
-        # applies log revisions newer than memory and is therefore safe during
-        # an active runtime.
         if _is_manager_session(session):
             # Explicit manager branch, before any injected factory, manager or
             # engine: a manager turn gets its own eight-tool catalog and a fresh
@@ -4538,7 +4655,6 @@ class Runtime:
             return self._make_manager_tool_turn(
                 config=config, session=session, turn_id=turn_id, attended=attended
             )
-        self._restore_todos(session)
         if self._tool_factory is not None:
             return self._tool_factory(
                 config=config,
@@ -4602,9 +4718,7 @@ class Runtime:
                     config,
                     workspace=self.workspace,
                     tools=filtered,
-                    job_registry=self._job_registry,
-                    todo_store=self._effective_todo_store(),
-                    path_guard=manager.path_guard,
+                    job_registry=self._job_registry,                    path_guard=manager.path_guard,
                 )
                 self._track_tool_manager(manager)
         if manager is None:
@@ -4620,9 +4734,7 @@ class Runtime:
                 config,
                 workspace=self.workspace,
                 tools=catalog,
-                job_registry=self._job_registry,
-                todo_store=self._effective_todo_store(),
-            )
+                job_registry=self._job_registry,            )
             self._track_tool_manager(manager)
         if (
             agent_definition is not None
@@ -4637,9 +4749,7 @@ class Runtime:
                 workspace=self.workspace,
                 tools=(*manager.tools, build_task_tool(None)),
                 restrict=(*original_names, "subagent"),
-                job_registry=self._job_registry,
-                todo_store=self._effective_todo_store(),
-                path_guard=manager.path_guard,
+                job_registry=self._job_registry,                path_guard=manager.path_guard,
             )
             self._track_tool_manager(manager)
         if agent_definition is not None:
@@ -4663,9 +4773,7 @@ class Runtime:
                     workspace=self.workspace,
                     tools=manager.tools,
                     restrict=tuple(name for name in manager.names if name in selected.selected),
-                    job_registry=self._job_registry,
-                    todo_store=self._effective_todo_store(),
-                    path_guard=manager.path_guard,
+                    job_registry=self._job_registry,                    path_guard=manager.path_guard,
                 )
                 self._track_tool_manager(manager)
             else:
@@ -4766,11 +4874,9 @@ class Runtime:
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
             if static_runner is not None and "subagent" in manager.names:
-                from .tools.builtin.subagent_control import build_agent_control_tools
                 from .tools.builtin.task import build_task_tool
 
                 roster_digest = _roster_digest(static_runner)
-                controls = build_agent_control_tools(static_runner)
                 manager = ToolManager(
                     config,
                     workspace=self.workspace,
@@ -4779,12 +4885,9 @@ class Runtime:
                             build_task_tool(static_runner) if tool.name == "subagent" else tool
                             for tool in manager.tools
                         ),
-                        *controls,
                     ),
-                    restrict=(*manager.names, *(tool.name for tool in controls)),
-                    job_registry=self._job_registry,
-                    todo_store=self._effective_todo_store(),
-                    path_guard=manager.path_guard,
+                    restrict=manager.names,
+                    job_registry=self._job_registry,                    path_guard=manager.path_guard,
                 )
                 self._track_tool_manager(manager)
             runner = self._make_subagent_runner(
@@ -4894,7 +4997,6 @@ class Runtime:
             tools=build_manager_catalog(port),
             restrict=MANAGER_TOOL_NAMES,
             job_registry=self._job_registry,
-            todo_store=self._effective_todo_store(),
         )
         self._track_tool_manager(manager)
         engine = PermissionEngine(
@@ -4991,9 +5093,7 @@ class Runtime:
             workspace=self.workspace,
             tools=catalog,
             restrict=restrict,
-            job_registry=self._job_registry,
-            todo_store=self._effective_todo_store(),
-            path_guard=path_guard or PathGuard(
+            job_registry=self._job_registry,            path_guard=path_guard or PathGuard(
                 self.workspace,
                 write_roots=tuple(config.v2.permissions.write_roots) if config.v2 else ("./",),
                 read_denyroots=tuple(config.v2.permissions.read_denyroots) if config.v2 else (),
@@ -5031,7 +5131,7 @@ class Runtime:
                 manager = ToolManager(
                     config, workspace=self.workspace, tools=(*manager.tools, code_tool),
                     restrict=restrict, job_registry=self._job_registry,
-                    todo_store=self._effective_todo_store(), path_guard=manager.path_guard,
+                    path_guard=manager.path_guard,
                 )
         self._track_tool_manager(manager)
         return manager
@@ -5193,7 +5293,7 @@ class Runtime:
         """
         if manager is self._tools:
             return
-        if manager._owns_job_registry or manager._owns_todo_store:
+        if manager._owns_job_registry:
             if not any(manager is owned for owned in self._owned_tools):
                 self._owned_tools.append(manager)
         else:
@@ -5378,6 +5478,8 @@ class Runtime:
             return OllamaProvider(api=api, **kwargs)
         if kind == ADAPTER_XAI:
             return self._construct_xai(name, section, api, auth, kwargs)
+        if kind == ADAPTER_NVIDIA:
+            return self._construct_nvidia(name, api, auth, kwargs)
         if kind in (ADAPTER_OPENAI, OPENAI_COMPATIBLE):
             if not api:
                 api = "chat" if kind == OPENAI_COMPATIBLE else "responses"
@@ -5417,6 +5519,27 @@ class Runtime:
                 provider.name = name
             return provider
         return None
+
+    def _construct_nvidia(self, name: str, api: Any, auth: Any, kwargs: dict[str, Any]) -> Provider:
+        """Build the NVIDIA preset on Chat Completions.
+
+        The key is a pasted one (``auth = "keychain"``), an ``api_key`` reference
+        or, with neither, ``${env:NVIDIA_API_KEY}``. Other sign-ins are refused.
+        """
+        from .model.providers.nvidia import NvidiaProvider
+
+        if auth not in (None, "keychain"):
+            raise ConfigError(f"providers.{name}: NVIDIA connects with an API key "
+                              "(NVIDIA_API_KEY or a key pasted in Settings → Providers)")
+        if api not in (None, "chat"):
+            raise ConfigError(f"providers.{name}: NVIDIA is served over Chat Completions; use api = \"chat\"")
+        if auth == "keychain":
+            from .auth.api_key import StoredKeyAuth
+            factory = self._api_key_auth_factory or StoredKeyAuth
+            kwargs.update(api_key=None, auth_headers=factory(name, profile="default"))
+        provider = NvidiaProvider(api=api, **kwargs)
+        provider.name = name
+        return provider
 
     def _construct_xai(
         self, name: str, section: Any, api: Any, auth: Any, kwargs: dict[str, Any]
@@ -5829,7 +5952,6 @@ class Runtime:
             # builtin; include it so a role may declare it without a false
             # ``unknown_tool`` diagnostic.
             known_tools.add("subagent")
-            known_tools.update(SUBAGENT_CONTROL_TOOLS)
             manager = AgentManager.for_workspace(
                 self.workspace,
                 home=self._home,
@@ -6034,68 +6156,35 @@ class Runtime:
                     names.add(name)
         return tuple(sorted(names))
 
-    async def _enqueue_report(self, batch: ReportBatch) -> bool:
-        """Default report sink: queue the batch as a ``steer`` input, no wake.
-
-        A running root consumes it at its next iteration boundary; an idle root
-        keeps it queued until its next turn. The host facade installs a sink that
-        also wakes the root (plan 3.1).
-        """
-        handle = self._sessions.open(batch.root_session, create=False, recover=False)
-        handle.enqueue(batch.render(), mode="steer", origin=batch.origin())
-        return False
-
-    def _root_turn_active(self, session_id: str) -> bool:
-        handle = self._sessions.open(session_id, create=False, recover=False)
-        return bool(getattr(handle, "active", False))
-
-    def _queued_report_count(self, session_id: str) -> int:
-        handle = self._sessions.open(session_id, create=False, recover=False)
-        return int(getattr(handle, "queued_report_count", 0))
-
-    def _root_agents(self, session_id: str, section: Any = None) -> Any:
-        """The pool entry for a root session, wired to its event port and live set."""
-        from .session.session import register_live_agent, unregister_live_agent
-
-        def port(event: Event) -> Any:
-            handle = self._sessions.open(session_id, create=False, recover=False)
-            return handle.emit_agent_event(event)
-
-        def live(agent_id: str, running: bool) -> None:
-            (register_live_agent if running else unregister_live_agent)(session_id, agent_id)
-
-        def history() -> Any:
-            handle = self._sessions.open(session_id, create=False, recover=False)
-            return handle.read().events()
-
-        limits = ReportLimits.from_section(section) if section is not None else None
-        return self.agent_pool.root(
-            session_id, event_port=port, live_hook=live, limits=limits, history=history
-        )
-
     async def close_agent(
         self, session_id: str, agent_id: str, *, reason: str = "", by: str = "user"
     ) -> tuple[bool, str]:
-        """Stop one subagent of a root session for good (host ``AgentClose``).
+        """Host ``AgentClose``, kept for wire compatibility. Returns ``(closed, message)``.
 
-        A running child is cancelled first (its own token only), then closed; an
-        idle one is just closed. The children are rebuilt from the root log when
-        this process does not know them yet. Returns ``(closed, message)``.
+        Subagents are foreground-only, so a child is closed once its run ends:
+        closing a running child cancels that child alone (like ``AgentCancel``),
+        and a child that already ended, including a legacy idle one from an
+        older release, has nothing left to close. Nothing is written to the log.
+        ``session_id`` is accepted for the wire shape; the host checks that the
+        agent belongs to it.
         """
-        section = self._agents_section(self._load_config())
-        root = self._root_agents(session_id, section)
-        root.ensure_rebuilt()
-        result = await root.stop(agent_id, by=by, reason=reason)
-        return result.stopped, result.message
+        if cancel_child(agent_id, (reason or f"closed by {by}")[:200]):
+            return True, (
+                f"Cancelled subagent {agent_id}; its parent turn continues. "
+                "Subagents end with their run, so it is closed."
+            )
+        return True, (
+            f"Subagent {agent_id} is not running. Subagents end with their run, "
+            "so there is nothing left to close."
+        )
 
     def _turn_subagent_budget(
         self, session_id: str, turn_id: str, config: Config | None
     ) -> Any | None:
         """The root session's pool-owned budget, its window reset once per root turn.
 
-        Concurrency and the live-child count span turns (a background child
-        outlives its turn); tokens, cost and fan-out reset at each root turn
-        start, as the per-turn budget did.
+        Concurrency spans turns (a cancelled turn's children may still be winding
+        down); tokens, cost and fan-out reset at each root turn start.
         """
         if self._agents is None:
             return None
@@ -6106,17 +6195,16 @@ class Runtime:
         signature = tuple(
             getattr(section, name, None)
             for name in ("max_concurrent", "max_depth", "max_fanout", "token_budget",
-                         "cost_budget", "max_live")
+                         "cost_budget")
         )
-        return self._root_agents(session_id, section).budget_window(
+        return self.agent_pool.budget_window(
+            session_id,
             turn_id,
             signature=signature,
-            factory=lambda: self._new_subagent_budget(effective, max_live=True),
+            factory=lambda: self._new_subagent_budget(effective),
         )
 
-    def _new_subagent_budget(
-        self, config: Config | None, *, max_live: bool = False
-    ) -> Any | None:
+    def _new_subagent_budget(self, config: Config | None) -> Any | None:
         """Build the turn-scoped subagent tree budget, or ``None``.
 
         One budget per turn (shared across iterations, children, and
@@ -6138,9 +6226,6 @@ class Runtime:
                 max_fanout=getattr(section, "max_fanout", 16),
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
-                # Only the session-owned budget bounds held children; a code-mode
-                # or one-off budget has no live cap.
-                max_live=getattr(section, "max_live", None) if max_live else None,
             )
         except Exception:  # noqa: BLE001 - an invalid config disables the budget
             return None
@@ -6295,40 +6380,28 @@ class Runtime:
                 worktree_root_for=self._owned_worktree_root_for,
                 runtime_supports_workspace=runtime_supports_workspace,
                 worktree_scope=worktree_scope,
-                pool=self._root_agents(parent_session or session_id, section),
-                continuation_blocker=self._continuation_blocker,
+                stop_child_jobs=self._stop_child_jobs,
             )
         except Exception:  # noqa: BLE001 - an invalid agents config disables Task
             return None
 
-    def _continuation_blocker(self, model: str | None, provider: str | None) -> str | None:
-        """Why a child on this route could never be continued, else ``None``.
+    async def _stop_child_jobs(self, child_session_id: str) -> list[str]:
+        """Stop the shell jobs a child left running; return their ids.
 
-        Mirrors the route decision ``_ChildRuntime`` makes: Claude Code and
-        Antigravity workers run one assignment per session (the Agent SDK backend
-        for ``claude-code`` is a normal Nexus child and continues like one).
+        Quiet: the child's report lists them, no notification is queued.
         """
-        v2 = getattr(self._config, "v2", None)
-        sections = getattr(v2, "providers", None) or {}
-        sdk_backend = getattr(getattr(v2, "models", None), "claude_code_subagent_backend", "worker") == "sdk"
-        reference = str(model or "")
-        if reference in self._tiers.order:
-            reference = self._external_tier_route(reference, claude=not sdk_backend) or reference
-        head, sep, _tail = reference.partition("/")
-        provider_name = head if sep else provider
-        if not provider_name:
-            return None
-        kind = Runtime._adapter_kind(provider_name, sections.get(provider_name))
-        if kind == ADAPTER_ANTIGRAVITY:
-            label = _ANTIGRAVITY_LABEL
-        elif kind == ADAPTER_CLAUDE_CODE and not sdk_backend:
-            label = "Claude Code"
-        else:
-            return None
-        return (
-            f"{label} workers run one assignment per session; start a new subagent and "
-            "put what it needs from the report in the prompt"
-        )
+        registry = self._job_registry
+        active = getattr(registry, "active", None)
+        if not callable(active) or not child_session_id:
+            return []
+        stopped: list[str] = []
+        for job in active(session_id=child_session_id):
+            result = await registry.kill(
+                job.job_id, session_id=child_session_id, quiet=True
+            )
+            if result.outcome == "killed":
+                stopped.append(job.job_id)
+        return stopped
 
     def _worktree_root_for(self, workspace: str | Path) -> Path:
         """Resolve one stable, Runtime-owned registry root per parent checkout."""
@@ -6903,9 +6976,7 @@ class Runtime:
             tools=catalog,
             restrict=(*spec.tools, "escalate"),
             path_guard=path_guard,
-            job_registry=self._job_registry,
-            todo_store=self._effective_todo_store(),
-        )
+            job_registry=self._job_registry,        )
         self._track_tool_manager(manager)
         return manager
 
@@ -7281,10 +7352,7 @@ class Runtime:
         if self._closed:
             return
         self._closed = True
-        # Background children first: cancel them and drain their tasks while the
-        # session handles and child sessions they write to are still open.
-        with contextlib.suppress(Exception):
-            await self.agent_pool.aclose()
+        self.agent_pool.clear()
         await self.voice.shutdown()
         code_runner = getattr(self, "_code_runner", None)
         if code_runner is not None:

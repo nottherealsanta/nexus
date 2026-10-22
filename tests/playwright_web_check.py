@@ -377,9 +377,9 @@ async def main() -> None:
         socket = root / "daemon.sock"
 
         def runtime_factory(path: Path, **_kwargs: object) -> Runtime:
-            return Runtime(path, config=config, providers={"scripted": provider})
+            return Runtime(path, config=config, providers={"scripted": provider}, home=root / "home")
 
-        daemon = Daemon(workspace, socket_path=socket, runtime_factory=runtime_factory)
+        daemon = Daemon(workspace, socket_path=socket, runtime_factory=runtime_factory, home=root / "home")
         task = asyncio.create_task(daemon.serve_forever())
         terminal: UDSClient | None = None
         try:

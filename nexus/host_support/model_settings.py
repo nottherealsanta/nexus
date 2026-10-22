@@ -14,6 +14,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..config.schema import (
+    DEFAULT_USAGE_REFRESH_SECONDS,
+    MAX_USAGE_REFRESH_SECONDS,
+    MIN_USAGE_REFRESH_SECONDS,
+)
 from ..errors import ConfigError
 from ..model.registry import ADAPTER_ANTIGRAVITY, ADAPTER_CLAUDE_CODE, normalize_adapter_kind
 from ..model.request import ModelRequest
@@ -30,6 +35,8 @@ __all__ = [
     "tier_reset",
     "tier_rows",
     "tier_set",
+    "usage_refresh_settings",
+    "usage_refresh_settings_set",
 ]
 
 #: References one tier may list.
@@ -356,6 +363,22 @@ async def session_title_settings_set(
     if updates:
         _write(runtime, tuple(updates))
     return session_title_settings(runtime)
+
+
+def usage_refresh_settings(runtime: object) -> dict[str, Any]:
+    """``{seconds, minimum, maximum}``: the effective background usage refresh interval."""
+    reader = getattr(runtime, "usage_refresh_seconds", None)
+    seconds = reader() if callable(reader) else DEFAULT_USAGE_REFRESH_SECONDS
+    return {"seconds": seconds, "minimum": MIN_USAGE_REFRESH_SECONDS, "maximum": MAX_USAGE_REFRESH_SECONDS}
+
+
+async def usage_refresh_settings_set(runtime: object, seconds: int) -> dict[str, Any]:
+    """Write ``[models] usage_refresh_seconds``; the running poll reads it on its next tick."""
+    if type(seconds) is not int or not MIN_USAGE_REFRESH_SECONDS <= seconds <= MAX_USAGE_REFRESH_SECONDS:
+        raise ConfigError(
+            f"usage refresh must be a whole number of seconds from {MIN_USAGE_REFRESH_SECONDS} to {MAX_USAGE_REFRESH_SECONDS}")
+    _write(runtime, (("models", "usage_refresh_seconds", seconds),))
+    return usage_refresh_settings(runtime)
 
 
 #: Shown beside the toggle: what it does and what it does not.

@@ -17,6 +17,7 @@ SUBAGENT_TOOLS = frozenset({"task", "subagent"})
 
 #: tool name -> (past verb, present verb, singular noun, plural noun)
 CATEGORIES = {
+    "shell": ("Ran", "Running", "command", "commands"),
     "bash": ("Ran", "Running", "command", "commands"),
     "run": ("Ran", "Running", "command", "commands"),
     "read": ("Read", "Reading", "file", "files"),
@@ -145,6 +146,7 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui, trai
     if not any(role in {"tool", "change"} for *_, role in pending):
         return list(pending)
     from ...ui_support.timeline import diff_sections
+    from ...ui_support.tool_signal import closed_summary
     from .transcript_data import tool_presentation
     seq, rank, first, *_ = pending[0]
     group_id = turn.id + ":activity:" + first["id"]
@@ -168,9 +170,14 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui, trai
             if tool.provenance and heading_full:
                 heading_full += f" · {tool.provenance}"
             start_ms, end_ms = _span_ms(block, tool)
+            # Closed rows say the target, not the output: `Read path (lines 1–9)`, `Bash cmd`.
+            concise = None if tool.diff or tool.provenance else closed_summary(tool)
             if name not in SUBAGENT_TOOLS:
+                target = heading.removeprefix(tool.name.title()).strip() if concise is None else concise
+                if concise is not None:
+                    summary = ""
                 member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
-                    "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else ""),
+                    "title": tool.name.title(), "text": target + (f" · {summary}" if summary else ""),
                     "started_ms": start_ms, "elapsed_ms": max(0, end_ms - start_ms) if start_ms and end_ms else 0}
             member = {**member, "members": diff_members[tool.call_id]}
         if member.get("status") == "running":

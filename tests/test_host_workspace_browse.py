@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from types import SimpleNamespace
 
@@ -90,6 +91,73 @@ async def test_directory_listing_honours_read_deny_roots(tmp_path, monkeypatch):
     root = await _facade(tmp_path).handle(p.DirectoryList())
     assert [row["name"] for row in root.entries] == ["open"]
     assert isinstance(await _facade(tmp_path).handle(p.DirectoryList(path="secret")), p.ErrorResult)
+
+
+async def test_file_preview_reads_text_through_the_host_and_redacts(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("print('héllo')\ntoken = abcdef123456\n")
+    result = await _facade(tmp_path).handle(p.FilePreview(path="src/a.py"))
+    assert isinstance(result, p.FilePreviewResult)
+    assert (result.path, result.status, result.truncated) == ("src/a.py", "text", False)
+    assert "héllo" in result.text and "abcdef123456" not in result.text
+    assert result.size == result.shown == len("print('héllo')\ntoken = abcdef123456\n".encode())
+
+
+async def test_file_preview_clips_and_never_splits_a_character(tmp_path):
+    (tmp_path / "big.txt").write_text("é" * 100)  # two bytes each
+    result = await _facade(tmp_path).handle(p.FilePreview(path="big.txt", max_bytes=51))
+    assert result.status == "text" and result.truncated
+    assert result.text == "é" * 25 and result.shown == 50 and result.size == 200
+    capped = await _facade(tmp_path).handle(p.FilePreview(path="big.txt", max_bytes=10**9))
+    assert capped.shown == 200 and not capped.truncated
+    for bad in (0, -1):
+        assert isinstance(await _facade(tmp_path).handle(p.FilePreview(path="big.txt", max_bytes=bad)), p.ErrorResult)
+    (tmp_path / "huge.txt").write_bytes(b"a" * (wb.MAX_PREVIEW_BYTES + 5))
+    huge = await _facade(tmp_path).handle(p.FilePreview(path="huge.txt", max_bytes=10**9))
+    assert huge.shown == wb.MAX_PREVIEW_BYTES and huge.truncated and huge.size == wb.MAX_PREVIEW_BYTES + 5
+
+
+async def test_file_preview_hides_binary_and_empty_files(tmp_path):
+    (tmp_path / "nul.bin").write_bytes(b"ab\x00cd")
+    (tmp_path / "latin.txt").write_bytes(b"caf\xe9 au lait")
+    (tmp_path / "empty.txt").write_bytes(b"")
+    for name in ("nul.bin", "latin.txt"):
+        result = await _facade(tmp_path).handle(p.FilePreview(path=name))
+        assert result.status == "binary" and result.text == "" and result.shown == 0 and result.message
+    empty = await _facade(tmp_path).handle(p.FilePreview(path="empty.txt"))
+    assert (empty.status, empty.text, empty.size) == ("empty", "", 0)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["", "..", "../x", "/etc/passwd", "a/../b", ".env", "src/.hidden", "a\\b", "a\x00b", "src", "link.txt", "dirlink/f.txt",
+     "missing.txt", "x" * 2000, ".git/config"],
+)
+async def test_file_preview_refuses_unsafe_paths(tmp_path, path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "f.txt").write_text("secret")
+    workspace = tmp_path / "ws"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / ".hidden").write_text("h")
+    (workspace / ".env").write_text("SECRET=1")
+    (workspace / "link.txt").symlink_to(outside / "f.txt")
+    (workspace / "dirlink").symlink_to(outside)
+    result = await _facade(workspace).handle(p.FilePreview(path=path))
+    assert isinstance(result, p.ErrorResult)
+    assert "secret" not in str(result)
+
+
+async def test_file_preview_refuses_credential_names_special_files_and_deny_roots(tmp_path, monkeypatch):
+    (tmp_path / "secret").mkdir()
+    (tmp_path / "secret" / "key.txt").write_text("k")
+    (tmp_path / "sk-abcdef123456.txt").write_text("k")
+    monkeypatch.setattr(wb, "_file_search_denied_roots", lambda runtime: ((tmp_path / "secret").resolve(),))
+    for path in ("secret/key.txt", "sk-abcdef123456.txt"):
+        assert isinstance(await _facade(tmp_path).handle(p.FilePreview(path=path)), p.ErrorResult)
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(tmp_path / "pipe")
+        assert isinstance(await _facade(tmp_path).handle(p.FilePreview(path="pipe")), p.ErrorResult)
 
 
 def test_normalize_relative_accepts_plain_paths():

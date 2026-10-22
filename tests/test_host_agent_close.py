@@ -1,8 +1,10 @@
-"""Host ``AgentClose``: close one child agent for good (``agent.stopped``).
+"""Host ``AgentClose``: kept on the wire; with foreground-only subagents it cancels.
 
-Modeled on ``tests/test_host_agent_cancel.py``: where cancel ends a run and leaves the
-child idle, close cancels a run in flight if there is one and then makes the child
-terminal, freeing its live slot.
+A subagent ends with its run, so closing a running child cancels that child
+alone (its parent turn and siblings continue, like ``AgentCancel``), and closing
+one that already ended is an idempotent no-op that writes nothing. Legacy idle
+children from the retired background mode are covered in
+``tests/test_subagent_continue.py``.
 """
 
 from __future__ import annotations
@@ -10,92 +12,49 @@ from __future__ import annotations
 import asyncio
 
 import msgspec
-from test_phase6_integration import wait_for
-from test_subagent_background import SPAWN, Routed, _config
+from test_phase6_integration import make_runtime, wait_for
 
 from nexus.host import HostFacade
 from nexus.host import protocol as p
 from nexus.model.providers.scripted import ScriptedProvider, Wait, text_response, tool_response
-from nexus.runtime import Runtime
-from nexus.view import fold
 
 
-def _runtime(tmp_path, provider):
-    return Runtime(tmp_path, config=_config(), providers={"scripted": provider})
-
-
-async def test_close_an_idle_child_records_agent_stopped_and_frees_the_slot(tmp_path):
-    provider = Routed([tool_response(SPAWN), text_response("done")], [text_response("child report")])
-    runtime = _runtime(tmp_path, provider)
+async def test_close_a_running_child_cancels_only_that_child(tmp_path):
+    never = asyncio.Event()
+    fast = asyncio.Event()
+    provider = ScriptedProvider(
+        tool_response(
+            ("slow-call", "subagent", {"prompt": "slow"}),
+            ("fast-call", "subagent", {"prompt": "fast"}),
+        ),
+        [Wait(event=never), *text_response("slow report")],
+        [Wait(event=fast), *text_response("fast report")],
+        text_response("root done"),
+    )
+    runtime = make_runtime(tmp_path, provider)
     host = HostFacade(runtime)
     session = runtime.session("root")
-    [event async for event in session.send("go")]
-    [record] = list(runtime.agent_pool.get("root").records.values())
-    await asyncio.wait_for(record.task, 10)
-    budget = runtime.agent_pool.get("root").budget
-    assert record.state == "idle" and budget.live == 1
+    running = asyncio.create_task(session.send("go").__anext__())
+    await wait_for(lambda: len([e for e in session.events if e.type == "agent.spawned"]) == 2)
+    spawned = {e.data["agent"]["parent_call_id"]: e.data["agent"]["id"] for e in session.events
+               if e.type == "agent.spawned"}
 
+    result = await host.handle(p.AgentClose(session="root", agent_id=spawned["slow-call"], reason="enough"))
+    assert result.closed and "Cancelled subagent" in result.message
+    fast.set()
+    await running
+    await wait_for(lambda: any(e.type == "turn.completed" for e in session.events))
+
+    done = {e.data["agent"]["parent_call_id"]: e.data for e in session.events if e.type == "agent.completed"}
+    assert done["slow-call"]["status"] == "cancelled"
+    assert done["fast-call"]["status"] == "completed"
+    assert not [e for e in session.events if e.type == "agent.stopped"]
+
+    again = await host.handle(p.AgentClose(session="root", agent_id=spawned["slow-call"]))
+    assert again.closed and "nothing left to close" in again.message
     missing = await host.handle(p.AgentClose(session="root", agent_id="root/sub/99"))
     assert not missing.closed and "No such agent" in missing.message
-
-    result = await host.handle(p.AgentClose(session="root", agent_id=record.agent_id, reason="finished"))
-    assert result.closed and "Stopped subagent" in result.message
-    assert record.state == "stopped" and budget.live == 0
-    [stopped] = [e for e in session.events if e.type == "agent.stopped"]
-    assert stopped.data["by"] == "user" and stopped.data["reason"] == "finished"
-    agent = fold(session.events).agents[record.agent_id]
-    assert agent.stopped and agent.stopped_by == "user" and agent.stopped_reason == "finished"
-
-    again = await host.handle(p.AgentClose(session="root", agent_id=record.agent_id))
-    assert again.closed and "already stopped" in again.message
-    assert len([e for e in session.events if e.type == "agent.stopped"]) == 1
-    cancel = await host.handle(p.AgentCancel(session="root", agent_id=record.agent_id))
-    assert not cancel.cancelled and "AgentClose" in cancel.message
     await runtime.aclose()
-
-
-async def test_close_a_running_child_cancels_it_first_and_does_not_report_it(tmp_path):
-    never = asyncio.Event()
-    provider = Routed([tool_response(SPAWN), text_response("done")], [])
-    provider.child = ScriptedProvider([Wait(never), *text_response("never")])
-    runtime = _runtime(tmp_path, provider)
-    host = HostFacade(runtime)
-    session = runtime.session("root")
-    [event async for event in session.send("go")]
-    [record] = list(runtime.agent_pool.get("root").records.values())
-    await wait_for(lambda: record.state == "running")
-
-    result = await host.handle(p.AgentClose(session="root", agent_id=record.agent_id))
-    assert result.closed and "Cancelled and stopped" in result.message
-    assert record.state == "stopped" and record.task.done()
-    types = [e.type for e in session.events]
-    assert types.index("agent.completed") < types.index("agent.stopped")
-    completed = next(e for e in session.events if e.type == "agent.completed")
-    assert completed.data["status"] == "cancelled"
-    # The root asked for the stop: no report of the cancelled run is queued for it.
-    assert not [e for e in session.events if e.type == "input.queued"]
-    await runtime.aclose()
-
-
-async def test_close_after_a_restart_rebuilds_the_child_from_the_log(tmp_path):
-    provider = Routed([tool_response(SPAWN), text_response("done")], [text_response("child report")])
-    runtime = _runtime(tmp_path, provider)
-    session = runtime.session("root")
-    [event async for event in session.send("go")]
-    [record] = list(runtime.agent_pool.get("root").records.values())
-    await asyncio.wait_for(record.task, 10)
-    agent_id = record.agent_id
-    await runtime.aclose()
-
-    restarted = _runtime(tmp_path, ScriptedProvider(text_response("x")))
-    host = HostFacade(restarted)
-    assert restarted.agent_pool.get("root") is None
-    result = await host.handle(p.AgentClose(session="root", agent_id=agent_id))
-    assert result.closed
-    events = restarted.session("root").events
-    assert [e.data["by"] for e in events if e.type == "agent.stopped"] == ["user"]
-    assert restarted.agent_pool.get("root").get(agent_id).state == "stopped"
-    await restarted.aclose()
 
 
 async def test_agent_close_command_is_wire_serialisable():

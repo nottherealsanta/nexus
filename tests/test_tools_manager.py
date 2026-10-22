@@ -19,7 +19,6 @@ from nexus.core.cancel import CancelToken
 from nexus.errors import OperationCancelled
 from nexus.model.message import Text
 from nexus.tools.builtin._jobs import JobRegistry
-from nexus.tools.builtin.todo import TodoStore
 from nexus.tools.bundles import UnknownProfileError
 from nexus.tools.manager import (
     MAX_DISPLAY_CHARS,
@@ -53,8 +52,8 @@ EMPTY_SCHEMA: dict = {
 }
 
 ALL_BUILTINS = (
-    "read", "glob", "grep", "edit", "write", "apply_patch", "bash",
-    "todowrite", "question", "skill",
+    "read", "glob", "grep", "edit", "write", "apply_patch", "shell",
+    "question", "skill",
 )
 
 
@@ -188,7 +187,7 @@ def test_research_profile_is_read_only(tmp_path: Path):
         ),
         profile="research",
     )
-    assert m.names == ("read", "glob", "grep", "subagent", "todowrite", "question", "skill")
+    assert m.names == ("read", "glob", "grep", "subagent", "question", "skill")
     assert "apply_patch" not in m.names
 
 
@@ -208,8 +207,8 @@ def test_full_registered_catalog_profiles_do_not_implicitly_select_opt_ins(
     )
     coding = ToolManager(cfg(), workspace=tmp_path, tools=catalog)
     assert coding.names == (
-        "read", "glob", "grep", "edit", "write", "apply_patch", "bash", "subagent",
-        "todowrite", "question", "skill",
+        "read", "glob", "grep", "edit", "write", "apply_patch", "shell", "subagent",
+        "question", "skill",
     )
     assert all(name == name.lower() for name in coding.names)
 
@@ -217,7 +216,7 @@ def test_full_registered_catalog_profiles_do_not_implicitly_select_opt_ins(
         cfg(), workspace=tmp_path, tools=catalog, profile="research"
     )
     assert research.names == (
-        "read", "glob", "grep", "subagent", "todowrite", "question", "skill"
+        "read", "glob", "grep", "subagent", "question", "skill"
     )
     assert "apply_patch" not in research.names
     assert not any(tool.spec.mutates for tool in research.tools)
@@ -258,7 +257,7 @@ def test_chat_profile_has_no_tools(tmp_path: Path):
 
 def test_ops_profile_is_shell_only(tmp_path: Path):
     m = ToolManager(cfg(), workspace=tmp_path, profile="ops")
-    assert m.names == ("bash",)
+    assert m.names == ("shell",)
 
 
 def test_unknown_profile_fails_closed(tmp_path: Path):
@@ -1125,12 +1124,10 @@ async def test_injected_job_registry_is_not_closed(tmp_path: Path):
 
 async def test_services_are_injected_into_tool_context(tmp_path: Path):
     registry = JobRegistry()
-    store = TodoStore()
     captured: dict = {}
 
     async def run(args, ctx):
         captured["registry"] = ctx.job_registry
-        captured["store"] = ctx.todo_store
         captured["call_id"] = ctx.call_id
         return ToolExecutionResult.text("ok")
 
@@ -1140,53 +1137,27 @@ async def test_services_are_injected_into_tool_context(tmp_path: Path):
         tools=[make_tool("Probe", run)],
         tool_names=["Probe"],
         job_registry=registry,
-        todo_store=store,
     )
     await m.dispatch(
         gate(m.prepare([ToolCall(id="c", name="Probe", input={})])),
         ctx_factory(tmp_path),
     )
     assert captured["registry"] is registry
-    assert captured["store"] is store
     assert captured["call_id"] == "c"
 
 
-async def test_todo_state_persists_across_calls_through_manager(tmp_path: Path):
+@pytest.mark.parametrize("name", ["todowrite", "TodoWrite"])
+async def test_removed_todowrite_tool_is_unknown(tmp_path: Path, name: str):
     m = ToolManager(cfg(), workspace=tmp_path, profile="coding")
-    await m.dispatch(
-        gate(
-            m.prepare(
-                [
-                    ToolCall(
-                        id="c1",
-                        name="TodoWrite",
-                        input={
-                            "todos": [
-                                {
-                                    "id": "1",
-                                    "content": "ship it",
-                                    "status": "pending",
-                                    "priority": "high",
-                                }
-                            ]
-                        },
-                    )
-                ]
-            )
-        ),
-        ctx_factory(tmp_path, session_id="s1"),
-    )
-    assert m.todo_store.get("s1")[0].content == "ship it"
-    # A second call replaces the list, still session-scoped.
-    await m.dispatch(
-        gate(
-            m.prepare(
-                [ToolCall(id="c2", name="TodoWrite", input={"todos": []})]
-            )
-        ),
-        ctx_factory(tmp_path, session_id="s1"),
-    )
-    assert m.todo_store.get("s1") == ()
+    assert "todowrite" not in m.names
+    assert not hasattr(m, "todo_store")
+    batch = m.prepare([ToolCall(id="c1", name=name, input={"todos": []})])
+    assert batch.for_call("c1").code == "unknown_tool"
+    results = await m.dispatch(gate(batch), ctx_factory(tmp_path, session_id="s1"))
+    assert results[0].is_error
+    assert "Unknown tool" in results[0].content[0].text
+    with pytest.raises(ToolSelectionError):
+        ToolManager(cfg(), workspace=tmp_path, tool_names=[name])
 
 
 # ---------------------------------------------------------------------------
@@ -1224,14 +1195,18 @@ def test_research_profile_excludes_mutating_mcp_tools(tmp_path: Path):
     assert m.get("mcp__s__write") is None
 
 
-def test_bash_backstop_follows_bash_max_s_not_the_yield_window(tmp_path: Path):
-    from nexus.tools.builtin import bash
+def test_shell_backstop_follows_shell_max_s_not_the_yield_window(tmp_path: Path):
+    from nexus.tools.builtin import shell
     from nexus.tools.manager import BASH_TIMEOUT_GRACE_S
 
     m = ToolManager(cfg(bash_timeout_s=120, bash_max_s=900), workspace=tmp_path)
-    # A 600s timeout_s must not be cut at yield window + grace (125s).
-    assert m._timeout_for(bash.SPEC) == 900 + BASH_TIMEOUT_GRACE_S
-    assert m._timeout_for(bash.SPEC) > 600
+    # A 600s timeout_s must not be cut at yield window + grace (125s). The
+    # deprecated bash_max_s alias still sets the limit when shell_max_s is unset.
+    assert m._timeout_for(shell.SPEC) == 900 + BASH_TIMEOUT_GRACE_S
+    assert m._timeout_for(shell.SPEC) > 600
+    # The new key wins over the alias.
+    m = ToolManager(cfg(bash_max_s=900, shell_max_s=1200), workspace=tmp_path)
+    assert m._timeout_for(shell.SPEC) == 1200 + BASH_TIMEOUT_GRACE_S
 
 
 async def test_broken_permission_key_returns_model_visible_error(tmp_path):

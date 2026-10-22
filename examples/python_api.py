@@ -38,8 +38,12 @@ from nexus.tools.permissions import Decision
 TERMINAL = {"turn.completed", "turn.failed", "turn.cancelled"}
 
 
-def build_runtime(workspace: Path) -> Runtime:
-    """A runtime whose only provider is a deterministic offline script."""
+def build_runtime(workspace: Path, home: Path) -> Runtime:
+    """A runtime whose only provider is a deterministic offline script.
+
+    ``home`` keeps its state database private, so the example never registers
+    the throwaway workspace in the user's ``~/.nexus``.
+    """
     provider = ScriptedProvider(
         tool_response(
             ("call-1", "Write", {"path": "notes.txt", "content": "hello from Nexus"})
@@ -56,12 +60,14 @@ def build_runtime(workspace: Path) -> Runtime:
             tools=ToolsSection(),
         ),
     )
-    return Runtime(workspace, config=config, providers={"scripted": provider})
+    return Runtime(workspace, config=config, providers={"scripted": provider}, home=home)
 
 
 async def main() -> None:
-    workspace = Path(tempfile.mkdtemp(prefix="nexus-example-"))
-    runtime = build_runtime(workspace)
+    base = Path(tempfile.mkdtemp(prefix="nexus-example-"))
+    workspace = base / "workspace"
+    workspace.mkdir()
+    runtime = build_runtime(workspace, base / "home")
     facade = HostFacade(runtime, owns_runtime=True)
     try:
         facade.open_session("demo")

@@ -55,7 +55,9 @@ async def registry():
 def test_schema_defaults_to_run_and_exposes_actions():
     schema = bash.SPEC.input_schema
     props = schema["properties"]
-    assert props["action"]["enum"] == ["run", "status", "wait", "stop"]
+    assert props["action"]["enum"] == ["run", "status", "wait", "stop", "log", "cd"]
+    assert "cwd" in props and "background" in props
+    assert "workdir" not in props and "run_in_background" not in props
     assert props["action"]["default"] == "run"
     assert "required" not in schema
     assert schema["additionalProperties"] is False

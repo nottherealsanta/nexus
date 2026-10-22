@@ -13,9 +13,9 @@ SCENARIO = Scenario(
             calls(call("edit", path="src/app.py", old_string='return f"hello, {name}"', new_string='return f"Hello, {name}!"')),
             calls(call("write", path="src/newmod.py", content='"""New module."""\n\n\ndef ping() -> str:\n    return "pong"\n')),
             calls(call("edit", path="src/util.py", old_string="max(low, min(high, value))", new_string="min(high, max(low, value))")),
-            calls(call("bash", command="git diff --stat && git status --short")),
+            calls(call("shell", command="git diff --stat && git status --short")),
             verdict("diff-review", intro="Changes are in the working tree; try /diff.", checks=[tool_called("edit", 2), tool_called("write", 1),
-                                    tool_result_contains("bash", "src/app.py"), no_unexpected_errors(0)]),
+                                    tool_result_contains("shell", "src/app.py"), no_unexpected_errors(0)]),
         ]
     },
 )

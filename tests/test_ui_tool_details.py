@@ -38,14 +38,15 @@ def test_secrets_are_shown_and_long_values_report_the_clip():
     assert "[clipped 10000 more characters]" in text
 
 
-def test_list_of_objects_render_as_headed_groups_and_todos_get_a_checklist():
+def test_list_of_objects_render_as_headed_groups_and_historical_todo_calls_render_generically():
     todos = [{"id": "a", "content": "Do a", "status": "in_progress", "priority": "high"},
              {"id": "b", "content": "Do b", "status": "pending"}]
+    # A call recorded by the removed TodoWrite tool still renders as a plain tool call.
     tool = ToolCallView(call_id="t", name="TodoWrite", status="completed",
                         input={"todos": todos}, metrics={"counts": {"pending": 1}, "todos": todos})
     text = sections_to_text(tool_detail_sections(tool))
     assert "  todos[0]\n    id: a\n    content: Do a" in text
-    assert "[~] a: Do a (high)" in text and "[ ] b: Do b" in text
+    assert "Todo list" not in text and "[~] a: Do a (high)" not in text
     assert "counts.pending: 1" in text and "<dict>" not in text
 
 

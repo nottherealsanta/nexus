@@ -68,7 +68,7 @@ from ..config.paths import (
     project_agents_dir,
     project_state_dir,
 )
-from ..tools.names import SUBAGENT_CONTROL_TOOLS, canonical_tool_name, canonical_tool_names
+from ..tools.names import canonical_tool_name, canonical_tool_names, tool_rule_names
 from .model import (
     MAX_AGENT_FILE_BYTES,
     MAX_FRONTMATTER_BYTES,
@@ -791,19 +791,22 @@ class AgentManager:
             requested.update(name for name in ceiling if name.startswith("mcp__") or name in {"McpSearch", "McpCall"})
         declared_tools, _collisions = canonical_tool_names(resolved.tools)
         from fnmatch import fnmatchcase
-        requested.update(name for name in ceiling for pattern in declared_tools if fnmatchcase(name, pattern))
+        # Wildcards written for the old ``bash``/``Bash`` spelling keep matching ``shell``.
+        requested.update(
+            name for name in ceiling for pattern in declared_tools
+            if any(fnmatchcase(alias, pattern) for alias in tool_rule_names(name))
+        )
         requested.update(declared_tools)
 
         requested_set = frozenset(requested)
         selected = (ceiling & requested_set) - frozenset(
             canonical_tool_name(tool) for tool in resolved.excluded_tools
         )
-        excluded = frozenset(name for name in ceiling for pattern in resolved.excluded_tools if fnmatchcase(name, pattern))
+        excluded = frozenset(
+            name for name in ceiling for pattern in resolved.excluded_tools
+            if any(fnmatchcase(alias, pattern) for alias in tool_rule_names(name))
+        )
         selected -= excluded
-        if "subagent" in selected:
-            # The tools that steer persistent subagents come with ``subagent``; a
-            # definition that lists only ``subagent`` must not lose them.
-            selected |= (ceiling & SUBAGENT_CONTROL_TOOLS) - excluded
         stripped = frozenset()
         if any(name.startswith("mcp__") for name in selected):
             selected |= (ceiling & {"McpSearch", "McpCall"}) - excluded

@@ -222,6 +222,23 @@ def test_opened_group_keeps_failed_members_in_members_too(tmp_path, monkeypatch)
     assert [m["id"] for m in group["failed_members"]] == ["b"]
 
 
+def test_closed_members_name_the_target_and_not_the_output(tmp_path, monkeypatch):
+    text = lambda value: [{"type": "text", "text": value}]
+    command = "cargo test --workspace --all-features --no-fail-fast -- --nocapture"
+    tools = [_tool("r", "read", 2, input={"path": "a.py"}, result=text("import os\nx = 1\ny = 2")),
+             _tool("b", "bash", 3, input={"command": command}, result=text("job_id: j\nstatus: completed\nexit_code: 0\nstdout:\nok"),
+                   started_ts=10.0, finished_ts=12.5),
+             _tool("g", "bash", 4, status="running", input={"command": "sleep 9"}, started_ts=20.0)]
+    group = _group(tmp_path, monkeypatch, tools, expanded={"t:activity:r"})
+    read, bash, live = group["members"]
+    assert read["text"] == "a.py (lines 1–3)" and "import os" not in read["text"]
+    assert bash["text"].startswith("cargo test --workspace") and bash["text"].endswith("…")
+    assert bash["text"] != command and "ok" not in bash["text"] and "·" not in bash["text"]
+    assert bash["elapsed_ms"] == 2_500 and bash["started_ms"] == 10_000
+    assert live["text"] == "sleep 9" and live["status"] == "running" and live["started_ms"] == 20_000
+    assert live["elapsed_ms"] == 0
+
+
 def test_thoughts_alone_are_not_a_group(tmp_path, monkeypatch):
     blocks = _snapshot(tmp_path, monkeypatch, _turn([], [_thought("th", 2, ms=3200), _reply("rep", 3)]))["blocks"]
     assert not any(b["kind"] == "tool_group" for b in blocks)

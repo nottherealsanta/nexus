@@ -43,7 +43,9 @@ from .names import (
     canonical_permission_rule,
     canonical_tool_name,
     permission_bundle_matches,
+    tool_rule_names,
 )
+from .shell_syntax import analyze_command
 from .spec import PathTarget, ToolCall, ToolSpec
 
 __all__ = [
@@ -164,6 +166,28 @@ def _glob_matches(pattern: str, key: str) -> bool:
     except re.error:
         return False
 
+def _is_run_call(input_data: Mapping[str, Any] | None) -> bool:
+    """Whether a ``shell`` call's permission key is a command string."""
+    return input_data is None or input_data.get("action", "run") == "run"
+
+
+def _shell_glob_matches(pattern: str, command: str, effect: str) -> bool:
+    """Glob-match a ``shell`` command with control syntax taken into account.
+
+    ``allow``: a glob never auto-allows a compound command, so only a command
+    with no unquoted control syntax can match. ``deny``/``ask``: the glob is
+    tested against the whole command and against every segment, so
+    ``shell(rm -rf*)`` also catches ``cd build && rm -rf .``. Exact rules and
+    exact grants never reach this function.
+    """
+    segments, compound = analyze_command(command)
+    if effect == "allow":
+        return not compound and _glob_matches(pattern, command)
+    if _glob_matches(pattern, command):
+        return True
+    return compound and any(_glob_matches(pattern, part) for part in segments)
+
+
 RuleKind = Literal["tool", "tool_pattern", "tool_exact", "bundle", "wildcard"]
 Effect = Literal["allow", "deny"]
 Scope = Literal["session", "project", "user"]
@@ -191,9 +215,10 @@ class Rule:
         bundle: str | None,
         *,
         input_data: Mapping[str, Any] | None = None,
+        effect: str | None = None,
     ) -> bool:
         tool = canonical_tool_name(tool)
-        if self.tool in LEGACY_BASH_PERMISSION_ACTIONS and tool == "bash":
+        if self.tool in LEGACY_BASH_PERMISSION_ACTIONS and tool == "shell":
             # The legacy names are intentionally not dispatch aliases. Translate
             # their permission rules only for explicit unified-job actions, and
             # use the structured action as well as the qualified key so a run
@@ -221,18 +246,22 @@ class Rule:
         if self.kind == "tool":
             return self.tool == tool
         if self.kind == "wildcard":
-            return self.tool is not None and fnmatch.fnmatchcase(tool, self.tool)
+            # A wildcard written for the historical ``bash``/``Bash`` spelling
+            # keeps matching the renamed tool (deny rules must stay effective).
+            return self.tool is not None and any(
+                fnmatch.fnmatchcase(name, self.tool)
+                for name in tool_rule_names(tool)
+            )
         if self.kind == "bundle":
             return self.bundle is not None and permission_bundle_matches(
                 self.bundle, bundle
             )
         if self.kind == "tool_pattern":
-            return (
-                self.tool == tool
-                and key is not None
-                and self.pattern is not None
-                and _glob_matches(self.pattern, key)
-            )
+            if self.tool != tool or key is None or self.pattern is None:
+                return False
+            if tool == "shell" and effect is not None and _is_run_call(input_data):
+                return _shell_glob_matches(self.pattern, key, effect)
+            return _glob_matches(self.pattern, key)
         if self.kind == "tool_exact":
             return (
                 self.tool == tool
@@ -939,6 +968,9 @@ class PathGuard:
                     "daemon.sock",
                     "daemon.pid",
                     "daemon.lock",
+                    # Shell job logs and the session cwd record (may hold
+                    # secrets a program printed).
+                    "shell",
                     # The shared session state database (STATE_PLAN §5.4) is
                     # machine state, never editable through a tool call.
                     "nexus.db",
@@ -1176,13 +1208,6 @@ _NEVER_ASK_TOOLS = frozenset({"question"})
 #: every mode (a blocked child must always be able to say so). An explicit
 #: ``deny`` rule is evaluated earlier and still wins.
 _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
-#: Tools whose rules are the ``Task(...)`` rules: continuing or stopping a
-#: subagent is keyed ``"<role>:<tier>"`` like spawning it, so one rule governs
-#: all three (``deny = ["Task(*:high)"]`` also blocks ``subagent_send`` to a high child).
-_RULE_FAMILY = {"subagent_send": "subagent", "subagent_stop": "subagent"}
-#: Read-only introspection of the session's own subagents; allowed in every mode
-#: unless a ``deny`` rule names it.
-_READ_ONLY_TOOLS = frozenset({"subagent_list"})
 #: Families whose mode fallback is ``ask`` even under ``mode = "allow"``: reading
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
@@ -1274,9 +1299,12 @@ class PermissionEngine:
         bundle: str | None,
         *,
         input_data: Mapping[str, Any] | None = None,
+        effect: str | None = None,
     ) -> Rule | None:
         for rule in rules:
-            if rule.matches(tool, key, bundle, input_data=input_data):
+            if rule.matches(
+                tool, key, bundle, input_data=input_data, effect=effect
+            ):
                 return rule
         return None
 
@@ -1334,13 +1362,9 @@ class PermissionEngine:
 
         public_name = canonical_tool_name(call.name)
         denied = self._first_match(
-            self._deny, public_name, key, bundle, input_data=call.input
+            self._deny, public_name, key, bundle, input_data=call.input,
+            effect="deny",
         )
-        rule_name = _RULE_FAMILY.get(public_name)
-        if denied is None and rule_name is not None:
-            denied = self._first_match(
-                self._deny, rule_name, key, bundle, input_data=call.input
-            )
         if denied is not None:
             return self._verdict(
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
@@ -1366,22 +1390,13 @@ class PermissionEngine:
             )
 
         allowed = self._first_match(
-            self._allow, public_name, key, bundle, input_data=call.input
+            self._allow, public_name, key, bundle, input_data=call.input,
+            effect="allow",
         )
-        if allowed is None and rule_name is not None:
-            allowed = self._first_match(
-                self._allow, rule_name, key, bundle, input_data=call.input
-            )
         if allowed is not None:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, allowed, "allow",
                 f"Allowed by rule {allowed.raw!r}", suggestions,
-            )
-
-        if public_name in _READ_ONLY_TOOLS:
-            return self._verdict(
-                call, spec, key, Outcome.ALLOW, None, "read_only",
-                "Listing your own subagents changes nothing", suggestions,
             )
 
         if public_name in _ALWAYS_ALLOWED_TOOLS:
@@ -1399,12 +1414,9 @@ class PermissionEngine:
             )
 
         ask = self._first_match(
-            self._ask, public_name, key, bundle, input_data=call.input
+            self._ask, public_name, key, bundle, input_data=call.input,
+            effect="ask",
         )
-        if ask is None and rule_name is not None:
-            ask = self._first_match(
-                self._ask, rule_name, key, bundle, input_data=call.input
-            )
         if ask is not None:
             return self._ask_verdict(call, spec, key, ask, attended, suggestions)
 

@@ -44,6 +44,7 @@ from .model import (
     LiveCallView,
     LiveDelegationView,
     LiveTurnView,
+    JobView,
 )
 
 __all__ = ["apply", "apply_many", "initial_state"]
@@ -1278,7 +1279,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     return state
 
 def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
-    """A composer ``!`` run: a ``shell`` turn with the command and one bash row."""
+    """A composer ``!`` run: a ``shell`` turn with the command and one shell row."""
     shell_id = _as_str(data.get("shell_id")) or event.id
     turn_id = f"shell:{shell_id}"
     command = _as_str(data.get("command")) or ""
@@ -1302,7 +1303,7 @@ def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             tools=[ToolCallView(
                 call_id=shell_id,
                 event_seq=event.seq,
-                name="bash",
+                name="shell",
                 status="running",
                 bundle="shell",
                 executed=True,
@@ -1343,6 +1344,67 @@ def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     ]
     phase = {"cancelled": "cancelled", "failed": "failed", "interrupted": "failed"}.get(status, "completed")
     return _put(state, index, replace(turn, tools=tools, phase=phase, updated_ts=event.ts))
+
+_JOB_MAX = 64
+
+def _on_job(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Fold ``shell.job_*`` into ``ConversationView.jobs`` (SHELL_PLAN P4).
+
+    Idempotent per job: a second ``job_started`` for a known id is ignored, a
+    ``job_yielded`` is ignored once the job exited, and only the first
+    ``job_exited`` counts, so a replayed or doubled event cannot change the row.
+    """
+    job_id = _as_str(data.get("job_id"))
+    if not job_id:
+        return _diagnostic(state, event, data)
+    index = next((i for i, job in enumerate(state.jobs) if job.job_id == job_id), -1)
+    if event.type == "shell.job_started":
+        if index >= 0:
+            return state
+        job = JobView(
+            job_id=job_id,
+            command=_as_str(data.get("command")) or "",
+            cwd=_as_str(data.get("cwd")) or "",
+            pid=_opt_int(data.get("pid")),
+            background=bool(data.get("background")),
+            persistent=bool(data.get("persistent")),
+            started_ts=_opt_float(data.get("started_at")) or _opt_float(event.ts),
+        )
+        jobs = [*state.jobs, job]
+        while len(jobs) > _JOB_MAX:
+            # Drop the oldest finished job first; a running one only as a last resort.
+            drop = next((i for i, item in enumerate(jobs) if item.status != "running"), 0)
+            del jobs[drop]
+        return replace(state, jobs=jobs)
+    job = state.jobs[index] if index >= 0 else JobView(job_id=job_id)
+    if event.type == "shell.job_yielded":
+        if index < 0 or job.status != "running" or job.background:
+            return state
+        job = replace(
+            job,
+            background=True,
+            yielded_reason=_as_str(data.get("reason")),
+            yielded_ts=_opt_float(event.ts),
+        )
+    else:  # shell.job_exited
+        if job.status != "running" and index >= 0:
+            return state
+        job = replace(
+            job,
+            status=_as_str(data.get("status")) or "completed",
+            background=job.background or bool(data.get("background")),
+            finished_ts=_opt_float(event.ts),
+            exit_code=_opt_int(data.get("exit_code")),
+            signal=_opt_int(data.get("signal")),
+            duration_ms=_opt_int(data.get("duration_ms")),
+            log_bytes=_as_int(data.get("log_bytes")),
+            log_lines=_as_int(data.get("log_lines")),
+            stderr_bytes=_as_int(data.get("stderr_bytes")),
+            stopped_reason=_as_str(data.get("stopped")),
+        )
+    if index < 0:
+        return replace(state, jobs=[*state.jobs, job][-_JOB_MAX:])
+    return replace(state, jobs=_replace_at(state.jobs, index, job))
 
 _LIVE_MAX_CALLS = 20
 _LIVE_MAX_ROWS = 500
@@ -1951,6 +2013,9 @@ _HANDLERS: dict[str, Any] = {
     "input.dropped": _on_input,
     "shell.started": _on_shell,
     "shell.completed": _on_shell,
+    "shell.job_started": _on_job,
+    "shell.job_yielded": _on_job,
+    "shell.job_exited": _on_job,
     "live.started": _on_live,
     "live.transcript": _on_live,
     "live.transcript.delta": _on_live,
@@ -1981,6 +2046,8 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
 
     if event_type in {"todo.updated", "handoff.created", "handoff.accepted", "handoff.dismissed"}:
         # Session metadata is not conversation content, including mirrored events.
+        # ``todo.updated`` is retained only so logs from the removed TodoWrite
+        # tool still replay.
         return state
     if event_type == "session.linked" or event_type in EVENT_GROUPS["manager"]:
         # Manager bookkeeping (supervision edges, refused launches, waits) is audit

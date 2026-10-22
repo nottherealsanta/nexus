@@ -547,212 +547,8 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         frame.render_widget(w, r);
     }
 }
-/// Details sidebar rows, and for each row the modified file it toggles (if any).
-pub fn details_rows(
-    s: &Snapshot,
-    p: &Palette,
-    width: u16,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
-    let title = |text: &str| {
-        Line::styled(
-            text.to_string(),
-            Style::default().fg(p.quiet).add_modifier(Modifier::BOLD),
-        )
-    };
-    let quiet = |text: &str| Line::styled(text.to_string(), Style::default().fg(p.quiet));
-    let d = &s.details_panel;
-    let mut out = vec![title("SESSION METADATA"), Line::default()];
-    for (label, value) in &d.session {
-        for (i, cells) in crate::transcript::wrap(
-            &[Span::styled(value.clone(), Style::default().fg(p.text))],
-            width.saturating_sub(11) as usize,
-        )
-        .into_iter()
-        .enumerate()
-        {
-            out.push(crate::transcript::line(
-                vec![Span::styled(
-                    if i == 0 {
-                        format!("{:<11}", format!("{label}:"))
-                    } else {
-                        " ".repeat(11)
-                    },
-                    Style::default().fg(p.muted),
-                )],
-                cells,
-                None,
-                Style::default(),
-            ));
-        }
-    }
-    if d.session.is_empty() {
-        out.push(quiet("No session metadata available."));
-    }
-    out.push(Line::default());
-    let mut file_rows: Vec<Option<usize>> = vec![None; out.len()];
-    out.push(title(&format!(
-        "CHANGES · {} {}",
-        d.files.len(),
-        if d.files.len() == 1 { "file" } else { "files" }
-    )));
-    if !d.files.is_empty() {
-        out.push(Line::from(vec![
-            Span::styled(
-                format!("+{}", d.files.iter().map(|file| file.added).sum::<u64>()),
-                Style::default().fg(p.success),
-            ),
-            Span::styled(
-                format!(
-                    " -{} lines",
-                    d.files.iter().map(|file| file.removed).sum::<u64>()
-                ),
-                Style::default().fg(p.error),
-            ),
-        ]));
-    }
-    out.push(Line::default());
-    if d.files.is_empty() {
-        out.push(quiet("No files changed yet."));
-    }
-    file_rows.resize(out.len(), None);
-    for (index, file) in d.files.iter().enumerate() {
-        let (head, base) = file
-            .path
-            .rsplit_once('/')
-            .map_or(("", file.path.as_str()), |(h, b)| (h, b));
-        let mut spans = vec![
-            Span::styled(
-                if file.open { "▾ " } else { "▸ " },
-                Style::default().fg(p.quiet),
-            ),
-            Span::styled(
-                if file.created { "A " } else { "M " },
-                Style::default().fg(if file.created { p.success } else { p.warning }),
-            ),
-        ];
-        if !head.is_empty() {
-            spans.push(Span::styled(
-                format!("{head}/"),
-                Style::default().fg(p.quiet),
-            ));
-        }
-        spans.push(Span::styled(
-            base.to_string(),
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw("  "));
-        if file.added > 0 || file.removed > 0 {
-            spans.push(Span::styled(
-                format!("+{}", file.added),
-                Style::default().fg(p.success),
-            ));
-            spans.push(Span::styled(
-                format!(" -{}", file.removed),
-                Style::default().fg(p.error),
-            ));
-        } else if file.created {
-            spans.push(Span::styled("new", Style::default().fg(p.success)));
-        } else {
-            spans.push(Span::styled("+0 -0", Style::default().fg(p.quiet)));
-        }
-        file_rows.resize(out.len(), None);
-        out.push(Line::from(spans));
-        file_rows.push(Some(index));
-        if file.open {
-            for row in &file.diff {
-                let tone = match row.chars().next() {
-                    Some('+') => p.success,
-                    Some('-') => p.error,
-                    Some('@') | Some('…') => p.quiet,
-                    _ => p.muted,
-                };
-                out.push(Line::styled(format!("  {row}"), Style::default().fg(tone)));
-            }
-            if file.diff.is_empty() {
-                out.push(quiet(if file.created {
-                    "  New file; no diff preview reported."
-                } else {
-                    "  No diff preview reported."
-                }));
-            }
-        }
-    }
-    file_rows.resize(out.len(), None);
-    if !d.files_summary.is_empty() {
-        out.push(quiet(&d.files_summary));
-    }
-    out.push(Line::default());
-    out.push(title("MCP SERVERS"));
-    out.push(Line::default());
-    for (tone, text, note) in &d.mcp {
-        let color = |name: &str| match name {
-            "success" => p.success,
-            "error" | "plain-error" => p.error,
-            "warning" => p.warning,
-            _ => p.quiet,
-        };
-        if tone.starts_with("plain-") {
-            out.push(Line::styled(text.clone(), Style::default().fg(color(tone))));
-        } else {
-            out.push(Line::from(vec![
-                Span::styled("● ", Style::default().fg(color(tone))),
-                Span::raw(text.clone()),
-                Span::styled(format!("  {note}"), Style::default().fg(p.quiet)),
-            ]));
-        }
-    }
-    file_rows.resize(out.len(), None);
-    let text = |line: &Line| {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>()
-    };
-    let files = out
-        .iter()
-        .position(|line| text(line).starts_with("MODIFIED FILES"))
-        .unwrap_or(out.len());
-    let mcp = out
-        .iter()
-        .position(|line| text(line) == "MCP SERVERS")
-        .unwrap_or(out.len());
-    let range = match d.tab.as_str() {
-        // A missing section falls back to `out.len()`, so clamp to keep every range ordered.
-        "Session" => Some(0..files.min(mcp)),
-        "Files" => Some(files..mcp.max(files)),
-        "MCP" => Some(mcp..out.len()),
-        _ => None,
-    };
-    if d.tab == "Logs" {
-        out.clear();
-        out.extend(s.logs.iter().flat_map(|row| {
-            crate::transcript::wrap(&[Span::raw(row.clone())], width as usize)
-                .into_iter()
-                .map(|cells| {
-                    crate::transcript::line(vec![], cells, None, Style::default().fg(p.text))
-                })
-        }));
-        file_rows = vec![None; out.len()];
-    } else if let Some(range) = range {
-        out = out[range.clone()].to_vec();
-        file_rows = file_rows[range].to_vec();
-    }
-    (out, file_rows)
-}
-
 pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
     tab_cells(s, area.width as usize)
-}
-pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
-    let mut start = area.x + 2;
-    for tab in ["Session", "Files", "MCP", "Logs"] {
-        let end = start + tab.len() as u16 + 1;
-        if x >= start && x < end {
-            return Some(tab);
-        }
-        start = end;
-    }
-    None
 }
 
 #[cfg(test)]
@@ -1336,22 +1132,22 @@ mod chrome_tests {
     fn details_sections_and_file_hit_rows_survive_expansion() {
         let s: Snapshot = serde_json::from_value(serde_json::json!({
             "details_panel": {
+                "tab": "Files",
                 "session": [["Title", "Test"]],
                 "files": [{"path":"src/main.rs", "added":3, "removed":1,
                     "open":true, "diff":["+new", "-old"]}]
             }
         }))
         .unwrap();
-        let (rows, hits) = details_rows(&s, &Palette::new(false), 36);
+        let (rows, hits) = crate::details_sidebar::rows(&s, &Palette::new(false), 36);
         let text = |line: &Line<'_>| {
             line.spans
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
         };
-        assert_eq!(text(&rows[0]), "SESSION METADATA");
-        assert!(rows.iter().any(|row| text(row).contains("Title:")));
-        assert!(rows.iter().any(|row| text(row) == "CHANGES · 1 file"));
+        assert_eq!(text(&rows[0]), "CHANGES · 1 file");
+        assert!(!rows.iter().any(|row| text(row).contains("Title:")));
         let file_row = hits.iter().position(|hit| *hit == Some(0)).unwrap();
         assert!(text(&rows[file_row]).contains("src/main.rs"));
         assert!(rows[file_row]
@@ -1366,7 +1162,9 @@ mod chrome_tests {
 
     #[test]
     fn empty_details_have_explicit_status() {
-        let (rows, hits) = details_rows(&Snapshot::default(), &Palette::new(false), 36);
+        let mut s = Snapshot::default();
+        s.details_panel.tab = "Files".into();
+        let (rows, hits) = crate::details_sidebar::rows(&s, &Palette::new(false), 36);
         assert!(rows.iter().any(|row| row
             .spans
             .iter()

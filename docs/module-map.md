@@ -77,8 +77,8 @@ here, so add a row when you add a file.
 | `manager.py` | AgentManager: deterministic subagent discovery, seeding, and tool selection |
 | `manager_prompt.py` | Packaged constants of the workspace manager session: kind, the pinned `codex/gpt-6-luna` route, sign-in hint and system prompt; code, not a role file, so nothing user-supplied can extend it ([manager.md](manager.md)) |
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
-| `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions; `spawn` (wait) and `start` (background) share `_prepare`/`_execute` |
-| `pool.py` | AgentPool/RootAgents: background child runs that outlive a turn, persistent (idle, continuable) child records with their live slots, stop/list rows and rebuild from the root log, the pool-owned tree budget with per-root-turn windows, the root event port, report batching (coalescing, bounds, the auto-wake cap) |
+| `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions; `spawn` (always blocking) is `_prepare` then `_execute` |
+| `pool.py` | AgentPool/RootAgents: session-scoped subagent tree budget with per-root-turn windows, active child registration, and legacy detached/persistent child lifecycle support |
 | `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
 | `antigravity_worker.py` | **NEW.** External Antigravity (`agy`) worker: one headless `agy --input-format stream-json --output-format stream-json` process per assignment running agy's own tools; stdin user event, NDJSON `init`/`step_update`/`result` readback, refuses tool/MCP/restriction fields and bypass modes; same duck contract as `claude_code_worker.py` |
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
@@ -178,6 +178,7 @@ here, so add a row when you add a file.
 | `parallel_tools.py` | Single, batched, failing-member and write batches: parallel call states |
 | `provider_failure.py` | Interactive: the provider fails once; the next message recovers |
 | `question.py` | Interactive: the question tool, branching on the answers |
+| `shell_persistent.py` | A persistent job (background, no timeout) is waited on with `until=match`, then stopped |
 | `streaming_rich.py` | Rich markdown, wide lines, unicode and escape-looking text, with thinking |
 | `stress.py` | Performance: every built-in tool, many subagents of every kind, nesting and failures |
 | `tool_marathon.py` | A long chain of tool calls using most built-in tools, all inside the sandbox |
@@ -211,7 +212,7 @@ here, so add a row when you add a file.
 | `facade.py` | The single surface API: `HostFacade` over one :class:`Runtime`; also opens the manager session (`ManagerOpen`/`ManagerState`) and injects its tool port |
 | `presence.py` | Host-level presence: client attachment and first-responder permission leases |
 | `protocol.py` | Transport-neutral wire contract for the host facade |
-| `reports.py` | Delivery of background-subagent reports to the root through its own input queue: sink, wake, reconcile on open, one-shot activity |
+| `reports.py` | Legacy subagent report delivery and one-shot activity; historical detached-run reports are not replayed |
 | `session_diagnostics.py` | Compatibility module path for the session diagnostics implementation |
 | `supervisor.py` | Turn scheduling across sessions under one global concurrency cap |
 | `web.py` | Browser-only HTTP routes and short-lived launch/session credentials |
@@ -251,13 +252,14 @@ here, so add a row when you add a file.
 | `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
 | `session_archive.py` | Bounded host projections for durable session archive metadata |
+| `session_jobs.py` | Host job commands (`SessionJobs`/`Log`/`Stop`/`Background`): session-partitioned, bounded reads of the runtime's shell `JobRegistry` |
 | `errors.py` | `error_text(exc)`: the redacted, one-line, never-empty reason clients show in an error toast (a `TimeoutError()` names its type); used when another project's session fails to open |
 | `session_preview.py` | Sessions dashboard text helpers: current-session message tails, the worked label and text cleaning (`message_tails`, `worked_label`, `clean_preview_text`); the dashboard preview projection was removed |
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `skills_install.py` | `SkillsInstall`: run pinned `npx skills add --copy` in a temp stage, validate each skill, import into the scope's `skills/` with conflict, trash and rollback handling |
 | `setup.py` | First-run setup behind the host boundary |
-| `usage_snapshot.py` | Background refresh of the plan-usage snapshot the usage gate reads (coalesced, rate-limited, fail-open) |
+| `usage_snapshot.py` | Periodic (`[models] usage_refresh_seconds`, default 300) and gate-triggered background refresh of the plan-usage snapshot (one fetch at a time, stale results dropped, fail-open, cancelled on shutdown) |
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
@@ -266,7 +268,7 @@ here, so add a row when you add a file.
 | `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command; separate `manager` scope for the cross-session notice |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
-| `workspace_browse.py` | Bounded, read-only `DirectoryList` (path-checked, symlinks listed but never followed, read-deny roots and hidden entries omitted) and `GitStatus` (porcelain v2, deadline and byte cap) for the native sidebar's Files and Git tabs |
+| `workspace_browse.py` | Bounded, read-only `DirectoryList` (path-checked, symlinks listed but never followed, read-deny roots and hidden entries omitted), `FilePreview` (clipped, redacted text of one regular workspace file) and `GitStatus` (porcelain v2, deadline and byte cap) for the native sidebar's Files and Git tabs |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |
 
 ### `nexus/mcp/`
@@ -312,6 +314,7 @@ here, so add a row when you add a file.
 | `claude_agent_auth.py` | Bounded official CLI subscription status, usage and sign-in, never token files |
 | `discovery.py` | File-loaded providers: `.agents/providers/*.py` |
 | `gemini.py` | Google Gemini `generateContent` streaming adapter |
+| `nvidia.py` | NVIDIA hosted-catalogue preset over the OpenAI Chat Completions adapter: endpoint, env key, attribution header |
 | `ollama.py` | Ollama / llama.cpp local adapter |
 | `openai.py` | OpenAI adapter: Responses API and Chat Completions behind one class |
 | `opencode.py` | OpenCode adapter over its documented Agent Client Protocol surface |
@@ -380,9 +383,10 @@ here, so add a row when you add a file.
 | `manager.py` | ToolManager: selected registry, validation, scheduling, and dispatch |
 | `manager_port.py` | `ManagerPort` protocol (`find` `status` `result` `launch` `wait` `cancel` `send` `show`) and bounded value types for the workspace manager session ([manager.md](manager.md)) |
 | `manager_tools.py` | The eight manager tools over an injected `ManagerPort` and `build_manager_catalog`, the manager's whole catalog ([manager.md](manager.md)) |
-| `names.py` | Exact, one-way compatibility mapping for public tool names |
+| `names.py` | Exact, one-way compatibility mapping for public tool names (`bash`/`Bash` → `shell`, legacy shell arguments, wildcard-rule aliases) |
 | `permissions.py` | Permission grammar, evaluation, path security, and approval primitives |
 | `questions.py` | Session-scoped question requests for tools and agents |
+| `shell_syntax.py` | Conservative detection and splitting of unquoted shell control syntax for glob permission rules |
 | `spec.py` | Tool contracts |
 
 ### `nexus/tools/codemode/`
@@ -408,13 +412,15 @@ here, so add a row when you add a file.
 | `_anydoc_worker.py` | Bounded, offline AnyDoc document-to-Markdown worker |
 | `_grep_scan.py` | Isolated, killable regex-scan worker for the `Grep` tool |
 | `_html_markdown.py` | Bounded, offline conversion of untrusted HTML into Markdown |
+| `_job_recovery.py` | Restart recovery (P7): per-registry owner lock + record, process identity via `ps`, the verified orphan sweep, and the live-owner probe |
 | `_jobs.py` | Shell job registry and process-group lifecycle management |
-| `_output_limit.py` | Shell output limit (2,000 lines / 50 KiB) shared by `bash` and `!` mode; spills the full text to a private temp file |
+| `_output_limit.py` | Shell output limit (2,000 lines / 50 KiB) shared by `shell` and `!` mode; spills the full text to a private temp file unless the caller names a job log |
 | `_patch_commit.py` | Guarded commit and rollback for immutable staged patch changes |
 | `_patch_parse.py` | Pure, bounded parser for the Nexus multi-file patch format |
 | `_patch_stage.py` | Pure snapshot-based planning for parsed Nexus patches |
+| `_shell_logs.py` | Per-job combined shell logs (head/tail buffers, disk bounds, retention) and the persistent session cwd record |
 | `apply_patch.py` | Built-in `apply_patch`: validate and apply bounded multi-file patches |
-| `bash.py` | `bash`: run commands and control background jobs in the workspace |
+| `bash.py` | Compatibility shim: the old `bash` import path for the `shell` tool (translates legacy arguments) |
 | `bash_output.py` | `BashOutput`: read buffered output and status for a registry-owned job |
 | `edit.py` | Built-in `Edit`: exact, single-commit string replacement |
 | `glob.py` | Built-in `Glob`: deterministic, workspace-rooted path matching |
@@ -426,10 +432,9 @@ here, so add a row when you add a file.
 | `question.py` | `question`: ask the operator one question and wait for the answer |
 | `escalate.py` | `escalate` (subagents only): report a block to the parent, which resolves it or asks the user |
 | `read.py` | Built-in `Read` and the private helpers shared by the fs tools |
+| `shell.py` | `shell` (was `bash`): run commands, control jobs, read job logs (`log`) and set the session cwd (`cd`) |
 | `skill.py` | `Skill`: progressive disclosure of a skill body or bundled resource |
 | `task.py` | `subagent` (legacy name `Task`): spawn a bounded subagent (bundle `task`) |
-| `subagent_control.py` | `subagent_send` / `subagent_stop` / `subagent_list`: continue, close and list persistent subagents (bundle `task`, root only, offered with `agents.background`) |
-| `todo.py` | `TodoWrite`: agent-scoped in-memory task list (bundle `task`) |
 | `webfetch.py` | Fetch a public web page and return bounded, explicitly untrusted Markdown |
 | `websearch.py` | Search configured SearXNG instances and return bounded untrusted results |
 | `write.py` | Built-in `Write`: atomic, symlink-safe file creation and replacement |
@@ -483,7 +488,7 @@ here, so add a row when you add a file.
 | `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `context.py` | Pure display projections for context preview and session usage |
 | `context_header.py` | Toolkit-free context header blocks, complete inventories and bounded fallback previews; skill tokens estimate the included index rather than the available catalogue |
-| `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
+| `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells, plus the terminal right sidebar's stored tabs (`Changes` = `Files`) and width bounds (mirrored in `rust/tui/src/details_sidebar.rs`) |
 | `external_worker.py` | Labelled authority/outcome blocks for an external Claude Code worker (`ConversationView.external`): launch authority, attention state with the manual instruction, transcript path, usage unknown |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
@@ -572,6 +577,7 @@ here, so add a row when you add a file.
 | `turn_status.py` | Running-turn status line fields (activity, since, tokens) for the native client |
 | `transcript_data.py` | Bounded immutable-tool presentation cache |
 | `background.py` | Bounded independent completion/model/clipboard tasks with stale guards |
+| `jobs.py` | Jobs tab of the native details sidebar: the session's shell jobs and one bounded log tail through the existing host job commands; polls only while drawn, drops stale replies |
 | `trace.py` | Bounded, body-free Python bridge timings and exit report |
 
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
@@ -627,6 +633,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/mermaid.rs` | Self-contained Mermaid renderer (flowchart, sequence, state) as Unicode art; unsupported or oversized diagrams return `None` for the code-block fallback. Registered and called from `markdown.rs`; behaviour is unverified end to end |
 | `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
 | `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
+| `rust/tui/src/details_sidebar.rs` | Right details sidebar: stored width (24..=60, default 40) and room for the conversation, drawer below 100 columns, wrapped Session/Changes/MCP/Logs tabs, per-tab rows, pure `geometry` shared by painting and hit-testing (tabs, Logs copy-ID line, Changes rows), divider hover and drag |
 | `rust/tui/src/sidebar.rs` | Left sidebar: bounded width and room for the conversation, wrapping tab cells shared by painting and hit-testing, Projects/Sessions/Files/Git tabs, divider drag, focus and key routing; the Sessions tab drives `picker::Dashboard` |
 | `rust/tui/src/render/sessions.rs` | Compact centered, bordered Sessions page (max 72 columns, content height): time groups, one line per session (status glyph, name, last-used age), header actions |
 | `rust/tui/src/transcript/groups.rs` | Verb-group header (`▾ Working` while running), the running grey member tree and expanded member boxes |

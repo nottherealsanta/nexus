@@ -2,6 +2,7 @@
 mod bridge;
 mod config;
 mod copy_button;
+mod details_sidebar;
 mod disclosure;
 mod editor;
 mod graphics;
@@ -368,6 +369,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut local_ui = local_ui::LocalUi::default();
     let mut details_focus = false;
     let mut details_visible = false;
+    let mut details_jobs_visible = false;
     let mut details_index = 0usize;
     let mut logs_scroll = 0usize;
     let mut leader = None;
@@ -664,18 +666,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             next.restore_blocks(&mut s)?;
             local_ui.reconcile(&mut next, &s);
             logs_open = next.details_sidebar && next.details_panel.tab == "Logs";
-            if next.details_panel.tab != s.details_panel.tab {
+            if next.details_panel.tab != s.details_panel.tab
+                || (s.details_panel.jobs.log.is_some() && next.details_panel.jobs.log.is_none())
+            {
                 details_scroll = 0;
                 details_index = 0;
             }
             next.last_opened = s.last_opened.clone();
-            // The host asks for sidebar focus by bumping a counter (`/sessions`, Ctrl+B); a
-            // divider drag in flight keeps its width until the button is released.
-            if next.sidebar.open && next.sidebar.focus != s.sidebar.focus {
-                cache.sidebar.focus = true;
-            }
+            // Opening the sidebar (`/sessions`, Ctrl+B) leaves keyboard focus where it is; only a
+            // focus request to an already-open sidebar or a click moves it. A divider drag in
+            // flight keeps its width until the button is released.
+            cache.sidebar.take_host_focus(&s, &next);
             if cache.sidebar.dragging {
                 next.sidebar.width = s.sidebar.width;
+            }
+            if cache.details.dragging {
+                next.details_panel.width = s.details_panel.width;
             }
             next.queue_collapsed = s.queue_collapsed;
             next.live_expanded = s.live_expanded && next.live.active;
@@ -763,6 +769,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         dirty |= cache.component_hover.needs_redraw(Instant::now());
         cache.sidebar.sync(&s);
+        cache.details.sync(&s);
         // Local dashboard view state lives only while the host shows the dashboard.
         if s.dashboard.is_none() {
             cache.dashboard = picker::Dashboard::default();
@@ -877,9 +884,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 drawn_at = Instant::now();
             })?;
             let visible = drawn_regions.details.width > 0 && s.details_panel.tab == "Logs";
-            if visible != details_visible {
+            let jobs_visible = drawn_regions.details.width > 0 && s.details_panel.tab == "Jobs";
+            if visible != details_visible || jobs_visible != details_jobs_visible {
                 details_visible = visible;
-                send(json!({"type":"details_visible","open":visible}))?;
+                details_jobs_visible = jobs_visible;
+                send(json!({"type":"details_visible","open":visible,"jobs":jobs_visible}))?;
             }
             trace::stall("draw (layout+render)", drawn_at.duration_since(drawing_at));
             trace::stall("terminal flush", drawn_at.elapsed());
@@ -1078,9 +1087,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         action("quit", "")?;
                         break 'app;
                     }
+                    if !s.sidebar.open && cache.sidebar.focus
+                        && s.details_sidebar && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
+                        && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
+                        && !matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+                    {
+                        let browser = sidebar::details_snapshot(&s);
+                        let out = cache.sidebar.key(key, &browser, draft.text.is_empty());
+                        if let Some(message) = out.action { send(message)?; }
+                        if out.consumed { dirty = true; continue; }
+                    }
                     // The left sidebar owns the keys while it has focus; a key it does not
                     // want (typing, composer shortcuts) falls through to the composer.
-                    if cache.sidebar.focus
+                    if s.sidebar.open
                         && drawn_regions.sidebar.width > 0
                         && s.panel_title.is_empty()
                         && s.prompt.is_none()
@@ -1095,10 +1114,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(message) = out.action {
                             send(message)?;
                         }
-                        if out.consumed {
-                            dirty = true;
-                            continue;
-                        }
+                        dirty = true;
+                        continue;
                     }
                     // The Sessions dashboard has no composer. Search, rename and archive
                     // confirmation own every key; otherwise the list shortcuts apply and any
@@ -1119,6 +1136,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if key.code == KeyCode::Esc
                         && s.panel_title.is_empty()
                         && s.prompt.is_none()
+                        && !(details_focus
+                            && s.details_panel.tab == "Jobs"
+                            && s.details_panel.jobs.log.is_some())
                         && drawn_regions.details.width > 0
                         && drawn_regions.details.x < drawn_regions.transcript.right()
                     {
@@ -1130,22 +1150,91 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     cache.selection = None;
                     if details_focus && s.panel_title.is_empty() && s.prompt.is_none() {
-                        let tabs = ["Session", "Files", "MCP", "Logs"];
+                        let tabs = details_sidebar::TABS.map(|(id, _)| id);
                         let index = tabs
                             .iter()
                             .position(|tab| *tab == s.details_panel.tab)
                             .unwrap_or(0);
+                        let jobs_tab = s.details_panel.tab == "Jobs";
+                        let job_log = jobs_tab && s.details_panel.jobs.log.is_some();
                         match key.code {
                             KeyCode::Char('[') | KeyCode::Char(']') => {
                                 let next = if key.code == KeyCode::Char(']') {
-                                    (index + 1) % 4
+                                    (index + 1) % tabs.len()
                                 } else {
-                                    (index + 3) % 4
+                                    (index + tabs.len() - 1) % tabs.len()
                                 };
                                 local_ui.dispatch(
                                     json!({"type":"details_tab","text":tabs[next]}),
                                     &mut s,
                                 )?;
+                                continue;
+                            }
+                            KeyCode::Esc if job_log => {
+                                send(
+                                    json!({"type":"job_log_close","text":"","generation":s.generation}),
+                                )?;
+                                details_scroll = 0;
+                                continue;
+                            }
+                            KeyCode::Up | KeyCode::Down if job_log => {
+                                let palette = render::Palette::new(s.theme == "nexus-light");
+                                let width =
+                                    details_sidebar::geometry(drawn_regions.details, &s, &palette)
+                                        .map_or(0, |g| g.body.width);
+                                let rows = cache.detail_rows(&s, &palette, width).0.len();
+                                let end = details_sidebar::max_scroll(
+                                    drawn_regions.details,
+                                    &s,
+                                    &palette,
+                                    rows,
+                                );
+                                // The log opens scrolled past its end (the tail is what matters).
+                                let at = details_scroll.min(end);
+                                details_scroll = if key.code == KeyCode::Up {
+                                    at.saturating_sub(1)
+                                } else {
+                                    (at + 1).min(end)
+                                };
+                                dirty = true;
+                                continue;
+                            }
+                            KeyCode::Up | KeyCode::Down if jobs_tab => {
+                                let delta = if key.code == KeyCode::Up { -1 } else { 1 };
+                                if let Some(id) = details_sidebar::neighbour_job(&s, delta) {
+                                    send(
+                                        json!({"type":"job_select","text":id,"generation":s.generation}),
+                                    )?;
+                                }
+                                continue;
+                            }
+                            KeyCode::Enter | KeyCode::Char('l') if jobs_tab => {
+                                if let Some(job) = details_sidebar::selected_job(&s) {
+                                    details_scroll = usize::MAX / 2;
+                                    send(
+                                        json!({"type":"job_log","text":job.id,"generation":s.generation}),
+                                    )?;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('s') if jobs_tab => {
+                                if let Some(job) =
+                                    details_sidebar::selected_job(&s).filter(|job| job.stop)
+                                {
+                                    send(
+                                        json!({"type":"job_stop","text":job.id,"generation":s.generation}),
+                                    )?;
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('b') if jobs_tab => {
+                                if let Some(job) =
+                                    details_sidebar::selected_job(&s).filter(|job| job.background)
+                                {
+                                    send(
+                                        json!({"type":"job_background","text":job.id,"generation":s.generation}),
+                                    )?;
+                                }
                                 continue;
                             }
                             KeyCode::Esc => {
@@ -1167,7 +1256,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Down => {
                                 details_index = (details_index + 1)
                                     .min(s.details_panel.files.len().saturating_sub(1));
-                                details_scroll += 1;
+                                let palette = render::Palette::new(s.theme == "nexus-light");
+                                let width =
+                                    details_sidebar::geometry(drawn_regions.details, &s, &palette)
+                                        .map_or(0, |g| g.body.width);
+                                let rows = cache.detail_rows(&s, &palette, width).0.len();
+                                details_scroll =
+                                    (details_scroll + 1).min(details_sidebar::max_scroll(
+                                        drawn_regions.details,
+                                        &s,
+                                        &palette,
+                                        rows,
+                                    ));
                                 dirty = true;
                                 continue;
                             }
@@ -2163,6 +2263,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     dirty = true;
                 }
                 Event::Paste(text) => {
+                    // Panels own paste even when they have no editable control. Never
+                    // let a secret (or an ignored panel paste) fall into the composer.
+                    if !s.panel_title.is_empty() && s.form.is_none() && s.prompt.is_none() {
+                        if !cache.settings_root.active && !settings_nav_focus && !s.panel_loading {
+                            if let Some(raw) = s.settings_page.as_ref() {
+                                let page = cache.page_for(s.revision, raw);
+                                settings_page::input::paste(&page, &mut cache.page_state, &text);
+                                dirty = true;
+                            }
+                        }
+                        continue;
+                    }
+                    if s.dashboard.is_some() {
+                        continue;
+                    }
                     if !s.agent_page.is_empty() && s.panel_title.is_empty() {
                         continue;
                     }
@@ -2213,6 +2328,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             send(
                                 json!({"type":"operation","operation":operation,"generation":s.generation}),
                             )?;
+                        }
+                        if let Some(message) = out.action {
+                            send(message)?;
+                        }
+                        cache.pointer = Some((mouse.column, mouse.row));
+                        dirty = true;
+                        continue;
+                    }
+                    if !s.sidebar.open && s.details_sidebar
+                        && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
+                        && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
+                    {
+                        let palette = render::Palette::new(s.theme == "nexus-light");
+                        if let Some(g) = details_sidebar::geometry(drawn_regions.details, &s, &palette) {
+                            if g.body.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+                                let browser = sidebar::details_snapshot(&s);
+                                let out = cache.sidebar.details_mouse(mouse, &browser, g.body);
+                                if let Some(message) = out.action { send(message)?; }
+                                dirty = true;
+                                continue;
+                            }
+                        }
+                    }
+                    // The right details sidebar owns its divider (hover and drag); its tabs and
+                    // rows are handled with the conversation clicks below.
+                    if s.details_sidebar
+                        && (drawn_regions.details.width > 0 || cache.details.dragging)
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
+                    {
+                        let total = terminal.size()?.width;
+                        let out = cache.details.mouse(mouse, drawn_regions.details, total);
+                        if let Some(width) = out.width {
+                            s.details_panel.width = width;
                         }
                         if let Some(message) = out.action {
                             send(message)?;
@@ -2430,7 +2580,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             if r.details.contains((mouse.column, mouse.row).into()) {
-                                details_scroll = details_scroll.saturating_sub(3);
+                                let palette = render::Palette::new(s.theme == "nexus-light");
+                                let width = details_sidebar::geometry(r.details, &s, &palette)
+                                    .map_or(0, |g| g.body.width);
+                                let rows = cache.detail_rows(&s, &palette, width).0.len();
+                                // An opened job log is scrolled past its end; start from what is drawn.
+                                details_scroll = details_scroll
+                                    .min(details_sidebar::max_scroll(r.details, &s, &palette, rows))
+                                    .saturating_sub(3);
                                 dirty = true;
                                 continue;
                             }
@@ -2472,35 +2629,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             if r.details.contains((mouse.column, mouse.row).into()) {
-                                details_focus = true;
-                                if mouse.row == r.details.y {
-                                    if let Some(tab) =
-                                        render::details_tab_at(r.details, mouse.column)
-                                    {
-                                        local_ui.dispatch(
-                                            json!({"type":"details_tab","text":tab}),
-                                            &mut s,
-                                        )?;
-                                    }
-                                    dirty = true;
-                                    continue;
-                                }
-                                if mouse.row == r.details.y + 1 && s.details_panel.tab == "Logs" {
-                                    if let Some((_, session)) = s.details_panel.logs_header.first()
-                                    {
-                                        action("copy_text", session)?;
-                                    }
-                                    continue;
-                                }
                                 let palette = render::Palette::new(s.theme == "nexus-light");
-                                let rows = cache
-                                    .detail_rows(&s, &palette, r.details.width.saturating_sub(5))
-                                    .0
-                                    .len();
-                                details_scroll =
-                                    (details_scroll + 3).min(rows.saturating_sub(
-                                        r.details.height.saturating_sub(1) as usize,
-                                    ));
+                                let width = details_sidebar::geometry(r.details, &s, &palette)
+                                    .map_or(0, |g| g.body.width);
+                                let rows = cache.detail_rows(&s, &palette, width).0.len();
+                                details_scroll = (details_scroll + 3).min(
+                                    details_sidebar::max_scroll(r.details, &s, &palette, rows),
+                                );
                                 dirty = true;
                                 continue;
                             }
@@ -2933,41 +3068,48 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             if r.details.contains((mouse.column, mouse.row).into()) {
                                 details_focus = true;
-                                if mouse.row == r.details.y {
-                                    if let Some(tab) =
-                                        render::details_tab_at(r.details, mouse.column)
-                                    {
-                                        local_ui.dispatch(
-                                            json!({"type":"details_tab","text":tab}),
-                                            &mut s,
-                                        )?;
-                                    }
+                                if let Some(tab) =
+                                    details_sidebar::tab_at(r.details, mouse.column, mouse.row)
+                                {
+                                    local_ui.dispatch(
+                                        json!({"type":"details_tab","text":tab}),
+                                        &mut s,
+                                    )?;
                                     dirty = true;
                                     continue;
                                 }
-                                if mouse.row == r.details.y + 1 && s.details_panel.tab == "Logs" {
+                                let palette = render::Palette::new(s.theme == "nexus-light");
+                                if details_sidebar::copy_id_at(
+                                    r.details,
+                                    &s,
+                                    &palette,
+                                    mouse.column,
+                                    mouse.row,
+                                ) {
                                     if let Some((_, session)) = s.details_panel.logs_header.first()
                                     {
                                         action("copy_text", session)?;
                                     }
                                     continue;
                                 }
-                                let palette = render::Palette::new(s.theme == "nexus-light");
-                                let (_, files) = cache.detail_rows(
+                                // The same rows, width and scroll the last frame painted.
+                                let width = details_sidebar::geometry(r.details, &s, &palette)
+                                    .map_or(0, |g| g.body.width);
+                                let rows = cache.detail_rows(&s, &palette, width).clone();
+                                let hit = details_sidebar::file_at(
+                                    r.details,
                                     &s,
                                     &palette,
-                                    r.details.width.saturating_sub(5),
+                                    &rows,
+                                    details_scroll,
+                                    logs_scroll,
+                                    mouse.column,
+                                    mouse.row,
                                 );
-                                let row = details_scroll
-                                    + (mouse.row - r.details.y).saturating_sub(1) as usize;
-                                if let Some(file) = files
-                                    .get(row)
-                                    .copied()
-                                    .flatten()
-                                    .and_then(|i| s.details_panel.files.get(i))
-                                {
+                                if let Some(file) = hit.and_then(|i| s.details_panel.files.get(i)) {
+                                    let path = file.path.clone();
                                     local_ui.dispatch(
-                                        json!({"type":"file_toggle","text":file.path}),
+                                        json!({"type":"file_toggle","text":path}),
                                         &mut s,
                                     )?;
                                 }

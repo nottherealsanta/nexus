@@ -413,6 +413,44 @@ def _agent_origin_row(message, agents) -> tuple[str, str, dict | None] | None:
     return title, "report", operation
 
 
+_REPORT_PREVIEW_LINES = 2
+
+
+def _agent_report_block(message, agents, shell=None) -> dict | None:
+    """The compact ``agent_report`` block for a delivered subagent report, else ``None``.
+
+    Carries the agent name and task title, a preview capped to two content lines and the number
+    of lines left out (``count``); the click opens the full message, ``i`` the agent page.
+    """
+    origin = message.origin or {}
+    if origin.get("kind") != "subagent_report":
+        return None
+    agents = agents or {}
+    batch = [item for item in (origin.get("agents") or []) if isinstance(item, str)]
+    agent_id = str(origin.get("agent") or "")
+    child = agents.get(agent_id)
+    lines = [line.strip() for line in message.text.splitlines() if line.strip()]
+    if lines and lines[0].startswith("[Subagent report"):
+        lines = lines[1:]
+    shown = [escape_controls(line) for line in lines[:_REPORT_PREVIEW_LINES]]
+    if len(batch) > 1:
+        name = f"{len(batch)} subagents"
+        task = ", ".join(escape_controls(item)[:60] for item in batch[:4]) + (", …" if len(batch) > 4 else "")
+    else:
+        name = escape_controls((child.type if child and child.type else "") or agent_id or "subagent")[:60]
+        task = escape_controls(" ".join(((child.description or child.task or "") if child else "").split()))[:120]
+    block = {"id": message.id + ":report", "kind": "agent_report", "agent_name": name, "task": task,
+             "title": name, "text": "\n".join(shown), "count": max(0, len(lines) - len(shown)),
+             "status": escape_controls(str(origin.get("status") or ""))[:40],
+             "operation": {"kind": "message_page", "id": message.id}}
+    if len(batch) <= 1:
+        # The same per-agent colour the subagent call's first line uses.
+        block["color"] = _agent_color(shell, name)
+    if len(batch) <= 1 and child is not None:
+        block["inspect_operation"] = {"kind": "agent_page", "id": agent_id}
+    return block
+
+
 def _turn_number(turns, turn):
     """``#N`` of ``turn``: user-initiated turns before it plus one (0 for shell or prompt-less turns)."""
     ordinal = 0
@@ -475,6 +513,12 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
                 # A consumed steer lands after the turn's own prompt (reduce appends it; the
                 # view keeps no per-message mode), so any later user card is a steer.
                 block["status"] = "steer"  # drawn as "steer" beside the card
+            report = _agent_report_block(message, agents, shell)
+            if report is not None:
+                # Compact notification, not a user card: no turn number, no fold, the whole
+                # report is one click away (message page) and never leaves the record.
+                entries.append((message.event_seq, 2, report, 1, 1, "user"))
+                continue
             agent_row = _agent_origin_row(message, agents)
             if agent_row is not None:
                 # Not typed by the user: a labelled subagent notification. It never takes #N, and the
@@ -588,7 +632,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
                      # `idle · run 2` / `stopped by system: …`; empty for a plain running or finished child.
-                     "state": agent_state_label(child) if state in {"idle", "interrupted", "stopped"} or (state == "running" and child.runs > 1) else "",
+                     "state": agent_state_label(child) if state in {"interrupted", "stopped"} or (state == "running" and child.runs > 1) else "",
                      "model": model, "effort": effort, "tier": tier, "metrics": "",
                      "agent_name": agent_name, "task": phrase,
                      "tool_calls": tool_calls, "external_tool_calls": _agent_card_external_tools(child), "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
@@ -767,7 +811,7 @@ def _modified_files_memo(shell, view, modified_files):
 
 def _details_panel(controller, view, shell):
     """The terminal details sidebar (SESSION, MODIFIED FILES, MCP SERVERS) as data."""
-    from ...ui_support.details import diff_preview_lines, mcp_rows, modified_files, session_rows
+    from ...ui_support.details import DEFAULT_WIDTH, diff_preview_lines, mcp_rows, modified_files, session_rows
     rows = session_rows(view, phase=view.phase, agent=getattr(controller, "agent_name", "build"),
                         model=getattr(controller, "model", None) or "default",
                         effort=getattr(controller, "reasoning_effort", None))
@@ -807,6 +851,7 @@ def _details_panel(controller, view, shell):
             ("Branch", str(getattr(shell, "branch", "") or (report.get("git") or {}).get("branch") or "unavailable"))]
     return {
         "tab": shell.preferences.values["details_tab"] if shell else "Session",
+        "width": shell.preferences.values.get("details_width", DEFAULT_WIDTH) if shell else DEFAULT_WIDTH,
         "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
                         ["Socket", escape_controls(str(daemon.get("socket") or "unavailable"))],
                         ["Client", str(getattr(getattr(getattr(controller, "client", None), "health", None), "version", "unavailable"))],
@@ -819,6 +864,7 @@ def _details_panel(controller, view, shell):
         "files_summary": f"+{added} -{removed} across {len(files)} file{'s' if len(files) != 1 else ''}" if files else "",
         "mcp": [[tone, escape_controls(text), escape_controls(note)]
                 for tone, text, note in mcp_rows(mcp_report, error=getattr(shell, "mcp_error", None))],
+        "jobs": shell.jobs.projection() if shell is not None and hasattr(shell, "jobs") else {},
     }
 
 
@@ -1087,12 +1133,10 @@ def _agent_state_blocks(agent) -> list[dict]:
         by = escape_controls(agent.stopped_by or "unknown")
         reason = escape_controls(agent.stopped_reason or "no reason recorded")
         return [{"id": agent.id + ":state", "kind": "literal", "title": f"Subagent stopped · by {by}",
-                 "text": f"Reason: {reason}\nThe conversation log is kept; the agent cannot be continued.", "gap": 1}]
-    if state in {"idle", "interrupted"}:
-        why = ("The root can continue it with subagent_send, or close it with subagent_stop (/tasks)."
-               if state == "idle" else "The run was cut short by a daemon restart; the root can continue it with subagent_send.")
+                 "text": f"Reason: {reason}\nThe conversation log is kept.", "gap": 1}]
+    if state == "interrupted":
         return [{"id": agent.id + ":state", "kind": "literal", "title": f"Subagent {agent_state_label(agent)}",
-                 "text": why, "gap": 1}]
+                 "text": "The run was cut short by a daemon restart.", "gap": 1}]
     return []
 
 
@@ -1392,6 +1436,24 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     return snapshot
 
 
+async def dismiss(shell) -> bool:
+    """The native ``dismiss`` action (Esc, Back, outside click); False when it was ignored."""
+    # Only the provider usage modal sets panel_loading; it stays dismissable while its fetch is
+    # pending (back() bumps panel_revision, so the refresh drops its result).
+    if shell.panel_loading and shell.panel_title != "Provider usage":
+        return False
+    if await shell.workflows.speak_stop():
+        return False
+    form = shell.workflows.form
+    if form and not form["secret"] and form["status"] and not form.get("saved", False):
+        shell.workflows.menu("Discard unsaved changes?", [("Keep editing", {"kind": "back"}),
+            ("Discard draft", {"kind": "discard_form"})], [form["status"], form["body"]])
+    else:
+        shell.workflows.back()
+        await shell.workflows.refresh_page()
+    return True
+
+
 async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, desktop=False, process=None) -> int:
     client = client or await open_client(workspace)
     controller = TuiController(client, session)
@@ -1400,6 +1462,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
     shell.command_help = {spec.name: spec.summary for spec in SPECS if not spec.hidden}
     shell.local_transcript = not desktop
+    shell.native_reload = not desktop
     shell.sidebar.enabled = not desktop  # the left sidebar is a terminal feature
     shell.live.pane = not desktop  # the terminal shows the open call above the composer
     shell.ui_ack = 0
@@ -1560,12 +1623,12 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
                      shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines,
-                     shell.sidebar.fingerprint()))
+                     shell.sidebar.fingerprint(), shell.jobs.projection()))
     async def poll():
         preview_cursor = -1
         last_polled = None
         while True:
-            await asyncio.sleep(.2 if shell.voice.phase != "idle" else 1 if shell.logs.open else 3)
+            await asyncio.sleep(.2 if shell.voice.phase != "idle" else 1 if shell.logs.open or shell.jobs.active else 3)
             shell.focus.tick()  # keeps this client's foreground claim fresh on the host
             failures = []
             async def section(label, work):
@@ -1632,11 +1695,13 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             async def logs():
                 if shell.logs.open and shell.logs.visible:
                     await shell.logs.poll()
+            async def jobs():
+                await shell.jobs.poll()  # only while the Jobs tab is drawn
             async def manager():
                 if shell.manager.due():
                     await shell.manager.refresh()  # failures are kept as the entry's text, never raised
             for label, work in (("Sessions", sessions), ("Branch", lambda: refresh_branch(shell)), ("Dictation", dictation),
-                                ("Health", health), ("Context", context), ("Logs", logs), ("Manager", manager),
+                                ("Health", health), ("Context", context), ("Logs", logs), ("Jobs", jobs), ("Manager", manager),
                                 ("Sidebar", shell.sidebar.poll)):
                 await section(label, work)
             if failures:
@@ -1750,26 +1815,19 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if not await shell.workflows.speak_stop():
                         await shell.cancel()
                 elif action["type"] == "dismiss":
-                    if shell.panel_loading:
+                    if not await dismiss(shell):
                         continue
-                    if await shell.workflows.speak_stop():
-                        continue
-                    form = shell.workflows.form
-                    if form and not form["secret"] and form["status"] and not form.get("saved", False):
-                        shell.workflows.menu("Discard unsaved changes?", [("Keep editing", {"kind": "back"}),
-                            ("Discard draft", {"kind": "discard_form"})], [form["status"], form["body"]])
-                    else:
-                        shell.workflows.back()
-                        await shell.workflows.refresh_page()
                 elif action["type"] == "command":
-                    await shell.submit(action["text"])
+                    if not await shell.submit(action["text"]):
+                        break
                 elif action["type"] == "pick":
                     if action.get("generation") == shell.generation:
                         item = next((item for item in shell.items if item["command"] == action["text"]), None)
                         if item:
                             shell.panel_title = ""
                             shell.items = []
-                            await shell.submit(item["command"])
+                            if not await shell.submit(item["command"]):
+                                break
                 elif action["type"] == "answer":
                     current = displayed_prompt
                     if current and current["id"] == action["text"]:
@@ -1834,8 +1892,6 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if key in {"sessions_sidebar", "details_sidebar", "context_preview"}:
                         shell.preferences.set(key, bool(action.get("value", not shell.preferences.values[key])))
                         shell.logs.open = shell.preferences.values["details_sidebar"] and shell.preferences.values["details_tab"] == "Logs"
-                        if key == "sessions_sidebar":
-                            await shell.sidebar.sync()
                 elif action["type"] == "file_toggle":
                     path = action["text"]
                     if not action.get("value", path not in shell.open_files):
@@ -1844,13 +1900,32 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         shell.open_files.add(path)
                 elif action["type"] == "details_tab":
                     tab = action.get("text")
-                    if tab in {"Session", "Files", "MCP", "Logs"}:
+                    if tab in {"Session", "Files", "Changes", "MCP", "Jobs", "Logs", "Browser", "Git"}:
+                        tab = "Files" if tab == "Changes" else tab
                         shell.preferences.set("details_tab", tab)
+                        if tab in {"Browser", "Git"}:
+                            await shell.sidebar.refresh(force=True)
                         shell.logs.open = tab == "Logs" and shell.preferences.values["details_sidebar"]
                         if shell.logs.open and shell.logs.visible:
                             await shell.logs.poll()
+                        if tab != "Jobs":
+                            shell.jobs.log = None  # leaving the tab closes the viewer
+                elif action["type"] in {"job_select", "job_log", "job_log_close", "job_stop", "job_background"}:
+                    job_id = action.get("text")
+                    if shell.jobs.active and isinstance(job_id, str):
+                        await {"job_select": shell.jobs.select, "job_log": shell.jobs.open_log,
+                               "job_stop": shell.jobs.stop, "job_background": shell.jobs.background,
+                               "job_log_close": lambda _id: shell.jobs.close_log()}[action["type"]](job_id)
+                elif action["type"] == "details_width":
+                    width = action.get("width")
+                    if isinstance(width, int) and not isinstance(width, bool):
+                        from ...ui_support.details import clamp_width
+                        shell.preferences.set("details_width", clamp_width(width))
                 elif action["type"] == "details_visible":
                     shell.logs.visible = bool(action.get("open"))
+                    shell.jobs.visible = bool(action.get("jobs"))
+                    if shell.jobs.active:
+                        await shell.jobs.poll(force=True)
                 elif action["type"] == "ui_trace":
                     shell.logs.trace = [sanitize(line, 256) for line in action.get("lines", [])[:16]]
                 elif action["type"] == "update_help":
@@ -1924,6 +1999,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             except Exception as exc:
                 shell.flash(error_text(exc), "error")
                 await update()
+        if shell.reload_request is not None:
+            return shell.reload_request
         return await process.wait()
     finally:
         shell.workflows.close_dashboard(force=True)
@@ -1965,8 +2042,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), 2)
             if process.returncode is None:
-                process.terminate()
-                await process.wait()
+                from .run import release
+                await release(process)
 
 
 def main() -> None:

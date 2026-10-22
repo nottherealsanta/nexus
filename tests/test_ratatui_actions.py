@@ -275,7 +275,7 @@ async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
     await shell.command("/tools", ())
     assert shell.notice == "No tools used in this transcript"
     await shell.command("/tasks", ())
-    assert shell.notice == "No background tasks"
+    assert shell.notice == "No subagents"
     with pytest.raises(ValueError, match="/theme dark"):
         await shell.command("/theme", ("purple",))
     with pytest.raises(ValueError, match="unavailable"):
@@ -385,6 +385,20 @@ async def test_usage_opens_before_fetch_and_keeps_cached_data_on_error(tmp_path,
     await shell.usage_task
     assert not shell.panel_loading and "Codex · Plus" in shell.panel_lines
     assert "offline" in shell.panel_lines[-1]
+    assert "out of date" in shell.panel_lines[0] and shell.panel_tones[0] == "bad"  # cached numbers are not claimed fresh
+
+
+@pytest.mark.asyncio
+async def test_usage_open_fetches_again_even_with_a_fresh_cache(tmp_path, monkeypatch):
+    fetch = AsyncMock(return_value={"providers": [{"id": "codex", "label": "Codex"}], "fetched_at": 1})
+    shell = _shell(tmp_path, monkeypatch, providers_usage=fetch)
+    shell.on_update = AsyncMock()
+    shell.usage_cache = {"providers": [{"label": "Cached"}], "fetched_at": 9e9}
+    shell.open_usage()
+    assert shell.panel_loading and "Cached" in shell.panel_lines
+    await shell.usage_task
+    fetch.assert_awaited_once()
+    assert "Codex" in shell.panel_lines and not shell.panel_loading
 
 
 @pytest.mark.asyncio
@@ -407,6 +421,35 @@ async def test_usage_refresh_cannot_replace_a_dismissed_or_new_panel(tmp_path, m
     assert shell.panel_title == "Different panel" and shell.panel_lines == ["Keep this"]
     shell.on_update.assert_not_awaited()
     assert shell.usage_cache is not None
+
+
+@pytest.mark.asyncio
+async def test_usage_modal_dismisses_while_its_fetch_is_pending(tmp_path, monkeypatch):
+    import asyncio
+    from nexus.ui.ratatui.prototype import dismiss
+
+    gate = asyncio.Event()
+
+    async def fetch():
+        await gate.wait()
+        return {"providers": [{"label": "Fresh"}]}
+
+    shell = _shell(tmp_path, monkeypatch, providers_usage=AsyncMock(side_effect=fetch))
+    shell.on_update = AsyncMock()
+    await shell.command("/usage", ())
+    assert shell.panel_loading and not shell.usage_task.done()
+    assert await dismiss(shell) is True
+    assert shell.panel_title == "" and not shell.panel_loading
+    gate.set()
+    await shell.usage_task
+    assert shell.panel_title == "" and shell.panel_lines == []
+    shell.on_update.assert_not_awaited()
+
+    # Any other loading panel still ignores dismiss.
+    shell.show("Models", "x")
+    shell.panel_loading = True
+    assert await dismiss(shell) is False
+    assert shell.panel_title == "Models" and shell.panel_loading
 
 
 @pytest.mark.asyncio

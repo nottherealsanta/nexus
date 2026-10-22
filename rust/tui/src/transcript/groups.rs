@@ -9,8 +9,10 @@
 //! and never expand a group. When the group finishes, `transcript::fold` removes the rows
 //! one by one and the header flashes (`Content::flash`) before settling to muted.
 //!
-//! An expanded member is a small box: `┌ Read path`, the relevant rows or reasoning behind
-//! a `│` rail, then `╰ 0.8s` in italics. A collapsed member is one row, `▸ Read path  0.8s`.
+//! An expanded member is a small box: `┌ Read path  0.8s`, the relevant rows or reasoning
+//! behind a `│` rail that closes as `╰` on the last row. A collapsed member is one row,
+//! `▸ Read path  0.8s`. The seconds always ride on the head row; a running shell counts up
+//! from `started_ms`. Every row of a member carries its toggle and `inspect_operation`.
 use super::{look, thought, tools, truncate, Rows};
 use crate::{bridge::Content, render::Palette};
 use nexus_widgets::theme::mix;
@@ -40,9 +42,23 @@ fn verb_rest(m: &Content) -> (String, String) {
     (super::capitalized(verb), rest.to_string())
 }
 
-/// Seconds of a finished member, from the projection's `elapsed_ms`.
-fn took(m: &Content) -> Option<String> {
-    (m.elapsed_ms > 0 && m.status != "running").then(|| seconds(m.elapsed_ms))
+/// Wall clock in epoch milliseconds, for the live time of a running shell.
+fn now_ms() -> u64 {
+    (crate::live_bar::now_epoch() * 1000.0) as u64
+}
+
+fn is_shell(m: &Content) -> bool {
+    matches!(m.title.to_lowercase().as_str(), "bash" | "shell" | "run")
+}
+
+/// Seconds of a member: `elapsed_ms` once finished; a running shell counts up from the
+/// projection's `started_ms` against `now_ms` (the projection holds no clock).
+fn took(m: &Content, now_ms: u64) -> Option<String> {
+    if m.status == "running" {
+        return (is_shell(m) && m.started_ms > 0 && now_ms > m.started_ms)
+            .then(|| seconds(now_ms - m.started_ms));
+    }
+    (m.elapsed_ms > 0).then(|| seconds(m.elapsed_ms))
 }
 
 /// Member times are always seconds (`0.8s`), never milliseconds; minutes keep the shared form.
@@ -62,7 +78,7 @@ fn gutter() -> Span<'static> {
 }
 
 /// One member, collapsed or expanded.
-fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
+fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette, now_ms: u64) {
     let glyphs = look::glyphs();
     let running = m.status == "running";
     let (verb, rest) = verb_rest(m);
@@ -82,12 +98,10 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
         glyphs.closed
     };
     let corner_tone = if running { p.text } else { p.border_strong };
-    let time = took(m);
-    // A collapsed row ends with its seconds; the text gives way before they do.
-    let reserve = match (&time, open) {
-        (Some(time), false) => time.width() + 2,
-        _ => 0,
-    };
+    // The seconds ride on the head row, open or closed (a thought's title already says them).
+    let time = took(m, now_ms).filter(|_| !(open && m.kind == "thought"));
+    // The text gives way before the seconds do.
+    let reserve = time.as_ref().map_or(0, |time| time.width() + 2);
     let mut head = vec![
         gutter(),
         Span::styled(corner, Style::default().fg(corner_tone)),
@@ -124,27 +138,30 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
         Span::styled(glyphs.rail, Style::default().fg(p.border)),
         Span::raw(" "),
     ];
+    let first_body = out.len();
     if m.kind == "thought" {
         thought::trace(out, m, &rail, width, p);
+    } else if m.signal.is_empty() && m.output_operation.is_some() {
+        // Every body row belongs to the member's own toggle (and its `i` inspector), also
+        // the labelled-details fallback, which a standalone row ties to its output toggle.
+        let mut attached = m.clone();
+        attached.output_operation = None;
+        tools::body(out, &attached, &rail, width, p, &op);
     } else {
         tools::body(out, m, &rail, width, p, &op);
     }
+    // The box closes on its last body row (`╰ …`), so no row is spent on a footer.
+    if m.members.is_empty() && out.len() > first_body {
+        if let Some((line, _)) = out.last_mut() {
+            if let Some(span) = line.spans.get_mut(1) {
+                if span.content == glyphs.rail {
+                    span.content = look::corner_end().into();
+                }
+            }
+        }
+    }
     for child in &m.members {
         out.extend(super::build_inner(child, width as u16, p));
-    }
-    if let Some(time) = time {
-        out.push((
-            Line::from(vec![
-                gutter(),
-                Span::styled(look::corner_end(), Style::default().fg(p.border)),
-                Span::raw(" "),
-                Span::styled(
-                    time,
-                    Style::default().fg(p.quiet).add_modifier(Modifier::ITALIC),
-                ),
-            ]),
-            op,
-        ));
     }
 }
 
@@ -280,8 +297,9 @@ pub fn draw(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     out.push((header(b, width, p), b.operation.clone()));
     // A failure never opens a group; failure details are shown on the individual member rows.
     if !b.collapsed && !b.members.is_empty() {
+        let now = now_ms();
         for m in &b.members {
-            member(out, m, width, p);
+            member(out, m, width, p, now);
         }
     } else if b.status == "running" && !b.members.is_empty() {
         tree(out, b, width, p);
@@ -556,20 +574,71 @@ mod tests {
             plain(&rows),
             [
                 "    ▾ Ran 2 commands, Read 3 files · 1.8s",
-                "    ┌ Read src/main.rs",
+                "    ┌ Read src/main.rs  0.8s",
                 "    │ 1  fn main() {}",
-                "    │ … 112 lines",
-                "    ╰ 0.8s",
+                "    ╰ … 112 lines",
                 "    ▸ Read src/main.rs  0.8s",
             ]
         );
-        let last = rows[4].0.spans.last().unwrap();
+        let last = rows[1].0.spans.last().unwrap();
         assert!(last.style.add_modifier.contains(Modifier::ITALIC));
-        assert_eq!(rows[1].1.as_ref().unwrap()["inspect_operation"]["id"], "a");
+        // Head and every body row share the member's toggle and its inspector.
+        for index in [1, 2, 3] {
+            let op = rows[index].1.as_ref().unwrap();
+            assert_eq!(op["id"], "a:detail");
+            assert_eq!(op["inspect_operation"]["id"], "a");
+        }
         // Column alignment: connectors share the header glyph's column.
-        for index in [1, 2, 4, 5] {
+        for index in [1, 2, 3, 4] {
             assert!(plain(&rows)[index].starts_with("    "));
             assert!(!plain(&rows)[index].starts_with("     "));
+        }
+    }
+
+    #[test]
+    fn running_shell_counts_up_from_its_start_and_a_finished_one_shows_its_time() {
+        let p = Palette::new(false);
+        let mut shell = read("s", "running");
+        shell.title = "Bash".into();
+        shell.text = "sleep 9".into();
+        shell.elapsed_ms = 0;
+        shell.started_ms = 10_000;
+        shell.signal = vec![("code".into(), "$ sleep 9".into())];
+        let mut rows = Vec::new();
+        member(&mut rows, &shell, 80, &p, 13_200);
+        assert_eq!(
+            plain(&rows),
+            [
+                format!("    {} Bash sleep 9  3.2s", look::SLOT),
+                "    ╰ $ sleep 9".to_string()
+            ]
+        );
+        // A running read has no live clock, and a finished shell shows its recorded time.
+        let mut reading = read("r", "running");
+        reading.elapsed_ms = 0;
+        reading.started_ms = 10_000;
+        let mut rows = Vec::new();
+        member(&mut rows, &reading, 80, &p, 13_200);
+        assert!(!plain(&rows)[0].contains("3.2s"));
+        shell.status = "completed".into();
+        shell.elapsed_ms = 2_500;
+        let mut rows = Vec::new();
+        member(&mut rows, &shell, 80, &p, 99_000);
+        assert!(plain(&rows)[0].ends_with("Bash sleep 9  2.5s"));
+    }
+
+    #[test]
+    fn detail_fallback_rows_stay_on_the_members_toggle() {
+        let p = Palette::new(false);
+        let mut open = read("a", "completed");
+        open.detail = "  Label: value\nplain".into();
+        open.output_operation = Some(json!({"kind":"block_toggle","id":"a:output"}));
+        let mut rows = Vec::new();
+        member(&mut rows, &open, 80, &p, 0);
+        assert!(rows.len() >= 3);
+        for (_, op) in &rows {
+            assert_eq!(op.as_ref().unwrap()["id"], "a:detail");
+            assert_eq!(op.as_ref().unwrap()["inspect_operation"]["id"], "a");
         }
     }
 
@@ -592,8 +661,8 @@ mod tests {
         let lines = plain(&rows);
         assert_eq!(lines[1], "    ┌ Thought for 1.1s");
         assert_eq!(lines[2], "    │ Plan");
-        assert_eq!(lines[3], "    │ read first");
-        assert_eq!(lines[4], "    ╰ 1.1s");
+        assert_eq!(lines[3], "    ╰ read first");
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]

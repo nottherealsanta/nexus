@@ -1,8 +1,8 @@
-"""Ratatui projection of non-blocking, persistent subagents (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md phase 7).
+"""Ratatui projection of historical background subagent events.
 
-A background child outlives its tool call and the root turn: its card keeps the spinner while it
-runs, names `idle · run N` / `stopped by …` afterwards, and a delivered report is a labelled
-notification row, never a user prompt.
+Subagents are foreground-only now, but old session logs still hold background children: the card
+keeps the spinner while such a child runs, a completed one reads as finished (no `idle` state),
+`stopped by …` stays, and a delivered report is a labelled notification row, never a user prompt.
 """
 from __future__ import annotations
 
@@ -63,13 +63,13 @@ def test_acked_background_call_keeps_its_spinner_while_the_child_runs(tmp_path, 
     assert _snapshot(tmp_path, monkeypatch, view)["agents_running"] == 1
 
 
-def test_idle_child_card_names_the_state_and_run(tmp_path, monkeypatch):
+def test_completed_legacy_persistent_child_reads_as_finished_not_idle(tmp_path, monkeypatch):
     view = _root([_completed(8)])
     agent = view.agents[CHILD]
-    assert agent_state(agent) == "idle" and agent_state_label(agent) == "idle · run 1"
+    assert agent_state(agent) == "finished" and agent_state_label(agent) == "completed"
     snapshot = _snapshot(tmp_path, monkeypatch, view)
     block = _task(snapshot)
-    assert block["status"] == "done" and block["state"] == "idle · run 1"
+    assert block["status"] == "done" and block["state"] == ""
     assert snapshot["agents_running"] == 0
 
 
@@ -113,13 +113,53 @@ def test_report_row_is_a_labelled_notification_not_a_numbered_prompt(tmp_path, m
         _ev(11, "input.consumed", {"queued_id": "q1", "turn": "t2", "mode": "steer", "content": [{"type": "text", "text": body}]}, turn="t2"),
     ]
     snapshot = _snapshot(tmp_path, monkeypatch, _root(extra))
-    row = next(b for b in snapshot["blocks"] if b["kind"] == "user" and b.get("status") == "report")
-    assert row["title"] == "report · s/child/1 · explorer · run 1 · completed"
-    assert "Found x in a.py:3" in row["text"], "the report body stays readable"
-    assert row["number"] == 0
-    assert row["operation"] == {"kind": "agent_page", "id": CHILD}
-    prompts = [b for b in snapshot["blocks"] if b["kind"] == "user" and b.get("status") != "report"]
+    row = next(b for b in snapshot["blocks"] if b["kind"] == "agent_report")
+    assert row["agent_name"] == "explorer" and row["status"] == "completed"
+    assert "task" in row, "the task title travels with the agent name"
+    assert row["text"] == "Found x in a.py:3", "the header line is not previewed"
+    assert row["count"] == 0
+    assert row["operation"] == {"kind": "message_page", "id": row["operation"]["id"]}
+    assert row["inspect_operation"] == {"kind": "agent_page", "id": CHILD}
+    prompts = [b for b in snapshot["blocks"] if b["kind"] == "user"]
     assert [b["number"] for b in prompts] == [1], "a report-only wake turn takes no #N"
+    assert all(b.get("status") != "report" for b in prompts)
+
+
+def test_report_preview_is_two_lines_and_the_full_text_stays_on_the_message(tmp_path, monkeypatch):
+    origin = {"kind": "subagent_report", "agent": CHILD, "run": 1, "status": "completed", "agents": [f"{CHILD}:1"]}
+    body = "[Subagent report: s/child/1]\none\n\ntwo\nthree\nfour"
+    extra = [
+        _completed(8),
+        _ev(9, "input.queued", {"queued_id": "q1", "mode": "steer", "origin": origin, "content": [{"type": "text", "text": body}]}, turn=None),
+        _ev(10, "turn.started", turn="t2"),
+        _ev(11, "input.consumed", {"queued_id": "q1", "turn": "t2", "mode": "steer", "content": [{"type": "text", "text": body}]}, turn="t2"),
+    ]
+    view = _root(extra)
+    row = next(b for b in _snapshot(tmp_path, monkeypatch, view)["blocks"] if b["kind"] == "agent_report")
+    assert row["text"] == "one\ntwo" and row["count"] == 2
+    message = next(m for t in view.turns for m in t.messages if m.id == row["operation"]["id"])
+    assert message.text == body, "the full report stays reachable through the message page"
+
+
+def test_report_preview_does_not_silently_slice_long_lines_at_300_chars(tmp_path, monkeypatch):
+    origin = {"kind": "subagent_report", "agent": CHILD, "run": 1, "status": "completed", "agents": [f"{CHILD}:1"]}
+    long_line = "x" * 350
+    body = f"[Subagent report: s/child/1]\n{long_line}"
+    extra = [
+        _completed(8),
+        _ev(9, "input.queued", {"queued_id": "q1", "mode": "steer", "origin": origin, "content": [{"type": "text", "text": body}]}, turn=None),
+        _ev(10, "turn.started", turn="t2"),
+        _ev(11, "input.consumed", {"queued_id": "q1", "turn": "t2", "mode": "steer", "content": [{"type": "text", "text": body}]}, turn="t2"),
+    ]
+    view = _root(extra)
+    row = next(b for b in _snapshot(tmp_path, monkeypatch, view)["blocks"] if b["kind"] == "agent_report")
+    assert row["text"] == long_line, "long lines are not sliced at 300 chars in Python; Rust bounds display"
+
+
+def test_ordinary_user_message_is_not_an_agent_report(tmp_path, monkeypatch):
+    blocks = _snapshot(tmp_path, monkeypatch, _root([_completed(8)]))["blocks"]
+    assert not [b for b in blocks if b["kind"] == "agent_report"]
+    assert [b["kind"] for b in blocks if b["kind"] == "user"]
 
 
 def test_batched_report_lists_every_agent_and_run(tmp_path, monkeypatch):
@@ -129,8 +169,9 @@ def test_batched_report_lists_every_agent_and_run(tmp_path, monkeypatch):
         _ev(9, "turn.started", turn="t2"),
         _ev(10, "input.consumed", {"queued_id": "q1", "turn": "t2", "mode": "steer", "content": [{"type": "text", "text": "two reports"}]}, turn="t2"),
     ]
-    row = next(b for b in _snapshot(tmp_path, monkeypatch, _root(extra))["blocks"] if b.get("status") == "report")
-    assert row["title"] == "reports · 2 subagents · a:1, b:2"
+    row = next(b for b in _snapshot(tmp_path, monkeypatch, _root(extra))["blocks"] if b["kind"] == "agent_report")
+    assert row["agent_name"] == "2 subagents" and row["task"] == "a:1, b:2"
+    assert "inspect_operation" not in row
 
 
 def test_follow_up_row_is_drawn_on_the_agent_page(tmp_path, monkeypatch):
@@ -180,10 +221,10 @@ def test_replay_gives_the_same_projection(tmp_path, monkeypatch):
     assert _task(first)["state"] == _task(second)["state"] == "stopped by root: done"
 
 
-async def test_tasks_menu_offers_cancel_for_running_and_close_for_idle(tmp_path, monkeypatch):
+async def test_tasks_menu_offers_cancel_and_close_only_while_running(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    for events, expected in (([], ["Cancel", "Close"]), ([_completed(8)], ["Close"]),
+    for events, expected in (([], ["Cancel", "Close"]), ([_completed(8)], []),
                              ([_completed(8), _ev(9, "agent.stopped", {"agent": META, **META, "by": "root"}, turn=None)], [])):
         controller = SimpleNamespace(view=_root(events), session="s")
         shell = ShellActions(controller)

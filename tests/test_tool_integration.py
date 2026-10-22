@@ -239,9 +239,10 @@ async def test_native_read_write_bash_flow(tmp_path):
     assert [r.content[0].tool_use_id for r in results] == ["c1", "c2", "c3"]
     assert "hello" in results[0].content[0].content[0].text
     # Schemas reached every request in the turn.
-    assert [len(req.tools) for req in provider.requests] == [16, 16, 16, 16]
+    assert [len(req.tools) for req in provider.requests] == [13, 13, 13, 13]
     names = {t.name for t in provider.requests[0].tools}
-    assert {"read", "write", "bash"} <= names
+    assert {"read", "write", "shell"} <= names
+    assert "bash" not in names  # the old name is only an alias for calls
     assert all(name == name.lower() for name in names)
     await runtime.aclose()
 
@@ -328,7 +329,8 @@ async def test_anthropic_request_includes_tool_schemas(tmp_path):
     body = json.loads(captured[0].content)
     assert "tools" in body
     names = {tool["name"] for tool in body["tools"]}
-    assert {"read", "write", "bash", "todowrite"} <= names
+    assert {"read", "write", "shell"} <= names
+    assert "todowrite" not in names
     await runtime.aclose()
 
 
@@ -1313,13 +1315,13 @@ async def test_config_profile_and_policy_freeze_within_turn(tmp_path):
     # Within the turn the catalog and policy are frozen: the second iteration
     # still sees the coding tool set and allow policy, and SOUL-A.
     assert (tmp_path / "out.txt").exists()
-    assert [len(req.tools) for req in provider.requests] == [16, 16]
+    assert [len(req.tools) for req in provider.requests] == [13, 13]
     assert all("SOUL-A" in (req.system or "") for req in provider.requests)
     assert types(events)[-1] == "turn.completed"
 
     # Between turns the edit takes effect: research has fewer tools.
     await drain(session.send("again"))
-    assert len(provider.requests[-1].tools) == 9
+    assert len(provider.requests[-1].tools) == 8
     await runtime.aclose()
 
 
@@ -1352,90 +1354,28 @@ async def test_research_profile_is_read_only_and_unknown_profile_fails_closed(tm
 
 
 # ---------------------------------------------------------------------------
-# Todo durable seam
+# Removed TodoWrite tool
 # ---------------------------------------------------------------------------
 
 
-async def test_todo_result_persisted_and_state_shared_across_turns(tmp_path):
+@pytest.mark.parametrize("name", ["todowrite", "TodoWrite"])
+async def test_removed_todowrite_call_is_an_unknown_tool_error(tmp_path, name):
     provider = ScriptedProvider(
         tool_response(
-            (
-                "c1",
-                "TodoWrite",
-                {
-                    "todos": [
-                        {"id": "t1", "content": "ship it", "status": "in_progress"}
-                    ]
-                },
-            )
+            ("c1", name, {"todos": [{"id": "t1", "content": "ship it", "status": "pending"}]})
         ),
-        text_response("one"),
-        text_response("two"),
+        text_response("done"),
     )
     runtime = make_runtime(tmp_path, provider, make_config())
     session = runtime.session("todo")
     await drain(session.send("plan"))
 
     result = session.messages[2].content[0]
-    assert result.is_error is False
-    assert "ship it" in result.content[0].text
-    # The manager-owned store is shared across turns of this runtime.
-    assert runtime.todo_store.get("todo")[0].content == "ship it"
-
-    # The full list is durable, alongside the existing progress payload.
-    assert any(m for m in session.messages if isinstance(m.content[0], ToolResult))
-    updated = [e for e in session.events if e.type == "todo.updated"]
-    assert updated and updated[0].data["todos"][0]["content"] == "ship it"
-    assert updated[0].data["revision"] == 1
-    assert updated[0].data["agent_id"] == "root"
-    progress = [e for e in session.events if e.type == "tool.progress"]
-    assert progress and progress[0].data["todos"][0]["content"] == "ship it"
-
-    await drain(session.send("next"))
-    assert runtime.todo_store.get("todo")[0].content == "ship it"
+    assert result.is_error is True
+    assert "Unknown tool" in result.content[0].text
+    assert not any(e.type == "todo.updated" for e in session.events)
+    assert not hasattr(runtime, "todo_store")
     await runtime.aclose()
-
-
-async def test_todo_state_replays_after_runtime_restart_and_direct_session_open(tmp_path):
-    first_runtime = make_runtime(
-        tmp_path,
-        ScriptedProvider(
-            tool_response(
-                (
-                    "todo-call",
-                    "todowrite",
-                    {"todos": [{"id": "t1", "content": "durable", "status": "pending"}]},
-                )
-            ),
-            text_response("saved"),
-        ),
-        make_config(),
-    )
-    first_session = first_runtime.session("todo-restart")
-    await drain(first_session.send("save todos"))
-    await first_runtime.aclose()
-
-    second_runtime = make_runtime(
-        tmp_path, ScriptedProvider(text_response("reopened")), make_config()
-    )
-    # The public session API restores immediately on reconnect.
-    second_runtime.session("todo-restart", create=False)
-    assert second_runtime.todo_store.get("todo-restart")[0].content == "durable"
-    assert second_runtime.todo_store.revision("todo-restart") == 1
-
-    # Callers may open through Runtime.sessions directly; the turn boundary
-    # still restores before constructing/dispatching tools.
-    third_runtime = make_runtime(
-        tmp_path, ScriptedProvider(text_response("direct open")), make_config()
-    )
-    direct = third_runtime.sessions.open("todo-restart", create=False)
-    assert third_runtime.todo_store.get("todo-restart") == ()
-    third_runtime._make_tool_turn(
-        config=make_config(), session=direct, turn_id="direct-turn", attended=False
-    )
-    assert third_runtime.todo_store.get("todo-restart")[0].content == "durable"
-    await second_runtime.aclose()
-    await third_runtime.aclose()
 
 
 # ---------------------------------------------------------------------------

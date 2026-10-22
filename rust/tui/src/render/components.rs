@@ -204,8 +204,10 @@ impl Hover {
                     .position(|cell| col >= cell.start && col < cell.end)
                     .map(|i| format!("tab:{i}"));
             }
-            if r.details.contains(point) && y == r.details.y {
-                return super::details_tab_at(r.details, x).map(|tab| format!("details:{tab}"));
+            if r.details.contains(point) {
+                if let Some(tab) = crate::details_sidebar::tab_at(r.details, x, y) {
+                    return Some(format!("details:{tab}"));
+                }
             }
             composer_control_at(r.composer, s, x, y)
                 .or_else(|| composer_context_at(r.composer, s, x, y).then_some("context"))
@@ -325,17 +327,15 @@ impl Hover {
                 Style::default().bg(style.bg.unwrap()),
             );
         }
-        let mut x = r.details.x + 2;
-        for tab in ["Session", "Files", "MCP", "Logs"] {
-            let width = tab.len() as u16 + 1;
-            let amount = self.amount(&format!("details:{tab}"), now);
-            if amount > 0.0 && r.details.width > 0 && x < r.details.right() {
+        for (rect, tab) in crate::details_sidebar::tab_rects(r.details) {
+            let id = crate::details_sidebar::TABS[tab].0;
+            let amount = self.amount(&format!("details:{id}"), now);
+            if amount > 0.0 {
                 frame.buffer_mut().set_style(
-                    Rect::new(x, r.details.y, width.min(r.details.right() - x), 1),
+                    rect,
                     Style::default().bg(mix(p.panel, p.element_hi, amount)),
                 );
             }
-            x += width;
         }
     }
     fn set_target(&mut self, target: Option<&str>, now: Instant) -> bool {

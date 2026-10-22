@@ -256,9 +256,47 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
 }
 /// Filtered item index under the pointer, using the same grouping and scroll as drawing.
 pub fn item_height(item: &crate::bridge::Item) -> u16 {
-    1 + u16::from(!item.detail.is_empty())
-        + u16::from(!item.description.is_empty())
-        + item.lines.len() as u16
+    1 + card_rows(item).len() as u16
+}
+/// Most body rows a card shows under its name; the full text lives on the Enter detail page.
+const CARD_ROWS: usize = 3;
+/// Body rows of a card, each once: the description, then the host's rows. `detail` is already
+/// inline beside the name, so it never gets a row of its own. Longer cards keep their first
+/// rows, end the last kept description row with `…`, and keep the final (stats) row.
+pub fn card_rows(item: &crate::bridge::Item) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    for text in std::iter::once(&item.description).chain(&item.lines) {
+        let text = text.trim_end();
+        if !text.is_empty() && rows.last().map(String::as_str) != Some(text) {
+            rows.push(text.to_string());
+        }
+    }
+    if rows.len() > CARD_ROWS {
+        let last = rows.pop().unwrap_or_default();
+        rows.truncate(CARD_ROWS - 1);
+        if let Some(end) = rows.last_mut() {
+            end.push_str(" …");
+        }
+        rows.push(last);
+    }
+    rows
+}
+/// One indented card row cut to `width` columns, with `…` when text was lost.
+pub fn fit_card_row(text: &str, width: usize) -> String {
+    let text = format!("   {text}");
+    if text.width() <= width {
+        return text;
+    }
+    let mut cut = truncate_width(&text, width.saturating_sub(1));
+    if width > 0 {
+        cut.push('…');
+    }
+    cut
+}
+/// A card body row: readable on the selected fill (`muted`) and quiet otherwise, never bold.
+pub fn card_row_style(p: &Palette, base: Style, on: bool) -> Style {
+    base.fg(if on { p.muted } else { p.quiet })
+        .remove_modifier(Modifier::BOLD)
 }
 pub fn settings_header_height(s: &Snapshot, width: u16, height: u16) -> u16 {
     let full: usize = s
@@ -1154,6 +1192,58 @@ mod tests {
         assert_eq!(panel_item_at(&s, area, "", 0, y + 5), Some(1));
         assert_eq!(panel_item_at(&s, area, "two", 0, y + 3), Some(0));
     }
+    fn skill(description: &str, lines: &[&str]) -> crate::bridge::Item {
+        crate::bridge::Item {
+            label: "review  global".into(),
+            description: description.into(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn selected_card_rows_are_readable_on_the_selected_fill() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let state = super::super::components::State {
+                selected: true,
+                ..Default::default()
+            };
+            let base = super::super::components::selectable(&p, state);
+            let style = card_row_style(&p, base, true);
+            assert_ne!(style.fg, base.bg, "text must differ from the fill");
+            assert_ne!(style.fg, Some(p.background), "no background-coloured text");
+            assert!(!style.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(style.bg, base.bg, "the fill is kept");
+        }
+    }
+    #[test]
+    fn card_rows_never_repeat_detail_or_duplicate_text() {
+        let mut item = skill("Review code", &["Review code", "~12 in context"]);
+        item.detail = "inline-detail".into();
+        let rows = card_rows(&item);
+        assert_eq!(rows, vec!["Review code", "~12 in context"]);
+        assert!(rows.iter().all(|r| !r.contains("inline-detail")));
+        assert_eq!(item_height(&item), 3);
+    }
+    #[test]
+    fn long_cards_are_bounded_keep_stats_and_fit_any_width() {
+        let long: Vec<String> = (0..12).map(|i| format!("description line {i}")).collect();
+        let mut lines: Vec<&str> = long.iter().map(String::as_str).collect();
+        lines.push("~40 in context");
+        let item = skill("", &lines);
+        let rows = card_rows(&item);
+        assert_eq!(rows.len(), CARD_ROWS);
+        assert_eq!(item_height(&item), 1 + CARD_ROWS as u16);
+        assert!(rows[CARD_ROWS - 2].ends_with('…'), "clipping is marked");
+        assert_eq!(rows.last().unwrap(), "~40 in context");
+        for width in [0usize, 1, 8, 20, 40, 76, 120] {
+            for row in &rows {
+                let fitted = fit_card_row(row, width);
+                assert!(fitted.width() <= width, "{width}: {fitted:?}");
+            }
+        }
+        assert!(fit_card_row("x".repeat(200).as_str(), 30).ends_with('…'));
+    }
 }
 
 /// Filtered menu rows share the component states used by other interactive controls.
@@ -1352,22 +1442,10 @@ pub fn draw_menu(
             selected_line = body.len();
         }
         body.push(Line::from(spans));
-        if !item.description.is_empty() {
+        for text in card_rows(item) {
             body.push(Line::styled(
-                truncate_width(&format!("   {}", item.description), width),
-                base.fg(if on { p.background } else { p.quiet }),
-            ));
-        }
-        for text in &item.lines {
-            body.push(Line::styled(
-                truncate_width(&format!("   {text}"), width),
-                base.fg(if on { p.background } else { p.quiet }),
-            ));
-        }
-        if !item.detail.is_empty() {
-            body.push(Line::styled(
-                truncate_width(&format!("   {}", item.detail), width),
-                base.fg(if on { p.background } else { p.quiet }),
+                fit_card_row(&text, width),
+                card_row_style(p, base, on),
             ));
         }
     }

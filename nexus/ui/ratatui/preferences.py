@@ -6,14 +6,17 @@ import json
 import os
 from pathlib import Path
 
+from ...ui_support import details as details_view
 from ...ui_support.sidebar import TABS, clamp_width, normalize_tab
 
 
 class Preferences:
-    #: ``sessions_sidebar`` is the left sidebar (Projects, Sessions, Files, Git); closed until opened.
-    DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": False, "details_sidebar": True,
+    #: ``sessions_sidebar`` is the GPUI desktop's sessions sidebar (default open, shared file); the
+    #: terminal's left sidebar (Projects, Sessions, Files, Git) is ``sidebar_open``, closed until opened.
+    DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
                 "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": [],
-                "sidebar_width": 34, "sidebar_tab": "Sessions"}
+                "sidebar_open": False, "sidebar_width": 34, "sidebar_tab": "Sessions",
+                "details_width": details_view.DEFAULT_WIDTH}
 
     def __init__(self, path=None):
         self._worker = None
@@ -30,8 +33,9 @@ class Preferences:
                             self.values[key] = value[key]
         except (OSError, ValueError):
             pass
-        if self.values["details_tab"] not in {"Session", "Files", "MCP", "Logs"}:
-            self.values["details_tab"] = "Session"
+        # The right sidebar's Changes tab is stored as ``Files``; its width is bounded like the left one.
+        self.values["details_tab"] = self.values["details_tab"] if self.values["details_tab"] in {"Browser", "Git"} else details_view.normalize_tab(self.values["details_tab"])
+        self.values["details_width"] = details_view.clamp_width(self.values["details_width"])
         # A stored width outside the bounds is clamped; an unknown tab falls back to Sessions.
         self.values["sidebar_width"] = clamp_width(self.values["sidebar_width"])
         self.values["sidebar_tab"] = normalize_tab(self.values["sidebar_tab"])
@@ -39,8 +43,14 @@ class Preferences:
     def set(self, key, value):
         if key not in self.DEFAULTS or not isinstance(value, type(self.DEFAULTS[key])):
             return
-        if key == "details_tab" and value not in {"Session", "Files", "MCP", "Logs"}:
-            return
+        if key == "details_tab":
+            if value not in {*details_view.TABS, "Changes", "Browser", "Git"}:
+                return
+            value = value if value in {"Browser", "Git"} else details_view.normalize_tab(value)
+        if key == "details_width":
+            if isinstance(value, bool):
+                return
+            value = details_view.clamp_width(value)
         if key == "sidebar_tab" and value not in TABS:
             return
         if key == "sidebar_width":

@@ -111,11 +111,6 @@ async def test_automatic_handoff_sends_brief_first_then_pair_safe_suffix(tmp_pat
     runtime = _runtime(tmp_path / "run", provider, _config(budget))
     session = runtime.session("s")
     seeded = _seed(session)
-    todo = {
-        "session": "s", "agent_id": "root", "revision": 3,
-        "todos": [{"id": "t1", "content": "keep me", "status": "pending"}],
-    }
-    session.append_event(Event(type="todo.updated", session="s", data=todo))
     queued_id = session.enqueue("queued for later")
 
     events = [e async for e in session.send("go")]
@@ -145,8 +140,7 @@ async def test_automatic_handoff_sends_brief_first_then_pair_safe_suffix(tmp_pat
     )
     assert provider.calls == 2
     assert "queued for later" in _text(provider.requests[1].messages[-1])
-    todos = [e for e in session.events if e.type == "todo.updated"]
-    assert todos[-1].data["todos"] == todo["todos"] and todos[-1].data["revision"] == 3
+    assert "todos" not in _text(first.messages[0])
     assert events[-1].type == "turn.completed"
 
     # A small follow-up turn must not immediately roll over again.

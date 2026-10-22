@@ -497,6 +497,44 @@ def test_project_session_index_keeps_project_identity_and_excludes_hidden_rows(t
         db.project_sessions(limit=0)
 
 
+def test_registered_projects_list_only_roots_with_eligible_sessions_by_activity(tmp_path):
+    db = _db(tmp_path)
+    db.touch_project("registry-only", "/reg/only")
+    SqliteSessionStore(db, "empty", root="/empty/proj").create("blank")
+    manager = SqliteSessionStore(db, "mgr", root="/mgr/proj")
+    manager.create("m")
+    manager.append_message("m", _msg("hi"))
+    with db.transaction() as conn:
+        conn.execute("UPDATE sessions SET kind='manager' WHERE project_id='mgr'")
+    trashed = SqliteSessionStore(db, "trash", root="/trash/proj")
+    trashed.create("t")
+    trashed.append_message("t", _msg("hi"))
+    trashed.trash("t", reason="user", retention_seconds=60)
+    agent = SqliteSessionStore(db, "agent", "agents", root="/agent/proj")
+    agent.create("a")
+    agent.append_message("a", _msg("hi"))
+    bare = SqliteSessionStore(db, "bareid")
+    bare.create("b")
+    bare.append_message("b", _msg("hi"))
+    old = SqliteSessionStore(db, "old", root="/old/proj")
+    old.create("o")
+    old.append_message("o", _msg("hi"))
+    old.archive("o", "user")
+    new = SqliteSessionStore(db, "new", root="/new/proj")
+    new.create("n")
+    new.append_message("n", _msg("hi"))
+    with db.transaction() as conn:
+        conn.execute("UPDATE sessions SET last_user_at=100.0 WHERE project_id='old'")
+        conn.execute("UPDATE sessions SET last_user_at=200.0 WHERE project_id='new'")
+    rows = db.registered_projects()
+    assert [(r["project_id"], r["workspace"], r["updated"]) for r in rows] == [
+        ("new", "/new/proj", 200.0), ("old", "/old/proj", 100.0),
+    ], "archived included; registry, empty, manager, trashed, agent-only and bare ids are not"
+    assert [r["project_id"] for r in db.registered_projects(limit=1)] == ["new"]
+    with pytest.raises(ValueError):
+        db.registered_projects(limit=0)
+
+
 def test_project_session_search_is_bounded_literal_and_filters_before_limit(tmp_path):
     db = _db(tmp_path)
     store = SqliteSessionStore(db, "a", root="/workspace/UniqueRoot")

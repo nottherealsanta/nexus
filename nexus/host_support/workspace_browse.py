@@ -24,6 +24,10 @@ DEFAULT_LIST_ENTRIES = 200
 #: Directory entries read before the listing is cut off (a huge directory never stalls the host).
 MAX_SCANNED_ENTRIES = 5_000
 
+#: Bytes of a file the Files tab previews by default, and the most a caller may ask for.
+DEFAULT_PREVIEW_BYTES = 64 * 1024
+MAX_PREVIEW_BYTES = 256 * 1024
+
 MAX_STATUS_ENTRIES = 500
 MAX_STATUS_BYTES = 512 * 1024
 _STATUS_SECONDS = 5.0
@@ -120,6 +124,83 @@ def list_directory(runtime: object, path: str = "", limit: int = DEFAULT_LIST_EN
     entries.sort(key=lambda row: (row["kind"] != "dir", row["name"].casefold(), row["name"]))
     truncated = cut or len(entries) > limit
     return relative, entries[:limit], truncated
+
+
+def _walk_workspace_path(runtime: object, relative: str, noun: str) -> tuple[Path, Path]:
+    """Resolve ``relative`` below the workspace without crossing a symlink or a read-deny root."""
+    workspace = Path(runtime.workspace).resolve()
+    denied = _file_search_denied_roots(runtime)
+    target = workspace
+    for part in relative.split("/"):
+        target = target / part
+        try:
+            if target.is_symlink():
+                raise ValueError(f"{noun} path crosses a symbolic link")
+        except OSError as exc:
+            raise ValueError(f"{noun} is unavailable") from exc
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"{noun} is unavailable") from exc
+    if not resolved.is_relative_to(workspace):
+        raise ValueError(f"{noun} is outside the workspace")
+    if _path_is_denied(resolved, denied):
+        raise ValueError(f"{noun} is not readable")
+    return workspace, resolved
+
+
+def preview_file(runtime: object, path: str, max_bytes: int = DEFAULT_PREVIEW_BYTES) -> dict[str, Any]:
+    """Read the start of one workspace file as text: ``{path, status, text, size, shown, truncated, message}``.
+
+    ``status`` is ``text`` (``text`` holds the redacted, control-escaped start of the file),
+    ``binary`` (NUL bytes or not UTF-8: nothing is shown) or ``empty``. Path problems (absolute,
+    ``..``, hidden, a symlink anywhere on the path, outside the workspace, under a read-deny root,
+    a credential-looking name, not a regular file) raise ``ValueError``. At most ``max_bytes``
+    (1..``MAX_PREVIEW_BYTES``) are read from a descriptor opened with ``O_NOFOLLOW``.
+    """
+    relative = normalize_relative(path)
+    if not relative:
+        raise ValueError("file path must name a file")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+        raise ValueError("preview size must be a positive integer")
+    max_bytes = min(max_bytes, MAX_PREVIEW_BYTES)
+    if any(redact_secrets(part) != part for part in relative.split("/")):  # names the listing omits
+        raise ValueError("file is not readable")
+    _, resolved = _walk_workspace_path(runtime, relative, "file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(resolved, flags)
+    except OSError as exc:
+        raise ValueError("file is unavailable") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("path is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            data = handle.read(max_bytes + 1)
+    except OSError as exc:
+        raise ValueError("file is unavailable") from exc
+    finally:
+        os.close(descriptor)
+    size = int(info.st_size)
+    truncated = len(data) > max_bytes
+    data = data[:max_bytes]
+    result: dict[str, Any] = {"path": relative, "status": "text", "text": "", "size": size,
+                              "shown": len(data), "truncated": truncated, "message": ""}
+    if not data:
+        return {**result, "status": "empty", "message": "The file is empty"}
+    if b"\0" in data:
+        return {**result, "status": "binary", "shown": 0, "message": "Binary file: not shown"}
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        # A cut in the middle of a multi-byte character is only the clip; anything else is not text.
+        if truncated and exc.start >= len(data) - 3:
+            text = data[:exc.start].decode("utf-8", errors="strict")
+            result["shown"] = exc.start
+        else:
+            return {**result, "status": "binary", "shown": 0, "message": "Not UTF-8 text: not shown"}
+    return {**result, "text": redact_secrets(text)}
 
 
 def _status_label(code: str) -> str:
@@ -238,4 +319,4 @@ def _unavailable(message: str) -> dict[str, Any]:
             "rows": [], "counts": {}, "truncated": False}
 
 
-__all__ = ["git_status", "list_directory", "normalize_relative", "parse_status"]
+__all__ = ["git_status", "list_directory", "normalize_relative", "parse_status", "preview_file"]

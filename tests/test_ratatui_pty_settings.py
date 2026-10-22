@@ -3,6 +3,7 @@
 Build rust/tui first. This developer integration test needs controlling-TTY access.
 """
 import time
+import select
 
 import pytest
 from test_ratatui_pty_sessions import BINARY, Terminal
@@ -25,6 +26,42 @@ PAGE = {
     ],
 }
 NAV = {"items": [["GENERAL", "", True], ["Appearance", "appearance", False], ["Models", "models", False]], "selected": 2}
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_settings_secret_paste_is_local_masked_and_never_leaks_to_composer():
+    t = Terminal(40, 120)
+    try:
+        send_page(t)
+        # Non-text focus ignores paste instead of silently filling the draft.
+        t.key(b"\x1b[200~ignored-secret\x1b[201~")
+        page = {**PAGE, "blocks": [{"t": "row", "id": "key", "label": "API key",
+            "control": {"c": "text", "value": "", "secret": True,
+                        "operation": {"kind": "save_key"}}}]}
+        t.send(panel_title="Settings · Models", panel_layout="modal", nav=NAV,
+               settings_page=page, generation=1)
+        time.sleep(.4)
+        # Focused text rows accept paste without first pressing Enter.
+        t.key(b"\x1b[200~sk-private\r\n\t-value\x1b[201~")
+        assert not t.pending and not select.select([t.process.stdout], [], [], .2)[0], "paste must not commit"
+        t.redraw()
+        assert "sk-private" not in t.text()
+        assert "•" in t.text(), "secret editor is masked"
+        t.key(b"\r")
+        assert t.action() == {"type": "operation", "operation": {"kind": "save_key", "value": "sk-private-value"}, "generation": 1}
+        # Generic panels must swallow paste too.
+        t.send(panel_title="Read only", panel_layout="modal", nav=None,
+               settings_page=None, generation=1)
+        time.sleep(.3)
+        t.key(b"\x1b[200~panel-secret\x1b[201~")
+        t.send(panel_title="", settings_page=None, nav=None, generation=1)
+        time.sleep(.3)
+        t.key(b"\x1b[200~normal composer paste\x1b[201~")
+        t.key(b"\r")
+        action = t.action()
+        assert action["type"] == "submit" and action["text"] == "normal composer paste", action
+    finally:
+        t.close()
 
 
 def drill_to_models(t):

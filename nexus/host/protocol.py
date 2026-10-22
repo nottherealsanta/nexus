@@ -83,6 +83,10 @@ class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
     #: Also return up to this many of the newest archived sessions (``archived=True``
     #: rows after the regular ones); 0 returns none. Bounded at 100 by the host.
     archived: int = 0
+    #: Also return up to this many registered projects (``ProjectSessionsListResult.projects``,
+    #: newest opened first, the active workspace always included) whether or not they have a
+    #: listed session; 0 returns none. Bounded at 500 by the host.
+    projects: int = 0
 
 
 class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
@@ -110,10 +114,25 @@ class ProjectSession(msgspec.Struct, frozen=True):
     pending: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
+class ProjectEntry(msgspec.Struct, frozen=True):
+    """A listed project root: the current workspace, or one with an eligible (maybe archived) session."""
+
+    workspace: str
+    project_id: str = ""
+    repo: str = ""
+    worktree: str = ""
+    #: Newest user activity (epoch seconds) among the project's eligible sessions; 0 when none.
+    updated: float = 0.0
+    #: Whether the root is a directory on disk; clients omit missing historical roots.
+    exists: bool = True
+
+
 class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
     workspace: str = ""
     sessions: list[ProjectSession] = msgspec.field(default_factory=list)
     truncated: bool = False
+    #: Registered projects, only when ``ProjectSessionsList.projects`` > 0.
+    projects: list[ProjectEntry] = msgspec.field(default_factory=list)
 
 
 class ProjectSessionOpenResult(msgspec.Struct, tag=True, frozen=True):
@@ -376,6 +395,49 @@ class SessionShell(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     command: str
+
+
+class SessionJobs(msgspec.Struct, tag=True, frozen=True):
+    """List the ``shell`` tool jobs the named session owns (running first, bounded).
+
+    Another session's jobs are never included: the host answers from the job
+    registry partition of ``session`` only.
+    """
+
+    session: str
+
+
+class SessionJobLog(msgspec.Struct, tag=True, frozen=True):
+    """Read a bounded slice of one of the session's job logs.
+
+    ``job_id`` is the registry-owned id the tool printed, never a path. With
+    ``offset`` unset the reply is the last ``tail_lines`` lines; with it set, up to
+    ``limit`` bytes from that byte offset (``next_offset`` continues the read).
+    """
+
+    session: str
+    job_id: str
+    tail_lines: int = 200
+    offset: int | None = None
+    limit: int = 32768
+
+
+class SessionJobStop(msgspec.Struct, tag=True, frozen=True):
+    """Stop one of the session's running jobs (the whole process group)."""
+
+    session: str
+    job_id: str
+
+
+class SessionJobBackground(msgspec.Struct, tag=True, frozen=True):
+    """Ask the tool call blocking on a foreground job to hand it to the background.
+
+    Only a job that a tool call is awaiting in the foreground can be moved; the
+    reply says whether the request was accepted (``outcome``).
+    """
+
+    session: str
+    job_id: str
 
 
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
@@ -649,6 +711,16 @@ class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
     model: str | None = None
 
 
+class UsageRefreshSettings(msgspec.Struct, tag=True, frozen=True):
+    """Read ``[models] usage_refresh_seconds`` (Settings -> Providers)."""
+
+
+class UsageRefreshSettingsSet(msgspec.Struct, tag=True, frozen=True):
+    """Set how often the daemon re-reads provider plan usage (60-3600 seconds); applies at once."""
+
+    seconds: int
+
+
 class ClaudeCodeSettings(msgspec.Struct, tag=True, frozen=True):
     """Read ``[models] claude_code_main_enabled`` and ``claude_code_subagent_backend``."""
 
@@ -783,6 +855,17 @@ class DirectoryList(msgspec.Struct, tag=True, frozen=True):
 
     path: str = ""
     limit: int = 200
+
+
+class FilePreview(msgspec.Struct, tag=True, frozen=True):
+    """Read the start of one workspace file as text for the sidebar Files tab (read-only, bounded).
+
+    ``path`` follows the ``DirectoryList`` rules and must name a regular file; ``max_bytes`` is
+    1..262,144.
+    """
+
+    path: str
+    max_bytes: int = 65536
 
 
 class GitStatus(msgspec.Struct, tag=True, frozen=True):
@@ -1069,6 +1152,10 @@ Command = (
     | SessionStart
     | SessionEnqueue
     | SessionShell
+    | SessionJobs
+    | SessionJobLog
+    | SessionJobStop
+    | SessionJobBackground
     | SessionCancel
     | SessionQueueMove
     | SessionQueueRemove
@@ -1105,6 +1192,8 @@ Command = (
     | SessionTitleSettingsSet
     | ClaudeCodeSettings
     | ClaudeCodeSettingsSet
+    | UsageRefreshSettings
+    | UsageRefreshSettingsSet
     | ModelSelect
     | ReasoningEffortSelect
     | AgentsList
@@ -1122,6 +1211,7 @@ Command = (
     | FileSearch
     | GitDiff
     | DirectoryList
+    | FilePreview
     | GitStatus
     | WorktreeList
     | WorktreeInspect
@@ -1195,6 +1285,10 @@ COMMANDS: tuple[type, ...] = (
     SessionStart,
     SessionEnqueue,
     SessionShell,
+    SessionJobs,
+    SessionJobLog,
+    SessionJobStop,
+    SessionJobBackground,
     SessionCancel,
     SessionQueueMove,
     SessionQueueRemove,
@@ -1231,6 +1325,8 @@ COMMANDS: tuple[type, ...] = (
     SessionTitleSettingsSet,
     ClaudeCodeSettings,
     ClaudeCodeSettingsSet,
+    UsageRefreshSettings,
+    UsageRefreshSettingsSet,
     ModelSelect,
     ReasoningEffortSelect,
     AgentsList,
@@ -1248,6 +1344,7 @@ COMMANDS: tuple[type, ...] = (
     FileSearch,
     GitDiff,
     DirectoryList,
+    FilePreview,
     GitStatus,
     WorktreeList,
     WorktreeInspect,
@@ -1451,6 +1548,69 @@ class SessionEnqueueResult(msgspec.Struct, tag=True, frozen=True):
 class SessionShellResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     shell_id: str
+
+
+class JobSummary(msgspec.Struct, frozen=True):
+    """One shell job as the host shows it; no output, environment or file path."""
+
+    job_id: str
+    command: str = ""
+    cwd: str = ""
+    status: str = "running"  # running|completed|failed|timed_out|killed
+    background: bool = False
+    pid: int | None = None
+    exit_code: int | None = None
+    signal: int | None = None
+    started_at: float = 0.0
+    finished_at: float | None = None
+    log_bytes: int = 0
+    log_lines: int = 0
+    stderr_bytes: int = 0
+    #: ``SessionJobLog`` can read something (a log file was written).
+    log_available: bool = False
+    #: A tool call is awaiting it in the foreground (``SessionJobBackground`` applies).
+    can_background: bool = False
+    #: ``tool`` (the ``shell`` tool) or ``user`` (a composer ``!`` run).
+    source: str = "tool"
+    #: A background job with no lifetime limit that runs until stopped.
+    persistent: bool = False
+
+
+class SessionJobsResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    jobs: list[JobSummary] = msgspec.field(default_factory=list)
+    running: int = 0
+    truncated: bool = False
+
+
+class SessionJobLogResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    job_id: str
+    #: ``ok`` | ``unknown`` (no such job in this session) | ``unavailable`` (log gone).
+    status: str = "ok"
+    text: str = ""
+    start: int = 0
+    end: int = 0
+    size: int = 0
+    next_offset: int | None = None
+    message: str = ""
+
+
+class SessionJobStopResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    job_id: str
+    #: ``killed`` | ``finished`` (already over) | ``unknown``.
+    outcome: str
+    exit_code: int | None = None
+    signal: int | None = None
+
+
+class SessionJobBackgroundResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    job_id: str
+    #: ``requested`` | ``finished`` | ``already_background`` | ``not_foreground`` | ``unknown``.
+    outcome: str
+    requested: bool = False
 
 
 class SessionCancelResult(msgspec.Struct, tag=True, frozen=True):
@@ -1674,6 +1834,14 @@ class SessionTitleSettingsResult(msgspec.Struct, tag=True, frozen=True):
     message: str = ""
 
 
+class UsageRefreshSettingsResult(msgspec.Struct, tag=True, frozen=True):
+    """The effective interval and its bounds."""
+
+    seconds: int = 300
+    minimum: int = 60
+    maximum: int = 3600
+
+
 class ClaudeCodeSettingsResult(msgspec.Struct, tag=True, frozen=True):
     """``message`` explains scope: main selection is SDK-only; subagents follow ``subagent_backend``."""
 
@@ -1863,6 +2031,21 @@ class DirectoryListResult(msgspec.Struct, tag=True, frozen=True):
     #: ``{name, path, kind: dir|file|link, size}``; directories first, hidden entries omitted.
     entries: list[dict[str, Any]] = msgspec.field(default_factory=list)
     truncated: bool = False
+
+
+class FilePreviewResult(msgspec.Struct, tag=True, frozen=True):
+    #: The canonical workspace-relative path.
+    path: str = ""
+    #: ``text``, ``binary`` (nothing shown) or ``empty``.
+    status: str = "text"
+    #: Redacted UTF-8 start of the file (``text`` status only).
+    text: str = ""
+    #: File size in bytes and the bytes of it that ``text`` covers.
+    size: int = 0
+    shown: int = 0
+    #: True when the file is longer than what was read.
+    truncated: bool = False
+    message: str = ""
 
 
 class GitStatusResult(msgspec.Struct, tag=True, frozen=True):
@@ -2062,6 +2245,10 @@ class HealthResult(msgspec.Struct, tag=True, frozen=True):
     uptime: float = 0.0
     #: Dev mode (isolated home, sandbox workspace, ``/mock``); MOCK_PLAN §3.1.
     dev: bool = False
+    #: Running persistent ``shell`` jobs (``nexus daemon status``): the total and
+    #: a bounded list of ``{session, job_id, command, cwd, pid, started_at}``.
+    persistent_jobs_total: int = 0
+    persistent_jobs: list[dict[str, Any]] = msgspec.field(default_factory=list)
 
 
 class MockScenarioInfo(msgspec.Struct, frozen=True):
@@ -2139,6 +2326,10 @@ Result = (
     | SessionStartResult
     | SessionEnqueueResult
     | SessionShellResult
+    | SessionJobsResult
+    | SessionJobLogResult
+    | SessionJobStopResult
+    | SessionJobBackgroundResult
     | SessionCancelResult
     | SessionQueueEditResult
     | SessionSubscribeResult
@@ -2167,6 +2358,7 @@ Result = (
     | DefaultModelSettingsResult
     | SessionTitleSettingsResult
     | ClaudeCodeSettingsResult
+    | UsageRefreshSettingsResult
     | ModelSelectResult
     | ReasoningEffortSelectResult
     | AgentsListResult
@@ -2181,6 +2373,7 @@ Result = (
     | FileSearchResult
     | GitDiffResult
     | DirectoryListResult
+    | FilePreviewResult
     | GitStatusResult
     | WorktreeListResult
     | WorktreeInspectResult
@@ -2244,6 +2437,10 @@ RESULTS: tuple[type, ...] = (
     SessionStartResult,
     SessionEnqueueResult,
     SessionShellResult,
+    SessionJobsResult,
+    SessionJobLogResult,
+    SessionJobStopResult,
+    SessionJobBackgroundResult,
     SessionCancelResult,
     SessionQueueEditResult,
     SessionSubscribeResult,
@@ -2272,6 +2469,7 @@ RESULTS: tuple[type, ...] = (
     DefaultModelSettingsResult,
     SessionTitleSettingsResult,
     ClaudeCodeSettingsResult,
+    UsageRefreshSettingsResult,
     ModelSelectResult,
     ReasoningEffortSelectResult,
     AgentsListResult,
@@ -2286,6 +2484,7 @@ RESULTS: tuple[type, ...] = (
     FileSearchResult,
     GitDiffResult,
     DirectoryListResult,
+    FilePreviewResult,
     GitStatusResult,
     WorktreeListResult,
     WorktreeInspectResult,
@@ -2385,6 +2584,8 @@ __all__ = [
     "GitDiffResult",
     "DirectoryList",
     "DirectoryListResult",
+    "FilePreview",
+    "FilePreviewResult",
     "GitStatus",
     "GitStatusResult",
     "Health",
@@ -2418,6 +2619,9 @@ __all__ = [
     "ClaudeCodeSettings",
     "ClaudeCodeSettingsResult",
     "ClaudeCodeSettingsSet",
+    "UsageRefreshSettings",
+    "UsageRefreshSettingsResult",
+    "UsageRefreshSettingsSet",
     "SessionTitleSettings",
     "SessionTitleSettingsSet",
     "SessionTitleSettingsResult",
@@ -2460,6 +2664,15 @@ __all__ = [
     "SessionEnqueueResult",
     "SessionShell",
     "SessionShellResult",
+    "JobSummary",
+    "SessionJobBackground",
+    "SessionJobBackgroundResult",
+    "SessionJobLog",
+    "SessionJobLogResult",
+    "SessionJobStop",
+    "SessionJobStopResult",
+    "SessionJobs",
+    "SessionJobsResult",
     "SessionExport",
     "SessionExportResult",
     "SessionFork",

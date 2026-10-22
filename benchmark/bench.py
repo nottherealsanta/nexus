@@ -960,7 +960,8 @@ def _shell_evidence(events: list[dict[str, Any]]) -> tuple[bool, str]:
                 for block in blocks if isinstance(blocks, list) else []:
                     if isinstance(block, dict) and isinstance(block.get("text"), str):
                         outputs.setdefault(result_id, []).append(block["text"])
-    if len(requests) != 1 or requests[0][1] != "bash":
+    shell_names = ("shell", "bash")  # the tool was renamed; older logs say bash
+    if len(requests) != 1 or requests[0][1] not in shell_names:
         return False, "expected exactly one requested tool call, and it must be Bash"
     call_id = requests[0][0]
     if len(inputs) != 1 or inputs[0][0] != call_id:
@@ -974,9 +975,9 @@ def _shell_evidence(events: list[dict[str, Any]]) -> tuple[bool, str]:
         or set(tool_input) - {"command", "action"}
     ):
         return False, "Bash input was not the exact fixed benchmark invocation"
-    if started != [(call_id, "bash")]:
+    if len(started) != 1 or started[0][0] != call_id or started[0][1] not in shell_names:
         return False, "expected exactly one started Bash invocation and no other tools"
-    if completed != [(call_id, "bash", True, False)]:
+    if completed != [(call_id, started[0][1], True, False)]:
         return False, "expected exactly one successfully completed Bash invocation"
     if failed:
         return False, "unexpected failed tool event in shell scenario"

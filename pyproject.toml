@@ -26,9 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 # Compatibility alias, included by default.
 codemode = ["pydantic-monty==1.1.0"]
-# misaki[en] would pull spacy-curated-transformers and with it torch; misaki only
-# imports spacy and num2words for English, so the speak extra names those directly.
-speak = ["onnxruntime>=1.18", "misaki>=0.9.4,<1", "spacy>=3.7", "num2words", "huggingface_hub>=0.23", "sounddevice>=0.5,<1", "numpy>=1.26"]
+# ptts is the official Rust runtime for gradium's phonon TTS models; it needs only numpy.
+speak = ["ptts>=0.4.1,<1", "sounddevice>=0.5,<1", "numpy>=1.26"]
 # claude-agent and documents are compatibility aliases, included by default.
 # voice is separate: its runtime (kestrel-native) has no musl wheels, so a default
 # dependency would break installs on Alpine. install.sh adds it except on musl.

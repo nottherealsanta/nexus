@@ -441,8 +441,13 @@ Long shell commands are yielded, not killed. Under `[tools]`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `bash_yield_s` | `120` | How long a foreground `bash` run blocks. A command still running then moves to the background and returns its `job_id`; `bash action=wait` returns when it exits. `bash_timeout_s` is a deprecated alias. |
-| `bash_max_s` | `3600` | Hard runtime limit for any `bash` job, foreground or background. A per-call `timeout_s` is a kill limit capped at this. |
+| `shell_yield_s` | `120` | How long a foreground `shell` run blocks. A command still running then moves to the background and returns its `job_id`; `shell action=wait` returns when it exits. `bash_yield_s` and `bash_timeout_s` are deprecated aliases. |
+| `shell_max_s` | `3600` | Hard runtime limit for any `shell` job, foreground or background. A per-call `timeout_s` is a kill limit capped at this. `bash_max_s` is a deprecated alias. |
+| `shell_log_max_bytes` | `536870912` | Largest per-job output log (`0` = unlimited); bytes past it are counted and reported. Full output stays readable with `shell action=log`. |
+| `shell_log_total_bytes` / `shell_log_retention_days` | `2147483648` / `7` | Per-project disk bound and age limit for finished job logs. |
+| `shell_max_auto_wakes` | `10` | Consecutive turns a finished background job may start on its own; after that completions queue quietly until you send a message. |
+| `shell_max_persistent_per_session` / `shell_max_persistent` | `4` / `8` | Running persistent jobs (`shell` with `background` and no `timeout_s`, such as a dev server) allowed per session and per runtime. |
+| `shell_orphan_s` | `3600` | Seconds with persistent jobs running, no viewer and no turn before the daemon stops them and exits (`0` = never). `nexus daemon status` lists them; `nexus daemon stop` stops them. |
 
 ### Secrets references only
 
@@ -671,7 +676,7 @@ Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 | --- | --- |
 | `fs` | Read, Write, Edit, MultiEdit, Glob, Grep, LS |
 | `shell` | Bash, BashOutput, KillShell |
-| `task` | Task, TodoWrite, question |
+| `task` | Task, question |
 | `meta` | ReloadExtensions, ListExtensions, WriteTool |
 | `ext` | Skill |
 | `mcp` | Everything bridged from MCP, plus `McpSearch` / `McpCall` for servers in search mode (the default) |
@@ -777,11 +782,9 @@ active.
 ## Subagents (`Task`)
 
 `Task` spawns a nested runtime with its own session, tool set, and model. Its
-events re-emit on the parent bus with an agent field. By default the call returns at
-once and the child runs in the background; its report arrives later as a labelled
-"Subagent report" message (waking an idle root), the child stays idle and can be
-continued with `subagent_send` or closed with `subagent_stop`. Pass `wait: true` on
-the call, or set `agents.background = false`, to get the report as the tool result.
+events re-emit on the parent bus with an agent field. The call always blocks and
+returns the report as the tool result; issue independent calls together in one batch to
+run them concurrently. (`agents.background` is deprecated and ignored.)
 
 ```toml
 [agents]

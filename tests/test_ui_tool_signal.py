@@ -2,7 +2,9 @@
 import pytest
 
 from nexus.ui_support.tool_details import SECTION_ROWS, VALUE_LIMIT, tool_detail_sections
-from nexus.ui_support.tool_signal import MAX_SIGNAL_CHARS, SignalRow, strip_workspace, tool_signal
+from nexus.ui_support.tool_signal import (
+    MAX_SIGNAL_CHARS, SignalRow, clip_cells, closed_summary, strip_job_header, strip_workspace, tool_signal,
+)
 from nexus.view.model import ToolCallView
 
 METADATA = ("Call ID", "Requested", "Started", "Finished", "Status", "Bundle", "Model iteration", "Executed",
@@ -188,6 +190,42 @@ def test_controls_escaped_in_every_field_and_full_inspector_is_separate():
     assert "more characters" in tool_signal(huge).text()
     full = "\n".join(row.value for section in tool_detail_sections(huge) for row in section.rows)
     assert big[:VALUE_LIMIT] in full  # the inspector's own bounds are unchanged by the signal
+
+
+def test_shell_job_header_is_stripped_but_program_output_is_kept():
+    raw = "job_id: j1\nstatus: completed\nexit_code: 0\nstdout:\nhello\nstatus: fine\nstderr:\nwarn"
+    view = tool_signal(_tool("bash", {"command": "ls"}, raw))
+    assert [r.text for r in view.rows] == ["$ ls", "hello", "status: fine", "stderr:", "warn"]
+    assert not any(label in view.text() for label in ("job_id", "exit_code: 0", "stdout:"))
+    # Output that merely looks like a header is untouched unless the job header leads.
+    plain = tool_signal(_tool("bash", {"command": "ls"}, "status: fine\nexit_code: 0"))
+    assert [r.text for r in plain.rows] == ["$ ls", "status: fine", "exit_code: 0"]
+    lone = tool_signal(_tool("bash", {"command": "ls"}, "job_id: x\nplain"))
+    assert [r.text for r in lone.rows] == ["$ ls", "job_id: x", "plain"]
+    assert strip_job_header("job_id: j\nstatus: running") == ""
+
+
+def test_failed_shell_still_reports_its_exit_after_the_header_is_stripped():
+    raw = "job_id: j\nstatus: failed\nexit_code: 2\nstderr:\nboom"
+    view = tool_signal(_tool("bash", {"command": "x"}, raw, status="failed", metrics={"exit_code": 2}))
+    assert [r.text for r in view.rows] == ["$ x", "stderr:", "boom", "exit 2"]
+
+
+def test_closed_summary_is_a_target_not_output():
+    assert closed_summary(_tool("read", {"path": "a.py"}, "first\nsecond")) == "a.py (lines 1–2)"
+    assert closed_summary(_tool("read", {"path": "a.py", "offset": 5}, "x")) == "a.py (lines 5–5)"
+    assert closed_summary(_tool("read", {"path": "a.py"}, status="running")) == "a.py"
+    assert closed_summary(_tool("read", {"path": "a.py"}, "boom", status="failed", error="no")) == "a.py"
+    assert closed_summary(_tool("bash", {"command": "make\nmore"}, "out")) == "make"
+    assert closed_summary(_tool("grep", {"pattern": "x"}, "a:1: x")) is None
+
+
+def test_command_is_clipped_to_forty_display_cells():
+    long = closed_summary(_tool("bash", {"command": "echo " + "a" * 100}))
+    assert len(long) == 40 and long.endswith("…")
+    wide = clip_cells("界" * 30)
+    assert wide.endswith("…") and 2 * (len(wide) - 1) + 1 <= 40
+    assert clip_cells("short") == "short"
 
 
 def test_wire_is_json_ready_rows():

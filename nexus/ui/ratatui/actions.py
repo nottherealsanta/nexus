@@ -148,12 +148,15 @@ class ShellActions:
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
         self.seen_seq: dict[str, int] = {}  # completion sequence viewed per session
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar
+        self.native_reload = False
+        self.reload_request = None
         self.reconnect = None
         from .preferences import Preferences
         from .workflows import Workflows
         from .voice import Voice
         from .live import Live
         from .logs import Logs
+        from .jobs import Jobs
         from .manager import Manager
         from .focus import Focus
         from .sidebar import SidebarController
@@ -165,6 +168,7 @@ class ShellActions:
         self.live = Live(self)
         self.manager = Manager(self)
         self.logs = Logs(self)
+        self.jobs = Jobs(self)
         self.logs.open = self.preferences.values["details_sidebar"] and self.preferences.values["details_tab"] == "Logs"
 
     @property
@@ -278,8 +282,13 @@ class ShellActions:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if request != self.usage_request or generation != self.generation or client is not self.client:
+                    return  # a newer open owns the panel; its own result or failure is the one to show
                 lines, tones = list(self.panel_lines), list(self.panel_tones)
-                lines.append(f"Refresh failed: {type(exc).__name__}: {exc}")
+                if self.usage_cache is not None:  # the numbers above are not from this open
+                    lines.insert(0, "Showing the last fetched numbers; they may be out of date.")
+                    tones.insert(0, "bad")
+                lines.append(f"Refresh failed: {type(exc).__name__}: {exc}".rstrip(": "))
                 tones.append("bad")
             if revision != self.panel_revision or generation != self.generation or self.panel_title != "Provider usage":
                 return
@@ -789,16 +798,16 @@ class ShellActions:
             self.workflows.menu("Tools", [(f"{tool.name} · {tool.status}", {"kind": "tool_page", "id": tool.call_id}) for tool in self.controller.view.tools])
         elif name == "/tasks":
             if not self.controller.view.agents:
-                self.notice = "No background tasks"
+                self.notice = "No subagents"
                 return True
             from ...ui_support.timeline import agent_state, agent_state_label
             rows = []
             for agent in self.controller.view.agents.values():
                 state = agent_state(agent)
                 rows.append((f"{agent.id} · {agent_state_label(agent)} · {agent.task or agent.description}", {"kind": "agent_page", "id": agent.id}))
-                if state == "running":  # stop this one run only, not the turn; the child goes idle
+                if state == "running":  # stop this one run only, not the turn
                     rows.append((f"  ✕ Cancel {agent.id} (ends this run)", {"kind": "agent_cancel", "id": agent.id}))
-                if state in {"running", "idle", "interrupted"} and agent.continuable:  # close: terminal, the log is kept
+                if state in {"running", "interrupted"} and agent.continuable:  # legacy persistent child: close is terminal, the log is kept
                     rows.append((f"  ■ Close {agent.id} (stop for good)", {"kind": "agent_close", "id": agent.id}))
             self.workflows.menu("Background tasks", rows)
         elif name in {"/mcp", "/skills"}:
@@ -823,6 +832,17 @@ class ShellActions:
             self.workflows.settings_scope = argument if argument in {"project", "global"} else "global"
             await self.workflows.operate({"kind": "appearance"})
         elif name == "/reload":
+            if args:
+                raise ValueError("/reload takes no arguments")
+            if not self.native_reload:
+                raise ValueError("/reload is only available in the native TUI; use /reload-extensions for extensions and MCP")
+            if not self.workspace:
+                raise ValueError("Cannot reload: workspace is unknown")
+            from pathlib import Path
+            from .run import ReloadRequest
+            self.reload_request = ReloadRequest(Path(self.workspace).resolve(), self.controller.session)
+            return False
+        elif name == "/reload-extensions":
             self.show("Extensions reloaded", await self.client.reload_extensions(trigger="chat"))
             self.mcp_due = 0.0
         elif name == "/attach":

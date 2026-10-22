@@ -128,6 +128,9 @@ def _parse_web_url(value: str, label: str):
 #: lazy); the runtime passes these values straight into ``ModelRegistry``.
 DEFAULT_CATALOGUE_URL = "https://models.dev/api.json"
 DEFAULT_REFRESH_TTL_DAYS = 7.0
+DEFAULT_USAGE_REFRESH_SECONDS = 300
+MIN_USAGE_REFRESH_SECONDS = 60
+MAX_USAGE_REFRESH_SECONDS = 3600
 
 
 class ModelParams(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -268,8 +271,21 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     subagent_usage: SubagentUsageSection = msgspec.field(
         default_factory=SubagentUsageSection
     )
+    #: Seconds between background reads of every provider's plan usage (the
+    #: host's own idle poll; independent of the subagent usage gate). User-level only.
+    usage_refresh_seconds: int = DEFAULT_USAGE_REFRESH_SECONDS
 
     def __post_init__(self) -> None:
+        refresh = self.usage_refresh_seconds
+        if (
+            isinstance(refresh, bool)
+            or not isinstance(refresh, int)
+            or not MIN_USAGE_REFRESH_SECONDS <= refresh <= MAX_USAGE_REFRESH_SECONDS
+        ):
+            raise ValueError(
+                "models.usage_refresh_seconds must be an integer between "
+                f"{MIN_USAGE_REFRESH_SECONDS} and {MAX_USAGE_REFRESH_SECONDS}"
+            )
         for name in ("default", "fast", "plan"):
             value = getattr(self, name)
             if value is not None and (
@@ -355,19 +371,6 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                     raise ValueError("models.tier_efforts contains an unknown effort")
 
 
-#: ``(key, minimum, maximum)`` for the integer ``[agents]`` background keys.
-_AGENTS_BACKGROUND_BOUNDS = (
-    ("max_live", 1, 64),
-    ("max_pending_reports", 1, 1024),
-    ("max_report_batch", 1, 256),
-    ("max_report_chars", 1000, 1_000_000),
-    ("report_coalesce_ms", 0, 60_000),
-    ("max_auto_wakes", 0, 1000),
-    ("max_followup_chars", 1, 200_000),
-    ("oneshot_wait_seconds", 0, 86_400),
-)
-
-
 class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Canonical ``[agents]`` section (plan sections 5.6, 15.8).
 
@@ -377,6 +380,10 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     parseable for config compatibility but is ignored by runtime wiring. Only
     the root session spawns, so ``max_depth`` values above 1 behave as 1; 0
     disables spawning.
+
+    Subagents are foreground-only. The keys of the retired background mode
+    (``background`` through ``oneshot_wait_seconds`` below) still parse, so an
+    older config keeps loading, but nothing reads them.
     """
 
     enabled: bool = True
@@ -388,33 +395,18 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     token_budget: int | None = None
     cost_budget: float | None = None
     seed_roles: bool = False
-    #: Background subagents (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md). When
-    #: true (the default since plan phase 6) ``subagent`` returns at once and the
-    #: report arrives later; false restores the blocking tool result.
-    background: bool = True
-    #: Most children (running or idle, not stopped) one root session may hold.
+    #: Deprecated and ignored (retired background subagents).
+    background: bool = False
     max_live: int = 8
-    #: Reports queued to the root before further completions are held in the pool.
     max_pending_reports: int = 32
-    #: Reports coalesced into one root input, and their total characters.
     max_report_batch: int = 16
     max_report_chars: int = 24000
-    #: How long an idle root waits to coalesce reports before waking.
     report_coalesce_ms: int = 750
-    #: Consecutive report-initiated root turns without a human message.
     max_auto_wakes: int = 20
-    #: Longest ``subagent_send`` message; over-limit is an error, never truncation.
     max_followup_chars: int = 20000
-    #: ``nexus run`` waits this long for background children; 0 = exit at once.
     oneshot_wait_seconds: int = 600
 
     def __post_init__(self) -> None:
-        if not isinstance(self.background, bool):
-            raise ValueError("agents.background must be a boolean")
-        for name, low, high in _AGENTS_BACKGROUND_BOUNDS:
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
-                raise ValueError(f"agents.{name} must be an integer from {low} to {high}")
         if not isinstance(self.default_type, str) or not self.default_type.strip():
             raise ValueError("agents.default_type must be a nonempty string")
         if not isinstance(self.max_tier, str) or not self.max_tier.strip():
@@ -566,7 +558,7 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 raise ValueError(f"{self.auth} providers read their credential from the private credential file; remove api_key")
             if any(value is not None for value in (self.executable, self.command, self.args, self.env, self.inherit_env, self.permission_policy)):
                 raise ValueError(f"{self.auth} cannot be combined with executable or agent fields")
-            if self.kind not in (None, "openai_compatible", "openai-compatible", "compatible"):
+            if self.kind not in (None, "openai_compatible", "openai-compatible", "compatible", "nvidia"):
                 raise ValueError(f"{self.auth} is supported only by OpenAI-compatible providers")
             if self.api not in (None, "chat", "responses"):
                 raise ValueError(f"{self.auth} requires api='chat' or api='responses'")
@@ -789,12 +781,37 @@ class PermissionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True
 class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Deprecated alias for ``bash_yield_s``; used only when that is unset.
     bash_timeout_s: float = 120
-    #: How long a foreground ``bash`` run blocks before yielding a
-    #: still-running job to the background. ``None`` falls back to
-    #: ``bash_timeout_s``.
+    #: Deprecated alias for ``shell_yield_s``: how long a foreground ``shell``
+    #: run blocks before yielding a still-running job to the background.
+    #: ``None`` falls back to ``bash_timeout_s``.
     bash_yield_s: float | None = None
-    #: Hard runtime limit for any ``bash`` job, foreground or background.
+    #: Deprecated alias for ``shell_max_s``.
     bash_max_s: float = 3600
+    #: How long a foreground ``shell`` run blocks before yielding a
+    #: still-running job to the background. ``None`` falls back to the
+    #: deprecated ``bash_yield_s`` / ``bash_timeout_s``.
+    shell_yield_s: float | None = None
+    #: Hard runtime limit for any ``shell`` job, foreground or background.
+    #: ``None`` falls back to the deprecated ``bash_max_s``.
+    shell_max_s: float | None = None
+    #: Largest log file kept per shell job, in bytes (``0`` = unlimited). Bytes
+    #: past the limit are counted and reported, never silently dropped.
+    shell_log_max_bytes: int = 512 * 1024 * 1024
+    #: Total shell log bytes kept per project (finished jobs are deleted oldest
+    #: first when a new job starts; running jobs' logs are never deleted).
+    shell_log_total_bytes: int = 2 * 1024 * 1024 * 1024
+    #: Finished shell logs older than this many days are deleted.
+    shell_log_retention_days: int = 7
+    #: Consecutive turns a background job's completion may start on its own
+    #: before automatic wake-ups pause until the next human message.
+    shell_max_auto_wakes: int = 10
+    #: Running persistent jobs (``background`` without ``timeout_s``) one session
+    #: may hold, and the runtime-wide total across sessions.
+    shell_max_persistent_per_session: int = 4
+    shell_max_persistent: int = 8
+    #: Seconds the daemon tolerates persistent jobs with no viewer and no running
+    #: turn before it stops them and exits (``0`` disables the policy).
+    shell_orphan_s: float = 3600
     #: Strict deadline for the isolated ``Grep`` regex worker. Finite, positive.
     grep_timeout_s: float = 5.0
     max_result_tokens: int = 25000
@@ -807,7 +824,56 @@ class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         value = self.bash_timeout_s if self.bash_yield_s is None else self.bash_yield_s
         return float(value)
 
+    @property
+    def shell_yield_window_s(self) -> float:
+        """The effective yield window (``shell_yield_s``, else the bash aliases)."""
+        if self.shell_yield_s is not None:
+            return float(self.shell_yield_s)
+        return self.bash_yield_window_s
+
+    @property
+    def shell_max_runtime_s(self) -> float:
+        """The effective hard runtime limit (``shell_max_s``, else ``bash_max_s``)."""
+        value = self.bash_max_s if self.shell_max_s is None else self.shell_max_s
+        return float(value)
+
     def __post_init__(self) -> None:
+        for name in ("shell_yield_s", "shell_max_s"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"tools.{name} must be a positive finite number")
+        for name in (
+            "shell_log_max_bytes",
+            "shell_log_total_bytes",
+            "shell_log_retention_days",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"tools.{name} must be a non-negative integer")
+        if (
+            isinstance(self.shell_max_auto_wakes, bool)
+            or not isinstance(self.shell_max_auto_wakes, int)
+            or self.shell_max_auto_wakes < 1
+        ):
+            raise ValueError("tools.shell_max_auto_wakes must be a positive integer")
+        for name in ("shell_max_persistent_per_session", "shell_max_persistent"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"tools.{name} must be a positive integer")
+        if (
+            isinstance(self.shell_orphan_s, bool)
+            or not isinstance(self.shell_orphan_s, (int, float))
+            or not math.isfinite(self.shell_orphan_s)
+            or self.shell_orphan_s < 0
+        ):
+            raise ValueError("tools.shell_orphan_s must be a non-negative finite number")
         if (
             isinstance(self.bash_timeout_s, bool)
             or not isinstance(self.bash_timeout_s, (int, float))
@@ -962,15 +1028,27 @@ class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     ``auto_title`` names a new session with one small side call to ``title_model``
     (a concrete ``provider/model`` reference); off keeps the first line of
     the first message as the title (plans/done/SESSION_TITLE_PLAN.md).
+
+    ``auto_archive_idle_seconds`` is the idle threshold for automatic archive
+    (default one hour; ``0`` disables). ``auto_archive_days`` is the legacy
+    switch: its value no longer sets a threshold, but ``0`` still disables.
     """
 
     auto_archive_days: int = 2
+    auto_archive_idle_seconds: int = 3600
     auto_title: bool = True
     title_model: str = "openai/gpt-5-mini"
 
     def __post_init__(self) -> None:
         if type(self.auto_archive_days) is not int or not 0 <= self.auto_archive_days <= 3650:
             raise ValueError("sessions.auto_archive_days must be an integer from 0 to 3650")
+        if (
+            type(self.auto_archive_idle_seconds) is not int
+            or not 0 <= self.auto_archive_idle_seconds <= 3650 * 86400
+        ):
+            raise ValueError(
+                "sessions.auto_archive_idle_seconds must be an integer from 0 to 315360000"
+            )
         if type(self.auto_title) is not bool:
             raise ValueError("sessions.auto_title must be true or false")
         if (

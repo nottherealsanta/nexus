@@ -32,7 +32,7 @@ class Transport(FacadeTransport):
 async def main(count):
     with tempfile.TemporaryDirectory(prefix="nexus-live-latency-") as temp:
         root=Path(temp)
-        os.environ.update(XDG_CONFIG_HOME=str(root/"config"),XDG_STATE_HOME=str(root/"state"))
+        os.environ.update(XDG_CONFIG_HOME=str(root/"config"),XDG_STATE_HOME=str(root/"state"),NEXUS_HOME=str(root/"home"))
         runtime,provider,gate=build_runtime(root/"workspace")
         gate.release.set()
         async def tick(_request):

@@ -91,7 +91,7 @@ def flatten(value: Any, prefix: str = "", depth: int = 0) -> list[DetailRow]:
         for index, item in enumerate(value):
             name = f"{prefix}[{index}]" if prefix else f"#{index + 1}"
             if grouped:
-                # Each object becomes a headed group: `todos[0]` then its fields.
+                # Each object becomes a headed group: `items[0]` then its fields.
                 rows.append(DetailRow(name, "", header=True))
                 rows += [replace(r, indent=r.indent + 1) for r in flatten(item, "", depth + 1)]
             else:
@@ -445,17 +445,6 @@ def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
         sections.append(DetailSection("Error", (DetailRow("error", _clean(tool.error), True),)))
     if tool.context_note:
         sections.append(DetailSection("Context", (DetailRow("note", _clean(tool.context_note), True),)))
-    todos = (tool.metrics or {}).get("todos") if isinstance(tool.metrics, Mapping) else None
-    if isinstance(todos, Sequence) and todos and all(isinstance(t, Mapping) for t in todos):
-        glyph = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]", "cancelled": "[-]"}
-        rows = [
-            DetailRow(
-                f"{glyph.get(str(t.get('status')), '[?]')} {t.get('id', index)}",
-                " ".join(filter(None, [_clean(t.get("content", ""), 2_000), f"({t['priority']})" if t.get("priority") else ""])),
-            )
-            for index, t in enumerate(todos, 1)
-        ]
-        sections.append(DetailSection("Todo list", _bounded(rows)))
     if tool.metrics:
         sections.append(DetailSection("Metrics", _bounded(flatten(tool.metrics))))
     if isinstance(tool.diff, Mapping):

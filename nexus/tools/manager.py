@@ -4,9 +4,8 @@ Plan section 5.3. The manager is the L3 owner of:
 
 * an **immutable, ordered catalog** selected from the built-in tools (``fs`` +
   ``shell`` + ``task``) for one frozen profile/config snapshot;
-* one shell :class:`~nexus.tools.builtin._jobs.JobRegistry` (owned or injected)
-  and one :class:`~nexus.tools.builtin.todo.TodoStore`, both injected through the
-  explicit :class:`~nexus.tools.spec.ToolContext` seams;
+* one shell :class:`~nexus.tools.builtin._jobs.JobRegistry` (owned or injected),
+  injected through the explicit :class:`~nexus.tools.spec.ToolContext` seam;
 * **strict JSON Schema validation** of every call before permission or dispatch;
 * **preparation** (:meth:`ToolManager.prepare`) that turns unknown tools and
   schema-invalid inputs into ordered, model-visible error results and
@@ -47,7 +46,12 @@ from ..events import Event
 from ..model.message import DUPLICATE_TOOL_CALL_KEY, Image, Text
 from ..model.request import ToolSchema
 from .bundles import DEFAULT_PROFILE, get_bundle, get_profile
-from .names import canonical_tool_name, permission_bundle_matches
+from .names import (
+    canonical_tool_name,
+    is_legacy_capped_background,
+    permission_bundle_matches,
+    translate_legacy_shell_input,
+)
 from .permissions import (
     BatchPlan,
     Decision,
@@ -91,6 +95,8 @@ MAX_METRIC_CHARS = 200
 #: Extra grace before the manager's backstop timeout cancels a ``Bash`` call; the
 #: tool owns its configured timeout and should be allowed to report it first.
 BASH_TIMEOUT_GRACE_S = 5.0
+#: Most legacy ``run_in_background`` call ids remembered between prepare and dispatch.
+_LEGACY_BACKGROUND_MARKS = 256
 
 
 class ToolManagerError(ToolError):
@@ -552,7 +558,6 @@ class ToolManager:
         tool_names: Iterable[str] | None = None,
         restrict: Iterable[str] | None = None,
         job_registry: Any | None = None,
-        todo_store: Any | None = None,
         path_guard: PathGuard | None = None,
         default_timeout_s: float | None = None,
         max_parallel: int | None = None,
@@ -599,7 +604,9 @@ class ToolManager:
         ):
             raise ToolManagerError("max_parallel must be a positive integer")
         self._default_timeout_s = default_timeout_s
-        self._bash_max_s = float(tools_section.bash_max_s)
+        self._shell_max_s = float(tools_section.shell_max_runtime_s)
+        #: Call ids (insertion ordered) of legacy ``run_in_background`` shell calls.
+        self._legacy_background_calls: dict[str, None] = {}
 
         permissions = _permissions_section(config)
         self._path_guard = path_guard or PathGuard(
@@ -612,8 +619,6 @@ class ToolManager:
         self._job_registry = (
             self._new_job_registry() if job_registry is None else job_registry
         )
-        self._owns_todo_store = todo_store is None
-        self._todo_store = self._new_todo_store() if todo_store is None else todo_store
         self._closed = False
         self._multi_target_authorizations: dict[object, tuple[Any, ...]] = {}
         self._multi_target_authority = object()
@@ -631,12 +636,6 @@ class ToolManager:
         from .builtin._jobs import JobRegistry
 
         return JobRegistry()
-
-    @staticmethod
-    def _new_todo_store():
-        from .builtin.todo import TodoStore
-
-        return TodoStore()
 
     @staticmethod
     def _index(catalog: Sequence[RegisteredTool]) -> Mapping[str, RegisteredTool]:
@@ -774,10 +773,6 @@ class ToolManager:
     @property
     def job_registry(self) -> Any:
         return self._job_registry
-
-    @property
-    def todo_store(self) -> Any:
-        return self._todo_store
 
     @property
     def max_parallel(self) -> int:
@@ -1140,8 +1135,13 @@ class ToolManager:
             canonical = canonical_tool_name(call.name)
             if canonical not in self._selected:
                 canonical = call.name
-            return call if canonical == call.name else ToolCall(
-                id=call.id, name=canonical, input=dict(call.input)
+            if canonical == call.name:
+                return call
+            self._note_legacy_background(call.id, call.name, call.input)
+            return ToolCall(
+                id=call.id,
+                name=canonical,
+                input=translate_legacy_shell_input(call.name, call.input),
             )
         from_tool_use = getattr(call, "from_tool_use", None)
         if from_tool_use is not None:
@@ -1149,10 +1149,26 @@ class ToolManager:
             canonical = canonical_tool_name(parsed.name)
             if canonical not in self._selected:
                 canonical = parsed.name
-            return parsed if canonical == parsed.name else ToolCall(
-                id=parsed.id, name=canonical, input=dict(parsed.input)
+            if canonical == parsed.name:
+                return parsed
+            self._note_legacy_background(parsed.id, parsed.name, parsed.input)
+            return ToolCall(
+                id=parsed.id,
+                name=canonical,
+                input=translate_legacy_shell_input(parsed.name, parsed.input),
             )
         raise ToolManagerError("calls must be ToolCall or ToolUse instances")
+
+    def _note_legacy_background(
+        self, call_id: str, name: str, data: Mapping[str, Any]
+    ) -> None:
+        """Remember a legacy ``bash`` background call: its job stays lifetime-capped."""
+        if not is_legacy_capped_background(name, data):
+            return
+        marks = self._legacy_background_calls
+        marks[call_id] = None
+        while len(marks) > _LEGACY_BACKGROUND_MARKS:
+            del marks[next(iter(marks))]
 
     # -- dispatch ----------------------------------------------------------
 
@@ -1577,7 +1593,7 @@ class ToolManager:
         if cancel is not None:
             cancel.raise_if_cancelled()
 
-        timeout = self._timeout_for(spec)
+        timeout = self._timeout_for(spec, None if entry.target else call.input)
         started = time.monotonic()
         failed = False
         try:
@@ -1663,7 +1679,10 @@ class ToolManager:
             cancel_token=cancel if cancel is not None else base.cancel_token,
             emit=self._ctx_emitter(emit, call, spec),
             job_registry=self._job_registry,
-            todo_store=self._todo_store,
+            legacy_capped_background=(
+                self._legacy_background_calls.pop(call.id, 0) is None
+                or base.legacy_capped_background
+            ),
         )
 
     def _ctx_emitter(
@@ -1699,11 +1718,17 @@ class ToolManager:
 
     # -- result capping ----------------------------------------------------
 
-    def _timeout_for(self, spec: ToolSpec) -> float | None:
+    def _timeout_for(
+        self, spec: ToolSpec, args: Mapping[str, Any] | None = None
+    ) -> float | None:
         if spec.timeout_s is not None:
             return spec.timeout_s
-        if spec.name == "bash":
-            return self._bash_max_s + BASH_TIMEOUT_GRACE_S
+        if spec.name in ("shell", "bash"):
+            if args is None:
+                return self._shell_max_s + BASH_TIMEOUT_GRACE_S
+            from .builtin.shell import action_bound_s
+
+            return action_bound_s(args, self._shell_max_s) + BASH_TIMEOUT_GRACE_S
         return self._default_timeout_s
 
     def cap_result(

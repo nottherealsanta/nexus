@@ -112,12 +112,13 @@ impl PromptPin {
 pub const BOTTOM_BUFFER: usize = 20;
 
 /// The bottom buffer for a viewport: `BOTTOM_BUFFER`, clamped so at least 4 content rows stay
-/// visible on short viewports. A transcript that fits the viewport gets none (no pointless scroll).
+/// visible on short viewports, but never below one blank row. A transcript that leaves a blank
+/// row in the viewport already has its padding and gets none (no pointless scroll).
 pub fn bottom_buffer(content: usize, height: usize) -> usize {
-    if content <= height {
+    if content < height || height < 2 {
         0
     } else {
-        BOTTOM_BUFFER.min(height.saturating_sub(4))
+        BOTTOM_BUFFER.min(height.saturating_sub(4)).max(1)
     }
 }
 
@@ -693,6 +694,23 @@ mod tests {
         assert_eq!(super::tail_padding(3, 20), 9);
         assert_eq!(super::tail_padding(300, 20), 9);
         assert_eq!(super::tail_padding(3, 1), 0);
+    }
+
+    #[test]
+    fn the_last_row_always_has_a_blank_row_below_it() {
+        for height in 2..40usize {
+            for content in 1..120usize {
+                let live = super::live_offset(content, height);
+                // Rows of content visible when parked at the bottom position.
+                let shown = content.saturating_sub(live).min(height);
+                assert!(
+                    shown < height,
+                    "content {content}, height {height}: last row touches the composer"
+                );
+            }
+        }
+        assert_eq!(super::live_offset(10, 10), 6, "an exact fit includes the bottom buffer");
+        assert_eq!(super::live_offset(10, 4), 6 + 1, "a tiny viewport still pads one row");
     }
 
     #[test]

@@ -137,9 +137,8 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
     [event async for event in runtime.session("catalog").send("inspect")]
 
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
-        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "subagent_send", "subagent_stop", "subagent_list",
-        "todowrite", "question", "webfetch", "websearch", "skill", "code",
+        "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
+        "subagent", "question", "webfetch", "websearch", "skill", "code",
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
@@ -196,8 +195,8 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
     [event async for event in runtime.session("web-tree").send("delegate")]
 
     expected = {
-        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "websearch", "skill", "code",
+        "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
+        "subagent", "question", "webfetch", "websearch", "skill", "code",
     }
     # Only the root session holds `subagent` and `code` (registered per root
     # iteration, never in the manifest a child draws from); the child keeps the rest.
@@ -237,10 +236,10 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     runtime.agents.refresh()
     [event async for event in runtime.session("research-tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "question", "webfetch", "websearch", "skill"}
     catalogs = [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests]
     assert catalogs == [expected, expected - {"subagent"}, expected]
-    assert all(not ({"write", "edit", "bash", "apply_patch"} & names) for names in catalogs)
+    assert all(not ({"write", "edit", "shell", "bash", "apply_patch"} & names) for names in catalogs)
     await runtime.aclose()
 
 
@@ -250,7 +249,7 @@ async def test_explore_keeps_its_declared_tools_within_the_parent_ceiling(tmp_pa
     (tmp_path / ".nexus" / "agents").mkdir(parents=True)
     (tmp_path / ".nexus" / "agents" / "explore.md").write_text(
         "---\nname: explore\ndescription: constrained explorer\ncontexts: [subagent]\n"
-        "tools: [read, glob, grep, subagent, todowrite, webfetch, websearch, bash, write]\n"
+        "tools: [read, glob, grep, subagent, webfetch, websearch, bash, write]\n"
         "---\nExplore safely.\n",
         encoding="utf-8",
     )
@@ -262,11 +261,11 @@ async def test_explore_keeps_its_declared_tools_within_the_parent_ceiling(tmp_pa
     runtime = Runtime(tmp_path, config=_config(background=False), providers={"scripted": provider})
     [event async for event in runtime.session("explore-ceiling").send("delegate")]
     spawned = next(event for event in runtime.session("explore-ceiling").events if event.type == "agent.spawned")
-    # Read-only is prompt guidance only: declared bash/write are kept; the
-    # declared root-only `subagent` is dropped.
+    # Read-only is prompt guidance only: declared bash (now shell)/write are
+    # kept; the declared root-only `subagent` is dropped.
     assert set(spawned.data["tools"]) == {
-        "read", "glob", "grep", "todowrite", "webfetch", "websearch", "bash", "write"}
-    assert not ({"bash", "write"} & set(spawned.data["dropped_tools"]))
+        "read", "glob", "grep", "webfetch", "websearch", "shell", "write"}
+    assert not ({"shell", "write"} & set(spawned.data["dropped_tools"]))
     assert "subagent" in spawned.data["dropped_tools"]
     assert "websearch" in ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY)
     await runtime.aclose()
@@ -287,7 +286,7 @@ async def test_child_catalog_inherits_parent_authority_minus_subagent(tmp_path):
     runtime = Runtime(tmp_path, config=_config("plan", background=False), providers={"scripted": provider})
     [event async for event in runtime.session("tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "edit", "write", "subagent", "todowrite", "question", "skill"}
+    expected = {"read", "glob", "grep", "edit", "write", "subagent", "question", "skill"}
     catalogs = [
         ({tool.name for tool in request.tools} - CHILD_ONLY)
         for request in provider.requests
@@ -308,7 +307,7 @@ async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
     agents.mkdir(parents=True)
     (agents / "explore.md").write_text(
         "---\nname: explore\ndescription: constrained planner\n"
-        "contexts: [subagent]\ntools: [read, glob, grep, subagent, todowrite, skill, webfetch, websearch, bash, write]\n"
+        "contexts: [subagent]\ntools: [read, glob, grep, subagent, skill, webfetch, websearch, bash, write]\n"
         "---\nplan\n",
         encoding="utf-8",
     )
@@ -330,15 +329,15 @@ async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
         if event.type == "agent.spawned"
     )
     assert set(spawned.data["tools"]) == {
-        "read", "glob", "grep", "todowrite", "webfetch", "websearch", "skill",
-        "bash", "write",
+        "read", "glob", "grep", "webfetch", "websearch", "skill",
+        "shell", "write",
     }
     assert not ({"edit", "multiedit"} & set(spawned.data["tools"]))
     # A skill activation's declared tools are intersected with this iteration's
     # catalog; declarations by a role never create a catalog entry.
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
-        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "websearch", "skill", "code",
+        "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
+        "subagent", "question", "webfetch", "websearch", "skill", "code",
     }
     await runtime.aclose()
 
@@ -373,8 +372,8 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
     [event async for event in runtime.session("skill-ceiling").send("delegate")]
 
     expected = {
-        "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "websearch", "skill", "code",
+        "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
+        "subagent", "question", "webfetch", "websearch", "skill", "code",
     }
     child = expected - {"subagent", "code"}
     assert len(provider.requests) == 4
@@ -485,7 +484,7 @@ async def test_root_tool_narrowing_also_caps_delegated_children(tmp_path):
 
     spawned = next(event for event in runtime.session("s").events if event.type == "agent.spawned")
     assert spawned.data["tools"] == ["read"]
-    assert set(spawned.data["dropped_tools"]) >= {"write", "bash"}
+    assert set(spawned.data["dropped_tools"]) >= {"write", "shell"}
     await runtime.aclose()
 
 
@@ -514,9 +513,9 @@ async def test_subagent_profile_is_a_ceiling_even_when_parent_has_more(tmp_path)
 
     spawned = next(event for event in runtime.session("s").events if event.type == "agent.spawned")
     tools = set(spawned.data["tools"])
-    assert {"read", "grep", "glob", "todowrite", "skill"} <= tools
+    assert {"read", "grep", "glob", "skill"} <= tools
     assert "subagent" not in tools
-    assert not ({"write", "edit", "multiedit", "bash", "BashOutput", "KillShell"} & tools)
+    assert not ({"write", "edit", "multiedit", "shell", "bash", "BashOutput", "KillShell"} & tools)
     await runtime.aclose()
 
 

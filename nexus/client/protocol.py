@@ -100,9 +100,11 @@ class Client:
         return await self._request(p.SessionList())  # type: ignore[return-value]
 
     async def project_sessions(
-        self, *, limit: int = 1000, query: str = "", archived: int = 0
+        self, *, limit: int = 1000, query: str = "", archived: int = 0, projects: int = 0
     ) -> p.ProjectSessionsListResult:
-        return await self._request(p.ProjectSessionsList(limit=limit, query=query, archived=archived))  # type: ignore[return-value]
+        return await self._request(  # type: ignore[return-value]
+            p.ProjectSessionsList(limit=limit, query=query, archived=archived, projects=projects)
+        )
 
     async def open_project_session(self, workspace: str, session: str, *, browser: bool = False) -> p.ProjectSessionOpenResult:
         return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser))  # type: ignore[return-value]
@@ -183,6 +185,9 @@ class Client:
     async def list_directory(self, path: str = "", limit: int = 200) -> p.DirectoryListResult:
         return await self._request(p.DirectoryList(path=path, limit=limit))  # type: ignore[return-value]
 
+    async def file_preview(self, path: str, max_bytes: int = 65536) -> p.FilePreviewResult:
+        return await self._request(p.FilePreview(path=path, max_bytes=max_bytes))  # type: ignore[return-value]
+
     async def git_status(self) -> p.GitStatusResult:
         return await self._request(p.GitStatus())  # type: ignore[return-value]
 
@@ -231,6 +236,22 @@ class Client:
         """Run a composer ``!`` command; its output joins the context, no turn starts."""
         result = await self._request(p.SessionShell(session=session, command=command))
         return result.shell_id  # type: ignore[union-attr]
+
+    async def session_jobs(self, session: str) -> p.SessionJobsResult:
+        """The session's ``shell`` tool jobs (host-bounded; never another session's)."""
+        return await self._request(p.SessionJobs(session=session))  # type: ignore[return-value]
+
+    async def session_job_log(self, session: str, job_id: str, *, tail_lines: int = 200,
+                              offset: int | None = None, limit: int = 32768) -> p.SessionJobLogResult:
+        return await self._request(p.SessionJobLog(
+            session=session, job_id=job_id, tail_lines=tail_lines, offset=offset, limit=limit,
+        ))  # type: ignore[return-value]
+
+    async def session_job_stop(self, session: str, job_id: str) -> p.SessionJobStopResult:
+        return await self._request(p.SessionJobStop(session=session, job_id=job_id))  # type: ignore[return-value]
+
+    async def session_job_background(self, session: str, job_id: str) -> p.SessionJobBackgroundResult:
+        return await self._request(p.SessionJobBackground(session=session, job_id=job_id))  # type: ignore[return-value]
 
     async def queue_move(self, session: str, queued_id: str, offset: int) -> bool:
         return (await self._request(p.SessionQueueMove(session=session, queued_id=queued_id, offset=offset))).changed
@@ -445,6 +466,11 @@ class Client:
         return await self._request(p.SessionTitleSettingsSet(enabled=enabled, model=model))
 
     async def claude_code_settings(self) -> Any: return await self._request(p.ClaudeCodeSettings())
+
+    async def usage_refresh_settings(self) -> Any: return await self._request(p.UsageRefreshSettings())
+
+    async def usage_refresh_settings_set(self, seconds: int) -> Any:
+        return await self._request(p.UsageRefreshSettingsSet(seconds=seconds))
 
     async def claude_code_settings_set(
         self, *, main_enabled: bool | None = None, subagent_backend: str | None = None

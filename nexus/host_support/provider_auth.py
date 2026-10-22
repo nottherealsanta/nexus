@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import secrets
 import time
 import tomllib
@@ -44,6 +45,7 @@ from ..auth.copilot import CopilotAuthManager, api_base_url, normalize_domain
 from ..auth.xai import XAIOAuthManager
 from ..model.providers.antigravity_cli import LOGIN_INSTRUCTION, AntigravityCli
 from ..model.providers.claude_agent_auth import ClaudeCliAuth
+from ..model.providers.nvidia import DEFAULT_BASE_URL as NVIDIA_BASE_URL
 from ..errors import ConfigError
 from ..util import redact_secrets
 from . import settings_inventory
@@ -65,6 +67,10 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...], str]] = {
         "OpenCode Go", ("api_key",),
         "Paste the API key from your OpenCode Go subscription (opencode.ai/auth).",
     ),
+    "nvidia": (
+        "NVIDIA", ("api_key",),
+        "Paste an NVIDIA API key (build.nvidia.com). NVIDIA_API_KEY in the daemon environment also works.",
+    ),
     "xai": (
         "xAI (SuperGrok)", ("device",),
         "Sign in with your SuperGrok subscription: open the link and enter the code. API keys are not used.",
@@ -83,9 +89,9 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...], str]] = {
 #: Providers whose sign-in is a manual step in the provider's own CLI; Nexus starts nothing.
 _MANUAL = frozenset({"antigravity"})
 #: Providers whose credential Nexus may remove from Settings.
-_LOGOUT = frozenset({"codex", "github-copilot", "opencode-go", "xai"})
+_LOGOUT = frozenset({"codex", "github-copilot", "opencode-go", "nvidia", "xai"})
 #: Providers that connect with a pasted API key.
-_PASTED_KEY = frozenset({"opencode-go"})
+_PASTED_KEY = frozenset({"opencode-go", "nvidia"})
 _LOGIN_TTL = 900.0
 _MAX_LOGINS = 8
 _READY_TIMEOUT = 15.0
@@ -186,7 +192,11 @@ async def copilot_domain(runtime: object) -> str | None:
 
 
 async def connected(runtime: object, provider: str) -> bool:
-    """Whether the private credential file holds a credential for ``provider`` (never the value)."""
+    """Whether a credential is available (never return its value)."""
+    if provider == "nvidia":
+        environ = getattr(runtime, "_environ", None)
+        if (os.environ if environ is None else environ).get("NVIDIA_API_KEY", "").strip():
+            return True
     try:
         return bool(await _manager(runtime, provider).status())
     except Exception:  # noqa: BLE001 - an unavailable credential file reads as not connected
@@ -214,6 +224,8 @@ def _route(provider: str, domain: str | None = None) -> tuple[tuple[str, str], .
         return (("kind", "claude-agent"),)
     if provider == "xai":
         return (("auth", "xai_oauth"), ("api", "responses"))
+    if provider == "nvidia":
+        return (("auth", "keychain"), ("base_url", NVIDIA_BASE_URL), ("api", "chat"))
     return (("auth", "keychain"), ("base_url", OPENCODE_GO_BASE_URL), ("api", "chat"))
 
 

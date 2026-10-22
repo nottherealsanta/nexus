@@ -47,6 +47,7 @@ __all__ = [
     "ADAPTER_ANTHROPIC",
     "ADAPTER_GEMINI",
     "ADAPTER_OLLAMA",
+    "ADAPTER_NVIDIA",
     "ADAPTER_XAI",
     "ADAPTER_OPENAI",
     "ADAPTER_OPENCODE",
@@ -98,6 +99,11 @@ ADAPTER_OLLAMA = "ollama"
 #: rules (``providers/xai.py``). Its own name so the catalogue's ``xai`` entry
 #: is runnable without a ``base_url``.
 ADAPTER_XAI = "xai"
+#: NVIDIA's hosted API catalogue (``integrate.api.nvidia.com``): Chat
+#: Completions with NVIDIA's endpoint, key and attribution header
+#: (``providers/nvidia.py``). The catalogue lists it as ``@ai-sdk/openai-compatible``,
+#: so the direct id decides, not ``npm``.
+ADAPTER_NVIDIA = "nvidia"
 #: The OpenCode ACP subprocess agent. It is an agent surface, not a model wire
 #: protocol, so it declares no model capabilities; the registry maps it only so
 #: a catalogue listing is not reported as adapter-less.
@@ -111,8 +117,8 @@ ADAPTER_ANTIGRAVITY = "antigravity"
 OPENAI_COMPATIBLE = "openai_compatible"
 
 _KNOWN_ADAPTERS = frozenset(
-    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_XAI, ADAPTER_OPENCODE,
-     ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE, ADAPTER_ANTIGRAVITY}
+    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_XAI, ADAPTER_NVIDIA,
+     ADAPTER_OPENCODE, ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE, ADAPTER_ANTIGRAVITY}
 )
 
 #: ``kind`` spellings that alias a canonical adapter. ``google`` is the
@@ -169,12 +175,16 @@ _DIRECT_ADAPTERS: dict[str, str] = {
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
     "xai": ADAPTER_XAI,
+    "nvidia": ADAPTER_NVIDIA,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,
     "claude_code": ADAPTER_CLAUDE_CODE,
     "claudecode": ADAPTER_CLAUDE_CODE,
 }
+
+#: Direct provider ids whose preset wins over the catalogue's ``npm`` signal.
+_PRESET_FIRST = frozenset({"nvidia"})
 
 #: Bounds that keep a hostile or corrupt catalogue from exhausting memory. The
 #: real catalogue is ~4.8 MB / 223 providers / ~8k models.
@@ -377,6 +387,8 @@ def map_provider(provider_id: str, npm: str | None = None) -> str | None:
     still listable -- the caller decides whether a configured ``base_url`` lets
     it fall back to the OpenAI-compatible adapter.
     """
+    if provider_id in _PRESET_FIRST:
+        return _DIRECT_ADAPTERS[provider_id]
     if npm and npm in _NPM_ADAPTERS:
         return _NPM_ADAPTERS[npm]
     return _DIRECT_ADAPTERS.get(provider_id)
@@ -821,9 +833,14 @@ def _canonical_key(
     ``("openai", "o1-pro")``. Two unrelated providers that happen to use the same
     bare id do *not* share a key, because the implied provider differs.
     """
+    # NVIDIA's hosted catalogue uses vendor/model as the *wire* ID, even
+    # when vendor is NVIDIA itself or another registered direct provider.
+    # Keep that namespace opaque: the Nexus route is an additional prefix.
+    if provider_id == "nvidia":
+        return provider_id, model_id
     if "/" in model_id:
         head, _, tail = model_id.partition("/")
-        if tail and head in known_providers:
+        if tail and head in known_providers and head != provider_id:
             return (head, tail)
     return (provider_id, model_id)
 
@@ -1379,6 +1396,10 @@ class ModelRegistry:
         if info is not None:
             return info
         matches = self._index.by_id.get(ref)
+        if matches is not None and "/" in ref:
+            # Namespaced NVIDIA wire IDs require an explicit runtime prefix;
+            # they must not masquerade as a different provider's public ref.
+            matches = tuple(item for item in matches if item.catalogue_provider != "nvidia")
         if matches is not None and len(matches) == 1:
             return matches[0]
         return None

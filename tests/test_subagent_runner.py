@@ -287,8 +287,8 @@ async def test_read_only_parent_cannot_write(tmp_path):
     )
     spec = factory.specs[-1]
     assert spec.tools == ("read",)
-    assert not (set(spec.tools) & {"write", "edit", "multiedit", "bash"})
-    assert "write" in spec.dropped_tools and "bash" in spec.dropped_tools
+    assert not (set(spec.tools) & {"write", "edit", "multiedit", "shell", "bash"})
+    assert "write" in spec.dropped_tools and "shell" in spec.dropped_tools
     assert not outcome.is_error
 
 
@@ -318,7 +318,7 @@ async def test_worktree_scope_excludes_unreviewed_tools_and_inherits(tmp_path):
         runtime_supports_workspace=True,
         parent_tools={
             "read", "glob", "grep", "ls", "edit", "write", "apply_patch",
-            "subagent", "todowrite", "skill", "webfetch", "websearch",
+            "subagent", "question", "skill", "webfetch", "websearch",
             "bash", "bash_output", "kill_shell", "CustomWriter", "mcp__srv__write",
         },
     )
@@ -334,7 +334,7 @@ async def test_worktree_scope_excludes_unreviewed_tools_and_inherits(tmp_path):
     spec = factory.specs[-1]
     assert outcome.ok
     assert spec.tools == ("read",)
-    assert {"bash", "CustomWriter"} <= set(spec.dropped_tools)
+    assert {"shell", "CustomWriter"} <= set(spec.dropped_tools)
     assert spec.worktree_scope is True
     assert "worktree safety" in outcome.render()
 
@@ -352,7 +352,7 @@ async def test_normal_child_keeps_parent_bash_authority(tmp_path):
     outcome = await runner.spawn(TaskRequest(prompt="ordinary"))
 
     assert outcome.ok
-    assert "bash" in factory.specs[-1].tools
+    assert "shell" in factory.specs[-1].tools
     assert factory.specs[-1].worktree_scope is False
 
 
@@ -368,7 +368,7 @@ async def test_explore_role_keeps_write_tools_the_parent_has(tmp_path):
     )
     spec = factory.specs[-1]
     # Read-only is prompt guidance only: nothing is stripped.
-    assert {"read", "write", "edit", "bash", "grep"} <= set(spec.tools)
+    assert {"read", "write", "edit", "shell", "grep"} <= set(spec.tools)
     assert not outcome.is_error
 
 
@@ -394,7 +394,7 @@ async def test_planner_declaration_asking_for_write_gets_it_within_the_parent_ce
         TaskRequest(prompt="plan", subagent_type="planner")
     )
     spec = factory.specs[-1]
-    assert {"bash", "write"} <= {name.lower() for name in spec.tools}
+    assert {"shell", "write"} <= {name.lower() for name in spec.tools}
     assert not outcome.is_error
 
 
@@ -526,7 +526,7 @@ async def test_max_depth_zero_still_disables_root_spawning(tmp_path):
 
 async def test_root_keeps_subagent_and_children_never_get_it(tmp_path):
     factory = Factory()
-    tools = {"read", "grep", "subagent", "todowrite", "question"}
+    tools = {"read", "grep", "subagent", "question"}
     runner = make_runner(tmp_path, factory, parent_tools=tools)
     for role in ("task", "quick", "advisor", "scout"):
         for worktree in (False, True):

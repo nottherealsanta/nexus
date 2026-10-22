@@ -22,7 +22,7 @@ def _wait_once(ctx: Ctx):
     if match is None:
         return say("The command finished inside the yield window; nothing to wait for.")
     return calls(
-        call("bash", action="wait", job_id=match.group(1)),
+        call("shell", action="wait", job_id=match.group(1)),
         text="Still running: waiting once for it to exit instead of polling.",
     )
 
@@ -30,16 +30,16 @@ def _wait_once(ctx: Ctx):
 SCENARIO = Scenario(
     name="bash-wait",
     summary="A ~8s command outlives the 3s yield window; one wait returns at exit (2 tool calls, no polling)",
-    tags=("tools", "bash"),
+    tags=("tools", "bash", "shell"),
     est_seconds=12,
     prompt="Run the slow build and tell me when it is done.",
     actors={"main": [
-        calls(call("bash", command=_COMMAND), text="Running the build in the foreground."),
+        calls(call("shell", command=_COMMAND), text="Running the build in the foreground."),
         dyn(_wait_once),
         verdict("bash-wait", intro="The build finished after a single wait.", checks=[
-            tool_called("bash", 2),
-            tool_result_contains("bash", "moved to background"),
-            tool_result_contains("bash", "BUILD-OK"),
+            tool_called("shell", 2),
+            tool_result_contains("shell", "moved to background"),
+            tool_result_contains("shell", "BUILD-OK"),
             no_unexpected_errors(0),
         ]),
     ]},

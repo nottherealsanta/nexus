@@ -90,6 +90,14 @@ def test_auto_archive_days_must_be_a_bounded_integer(days):
         ConfigV2(sessions=SessionsSection(auto_archive_days=days))
 
 
+def test_auto_archive_idle_seconds_defaults_to_one_hour_and_is_bounded():
+    assert SessionsSection().auto_archive_idle_seconds == 3600
+    assert SessionsSection(auto_archive_idle_seconds=0).auto_archive_idle_seconds == 0
+    for bad in (-1, 3650 * 86400 + 1, True, 1.5):
+        with pytest.raises(ValueError, match="sessions.auto_archive_idle_seconds"):
+            SessionsSection(auto_archive_idle_seconds=bad)
+
+
 def test_auto_archive_days_can_be_disabled():
     assert ConfigV2(sessions=SessionsSection(auto_archive_days=0)).sessions.auto_archive_days == 0
 

@@ -7,6 +7,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+// Matches the host's API-key limit; typing and paste share the same budget.
+const MAX_TEXT: usize = 512;
+
 #[derive(Default)]
 pub struct Popup {
     pub id: String,
@@ -310,13 +313,41 @@ fn edit_key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
             if !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && edit.text.value.chars().count() < 400 =>
+                && !c.is_control()
+                && edit.text.value.chars().count() < MAX_TEXT =>
         {
             edit.text.insert(c)
         }
         _ => {}
     }
     Act::Done
+}
+
+/// Paste belongs only to a text row, never to navigation or a select popup.
+/// Start editing a focused text row just as Enter would; saving still requires Enter.
+pub fn paste(page: &Page, st: &mut PageState, text: &str) {
+    if st.popup.is_some() {
+        return;
+    }
+    let id = st.edit.as_ref().map_or(&st.focus, |edit| &edit.id);
+    let Some(Target::Row(Row {
+        control: Control::Text { value, .. },
+        ..
+    })) = page.find(id)
+    else {
+        return;
+    };
+    let id = id.clone();
+    let edit = st.edit.get_or_insert_with(|| Edit {
+        id,
+        text: TextState::new(value),
+    });
+    let remaining = MAX_TEXT.saturating_sub(edit.text.value.chars().count());
+    // Single-line fields discard CR/LF, tabs, ESC and other control characters.
+    // In particular a pasted newline must not submit a secret.
+    for c in text.chars().filter(|c| !c.is_control()).take(remaining) {
+        edit.text.insert(c);
+    }
 }
 
 pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
@@ -796,6 +827,48 @@ mod tests {
             ),
             Act::Pass
         );
+    }
+
+    #[test]
+    fn paste_edits_single_line_text_locally_with_a_shared_512_character_limit() {
+        let p = Page::from_value(&json!({"blocks": [{"t": "row", "id": "k",
+            "control": {"c": "text", "value": "ab", "secret": true,
+                "operation": {"kind": "save_key"}}}]}));
+        let mut st = PageState {
+            focus: "row:k".into(),
+            ..Default::default()
+        };
+        paste(&p, &mut st, "c\r\n\t\u{1b}\0d");
+        assert_eq!(st.edit.as_ref().unwrap().text.value, "abcd");
+        key(&p, &mut st, press(KeyCode::Left));
+        paste(&p, &mut st, "é");
+        assert_eq!(st.edit.as_ref().unwrap().text.value, "abcéd");
+        paste(&p, &mut st, &"界".repeat(600));
+        assert_eq!(st.edit.as_ref().unwrap().text.value.chars().count(), 512);
+        key(&p, &mut st, press(KeyCode::Char('x')));
+        let value = st.edit.as_ref().unwrap().text.value.clone();
+        assert_eq!(value.chars().count(), 512);
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Enter)),
+            Act::Send(json!({"kind": "save_key", "value": value}))
+        );
+        assert!(st.edit.is_none());
+        paste(&p, &mut st, "cancelled");
+        assert_eq!(key(&p, &mut st, press(KeyCode::Esc)), Act::Done);
+        assert!(st.edit.is_none());
+    }
+
+    #[test]
+    fn paste_ignores_non_text_rows_and_popups() {
+        let p = page();
+        let mut st = state(&p);
+        paste(&p, &mut st, "secret");
+        assert!(st.edit.is_none());
+        st.focus = "row:dev".into();
+        key(&p, &mut st, press(KeyCode::Enter));
+        assert!(st.popup.is_some());
+        paste(&p, &mut st, "secret");
+        assert!(st.edit.is_none());
     }
 
     #[test]

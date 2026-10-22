@@ -225,7 +225,7 @@ def test_tools_exclusion_parsing_and_dedup():
     parsed = parse_frontmatter(
         doc("name: a", "description: d", "tools: [Bash, Bash, -Edit, -Edit]")
     )
-    assert parsed.tools == ("bash",)
+    assert parsed.tools == ("shell",)
     assert parsed.excluded_tools == ("edit",)
 
 
@@ -1000,7 +1000,7 @@ def test_declarations_never_grant_beyond_the_ceiling(tmp_path):
         bundle_map=seed_bundle_map() | {"shell": ["Bash"]},
     )
     assert selection.selected == frozenset({"read"})
-    assert "bash" in selection.dropped
+    assert "shell" in selection.dropped
     assert selection.selected <= selection.ceiling <= selection.available
 
 
@@ -1061,7 +1061,7 @@ def test_former_read_only_names_keep_declared_shell_and_write_tools(tmp_path):
         available={"Bash", "Write", "Read", "Grep", "Edit", "MultiEdit"},
         bundle_map={"shell": ["Bash"], "fs": ["Read", "Write", "Grep"]},
     )
-    assert selection.selected == frozenset({"read", "bash", "write"})
+    assert selection.selected == frozenset({"read", "shell", "write"})
     assert not selection.stripped
 
 
@@ -1098,7 +1098,7 @@ def test_former_read_only_role_inherits_the_whole_ceiling(tmp_path):
         explore, available=available, mutating={"SomeDynamicWrite"}
     )
     assert worker.selected == frozenset(
-        {"read", "write", "edit", "multiedit", "glob", "grep", "ls", "bash"}
+        {"read", "write", "edit", "multiedit", "glob", "grep", "ls", "shell"}
     )
     assert scout.selected == worker.selected
 
@@ -1128,7 +1128,7 @@ def test_declarations_on_former_read_only_names_are_kept(tmp_path):
         available={"Bash", "Read"},
         bundle_map={"shell": ["Bash"]},
     )
-    assert selection.selected == frozenset({"read", "bash"})
+    assert selection.selected == frozenset({"read", "shell"})
     assert not selection.read_only
 
 
@@ -1147,7 +1147,7 @@ def _provenance(tmp_path: Path, name: str):
 
 
 def test_no_role_is_structurally_read_only():
-    assert {"bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
+    assert {"shell", "bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
     assert {"write", "edit", "multiedit"} <= FORBIDDEN_ROLE_TOOLS
     assert READ_ONLY_ROLES == frozenset()  # user decision 2026-10-17
 
@@ -1167,14 +1167,21 @@ def test_builtin_build_prompt_names_no_optional_tools_or_roles() -> None:
     """Tools and subagent roles are discovered at runtime, not hardcoded.
 
     The tool list and the ``subagent`` roster carry names and usage; the build
-    prompt may assume only read/search/edit, so it never names a tool or role.
+    prompt may assume only read/search/edit, so it never names an optional tool
+    or a role. It may mention ``subagent`` only to say each call blocks until
+    its report returns (foreground-only delegation).
     """
     body = (_default_seed_source() / "build.md").read_text()
     for name in (
-        "bash", "todowrite", "question", "apply_patch", "webfetch", "websearch",
-        "skill", "subagent", "subagent_type", "advisor", "task", "quick",
+        "bash", "shell", "question", "apply_patch", "webfetch", "websearch",
+        "skill", "subagent_type", "advisor", "task", "quick",
     ):
         assert f"`{name}`" not in body and f"**{name}**" not in body, name
+    assert "blocks until its report returns" in " ".join(body.split())
+    # Background shell jobs are documented in the prompt (``background=true``);
+    # only the retired background-subagent surface stays out.
+    for retired in ("wait=", "`wait`", "subagent_status", "subagent_control"):
+        assert retired not in body, retired
 
 @pytest.mark.parametrize("role", ["build", "orchestrator"])
 def test_packaged_root_prompts_open_with_identity(role):

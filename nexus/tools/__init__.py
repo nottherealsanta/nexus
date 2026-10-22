@@ -4,7 +4,7 @@ Phase 2 is delivered in packets. This package now exposes:
 
 * :mod:`nexus.tools.spec` — :class:`ToolSpec`, :class:`ToolCall`,
   :class:`ToolContext`, :class:`ToolExecutionResult`, and the explicit
-  ``job_registry``/``todo_store`` service seams;
+  ``job_registry`` service seam;
 * :mod:`nexus.tools.bundles` — built-in bundles and profiles;
 * :mod:`nexus.tools.permissions` — the rule engine, path security, and approval
   primitives;
@@ -72,7 +72,6 @@ from .spec import (
     PermissionKeyFn,
     ProgressEmitter,
     RegisteredTool,
-    TodoStoreView,
     ToolCall,
     ToolContext,
     ToolExecutionResult,
@@ -115,7 +114,6 @@ __all__ = [
     "RegisteredTool",
     "ResolvedPath",
     "Rule",
-    "TodoStoreView",
     "ToolCall",
     "ToolContext",
     "ToolExecutionResult",

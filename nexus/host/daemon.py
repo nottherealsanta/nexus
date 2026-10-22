@@ -97,6 +97,8 @@ DEFAULT_HANDSHAKE_TIMEOUT = 5.0
 #: (or a callback that never returns) must not stop the daemon from releasing
 #: its exclusive lock.
 TEARDOWN_TIMEOUT = 1.0
+#: Longest the startup sweep of a killed daemon's shell process groups may take.
+SHELL_RECOVERY_TIMEOUT_S = 8.0
 #: Bound on concurrent subscriptions from one client, so a buggy client cannot
 #: open unbounded streams.
 MAX_SUBSCRIPTIONS_PER_CLIENT = 64
@@ -457,6 +459,10 @@ def _http_requested(
 class Daemon:
     """Own one runtime, one socket, and one lifecycle for a workspace."""
 
+    # Class-level defaults so a partially built daemon (tests) still has them.
+    _orphan_since: float | None = None
+    _orphan_task: asyncio.Future[None] | None = None
+
     def __init__(
         self,
         workspace: str | Path,
@@ -518,6 +524,10 @@ class Daemon:
         self._clients: set[_ClientConnection] = set()
         self._stop_event = asyncio.Event()
         self._reaper: asyncio.Task[None] | None = None
+        #: Monotonic time the persistent-job orphan clock started, and the task
+        #: that stops the jobs once it expires (see :meth:`_check_orphans`).
+        self._orphan_since: float | None = None
+        self._orphan_task: asyncio.Future[None] | None = None
         self._last_activity = time.time()
         self._started_at = 0.0
         self._closed = False
@@ -624,6 +634,7 @@ class Daemon:
                 owns_runtime=True,
                 emit=self._emit,
             )
+            await self._recover_shell_orphans()
             self._facade.start_usage_polling()
             stranded = await self._facade.recover_admissions()
             if stranded:
@@ -673,6 +684,29 @@ class Daemon:
             self._runtime = None
             await self._release()
             raise
+
+    async def _recover_shell_orphans(self) -> None:
+        """Stop the process groups a previous, killed daemon left running (P7).
+
+        Runs under the daemon lock, before the socket is bound, so nothing can
+        start a job concurrently. Bounded and best effort: a failure or timeout is
+        logged and never stops the daemon from starting. It writes no session
+        event and starts no turn; a session records its own interrupted jobs
+        when it is next opened.
+        """
+        recover = getattr(self._runtime, "recover_shell_orphans", None)
+        if not callable(recover):
+            return
+        try:
+            counts = await asyncio.wait_for(recover(), timeout=SHELL_RECOVERY_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - includes TimeoutError
+            self._log(
+                "daemon.shell_recovery_failed",
+                error=redact_secrets(str(exc)) or type(exc).__name__,
+            )
+            return
+        if counts and (counts.get("jobs") or counts.get("invalid")):
+            self._log("daemon.shell_orphans_swept", **counts)
 
     async def serve_forever(self) -> None:
         await self.start()
@@ -727,6 +761,11 @@ class Daemon:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reaper
             self._reaper = None
+        orphan_task, self._orphan_task = self._orphan_task, None
+        if orphan_task is not None and orphan_task is not asyncio.current_task():
+            orphan_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await orphan_task
         if self._server is not None:
             # Stop accepting first, but do not await ``wait_closed`` yet: since
             # Python 3.12 ``Server.wait_closed`` does not return until every
@@ -804,21 +843,94 @@ class Daemon:
         """Best-effort startup/hourly auto-archive; never blocks request handling."""
         runtime = self._runtime
         sessions = getattr(runtime, "sessions", None)
-        days = getattr(runtime, "auto_archive_days", None)
-        if sessions is None or not callable(days):
+        idle_seconds = getattr(runtime, "auto_archive_idle_seconds", None)
+        if sessions is None or not callable(idle_seconds):
             return
-        count = await sweep_stale_sessions(sessions, days)
+        count = await sweep_stale_sessions(sessions, idle_seconds)
         if count:
             self._log("sessions.auto_archived", count=count)
 
+    def _present_or_busy(self) -> bool:
+        """A viewer is attached, a turn runs or is queued, or a voice call is live."""
+        facade = self._facade
+        if facade is None:
+            return False
+        return bool(
+            facade.presence.total_viewers() > 0
+            or facade.supervisor.running
+            or facade.supervisor.queued
+            or getattr(getattr(self._runtime, "voice", None), "active", False)
+        )
+
+    def _check_orphans(self) -> None:
+        """Start the orphan policy once persistent jobs have had no viewer and no turn
+        for ``tools.shell_orphan_s``.
+
+        The clock is monotonic and separate from the idle clock (which restarts
+        whenever a job is running). Anyone present, or a running turn, resets it.
+        """
+        runtime = self._runtime
+        orphan_s = getattr(runtime, "shell_orphan_seconds", None)
+        jobs = getattr(runtime, "persistent_shell_jobs", None)
+        if self._facade is None or not callable(orphan_s) or not callable(jobs):
+            return
+        if self._orphan_task is not None:
+            return
+        limit = orphan_s()
+        try:
+            total = jobs(1)[0]
+        except Exception:  # noqa: BLE001 - a bad probe must not end the reaper
+            total = 0
+        if (
+            not isinstance(limit, (int, float))
+            or isinstance(limit, bool)
+            or limit <= 0
+            or not isinstance(total, int)
+            or total <= 0
+            or self._present_or_busy()
+        ):
+            self._orphan_since = None
+            return
+        now = time.monotonic()
+        if self._orphan_since is None:
+            self._orphan_since = now
+        if now - self._orphan_since >= limit:
+            reason = f"no viewer for {_duration_text(limit)}"
+            self._orphan_task = asyncio.ensure_future(self._stop_orphans(reason))
+
+    async def _stop_orphans(self, reason: str) -> None:
+        """Stop the persistent jobs, then end the daemon.
+
+        The jobs are stopped first, while sessions are still open, so each
+        ``shell.job_exited`` (with ``stopped: <reason>``) is written durably;
+        the daemon log records the same reason. Anyone who arrives before the
+        stop starts cancels it.
+        """
+        try:
+            if self._present_or_busy():
+                self._orphan_since = None
+                return
+            stopper = getattr(self._runtime, "stop_persistent_shell_jobs", None)
+            stopped = int(await stopper(reason)) if callable(stopper) else 0
+            self._log("daemon.orphan_jobs_stopped", reason=reason, count=stopped)
+            self.request_stop(f"orphan_jobs: {reason}")
+        except Exception as exc:  # noqa: BLE001 - never leave the policy half-done
+            self._log("daemon.orphan_stop_failed", error=redact_secrets(str(exc)))
+            self.request_stop("orphan_jobs")
+        finally:
+            self._orphan_task = None
+
     def _idle(self) -> bool:
+        self._check_orphans()
         if self.idle_timeout <= 0 or self._facade is None:
             return False
-        if self._facade.presence.total_viewers() > 0:
+        if self._present_or_busy():
             return False
-        if self._facade.supervisor.running or self._facade.supervisor.queued:
-            return False
-        if getattr(getattr(self._runtime, "voice", None), "active", False):
+        has_jobs = getattr(self._runtime, "has_active_shell_jobs", None)
+        if callable(has_jobs) and has_jobs() is True:
+            # A shell job outlives its turn; the idle window restarts once the
+            # last one ends instead of firing immediately.
+            self.touch()
             return False
         return (time.time() - self._last_activity) >= self.idle_timeout
 
@@ -1022,6 +1134,15 @@ def _server_version() -> str:
         return version("nexus-harness")
     except Exception:  # noqa: BLE001 - informational only
         return "0.0.0"
+
+
+def _duration_text(seconds: float) -> str:
+    """``3600`` -> ``1 h``, ``120`` -> ``2 min``, else seconds (for recorded reasons)."""
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{int(seconds // 3600)} h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{int(seconds // 60)} min"
+    return f"{seconds:g} s"
 
 
 def _pid_alive(pid: int) -> bool:

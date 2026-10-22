@@ -117,31 +117,16 @@ _TASK_SCHEMA: dict[str, Any] = {
                 "parallel subagents could edit the same files."
             ),
         },
-        "wait": {
-            "type": "boolean",
-            "description": (
-                "Block until the subagent finishes and return its report as this "
-                "call's result. Leave it unset: the call otherwise returns at "
-                "once and the report arrives later as a message. Set it only "
-                "when you cannot do anything useful before the report."
-            ),
-        },
     },
     "required": ["prompt"],
     "additionalProperties": False,
 }
 
 _TASK_DESCRIPTION = (
-    "Start a subagent on a self-contained task. By default the call returns at "
-    "once with the subagent's id and it works in the background: keep working on "
-    "anything that does not depend on it, or end your turn if there is nothing "
-    "else; its report arrives later as a message labelled \"Subagent report\" "
-    "and wakes you, so do not poll. Start independent subagents together. Pass "
-    "wait: true only when you cannot continue without the report. When it has "
-    "reported, the subagent is idle but keeps its whole conversation: continue "
-    "it with subagent_send instead of starting a new one, and close it with "
-    "subagent_stop when you are done (an idle subagent holds a slot). The "
-    "subagent does not see this conversation, so the prompt must carry the "
+    "Start a subagent on a self-contained task. The call blocks and returns its "
+    "report directly. Start independent subagents together in one batch of "
+    "calls so they run concurrently; the turn continues when every report is in. "
+    "The subagent does not see this conversation, so the prompt must carry the "
     "goal, relevant paths, constraints, and what to report. Subagents that edit "
     "files list them in their report. A subagent inherits only the parent's "
     "authority and cannot exceed it."
@@ -288,9 +273,6 @@ def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
         raise _TaskToolError("'worktree' must be a boolean")
     if "worktree" in args:
         request["worktree"] = worktree
-    wait = args.get("wait")
-    if wait is not None and not isinstance(wait, bool):
-        raise _TaskToolError("'wait' must be a boolean")
     tools = args.get("tools")
     if tools is not None:
         if not isinstance(tools, (list, tuple)) or not all(
@@ -309,73 +291,6 @@ def _usage_dict(usage: object) -> dict[str, Any]:
     if isinstance(usage, Mapping):
         return dict(usage)
     return {}
-
-
-def _call_id_kwargs(fn: Any, ctx: ToolContext) -> dict[str, Any]:
-    """Pass the model tool call id only to callables that accept it."""
-    try:
-        parameters = inspect.signature(fn).parameters.values()
-    except (TypeError, ValueError):
-        return {"call_id": ctx.call_id}
-    if any(
-        p.name == "call_id" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters
-    ):
-        return {"call_id": ctx.call_id}
-    return {}
-
-
-def _to_started_result(started: object) -> ToolExecutionResult:
-    """The acknowledgement for a subagent started in the background."""
-    agent_id = str(getattr(started, "agent_id", "") or "")
-    role = str(getattr(started, "role", "") or "subagent")
-    model = getattr(started, "model", None)
-    tier = getattr(started, "tier", None)
-    where = str(getattr(started, "workspace", "") or "the workspace")
-    label = ", ".join(
-        part
-        for part in (
-            role,
-            f"{model}" if isinstance(model, str) and model else "",
-            f"tier {tier}" if isinstance(tier, str) and tier and tier != model else "",
-        )
-        if part
-    )
-    lines = [
-        f"Started subagent {agent_id} ({label}) in {where}.",
-        "It is running in the background. Its report will arrive as a message "
-        'labelled "Subagent report" when it finishes; you do not need to poll. '
-        "Keep working on anything that does not depend on it, or end your turn "
-        "if there is nothing else: you will be woken when it reports. Continue "
-        "it later with subagent_send.",
-    ]
-    dropped = [str(name) for name in (getattr(started, "dropped_tools", ()) or ())]
-    if dropped:
-        lines.append(f"[note: these requested tools were not granted: {', '.join(dropped)}]")
-    note = getattr(started, "clamp_note", "")
-    if isinstance(note, str) and note:
-        lines.append(note)
-    metrics: dict[str, Any] = {
-        "agent": role,
-        "agent_id": agent_id,
-        "session": str(getattr(started, "session_id", "") or agent_id),
-        "status": "running",
-        "state": "running",
-        "background": True,
-        "usage": {},
-        "dropped_tools": dropped,
-        "clamped": bool(note),
-    }
-    if isinstance(tier, str):
-        metrics["tier"] = tier
-    worktree = getattr(started, "worktree", None)
-    if isinstance(worktree, Mapping):
-        metrics["worktree"] = dict(worktree)
-    return ToolExecutionResult.text(
-        "\n".join(lines),
-        display=f"Task {role}: started in the background",
-        context_note=f"[Task {role} ({agent_id}): started in the background]",
-        metrics=metrics,
-    )
 
 
 def _to_result(outcome: object) -> ToolExecutionResult:
@@ -421,18 +336,7 @@ def _to_result(outcome: object) -> ToolExecutionResult:
         metrics["worktree"] = dict(worktree)
     if not text.strip():
         text = f"Task: subagent {agent} returned {status}"
-    if getattr(outcome, "continuable", False) is True and session_id:
-        text += (
-            f"\n[This subagent is idle now. Continue it with subagent_send (agent_id "
-            f"{session_id}), or close it with subagent_stop.]"
-        )
-    continuable = getattr(outcome, "continuable", False) is True
-    if session_id and continuable:
-        context_note = (
-            f"[Task {agent} ({session_id}): {status}; the report was shown in full. "
-            "It is idle: continue it with subagent_send or close it with subagent_stop]"
-        )
-    elif session_id and status == "failed":
+    if session_id and status == "failed":
         context_note = (
             f"[Task {agent} ({session_id}): failed; the report above has what it "
             "did. If the work still matters, start a new subagent with what it needs]"
@@ -464,23 +368,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     if service is not None:
         try:
             request.setdefault("subagent_type", service.default_type)
-            start = getattr(service, "start", None)
-            # Background only when the service can start detached children,
-            # ``agents.background`` is on, and the caller did not ask to wait.
-            if (
-                callable(start)
-                and getattr(service, "background", False) is True
-                and args.get("wait") is not True
-            ):
-                started = await start(
-                    request, emit=ctx.emit, **_call_id_kwargs(start, ctx)
-                )
-                outcome = getattr(started, "outcome", None)
-                return _to_result(outcome) if outcome is not None else _to_started_result(started)
             spawn = service.spawn
             kwargs = {"cancel": ctx.cancel_token, "emit": ctx.emit}
-            # Keep structural test doubles and older internal callers working;
-            # production SubagentRunner accepts the exact model tool call id.
             try:
                 signature = inspect.signature(spawn)
                 if "call_id" in signature.parameters or any(

@@ -83,10 +83,10 @@ def thought_title(text: str, limit: int = 96) -> str:
 _TOOL_VERBS = {
     "read": "→ Read", "ls": "→ List", "glob": "✱ Glob", "grep": "✱ Grep",
     "edit": "← Edit", "multiedit": "← Edit", "write": "← Write", "apply_patch": "← Patch",
-    "webfetch": "% Fetch", "websearch": "◈ Search", "todowrite": "☐ Todo", "skill": "◇ Skill",
+    "webfetch": "% Fetch", "websearch": "◈ Search", "skill": "◇ Skill",
     "task": "◉ Task", "subagent": "◉ Task", "question": "? Question",
 }
-_RAW_OUTPUT_TOOLS = frozenset({"bash", "bashoutput", "glob", "grep", "ls"})
+_RAW_OUTPUT_TOOLS = frozenset({"shell", "bash", "bashoutput", "glob", "grep", "ls"})
 
 @dataclass(frozen=True)
 class ToolGroup:
@@ -134,27 +134,10 @@ def tool_heading(tool: ToolCallView) -> str:
         label = target.removeprefix("mcp__").replace("__", " · ").replace("/", " · ")
         return "⚙ " + _text(label, 120) + " · via McpCall"
     args = format_arguments(tool)
-    if name in {"bash", "bashoutput", "killshell"}:
+    if name in {"shell", "bash", "bashoutput", "killshell"}:
         return f"$ {args}" if args else "$"
     verb = _TOOL_VERBS.get(name, f"⚙ {_text(tool.name or 'tool', 40)}")
     return f"{verb} {args}".rstrip()
-
-
-def todo_preview(tool: ToolCallView) -> list[str]:
-    """Five item rows, or four items and a remaining count."""
-    if tool.name.casefold() != "todowrite" or tool_status(tool) == "failed":
-        return []
-    args = tool.input if isinstance(tool.input, Mapping) else {}
-    todos = tool.metrics.get("todos", args.get("todos")) if isinstance(tool.metrics, Mapping) else args.get("todos")
-    if not isinstance(todos, (list, tuple)):
-        return []
-    glyphs = {"pending": "☐", "in_progress": "◐", "completed": "✓", "cancelled": "✗"}
-    shown = todos[:4] if len(todos) > 5 else todos
-    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {_first_line(_text(item.get('content', ''), 180))}"
-            for item in shown if isinstance(item, Mapping)]
-    if len(todos) > 5:
-        rows.append(f"{len(todos) - 4} more")
-    return rows
 
 
 def tool_output(tool: ToolCallView) -> str:
@@ -200,7 +183,7 @@ def format_arguments(tool: ToolCallView) -> str:
         return _first_line(_text(path, 180))
     if name == "apply_patch":
         return _first_line(_text(", ".join(_patch_paths(args.get("patch"))), 180))
-    if name in {"bash", "bashoutput", "killshell"}:
+    if name in {"shell", "bash", "bashoutput", "killshell"}:
         command = str(args.get("command") or args.get("id") or "").strip()
         first, _, more = command.partition("\n")
         # Only the first command line; the full command stays in the expanded details.
@@ -581,11 +564,12 @@ def agent_model_label(agent: AgentView | None) -> str:
 
 
 def agent_state(agent: AgentView | None) -> str:
-    """Display state of a subagent: running, idle, interrupted, stopped or finished.
+    """Display state of a subagent: running, interrupted, stopped or finished.
 
     ``status == "spawned"`` stays the only "a run is in flight" signal (the reducer and crash
-    recovery key off it); the rest is derived from ``continuable``/``stopped``
-    (plans/done/NONBLOCKING_SUBAGENTS_PLAN.md 3.4).
+    recovery key off it). Subagents are foreground-only now, so a legacy persistent child
+    whose last run completed (once shown as idle) reads as finished; ``stopped`` and
+    ``interrupted`` are kept for historical events.
     """
     if agent is None:
         return "finished"
@@ -593,15 +577,15 @@ def agent_state(agent: AgentView | None) -> str:
         return "stopped"
     if agent.status == "spawned":
         return "running"
-    if agent.continuable:
-        return "interrupted" if agent.status == "interrupted" else "idle"
+    if agent.continuable and agent.status == "interrupted":
+        return "interrupted"
     return "finished"
 
 
 def agent_state_label(agent: AgentView | None) -> str:
-    """The labelled state: ``running · run 2``, ``idle · run 2``, ``stopped by system: why``.
+    """The labelled state: ``running · run 2``, ``interrupted · run 2``, ``stopped by system: why``.
 
-    A finished (not continuable) child keeps its plain status word, as before.
+    A finished child keeps its plain status word.
     """
     if agent is None:
         return ""
@@ -617,8 +601,6 @@ def agent_state_label(agent: AgentView | None) -> str:
     label = state
     if state != "running" or runs > 1:
         label += f" · run {runs}"
-    if state == "idle" and agent.status not in {"completed", "spawned"}:
-        label += f" · last run {_text(agent.status, 24)}"
     return label
 
 
@@ -632,15 +614,15 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
         else None
     ) or "General"
     kind = _text(str(kind), 32).title()
-    # The card derives its state from the child: an acked background `subagent` call is
-    # complete, but its spinner runs for as long as the child's run is in flight.
+    # The card derives its state from the child, so a legacy acked `subagent` call keeps its
+    # spinner for as long as the child's run is in flight.
     running = marker == "running" if agent is None else agent.status == "spawned" and not agent.stopped
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     mark = spinner[spinner_index] if running else "·"
     model = f" · {agent_model_label(agent)}" if with_model else ""
     state = agent_state(agent)
-    note = f" · {agent_state_label(agent)}" if state in {"idle", "interrupted", "stopped"} or (state == "running" and agent.runs > 1) else ""
+    note = f" · {agent_state_label(agent)}" if state in {"interrupted", "stopped"} or (state == "running" and agent.runs > 1) else ""
     return f"{mark} {kind} · {phrase}{model}{note}", running
 
 
@@ -834,7 +816,7 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
     marker = tool_status(tool)
     indicator = f"{_SPINNER_FRAMES[spinner_index % len(_SPINNER_FRAMES)]} " if marker == "running" else ""
     summary = ""
-    if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep", "todowrite"}:
+    if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep"}:
         summary = _text(tool.display.splitlines()[0], 88)
         if tool.name.casefold() == "write":
             content = tool.input.get("content") if isinstance(tool.input, Mapping) else None
@@ -846,13 +828,10 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
         summary = summary[len(tool.name) + 1 :].strip()
     summary = summary
     suffix = f" · {summary}" if summary else (f" · {marker}" if marker not in {"completed", "failed"} else "")
-    rows = todo_preview(tool)
-    heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
+    heading = tool_heading(tool)
     # An external worker's tool (Claude Code ran it, Nexus did not) says so on the row.
     origin = f" · {_text(tool.provenance, 60)}" if tool.provenance else ""
     text = f"{gutter}{indicator}{heading}{suffix}{origin}"
-    if rows:
-        text += "".join(f"\n{gutter}  {row}" for row in rows[1:])
     live = running_output_tail(tool) if marker == "running" else None
     if live is not None:
         tail, hidden = live

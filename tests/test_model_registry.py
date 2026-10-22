@@ -1563,3 +1563,14 @@ def test_cost_pricing_dict_includes_tiers():
         "modalities": {"output": ["text"]}, "cost": {"input": 1, "tiers": [
             {"input": 2, "tier": {"type": "context", "size": 10}}]}}}}}).encode(), env={"PA_KEY": "1"}).get("pa/m")
     assert info.capabilities().pricing["tiers"][0]["context"] == 10
+
+
+def test_canonical_key_keeps_self_namespaced_wire_id_and_aggregator_aliases():
+    from nexus.model.registry import _canonical_key
+
+    known = {"openai", "openrouter", "nvidia"}
+    assert _canonical_key("openai", "openai/m", known) == ("openai", "openai/m")
+    assert _canonical_key("openai", "m", known) == ("openai", "m")
+    assert _canonical_key("openrouter", "openai/m", known) == ("openai", "m")
+    assert _canonical_key("nvidia", "nvidia/m", known) == ("nvidia", "nvidia/m")
+    assert _canonical_key("nvidia", "openai/m", known) == ("nvidia", "openai/m")

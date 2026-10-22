@@ -488,6 +488,8 @@ pub struct Cache {
     pub dashboard: crate::picker::Dashboard,
     /// The left sidebar's presentation state (focus, drag, selections, Sessions filter).
     pub sidebar: crate::sidebar::SidebarUi,
+    /// The right details sidebar's divider state (hover, drag).
+    pub details: crate::details_sidebar::DetailsUi,
     /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
     pub voice_levels: Vec<f32>,
     pub voice_elapsed: u64,
@@ -859,13 +861,13 @@ impl Cache {
         s: &Snapshot,
         p: &Palette,
         width: u16,
-    ) -> &(Vec<Line<'static>>, Vec<Option<usize>>) {
+    ) -> &crate::details_sidebar::Rows {
         // Stored as a pair below to share exactly the drawing/hit-test rows.
         let same = self.details_chrome.as_ref().is_some_and(|old| {
             old.0 == s.revision.wrapping_add(s.ui_local_revision << 32) && old.1 == width
         });
         if !same {
-            let (lines, hits) = details_rows(s, p, width);
+            let (lines, hits) = crate::details_sidebar::rows(s, p, width);
             self.details_chrome = Some((
                 s.revision.wrapping_add(s.ui_local_revision << 32),
                 width,
@@ -1765,24 +1767,17 @@ pub const TOP_LINE_MIN_HEIGHT: u16 = 24;
 /// Columns the left sidebar and the conversation share: everything left of the details sidebar
 /// (or its drawer). The sidebar's drag bound and `regions` both start from it.
 pub fn sidebar_available(area: Rect, s: &Snapshot) -> u16 {
-    if !s.details_sidebar {
-        return area.width;
-    }
-    if area.width >= 100 {
-        return area.width - 40;
-    }
-    let drawer = area
-        .width
-        .min(40)
-        .min(area.width.saturating_sub(24.min(area.width)));
-    area.width - drawer
+    area.width - crate::details_sidebar::width_for(s, area.width)
 }
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
     // The Sessions dashboard draws its own header on row 0 and takes the width the details
     // sidebar leaves.
     let dash = s.dashboard.is_some();
-    let right = if s.details_sidebar && area.width >= 100 {
-        40
+    // The details sidebar's width is the stored preference (24..=60, default 40), bounded by
+    // the room the conversation needs (`details_sidebar::width_for`).
+    let details_width = crate::details_sidebar::width_for(s, area.width);
+    let right = if area.width >= crate::details_sidebar::DRAWER_BELOW {
+        details_width
     } else {
         0
     };
@@ -1790,24 +1785,18 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     // Below 100 columns the details drawer takes the right edge, and the conversation reflows
     // into the column to its left so no row is clipped. A tiny terminal shrinks the drawer so
     // the conversation keeps at least 24 columns.
-    let drawer = s.details_sidebar && area.width < 100;
-    let drawer_width = if drawer {
-        area.width
-            .min(40)
-            .min(area.width.saturating_sub(24.min(area.width)))
-    } else {
-        0
-    };
+    let drawer = s.details_sidebar && area.width < crate::details_sidebar::DRAWER_BELOW;
+    let drawer_width = if drawer { details_width } else { 0 };
     let mut middle = columns[0];
     if drawer {
         middle.width = area.width - drawer_width;
     }
-    // The left sidebar takes its columns off the conversation's left edge and never leaves the
-    // conversation narrower than `sidebar::MIN_CONVERSATION` (it hides instead).
-    let side = crate::sidebar::width_for(s, middle.width);
-    let sidebar = Rect::new(middle.x, middle.y, side, middle.height);
-    middle.x += side;
-    middle.width -= side;
+    // The selector overlays the conversation; it never reserves a left column.
+    let sidebar = if s.sidebar.open {
+        crate::sidebar::selector_area(area)
+    } else {
+        Rect::default()
+    };
     if s.centered_layout && middle.width > CENTERED_WIDTH && !dash {
         middle.x += (middle.width - CENTERED_WIDTH) / 2;
         middle.width = CENTERED_WIDTH;
@@ -2615,116 +2604,37 @@ pub fn draw(
         cache.live_back = 0;
         cache.live_max_back = 0;
     }
-    if r.sidebar.width > 0 {
-        cache.sidebar.draw(frame, r.sidebar, s, &p, spin, cache.mono);
-    }
     if r.details.width > 0 {
-        frame.render_widget(Clear, r.details);
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::LEFT)
-                .border_style(Style::default().fg(p.border_strong))
-                .style(Style::default().bg(p.panel)),
+        // Tabs, rule, body and hint share one pure layout with the mouse handlers
+        // (`details_sidebar::geometry`); the rows are cached per body width.
+        let (hot, mono) = (cache.details.hot(), cache.mono);
+        let width = crate::details_sidebar::geometry(r.details, s, &p).map_or(0, |g| g.body.width);
+        let rows = cache.detail_rows(s, &p, width);
+        crate::details_sidebar::draw(
+            frame,
             r.details,
+            s,
+            &p,
+            rows,
+            details_scroll,
+            logs_scroll,
+            hot,
+            mono,
         );
-        let strip = Rect {
-            x: r.details.x + 2,
-            y: r.details.y,
-            width: r.details.width.saturating_sub(3),
-            height: 1,
-        };
-        let mut spans = Vec::new();
-        for tab in ["Session", "Files", "MCP", "Logs"] {
-            spans.push(Span::styled(
-                format!("{tab} "),
-                Style::default()
-                    .fg(if s.details_panel.tab == tab {
-                        p.text
-                    } else {
-                        p.muted
-                    })
-                    .add_modifier(if s.details_panel.tab == tab {
-                        Modifier::UNDERLINED
-                    } else {
-                        Modifier::empty()
-                    }),
-            ));
-        }
-
-        let header_lines: Vec<Line<'static>> = if s.details_panel.tab == "Logs" {
-            s.details_panel
-                .logs_header
-                .iter()
-                .flat_map(|(label, value)| {
-                    crate::transcript::wrap(
-                        &[Span::styled(
-                            format!(
-                                "{label:<10}{value}{}",
-                                if label == "Session" { " ⧉" } else { "" }
-                            ),
-                            Style::default().fg(p.muted),
-                        )],
-                        r.details.width.saturating_sub(5) as usize,
-                    )
-                    .into_iter()
-                    .map(|cells| crate::transcript::line(vec![], cells, None, Style::default()))
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-        let header_height = (header_lines.len() as u16).min(r.details.height.saturating_sub(4));
-        let body_area = Rect {
-            y: r.details.y + header_height,
-            height: r.details.height.saturating_sub(header_height),
-            ..r.details
-        };
-        frame.render_widget(
-            Paragraph::new({
-                let rows = cache.detail_rows(s, &p, r.details.width.saturating_sub(5));
-                let offset = if s.details_panel.tab == "Logs" {
-                    rows.0
-                        .len()
-                        .saturating_sub(body_area.height.saturating_sub(2) as usize)
-                        .saturating_sub(logs_scroll)
+        if matches!(s.details_panel.tab.as_str(), "Browser" | "Git") {
+            if let Some(g) = crate::details_sidebar::geometry(r.details, s, &p) {
+                let browser = crate::sidebar::details_snapshot(s);
+                if s.details_panel.tab == "Browser" {
+                    cache.sidebar.draw_files(frame, g.body, &browser, &p, mono);
                 } else {
-                    details_scroll.min(
-                        rows.0
-                            .len()
-                            .saturating_sub(r.details.height.saturating_sub(1) as usize),
-                    )
-                };
-                rows.0.iter().skip(offset).cloned().collect::<Vec<_>>()
-            })
-            .block(
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_style(Style::default().fg(p.border_strong))
-                    .padding(ratatui::widgets::Padding::new(2, 2, 1, 0)),
-            )
-            .style(Style::default().bg(p.panel).fg(p.text)),
-            body_area,
-        );
-        if header_height > 0 {
-            frame.render_widget(
-                Paragraph::new(header_lines).style(Style::default().bg(p.panel)),
-                Rect {
-                    x: r.details.x + 3,
-                    y: r.details.y + 1,
-                    width: r.details.width.saturating_sub(5),
-                    height: header_height,
-                },
-            );
-            frame.render_widget(
-                Paragraph::new("│".repeat(1))
-                    .style(Style::default().fg(p.border_strong).bg(p.panel)),
-                Rect::new(r.details.x, r.details.y, 1, header_height + 1),
-            );
+                    cache.sidebar.draw_git(frame, g.body, &browser, &p);
+                }
+            }
         }
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(Style::default().bg(p.panel)),
-            strip,
-        );
+    }
+    if r.sidebar.width > 0 && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none() {
+        dim_backdrop(frame, &p);
+        cache.sidebar.draw(frame, r.sidebar, s, &p, spin, cache.mono);
     }
     if !s.panel_title.is_empty() || s.prompt.is_some() {
         // One dimmed backdrop under every modal kind (panels, Settings, pickers, prompts).
@@ -3296,7 +3206,8 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let (lines, files) = details_rows(&s, &Palette::new(false), 40);
+        s.details_panel.tab = "Files".into();
+        let (lines, files) = crate::details_sidebar::rows(&s, &Palette::new(false), 40);
         assert_eq!(lines.len(), files.len());
         let first = files.iter().position(|f| *f == Some(0)).unwrap();
         let text: String = lines[first]
@@ -3988,7 +3899,7 @@ mod tests {
                 {"id": "d", "kind": "diff", "title": "src/parser.py", "added": 1, "removed": 1,
                  "diff_rows": [[3, "old", 3, "new", "change"]]},
                 {"id": "m", "kind": "markdown", "text": "# Done\n\nUse `parse()` here.\n\n- one\n- two"}],
-            "details_panel": {"session": [["Status", "running"]], "files": [{"path": "src/parser.py", "added": 1, "removed": 1}], "files_summary": "+1 -1 across 1 file"},
+            "details_panel": {"tab": "Files", "session": [["Status", "running"]], "files": [{"path": "src/parser.py", "added": 1, "removed": 1}], "files_summary": "+1 -1 across 1 file"},
             "prompt": {"kind": "permission", "id": "p", "lines": ["Tool: Edit"], "choices": [{"label": "Allow once", "value": "allow_once", "key": "y", "disabled": false}]}
         })).unwrap()
     }

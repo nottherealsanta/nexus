@@ -52,9 +52,16 @@ def is_manager_row(row: dict, manager_session: str = "") -> bool:
     return bool(identity) and identity in {MANAGER_SESSION_ID, manager_session or MANAGER_SESSION_ID}
 
 
+def is_child_row(row: dict) -> bool:
+    """A subagent session (its own ``agents`` namespace or a non-root ``kind``); those live under their parent."""
+    kind = row.get("kind")
+    return row.get("namespace", "main") != "main" or (bool(kind) and kind not in {"root", "manager"})
+
+
 def visible_session_rows(rows: list[dict], manager_session: str = "") -> list[dict]:
-    """Rows the sidebar lists: everything except the manager (it has its own top-bar entry)."""
-    return [row for row in rows if not is_manager_row(row, manager_session)]
+    """Rows the sidebar lists: root sessions only, so neither the manager (it has its own
+    top-bar entry) nor subagents."""
+    return [row for row in rows if not is_manager_row(row, manager_session) and not is_child_row(row)]
 
 
 def sessions_payload(dashboard: dict | None, manager_session: str = "") -> dict | None:
@@ -80,7 +87,8 @@ def _base_name(path: str) -> str:
     return stripped.rsplit("/", 1)[-1] or stripped or path
 
 
-def project_rows(rows: list[dict], current_workspace: str = "", manager_session: str = "") -> list[dict]:
+def project_rows(rows: list[dict], current_workspace: str = "", manager_session: str = "",
+                 registered: list | None = None) -> list[dict]:
     """Group session rows into main repositories and their linked worktrees.
 
     Rows come from ``session_rows`` (``repo`` is the main checkout of a worktree, ``worktree``
@@ -109,6 +117,23 @@ def project_rows(rows: list[dict], current_workspace: str = "", manager_session:
             checkout["updated"], checkout["session"] = updated, str(row["id"])
             checkout["age"] = str(row.get("age") or "")
         project["updated"] = max(project["updated"], updated)
+
+    # Registered projects stay listed without an eligible session (all archived, or none yet);
+    # such a checkout has no session to open. A registered-only root that no longer exists on
+    # disk is omitted (the current workspace always stays); the entry's activity orders the project.
+    for entry in registered or []:
+        workspace = str(getattr(entry, "workspace", "") or "")
+        repo = str(getattr(entry, "repo", "") or workspace)
+        if not workspace:
+            continue
+        if not getattr(entry, "exists", True) and workspace != current_workspace:
+            continue
+        project = projects.setdefault(repo, {"repo": repo, "checkouts": {}, "updated": 0.0})
+        project["updated"] = max(project["updated"], float(getattr(entry, "updated", 0.0) or 0.0))
+        project["checkouts"].setdefault(workspace, {
+            "workspace": workspace, "worktree": str(getattr(entry, "worktree", "") or ""), "count": 0,
+            "updated": 0.0, "session": "", "age": "", "rank": 2,
+        })
 
     def newest(project: dict) -> tuple[int, float]:
         here = current_workspace and (project["repo"] == current_workspace or current_workspace in project["checkouts"])
@@ -187,6 +212,33 @@ def navigable(payload: dict) -> set[str]:
     return {row["path"] for row in payload.get("rows", []) if row.get("kind") in {"dir", "up"}}
 
 
+def previewable(payload: dict) -> set[str]:
+    """File paths the Files tab may preview (listed regular files only), to validate double-clicks."""
+    return {row["path"] for row in payload.get("rows", []) if row.get("kind") == "file"}
+
+
+def preview_panel(result: Any) -> tuple[str, str]:
+    """Title and body of the read-only file modal: labelled path, size and clipping, then the text.
+
+    The body is control-escaped; a binary file, an empty one and a clipped one each say so.
+    """
+    path = _text(getattr(result, "path", ""), 1024)
+    size, shown = int(getattr(result, "size", 0) or 0), int(getattr(result, "shown", 0) or 0)
+    status = str(getattr(result, "status", "text"))
+    lines = [f"Path: {path}", f"Size: {size:,} bytes ({human_size(size)})"]
+    if status == "binary":
+        lines.append(f"Not shown: {_text(getattr(result, 'message', ''), 200) or 'binary file'}")
+    elif status == "empty":
+        lines.append("The file is empty")
+    elif getattr(result, "truncated", False):
+        lines.append(f"Clipped: showing the first {shown:,} of {size:,} bytes")
+    else:
+        lines.append("Showing the whole file")
+    if status == "text":
+        lines += ["", *escape_controls(str(getattr(result, "text", ""))).split("\n")]
+    return f"File · {path}", "\n".join(lines)
+
+
 def git_payload(result: Any, error: str = "") -> dict:
     """The Git tab: read-only status as labelled sections (heading rows, then entries)."""
     if result is None:
@@ -206,8 +258,9 @@ def git_payload(result: Any, error: str = "") -> dict:
             label = _text(row.get("label"), 40)
             origin = _text(row.get("from"), 400)
             path = _text(row.get("path"), 400)
+            name = f"{_base_name(origin)} → {_base_name(path)}" if origin else _base_name(path)
             rows.append({"kind": "entry", "code": _text(row.get("code"), 2), "label": label,
-                         "path": f"{origin} → {path}" if origin else path})
+                         "path": f"{origin} → {path}" if origin else path, "name": name})
     branch = _text(getattr(result, "branch", ""), 200)
     upstream = _text(getattr(result, "upstream", ""), 200)
     ahead, behind = int(getattr(result, "ahead", 0) or 0), int(getattr(result, "behind", 0) or 0)
@@ -227,5 +280,6 @@ def git_payload(result: Any, error: str = "") -> dict:
 __all__ = [
     "DEFAULT_TAB", "DEFAULT_WIDTH", "MAX_WIDTH", "MIN_WIDTH", "TABS",
     "clamp_width", "clean", "files_payload", "git_payload", "human_size", "is_manager_row", "navigable",
-    "normalize_tab", "openable", "parent_path", "project_rows", "sessions_payload", "visible_session_rows",
+    "normalize_tab", "openable", "parent_path", "preview_panel", "previewable", "project_rows", "sessions_payload",
+    "visible_session_rows",
 ]

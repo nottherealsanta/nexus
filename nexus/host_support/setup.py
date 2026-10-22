@@ -23,13 +23,14 @@ from ..model.registry import DEFAULT_CATALOGUE_URL, ModelInfo, ModelRegistry
 from . import provider_auth, settings_inventory
 from .settings_scope import settings_target
 
-_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "ollama")
+_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "nvidia", "ollama")
 #: Signed in from Settings → Providers; credentials live in the private credential file.
-_SIGNED_IN = ("codex", "github-copilot", "opencode-go", "xai")
+_SIGNED_IN = ("codex", "github-copilot", "opencode-go", "xai", "nvidia")
 _ENV_NAMES = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "google": ("GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"),
+    "nvidia": ("NVIDIA_API_KEY",),
 }
 _PROVIDER_INFO = {
     "codex": ("ChatGPT (Codex)", "Sign in with your ChatGPT account in Settings → Providers."),
@@ -49,6 +50,7 @@ _PROVIDER_INFO = {
         "Set GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY in the daemon environment.",
     ),
     "xai": ("xAI (SuperGrok)", "Sign in with your SuperGrok subscription in Settings → Providers."),
+    "nvidia": ("NVIDIA", "Set NVIDIA_API_KEY or paste your NVIDIA API key in Settings → Providers."),
     "ollama": ("Ollama", "Local provider; availability is not checked. Install and run Ollama locally."),
 }
 #: Setup providers whose models.dev entry has another id.
@@ -130,6 +132,10 @@ def _newest_first(model: ModelInfo) -> tuple:
 
 async def _models(runtime: object, provider: str) -> list[str]:
     """Usable model ids for ``provider``, newest first (bounded)."""
+    if provider == "nvidia":
+        # Only this hosted wire ID is vetted for first-run setup. Do not
+        # auto-select arbitrary newer upstream catalogue entries.
+        return ["nvidia/llama-3.1-nemotron-ultra-253b-v1"]
     registry = _registry(runtime)
     await registry.load()
     rows = [model for model in registry.list(provider=provider) if _setup_usable(provider, model)]
@@ -252,7 +258,9 @@ async def setup_save(runtime: object, provider: str, model: str = "", *, reload:
     return {"global_model": reference, "restart_required": not reloaded}
 
 
-def _provider_config(provider: str, runtime: object, domain: str | None = None) -> tuple[tuple[str, str], ...]:
+def _provider_config(provider: str, runtime: object, domain: str | None = None) -> tuple[tuple[str, Any], ...]:
+    if provider == "nvidia" and _environment(runtime).get("NVIDIA_API_KEY", "").strip():
+        return (("auth", None), ("api_key", "${env:NVIDIA_API_KEY}"), ("api", "chat"))
     if provider in _SIGNED_IN:
         return provider_auth.provider_route(provider, domain)
     if provider == "claude-agent":

@@ -1,7 +1,7 @@
 """Phase 3.5 H4: one ``Runtime`` serving concurrent sessions without bleed.
 
-The runtime owns one provider map, one router, one shell ``JobRegistry``, one
-``TodoStore``, and one ``SessionManager`` shared by every session. These tests
+The runtime owns one provider map, one router, one shell ``JobRegistry``,
+and one ``SessionManager`` shared by every session. These tests
 exercise that sharing through the *public* runtime API only: two sessions run
 overlapping turns through the shared provider and tool stack with no cross-talk
 in their logs or files; the session lock stays per id (so a turn on one id never

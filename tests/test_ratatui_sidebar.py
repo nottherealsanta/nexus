@@ -1,4 +1,4 @@
-"""The native left sidebar (Projects, Sessions, Files, Git): projection, host-backed data, safety.
+"""The native project/session selector and right-side Files/Git browsers: projection, host-backed data, safety.
 
 The terminal never reads the filesystem: every Files/Git datum below comes from a (faked) host
 result, and every client action is validated against what the last snapshot offered.
@@ -55,8 +55,8 @@ def test_constants_mirror_the_rust_client():
     number = lambda name: int(re.search(rf"pub const {name}: u16 = (\d+);", source).group(1))  # noqa: E731
     assert (number("MIN_WIDTH"), number("MAX_WIDTH"), number("DEFAULT_WIDTH")) == \
         (view.MIN_WIDTH, view.MAX_WIDTH, view.DEFAULT_WIDTH)
-    tabs = re.search(r"pub const TABS: \[&str; 4\] = \[(.*?)\];", source).group(1)
-    assert tuple(re.findall(r'"([^"]+)"', tabs)) == view.TABS == ("Projects", "Sessions", "Files", "Git")
+    tabs = re.search(r"pub const TABS: \[&str; 2\] = \[(.*?)\];", source).group(1)
+    assert tuple(re.findall(r'"([^"]+)"', tabs)) == ("Projects", "Sessions")
 
 
 def test_width_and_tab_are_bounded():
@@ -150,6 +150,27 @@ def test_git_payload_is_labelled_and_read_only():
     assert view.git_payload(None, "boom")["error"] == "boom"
 
 
+def test_git_rows_show_the_file_name_and_keep_the_full_path():
+    result = SimpleNamespace(available=True, message="", branch="main", upstream="", ahead=0, behind=0,
+                             truncated=False, counts={}, rows=[
+        {"group": "unstaged", "code": "M", "label": "modified", "path": "docs/config.md", "from": ""},
+        {"group": "untracked", "code": "?", "label": "untracked", "path": "tests/new/", "from": ""},
+        {"group": "staged", "code": "R", "label": "renamed", "path": "b/new.py", "from": "a/old.py"},
+    ])
+    entries = [row for row in view.git_payload(result)["rows"] if row["kind"] == "entry"]
+    assert [row["name"] for row in entries] == ["old.py → new.py", "config.md", "new"]
+    assert [row["path"] for row in entries] == ["a/old.py → b/new.py", "docs/config.md", "tests/new/"]
+
+
+def test_subagent_sessions_are_not_listed():
+    rows = [_row("root", "/repo", kind="root"), _row("plain", "/repo"),
+            _row("kid", "/repo", kind="child", namespace="agents"), _row("kid2", "/repo", kind="child")]
+    assert [row["id"] for row in view.visible_session_rows(rows)] == ["root", "plain"]
+    assert view.project_rows(rows)[0]["count"] == 2
+    assert view.project_rows([rows[2], rows[3]]) == []
+    assert [row["id"] for row in view.sessions_payload({"rows": rows})["rows"]] == ["root", "plain"]
+
+
 def test_human_size():
     assert [view.human_size(n) for n in (None, 0, 1023, 1024, 1536, 10 * 1024, 5 * 1024 ** 2)] == \
         ["", "0B", "1023B", "1K", "1.5K", "10K", "5M"]
@@ -160,10 +181,12 @@ def test_human_size():
 
 def test_preferences_bound_the_width_and_reject_unknown_tabs(tmp_path):
     path = tmp_path / "tui.json"
-    path.write_text(json.dumps({"sidebar_width": 999, "sidebar_tab": "Bogus", "sessions_sidebar": True}))
+    path.write_text(json.dumps({"sidebar_width": 999, "sidebar_tab": "Bogus", "sidebar_open": True,
+                                "sessions_sidebar": False}))
     prefs = Preferences(path)
     assert prefs.values["sidebar_width"] == view.MAX_WIDTH and prefs.values["sidebar_tab"] == view.DEFAULT_TAB
-    assert prefs.values["sessions_sidebar"] is True, "an existing left sidebar preference is kept"
+    assert prefs.values["sidebar_open"] is True and prefs.values["sessions_sidebar"] is False, \
+        "the terminal sidebar and the desktop's sessions sidebar are separate preferences"
     prefs.set("sidebar_width", 1)
     assert prefs.values["sidebar_width"] == view.MIN_WIDTH
     prefs.set("sidebar_width", True)
@@ -171,26 +194,37 @@ def test_preferences_bound_the_width_and_reject_unknown_tabs(tmp_path):
     prefs.set("sidebar_tab", "Nope")
     prefs.set("sidebar_tab", "Git")
     assert prefs.values["sidebar_tab"] == "Git"
-    assert Preferences(tmp_path / "missing.json").values["sessions_sidebar"] is False, "closed by default"
+    fresh = Preferences(tmp_path / "missing.json").values
+    assert fresh["sidebar_open"] is False, "closed by default"
+    assert fresh["sessions_sidebar"] is True, "the desktop's default is unchanged"
 
 
 # -- controller ----------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sessions_command_opens_the_sidebar_on_the_sessions_tab_with_focus(shell):
+async def test_sessions_command_opens_the_sidebar_on_the_sessions_tab_without_taking_focus(shell):
     _fake_dashboard(shell, [_row("a", "/repo")])
     shell.preferences.set("sidebar_tab", "Git")
     await shell.command("/sessions", ())
     sidebar = shell.sidebar
-    assert sidebar.open and sidebar.tab == "Sessions" and sidebar.focus == 1
+    assert sidebar.open and sidebar.tab == "Sessions" and sidebar.focus == 0
     assert shell.workflows.dashboard.visible, "the list keeps polling for the Sessions tab"
     assert shell.workflows.dashboard.poll_seconds == 2.0
     snapshot = sidebar.snapshot()
-    assert snapshot["open"] and snapshot["tab"] == "Sessions" and snapshot["focus"] == 1
+    assert snapshot["open"] and snapshot["tab"] == "Sessions" and snapshot["focus"] == 0
     assert [row["id"] for row in snapshot["sessions"]["rows"]] == ["a"]
     await shell.command("/sessions", ())
-    assert sidebar.focus == 2, "asking again only moves focus"
+    assert sidebar.focus == 0, "asking again does not take focus either"
+    await sidebar.show("Sessions", focus=True)
+    assert sidebar.focus == 1, "only an explicit request bumps the counter"
+
+
+@pytest.mark.asyncio
+async def test_toggle_opening_does_not_bump_the_focus_counter(shell):
+    _fake_dashboard(shell)
+    await shell.sidebar.handle({"type": "sidebar", "op": "toggle"})
+    assert shell.sidebar.open and shell.sidebar.focus == 0
 
 
 @pytest.mark.asyncio
@@ -209,8 +243,8 @@ async def test_toggle_closes_and_reopens_and_stops_the_list_feed(shell):
     assert shell.sidebar.open and shell.workflows.dashboard.visible
     await shell.sidebar.handle({"type": "sidebar", "op": "toggle"})
     assert not shell.sidebar.open and not shell.workflows.dashboard.visible
-    assert shell.sidebar.snapshot() == {"available": True, "open": False}
-    assert shell.preferences.values["sessions_sidebar"] is False
+    assert shell.sidebar.snapshot()["open"] is False
+    assert shell.preferences.values["sidebar_open"] is False
 
 
 @pytest.mark.asyncio
@@ -237,7 +271,7 @@ async def test_legacy_dashboard_state_is_absent_where_the_sidebar_owns_the_list(
     assert _dashboard_state(shell)["kind"] == "sessions"
     shell.sidebar.enabled = True
     assert _dashboard_state(shell) is None
-    assert _sidebar_state(shell) == {"available": True, "open": False}
+    assert _sidebar_state(shell)["open"] is False
     assert _sidebar_state(None) == {"available": False, "open": False}
     assert _sidebar_state(SimpleNamespace()) == {"available": False, "open": False}
 
@@ -248,12 +282,12 @@ async def test_tab_and_width_actions_are_validated_and_persisted(shell):
     await shell.sidebar.show("Sessions")
     shell.client.git_status = AsyncMock(return_value=SimpleNamespace(
         available=False, message="not a repo", rows=[], counts={}))
-    await shell.sidebar.handle({"op": "tab", "tab": "Git"})
-    assert shell.sidebar.tab == "Git" and shell.preferences.values["sidebar_tab"] == "Git"
-    shell.client.git_status.assert_awaited_once()
+    await shell.sidebar.handle({"op": "tab", "tab": "Projects"})
+    assert shell.sidebar.tab == "Projects" and shell.preferences.values["sidebar_tab"] == "Projects"
+    shell.client.git_status.assert_not_awaited()
     with pytest.raises(ValueError):
         await shell.sidebar.handle({"op": "tab", "tab": "Terminal"})
-    assert shell.sidebar.tab == "Git"
+    assert shell.sidebar.tab == "Projects"
     for sent, stored in ((10, view.MIN_WIDTH), (999, view.MAX_WIDTH), (41, 41)):
         await shell.sidebar.handle({"op": "width", "width": sent})
         assert shell.sidebar.width == stored == shell.preferences.values["sidebar_width"]
@@ -268,7 +302,7 @@ async def test_tab_and_width_actions_are_validated_and_persisted(shell):
 async def test_the_client_does_nothing_while_the_sidebar_is_not_enabled(shell):
     shell.sidebar.enabled = False
     await shell.sidebar.handle({"op": "toggle"})
-    assert shell.preferences.values["sessions_sidebar"] is False
+    assert shell.preferences.values["sidebar_open"] is False
 
 
 @pytest.mark.asyncio
@@ -293,6 +327,76 @@ async def test_files_navigate_only_through_folders_the_host_listed(shell):
     assert [(r["kind"], r["path"]) for r in shell.sidebar.files["rows"]] == [("up", ""), ("dir", "src/deep")]
     await shell.sidebar.handle({"op": "dir", "path": ""})  # the parent row
     assert shell.sidebar.files["path"] == ""
+
+
+def _preview(**fields):
+    base = {"path": "a.txt", "status": "text", "text": "hello\n\x1b[31mred", "size": 15, "shown": 15,
+            "truncated": False, "message": ""}
+    return SimpleNamespace(**{**base, **fields})
+
+
+@pytest.mark.asyncio
+async def test_files_preview_only_listed_files_and_goes_through_the_host(shell):
+    _fake_dashboard(shell)
+    shell.client.list_directory = AsyncMock(return_value=SimpleNamespace(path="", truncated=False, entries=[
+        {"name": "src", "path": "src", "kind": "dir", "size": None},
+        {"name": "a.txt", "path": "a.txt", "kind": "file", "size": 15},
+        {"name": "l", "path": "l", "kind": "link", "size": None}]))
+    shell.client.file_preview = AsyncMock(return_value=_preview())
+    await shell.sidebar.show("Files")
+    for refused in ("../etc/passwd", "/etc/passwd", "src", "l", "missing.txt", "", None, 3):
+        with pytest.raises(ValueError):
+            await shell.sidebar.handle({"op": "file", "path": refused})
+    shell.client.file_preview.assert_not_awaited()
+    await shell.sidebar.handle({"op": "file", "path": "a.txt"})
+    shell.client.file_preview.assert_awaited_once_with("a.txt")
+    assert shell.panel_title == "File · a.txt" and shell.panel_layout == "modal"
+    assert shell.panel_lines[:3] == ["Path: a.txt", "Size: 15 bytes (15B)", "Showing the whole file"]
+    assert "\x1b" not in "\n".join(shell.panel_lines) and "\\x1b[31mred" in shell.panel_lines[-1]
+
+
+def test_preview_panel_labels_clipping_binary_and_empty_files():
+    clipped = view.preview_panel(_preview(path="big.log", size=300000, shown=65536, truncated=True, text="x"))
+    assert clipped[0] == "File · big.log"
+    assert "Clipped: showing the first 65,536 of 300,000 bytes" in clipped[1]
+    binary = view.preview_panel(_preview(status="binary", text="SECRET", shown=0, message="Binary file: not shown"))
+    assert "Not shown: Binary file: not shown" in binary[1] and "SECRET" not in binary[1]
+    assert "The file is empty" in view.preview_panel(_preview(status="empty", text="", size=0, shown=0))[1]
+    assert "\x1b" not in view.preview_panel(_preview(path="a\x1bb"))[0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_preview_opens_a_labelled_error_modal(shell):
+    _fake_dashboard(shell)
+    shell.client.list_directory = AsyncMock(return_value=SimpleNamespace(path="", truncated=False, entries=[
+        {"name": "a.txt", "path": "a.txt", "kind": "file", "size": 1}]))
+    shell.client.file_preview = AsyncMock(side_effect=RuntimeError("file path crosses a symbolic link\x1b[0m"))
+    await shell.sidebar.show("Files")
+    await shell.sidebar.handle({"op": "file", "path": "a.txt"})
+    assert shell.panel_title == "File · a.txt"
+    assert shell.panel_lines[0] == "Path: a.txt" and "symbolic link" in shell.panel_lines[1]
+    assert "\x1b" not in "\n".join(shell.panel_lines)
+
+
+@pytest.mark.asyncio
+async def test_a_stale_preview_is_dropped_when_the_project_changes(shell):
+    _fake_dashboard(shell)
+    shell.client.list_directory = AsyncMock(return_value=SimpleNamespace(path="", truncated=False, entries=[
+        {"name": "a.txt", "path": "a.txt", "kind": "file", "size": 1}]))
+    gate = asyncio.Event()
+
+    async def slow(path):
+        await gate.wait()
+        return _preview()
+
+    shell.client.file_preview = AsyncMock(side_effect=slow)
+    await shell.sidebar.show("Files")
+    pending = asyncio.create_task(shell.sidebar.handle({"op": "file", "path": "a.txt"}))
+    await asyncio.sleep(0)
+    shell.workspace = "/elsewhere"
+    gate.set()
+    await pending
+    assert shell.panel_title == ""
 
 
 @pytest.mark.asyncio
@@ -358,7 +462,7 @@ async def test_projects_open_only_sessions_that_were_listed(shell):
     shell.client.project_sessions = AsyncMock(return_value=result)
     shell.switch_project = AsyncMock()
     await shell.sidebar.show("Projects")
-    shell.client.project_sessions.assert_awaited_with(limit=300)
+    shell.client.project_sessions.assert_awaited_with(limit=300, projects=300)
     listed = shell.sidebar.snapshot()["projects"]
     assert listed["loaded"] and [r["label"] for r in listed["rows"]] == ["repo", "main", "feat"]
     await shell.sidebar.handle({"op": "open_session", "workspace": "/wt", "session": "b"})
@@ -367,6 +471,40 @@ async def test_projects_open_only_sessions_that_were_listed(shell):
         with pytest.raises(ValueError):
             await shell.sidebar.handle({"op": "open_session", "workspace": pair[0], "session": pair[1]})
     assert shell.switch_project.await_count == 1
+
+
+def test_registered_projects_stay_listed_without_sessions_and_current_first():
+    registered = [SimpleNamespace(workspace="/old", repo="", worktree=""),
+                  SimpleNamespace(workspace="/nexus", repo="", worktree=""),
+                  SimpleNamespace(workspace="/wt", repo="/old", worktree="feat")]
+    rows = view.project_rows([_row("a", "/live", updated=5.0)], "/nexus", "", registered)
+    top = [r for r in rows if r["kind"] == "project"]
+    assert [r["label"] for r in top] == ["nexus", "live", "old"]
+    assert top[0]["current"] and top[0]["count"] == 0 and top[0]["session"] == ""
+    assert top[0]["workspace"] == "/nexus", "current project is listed though it has no session"
+    assert [r["label"] for r in rows if r["kind"] == "checkout"] == ["main", "feat"]
+    assert view.openable(rows) == {("/live", "a")}
+    assert len(view.project_rows([], "", "", [SimpleNamespace(workspace=f"/p{i}") for i in range(500)])) <= view.MAX_PROJECT_ROWS
+
+
+def test_registered_projects_order_by_activity_and_omit_missing_roots():
+    registered = [SimpleNamespace(workspace="/older", updated=10.0),
+                  SimpleNamespace(workspace="/newer", updated=90.0),
+                  SimpleNamespace(workspace="/gone", updated=99.0, exists=False),
+                  SimpleNamespace(workspace="/nexus", updated=0.0, exists=False)]
+    rows = view.project_rows([], "/nexus", "", registered)
+    assert [r["label"] for r in rows if r["kind"] == "project"] == ["nexus", "newer", "older"]
+
+
+@pytest.mark.asyncio
+async def test_projects_tab_lists_current_workspace_when_every_session_is_archived(shell):
+    _fake_dashboard(shell)
+    from nexus.host.protocol import ProjectEntry, ProjectSessionsListResult
+    shell.client.project_sessions = AsyncMock(return_value=ProjectSessionsListResult(
+        workspace="/repo", projects=[ProjectEntry(workspace="/repo"), ProjectEntry(workspace="/other")]))
+    await shell.sidebar.show("Projects")
+    listed = shell.sidebar.snapshot()["projects"]
+    assert [(r["label"], r["current"], r["count"]) for r in listed["rows"]] == [("repo", True, 0), ("other", False, 0)]
 
 
 @pytest.mark.asyncio
@@ -396,7 +534,7 @@ def test_polled_state_changes_with_the_sidebar(shell):
 
 
 def test_the_snapshot_block_is_json_safe(shell):
-    shell.preferences.set("sessions_sidebar", True)
+    shell.preferences.set("sidebar_open", True)
     block = shell.sidebar.snapshot()
     assert json.loads(json.dumps(block)) == block
     assert set(block) >= {"available", "open", "tab", "width", "focus", "sessions", "projects", "files", "git"}

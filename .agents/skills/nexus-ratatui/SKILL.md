@@ -36,6 +36,8 @@ host daemon  <->  Python (nexus/ui/ratatui/)  --JSONL snapshots-->  Rust (rust/t
 | Slash commands, attachments, notices | `nexus/ui/ratatui/actions.py` |
 | Menus, settings, providers, worktrees, forms | `nexus/ui/ratatui/workflows.py` |
 | Voice, logs, preferences, desktop clipboard | `voice.py`, `logs.py`, `preferences.py`, `desktop.py` |
+| Left sidebar (Projects/Sessions/Files/Git): state, host loads, snapshot block | `nexus/ui/ratatui/sidebar.py`, `nexus/ui_support/sidebar.py`, `rust/tui/src/sidebar.rs` |
+| Right details sidebar (Session/Changes/MCP/Logs): tab and width preferences, `details_panel` projection | `nexus/ui_support/details.py`, `nexus/ui/ratatui/preferences.py`, `rust/tui/src/details_sidebar.rs` |
 | Key/mouse loop, action sending | `rust/tui/src/main.rs` |
 | Layout, palette, top bar, sidebars, composer, dialogs | `rust/tui/src/render.rs` |
 | Transcript blocks -> wrapped, styled rows | `rust/tui/src/transcript.rs` |

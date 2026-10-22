@@ -1,90 +1,94 @@
-"""``[agents]`` background keys: defaults, validation, and layering (plan phase 1)."""
+"""The retired background-subagent ``[agents]`` keys still parse and change nothing.
+
+An older config that sets ``background`` or any report/slot bound keeps loading
+(including values the old range checks rejected), a project file no longer
+clamps them, and the runtime builds the same foreground subagent budget either
+way.
+"""
 
 from __future__ import annotations
 
-import pytest
+import dataclasses
+
+import msgspec
+from test_phase6_integration import drain, make_config, make_runtime, tool_result_for
 
 from nexus.config import Config
 from nexus.config.schema import AgentsSection
-from nexus.errors import ConfigError
+from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
 
-KEYS = {
-    "max_live": 8,
-    "max_pending_reports": 32,
-    "max_report_batch": 16,
-    "max_report_chars": 24000,
-    "report_coalesce_ms": 750,
-    "max_auto_wakes": 20,
-    "max_followup_chars": 20000,
-    "oneshot_wait_seconds": 600,
+LEGACY_KEYS = {
+    "background": True,
+    "max_live": 0,
+    "max_pending_reports": 0,
+    "max_report_batch": 0,
+    "max_report_chars": 5,
+    "report_coalesce_ms": 999_999,
+    "max_auto_wakes": 5000,
+    "max_followup_chars": 0,
+    "oneshot_wait_seconds": 900,
 }
 
 
-def test_defaults_are_background_and_persistent():
-    section = AgentsSection()
-    assert section.background is True
-    for key, value in KEYS.items():
-        assert getattr(section, key) == value
-
-
-@pytest.mark.parametrize("key", sorted(KEYS))
-def test_integer_keys_reject_bools_strings_and_out_of_range(key):
-    for bad in (True, "3", 1.5, -1, 10**9):
-        with pytest.raises(ValueError, match=f"agents.{key}"):
-            AgentsSection(**{key: bad})
-
-
-def test_zero_is_allowed_only_where_it_means_off():
-    assert AgentsSection(max_auto_wakes=0).max_auto_wakes == 0
-    assert AgentsSection(oneshot_wait_seconds=0).oneshot_wait_seconds == 0
-    assert AgentsSection(report_coalesce_ms=0).report_coalesce_ms == 0
-    with pytest.raises(ValueError):
-        AgentsSection(max_live=0)
-
-
-def test_background_must_be_boolean():
-    with pytest.raises(ValueError, match="agents.background"):
-        AgentsSection(background=1)  # type: ignore[arg-type]
-
-
-def _write(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
-def _load(tmp_path, user: str = "", project: str = "", environ=None):
+def _home(tmp_path):
     home = tmp_path / "home"
-    ws = tmp_path / "ws"
-    ws.mkdir(exist_ok=True)
-    home.mkdir(exist_ok=True)
-    if user:
-        _write(home / ".nexus" / "config.toml", user)
-    if project:
-        _write(ws / ".agents" / "nexus.toml", project)
-    return Config.load(ws, home=home, environ=environ or {}).v2.agents
+    (home / ".nexus").mkdir(parents=True)
+    return home
 
 
-def test_user_config_sets_the_keys(tmp_path):
-    section = _load(tmp_path, user="config_version = 2\n[agents]\nbackground = true\nmax_live = 12\nmax_auto_wakes = 50\n")
-    assert section.background is True and section.max_live == 12 and section.max_auto_wakes == 50
+def test_every_legacy_key_parses_even_outside_the_old_bounds():
+    section = msgspec.convert(LEGACY_KEYS, AgentsSection)
+    assert section.background is True and section.max_live == 0
+    assert section.oneshot_wait_seconds == 900
+    # The live bounds are still validated.
+    for bad in ({"max_concurrent": 0}, {"max_depth": -1}, {"max_fanout": 0}):
+        try:
+            msgspec.convert(bad, AgentsSection)
+        except (msgspec.ValidationError, ValueError):
+            continue
+        raise AssertionError(f"{bad} should be rejected")
 
 
-def test_project_file_may_lower_but_not_raise_the_bounds(tmp_path):
-    section = _load(
-        tmp_path,
-        user="config_version = 2\n[agents]\nmax_live = 10\nmax_followup_chars = 5000\n",
-        project="config_version = 2\n[agents]\nmax_live = 99\nmax_followup_chars = 100\nmax_auto_wakes = 5000\n",
+def test_legacy_keys_load_from_user_and_project_files_without_clamping(tmp_path):
+    home = _home(tmp_path)
+    lines = "\n".join(f"{key} = {str(value).lower()}" for key, value in LEGACY_KEYS.items())
+    (home / ".nexus" / "config.toml").write_text(
+        f"config_version = 2\n\n[agents]\n{lines}\n", encoding="utf-8"
     )
-    assert section.max_live == 10  # raised value ignored
-    assert section.max_followup_chars == 100  # lowered value applies
-    assert section.max_auto_wakes == 20  # default 20 is the ceiling too
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n\n[agents]\nmax_live = 64\noneshot_wait_seconds = 86400\n",
+        encoding="utf-8",
+    )
+    agents = Config.load(tmp_path, home=home, environ={}).v2.agents
+    assert agents.background is True
+    # Ignored keys are plain overlays now; the old lower-only rule is gone.
+    assert agents.max_live == 64 and agents.oneshot_wait_seconds == 86400
+    assert agents.max_report_chars == 5
 
 
-def test_invalid_project_value_is_a_config_error(tmp_path):
-    with pytest.raises(ConfigError):
-        _load(tmp_path, project="config_version = 2\n[agents]\nmax_live = 0\n")
+async def test_background_true_still_runs_the_child_in_the_foreground(tmp_path):
+    base = make_config(max_concurrent=2)
+    legacy = msgspec.structs.replace(
+        base.v2.agents, background=True, max_live=1, max_followup_chars=1
+    )
+    config = dataclasses.replace(base, v2=msgspec.structs.replace(base.v2, agents=legacy))
+    provider = ScriptedProvider(
+        tool_response(
+            ("a", "subagent", {"prompt": "one"}),
+            ("b", "subagent", {"prompt": "two"}),
+        ),
+        text_response("report-one"),
+        text_response("report-two"),
+        text_response("done"),
+    )
+    runtime = make_runtime(tmp_path, provider, config)
+    session = runtime.session("root")
+    events = await drain(session)
 
-
-def test_env_overlay_reads_the_new_keys(tmp_path):
-    section = _load(tmp_path, user="config_version = 2\n", environ={"NEXUS_AGENTS__BACKGROUND": "true", "NEXUS_AGENTS__MAX_LIVE": "3"})
-    assert section.background is True and section.max_live == 3
+    # ``max_live = 1`` no longer refuses the second parallel child.
+    bodies = {tool_result_for(session, call).content[0].text.partition("\n")[2].strip() for call in "ab"}
+    assert bodies == {"report-one", "report-two"}
+    assert [e.data["status"] for e in events if e.type == "agent.completed"] == ["completed"] * 2
+    budget = runtime.agent_pool.budget("root")
+    assert budget.max_concurrent == 2 and not hasattr(budget, "max_live")
+    await runtime.aclose()

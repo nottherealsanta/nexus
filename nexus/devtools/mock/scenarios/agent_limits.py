@@ -8,7 +8,7 @@ def _chain(level: int):
     name = f"depth-{level}"
     if level >= 6:
         return {name: [say("Reached the bottom (should not happen if depth is capped).")]}
-    return {name: [calls(task(f"depth-{level + 1}", "Go one level deeper.", wait=True)), say(f"depth-{level} done.")]} | _chain(level + 1)
+    return {name: [calls(task(f"depth-{level + 1}", "Go one level deeper.")), say(f"depth-{level} done.")]} | _chain(level + 1)
 
 
 SCENARIO = Scenario(
@@ -19,8 +19,8 @@ SCENARIO = Scenario(
     prompt="Push the subagent limits.",
     actors={
         "main": [
-            calls(task("depth-1", "Go one level deeper.", wait=True), text="Nesting deeply."),
-            calls(*(task("leaf", f"Leaf {i}.", wait=True) for i in range(20)), text="Fanning out twenty."),
+            calls(task("depth-1", "Go one level deeper."), text="Nesting deeply."),
+            calls(*(task("leaf", f"Leaf {i}.") for i in range(20)), text="Fanning out twenty."),
             verdict("agent-limits", intro="Limits exercised.", checks=[
                 tool_called("subagent", at_least=21),
                 Check("some spawns were refused or clamped",

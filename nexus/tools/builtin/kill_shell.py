@@ -55,11 +55,15 @@ async def _stop_job(
         session_id = _jobs.require_session_id(ctx.session_id)
     except _jobs.JobRegistryError as exc:
         return ToolExecutionResult.text(f"{tool_name}: {exc}", is_error=True)
-    result = await registry.kill(job_id, session_id=session_id)
+    # This result is the model-visible completion of the job it stops.
+    result = await registry.kill(job_id, session_id=session_id, quiet=True)
+    stopped = registry.job(job_id, session_id=session_id)
+    if stopped is not None:
+        stopped.claim()
     if result.outcome == "unknown":
         return ToolExecutionResult.text(
             f"{tool_name}: unknown job_id {job_id!r}; only jobs started by "
-            "Bash in this session can be terminated",
+            "the shell tool in this session can be terminated",
             is_error=True,
         )
     if result.outcome == "finished":

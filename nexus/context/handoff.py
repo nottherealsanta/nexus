@@ -102,11 +102,8 @@ def build_brief(messages: Sequence[Message], *, handle=None, boundary=0) -> str:
                 state_view = apply(state_view, record.event)
         view = state_view.to_dict()
         body = view
-        todos = None
         jobs = {}
         for record in handle.read().records:
-            if isinstance(record, EventRecord) and record.event.type == "todo.updated":
-                todos = record.event.data
             if isinstance(record, EventRecord) and record.event.type == "shell.started":
                 jobs[str(record.event.data.get("shell_id", record.seq))] = record.event.data
             elif isinstance(record, EventRecord) and record.event.type == "shell.completed":
@@ -126,7 +123,7 @@ def build_brief(messages: Sequence[Message], *, handle=None, boundary=0) -> str:
         owner_rows = [{k: r.get(k) for k in ("id", "namespace", "agent_id", "kind", "root_id")}
                       for r in owner_rows]
         state += "\nSession state (not moved): " + json.dumps({
-            "todos": todos, "live_children": body.get("agents"),
+            "live_children": body.get("agents"),
             "open_shell_jobs": jobs, "worktree": view.get("worktree"),
             "owned_children": owner_rows,
         }, default=str)[:1800]

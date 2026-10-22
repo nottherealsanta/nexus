@@ -31,6 +31,16 @@ async def test_direct_arm_runs_without_monty(tmp_path):
     assert "ratio" not in out
 
 
+async def test_eval_state_stays_in_its_own_home_not_the_ambient_one(tmp_path, monkeypatch):
+    ambient = tmp_path / "ambient"
+    monkeypatch.setenv("NEXUS_HOME", str(ambient))
+    base = tmp_path / "base"
+    await ev.run_scenario("fanout_read", base, monty=False)
+    # ``home=`` is a fake HOME: the state root is <home>/.nexus (config.paths.nexus_home).
+    assert (base / "nexus-home" / ".nexus" / "nexus.db").exists()
+    assert not ambient.exists()
+
+
 async def test_long_child_skips_cleanly_without_monty(tmp_path):
     out = await ev.run_scenario("long_child_context", tmp_path, monty=False)
     assert out == {"scenario": "long_child_context", "code": {"skipped": ev.SKIP_NO_MONTY}}

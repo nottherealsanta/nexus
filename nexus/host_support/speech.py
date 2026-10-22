@@ -1,10 +1,9 @@
-"""Bounded, isolated Paradee speech for completed assistant turns.
+"""Bounded, isolated ptts speech for completed assistant turns.
 
-Paradee is an 8M-parameter int8 ONNX text-to-speech model distilled from Kokoro-82M
-(voice af_heart). It runs on CPU through onnxruntime; phonemes come from misaki, the
-same G2P Kokoro uses. No torch is involved. The worker downloads two files from the
-Hugging Face Hub (the model and its config.json vocabulary), reads the text one
-sentence at a time and plays each chunk as it is synthesized.
+The worker runs gradium's Apache-2.0 ``phonon-31m-en`` text-to-speech model (int8) on
+CPU through the official ``ptts`` runtime, a Rust Python wheel that needs only numpy.
+The model is fetched from the Hugging Face Hub by ptts itself. The worker reads the
+text one sentence at a time and plays each chunk as it is synthesized.
 """
 
 from __future__ import annotations
@@ -27,8 +26,7 @@ from ..host import protocol as p
 _MAX_TEXT_CHARS = 20_000
 _MAX_AUDIO_SECONDS = 180
 _WORKER_TIMEOUT_SECONDS = 300
-_SAMPLE_RATE = 24_000
-_MAX_PHONEMES = 510  # the model has 512 positions: one pad token at each end
+_MAX_CHUNK_CHARS = 400  # a longer sentence is cut at the last space that fits
 _LOCK = threading.Lock()
 #: The warm synthesis worker: started by the first ``/speak``, kept loaded while the
 #: user keeps using it, and unloaded after this many idle seconds.
@@ -38,14 +36,14 @@ _WORKER_DOWNLOAD = False
 _IDLE_TIMER: threading.Timer | None = None
 _STOPPED = threading.Event()
 
-_REPO_ID = "sahilmahendrakar/Paradee-8M-v1.0"
-_REVISION = "v1.0"
-_MODEL_FILE = "onnx/paradee_int8.onnx"  # 9 MB int8 graph: token ids in, 24 kHz waveform out
-_CONFIG_FILE = "config.json"  # Kokoro's phoneme vocabulary and the sample rate
-#: The model files (~9.5 MB) plus the spaCy English package misaki uses (en_core_web_sm, ~13 MB).
-MODEL_BYTES = 25_000_000
+_MODEL_ID = "hf://gradium/phonon-31m-en"
+_LANG = "en"
+_QUANT = "q8"
+_BACKEND = "ptts-cpu"
+#: Approximate download size of the q8 model, used only for the progress display.
+MODEL_BYTES = 60_000_000
 _PREPARE_TIMEOUT_SECONDS = 1800
-_REPO_DIR = "models--sahilmahendrakar--Paradee-8M-v1.0"
+_REPO_DIR = "models--gradium--phonon-31m-en"
 _INSTALL_HINT = (
     "Install the speak extra in the daemon's environment (uv sync --extra speak), plus "
     "portaudio (brew install portaudio), then restart the daemon."
@@ -211,33 +209,25 @@ def stop_speaking() -> bool:
 #
 # Mirrors the voice model flow (``/voice download``): the clients ask for the
 # status, show the size and ask for consent, call ``SpeechPrepare`` and poll.
-# Status never imports onnxruntime: it looks for the packages and the cache
-# files. Preparation is the only network step, and it runs in the same isolated
-# worker as synthesis.
+# Status never imports ptts: it looks for the packages and the cache files.
+# Preparation is the only network step, and it runs in the same isolated worker
+# as synthesis.
 #
-# Everything downloaded must survive ``nexus update``, which replaces the tool's
-# virtual environment: the model lives in the Hugging Face cache and spaCy's
-# English package is unpacked under ``~/.nexus/models/speech/python`` (never
-# pip-installed into the venv). Consent is durable too: once the user agreed to
-# a download (recorded in ``~/.nexus/models/speech/consent``, or implied by an
-# earlier Kokoro or Paradee download), a missing or newer model is fetched
-# again without asking.
+# The model lives in the Hugging Face cache, which survives ``nexus update``.
+# Consent is durable too: once the user agreed to a download (recorded in
+# ``~/.nexus/models/speech/consent``, or implied by an earlier Kokoro or Paradee
+# download), a missing or newer model is fetched again without asking.
 
 _PREPARE: dict[str, Any] = {"state": "idle", "message": "", "started": 0.0}
 _PREPARE_LOCK = threading.Lock()
-_PHONEMIZER = "en_core_web_sm"
-_PHONEMIZER_MAX_BYTES = 200_000_000
-_LEGACY_REPO_DIR = "models--hexgrad--Kokoro-82M"  # the pre-Paradee model; its presence is earlier consent
+#: Earlier speech models; their presence in the cache is earlier consent.
+_LEGACY_REPO_DIRS = ("models--hexgrad--Kokoro-82M", "models--sahilmahendrakar--Paradee-8M-v1.0")
 
 
 def _speech_home() -> Path:
     from ..config.paths import nexus_home
 
     return nexus_home() / "models" / "speech"
-
-
-def _phonemizer_dir() -> Path:
-    return _speech_home() / "python"
 
 
 def _hub_cache() -> Path:
@@ -249,20 +239,11 @@ def _hub_cache() -> Path:
 
 
 def _missing_packages() -> list[str]:
-    names = ("onnxruntime", "misaki", "sounddevice", "numpy", "huggingface_hub")
+    names = ("ptts", "sounddevice", "numpy")
     try:
         return [name for name in names if importlib.util.find_spec(name) is None]
     except (ImportError, ValueError):
         return list(names)
-
-
-def _phonemizer_present() -> bool:
-    if (_phonemizer_dir() / _PHONEMIZER).is_dir():
-        return True
-    try:  # an older install pip-installed it into the venv
-        return importlib.util.find_spec(_PHONEMIZER) is not None
-    except (ImportError, ValueError):
-        return False
 
 
 def _tree_bytes(root: Path) -> int:
@@ -278,13 +259,12 @@ def _tree_bytes(root: Path) -> int:
 def _cache_progress() -> tuple[bool, int]:
     """``(everything cached, bytes on disk so far)`` without importing any model code."""
     repo = _hub_cache() / _REPO_DIR
-    done = _tree_bytes(repo / "blobs") + _tree_bytes(_phonemizer_dir())
-    model = config = False
+    done = _tree_bytes(repo / "blobs")
+    cached = False
     with contextlib.suppress(OSError):
-        for snapshot in (repo / "snapshots").iterdir():
-            model = model or (snapshot / _MODEL_FILE).exists()
-            config = config or (snapshot / _CONFIG_FILE).exists()
-    return model and config and _phonemizer_present(), done
+        cached = any(next(snapshot.rglob("*"), None) is not None for snapshot in (repo / "snapshots").iterdir())
+        cached = cached and not any((repo / "blobs").glob("*.incomplete"))
+    return cached, done
 
 
 def has_consent() -> bool:
@@ -296,7 +276,7 @@ def has_consent() -> bool:
     if (_speech_home() / "consent").exists():
         return True
     hub = _hub_cache()
-    return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, _LEGACY_REPO_DIR))
+    return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, *_LEGACY_REPO_DIRS))
 
 
 def _record_consent() -> None:
@@ -401,7 +381,7 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
             if code not in allowed:
                 code = "speech_unavailable"
             messages = {
-                "speech_dependency_missing": "Install the speak extra (onnxruntime, misaki, sounddevice) to use speech",
+                "speech_dependency_missing": "Install the speak extra (ptts, sounddevice) to use speech",
                 "speech_model_not_cached": "Speech model is not cached; run /speak download first",
                 "speech_model_unavailable": "Speech model could not be loaded",
                 "speech_playback_failed": "Audio playback failed",
@@ -411,7 +391,7 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
         backend = result.get("backend")
         if backend == "stopped":
             return p.SpeakResult(message="Stopped speaking", backend="")
-        if backend not in {"paradee-cpu"}:
+        if backend not in {_BACKEND}:
             return p.ErrorResult(kind="speech_unavailable", message="Speech worker returned an invalid response")
         return p.SpeakResult(message="Finished speaking the latest answer", backend=backend)
     except _SpeechRequestError as exc:
@@ -422,12 +402,11 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
 
 
 class _Engine:
-    """A loaded Paradee model: the onnxruntime session, misaki G2P and the phoneme vocabulary."""
+    """A loaded ptts model and the sample rate it synthesizes at."""
 
-    def __init__(self, session: Any, g2p: Any, vocab: dict[str, int]) -> None:
-        self.session = session
-        self.g2p = g2p
-        self.vocab = vocab
+    def __init__(self, tts: Any) -> None:
+        self.tts = tts
+        self.sample_rate = int(tts.sample_rate)
 
 
 _ENGINE: _Engine | None = None  # warm: stays loaded between requests in the serve loop
@@ -435,107 +414,30 @@ _WORKER_STOP = threading.Event()  # set by the serve loop's reader when the pare
 
 
 def _load_engine() -> _Engine:
-    """Fetch (respecting HF_HUB_OFFLINE) and load the model, the vocabulary and the phonemizer."""
-    import onnxruntime as ort
-    from huggingface_hub import hf_hub_download
+    """Load the model; ptts fetches it from the Hub unless the worker runs offline."""
+    import ptts
 
-    _ensure_phonemizer()
-    from misaki import en
-
-    model_path = hf_hub_download(_REPO_ID, _MODEL_FILE, revision=_REVISION)
-    config_path = hf_hub_download(_REPO_ID, _CONFIG_FILE, revision=_REVISION)
-    with open(config_path, encoding="utf-8") as handle:
-        vocab = json.load(handle)["vocab"]
-    options = ort.SessionOptions()
-    # ORT's default intra-op threads: measured ~34x real time on an M4 vs ~18x with one thread.
-    options.inter_op_num_threads = 1
-    session = ort.InferenceSession(model_path, options, providers=["CPUExecutionProvider"])
-    # fallback=None: no espeak. Words misaki cannot place are dropped by the vocabulary filter.
-    g2p = en.G2P(trf=False, british=False, fallback=None, unk="")
-    return _Engine(session, g2p, vocab)
+    if os.environ.get("HF_HUB_OFFLINE") == "1" and not _cache_progress()[0]:
+        # Never reach the network for a model the user has not downloaded.
+        raise _SpeechRequestError("speech_model_not_cached", "The speech model is not downloaded")
+    return _Engine(ptts.TTS(_MODEL_ID, lang=_LANG, quant=_QUANT))
 
 
-def _ensure_phonemizer() -> None:
-    """Make spaCy's English package importable, downloading it under ``~/.nexus`` when online.
-
-    It is unpacked from spaCy's official wheel into ``~/.nexus/models/speech/python``
-    rather than pip-installed: uv tool environments have no pip, and ``nexus update``
-    replaces the environment, which would drop the package and ask again.
-    """
-    target = _phonemizer_dir()
-    _add_to_path(target)
-    import spacy
-
-    if spacy.util.is_package(_PHONEMIZER):
-        return
-    if os.environ.get("HF_HUB_OFFLINE") == "1":
-        raise _SpeechRequestError("speech_model_not_cached", "The English phonemizer is not downloaded")
-    _download_phonemizer(target)
-    _add_to_path(target)
-
-
-def _add_to_path(target: Path) -> None:
-    if target.is_dir() and str(target) not in sys.path:
-        sys.path.insert(0, str(target))
-        importlib.invalidate_caches()
-
-
-def _download_phonemizer(target: Path) -> None:
-    """Fetch the spaCy-compatible ``en_core_web_sm`` wheel and unpack it into ``target`` (bounded)."""
-    import shutil
-    import urllib.request
-    import zipfile
-
-    from spacy import about
-    from spacy.cli.download import get_compatibility, get_model_filename, get_version
-
-    base = about.__download_url__.rstrip("/") + "/"
-    url = base + get_model_filename(_PHONEMIZER, get_version(_PHONEMIZER, get_compatibility()), False)
-    if not url.startswith(base) or ".." in url[len(base):]:
-        raise ValueError("unexpected phonemizer download URL")
-    staging = target.parent / "python.partial"
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
-    try:
-        wheel = staging / "phonemizer.whl"
-        with urllib.request.urlopen(url, timeout=60) as response, wheel.open("wb") as out:
-            written = 0
-            while chunk := response.read(1 << 20):
-                written += len(chunk)
-                if written > _PHONEMIZER_MAX_BYTES:
-                    raise ValueError("phonemizer download is too large")
-                out.write(chunk)
-        unpacked = staging / "python"
-        with zipfile.ZipFile(wheel) as archive:
-            for name in archive.namelist():
-                if name.startswith(("/", "\\")) or ".." in Path(name).parts:
-                    raise ValueError("unsafe path in the phonemizer wheel")
-            archive.extractall(unpacked)
-        shutil.rmtree(target, ignore_errors=True)
-        unpacked.rename(target)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-
-
-def _phoneme_chunks(engine: _Engine, text: str):
-    """Yield phoneme strings, one sentence at a time, each at most ``_MAX_PHONEMES`` long."""
+def _text_chunks(text: str):
+    """Yield text one sentence at a time, each at most ``_MAX_CHUNK_CHARS`` long."""
     for sentence in re.split(r"(?<=[.!?…])\s+|\n+", text.strip()):
-        if not sentence.strip():
-            continue
-        phonemes, _ = engine.g2p(sentence)
-        while len(phonemes) > _MAX_PHONEMES:  # a very long sentence: cut at the last space that fits
-            cut = phonemes.rfind(" ", 0, _MAX_PHONEMES)
-            cut = cut if cut > 0 else _MAX_PHONEMES
-            yield phonemes[:cut]
-            phonemes = phonemes[cut:].lstrip()
-        if phonemes:
-            yield phonemes
+        sentence = sentence.strip()
+        while len(sentence) > _MAX_CHUNK_CHARS:  # a very long sentence: cut at the last space that fits
+            cut = sentence.rfind(" ", 0, _MAX_CHUNK_CHARS)
+            cut = cut if cut > 0 else _MAX_CHUNK_CHARS
+            yield sentence[:cut]
+            sentence = sentence[cut:].lstrip()
+        if sentence:
+            yield sentence
 
 
-def _synthesize_chunk(engine: _Engine, phonemes: str, np: Any) -> Any:
-    ids = [0] + [engine.vocab[c] for c in phonemes if c in engine.vocab][:_MAX_PHONEMES] + [0]
-    feed = {"input_ids": np.array([ids], dtype=np.int64), "speed": np.array([1.0], dtype=np.float32)}
-    return engine.session.run(None, feed)[0][0]
+def _synthesize_chunk(engine: _Engine, text: str) -> Any:
+    return engine.tts.synth(text)  # the model's default voice
 
 
 def _worker_synthesize(text: str) -> dict[str, Any]:
@@ -543,17 +445,15 @@ def _worker_synthesize(text: str) -> dict[str, Any]:
     try:
         import numpy as np
         import sounddevice
-        import onnxruntime  # noqa: F401  (checked here so a missing package reports as such)
-        import misaki  # noqa: F401
-        import huggingface_hub  # noqa: F401
+        import ptts  # noqa: F401  (checked here so a missing package reports as such)
     except ImportError:
         return {"ok": False, "code": "speech_dependency_missing"}
 
     global _ENGINE
     try:
         if _ENGINE is None:
-            # Offline (the default) never downloads: a missing phonemizer or model
-            # raises and is reported as not cached.
+            # Offline (the default) never downloads: a missing model raises and is
+            # reported as not cached.
             _ENGINE = _load_engine()
     except Exception:
         code = "speech_model_not_cached" if os.environ.get("HF_HUB_OFFLINE") == "1" else "speech_model_unavailable"
@@ -564,40 +464,39 @@ def _worker_synthesize(text: str) -> dict[str, Any]:
 
 def _worker_play(engine: _Engine, text: str, np: Any, sounddevice: Any) -> dict[str, Any]:
     total_seconds = 0.0
-    chunks = _phoneme_chunks(engine, text)
+    chunks = _text_chunks(text)
     while True:
         try:
-            phonemes = next(chunks, None)
-            if phonemes is None:
+            chunk = next(chunks, None)
+            if chunk is None:
                 break
-            audio = _synthesize_chunk(engine, phonemes, np)
+            audio = _synthesize_chunk(engine, chunk)
         except Exception:
             return {"ok": False, "code": "speech_unavailable"}
         if _WORKER_STOP.is_set():
             return {"ok": True, "backend": "stopped"}
-        total_seconds += float(len(audio)) / _SAMPLE_RATE
+        total_seconds += float(len(audio)) / engine.sample_rate
         if total_seconds > _MAX_AUDIO_SECONDS:
             return {"ok": False, "code": "speech_unavailable"}
         try:
             with contextlib.redirect_stdout(sys.stderr):
-                sounddevice.play(np.asarray(audio, dtype=np.float32), samplerate=_SAMPLE_RATE, blocking=True)
+                sounddevice.play(np.asarray(audio, dtype=np.float32), samplerate=engine.sample_rate, blocking=True)
         except Exception:
             return {"ok": False, "code": "speech_playback_failed"}
         if _WORKER_STOP.is_set():
             return {"ok": True, "backend": "stopped"}
-    return {"ok": True, "backend": "paradee-cpu"}
+    return {"ok": True, "backend": _BACKEND}
 
 
 def _worker_prepare() -> dict[str, Any]:
-    """Fetch the model, its config and the English phonemizer (network on)."""
+    """Fetch and load the model (network on)."""
     try:
-        import onnxruntime  # noqa: F401
-        import misaki  # noqa: F401
-        import huggingface_hub  # noqa: F401
+        import ptts  # noqa: F401
     except ImportError:
         return {"ok": False, "code": "speech_dependency_missing"}
+    global _ENGINE
     try:
-        _load_engine()
+        _ENGINE = _load_engine()
     except Exception:
         return {"ok": False, "code": "speech_model_unavailable"}
     return {"ok": True}

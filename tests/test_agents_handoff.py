@@ -69,11 +69,9 @@ async def test_child_crash_returns_failed_outcome_with_handoff(tmp_path, monkeyp
             pass
 
     session = SimpleNamespace(id="s", events=[], messages=_messages(), begin_turn=lambda **_: Lease())
-    store = SimpleNamespace(clear_session=lambda _id: None)
     runtime = SimpleNamespace(
         workspace=tmp_path, _home=tmp_path,
         _ensure_child_sessions=lambda: SimpleNamespace(manager=SimpleNamespace(open=lambda *a, **k: session)),
-        _restore_todos=lambda _s: None, _effective_todo_store=lambda: store,
         _outbound_http_service=None, _child_config=lambda _s: None,
         _build_child_assembler=lambda *a: object(),
         _build_child_tool_manager=lambda *a: SimpleNamespace(schemas=lambda: ()),

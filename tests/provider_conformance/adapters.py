@@ -28,6 +28,7 @@ from nexus.model.http import RetryPolicy
 from nexus.model.provider import Provider
 from nexus.model.providers.anthropic import AnthropicProvider
 from nexus.model.providers.gemini import GeminiProvider
+from nexus.model.providers.nvidia import NvidiaProvider
 from nexus.model.providers.openai import OpenAIProvider
 from nexus.model.providers.scripted import ScriptedProvider, Wait
 from nexus.model.providers.xai import XAIProvider
@@ -73,6 +74,7 @@ __all__ = [
     "ADAPTER_SPECS",
     "AnthropicAdapter",
     "GeminiAdapter",
+    "NvidiaChatAdapter",
     "OpenAIChatAdapter",
     "OpenAIResponsesAdapter",
     "ScriptedAdapter",
@@ -85,6 +87,7 @@ GEMINI_BASE_URL = "https://gemini.conformance"
 #: exercised offline through ``httpx.MockTransport``. No network is touched.
 OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1"
 XAI_BASE_URL = "https://api.x.ai/v1"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 OPENAI_CHAT_BASE_URL = "https://api.openai.com/v1"
 
 ANTHROPIC_TAGS = frozenset(
@@ -476,6 +479,28 @@ class OpenAIChatAdapter(_HTTPAdapter):
         )
 
 
+class NvidiaChatAdapter(OpenAIChatAdapter):
+    """The NVIDIA preset over Chat Completions (no input-token counter)."""
+
+    name = "nvidia_chat"
+    model = "nvidia-conformance"
+
+    def __init__(self, *, api_key: str = "conformance-key") -> None:
+        _HTTPAdapter.__init__(self, api_key=api_key, base_url=NVIDIA_BASE_URL)
+
+    def _build_provider(self, api_key: str, base_url: str) -> NvidiaProvider:
+        return NvidiaProvider(
+            api_key=api_key,
+            model=self.model,
+            base_url=base_url,
+            retry=_RETRY,
+            sleep=self._sleep,
+            jitter=lambda: 0.0,
+            environ={},
+            http_transport=httpx.MockTransport(self._handle),
+        )
+
+
 class ScriptedAdapter:
     """The deterministic in-process provider, replaying normalized events.
 
@@ -567,6 +592,13 @@ ADAPTER_SPECS: tuple[AdapterSpec, ...] = (
         make=OpenAIChatAdapter,
         dialect=OPENAI_CHAT_DIALECT,
         description="OpenAI Chat Completions adapter over httpx.MockTransport",
+    ),
+    AdapterSpec(
+        name="nvidia_chat",
+        tags=OPENAI_CHAT_TAGS,
+        make=NvidiaChatAdapter,
+        dialect=OPENAI_CHAT_DIALECT,
+        description="NVIDIA preset over the Chat Completions adapter (httpx.MockTransport)",
     ),
     *OLLAMA_SPECS,
     OPENCODE_ACP_SPEC,

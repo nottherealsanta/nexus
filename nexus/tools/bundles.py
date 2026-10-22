@@ -115,7 +115,7 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
         ),
         "shell": Bundle(
             name="shell",
-            tools=("bash",),
+            tools=("shell",),
         ),
         "legacy_shell": Bundle(
             name="legacy_shell",
@@ -127,10 +127,7 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
         ),
         "task": Bundle(
             name="task",
-            tools=(
-                "subagent", "subagent_send", "subagent_stop", "subagent_list",
-                "todowrite", "question",
-            ),
+            tools=("subagent", "question"),
         ),
         "web": Bundle(
             name="web",
@@ -189,11 +186,8 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         "research": Profile(
             name="research",
             bundles=("fs", "task", "web", "ext", "mcp"),
-            include=(
-                "subagent", "subagent_send", "subagent_stop", "subagent_list",
-                "todowrite", "question", "skill",
-            ),
-            exclude=("write", "edit", "bash"),
+            include=("subagent", "question", "skill"),
+            exclude=("write", "edit", "shell"),
             read_only=True,
         ),
         "chat": Profile(name="chat", bundles=()),

@@ -7,10 +7,63 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shutil
 import sys
+
+
+@dataclass(frozen=True)
+class ReloadRequest:
+    """Returned only after the native bridge has fully unwound."""
+    workspace: Path
+    session: str
+
+
+async def rebuild() -> Path:
+    """Return Cargo's actual executable, never binary discovery."""
+    manifest = Path(__file__).resolve().parents[3] / "rust/tui/Cargo.toml"
+    if not manifest.is_file() or not manifest.with_name("Cargo.lock").is_file():
+        raise RuntimeError("/reload requires a source checkout with rust/tui/Cargo.toml and Cargo.lock. Rebuild Nexus manually.")
+    print("Rebuilding native TUI…", flush=True)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "cargo", "build", "--release", "--locked", "--manifest-path", str(manifest),
+            "--bin", "nexus-ratatui", "--message-format=json-render-diagnostics",
+            stdout=asyncio.subprocess.PIPE, cwd=manifest.parent)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot run Cargo for /reload: {exc}. Install Rust/Cargo and retry.") from exc
+    output, _ = await process.communicate()
+    executable = None
+    for line in output.decode(errors="replace").splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            print(line)
+            continue
+        if message.get("reason") == "compiler-message":
+            print(message.get("message", {}).get("rendered", ""), end="", file=sys.stderr)
+        if (message.get("reason") == "compiler-artifact"
+                and message.get("target", {}).get("name") == "nexus-ratatui"
+                and message.get("executable")):
+            executable = Path(message["executable"])
+    if process.returncode or executable is None or not executable.is_file():
+        raise RuntimeError("/reload build failed; the workspace daemon was not stopped. Fix the Cargo errors and run nexus chat again.")
+    return executable.resolve()
+
+
+async def restart_workspace(workspace: Path) -> None:
+    from nexus.host import daemon
+    print(f"Restarting workspace daemon: {workspace}", flush=True)
+    report = await daemon.status(workspace)
+    pid = report.get("pid") if report.get("running") else None
+    stopped = await daemon.stop(workspace)
+    if pid and not stopped:
+        raise RuntimeError("/reload could not stop daemon. Run nexus daemon stop and relaunch.")
+    if not await daemon.wait_stopped(workspace, pid, polls=100, interval=0.1):
+        raise RuntimeError("/reload timed out waiting for daemon shutdown. Run nexus daemon stop before relaunching.")
 
 
 def binary_path() -> Path:
@@ -45,14 +98,14 @@ def available() -> bool:
     return True
 
 
-async def spawn():
+async def spawn(binary: Path | None = None):
     """Start the native client now, so its splash answers the launch before the host is ready.
 
     The bridge protocol is unchanged: the process draws "Nexus" until the first snapshot
     reaches its stdin, which the controller sends once the session has loaded.
     """
     return await asyncio.create_subprocess_exec(
-        str(binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        str(binary if binary is not None else binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         limit=16 * 1024 * 1024)
 
 
@@ -115,7 +168,11 @@ async def release(process) -> None:
             await asyncio.wait_for(process.wait(), 2)
         if process.returncode is None:
             process.terminate()
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), 2)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
 
 
 async def run(client, *, session="default", reconnect=None, workspace=None, process=None):

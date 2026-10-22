@@ -23,7 +23,7 @@ from nexus.tools.manager import ToolManager
 FIXTURES = Path(__file__).parent / "fixtures" / "anthropic"
 
 
-async def test_child_event_sink_propagates_todo_append_failure():
+async def test_child_event_sink_treats_append_failure_as_best_effort():
     relayed = []
 
     class Session:
@@ -34,16 +34,11 @@ async def test_child_event_sink_propagates_todo_append_failure():
         relayed.append((event_type, data))
 
     sink = _ChildEventSink(Session(), relay)
-    event = Event(type="todo.updated", data={"todos": [], "revision": 1})
+    event = Event(type="text.delta", data={"text": "hi"})
 
-    try:
-        await sink.emit(event)
-    except OSError as exc:
-        assert str(exc) == "child log unavailable"
-    else:
-        raise AssertionError("todo.updated append failure was suppressed")
+    assert await sink.emit(event) is event
 
-    assert relayed[0] == ("todo.updated", event.data)
+    assert relayed[0] == ("text.delta", event.data)
     assert relayed[1][0] == "error"
     assert relayed[1][1]["code"] == "child_log_persist_failed"
 
@@ -264,7 +259,7 @@ async def test_runtime_builds_native_tools_and_closes_owned_registry(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn is not None
-    assert len(turn.schemas) == 16
+    assert len(turn.schemas) == 12
     assert turn.gate is not None
 
     await runtime.aclose()
@@ -283,14 +278,12 @@ async def test_runtime_injected_tool_manager_is_used(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn.manager.profile == manager.profile
-    assert turn.manager.names == ("read", "glob", "grep", "todowrite", "question", "skill")
-    assert [schema.name for schema in turn.schemas] == ["read", "glob", "grep", "todowrite", "question", "skill"]
+    assert turn.manager.names == ("read", "glob", "grep", "question", "skill")
+    assert [schema.name for schema in turn.schemas] == ["read", "glob", "grep", "question", "skill"]
     await runtime.aclose()
 
 
-async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(tmp_path):
-    from nexus.tools.builtin.todo import TodoStore
-
+async def test_historical_todo_events_reopen_safely_and_the_runtime_has_no_todo_store(tmp_path):
     config = Config(
         model="scripted/sm",
         version=2,
@@ -307,9 +300,7 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
         encoding="utf-8",
     )
 
-    original_manager = ToolManager(
-        config, workspace=tmp_path, profile="research", todo_store=TodoStore()
-    )
+    original_manager = ToolManager(config, workspace=tmp_path, profile="research")
     first_runtime = Runtime(
         tmp_path,
         config=config,
@@ -335,9 +326,7 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
     await first_runtime.aclose()
     assert original_manager.closed is False
 
-    reopened_manager = ToolManager(
-        config, workspace=tmp_path, profile="research", todo_store=TodoStore()
-    )
+    reopened_manager = ToolManager(config, workspace=tmp_path, profile="research")
     runtime = Runtime(
         tmp_path,
         config=config,
@@ -345,7 +334,9 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
         tools=reopened_manager,
     )
     session = runtime.session("injected-todo-reopen", create=False)
-    assert reopened_manager.todo_store.revision(session.id, "root") == 4
+    assert not hasattr(runtime, "todo_store")
+    assert not hasattr(reopened_manager, "todo_store")
+    assert any(e.type == "todo.updated" for e in session.events)
 
     session._turn_agent_definition = runtime.agents.resolve("reviewer", context="root")
     turn = runtime._make_tool_turn(
@@ -353,8 +344,7 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
     )
 
     assert turn.manager is not reopened_manager
-    assert turn.manager.todo_store is reopened_manager.todo_store
-    assert turn.manager.todo_store.get(session.id, "root")[0].content == "reopened"
+    assert "todowrite" not in turn.manager.names
     await runtime.aclose()
     assert reopened_manager.closed is False
 
@@ -373,7 +363,6 @@ async def test_iteration_tool_managers_are_not_retained(tmp_path):
             scripted_config(), SimpleNamespace(tools={})
         )
         assert manager._owns_job_registry is False
-        assert manager._owns_todo_store is False
         assert len(runtime._owned_tools) == 0
         assert len(runtime._tracked_tools) <= 1
 
@@ -425,7 +414,7 @@ def test_tool_dispatcher_context_has_stable_root_and_child_agent_ids(tmp_path):
         agent_id="session-1/sub/1/sub/1",
         outbound_http=outbound_http,
     )
-    call = ToolCall(id="call", name="todowrite")
+    call = ToolCall(id="call", name="read")
     spec = SimpleNamespace(agent_id="session-1/sub/1")
 
     assert first_turn._ctx_factory(call, spec).agent_id == "root"
@@ -522,18 +511,10 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
 
     import nexus.runtime as runtime_module
     from nexus.runtime import _ChildRuntime
-    from nexus.tools.builtin.todo import TodoItem, TodoStore
     from nexus.tools.spec import ToolCall
 
     config = scripted_config()
-    store = TodoStore()
-    root_todo = TodoItem("root", "root work", "pending")
-    sibling_todo = TodoItem("sibling", "sibling work", "pending")
-    store.replace("parent-session", [root_todo])
-    store.replace("sibling-session", [sibling_todo], agent_id="sibling-agent")
-    manager = ToolManager(
-        config, workspace=tmp_path, profile="research", todo_store=store
-    )
+    manager = ToolManager(config, workspace=tmp_path, profile="research")
     outbound_http = object()
     captured = {}
     child_session_id = runtime_module._child_session_id("root/sub/1")
@@ -544,24 +525,7 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
 
     class Session:
         id = child_session_id
-        events: ClassVar[list] = [
-            Event(
-                type="todo.updated",
-                session=child_session_id,
-                data={
-                    "session": child_session_id,
-                    "agent_id": "root/sub/1",
-                    "revision": 4,
-                    "todos": [
-                        {
-                            "id": "reopened",
-                            "content": "child persisted work",
-                            "status": "in_progress",
-                        }
-                    ],
-                },
-            )
-        ]
+        events: ClassVar[list] = []
 
         def begin_turn(self, **_kwargs):
             return Lease()
@@ -577,8 +541,6 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
     runtime = SimpleNamespace(
         workspace=tmp_path,
         _ensure_child_sessions=lambda: facade,
-        _restore_todos=lambda opened: store.replay(opened),
-        _effective_todo_store=lambda: store,
         _outbound_http_service=outbound_http,
         _child_config=lambda _spec: config,
         _build_child_assembler=lambda *_args: object(),
@@ -599,12 +561,8 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
     )
 
     async def fake_run_turn(*, tools, **_kwargs):
-        assert store.get(child_session_id, "root/sub/1") == (
-            TodoItem("reopened", "child persisted work", "in_progress"),
-        )
-        assert store.revision(child_session_id, "root/sub/1") == 4
         captured["ctx"] = tools._ctx_factory(
-            ToolCall(id="todo-call", name="todowrite"),
+            ToolCall(id="read-call", name="read"),
             SimpleNamespace(agent_id=spec.agent_id),
         )
         return "child-outcome"
@@ -614,15 +572,6 @@ async def test_child_runtime_passes_spec_agent_id_to_tool_context(tmp_path, monk
     outcome = await _ChildRuntime(runtime, spec, runner=object()).run()
 
     assert outcome == "child-outcome"
-    assert store.get(child_session_id, "root/sub/1") == ()
-    assert store.revision(child_session_id, "root/sub/1") == 0
-    assert store.get("parent-session") == (root_todo,)
-    assert store.get("sibling-session", "sibling-agent") == (sibling_todo,)
-    assert len(session.events) == 1
-    store.replay(session)
-    assert store.get(child_session_id, "root/sub/1") == (
-        TodoItem("reopened", "child persisted work", "in_progress"),
-    )
     assert captured["ctx"].session_id != spec.session_id
     assert captured["ctx"].agent_id == spec.agent_id
     assert captured["ctx"].outbound_http is outbound_http
@@ -759,22 +708,16 @@ async def test_child_runtime_has_no_runner(tmp_path):
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
-async def test_child_runtime_clears_todos_after_failure_or_cancellation(
+async def test_child_runtime_reports_failure_or_propagates_cancellation(
     tmp_path, monkeypatch, error_type
 ):
     from types import SimpleNamespace
 
     import nexus.runtime as runtime_module
     from nexus.runtime import _ChildRuntime
-    from nexus.tools.builtin.todo import TodoItem, TodoStore
 
     config = scripted_config()
-    store = TodoStore()
     child_session_id = runtime_module._child_session_id("root/sub/failed")
-    root_todo = TodoItem("root", "root work", "pending")
-    child_todo = TodoItem("child", "child work", "in_progress")
-    store.replace("parent-session", [root_todo])
-    store.replace(child_session_id, [child_todo], agent_id="root/sub/failed")
 
     class Lease:
         def release(self):
@@ -788,7 +731,7 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
             return Lease()
 
     session = Session()
-    manager = ToolManager(config, workspace=tmp_path, profile="research", todo_store=store)
+    manager = ToolManager(config, workspace=tmp_path, profile="research")
     runtime = SimpleNamespace(
         workspace=tmp_path,
         _ensure_child_sessions=lambda: SimpleNamespace(
@@ -797,8 +740,6 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
                 store=SimpleNamespace(resolve_child_id=runtime_module._child_session_id),
             )
         ),
-        _restore_todos=lambda _opened: None,
-        _effective_todo_store=lambda: store,
         _child_config=lambda _spec: config,
         _build_child_assembler=lambda *_args: object(),
         _build_child_tool_manager=lambda *_args: manager,
@@ -837,10 +778,6 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
     else:
         with pytest.raises(error_type, match="child stopped"):
             await _ChildRuntime(runtime, spec, runner=object()).run()
-
-    assert store.get(child_session_id, spec.agent_id) == ()
-    assert store.revision(child_session_id, spec.agent_id) == 0
-    assert store.get("parent-session") == (root_todo,)
 
 
 # ---------------------------------------------------------------------------

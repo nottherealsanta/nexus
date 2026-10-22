@@ -517,6 +517,29 @@ class StateDatabase:
             )
         ]
 
+    def registered_projects(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Project roots holding an eligible main session (archived included), newest activity first.
+
+        Eligible means a non-manager, non-trashed main session with user input; a bare
+        registration, an empty project or one with only agent/manager/trashed sessions is not listed.
+        """
+        if not 1 <= limit <= _MAX_LIMIT:
+            raise ValueError("invalid project limit")
+        return [
+            {"project_id": row["project_id"], "workspace": row["workspace"], "updated": float(row["updated"] or 0.0)}
+            for row in self._connection().execute(
+                # A root equal to its id is a bare id that was never resolved to a path.
+                "SELECT p.id AS project_id, p.root AS workspace, "
+                "MAX(CASE WHEN s.last_user_at > 0 THEN s.last_user_at "
+                "WHEN s.created_at > 0 THEN s.created_at ELSE s.last_activity END) AS updated "
+                "FROM projects p JOIN sessions s ON s.project_id=p.id "
+                "WHERE p.root<>p.id AND s.namespace='main' AND s.kind<>'manager' "
+                f"AND s.trash_id IS NULL AND {_has_user_input('s')} "
+                "GROUP BY p.id, p.root ORDER BY updated DESC, p.id LIMIT ?",
+                [limit],
+            )
+        ]
+
     def archived_project_sessions(self, *, limit: int = 20) -> list[dict[str, Any]]:
         """The newest archived sessions across projects (same row shape as ``project_sessions``)."""
         if not 1 <= limit <= _MAX_LIMIT:
@@ -688,6 +711,13 @@ def _append_in_txn(conn, project_id, namespace, session, requested_seq, kind, ts
         created_at if created_at > 0 else (ts if ts > 0 else created_at)
     )
     new_activity = max(last_activity, ts) if ts > 0 else last_activity
+    if (
+        last_activity > 0
+        and kind == "event"
+        and isinstance(payload, Event)
+        and payload.type.startswith("presence.")
+    ):
+        new_activity = last_activity  # merely viewing a session is not activity
     conn.execute(
         "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
         "created_at=?, last_activity=?, last_user=?, last_agent=?, last_user_at=?, completion_seq=CASE "
@@ -1745,7 +1775,7 @@ class SqliteSessionStore:
             .execute(
                 "SELECT id FROM sessions WHERE project_id=? AND namespace=? AND "
                 "kind<>'manager' AND trash_id IS NULL AND archived_at IS NULL "
-                "AND last_activity <= ? ORDER BY last_activity ASC LIMIT ?",
+                "AND last_activity < ? ORDER BY last_activity ASC LIMIT ?",
                 (self.project_id, self.namespace, threshold, min(limit, _MAX_LIMIT)),
             )
             .fetchall()

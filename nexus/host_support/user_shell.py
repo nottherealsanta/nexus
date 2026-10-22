@@ -4,11 +4,13 @@ Contract (docs/tools.md "Shell mode"):
 
 - ``SessionShell`` runs the command with ``/bin/bash -c`` in the workspace
   through the runtime's ``JobRegistry`` (same process-group lifecycle, capture
-  cap and environment as the ``bash`` tool). The user typed it, so no
-  permission rule is consulted. It is bounded by ``tools.bash_max_s``.
+  cap and environment as the ``shell`` tool). The user typed it, so no
+  permission rule is consulted. It is bounded by ``tools.shell_max_s``. It does
+  not use the session cwd (it runs at the workspace root) and keeps the temp
+  file spill instead of a job log.
 - ``shell.started`` and ``shell.completed`` are durable session events; the
-  reducer draws each run as a ``kind="shell"`` turn holding one ``bash`` row.
-- The output is limited exactly like the ``bash`` tool (2,000 lines or 50 KiB;
+  reducer draws each run as a ``kind="shell"`` turn holding one ``shell`` row.
+- The output is limited exactly like the ``shell`` tool (2,000 lines or 50 KiB;
   the rest is saved to a temp file whose path is named) and added to model
   context as a user message through ``Session.add_context``. It never starts a
   turn: idle sessions just record it, a running turn sees it at its next safe
@@ -124,7 +126,8 @@ class UserShells:
         output = ""
         try:
             job = await self._registry().spawn(
-                command, session_id=handle.id, cwd=workspace, shell=_SHELL
+                command, session_id=handle.id, cwd=workspace, shell=_SHELL,
+                announce=False,  # ``!`` runs have their own shell.started/completed
             )
             outcome = await _jobs.await_job(job, timeout=limit)
             if outcome == "timeout" or job.status is _jobs.JobStatus.TIMED_OUT:

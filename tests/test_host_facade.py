@@ -341,6 +341,10 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionStart(session="s", content="hi"),
         p.SessionEnqueue(session="s", content="hi"),
         p.SessionShell(session="s", command="ls"),
+        p.SessionJobs(session="s"),
+        p.SessionJobLog(session="s", job_id="job_0123456789ab", offset=4, limit=100),
+        p.SessionJobStop(session="s", job_id="job_0123456789ab"),
+        p.SessionJobBackground(session="s", job_id="job_0123456789ab"),
         p.SessionCancel(session="s"),
         p.SessionSubscribe(session="s", from_seq=3),
         p.SessionState(session="s", from_seq=1),
@@ -381,6 +385,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.FileSearch(query="src"),
         p.GitDiff(staged=True, ref="HEAD"),
         p.DirectoryList(path="src", limit=5),
+        p.FilePreview(path="src/a.py", max_bytes=100),
         p.GitStatus(),
         p.WorktreeList(),
         p.WorktreeInspect(child_id="s/sub/1"),
@@ -466,6 +471,10 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionStartResult(session="s", turn_id="t"),
         p.SessionEnqueueResult(session="s", queued_id="q", depth=1),
         p.SessionShellResult(session="s", shell_id="sh"),
+        p.SessionJobsResult(session="s", jobs=[p.JobSummary(job_id="job_0123456789ab")], running=1),
+        p.SessionJobLogResult(session="s", job_id="job_0123456789ab", text="x", end=1, size=1),
+        p.SessionJobStopResult(session="s", job_id="job_0123456789ab", outcome="killed"),
+        p.SessionJobBackgroundResult(session="s", job_id="job_0123456789ab", outcome="requested", requested=True),
         p.SessionCancelResult(session="s", cancelled=True, dropped=2),
         p.SessionQueueEditResult(session="s", changed=True),
         p.SessionSubscribeResult(session="s", from_seq=0),
@@ -506,6 +515,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.FileSearchResult(paths=["src/main.py"]),
         p.GitDiffResult(patch="+line", truncated=False),
         p.DirectoryListResult(path="src", entries=[{"name": "a.py", "path": "src/a.py", "kind": "file", "size": 1}]),
+        p.FilePreviewResult(path="src/a.py", status="text", text="x", size=1, shown=1),
         p.GitStatusResult(available=True, branch="main", rows=[{"group": "unstaged", "code": "M", "label": "modified", "path": "a.py", "from": ""}], counts={"unstaged": 1}),
         p.WorktreeListResult(worktrees=[{"child_id": "s/sub/1"}]),
         p.WorktreeInspectResult(child_id="s/sub/1", status="finalized"),
@@ -1810,6 +1820,63 @@ async def test_project_sessions_returns_bounded_archived_rows_and_pending_reques
         searched = await facade.handle(p.ProjectSessionsList(limit=20, query="live", archived=5))
         assert not any(row.archived for row in searched.sessions), "a search skips archived rows"
         assert isinstance(await facade.handle(p.ProjectSessionsList(archived="1")), p.ErrorResult)
+    finally:
+        await runtime.aclose()
+
+
+async def test_project_sessions_projects_survive_archive_and_include_current(tmp_path):
+    from nexus.session.db import SqliteSessionStore
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    try:
+        # Nothing registered or listed: the active workspace is still returned, opt-in only.
+        empty = await facade.handle(p.ProjectSessionsList(projects=5))
+        assert [e.workspace for e in empty.projects] == [str(tmp_path)] and empty.sessions == []
+        assert (await facade.handle(p.ProjectSessionsList())).projects == []
+        other = tmp_path / "other"
+        other.mkdir()
+        store = SqliteSessionStore(runtime.sessions.store.db, "other", root=str(other))
+        store.create("only")
+        store.append_message("only", Message(role="user", content=[Text(text="hi")]))
+        with runtime.sessions.store.db.transaction() as conn:
+            conn.execute("UPDATE sessions SET archived_at=1.0 WHERE project_id='other'")
+        result = await facade.handle(p.ProjectSessionsList(projects=5))
+        assert result.sessions == []
+        assert {e.workspace for e in result.projects} == {str(tmp_path), str(other)}
+        assert result.projects[0].workspace == str(tmp_path)
+        bounded = await facade.handle(p.ProjectSessionsList(projects=1))
+        assert [e.workspace for e in bounded.projects] == [str(tmp_path)]
+        assert isinstance(await facade.handle(p.ProjectSessionsList(projects="1")), p.ErrorResult)
+    finally:
+        await runtime.aclose()
+
+
+async def test_project_entries_omit_ghosts_carry_activity_and_flag_missing_roots(tmp_path, monkeypatch):
+    from nexus.session.db import SqliteSessionStore
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    db = runtime.sessions.store.db
+    try:
+        db.touch_project("ghost", str(tmp_path / "ghost"))  # registered, no session
+        live = tmp_path / "live"
+        live.mkdir()
+        gone = tmp_path / "gone"  # never created on disk
+        for project_id, root in (("live", live), ("gone", gone)):
+            store = SqliteSessionStore(db, project_id, root=str(root))
+            store.create("s")
+            store.append_message("s", Message(role="user", content=[Text(text="hi")]))
+        with db.transaction() as conn:
+            conn.execute("UPDATE sessions SET last_user_at=321.0 WHERE project_id='live'")
+        inspected = []
+        monkeypatch.setattr("nexus.host.facade._worktree_of", lambda w: inspected.append(w) or ("", ""))
+        result = await facade.handle(p.ProjectSessionsList(projects=10))
+        by_root = {e.workspace: e for e in result.projects}
+        assert str(tmp_path / "ghost") not in by_root
+        assert result.projects[0].workspace == str(tmp_path) and by_root[str(tmp_path)].exists
+        assert by_root[str(live)].updated == 321.0 and by_root[str(live)].exists
+        assert not by_root[str(gone)].exists and str(gone) not in inspected
+        # Session rows under the vanished root are dropped too, so clients cannot regroup them.
+        assert {row.workspace for row in result.sessions} == {str(live)}
     finally:
         await runtime.aclose()
 

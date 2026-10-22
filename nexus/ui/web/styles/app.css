@@ -1074,9 +1074,6 @@ pre.code-block > code { display: block; width: max-content; min-width: 100%; pad
 .submitted-document { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; margin: 12px 0 0; font-size: 12px; }
 .turn-folded .submitted-attachments { display: none; }
 
-.card-head.todo-card-head { align-items: flex-start; height: auto; }
-.todo-card-head .tool-target { white-space: pre; display: block; }
-
 /* ---------- logs: problems first, the rest folded ---------- */
 .logs-problems { margin-bottom: 12px; }
 .logs-problems-title { margin: 0 0 8px; color: var(--text); font: 600 12px/var(--row) var(--font-sans); letter-spacing: .06em; text-transform: uppercase; }

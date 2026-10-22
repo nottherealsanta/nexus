@@ -16,6 +16,29 @@ from .timeline import split_diff_files
 
 _EDIT_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch"})
 
+#: The terminal's right sidebar tabs as stored. ``Files`` is the Changes tab (the stored id predates
+#: the label); ``Changes`` is accepted as an alias and normalised to it.
+TABS = ("Session", "Files", "MCP", "Jobs", "Logs")
+DEFAULT_TAB = "Session"
+#: Mirror ``rust/tui/src/details_sidebar.rs`` (pinned by ``tests/test_ratatui_details_sidebar.py``).
+MIN_WIDTH = 24
+MAX_WIDTH = 60
+DEFAULT_WIDTH = 40
+
+
+def normalize_tab(value: object) -> str:
+    """A stored or requested tab as one of ``TABS`` (``Changes`` is ``Files``; anything else is Session)."""
+    if value == "Changes":
+        return "Files"
+    return value if isinstance(value, str) and value in TABS else DEFAULT_TAB
+
+
+def clamp_width(value: object) -> int:
+    """A stored width bounded to ``MIN_WIDTH``..``MAX_WIDTH``; anything unusable is the default."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_WIDTH
+    return max(MIN_WIDTH, min(MAX_WIDTH, value))
+
 
 @dataclass(frozen=True)
 class FileChange:

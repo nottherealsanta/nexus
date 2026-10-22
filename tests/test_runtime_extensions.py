@@ -135,7 +135,7 @@ async def test_bootstrap_manifest_has_builtins_config_system_files_skills_tools(
     manifest = runtime.manifest
 
     # Builtins plus the external tool.
-    assert "read" in manifest.tools and "bash" in manifest.tools
+    assert "read" in manifest.tools and "shell" in manifest.tools
     assert "ExtPing" in manifest.tools
     assert manifest.tools["ExtPing"].origin == "ext"
     # Config is the bootstrap config.

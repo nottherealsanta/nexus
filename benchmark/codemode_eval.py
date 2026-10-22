@@ -144,6 +144,7 @@ async def drain(session, text: str, decide=None) -> list:
 async def run_single(name, workspace, scripts, config, prompt, expected, forbidden=()):
     provider = ScriptedProvider(*scripts)
     runtime = Runtime(workspace, config=config, providers={"scripted": provider},
+                      home=workspace.parent / "nexus-home",
                       mcp_client_factory=lambda cfg: MCPClient(cfg, backend="native"))
     try:
         session = runtime.session(name)
@@ -300,15 +301,14 @@ async def run_long_child(workspace: Path) -> dict:
 
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "scan data/ for the finding",
-                                          "subagent_type": "task",
-                                          "wait": True})),
+                                          "subagent_type": "task"})),
         reads,
         text_response(f"CHILD-REPORT found {NEEDLE} in the middle file"),
         text_response("delegated"),
         [program_step],
         text_response("done"))
     runtime = Runtime(workspace, config=make_config(code=True, context=True, mode="ask"),
-                      providers={"scripted": provider})
+                      providers={"scripted": provider}, home=workspace.parent / "nexus-home")
     try:
         session = runtime.session("long-child").mark_attended()
         await drain(session, "delegate", decide="allow_once")

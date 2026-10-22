@@ -11,10 +11,11 @@ from collections.abc import Mapping
 from fnmatch import fnmatchcase
 
 from ...model.tokenizer import DEFAULT_TOKENIZER
+from ..names import canonical_tool_name, tool_rule_names
 from .stubs import HEADER, identifier, stub
 
-EXCLUDED = frozenset({'code', 'subagent', 'subagent_send', 'subagent_stop', 'subagent_list',
-                      'question', 'todowrite', 'skill',
+EXCLUDED = frozenset({'code', 'subagent',
+                      'question', 'skill',
                       'McpCall', 'McpSearch', 'mcp_call', 'mcp_search'})
 RESERVED = frozenset({'search_tools', 'describe_tool', 'store', 'load', 'llm',
                       'targets', 'context_meta', 'context_messages',
@@ -51,8 +52,10 @@ def build_catalog(tools, expose='read_only', *, read_only=False):
             continue
         if (read_only or expose == 'read_only') and spec.mutates:
             continue
-        if isinstance(expose, (list, tuple)) and not any(fnmatchcase(spec.name, p) for p in expose):
-            continue
+        if isinstance(expose, (list, tuple)) and not any(
+            fnmatchcase(alias, p) for p in expose for alias in tool_rule_names(spec.name)
+        ):
+            continue  # ``expose = ["bash"]`` still exposes ``shell``
         if isinstance(expose, (list, tuple)) and read_only and spec.mutates:
             continue
         name = spec.name.replace('-', '_')
@@ -101,7 +104,7 @@ def render_catalog(catalog, *, budget_tokens, pinned=()):
     for name in catalog:
         counts[namespace(name)] = counts.get(namespace(name), 0) + 1
     lines = [f'{ns}: {n} tool{"s" if n != 1 else ""}' for ns, n in counts.items()]
-    pins = [p.replace('-', '_') for p in pinned]
+    pins = [canonical_tool_name(p).replace('-', '_') for p in pinned]
     order = [n for n in dict.fromkeys(pins) if n in catalog]
     order += [n for n in catalog if n not in set(order)]
     used = _tokens('\n'.join(lines))

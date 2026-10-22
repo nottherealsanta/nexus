@@ -21,7 +21,7 @@ from ..host.protocol import (
     SessionUnarchive,
     SessionUnarchiveResult,
 )
-from ..session.manager import SessionManager
+from ..session.manager import AUTO_ARCHIVE_IDLE_SECONDS, SessionManager
 from ..util import redact_secrets
 from ..view import ConversationView, apply, initial_state
 
@@ -32,28 +32,47 @@ MAX_QUERY_CHARS = 256
 _LOG = logging.getLogger(__name__)
 
 
+#: How often the daemon looks for sessions idle past the archive threshold.
+ARCHIVE_SWEEP_INTERVAL_SECONDS = 5 * 60
+
+
 async def sweep_stale_sessions(
-    manager: SessionManager, days: int | Callable[[], int]
+    manager: SessionManager,
+    idle_seconds: int | Callable[[], int] = AUTO_ARCHIVE_IDLE_SECONDS,
+    *,
+    now: float | None = None,
 ) -> int:
-    """Run one bounded stale-session sweep off the daemon event loop."""
-    if callable(days):
+    """Run one bounded stale-session sweep off the daemon event loop.
+
+    ``idle_seconds`` (or a callable returning it, re-read each sweep) is the
+    ``[sessions] auto_archive_idle_seconds`` threshold; ``0`` disables the
+    sweep. Handles of archived sessions are closed.
+    """
+    if callable(idle_seconds):
         try:
-            days = await asyncio.to_thread(days)
+            idle_seconds = await asyncio.to_thread(idle_seconds)
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("could not read session auto-archive config: %s", exc)
             return 0
-    if type(days) is not int or not 0 <= days <= 3650 or days == 0:
+    if type(idle_seconds) is not int or idle_seconds <= 0:
         return 0
     sweep = getattr(manager, "archive_stale", None)
     if not callable(sweep):
         return 0
     try:
         records = await asyncio.to_thread(
-            sweep, now=None, older_than=days * 24 * 60 * 60
+            sweep, now=now, older_than=idle_seconds
         )
     except Exception as exc:  # noqa: BLE001 - cleanup never blocks daemon startup
         _LOG.warning("session auto-archive sweep failed: %s", exc)
         return 0
+    close = getattr(manager, "aclose_session", None)
+    if callable(close):
+        for record in records:
+            try:
+                await close(record.session_id)
+            except Exception as exc:  # noqa: BLE001 - a busy handle stays cached
+                _LOG.debug("could not close archived session %s: %s", record.session_id, exc)
     return len(records)
 
 
@@ -64,17 +83,18 @@ async def reap_with_archive_sweep(
     idle: Callable[[], bool],
     request_stop: Callable[[str], Any],
     log: Callable[[str], Any],
+    sweep_interval: float = ARCHIVE_SWEEP_INTERVAL_SECONDS,
 ) -> None:
-    """Run the daemon idle timer and startup/hourly archive maintenance."""
+    """Run the daemon idle timer and startup/periodic archive maintenance."""
     await archive_sweep()
-    next_sweep = asyncio.get_running_loop().time() + 60 * 60
+    next_sweep = asyncio.get_running_loop().time() + sweep_interval
     while not stop_event.is_set():
         await asyncio.sleep(interval)
         if stop_event.is_set():
             return
         if asyncio.get_running_loop().time() >= next_sweep:
             await archive_sweep()
-            next_sweep = asyncio.get_running_loop().time() + 60 * 60
+            next_sweep = asyncio.get_running_loop().time() + sweep_interval
         if idle():
             log("daemon.idle_shutdown")
             request_stop("idle")

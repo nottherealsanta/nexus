@@ -597,7 +597,7 @@ async def test_t3_kill_with_interrupted_child_stream_does_not_replay_completed_b
         # Schema (docs/host.md, nexus/view/model.py): ``view`` is the pure-reduced
         # ConversationView; completed tool calls carry ``status``/``executed``.
         before_tools = [t for turn in inspected.view["turns"] for t in turn["tools"]]
-        bash = [t for t in before_tools if t["name"] == "bash"]
+        bash = [t for t in before_tools if t["name"] in ("bash", "shell")]
         assert len(bash) == 1 and bash[0]["status"] == "completed"
         assert bash[0]["executed"] is True and not bash[0]["is_error"]
         assert bash[0]["input"]["command"].startswith("echo ran >>")
@@ -627,7 +627,7 @@ async def test_t3_kill_with_interrupted_child_stream_does_not_replay_completed_b
         # still the single, completed call (no second call, no running tool).
         closed = await call(client, inspect)
         closed_tools = [t for turn in closed.view["turns"] for t in turn["tools"]]
-        assert [(t["name"], t["status"]) for t in closed_tools] == [("bash", "completed")]
+        assert [(t["name"] in ("bash", "shell"), t["status"]) for t in closed_tools] == [(True, "completed")]
         await quiet(harness)
         assert harness.calls() == [] and harness.effect_lines() == 1  # bash not replayed
 

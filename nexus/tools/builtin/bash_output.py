@@ -1,6 +1,6 @@
 """``BashOutput``: read buffered output and status for a registry-owned job.
 
-Only opaque job ids returned by ``Bash`` are accepted. The tool cannot be used
+Only opaque job ids returned by ``shell`` are accepted. The tool cannot be used
 to inspect an arbitrary process or PID. Offsets are indexes into the job's
 captured stdout/stderr, so callers can read the full buffer or only what has
 arrived since a previous call.
@@ -93,7 +93,7 @@ async def _read_job_output(
 
     The legacy ``BashOutput`` entry point waits only for new output (bounded by
     ``_MAX_WAIT_S``) and reads from offset 0 unless offsets are given. The
-    unified ``bash`` tool (``unified=True``) defaults to ``until="exit"`` and a
+    unified ``shell`` tool (``unified=True``) defaults to ``until="exit"`` and a
     per-job read cursor, so ``status``/``wait`` without offsets return only
     output not returned before. ``max_wait_s`` caps ``until="output"`` waits.
     """
@@ -110,7 +110,7 @@ async def _read_job_output(
     if job is None:
         return _error(
             f"{tool_name}: unknown job_id {job_id!r}; only jobs started by "
-            "Bash in this session are valid"
+            "the shell tool in this session are valid"
         )
 
     try:
@@ -127,8 +127,20 @@ async def _read_job_output(
         if not explicit_err:
             stderr_offset = job.read_stderr
     until = args.get("until", "exit" if unified else "output")
-    if until not in ("exit", "output"):
-        return _error(f"{tool_name}: until must be 'exit' or 'output'")
+    if until not in (("exit", "output", "match") if unified else ("exit", "output")):
+        return _error(
+            f"{tool_name}: until must be 'exit', 'output'"
+            + (" or 'match'" if unified else "")
+        )
+    matcher: _jobs.LineMatcher | None = None
+    if until == "match":
+        try:
+            regex = _jobs.compile_match_pattern(args.get("pattern"))
+        except ValueError as exc:
+            return _error(f"{tool_name}: {exc}")
+        matcher = _jobs.LineMatcher(
+            regex, 0 if explicit_out or explicit_err else job.read_combined
+        )
 
     if ctx.cancel_token is not None:
         ctx.cancel_token.raise_if_cancelled()
@@ -144,12 +156,27 @@ async def _read_job_output(
     wait_limit = max_wait_s if max_wait_s is not None else _MAX_WAIT_S
     if until == "exit":
         wait_limit = _jobs.max_runtime(ctx.config)
+        if job.persistent:
+            wait_limit = min(wait_limit, _jobs.PERSISTENT_WAIT_MAX_S)
+    elif until == "match":
+        wait_limit = _jobs.MATCH_WAIT_MAX_S
     if wait_s is not None and wait_s > wait_limit:
         return _error(f"{tool_name}: wait_s must not exceed {wait_limit:g} seconds")
 
     waiting = args.get("action") == "wait" if unified else wait_s is not None
+    header_extra: tuple[str, ...] = ()
     if not waiting:
         pass
+    elif matcher is not None:
+        try:
+            header_extra = await _wait_for_match(
+                job,
+                matcher,
+                float(wait_s) if wait_s is not None else wait_limit,
+                ctx,
+            )
+        except ValueError as exc:
+            return _error(f"{tool_name}: {exc}")
     elif until == "exit":
         if not job.done:
             await _wait_for_exit(
@@ -169,12 +196,20 @@ async def _read_job_output(
         stdout_offset=stdout_offset,
         stderr_offset=stderr_offset,
         show_offsets=True,
+        combined_offset=(
+            job.read_combined if unified and not (explicit_out or explicit_err) else 0
+        ),
+        header_extra=header_extra,
     )
+    # The terminal state is in this result: it is the model-visible completion.
+    job.claim()
     if unified:
         if not explicit_out:
             job.read_stdout = max(job.read_stdout, len(job.stdout))
         if not explicit_err:
             job.read_stderr = max(job.read_stderr, len(job.stderr))
+        if not (explicit_out or explicit_err):
+            job.read_combined = max(job.read_combined, job.log.total)
     return ToolExecutionResult.text(
         text,
         context_note=(
@@ -217,6 +252,78 @@ async def _wait_for_output(
         await job.wait_for_output(ready, min(remaining, 0.2))
 
 
+def _grep_timeout(ctx: ToolContext) -> float:
+    value = _jobs._tools_number(ctx.config, "grep_timeout_s")
+    return value if value is not None else 5.0
+
+
+async def _wait_for_match(
+    job: _jobs.ShellJob,
+    matcher: _jobs.LineMatcher,
+    wait_s: float,
+    ctx: ToolContext,
+) -> tuple[str, ...]:
+    """Wait for a line matching ``matcher`` (header lines say what happened).
+
+    Returns when a line matches, the job exits (its unterminated last line is
+    tested first) or ``wait_s`` elapses; the job is never killed. A cancelled wait
+    leaves it running and hands its completion back to delivery, as ``until=exit``
+    does. Scanning runs off the event loop with the ``tools.grep_timeout_s``
+    deadline, so a pathological pattern costs the model an error, not the daemon.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_s
+    scan_s = _grep_timeout(ctx)
+    job.begin_wait()
+    matched: str | None = None
+    try:
+        while True:
+            if ctx.cancel_token is not None and ctx.cancel_token.cancelled:
+                ctx.cancel_token.raise_if_cancelled()
+            finished = job.done
+            pieces = matcher.collect(job)
+
+            def work(pieces=pieces, finished=finished) -> str | None:
+                hit = matcher.scan(pieces)
+                return hit if hit is not None or not finished else matcher.flush()
+
+            try:
+                matched = await asyncio.wait_for(asyncio.to_thread(work), scan_s)
+            except TimeoutError:
+                raise ValueError(
+                    f"matching the pattern took longer than {scan_s:g}s and was "
+                    "abandoned; use a simpler pattern"
+                ) from None
+            if matched is not None or finished:
+                break
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            await job.wait_for_output(
+                lambda: job.done or job.log.total > matcher.offset,
+                min(remaining, 0.2),
+            )
+    except BaseException:
+        job.end_wait(consumed=False)
+        raise
+    job.end_wait(consumed=job.done)
+    lines: list[str] = []
+    if matched is not None:
+        lines.append(f"match: {matched[:300]}")
+    elif job.done:
+        lines.append("match: none (the job exited first)")
+    else:
+        lines.append(
+            f"match: none within {wait_s:g}s (the job is still running)"
+        )
+    if matcher.skipped:
+        lines.append(
+            f"match_unscanned_bytes: {matcher.skipped} (use shell action=log "
+            "grep=... to search the full log)"
+        )
+    return tuple(lines)
+
+
 async def _wait_for_exit(
     job: _jobs.ShellJob, wait_s: float, ctx: ToolContext
 ) -> None:
@@ -225,13 +332,22 @@ async def _wait_for_exit(
     Cancellation stops the wait and leaves the job running: it was started or
     yielded to the background on purpose.
     """
-    await _jobs.await_job(
-        job,
-        yield_after=wait_s,
-        cancel_token=ctx.cancel_token,
-        kill_on_cancel=False,
-        tick=_progress_tick(job, ctx),
-    )
+    # While blocked here the wait owns the completion: an exit that happens
+    # now is returned as this call's result and is not also queued. A wait that
+    # ends without the exit (cancelled) hands the completion back to delivery.
+    job.begin_wait()
+    try:
+        await _jobs.await_job(
+            job,
+            yield_after=wait_s,
+            cancel_token=ctx.cancel_token,
+            kill_on_cancel=False,
+            tick=_progress_tick(job, ctx),
+        )
+    except BaseException:
+        job.end_wait(consumed=False)
+        raise
+    job.end_wait(consumed=job.done)
 
 
 def _progress_tick(job: _jobs.ShellJob, ctx: ToolContext):

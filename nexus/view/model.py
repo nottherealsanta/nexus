@@ -21,6 +21,7 @@ __all__ = [
     "ErrorView",
     "ExtensionView",
     "HookView",
+    "JobView",
     "McpView",
     "MessageView",
     "PermissionTargetView",
@@ -109,7 +110,7 @@ def _dump(value: object) -> Any:
             # delegation exists, so older wire snapshots are unchanged.
             if item.name == "origin" and field_value is None:
                 continue
-            if item.name == "live_calls" and not field_value:
+            if item.name in {"live_calls", "jobs"} and not field_value:
                 continue
             if (
                 item.name in {"assistant_ts", "elapsed_ms"}
@@ -463,6 +464,37 @@ class LiveCallView(_View):
 
 
 @dataclass
+class JobView(_View):
+    """One ``shell`` tool job folded from ``shell.job_*`` (SHELL_PLAN P4).
+
+    Ids, status and counts only: never output, environment or a log path. The
+    host's ``SessionJobs`` is the live answer; this is the replayable record.
+    """
+
+    job_id: str = ""
+    command: str = ""
+    cwd: str = ""
+    pid: int | None = None
+    #: running|completed|failed|timed_out|killed
+    status: str = "running"
+    background: bool = False
+    #: ``yield_window`` or ``user`` once a foreground run moved to the background.
+    yielded_reason: str | None = None
+    started_ts: float | None = None
+    yielded_ts: float | None = None
+    finished_ts: float | None = None
+    exit_code: int | None = None
+    signal: int | None = None
+    duration_ms: int | None = None
+    log_bytes: int = 0
+    log_lines: int = 0
+    stderr_bytes: int = 0
+    #: A background job with no lifetime limit (``kind: persistent``).
+    persistent: bool = False
+    #: Why the harness stopped it (for example the daemon's no-viewer policy).
+    stopped_reason: str | None = None
+
+@dataclass
 class ExtensionView(_View):
     name: str = ""
     status: str = "loaded"  # loaded|unloaded|failed|shadowed
@@ -572,7 +604,6 @@ class AgentView(_View):
     #: ``status == "spawned"`` still means a run is in flight; these say what a
     #: finished child can do next. ``runs`` counts started runs (spawn is run 1).
     runs: int = 1
-    #: The root may ``subagent_send`` to it after a run ends (false for external workers).
     continuable: bool = False
     #: Closed by ``agent.stopped``; terminal.
     stopped: bool = False
@@ -613,6 +644,9 @@ class ConversationView(_View):
     external: dict[str, Any] | None = None
     #: GPT Live calls in this session, oldest first (bounded by the reducer).
     live_calls: list[LiveCallView] = field(default_factory=list)
+    #: ``shell`` tool jobs, oldest first (bounded by the reducer); absent from
+    #: the wire shape until a ``shell.job_started`` is seen.
+    jobs: list[JobView] = field(default_factory=list)
 
     @property
     def live(self) -> LiveCallView | None:

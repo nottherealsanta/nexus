@@ -115,8 +115,8 @@ def test_task_spec_shape_and_bundle():
         "model",
         "description",
         "worktree",
-        "wait",
     }
+    assert "background" not in schema["properties"] and "wait" not in schema["properties"]
 
 
 @pytest.mark.parametrize(
@@ -238,6 +238,37 @@ async def test_worktree_defaults_off_and_rejects_non_boolean(tmp_path):
     )
     assert result.is_error
     assert len(service.requests) == 1
+
+
+class LegacyBackgroundService(FakeService):
+    """A service that still exposes the retired detached-start seam."""
+
+    background = True
+
+    def __init__(self, outcome_: object) -> None:
+        super().__init__(outcome_)
+        self.started: list[dict] = []
+
+    async def start(self, request, /, *, emit=None, call_id=""):
+        self.started.append(dict(request))
+        raise AssertionError("Task must never start a detached child")
+
+
+@pytest.mark.parametrize("args", [{}, {"background": True}, {"wait": False}, {"wait": True}])
+async def test_task_always_blocks_for_the_report(tmp_path, args):
+    """Old ``background``/``wait`` arguments are ignored: the call is foreground-only."""
+    service = LegacyBackgroundService(outcome())
+    result = await task.run({"prompt": "x", **args}, make_ctx(tmp_path, subagents=service))
+    assert not service.started and len(service.requests) == 1
+    assert "background" not in service.requests[0] and "wait" not in service.requests[0]
+    assert "the report body" in result.content[0].text
+    assert "background" not in result.metrics
+
+
+def test_task_description_tells_the_model_to_batch_independent_calls():
+    text = task.TASK_SPEC.description
+    assert "blocks" in text and "together" in text
+    assert "background" not in text and "subagent_send" not in text
 
 
 async def test_bound_service_default_type_applies_to_spawn(tmp_path):

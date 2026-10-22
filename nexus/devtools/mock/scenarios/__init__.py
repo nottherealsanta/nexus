@@ -24,6 +24,7 @@ _MODULES = (
     "diff_review",
     "stress",
     "bash_wait",
+    "shell_persistent",
     "extensions",
 )
 

@@ -1,4 +1,4 @@
-"""Shell output limit shared by the ``bash`` tool and the composer's ``!`` mode.
+"""Shell output limit shared by the ``shell`` tool and the composer's ``!`` mode.
 
 Contract: text shown to the model is at most ``MAX_LINES`` lines and
 ``MAX_BYTES`` UTF-8 bytes. Larger output is written in full to a private
@@ -99,8 +99,14 @@ def _clip_bytes(text: str, budget: int, *, from_end: bool) -> str:
     return piece.decode("utf-8", "ignore")
 
 
-def limit_output(text: str, *, label: str = "output") -> LimitedOutput:
-    """Bound ``text`` to the shell output limit, spilling the full text if needed."""
+def limit_output(
+    text: str, *, label: str = "output", where: str | None = None
+) -> LimitedOutput:
+    """Bound ``text`` to the shell output limit, spilling the full text if needed.
+
+    ``where`` is a caller-supplied sentence saying where the full output lives
+    (a job log). When given, nothing is spilled to the temp directory.
+    """
     lines = text.splitlines(keepends=True)
     total_bytes = len(text.encode("utf-8"))
     if len(lines) <= MAX_LINES and total_bytes <= MAX_BYTES:
@@ -118,12 +124,13 @@ def limit_output(text: str, *, label: str = "output") -> LimitedOutput:
     tail_text = _clip_bytes("".join(tail), budget - len(head_text.encode("utf-8")), from_end=True)
     shown_lines = len(head_text.splitlines()) + len(tail_text.splitlines())
 
-    try:
-        path: str | None = _spill(text, label)
-        where = f"{_SAVED} {path}{_SAVED_END} read it with offsets or grep it there."
-    except OSError as exc:
-        path = None
-        where = f"The full output could not be saved ({exc.strerror or exc})."
+    path: str | None = None
+    if where is None:
+        try:
+            path = _spill(text, label)
+            where = f"{_SAVED} {path}{_SAVED_END} read it with offsets or grep it there."
+        except OSError as exc:
+            where = f"The full output could not be saved ({exc.strerror or exc})."
     marker = (
         f"\n[output too large: {len(lines)} lines, {_human(total_bytes)}; "
         f"limit {MAX_LINES} lines or {_human(MAX_BYTES)}. Showing the first and "

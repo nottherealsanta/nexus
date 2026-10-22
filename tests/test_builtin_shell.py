@@ -377,11 +377,12 @@ async def test_invalid_arguments_are_model_visible_errors(registry, ctx):
 
 
 def test_specs_and_permission_keys():
-    assert bash.SPEC.name == "bash"
+    # ``bash`` is the legacy import path; the tool itself is now ``shell``.
+    assert bash.SPEC.name == "shell"
     assert bash.SPEC.bundle == "shell"
     assert bash.SPEC.mutates is True
     assert bash.SPEC.resolve_permission_key({"command": "git status"}) == "git status"
-    assert tuple(tool.spec.name for tool in SHELL_TOOLS) == ("bash",)
+    assert tuple(tool.spec.name for tool in SHELL_TOOLS) == ("shell",)
 
     assert bash_output.SPEC.name == "BashOutput"
     assert bash_output.SPEC.bundle == "legacy_shell"

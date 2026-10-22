@@ -72,6 +72,10 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
+`StateDatabase.registered_projects` lists project roots that hold at least one eligible session
+(main namespace, not manager, not trashed, with user input; **archived included**, so navigation
+survives auto-archive), newest user activity first, with that `updated` time. A bare registration,
+an empty project, bare-id roots and agent/manager/trash-only projects are not listed.
 `StateDatabase.project_sessions` supplies a bounded cross-project sidebar index
 by joining session metadata to recorded project roots; it excludes archive,
 trash and child namespaces and orders by newest user prompt (`last_user_at`, else
@@ -132,7 +136,7 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   A background child that is running in this process (registered by the agent pool
   with `register_live_agent`) is skipped, so a second handle never closes it; an
   `agent.resumed` with no later `agent.completed` is an open run like an unclosed
-  spawn, and an `agent.stopped` child has nothing left to close. The `agent.completed(interrupted)` it writes names the run (`run`: 1 for the spawn, the `agent.resumed` run number otherwise). A continuation (`subagent_send`) reopens the child's own log with recovery on, so a child log a crash left behind (an open turn, a tool call with no result) is repaired before the new turn appends to it.
+  spawn, and an `agent.stopped` child has nothing left to close. The `agent.completed(interrupted)` it writes names the run (`run`: 1 for the spawn, the `agent.resumed` run number otherwise). Continuations (the retired `subagent_send`) are no longer produced; a legacy `agent.resumed` run in an old log is still recovered the same way.
   This covers crashes before child promotion or `turn.started` too. This
   parent-log recovery runs alongside owned-log recovery: proven child rows
   are traversed recursively using the project-scoped ownership index, and each
@@ -189,7 +193,7 @@ every `session.snapshot_every` (20) completed turns. `records`, `events`,
 | `open(id)` | reuse the live handle; create/recover as asked |
 | `fork(id, at_seq)` | branch into a new log (`parent_id`, `fork_seq`) |
 | `list` / `summary` | `SessionSummary` (state `idle`/`running`/`awaiting_permission`/`awaiting_input`, viewers, title, activity, `last_user_at`) in one indexed query; `list` orders by `order_time` (newest user prompt first), ties by id |
-| `archive` / `unarchive` / `archive_stale` | hide without touching the log; the sweep archives up to 500 idle, unopened sessions older than `sessions.auto_archive_days` |
+| `archive` / `unarchive` / `archive_stale` | hide without touching the log; the sweep archives up to 500 sessions idle strictly more than one hour ([Automatic archive](#automatic-archive)) |
 | `delete` / `restore` | move to trash in one transaction, never cancelling a turn; `purge_expired` removes rows past retention (default 7 days) |
 | `export(id, format=)` | a consistent prefix as `json`, `markdown` or `jsonl` |
 | `replay` | yield persisted events in order, read-only |
@@ -207,6 +211,31 @@ Host-side archive projections (`SessionListArchived`, `SessionSearch`,
   replay reproduces it. Bump the relevant version if an encoding changes.
 - Tests: `tests/test_session_*.py`, `test_host_session_archive.py`,
   `test_runtime_shared_state.py`, `test_core_loop.py` (crash-resume).
+
+## Automatic archive
+
+The daemon owns the lifecycle; no UI takes part. At startup and every five
+minutes (`ARCHIVE_SWEEP_INTERVAL_SECONDS`) it calls `SessionManager.archive_stale`
+through `sweep_stale_sessions` (`host_support/session_archive.py`), which runs off
+the event loop and then closes the cached handles of whatever was archived. The
+archive is the durable `archived_at` marker (`reason = "auto"`), so it survives a
+restart and the log is untouched. Unarchiving or sending a new message restores the
+session as usual.
+
+- **Threshold.** Idle strictly more than `AUTO_ARCHIVE_IDLE_SECONDS` (3,600 s):
+  `last_activity < now - 3600`. Exactly one hour is not archived.
+  The threshold is `[sessions] auto_archive_idle_seconds` (default 3600; `0`
+  disables the sweep). The legacy `auto_archive_days` no longer sets a threshold,
+  but `auto_archive_days = 0` still disables the sweep.
+- **Last genuine activity.** `last_activity` is the newest appended record
+  timestamp. Listing, summaries, exports and reads write nothing, and `presence.*`
+  events (a view attaching or leaving) no longer advance it. Messages, turn and tool
+  events, queued input and approvals do.
+- **Never archived.** A running turn, queued input, a pending approval, a running background subagent (`has_live_agents`), a running `shell` job (the injected `busy_check`; such a session is also not evicted until the job ends or is stopped), a turn lease held by
+  another process, or the workspace manager (`kind = "manager"`). An idle cached
+  handle does not protect a session; the daemon evicts it after archiving. A
+  session that is merely open in a viewer is **not** exempt, or an idle session left
+  on screen would never archive.
 
 ## Automatic titles
 

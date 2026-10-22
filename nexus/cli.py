@@ -153,22 +153,30 @@ async def _chat(workspace: Path, *, session: str, renderer: str = "ratatui") -> 
     from .ui.cli import open_client
     from .ui.ratatui.run import progress, release, run, spawn, stderr_to
 
-    # The native client starts first and shows its splash while the daemon connects.
-    process = await spawn()
-    # It keeps the real terminal as stderr; the controller's native-library noise goes to a log.
-    with stderr_to(nexus_home() / "logs" / "chat-stderr.log"):
-        try:
-            client = await open_client(workspace)
-            try:
-                await progress(process, 2)  # host connected: the splash bar moves past the client
-                async def reconnect():
-                    return await open_client(workspace)
+    from .ui.ratatui.run import ReloadRequest, rebuild, restart_workspace
 
-                return await run(client, session=session, reconnect=reconnect, workspace=workspace, process=process)
+    binary = None
+    while True:
+        process = await spawn() if binary is None else await spawn(binary)
+        with stderr_to(nexus_home() / "logs" / "chat-stderr.log"):
+            try:
+                client = await open_client(workspace)
+                try:
+                    await progress(process, 2)
+                    async def reconnect():
+                        return await open_client(workspace)
+
+                    result = await run(client, session=session, reconnect=reconnect, workspace=workspace, process=process)
+                finally:
+                    await client.aclose()
             finally:
-                await client.aclose()
-        finally:
-            await release(process)
+                await release(process)
+        if not isinstance(result, ReloadRequest):
+            return result
+        # The bridge, client, and redirected stderr are gone before building.
+        workspace, session = result.workspace, result.session
+        binary = await rebuild()
+        await restart_workspace(workspace)
 
 
 async def _web(workspace: Path, *, open_browser: bool) -> int:
@@ -1116,6 +1124,17 @@ async def _daemon_command(
                 f"sessions={report.get('sessions', 0)} "
                 f"running_turns={report.get('running', 0)}\n"
             )
+            total = report.get("persistent_jobs_total", 0)
+            if total:
+                stdout.write(f"persistent_jobs={total}\n")
+                for job in report.get("persistent_jobs", []):
+                    stdout.write(
+                        f"  {job.get('job_id')} session={job.get('session')} "
+                        f"pid={job.get('pid')} cwd={job.get('cwd')} "
+                        f"command={job.get('command')!r}\n"
+                    )
+                if total > len(report.get("persistent_jobs", [])):
+                    stdout.write(f"  ... and {total - len(report['persistent_jobs'])} more\n")
         else:
             stdout.write(f"not running socket={report.get('socket')}\n")
         return 0 if report.get("running") else 1
@@ -1683,7 +1702,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_sub = daemon.add_subparsers(dest="daemon_action", required=True)
     daemon_status = daemon_sub.add_parser("status", help="Report daemon liveness")
     daemon_status.add_argument("--json", action="store_true")
-    daemon_stop = daemon_sub.add_parser("stop", help="Gracefully stop the daemon")
+    daemon_stop = daemon_sub.add_parser("stop", help="Gracefully stop the daemon and its shell jobs")
     daemon_stop.add_argument(
         "--all", action="store_true", help="Stop every workspace's daemon"
     )

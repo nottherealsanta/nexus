@@ -242,7 +242,9 @@ async def test_truncation_keeps_head_and_tail_and_saves_the_rest(
     job = await registry.spawn("seq 1 20000; echo SUMMARY-LINE", cwd=workspace)
     await job.wait(10)
     text = _jobs.format_job_output(job)
-    assert "[output too large: 20002 lines" in text
+    # The stream is seq 1..20000 plus SUMMARY-LINE: 20001 lines, no header line.
+    assert "[combined output in arrival order: 20001 lines" in text
+    assert "[output too large: 20001 lines" in text
     assert "\n1\n" in text and "SUMMARY-LINE" in text
     assert len(text.splitlines()) <= 2000 + 5
     assert len(text.encode()) <= 50 * 1024 + 512

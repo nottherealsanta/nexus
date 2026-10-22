@@ -372,7 +372,9 @@ class HookSpec:
             rule = parse_rule(matcher)
         except PermissionRuleError:
             return False
-        return rule.matches(tool, key, bundle, input_data=input_data)
+        # ``effect="ask"``: a ``shell(git push*)`` matcher also fires for a
+        # compound command whose segment is a push (never fewer than before).
+        return rule.matches(tool, key, bundle, input_data=input_data, effect="ask")
 
     def fingerprint(self) -> str:
         """A stable content digest that ignores the generation and ``fn``."""

@@ -94,7 +94,8 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/settings` | | | open Settings |
 | `/verbose` | | | toggle full tool output previews |
 | `/mcp`, `/skills`, `/tasks` | | | MCP servers (with each server's tool loading mode in the Ratatui dialog), active skills, background agent tasks |
-| `/reload` | | | reload extensions and MCP |
+| `/reload` | | | native only: rebuild TUI, restart workspace daemon, reopen same session |
+| `/reload-extensions` | | | reload extensions and MCP in place |
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
@@ -175,3 +176,16 @@ Saved immutable session names are accepted anywhere a session target is accepted
 including `sessions show` and open; exact IDs win. Completion lists saved names,
 not retired tombstones or unsaved drafts. Names are case-sensitive and cannot be
 renamed; titles remain independently editable.
+
+### Native rebuild and reload
+
+In the native terminal TUI, `/reload` closes the UI, builds the checkout's
+`rust/tui/Cargo.toml` binary with `cargo build --release --locked`, then stops the
+current workspace daemon and reopens the freshly built executable in the same
+workspace and session. This requires a source checkout and Cargo. Running turns
+end when the old daemon stops; durable transcript state replays. The launcher
+builds only after the bridge and clients have closed, and stops the daemon only
+after a successful build. Build/restart errors appear in the terminal; fix them
+and launch `nexus chat` again. `/restart` remains a daemon-only in-place restart.
+Desktop does not support native `/reload`. The former extension/MCP reload is
+available as `/reload-extensions`, without rebuilding or restarting anything.

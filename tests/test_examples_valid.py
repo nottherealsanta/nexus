@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,22 @@ def test_facade_example_runs_offline_end_to_end():
     assert result.returncode == 0, result.stderr
     assert "turn.completed" in result.stdout
     assert "wrote: 'hello from Nexus'" in result.stdout
+
+
+def test_facade_example_keeps_state_out_of_the_ambient_home(tmp_path):
+    ambient = tmp_path / "ambient"
+    result = subprocess.run(
+        [sys.executable, str(EXAMPLES / "python_api.py")],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, "NEXUS_HOME": str(ambient), "HOME": str(tmp_path / "fake-home")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not ambient.exists()
+    assert not (tmp_path / "fake-home").exists()
 
 
 def test_example_workspace_config_is_valid():

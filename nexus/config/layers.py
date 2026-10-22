@@ -29,7 +29,7 @@ from .paths import (
     workspace_config_path,
     workspace_settings_config_path,
 )
-from .schema import AgentsSection, ConfigV2, SubagentUsageSection
+from .schema import ConfigV2, SubagentUsageSection
 
 LEGACY_KEYS = frozenset(
     {
@@ -102,6 +102,7 @@ _V2_NUMERIC = {
     "model.params.max_output_tokens": int,
     "model.params.thinking_budget": int,
     "models.refresh_ttl_days": float,
+    "models.usage_refresh_seconds": int,
     "context.max_tokens": int,
     "context.safety_margin_tokens": int,
     "context.compact_at_fraction": float,
@@ -113,6 +114,15 @@ _V2_NUMERIC = {
     "tools.bash_timeout_s": float,
     "tools.bash_yield_s": float,
     "tools.bash_max_s": float,
+    "tools.shell_yield_s": float,
+    "tools.shell_max_s": float,
+    "tools.shell_log_max_bytes": int,
+    "tools.shell_log_total_bytes": int,
+    "tools.shell_log_retention_days": int,
+    "tools.shell_max_auto_wakes": int,
+    "tools.shell_max_persistent_per_session": int,
+    "tools.shell_max_persistent": int,
+    "tools.shell_orphan_s": float,
     "tools.web.search_timeout_s": float,
     "tools.web.fetch_timeout_s": float,
     "tools.web.max_results": int,
@@ -411,6 +421,10 @@ _SUBAGENT_USAGE_THRESHOLDS = (
 
 def _reject_project_subagent_usage_keys(doc: Mapping[str, Any], source: str) -> None:
     models = doc.get("models")
+    if isinstance(models, Mapping) and "usage_refresh_seconds" in models:
+        raise ConfigError(
+            f"{source}: models.usage_refresh_seconds may only be set in the user-level "
+            f"config (~/.nexus/config.toml), never in a project file")
     section = models.get("subagent_usage") if isinstance(models, Mapping) else None
     if not isinstance(section, Mapping):
         return
@@ -430,49 +444,9 @@ def _is_valid_threshold(value: object) -> bool:
     )
 
 
-#: ``[agents]`` bounds a project file may lower but never raise (background
-#: subagents, plans/done/NONBLOCKING_SUBAGENTS_PLAN.md phase 1).
-_AGENTS_LOWER_ONLY = (
-    "max_live",
-    "max_pending_reports",
-    "max_report_batch",
-    "max_report_chars",
-    "max_auto_wakes",
-    "max_followup_chars",
-    "oneshot_wait_seconds",
-)
-
-
-def _clamp_project_agents(
-    merged: Mapping[str, Any], doc: Mapping[str, Any], result: dict[str, Any]
-) -> None:
-    project = doc.get("agents")
-    if not isinstance(project, Mapping):
-        return
-    prior = merged.get("agents")
-    prior = prior if isinstance(prior, Mapping) else {}
-    defaults = AgentsSection()
-    section = dict(result["agents"])
-    for key in _AGENTS_LOWER_ONLY:
-        if key not in project:
-            continue
-        val, current = project[key], prior.get(key, getattr(defaults, key))
-        if (
-            isinstance(val, int) and not isinstance(val, bool)
-            and isinstance(current, int) and not isinstance(current, bool)
-        ):
-            section[key] = min(current, val)
-    result["agents"] = section
-
-
 def _merge_project_doc(merged: Mapping[str, Any], doc: Mapping[str, Any]) -> dict[str, Any]:
-    """Merge a project layer; ``models.subagent_usage`` thresholds may only rise.
-
-    ``[agents]`` background bounds (``max_live``, report and follow-up limits) may
-    only fall.
-    """
+    """Merge a project layer; ``models.subagent_usage`` thresholds may only rise."""
     result = deep_merge(merged, doc)
-    _clamp_project_agents(merged, doc, result)
     models = doc.get("models")
     project = models.get("subagent_usage") if isinstance(models, Mapping) else None
     if not isinstance(project, Mapping):

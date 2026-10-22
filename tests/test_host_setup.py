@@ -112,7 +112,7 @@ def test_setup_status_exposes_bounded_choices_without_environment_values(tmp_pat
     assert result["global_model"] == ""
     assert result["effective_model"] == "workspace/model"
     assert [row["id"] for row in result["providers"]] == [
-        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "ollama"
+        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "nvidia", "ollama"
     ]
     assert not next(row for row in result["providers"] if row["id"] == "github-copilot")["connected"]
     assert all(set(row) == {"id", "label", "connected", "instruction", "auto"} for row in result["providers"])
@@ -339,3 +339,31 @@ def test_setup_save_claude_subscription_uses_sdk_route(tmp_path, monkeypatch):
     assert result["global_model"] == "claude-agent/claude-sdk"
     assert saved["providers"]["claude-agent"] == {"kind": "claude-agent"}
     assert "api_key" not in repr(saved)
+
+
+@pytest.mark.parametrize("model", ["nvidia/llama-3.1-nemotron-ultra-253b-v1", ""])
+def test_nvidia_offline_first_run_setup(tmp_path, monkeypatch, model):
+    from nexus.model.providers.nvidia import NvidiaProvider
+    from nexus.model import ModelRequest
+    from nexus.model.router import ModelRouter
+
+    home = tmp_path / "home"
+    home.mkdir()
+    _home(monkeypatch, home)
+    runtime = _runtime(home, signed_in=("nvidia",))
+    registry = ModelRegistry(providers={"nvidia": {}}, env={}, offline=True,
+                             cache_path=tmp_path / "missing-cache.json")
+    monkeypatch.setattr(setup, "_registry", lambda runtime: registry)
+    choices = asyncio.run(setup._models(runtime, "nvidia"))
+    assert set(choices) == {"nvidia/llama-3.1-nemotron-ultra-253b-v1"}
+    result = asyncio.run(setup.setup_save(runtime, "nvidia", model))
+    selected = model or choices[0]
+    reference = f"nvidia/{selected}"
+    assert result["global_model"] == reference
+    assert tomllib.loads((home / ".nexus" / "config.toml").read_text())["models"]["default"] == reference
+    provider = NvidiaProvider(api_key="test-only")
+    try:
+        resolved = ModelRouter({"nvidia": provider}, registry=registry).resolve(ModelRequest(model=reference, messages=()))
+        assert resolved.provider is provider and resolved.model == selected
+    finally:
+        asyncio.run(provider.aclose())

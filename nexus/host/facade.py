@@ -26,8 +26,8 @@ hands a surface a ``Runtime``, a manager, or a tool.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
+import base64
 import hashlib
 import hmac
 import json
@@ -60,13 +60,14 @@ from ..host_support.context_preview import (
 )
 from ..host_support import model_settings
 from ..host_support.auto_title import AutoTitler, set_user_title
+from ..host_support.session_jobs import SessionJobControl
 from ..host_support.user_shell import UserShells
 from ..host_support.doctor import doctor_report
 from ..host_support.update_check import claim_announcement, update_status
 from ..host_support.git_diff import git_diff
 from ..host_support.git_head import git_head
 from ..host_support.workspace_browse import git_status as workspace_git_status
-from ..host_support.workspace_browse import list_directory
+from ..host_support.workspace_browse import list_directory, preview_file
 from ..host_support.mock import dispatch_mock
 from ..host_support.provider_auth import dispatch_providers
 from ..host_support.session_archive import (
@@ -111,7 +112,7 @@ from ..view import (
 )
 from . import protocol as p
 from .presence import Presence
-from .reports import ReportDelivery
+from .reports import session_activity
 from .supervisor import Supervisor
 from ..host_support.usage_snapshot import UsageSnapshotService
 
@@ -122,7 +123,6 @@ _WORKTREE_CONFIRMATION_TTL = 120
 _MAX_FILE_SEARCH_ENTRIES = 50_000
 
 #: Default global cap when the caller does not supply one.
-USAGE_POLL_TICK_SECONDS = 30.0
 DEFAULT_MAX_CONCURRENT_TURNS = 4
 
 #: The workspace manager's fixed session id (plan 02, docs/manager.md). Reserved: no
@@ -151,18 +151,14 @@ class HostFacade:
         self.attachments = AttachmentStore(runtime)
         self.titles = AutoTitler(runtime)
         self.shells = UserShells(runtime)
+        self.jobs = SessionJobControl(runtime)
         self.presence = Presence()
         # Plan-usage snapshot for sub-agent routing (docs/host.md): the runtime reads it,
         # this service keeps it fresh and shares the usage panel's fetches.
         self.usage = UsageSnapshotService(runtime)
-        self._usage_poller: asyncio.Task[None] | None = None
         if getattr(runtime, "usage_kick", False) is None:
             runtime.usage_kick = self.usage.kick
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
-        # Background subagent reports reach the root through its own input queue
-        # (docs/agents.md "Reports and waking the root").
-        self._reports = ReportDelivery(self)
-        self._reports.install()
         self._owns_runtime = bool(owns_runtime)
         self._started = time.time()
         self._foreground: dict[str, tuple[str, float]] = {}
@@ -178,6 +174,35 @@ class HostFacade:
         # (docs/manager.md). A runtime that already has a factory (tests) keeps it.
         if getattr(runtime, "manager_port_factory", False) is None:
             runtime.manager_port_factory = self._manager_port
+        # A background job's recorded completion wakes an idle session through
+        # the same supervisor as any queued input (docs/shell-jobs: plan 3.5).
+        self._wake_tasks: set[asyncio.Future[Any]] = set()
+        if getattr(runtime, "job_completion_notifier", False) is None:
+            runtime.job_completion_notifier = self._notify_job_completion
+
+    def _notify_job_completion(self, session_id: str, admission: Any) -> None:
+        """Runtime seam: schedule the turn for one admitted completion.
+
+        The notification is already durable in the session queue; this only asks
+        the supervisor to run it. An active turn consumes it at its next boundary
+        (the parked submission is then skipped as its id is gone), so a burst
+        yields one turn, not one per job.
+        """
+        if self._closed:
+            return
+        try:
+            handle = self._session(session_id, create=False, recover=False)
+        except Exception:  # noqa: BLE001 - the notification stays queued
+            return
+        task = asyncio.ensure_future(
+            self.supervisor.submit(
+                session_id, handle, None,
+                queued_id=admission.queued_id, turn_id=admission.turn_id,
+            )
+        )
+        self._wake_tasks.add(task)
+        task.add_done_callback(self._wake_tasks.discard)
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
     def _manager_port(self, session: Any) -> HostManagerPort:
         return HostManagerPort(
@@ -759,13 +784,11 @@ class HostFacade:
 
     # -- turns and the input queue ----------------------------------------
 
-    async def deliver_report(self, batch: Any) -> bool:
-        """Admit a ``ReportBatch`` as a ``steer`` input on its root; ``True`` if it woke it."""
-        return await self._reports.deliver(batch)
-
     def session_activity(self, session_id: str) -> p.SessionActivityResult:
         """What keeps ``session_id`` busy after its turn ended (one-shot quiescence wait)."""
-        return self._reports.activity(session_id)
+        return session_activity(
+            session_id, self._session(session_id, create=False, recover=False)
+        )
 
     async def start_turn(self, session_id: str, content: Any, *, client_request_id: str = "") -> str:
         """Schedule one turn for ``session_id``; return its pre-assigned id."""
@@ -777,7 +800,6 @@ class HostFacade:
             return turn_id
         handle = self._session(session_id)
         turn_id = await self.supervisor.submit(session_id, handle, content)
-        self._reports.human_input(session_id)
         return turn_id
 
     async def enqueue(
@@ -831,7 +853,6 @@ class HostFacade:
                     priority=mode == "interrupt", turn_id=turn_id,
                 )
                 self.titles.start(session_id, title)
-                self._reports.human_input(session_id, origin)
             return queued_id, turn_id
         if mode == "interrupt":
             await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
@@ -841,7 +862,6 @@ class HostFacade:
             session_id, handle, None, queued_id=queued_id, priority=mode == "interrupt"
         )
         self.titles.start(session_id, title)
-        self._reports.human_input(session_id, origin)
         return queued_id, turn_id
 
     def move_queued(self, session_id: str, queued_id: str, offset: int) -> bool:
@@ -889,7 +909,15 @@ class HostFacade:
     async def cancel(
         self, session_id: str, *, reason: str | None = None, drop_queue: bool = True
     ) -> tuple[bool, int]:
-        """Cancel the active turn and (by default) drop the session queue."""
+        """Cancel the active turn and (by default) drop the session queue.
+
+        A Stop (``drop_queue``) also pauses automatic wake-ups from background
+        job completions until the next human message; queued completions are kept.
+        An interrupt (``drop_queue=False``) is followed by a human message.
+        """
+        if drop_queue:
+            with contextlib.suppress(Exception):
+                self._session(session_id, create=False, recover=False).pause_auto_wake("stop")
         return await self.supervisor.cancel(
             session_id, reason=reason, drop_queue=drop_queue
         )
@@ -1644,6 +1672,13 @@ class HostFacade:
             total = len(sessions.list())
         except Exception:  # noqa: BLE001 - health must never raise
             total = 0
+        jobs_total, jobs = 0, []
+        probe = getattr(self.runtime, "persistent_shell_jobs", None)
+        if callable(probe):
+            try:
+                jobs_total, jobs = probe()
+            except Exception:  # noqa: BLE001 - health must never raise
+                jobs_total, jobs = 0, []
         return {
             "ok": not self._closed,
             "version": p.PROTOCOL_VERSION,
@@ -1654,24 +1689,14 @@ class HostFacade:
             "viewers": self.presence.total_viewers(),
             "uptime": max(0.0, time.time() - self._started),
             "dev": dev_enabled(),
+            "persistent_jobs_total": jobs_total,
+            "persistent_jobs": jobs,
         }
 
     def start_usage_polling(self) -> None:
-        """Refresh plan usage in the background (the daemon calls this once)."""
-        if self._usage_poller is None and not self._closed:
-            self._usage_poller = asyncio.get_running_loop().create_task(self._poll_usage())
-
-    async def stop_usage_polling(self) -> None:
-        task, self._usage_poller = self._usage_poller, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-    async def _poll_usage(self) -> None:
-        # ``kick`` rate-limits itself to the configured ``refresh_seconds``.
-        while True:
-            self.usage.kick()
-            await asyncio.sleep(USAGE_POLL_TICK_SECONDS)
+        """Refresh plan usage in the background every ``[models] usage_refresh_seconds`` (the daemon calls this once)."""
+        if not self._closed:
+            self.usage.start()
 
     async def shutdown(self, reason: str = "") -> bool:
         """Stop scheduling, close every session, and (if owned) the runtime."""
@@ -1683,16 +1708,12 @@ class HostFacade:
         live = getattr(self.runtime, "live", None)
         if live is not None:
             await live.shutdown()
-        # No report may wake a root while the host is closing; unreported runs are
-        # reconciled when their session is next opened.
-        pool = getattr(self.runtime, "agent_pool", None)
-        if pool is not None:
-            pool.closed = True
-        await self._reports.aclose()
-        await self.stop_usage_polling()
-        await self.usage.aclose()
+        await self.usage.aclose()  # the periodic poll and any in-flight fetch
         await self.titles.aclose()
         await self.shells.aclose()
+        for task in list(self._wake_tasks):
+            task.cancel()
+        await asyncio.gather(*self._wake_tasks, return_exceptions=True)
         await self.supervisor.aclose()
         closer = getattr(self.runtime.sessions, "aclose_all", None)
         if callable(closer):
@@ -1820,10 +1841,33 @@ class HostFacade:
             archived_rows = []
             if command.archived > 0 and not command.query:
                 archived_rows = self.runtime.sessions.store.db.archived_project_sessions(limit=min(command.archived, 100))
+            current = str(self.runtime.workspace)
+            if type(command.projects) is not int:
+                raise ValueError("project count must be an integer")
+            registered = []
+            if command.projects > 0:
+                wanted = min(command.projects, 500)
+                known = self.runtime.sessions.store.db.registered_projects(limit=wanted)
+                # The active workspace is listed first even when nothing is registered for it.
+                registered = [next((r for r in known if r["workspace"] == current),
+                                   {"project_id": "", "workspace": current, "updated": 0.0})]
+                registered += [r for r in known if r["workspace"] != current][:wanted - 1]
+            # A historical root that is gone from disk is flagged (and not inspected) so clients omit it.
+            present = {r["workspace"]: r["workspace"] == current or os.path.isdir(r["workspace"]) for r in registered}
+            # Sessions recorded under a root that is gone from disk cannot be opened: drop them (the
+            # current workspace stays) so a deleted temp checkout never reappears as a project.
+            for row in (*rows, *archived_rows):
+                present.setdefault(row["workspace"], row["workspace"] == current or os.path.isdir(row["workspace"]))
+            truncated = len(rows) > limit
+            rows = [r for r in rows if present[r["workspace"]]]
+            archived_rows = [r for r in archived_rows if present[r["workspace"]]]
             # Only returned rows need live metadata or workspace inspection.
             shown = [*rows[:limit], *archived_rows]
-            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in shown}}
-            current = str(self.runtime.workspace)
+            wanted_roots = {*(row["workspace"] for row in shown), *(r["workspace"] for r in registered)}
+            for workspace in wanted_roots:
+                present.setdefault(workspace, workspace == current or os.path.isdir(workspace))
+            trees = {workspace: _worktree_of(workspace) if present[workspace] else ("", "")
+                     for workspace in wanted_roots}
             sessions = []
             for row in shown:
                 pending = {}
@@ -1851,7 +1895,13 @@ class HostFacade:
                     last_agent=str(row.get("last_agent") or "")[:240],
                     archived=row.get("archived_at") is not None, pending=pending,
                 ))
-            return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=len(rows) > limit)
+            projects = [p.ProjectEntry(workspace=r["workspace"], project_id=r["project_id"],
+                                       repo=trees.get(r["workspace"], ("", ""))[0],
+                                       worktree=trees.get(r["workspace"], ("", ""))[1],
+                                       updated=float(r.get("updated") or 0.0), exists=present[r["workspace"]])
+                        for r in registered]
+            return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=truncated or len(rows) > limit,
+                                               projects=projects)
         if isinstance(command, p.ProjectSessionOpen):
             # Only recorded project/session pairs may start another workspace host.
             rows = self.runtime.sessions.store.db.project_sessions(limit=10_000)
@@ -1930,6 +1980,10 @@ class HostFacade:
                 list_directory, self.runtime, command.path, command.limit
             )
             return p.DirectoryListResult(path=path, entries=entries, truncated=truncated)
+        if isinstance(command, p.FilePreview):
+            return p.FilePreviewResult(
+                **await asyncio.to_thread(preview_file, self.runtime, command.path, command.max_bytes)
+            )
         if isinstance(command, p.GitStatus):
             return p.GitStatusResult(**await workspace_git_status(Path(self.runtime.workspace)))
         if isinstance(command, p.WorktreeList):
@@ -2068,6 +2122,17 @@ class HostFacade:
             return p.SessionShellResult(
                 session=command.session, shell_id=self.shells.start(handle, command.command)
             )
+        if isinstance(command, p.SessionJobs):
+            return self.jobs.jobs(command.session)
+        if isinstance(command, p.SessionJobLog):
+            return await self.jobs.log(
+                command.session, command.job_id, tail_lines=command.tail_lines,
+                offset=command.offset, limit=command.limit,
+            )
+        if isinstance(command, p.SessionJobStop):
+            return await self.jobs.stop(command.session, command.job_id)
+        if isinstance(command, p.SessionJobBackground):
+            return self.jobs.background(command.session, command.job_id)
         if isinstance(command, p.SessionCancel):
             returned_messages = []
             if command.return_queue:
@@ -2158,7 +2223,7 @@ class HostFacade:
                     "Cancellation requested for this agent only; its parent turn continues."
                     if cancelled else (
                         f"Agent is not running (status: {found['status']}). "
-                        "AgentClose closes an idle agent for good."
+                        "Subagents end with their run."
                     )
                 ),
             )
@@ -2314,6 +2379,12 @@ class HostFacade:
                 **await model_settings.session_title_settings_set(
                     self.runtime, enabled=command.enabled, model=command.model
                 )
+            )
+        if isinstance(command, p.UsageRefreshSettings):
+            return p.UsageRefreshSettingsResult(**model_settings.usage_refresh_settings(self.runtime))
+        if isinstance(command, p.UsageRefreshSettingsSet):
+            return p.UsageRefreshSettingsResult(
+                **await model_settings.usage_refresh_settings_set(self.runtime, command.seconds)
             )
         if isinstance(command, p.ClaudeCodeSettings):
             return p.ClaudeCodeSettingsResult(**model_settings.claude_code_settings(self.runtime))
@@ -2548,10 +2619,6 @@ class HostFacade:
                 # auto-consume the queue and bypass the global cap.
                 bind(auto_start_queued=False)
             self._managed.add(session_id)
-            # First open by this host: deliver background runs that ended without a
-            # report reaching the root (a daemon that died in between).
-            with contextlib.suppress(Exception):
-                self._reports.reconcile(session_id, handle)
         return handle
 
 

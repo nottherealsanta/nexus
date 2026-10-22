@@ -91,6 +91,30 @@ def _section(workflows, provider, expand: str) -> dict:
                       open_=connected or login is not None or expand == pid)
 
 
+#: Seconds offered for the background usage refresh (the host accepts any whole 60-3600).
+USAGE_REFRESH_CHOICES = (60, 180, 300, 600, 900, 1800, 3600)
+
+
+def _interval_label(seconds: int) -> str:
+    if seconds % 60 == 0:
+        minutes = seconds // 60
+        return "every minute" if minutes == 1 else f"every {minutes} minutes"
+    return f"every {seconds} seconds"
+
+
+async def _usage_refresh_row(client) -> dict | None:
+    try:
+        current = _get(await client.usage_refresh_settings(), "seconds")
+    except Exception:  # noqa: BLE001 - an older daemon: the page works without the control
+        return None
+    if type(current) is not int:
+        return None
+    choices = sorted({*USAGE_REFRESH_CHOICES, current})
+    return sp.row("usage-refresh", "Refresh plan usage", sp.select(
+        _interval_label(current), [(_interval_label(seconds), seconds) for seconds in choices], sp.op(AREA, "usage_refresh")),
+        description="How often the daemon re-reads each provider's limits in the background. Opening the usage panel always fetches fresh numbers.")
+
+
 async def build(workflows) -> dict:
     result = await workflows.client.providers_status()
     expand = workflows.page_state.setdefault(AREA, {}).get("expand", "")
@@ -105,6 +129,9 @@ async def build(workflows) -> dict:
             blocks.insert(1, sp.gap())
     except Exception:  # noqa: BLE001 - the page still works without the setup hint
         pass
+    refresh = await _usage_refresh_row(workflows.client)
+    if refresh is not None:
+        blocks += [refresh, sp.gap()]
     for provider in providers:
         blocks.append(_section(workflows, provider, expand))
     if not providers:
@@ -119,7 +146,10 @@ async def handle(workflows, operation) -> None:
     client = workflows.client
     key = operation["key"]
     flash = workflows.shell.flash
-    if key == "refresh_models":
+    if key == "usage_refresh":
+        result = await client.usage_refresh_settings_set(int(operation["value"]))
+        flash(f"Plan usage refreshes {_interval_label(_get(result, 'seconds', int(operation['value'])))}", "success")
+    elif key == "refresh_models":
         workflows.page_state.setdefault(AREA, {})["expand"] = operation["provider"]
         result = await client.provider_models_refresh(operation["provider"])
         flash(str(_get(result, "message", "") or "Models refreshed") + "; sign-in remains managed by agy",

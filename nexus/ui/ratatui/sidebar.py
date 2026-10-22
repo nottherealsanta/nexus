@@ -30,7 +30,7 @@ class SidebarController:
         self.shell = shell
         #: Set by the terminal client; hosts without the sidebar keep the legacy Sessions page.
         self.enabled = False
-        #: Bumped when the sidebar should take keyboard focus (``/sessions``, Ctrl+B).
+        #: Bumped only by an explicit ``show(focus=True)``; opening alone leaves focus alone.
         self.focus = 0
         self.workspace = ""
         self.tasks: set[asyncio.Task] = set()
@@ -43,13 +43,15 @@ class SidebarController:
                     "truncated": False, "error": "", "loaded": False}
         self._openable: set[tuple[str, str]] = set()
         self._dirs: set[str] = set()
+        self._previewable: set[str] = set()
+        self._preview_sequence = 0
         self._files_path = ""
         self.sequence = {tab: 0 for tab in DUE_SECONDS}
         self.due = {tab: 0.0 for tab in DUE_SECONDS}
 
     @property
     def open(self) -> bool:
-        return self.enabled and bool(self.shell.preferences.values["sessions_sidebar"])
+        return self.enabled and bool(self.shell.preferences.values["sidebar_open"])
 
     @property
     def tab(self) -> str:
@@ -68,10 +70,10 @@ class SidebarController:
 
     # -- lifecycle ---------------------------------------------------------------------
 
-    async def show(self, tab=None, *, focus=True):
-        """Open the sidebar (on ``tab``), start its data feeds and optionally take keyboard focus."""
+    async def show(self, tab=None, *, focus=False):
+        """Open the sidebar (on ``tab``), start its data feeds; opening never steals keyboard focus."""
         prefs = self.shell.preferences
-        prefs.set("sessions_sidebar", True)
+        prefs.set("sidebar_open", True)
         if tab:
             prefs.set("sidebar_tab", view.normalize_tab(tab))
         if focus:
@@ -92,11 +94,11 @@ class SidebarController:
         await self.refresh(force=True)
 
     async def close(self):
-        self.shell.preferences.set("sessions_sidebar", False)
+        self.shell.preferences.set("sidebar_open", False)
         self.shell.workflows.close_dashboard(force=True)
 
     async def sync(self):
-        """Apply the stored open/closed preference (Settings → Layout toggled it)."""
+        """Apply the stored open/closed preference."""
         if self.open:
             await self.activate()
         elif self.enabled:
@@ -138,8 +140,8 @@ class SidebarController:
 
     async def refresh(self, tab=None, *, force=False, path=None):
         """Load ``tab`` (default: the visible one) unless it was loaded recently; Sessions has its own poll."""
-        tab = tab or self.tab
-        if tab not in DUE_SECONDS or not self.open:
+        tab = tab or ({"Browser": "Files", "Git": "Git"}.get(self.shell.preferences.values.get("details_tab")) if not self.open else None) or self.tab
+        if tab not in DUE_SECONDS or not self.enabled or (not self.open and tab not in {"Files", "Git"}):
             return
         self._sync_workspace(kick=False)
         now = time.monotonic()
@@ -150,18 +152,19 @@ class SidebarController:
         sequence, workspace = self.sequence[tab], str(self.shell.workspace or "")
 
         def current() -> bool:
-            return (self.open and sequence == self.sequence[tab]
+            return (self.enabled and sequence == self.sequence[tab]
                     and workspace == str(self.shell.workspace or "") and workspace == self.workspace)
 
         client = self.shell.client
         try:
             if tab == "Projects":
-                result = await client.project_sessions(limit=PROJECT_LIMIT)
+                result = await client.project_sessions(limit=PROJECT_LIMIT, projects=PROJECT_LIMIT)
                 if not current():
                     return
                 from .workflows import session_rows
                 rows = session_rows(result, self.shell.controller.session, {})
-                listed = view.project_rows(rows, workspace, self._manager_session())
+                listed = view.project_rows(rows, workspace, self._manager_session(),
+                                           list(getattr(result, "projects", None) or []))
                 self._openable = view.openable(listed)
                 self.projects = {"rows": listed, "truncated": bool(getattr(result, "truncated", False)),
                                  "error": "", "loaded": True}
@@ -173,6 +176,7 @@ class SidebarController:
                 payload = view.files_payload(result, workspace)
                 self._files_path = payload["path"]
                 self._dirs = view.navigable(payload)
+                self._previewable = view.previewable(payload)
                 self.files = {**payload, "loaded": True}
             else:
                 result = await client.git_status()
@@ -196,7 +200,7 @@ class SidebarController:
 
     async def poll(self):
         """Called from the shell's background poll: refresh the visible tab when it is due."""
-        if not self.open:
+        if not self.enabled or (not self.open and (not self.shell.preferences.values.get("details_sidebar") or self.shell.preferences.values.get("details_tab") not in {"Browser", "Git"})):
             return
         self._sync_workspace()
         await self.refresh()
@@ -211,6 +215,23 @@ class SidebarController:
         if not isinstance(path, str) or path not in self._dirs:
             raise ValueError("That folder is not listed")
         await self.refresh("Files", force=True, path=path)
+
+    async def preview(self, path):
+        """Show a listed file's start in the read-only modal; the host reads and bounds it."""
+        if not isinstance(path, str) or path not in self._previewable:
+            raise ValueError("That file is not listed")
+        self._preview_sequence += 1
+        sequence, workspace = self._preview_sequence, self.workspace
+        try:
+            result = await self.shell.client.file_preview(path)
+            title, body = view.preview_panel(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the modal says why the file cannot be shown
+            title, body = f"File · {view.clean(path, 1024)}", f"Path: {view.clean(path, 1024)}\nError: {view.clean(error_text(exc))}"
+        if sequence != self._preview_sequence or workspace != str(self.shell.workspace or ""):
+            return  # a newer preview was asked for, or the project changed meanwhile
+        self.shell.show(title, body)
 
     async def open_session(self, workspace, session):
         if (workspace, session) not in self._openable:
@@ -232,7 +253,7 @@ class SidebarController:
             await self.close()
         elif op == "tab":
             tab = action.get("tab")
-            if tab not in view.TABS:
+            if tab not in {"Projects", "Sessions"}:
                 raise ValueError("Unknown sidebar tab")
             prefs.set("sidebar_tab", tab)
             await self.refresh(force=True)
@@ -242,6 +263,8 @@ class SidebarController:
                 prefs.set("sidebar_width", view.clamp_width(width))
         elif op == "dir":
             await self.navigate(action.get("path"))
+        elif op == "file":
+            await self.preview(action.get("path"))
         elif op == "refresh":
             await self.refresh(force=True)
         elif op == "open_session":
@@ -253,12 +276,12 @@ class SidebarController:
 
     def snapshot(self) -> dict:
         """The ``sidebar`` snapshot block. ``available`` tells the client this host owns the sidebar."""
-        if not self.open:
-            return {"available": self.enabled, "open": False}
+        if not self.enabled:
+            return {"available": False, "open": False}
         self._sync_workspace()
         dashboard = getattr(self.shell.workflows, "dashboard", None)
         sessions = None
         if dashboard is not None and dashboard.visible:
             sessions = view.sessions_payload(dashboard.snapshot(), self._manager_session())
-        return {"available": True, "open": True, "tab": self.tab, "width": self.width, "focus": self.focus,
+        return {"available": True, "open": self.open, "tab": self.tab, "width": self.width, "focus": self.focus,
                 "sessions": sessions, "projects": self.projects, "files": self.files, "git": self.git}

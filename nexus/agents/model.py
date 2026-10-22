@@ -219,7 +219,7 @@ MODEL_INHERIT = "inherit"
 #: Tools that write to the filesystem; a read-only role may never hold one.
 MUTATING_FS_TOOLS = frozenset({"write", "edit", "multiedit"})
 #: The shell bundle tools; a read-only role may never hold one.
-SHELL_TOOLS = frozenset({"bash", "BashOutput", "KillShell"})
+SHELL_TOOLS = frozenset({"shell", "bash", "BashOutput", "KillShell"})
 #: Everything the read-only roles are structurally denied.
 FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS
 #: Bundles the read-only roles are structurally denied.
@@ -229,8 +229,7 @@ FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
 READ_ONLY_ROLES: frozenset[str] = frozenset()
 #: Tools permitted to structurally read-only roles.
 READ_ONLY_TOOLS = frozenset(
-    {"read", "glob", "grep", "subagent", "subagent_send", "subagent_stop", "subagent_list",
-     "todowrite", "question", "skill", "webfetch", "websearch"}
+    {"read", "glob", "grep", "subagent", "question", "skill", "webfetch", "websearch"}
 )
 AGENT_CONTEXTS = frozenset({"root", "subagent"})
 #: The manager session's role, tool catalog and prompt are packaged constants

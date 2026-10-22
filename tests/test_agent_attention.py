@@ -26,7 +26,7 @@ async def test_denied_child_tool_is_reported_to_the_root_as_needing_attention(tm
 
     assert not target.exists()
     text = tool_result_for(session, "spawn").content[0].text
-    assert "needs attention" in text and "bash" in text
+    assert "needs attention" in text and ("shell" in text or "bash" in text)
     assert "escalation point" in text
     await runtime.aclose()
 

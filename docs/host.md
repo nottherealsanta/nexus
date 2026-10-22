@@ -15,7 +15,7 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 | `facade.py` | `HostFacade`: implements every command (`handle`), `subscribe`, `state`, `web_snapshot`, `subscribe_web`, `subscribe_workspace` |
 | `daemon.py` | `Daemon`: lifecycle, socket, handshake, idle shutdown, `web_launch`, `ensure_daemon`/`status`/`stop`/`logs`, daemon entrypoint |
 | `supervisor.py` | `Supervisor`: turn scheduling under a global cap; a cancel keeps queued subagent reports |
-| `reports.py` | `ReportDelivery`: the facade's seams for background-subagent reports (sink, probes, reconcile on open, `SessionActivity`) |
+| `reports.py` | `ReportDelivery`: legacy module for subagent reports; `SessionActivity` probe and historical report seams |
 | `presence.py` | `Presence`: attached views and first-responder approval leases |
 | `transports/__init__.py` | shared frames (`Hello`, `Welcome`, `CommandFrame`, `ResultFrame`, `EventFrame`, `Ping`/`Pong`, `Reject`, `Bye`, `SubscribeDone`, `Unsubscribe`), `MAX_FRAME_BYTES` (16 MiB), error taxonomy |
 | `transports/uds.py` | client half of the Unix-socket link (`UDSClient.connect(...).call(cmd)`) |
@@ -33,7 +33,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionJobs` `SessionJobLog` `SessionJobStop` `SessionJobBackground` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
@@ -44,24 +44,51 @@ inward-only exceptions. Errors are
 | Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
-| Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
+| Providers | `UsageRefreshSettings` `UsageRefreshSettingsSet` (result `UsageRefreshSettingsResult`) `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
-| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `DirectoryList` `GitStatus` `LogsRead` |
+| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
 | Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
 
-`DirectoryList` and `GitStatus` feed the native sidebar's Files and Git tabs
+`DirectoryList`, `FilePreview` and `GitStatus` feed the native sidebar's Files and Git tabs
 (`host_support/workspace_browse.py`; the UI never touches the filesystem or runs Git):
 
 | Command | Contract |
 | --- | --- |
 | `DirectoryList(path="", limit=200)` | One workspace directory → `DirectoryListResult(path, entries, truncated)`. `path` is workspace-relative POSIX; absolute paths, `..`, empty or hidden segments, backslashes, NUL/control characters and paths over 1,024 characters are refused, as is any path through a symlink or under a configured read-deny root. Entries are `{name, path, kind: dir\|file\|link, size}`, directories first, then case-insensitive names. Symlinks are listed (`link`) and never followed; hidden entries, special files, control-character names and credential-looking names are omitted. `limit` is 1..500 (default 200); at most 5,000 directory entries are read; `truncated` says when either cut applied. |
+| `FilePreview(path, max_bytes=65536)` | The start of one workspace file as text → `FilePreviewResult(path, status, text, size, shown, truncated, message)`. `path` follows the `DirectoryList` rules and must also be a regular file (no symlink on the path, no special files, no credential-looking name, no read-deny root); the file is opened with `O_NOFOLLOW` and at most `max_bytes` (1..262,144) are read. `status` is `text` (redacted; a clip never splits a UTF-8 character; `truncated` says the file is longer), `binary` (NUL bytes or not UTF-8: no text is returned, `message` says so) or `empty`. Unsafe or unreadable paths are errors. |
 | `GitStatus()` | Read-only `git status --porcelain=v2` of the workspace (no shell, `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, 5 s deadline, 512 KiB output cap) → `GitStatusResult(available, message, branch, upstream, ahead, behind, rows, counts, truncated)`. Rows are `{group: conflicts\|staged\|unstaged\|untracked, code, label, path, from}`, at most 500, paths redacted and relative to the repository root. Outside a work tree `available` is false with a `message`. |
 
-Neither command is available to paired gateway devices (the gateway policy is default-deny).
+The shell job commands (`host_support/session_jobs.py`, [tools.md](tools.md#shell-jobs)) read the
+runtime's job registry for the **named session only**, so a job id from another session answers
+`unknown`; they accept registry job ids (`job_` + 12 hex), never paths or PIDs:
+
+| Command | Contract |
+| --- | --- |
+| `SessionJobs(session)` | → `SessionJobsResult(jobs, running, truncated)`: at most 64 `JobSummary` rows, running first then newest (`job_id`, `command` ≤ 500 chars, `cwd`, `status`, `background`, `pid`, `exit_code`, `signal`, times, log byte/line counts, `log_available`, `can_background`, `source` `tool`\|`user`). No output, environment or file path. |
+| `SessionJobLog(session, job_id, tail_lines=200, offset=None, limit=32768)` | → `SessionJobLogResult(status, text, start, end, size, next_offset, message)`. Without `offset`: the last `tail_lines` (1..2,000) lines; with it: `limit` (1..51,200) bytes from that offset and `next_offset` to continue. `status` is `ok`, `unknown` (no such job in this session, or its log is gone) or `unavailable`. Works after the job left memory. Text is raw program output: a client must sanitise control sequences before drawing it. |
+| `SessionJobStop(session, job_id)` | Stops the job's process group → `outcome` `killed`, `finished` or `unknown`. |
+| `SessionJobBackground(session, job_id)` | Asks the tool call blocking on a foreground job to hand it to the background → `outcome` `requested`, `already_background`, `finished`, `not_foreground` (nothing is awaiting it) or `unknown`; `requested` is true only for the first. The move and `shell.job_yielded` happen in that tool call. |
+
+The daemon does not idle-exit while any shell job is running (`Runtime.has_active_shell_jobs`); the idle
+window restarts when the last job ends. A *persistent* job (`shell` with `background` and no `timeout_s`,
+[tools.md](tools.md)) is also bounded by the orphan policy: with no viewer, no running or queued turn and no
+live voice call for `tools.shell_orphan_s` (3600 s, monotonic; `0` disables, `--idle-timeout 0` does not),
+the daemon stops those jobs (`shell.job_exited` with `stopped: "no viewer for 1 h"`) and exits. `Health`
+carries `persistent_jobs_total` and a bounded `persistent_jobs` list, shown by `nexus daemon status`;
+`nexus daemon stop` ends the groups through runtime shutdown. `JobSummary.persistent` marks the row.
+
+**Restart recovery (SHELL_PLAN P7).** `Daemon.start`, holding the daemon lock and before binding the socket,
+sweeps the process groups a killed predecessor left behind (`Runtime.recover_shell_orphans`: dead owner
+locks only, members re-verified by pid + start time + pgid + uid before SIGTERM and SIGKILL, 6 s budget, 8 s
+timeout; `daemon.shell_orphans_swept` / `daemon.shell_recovery_failed` in the log). It writes no session
+event and starts no turn. A session records `shell.job_exited` (`interrupted`, `delivery: none`) for each lost
+job when it is next opened. Details and limits: [tools.md](tools.md).
+
+None of these commands is available to paired gateway devices (the gateway policy is default-deny).
 
 The manager session (kind `manager`, id `nexus-manager`) is never listed by
 `SessionList`, `ProjectSessionsList` or the archive commands; `ManagerState` returns its id.
@@ -161,18 +188,14 @@ snapshot fits; `detail` carries availability notices and resource templates.
   the submission first (`input.queued`), then the supervisor decides *when*, so
   the global cap applies to queued work; `mode` is `queue`, `steer` or
   `interrupt`.
-- **Subagent reports** (`reports.py`, [agents.md](agents.md#reports-and-waking-the-root)).
-  The facade installs `AgentPool.report_sink = deliver_report`: a `ReportBatch` is
-  admitted with `admit_submission(mode="steer", origin=..., request_id=...)` and, when
-  it should wake the root, `supervisor.submit(session, handle, None, queued_id=...)`
-  (no title is derived). A non-report `enqueue`/`start_turn` calls `human_input`, which
-  resets the pool's consecutive-wake counter and releases held reports. The first time
-  the facade opens a root it reconciles background runs that ended without a delivered
-  report (interrupted and cancelled ones queue without a wake). `SessionActivity`
-  answers `SessionActivityResult(turn_active, queued, running_agents, reports_pending,
-  wait_seconds)`; `nexus run` and the JSONL stream poll it after the first terminal
-  event to follow the session until quiescent, bounded by `wait_seconds`
-  (`[agents] oneshot_wait_seconds`, 0 = exit at once with a "still running" note).
+- **Legacy subagent reports** (`reports.py`; subagents are foreground-only,
+  [agents.md](agents.md#foreground-only); the module is legacy and detached-run
+  reports are historical records, not replayed). `SessionActivity` answers
+  `SessionActivityResult(turn_active, queued, running_agents, reports_pending,
+  wait_seconds)`; `nexus run` and the JSONL stream poll it after the first
+  terminal event to follow the session until quiescent, bounded by
+  `wait_seconds` (`[agents] oneshot_wait_seconds`, 0 = exit at once with a
+  "still running" note).
 - `subscribe(session, from_seq)` registers a view in `Presence`, catches up from
   the log and follows live; closing it frees the view's approval leases.
 - Session summaries retain `last_seq` for stream cursors and expose
@@ -361,6 +384,15 @@ worktree, its rows also carry `repo` (the main checkout, from `git_head`'s
 `main_root`; one bounded `.git` read per distinct workspace, cached for five
 minutes so the sidebar's polls never touch the disk, no subprocess) and
 `worktree` (its branch), so clients can group worktrees under their repository.
+`projects=N` (0 to 500, default 0) also returns `ProjectSessionsListResult.projects`: up to N
+project roots (`ProjectEntry`: `workspace`, `project_id`, `repo`, `worktree`, `updated`, `exists`),
+only those with an eligible session (archived included, so a project whose sessions are all archived
+stays listed), newest activity first (`updated` = newest user activity). Registrations without
+sessions are not listed. The active workspace is always first, eligible or not. `exists` is false
+when a historical root is no longer a directory (one bounded `isdir` per entry; no worktree read
+for it) and clients omit such entries; the current workspace is never omitted. Session rows
+under a vanished root are dropped from `sessions` as well (same `isdir` check), so clients cannot
+regroup them into projects.
 `ProjectSessionOpen` validates a
 recorded workspace/session pair before connecting to its owning daemon, returning
 a socket path for the terminal or a one-use browser launch URL. Each workspace
@@ -404,10 +436,16 @@ confirmation `lines` (no env/header value, no URL credential) and the structured
 ### Plan-usage snapshot
 
 `HostFacade.usage` is a `UsageSnapshotService` (`host_support/usage_snapshot.py`). The
-daemon starts a 30 s ticker (`start_usage_polling`) whose `kick()` refreshes at most once
-per `[models.subagent_usage] refresh_seconds`; the runtime also kicks it before a
-sub-agent spawn and after a child ends. It is closed in `shutdown`. A `ProvidersUsage`
-result is ingested into the same snapshot. The runtime only receives the snapshot
+daemon starts its periodic poll (`start_usage_polling` → `UsageSnapshotService.start`): a
+30 s ticker that refreshes whenever `[models] usage_refresh_seconds` (default 300, read live
+from config each tick; `UsageRefreshSettings` / `UsageRefreshSettingsSet` read and write it)
+has passed, even idle and even with the usage gate off. At most one fetch is in flight; a
+failed fetch keeps the previous snapshot and waits for the next interval. The runtime also
+kicks the service before a sub-agent spawn and after a child ends (`kick()`, gate-enabled
+only, at most once per `[models.subagent_usage] refresh_seconds`). `shutdown` closes the
+poll and any in-flight fetch. A `ProvidersUsage` result is always a fresh fetch (never the
+snapshot) and is ingested into the same snapshot; it counts as a refresh for the poll, and
+a result older than one already ingested is dropped. The runtime only receives the snapshot
 (`set_usage_snapshot`) and a `usage_kick` callable, so `runtime.py` imports nothing from
 `host_support`. A failed fetch keeps the previous snapshot and fails open
 ([models.md](models.md#usage-aware-sub-agent-routing)).
@@ -429,21 +467,19 @@ menu (a `Cancel <agent>` row under each running agent). Human handoff into the l
 Claude PTY is not implemented.
 
 `AgentClose(session, agent_id, reason="")` -> `AgentCloseResult(session, agent_id, closed,
-message)` closes one child **for good** (the same thing the root's `subagent_stop` does):
-a running child is cancelled first through its own token (`AgentCancel` semantics; the
+message)` closes one child **for good** (kept for compatibility with legacy persistent
+children; the root no longer has a stop tool): a running child is cancelled first through its own token (`AgentCancel` semantics; the
 cancelled run is not reported to the root), then the pool records `agent.stopped`
 (`by: "user"`, the reason clipped to 200 characters), frees the child's `max_live` slot,
 and the child can no longer be continued. Its log and any worktree are kept and stay
-reviewable. Where `AgentCancel` ends a run and leaves the child idle, `AgentClose`
-makes it terminal. Idempotent (`closed` is true with "already stopped" for a stopped
+reviewable. `AgentCancel` ends one run; `AgentClose` makes the child terminal. Idempotent (`closed` is true with "already stopped" for a stopped
 child); `closed` is false with `No such agent in this session.` for an unknown id. A
 child the process does not know yet (after a daemon restart) is rebuilt from the root
 log first (`Runtime.close_agent`). The command is in the gateway's `prompt` scope with
 `AgentCancel`; client method `Client.close_agent(session, agent_id, reason="")`.
 There is deliberately no `AgentList`/`AgentSend` command: surfaces read agent state
-(running, idle, stopped, `runs`, `continuable`) from the reduced `ConversationView`
-they already subscribe to, and only the root sends follow-ups (a human typing into a
-child page is the plan's open question Q4). `AgentCancel`'s "not running" message
+(running, finished, stopped, `runs`) from the reduced `ConversationView` they already
+subscribe to, and nothing sends follow-ups to a child. `AgentCancel`'s "not running" message
 points at `AgentClose`.
 
 ### Claude Code settings

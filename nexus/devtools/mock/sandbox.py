@@ -2,7 +2,7 @@
 
 Dev mode never runs against the user's real workspace. The CLI swaps the
 workspace for a seeded, git-initialised project under the dev home, so the real
-tools (read/write/edit/bash/…) execute for real but inside a folder the
+tools (read/write/edit/shell/…) execute for real but inside a folder the
 permission ``PathGuard`` already confines them to.
 """
 from __future__ import annotations
@@ -39,9 +39,9 @@ SEED_FILES: dict[str, str] = {
         "offline = true\n\n"
         "[permissions]\n"
         'mode = "allow"\n'
-        'ask = ["bash(git push*)"]\n\n'
+        'ask = ["shell(git push*)"]\n\n'
         "[tools]\n"
-        "bash_yield_s = 3\n"  # short window so the bash-wait scenario yields quickly
+        "shell_yield_s = 3\n"  # short window so the bash-wait scenario yields quickly
     ),
     "README.md": (
         "# Mock sandbox\n\n"
@@ -100,7 +100,7 @@ SEED_FILES: dict[str, str] = {
     ".agents/skills/code-review/references/examples/bad.diff": "--- a/x.py\n+++ b/x.py\n@@\n-return 1\n+return None  # oops\n",
     ".agents/skills/release-notes/SKILL.md": (
         "---\nname: release-notes\ndescription: Draft release notes from merged pull requests.\n"
-        "allowed-tools: [read, bash]\nmodel: mock/hello\nversion: 3\n---\n\n"
+        "allowed-tools: [read, shell]\nmodel: mock/hello\nversion: 3\n---\n\n"
         "# Release notes\n\nGroup merged changes under Added, Changed and Fixed.\n"
     ),
     ".agents/skills/sql-style/SKILL.md": (

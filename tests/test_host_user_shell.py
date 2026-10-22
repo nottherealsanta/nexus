@@ -65,7 +65,7 @@ async def test_idle_shell_adds_output_to_context_without_a_turn(facade):
     turn = view.turns[-1]
     assert turn.kind == "shell" and turn.messages[0].text == "!echo hello-shell; exit 3"
     [tool] = turn.tools
-    assert tool.name == "bash" and tool.status == "failed" and tool.input["command"].startswith("echo")
+    assert tool.name == "shell" and tool.status == "failed" and tool.input["command"].startswith("echo")
     assert "hello-shell" in tool.result[0]["text"]
 
 
@@ -76,7 +76,8 @@ async def test_large_shell_output_is_limited_and_saved(facade, tmp_path):
     event = await _completed(handle)
     path = Path(event.data["output_path"])
     assert path.parent == tmp_path / "spill" and "\n4321\n" in path.read_text()
-    assert "[output too large: 5001 lines" in event.data["output"]
+    assert "[combined output in arrival order: 5000 lines" in event.data["output"]
+    assert len(event.data["output"].splitlines()) < 5000  # still bounded
     assert str(path) in _user_texts(handle)[0]
 
 

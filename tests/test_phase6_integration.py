@@ -331,7 +331,7 @@ async def test_normal_child_retains_parent_bash_authority(tmp_path):
     events = await asyncio.wait_for(drain(runtime.session("normal-child-shell")), timeout=20)
 
     spawn = next(event.data for event in events if event.type == "agent.spawned")
-    assert "bash" in spawn["tools"]
+    assert "shell" in spawn["tools"]
     assert target.read_text(encoding="utf-8") == "normal"
     await runtime.aclose()
 
@@ -470,6 +470,7 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
     spawns = [event.data for event in events if event.type == "agent.spawned"]
     spawn = next(data for data in spawns if data["depth"] == 1)
     advertised = set(spawn["tools"])
+    assert "shell" not in advertised
     assert "bash" not in advertised
     assert "bash_output" not in advertised
     assert "kill_shell" not in advertised

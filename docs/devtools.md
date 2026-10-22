@@ -31,7 +31,7 @@ directive in the first user message and the step from the number of assistant
 messages already in the request, so parallel subagents, forks and replays all
 work. A request without a directive fails closed. Every scenario ends with an
 in-band `✓ mock verdict — …` message. The sandbox seeds `nexus.toml`
-(`mock/hello`, offline, `mode = "allow"`, `bash_yield_s = 3`), a README and a
+(`mock/hello`, offline, `mode = "allow"`, `shell_yield_s = 3`), a README and a
 small `src/app.py`. It also seeds extensions so the context header has real
 data: project skills (`mock-skill`, `code-review` with `references/` files,
 `release-notes`, `sql-style` with a very long description), global skills in the dev
@@ -50,7 +50,7 @@ and then loads `code-review` (last, because its `allowed-tools` narrows later ca
 **Scenarios** (`nexus mock list`): `hello`, `tool_marathon`, `parallel_tools`,
 `parallel_subagents`, `agent_limits`, `streaming_rich`, `errors`,
 `provider_failure`, `cancel`, `question`, `context_pressure`, `diff_review`,
-`stress`, `bash_wait`, `extensions`. `parallel_subagents` and `agent_limits` pass `wait: true` to every `subagent` call, because they assert blocking results in the same turn (subagents are non-blocking by default; reports would otherwise arrive as later messages). Interactive ones (`cancel`, `provider_failure`, `question`)
+`stress`, `bash_wait`, `shell_persistent`, `extensions`. `subagent` calls are always blocking, so `parallel_subagents` and `agent_limits` pass no `wait` argument. Interactive ones (`cancel`, `provider_failure`, `question`)
 need a person; `stress` is slow.
 
 **Use:**
@@ -155,7 +155,7 @@ steps.
 
 | File | Shows |
 | --- | --- |
-| `python_api.py` | drive `HostFacade` in-process with a `ScriptedProvider` (no daemon, no credentials); approves a gated write and prints the view |
+| `python_api.py` | drive `HostFacade` in-process with a `ScriptedProvider` (no daemon, no credentials); approves a gated write and prints the view; workspace and `Runtime(home=…)` live in one private temp directory, so `~/.nexus` is never touched |
 | `nexus.toml` | a full layered config sample (`ext.dirs` and `agents.default_type` there predate the `.agents/` and `task` defaults; [config.md](config.md) is authoritative) |
 | `tools/greet.py`, `skills/hello-world/SKILL.md`, `agents/researcher.md`, `hooks.toml`, `mcp.json` | minimal extension samples ([extending.md](extending.md)) |
 

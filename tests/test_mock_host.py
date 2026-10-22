@@ -170,7 +170,7 @@ def test_scenario_bash_commands_are_allowlisted_and_stay_in_the_sandbox():
         for steps in scenario.actors.values():
             for step in steps:
                 for item in _calls(step):
-                    if item.name != "bash":
+                    if item.name not in ("shell", "bash"):
                         continue
                     command = item.input.get("command", "")
                     for part in re.split(r"&&|\|\||;|\|", command):

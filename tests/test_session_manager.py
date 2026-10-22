@@ -445,21 +445,22 @@ def test_archive_is_durable_across_a_restarted_manager(tmp_path):
     assert [row.session_id for row in restarted.archived()] == ["durable"]
 
 
-def test_archive_stale_skips_live_handles_and_archives_only_old_idle_sessions(tmp_path):
+def test_archive_stale_archives_viewed_handles_and_old_idle_sessions(tmp_path):
     first = SessionManager(tmp_path)
     live = first.open("live")
     first.store.append_message("live", Message(role="user", content=[Text(text="hello")], meta=MessageMeta(ts=0)))
     live.append_event(Event(type="turn.completed", ts=1))
+    live._viewers = 1  # a view is attached
     old = first.open("old")
     first.store.append_message("old", Message(role="user", content=[Text(text="hello")], meta=MessageMeta(ts=0)))
     old.append_event(Event(type="turn.completed", ts=2))
-    # The second manager has no local open handles, as a daemon startup sweep
-    # would. The `live` record's lock is not held, so mark it as open only in
-    # the first manager and exercise the manager's in-process exclusion there.
-    assert first.archive_stale(now=1000, older_than=100) == []
+    # Neither an idle cached handle nor an attached viewer protects a session.
+    assert [row.session_id for row in first.archive_stale(now=1000, older_than=100)] == ["live", "old"]
+    # A manager with no local handles (another daemon) sees the durable archive state.
     sweep = SessionManager(tmp_path)
     rows = sweep.archive_stale(now=1000, older_than=100)
-    assert [row.session_id for row in rows] == ["live", "old"]
+    assert rows == []
+    assert {row.session_id for row in sweep.archived()} == {"live", "old"}
 
 
 def test_archive_stale_is_bounded_per_call_oldest_first(tmp_path, monkeypatch):

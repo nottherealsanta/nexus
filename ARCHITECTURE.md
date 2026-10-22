@@ -291,7 +291,7 @@ exposes it; `nexus ext restore` is not wired to the CLI.
 
 Owns every manager, the provider set, the router, the tier table, and the model
 registry. It builds a fresh per-turn tool manager while sharing one owned job
-registry and todo store, so shell jobs and todos survive between turns without a
+registry, so shell jobs survive between turns without a
 mutable runtime-global manager.
 
 ## The host layer

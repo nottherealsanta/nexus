@@ -29,12 +29,10 @@ def test_the_bundles_are_defined():
 def test_bundle_contents_match_the_plan():
     assert bundle_tools("fs") == ("read", "glob", "grep", "edit", "write")
     assert bundle_tools("patch") == ("apply_patch",)
-    assert bundle_tools("shell") == ("bash",)
+    assert bundle_tools("shell") == ("shell",)
     assert bundle_tools("legacy_fs") == ("ls", "multiedit")
     assert bundle_tools("legacy_shell") == ("BashOutput", "KillShell")
-    assert bundle_tools("task") == (
-        "subagent", "subagent_send", "subagent_stop", "subagent_list", "todowrite", "question",
-    )
+    assert bundle_tools("task") == ("subagent", "question")
     assert bundle_tools("web") == ("webfetch", "websearch")
     assert bundle_tools("meta") == (
         "ReloadExtensions",
@@ -58,9 +56,8 @@ def test_profile_table():
 def test_base_profile_advertises_only_implemented_canonical_tools():
     assert profile_tools("coding") == frozenset(
         {
-            "read", "apply_patch", "glob", "grep", "edit", "write", "bash",
-            "subagent", "subagent_send", "subagent_stop", "subagent_list",
-            "todowrite", "question", "webfetch", "websearch", "skill",
+            "read", "apply_patch", "glob", "grep", "edit", "write", "shell",
+            "subagent", "question", "webfetch", "websearch", "skill",
             # Declared by the profile; the runtime offers it only when [code_mode] is enabled and Monty is available.
             "code",
         }
@@ -78,12 +75,26 @@ def test_research_profile_is_read_search_only():
     # Phase 6 adds Task: research may delegate, but read_only still strips every
     # mutating and shell tool, so a child can never write.
     assert profile_tools("research") == frozenset(
-        {"read", "glob", "grep", "subagent", "subagent_send", "subagent_stop", "subagent_list",
-         "todowrite", "question", "webfetch", "websearch", "skill"}
+        {"read", "glob", "grep", "subagent", "question", "webfetch", "websearch", "skill"}
     )
     assert profile_tools("research").isdisjoint(
-        {"apply_patch", "write", "edit", "bash"}
+        {"apply_patch", "write", "edit", "shell", "bash"}
     )
+
+
+def test_todowrite_is_removed_everywhere():
+    from nexus.tools.builtin import BUILTIN_SPECS
+    from nexus.tools.names import canonical_tool_name
+
+    for bundle in BUNDLES.values():
+        assert "todowrite" not in bundle.tools
+    for name in PROFILE_NAMES:
+        assert "todowrite" not in profile_tools(name)
+    assert "todowrite" not in {spec.name for spec in BUILTIN_SPECS}
+    # The historical public spelling is no longer an alias for anything.
+    assert canonical_tool_name("TodoWrite") == "TodoWrite"
+    with pytest.raises(ImportError):
+        __import__("nexus.tools.builtin.todo")
 
 
 def test_chat_profile_has_no_tools():
@@ -91,7 +102,7 @@ def test_chat_profile_has_no_tools():
 
 
 def test_ops_profile_is_shell_only():
-    assert profile_tools("ops") == frozenset({"bash"})
+    assert profile_tools("ops") == frozenset({"shell"})
 
 
 def test_unknown_profiles_fail_closed():

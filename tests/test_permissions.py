@@ -433,7 +433,7 @@ def test_grants_reconstructable_from_resolved_records():
         },
     ]
     grants = collect_grants(records)
-    assert [grant.rule for grant in grants] == ['bash("git status")', "Read(**)"]
+    assert [grant.rule for grant in grants] == ['shell("git status")', "Read(**)"]
     assert [grant.effect for grant in grants] == ["allow", "allow"]
 
 
@@ -1217,9 +1217,9 @@ def test_engine_request_for_builds_ui_payload():
     assert request.key == "git status"
     assert request.bundle == "shell"
     # The persisted scope is the most specific exact-action rule, shown to the UI.
-    assert request.default_rule == 'bash("git status")'
+    assert request.default_rule == 'shell("git status")'
     # A keyed request never suggests whole-tool scope.
-    assert request.suggestions == ('bash("git status")',)
+    assert request.suggestions == ('shell("git status")',)
     assert "targets" not in request.to_dict()
 
 
@@ -1238,7 +1238,7 @@ def test_engine_request_for_without_key_uses_whole_tool():
     evaluation = engine.evaluate(call("Bash", command="git status"), spec)
     request = engine.request_for(evaluation)
     assert request.key is None
-    assert request.default_rule == "bash"
+    assert request.default_rule == "shell"
 
 
 def test_path_security_error_is_a_nexus_error():

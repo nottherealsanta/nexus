@@ -11,6 +11,10 @@ Tests need **no network and no credentials**. They use temporary workspaces,
 `NEXUS_HOME` per test (`tests/conftest.py`, autouse), so nothing ever touches the
 real `~/.nexus`. `pytest-asyncio` runs in `auto` mode; `live` tests (real
 providers, credentials) are deselected by default (`addopts = -m 'not live'`).
+Standalone scripts (`examples/python_api.py`, `benchmark/codemode_eval.py`,
+`tests/playwright_*_check.py`, `tests/ratatui_live_latency_fixture.py`) are not under that fixture:
+each passes a private `home` (or `NEXUS_HOME`) inside its own temp directory so a run never registers
+a throwaway workspace in the real `~/.nexus/nexus.db`. Keep that when adding a script.
 
 ## Commands
 

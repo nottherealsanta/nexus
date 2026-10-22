@@ -46,7 +46,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 | hook | `hook.fired` `hook.blocked` |
 | external | `external.started` `external.tool` `external.finished` ([below](#external-worker-events)) |
 | input | `input.started` `input.queued` `input.moved` `input.mode_changed` (`{queued_id, mode, order}`: a promotion, queue→steer→interrupt; the reducer sets the item's mode and applies `order`) `input.consumed` `input.dropped` |
-| shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
+| shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `shell` row ([tools.md](tools.md#shell-mode--in-the-composer)). `shell.job_started` `shell.job_yielded` `shell.job_exited`: the lifecycle of a `shell` tool job, turn-less, ids/status/counts only (`job_exited` also records `delivery`: `tool_result`, `queued`, `paused` or `none`; `queued`/`paused` exits are written in the same batch as their `input.queued` notification, origin `shell_job`; a job lost with its daemon is closed on the next open as `status: interrupted`, `delivery: none`, `recovered: true`, with no notification); reduced to `ConversationView.jobs` ([tools.md](tools.md#shell-jobs)) |
 | live | `live.started` `live.transcript` `live.transcript.delta` `live.delegated` `live.appended` `live.phase` `live.levels` `live.error` `live.ended`: a GPT Live voice call, turn-less and durable; reduced into `ConversationView.live_calls` ([live.md](live.md#events-and-view)) |
 | manager | `manager.launch_refused {reason, turn}` `manager.result_read {session, bytes, clipped, turn}` `manager.wait {ids, outcome, waited_seconds, turn}` `manager.cancelled {session, cancelled, turn}`: audit records in the workspace manager's own log, turn-less and durable, ids/counts/reason codes only, never instruction or result text ([manager.md](manager.md#events)) |
 | presence | `presence.joined` `presence.left` (count, not identity) |
@@ -159,8 +159,8 @@ and `continuable`. New events, both in the **root** log:
 
 | Event | Data |
 | --- | --- |
-| `agent.resumed` | `{agent, run, from: "root", message, message_chars, background, continuable, worktree}`; written by `subagent_send` through the calling tool's emitter. `message` is clipped to 3900 characters with the clip announced inside the text, the full text is the first user message of the child's new turn in its own log; `background` is false when the send waited |
-| `agent.stopped` | `{agent, by: "root"/"user"/"limit", reason, run}`; written through the root event port by `subagent_stop` (`by: "root"`) or host `AgentClose` (`by: "user"`); terminal, the child log is kept. A running child's cancelled `agent.completed` precedes it |
+| `agent.resumed` | `{agent, run, from: "root", message, message_chars, background, continuable, worktree}`; historical: written by the retired `subagent_send` tool (no longer emitted; old logs replay it). `message` is clipped to 3900 characters with the clip announced inside the text, the full text is the first user message of the child's new turn in its own log; `background` is false when the send waited |
+| `agent.stopped` | `{agent, by: "root"/"user"/"limit", reason, run}`; written through the root event port by host `AgentClose` (`by: "user"`; historical logs also hold `by: "root"` from the retired `subagent_stop`); terminal, the child log is kept. A running child's cancelled `agent.completed` precedes it |
 
 `AgentView.status` keeps its meaning (`spawned` = a run is in flight; `/tasks` and
 crash recovery key off it). It gains `runs` (spawn is run 1; `agent.resumed` and
@@ -183,7 +183,7 @@ recorded on `input.queued` only, so the prompt text and the turn are unchanged
 extra keys for that kind only), so a client can say "launched by manager". Two more kinds carry
 `agent`, `run`, `status` and `agents` (a bounded list of at most 32 agent ids, each at most 200
 characters; `run` is a non-negative integer, anything else is dropped): `subagent_report` (a
-finished child's report delivered to the root through its input queue; `agents` lists `"<agent id>:<run>"` for every report in the batch, and the queue keeps ints and string lists in an origin instead of stringifying them) and `root_followup` (the
+finished child's report delivered to the root through its input queue; `agents` lists `"<agent id>:<run>"` for every report in the batch, and the queue keeps ints and string lists in an origin instead of stringifying them; the native Ratatui client draws it as a compact `agent_report` block from this origin and the child's `type`/`description`, never as a user card) and `root_followup` (the
 root's follow-up shown on a child's page). Unknown kinds keep only `kind`. `session.linked` and every
 `manager.*` event fold to nothing in the view: they are audit metadata, not conversation, so they
 add no diagnostic row. A durable `context.notice` with `kind: "subagent_wake_paused"` (`message`, `pending`, `wakes`) records that the auto-wake cap paused report delivery; the reducer does not draw it yet. `LogsRead` projects each with a fixed summary and no event data.

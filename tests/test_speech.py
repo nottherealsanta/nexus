@@ -111,10 +111,10 @@ def test_dispatch_uses_worker_and_returns_backend(monkeypatch):
 
     monkeypatch.setattr(p, "Speak", Speak, raising=False)
     monkeypatch.setattr(p, "SpeakResult", SpeakResult, raising=False)
-    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: {"ok": True, "backend": "paradee-cpu"})
+    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: {"ok": True, "backend": "ptts-cpu"})
     command = Speak("session-1")
     result = asyncio.run(speech.dispatch_speech(command, None, View([Turn(messages=[Message("assistant", "hi")])])))
-    assert result == SpeakResult("Finished speaking the latest answer", "paradee-cpu")
+    assert result == SpeakResult("Finished speaking the latest answer", "ptts-cpu")
 
 
 def test_dispatch_does_not_leak_worker_exceptions(monkeypatch):
@@ -136,69 +136,45 @@ def test_dispatch_does_not_leak_worker_exceptions(monkeypatch):
 
 def test_worker_reports_missing_optional_dependencies(monkeypatch):
     # The worker must not import optional modules at module import time.
-    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    monkeypatch.setitem(sys.modules, "ptts", None)
     monkeypatch.setitem(sys.modules, "sounddevice", None)
     assert speech._worker_synthesize("hello") == {"ok": False, "code": "speech_dependency_missing"}
 
 
 class FakeSpeechModules:
-    """Fake onnxruntime, misaki and huggingface_hub in sys.modules; numpy and the vocab are real."""
+    """Fake ptts and sounddevice in sys.modules; numpy is real. Offline checks see a cached model."""
 
-    def __init__(self, monkeypatch, tmp_path, *, samples=24_000):
-        self.calls: dict = {"downloads": [], "feeds": []}
+    def __init__(self, monkeypatch, tmp_path, *, samples=24_000, cached=True):
+        self.calls: dict = {"loads": [], "synth": []}
         self.played: list = []
         self.samples = samples
-        config = tmp_path / "config.json"
-        config.write_text(json.dumps({"vocab": {c: i + 1 for i, c in enumerate("abcdefghijklmnopqrstuvwxyz ")}}))
-        self.config = config
         outer = self
 
-        class Session:
-            def __init__(self, path, options, providers):
-                outer.calls["session"] = (path, options.intra_op_num_threads, providers)
+        class TTS:
+            sample_rate = 24_000
 
-            def run(self, outputs, feed):
-                outer.calls["feeds"].append(feed)
-                return [np.zeros((1, outer.samples), dtype=np.float32)]
+            def __init__(self, model, **kwargs):
+                outer.calls["loads"].append((model, kwargs))
 
-        class G2P:
-            def __init__(self, **kwargs):
-                outer.calls["g2p"] = kwargs
+            def synth(self, text, **kwargs):
+                outer.calls["synth"].append((text, kwargs))
+                return np.zeros(outer.samples, dtype=np.float32)
 
-            def __call__(self, text):
-                return text.lower().replace(".", ""), None
-
-        def download(repo_id, filename, revision=None):
-            outer.calls["downloads"].append((repo_id, filename, revision))
-            return str(outer.config) if filename == "config.json" else str(tmp_path / "paradee_int8.onnx")
-
-        ort = types.ModuleType("onnxruntime")
-        ort.SessionOptions = lambda: types.SimpleNamespace(intra_op_num_threads=0, inter_op_num_threads=0)
-        ort.InferenceSession = Session
-        misaki = types.ModuleType("misaki")
-        misaki.en = types.SimpleNamespace(G2P=G2P)
-        hub = types.ModuleType("huggingface_hub")
-        hub.hf_hub_download = download
+        ptts = types.ModuleType("ptts")
+        ptts.TTS = TTS
         sounddevice = types.ModuleType("sounddevice")
         sounddevice.play = lambda audio, samplerate, blocking: outer.played.append((audio, samplerate, blocking))
-        for name, module in {"onnxruntime": ort, "misaki": misaki, "huggingface_hub": hub, "sounddevice": sounddevice}.items():
+        for name, module in {"ptts": ptts, "sounddevice": sounddevice}.items():
             monkeypatch.setitem(sys.modules, name, module)
         monkeypatch.setattr(speech, "_ENGINE", None)
+        monkeypatch.setattr(speech, "_cache_progress", lambda: (cached, 0))
 
 
 def test_worker_synthesizes_and_plays_on_cpu(monkeypatch, tmp_path):
     fake = FakeSpeechModules(monkeypatch, tmp_path)
-    assert speech._worker_synthesize("Hello") == {"ok": True, "backend": "paradee-cpu"}
-    assert fake.calls["downloads"] == [
-        ("sahilmahendrakar/Paradee-8M-v1.0", "onnx/paradee_int8.onnx", "v1.0"),
-        ("sahilmahendrakar/Paradee-8M-v1.0", "config.json", "v1.0"),
-    ]
-    assert fake.calls["session"][1:] == (0, ["CPUExecutionProvider"])  # ORT default threads
-    assert fake.calls["g2p"] == {"trf": False, "british": False, "fallback": None, "unk": ""}
-    feed = fake.calls["feeds"][0]
-    ids = feed["input_ids"][0].tolist()
-    assert feed["input_ids"].dtype == np.int64 and ids[0] == ids[-1] == 0 and len(ids) == len("hello") + 2
-    assert feed["speed"].tolist() == [1.0]
+    assert speech._worker_synthesize("Hello") == {"ok": True, "backend": "ptts-cpu"}
+    assert fake.calls["loads"] == [("hf://gradium/phonon-31m-en", {"lang": "en", "quant": "q8"})]
+    assert fake.calls["synth"] == [("Hello", {})]  # the model's default voice
     [(audio, rate, blocking)] = fake.played
     assert rate == 24_000 and blocking is True and len(audio) == 24_000 and audio.dtype == np.float32
 
@@ -207,18 +183,14 @@ def test_worker_keeps_the_model_warm_between_chunks_and_requests(monkeypatch, tm
     fake = FakeSpeechModules(monkeypatch, tmp_path)
     speech._worker_synthesize("one")
     speech._worker_synthesize("two")
-    assert len(fake.calls["downloads"]) == 2  # loaded once: two files, not four
+    assert len(fake.calls["loads"]) == 1  # loaded once, reused for both answers
 
 
-def test_phoneme_chunks_split_on_sentences_and_stay_within_the_model_limit(monkeypatch):
-    class Engine:
-        def __init__(self):
-            self.g2p = lambda sentence: ("ab " * 300 if "long" in sentence else "xy", None)
-
-    chunks = list(speech._phoneme_chunks(Engine(), "Short one. A long sentence here. Last."))
-    assert chunks[0] == "xy" and chunks[-1] == "xy"
-    long_parts = chunks[1:-1]
-    assert len(long_parts) >= 2 and all(len(part) <= speech._MAX_PHONEMES for part in chunks)
+def test_text_chunks_split_on_sentences_and_stay_within_the_limit():
+    text = "Short one. A " + "long " * 200 + "sentence here.\nLast."
+    chunks = list(speech._text_chunks(text))
+    assert chunks[0] == "Short one." and chunks[-1] == "Last."
+    assert len(chunks) >= 4 and all(0 < len(part) <= speech._MAX_CHUNK_CHARS for part in chunks)
 
 
 def test_worker_stop_before_playback_plays_nothing(monkeypatch, tmp_path):
@@ -237,13 +209,11 @@ def test_worker_refuses_audio_over_the_cap(monkeypatch, tmp_path):
     assert fake.played == []
 
 
-def test_worker_offline_without_cached_spacy_model_is_refused(monkeypatch, tmp_path):
-    FakeSpeechModules(monkeypatch, tmp_path)
+def test_worker_offline_without_cached_model_is_refused_without_loading(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path, cached=False)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    spacy = types.ModuleType("spacy")
-    spacy.util = types.SimpleNamespace(is_package=lambda name: False)
-    monkeypatch.setitem(sys.modules, "spacy", spacy)
     assert speech._worker_synthesize("hello") == {"ok": False, "code": "speech_model_not_cached"}
+    assert fake.calls["loads"] == []  # ptts is never asked to fetch
 
 
 def test_worker_stdin_protocol_is_bounded_and_redacts_exceptions(monkeypatch):
@@ -280,7 +250,7 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
     from nexus.runtime import Runtime
 
     spoken = []
-    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: spoken.append((text, download)) or {"ok": True, "backend": "paradee-cpu"})
+    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: spoken.append((text, download)) or {"ok": True, "backend": "ptts-cpu"})
     config = Config(model="scripted/m", version=2, v2=ConfigV2(model=ModelSection(default="scripted/m")))
     runtime = Runtime(tmp_path, config=config, providers={"scripted": ScriptedProvider(text_response("the final answer"))})
     facade = HostFacade(runtime)
@@ -290,7 +260,7 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
     await facade.start_turn("s", "hello")
     await facade.wait_idle(timeout=5.0)
     result = await facade.handle(p.Speak(session_id="s", download=True))
-    assert result == p.SpeakResult(message="Finished speaking the latest answer", backend="paradee-cpu")
+    assert result == p.SpeakResult(message="Finished speaking the latest answer", backend="ptts-cpu")
     assert spoken == [("the final answer", True)]
     await facade.shutdown()
     await runtime.aclose()
@@ -443,7 +413,7 @@ class _FakeWorker:
     def __init__(self, *args, **kwargs):
         self.args, self.returncode, self.lines = args, None, []
         self.stdin = types.SimpleNamespace(write=self.lines.append, flush=lambda: None)
-        self.stdout = types.SimpleNamespace(readline=lambda: '{"ok":true,"backend":"paradee-cpu"}\n')
+        self.stdout = types.SimpleNamespace(readline=lambda: '{"ok":true,"backend":"ptts-cpu"}\n')
         _FakeWorker.instances.append(self)
 
     def poll(self):

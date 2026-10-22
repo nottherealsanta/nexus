@@ -171,7 +171,7 @@ pub struct Sidebar {
     pub tab: String,
     /// Preferred width in columns; the client clamps it and yields to the conversation.
     pub width: u16,
-    /// Bumped by the host when the sidebar should take keyboard focus.
+    /// Bumped by the host to focus an already-open sidebar; ignored while opening.
     pub focus: u64,
     pub sessions: Option<Value>,
     pub projects: Value,
@@ -764,12 +764,56 @@ pub struct Nav {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct DetailsPanel {
+    /// `Session`, `Files` (shown as Changes), `MCP` or `Logs`.
     pub tab: String,
+    /// Preferred sidebar width in columns; the client clamps it and yields to the conversation.
+    pub width: u16,
     pub logs_header: Vec<(String, String)>,
     pub session: Vec<(String, String)>,
     pub files: Vec<FileChange>,
     pub files_summary: String,
     pub mcp: Vec<(String, String, String)>,
+    pub jobs: JobsPanel,
+}
+/// The Jobs tab: the session's shell jobs and, when open, one bounded log tail. Python projects
+/// display text only (no paths, pids or raw replies).
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct JobsPanel {
+    pub rows: Vec<JobRow>,
+    pub running: u64,
+    pub truncated: bool,
+    pub loaded: bool,
+    pub error: String,
+    pub notice: String,
+    pub log: Option<JobLog>,
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct JobRow {
+    pub id: String,
+    pub command: String,
+    /// `running`, `completed`, `failed`, `timed_out` or `killed`.
+    pub status: String,
+    pub label: String,
+    /// `agent` or `you`.
+    pub source: String,
+    pub mode: String,
+    pub facts: String,
+    pub log: bool,
+    pub stop: bool,
+    pub background: bool,
+    pub selected: bool,
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct JobLog {
+    pub id: String,
+    pub lines: Vec<String>,
+    /// `loading`, `ok`, `unknown` or `unavailable`.
+    pub status: String,
+    pub message: String,
+    pub clipped: bool,
 }
 #[derive(Default, Deserialize)]
 #[serde(default)]

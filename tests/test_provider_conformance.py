@@ -269,6 +269,10 @@ def _secret_adapter(spec, secret: str):
         return OpenAIResponsesAdapter(api_key=secret)
     if spec.name == "openai_chat":
         return OpenAIChatAdapter(api_key=secret)
+    if spec.name == "nvidia_chat":
+        from provider_conformance.adapters import NvidiaChatAdapter
+
+        return NvidiaChatAdapter(api_key=secret)
     if spec.name == "xai_responses":
         from provider_conformance.adapters import XAIResponsesAdapter
 

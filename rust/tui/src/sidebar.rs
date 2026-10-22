@@ -19,9 +19,10 @@ use ratatui::{
 };
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
-pub const TABS: [&str; 4] = ["Projects", "Sessions", "Files", "Git"];
+pub const TABS: [&str; 2] = ["Projects", "Sessions"];
 /// Mirrors `nexus/ui_support/sidebar.py` (pinned by `tests/test_ratatui_sidebar.py`).
 pub const MIN_WIDTH: u16 = 24;
 pub const MAX_WIDTH: u16 = 60;
@@ -68,6 +69,20 @@ pub fn width_at(column: u16, area: Rect, available: u16) -> u16 {
         .saturating_sub(area.x)
         .saturating_add(1)
         .clamp(MIN_WIDTH, max_width(available))
+}
+
+/// Centered selector geometry, including on small terminals.
+pub fn selector_area(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(4).min(90);
+    let height = area.height.saturating_sub(4).min(32);
+    Rect::new(area.x + (area.width - width) / 2, area.y + (area.height - height) / 2, width, height)
+}
+
+/// A browser view of the shared host payload without changing selector state.
+pub fn details_snapshot(s: &Snapshot) -> Snapshot {
+    let mut view = Snapshot { sidebar: s.sidebar.clone(), ..Snapshot::default() };
+    view.sidebar.tab = if s.details_panel.tab == "Browser" { "Files" } else { "Git" }.into();
+    view
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,7 +164,7 @@ impl Out {
 
 #[derive(Default)]
 pub struct SidebarUi {
-    /// Keys go to the sidebar first (set by `/sessions`, Ctrl+B or a click; Esc leaves).
+    /// Keys go to the sidebar first (set by a click or a request to the open sidebar; Esc leaves).
     pub focus: bool,
     /// The divider is being dragged.
     pub dragging: bool,
@@ -166,8 +181,13 @@ pub struct SidebarUi {
     file_sel: usize,
     file_top: usize,
     file_path: String,
+    /// The last click on a Files row (path, time), to recognise a double-click on the same file.
+    last_file_click: Option<(String, Instant)>,
     git_top: usize,
 }
+
+/// Two clicks on the same file row within this interval open the file preview.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 fn rows_of(value: &Value) -> &[Value] {
     value
@@ -318,6 +338,14 @@ fn move_selection(sel: &mut usize, len: usize, code: KeyCode) -> bool {
 }
 
 impl SidebarUi {
+    /// A new snapshot may ask the already-open sidebar for keyboard focus (the host bumps
+    /// `sidebar.focus`). Opening it never takes focus: the composer keeps the keys until a click.
+    pub fn take_host_focus(&mut self, prev: &Snapshot, next: &Snapshot) {
+        if next.sidebar.open && (!prev.sidebar.open || next.sidebar.focus != prev.sidebar.focus) {
+            self.focus = true;
+        }
+    }
+
     /// Called every loop: local state lives only while the host shows the sidebar.
     pub fn sync(&mut self, s: &Snapshot) {
         if !s.sidebar.open {
@@ -370,7 +398,7 @@ impl SidebarUi {
                 }
                 KeyCode::Esc if !(tab == "Sessions" && !self.dash.query.is_empty()) => {
                     self.focus = false;
-                    return Out::eat();
+                    return Out::action(act("close"));
                 }
                 _ => {}
             }
@@ -461,6 +489,9 @@ impl SidebarUi {
         }
         match key.code {
             KeyCode::Enter | KeyCode::Right => match rows.get(self.file_sel) {
+                Some(row) if key.code == KeyCode::Enter && text(row, "kind") == "file" => {
+                    self.open_file(row)
+                }
                 Some(row) => self.open_directory(row),
                 None => Out::eat(),
             },
@@ -482,6 +513,31 @@ impl SidebarUi {
                 json!({"type":"sidebar","op":"dir","path":text(row, "path")}),
             );
         }
+        Out::eat()
+    }
+
+    /// Asks the host to show a listed file in the read-only modal (the host reads it).
+    fn open_file(&mut self, row: &Value) -> Out {
+        self.last_file_click = None;
+        Out::action(json!({"type":"sidebar","op":"file","path":text(row, "path")}))
+    }
+
+    /// A click on a Files row: folders open at once; a file is only selected, and a second click
+    /// on the same file within `DOUBLE_CLICK` previews it. Another row restarts the interval.
+    fn click_file_row(&mut self, row: &Value, now: Instant) -> Out {
+        if text(row, "kind") != "file" {
+            self.last_file_click = None;
+            return self.open_directory(row);
+        }
+        let path = text(row, "path");
+        let double = self
+            .last_file_click
+            .as_ref()
+            .is_some_and(|(last, at)| last == path && now.saturating_duration_since(*at) <= DOUBLE_CLICK);
+        if double {
+            return self.open_file(row);
+        }
+        self.last_file_click = Some((path.to_owned(), now));
         Out::eat()
     }
 
@@ -568,6 +624,13 @@ impl SidebarUi {
         }
     }
 
+    /// Files/Git reuse the bounded host payloads and browser interactions in the right panel.
+    pub fn details_mouse(&mut self, ev: MouseEvent, s: &Snapshot, body: Rect) -> Out {
+        self.divider = Rect::default();
+        self.tab_hits.clear();
+        self.mouse(ev, s, body, body.width)
+    }
+
     fn list_row_at(&self, x: u16, y: u16) -> Option<usize> {
         if !self.list.contains(Position::new(x, y)) {
             return None;
@@ -594,7 +657,7 @@ impl SidebarUi {
                 if let Some(index) = self.list_row_at(ev.column, ev.row) {
                     self.file_sel = index;
                     if let Some(row) = rows_of(&s.sidebar.files).get(index) {
-                        return self.open_directory(row);
+                        return self.click_file_row(row, Instant::now());
                     }
                 }
                 Out::eat()
@@ -745,7 +808,7 @@ impl SidebarUi {
         }
         match s.sidebar.tab.as_str() {
             "Projects" => "↑↓ move · Enter open/fold · Tab tab · Esc back",
-            "Files" => "↑↓ move · Enter open · ← up · r refresh · Esc back",
+            "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
             _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
         }
@@ -889,7 +952,7 @@ impl SidebarUi {
         self.proj_top = top;
     }
 
-    fn draw_files(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette, mono: bool) {
+    pub fn draw_files(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette, mono: bool) {
         let data = &s.sidebar.files;
         let quiet = Style::default().fg(p.quiet);
         let rows = rows_of(data);
@@ -902,6 +965,7 @@ impl SidebarUi {
             self.file_path = text(data, "path").to_owned();
             self.file_sel = 0;
             self.file_top = 0;
+            self.last_file_click = None;
         }
         let width = usize::from(body.width);
         let glyphs = nexus_widgets::Glyphs::from_env();
@@ -948,7 +1012,7 @@ impl SidebarUi {
                     vec![Span::styled(marker, Style::default().fg(p.accent))],
                     &name,
                     main_style,
-                    text(row, "size"),
+                    "",
                     quiet,
                     width,
                     bg,
@@ -964,7 +1028,7 @@ impl SidebarUi {
         self.file_top = top;
     }
 
-    fn draw_git(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette) {
+    pub fn draw_git(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette) {
         let data = &s.sidebar.git;
         let quiet = Style::default().fg(p.quiet);
         if !flag(data, "loaded") {
@@ -1022,7 +1086,13 @@ impl SidebarUi {
                     Span::styled(label, Style::default().fg(tone)),
                     Span::raw(" "),
                     Span::styled(
-                        fit(text(row, "path"), room),
+                        fit(
+                            match text(row, "name") {
+                                "" => text(row, "path"),
+                                name => name,
+                            },
+                            room,
+                        ),
                         Style::default().fg(p.text),
                     ),
                 ]));
@@ -1442,7 +1512,7 @@ mod tests {
             }
         }
         assert_eq!(tab_cells(60).1, 1, "wide sidebars keep one row");
-        assert!(tab_cells(24).1 >= 2, "a narrow one wraps");
+        assert!(tab_cells(12).1 >= 2, "a narrow one wraps");
     }
 
     #[test]
@@ -1459,6 +1529,20 @@ mod tests {
             let drawn: String = row[usize::from(rect.x)..usize::from(rect.right())].iter().collect();
             assert_eq!(drawn, format!(" {} ", TABS[cell.tab]));
         }
+    }
+
+    #[test]
+    fn opening_the_selector_takes_requested_keyboard_focus() {
+        let closed = Snapshot::default();
+        let mut opened = open("Sessions", 34);
+        opened.sidebar.focus = 1;
+        let mut ui = SidebarUi::default();
+        ui.take_host_focus(&closed, &opened);
+        assert!(ui.focus, "the modal takes focus when opened");
+        let mut asked = open("Sessions", 34);
+        asked.sidebar.focus = 2;
+        ui.take_host_focus(&opened, &asked);
+        assert!(ui.focus, "an explicit request to the open sidebar still focuses it");
     }
 
     #[test]
@@ -1528,7 +1612,7 @@ mod tests {
         assert_eq!(ui.key(key(KeyCode::Tab), &s, true).action, Some(tab_message("Sessions")));
         assert_eq!(
             ui.key(key(KeyCode::BackTab), &s, true).action,
-            Some(tab_message("Git")),
+            Some(tab_message("Sessions")),
             "Shift+Tab wraps backwards"
         );
         let esc = ui.key(key(KeyCode::Esc), &s, true);
@@ -1655,14 +1739,19 @@ mod tests {
         let mut ui = SidebarUi::default();
         ui.focus = true;
         let text = screen(&mut ui, &s, 34, 24);
-        assert!(text.contains("repo/src") && text.contains("core/") && text.contains("main.rs") && text.contains("2K"));
+        assert!(text.contains("repo/src") && text.contains("core/") && text.contains("main.rs"));
+        assert!(!text.contains("2K"), "file size column is omitted: {text}");
         ui.key(key(KeyCode::Down), &s, true);
         assert_eq!(
             ui.key(key(KeyCode::Enter), &s, true).action,
             Some(json!({"type":"sidebar","op":"dir","path":"src/core"}))
         );
         ui.key(key(KeyCode::Down), &s, true);
-        assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none(), "files do not navigate");
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"file","path":"src/main.rs"})),
+            "Enter on a file asks the host for its preview, never a folder change"
+        );
         ui.key(key(KeyCode::Down), &s, true);
         assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none(), "links are never followed");
         assert_eq!(
@@ -1670,6 +1759,83 @@ mod tests {
             Some(json!({"type":"sidebar","op":"dir","path":""})),
             "Backspace goes to the parent"
         );
+    }
+
+    fn click_at(ui: &mut SidebarUi, s: &Snapshot, index: usize) -> Out {
+        let line = ui
+            .line_items
+            .iter()
+            .position(|item| *item == Some(index))
+            .expect("row is drawn");
+        let at = mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            ui.list.x + 2,
+            ui.list.y + line as u16,
+        );
+        ui.mouse(at, s, Rect::new(0, 0, 34, 24), 200)
+    }
+
+    #[test]
+    fn double_clicking_the_same_file_previews_it_but_single_clicks_only_select() {
+        let mut s = open("Files", 34);
+        s.sidebar.files = json!({"loaded":true,"path":"src","label":"repo/src","rows":[
+            {"name":"core","path":"src/core","kind":"dir","size":""},
+            {"name":"a.rs","path":"src/a.rs","kind":"file","size":"1K"},
+            {"name":"b.rs","path":"src/b.rs","kind":"file","size":"1K"},
+            {"name":"link","path":"src/link","kind":"link","size":""},
+        ]});
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        let first = click_at(&mut ui, &s, 1);
+        assert!(first.consumed && first.action.is_none(), "one click selects only");
+        assert_eq!(ui.file_sel, 1);
+        // A different file within the interval is a new first click, not a double-click.
+        assert!(click_at(&mut ui, &s, 2).action.is_none());
+        assert_eq!(ui.file_sel, 2);
+        let second = click_at(&mut ui, &s, 2);
+        assert_eq!(
+            second.action,
+            Some(json!({"type":"sidebar","op":"file","path":"src/b.rs"}))
+        );
+        assert!(click_at(&mut ui, &s, 2).action.is_none(), "the pair is consumed");
+        // Folders keep opening on a single click and reset the pair; links do nothing.
+        assert_eq!(
+            click_at(&mut ui, &s, 0).action,
+            Some(json!({"type":"sidebar","op":"dir","path":"src/core"}))
+        );
+        assert!(click_at(&mut ui, &s, 3).action.is_none());
+        assert!(click_at(&mut ui, &s, 3).action.is_none(), "links never preview");
+    }
+
+    #[test]
+    fn a_slow_second_click_is_not_a_double_click() {
+        let row = json!({"name":"a.rs","path":"src/a.rs","kind":"file"});
+        let mut ui = SidebarUi::default();
+        let start = Instant::now();
+        assert!(ui.click_file_row(&row, start).action.is_none());
+        let late = start + DOUBLE_CLICK + Duration::from_millis(1);
+        assert!(ui.click_file_row(&row, late).action.is_none(), "too slow");
+        let quick = late + Duration::from_millis(100);
+        assert!(ui.click_file_row(&row, quick).action.is_some(), "the late click started a new pair");
+    }
+
+    #[test]
+    fn files_render_filenames_without_file_sizes() {
+        let mut s = open("Files", 34);
+        s.sidebar.files = json!({"loaded":true,"path":"","label":"repo/","rows":[
+            {"name":"AGENTS.md","path":"AGENTS.md","kind":"file","size":"10.5K"},
+            {"name":"README.md","path":"README.md","kind":"file","size":"1K"},
+            {"name":"src","path":"src","kind":"dir","size":""},
+        ]});
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        let text = screen(&mut ui, &s, 34, 24);
+        for want in ["AGENTS.md", "README.md", "src/"] {
+            assert!(text.contains(want), "{want:?} missing in files list:\n{text}");
+        }
+        for unwanted in ["10.5K", "1K"] {
+            assert!(!text.contains(unwanted), "{unwanted:?} size should not be rendered:\n{text}");
+        }
     }
 
     #[test]
@@ -1681,13 +1847,15 @@ mod tests {
                 {"kind":"entry","code":"A","label":"added","path":"new.rs"},
                 {"kind":"heading","text":"Untracked · 1"},
                 {"kind":"entry","code":"?","label":"untracked","path":"notes.txt"},
+                {"kind":"entry","code":"M","label":"modified","path":"docs/config.md","name":"config.md"},
             ]});
         let mut ui = SidebarUi::default();
         ui.focus = true;
         let text = screen(&mut ui, &s, 44, 24);
-        for want in ["main → origin/main", "Staged changes · 1", "added", "new.rs", "untracked", "notes.txt"] {
+        for want in ["main → origin/main", "Staged changes · 1", "added", "new.rs", "untracked", "notes.txt", "config.md"] {
             assert!(text.contains(want), "{want:?} missing:\n{text}");
         }
+        assert!(!text.contains("docs/config.md"), "a row shows the base name only:\n{text}");
         // Every key either scrolls, refreshes or is ignored: nothing can change the repository.
         for code in [KeyCode::Enter, KeyCode::Delete, KeyCode::Char('d'), KeyCode::Char('a')] {
             let out = ui.key(key(code), &s, true);
@@ -1760,91 +1928,32 @@ mod tests {
     }
 
     #[test]
-    fn regions_reserve_the_left_edge_and_the_conversation_keeps_its_minimum() {
-        let mut s = open("Sessions", 34);
-        s.details_sidebar = true;
-        let r = crate::render::regions(Rect::new(0, 0, 200, 40), &s, 8, false);
-        assert_eq!((r.sidebar.x, r.sidebar.width, r.sidebar.height), (0, 34, 40));
-        assert_eq!(r.transcript.x, 34);
-        assert_eq!(r.tabs.x, r.sidebar.right());
-        assert_eq!(r.composer.x, r.sidebar.right());
-        assert_eq!(r.transcript.width, 200 - 34 - 40);
-        assert_eq!(r.details.right(), 200);
-        for width in 20..=240u16 {
-            for details in [false, true] {
-                s.details_sidebar = details;
-                let r = crate::render::regions(Rect::new(0, 0, width, 40), &s, 8, false);
-                if r.sidebar.width == 0 {
-                    assert_eq!(r.transcript.x, 0, "{width}: a hidden sidebar moves nothing");
-                    continue;
-                }
-                assert!(r.sidebar.width >= MIN_WIDTH && r.sidebar.width <= MAX_WIDTH);
-                assert!(
-                    r.transcript.width >= MIN_CONVERSATION,
-                    "{width} details={details}: conversation {} < minimum",
-                    r.transcript.width
-                );
-                assert_eq!(r.transcript.x, r.sidebar.right(), "{width}");
-                assert!(
-                    r.details.width == 0 || r.transcript.right() <= r.details.x,
-                    "{width}: conversation runs under the details sidebar"
-                );
-            }
-        }
-        s.details_sidebar = true;
-        s.sidebar.open = false;
-        let closed = crate::render::regions(Rect::new(0, 0, 200, 40), &s, 8, false);
-        assert_eq!((closed.sidebar.width, closed.transcript.x), (0, 0));
-    }
-
-    #[test]
-    fn the_available_width_matches_what_regions_shares() {
-        let mut s = open("Sessions", 60);
-        for width in [60u16, 99, 100, 140, 200] {
-            for details in [false, true] {
-                s.details_sidebar = details;
-                let area = Rect::new(0, 0, width, 30);
-                let r = crate::render::regions(area, &s, 8, false);
-                let shared = r.sidebar.width + r.transcript.width;
-                assert_eq!(
-                    shared,
-                    crate::render::sidebar_available(area, &s),
-                    "{width} details={details}"
-                );
+    fn selector_overlays_without_reserving_conversation_columns() {
+        for width in 0..=240u16 {
+            for height in [0, 3, 24, 40] {
+                let mut s = open("Sessions", 34);
+                s.details_sidebar = true;
+                let area = Rect::new(0, 0, width, height);
+                let opened = crate::render::regions(area, &s, 8, false);
+                assert!(opened.sidebar.right() <= width && opened.sidebar.bottom() <= height);
+                s.sidebar.open = false;
+                let closed = crate::render::regions(area, &s, 8, false);
+                assert_eq!(opened.transcript, closed.transcript);
+                assert_eq!(opened.details, closed.details);
             }
         }
     }
 
     #[test]
-    fn the_sidebar_paints_where_it_is_hit_tested_and_the_conversation_stays_right_of_it() {
-        let mut s = open("Files", 34);
-        s.title = "A conversation".into();
-        s.sidebar.files = json!({"loaded":true,"path":"","label":"repo/","rows":[
-            {"name":"src","path":"src","kind":"dir","size":""},
-            {"name":"README.md","path":"README.md","kind":"file","size":"1K"},
-        ]});
+    fn selector_paints_at_its_modal_hit_regions() {
+        let s = open("Projects", 34);
         let mut cache = crate::render::Cache::default();
         let (drawn, lines) = paint_all(&s, 140, 40, &mut cache);
-        assert_eq!(drawn.sidebar, crate::render::regions(Rect::new(0, 0, 140, 40), &s, crate::render::composer_height(Rect::new(0, 0, 140, 40), &crate::editor::Editor::default(), &s), false).sidebar);
-        assert_eq!(drawn.sidebar.width, 34);
-        let left = |y: usize| lines[y].chars().take(34).collect::<String>();
-        let tab_row = usize::from(cache.sidebar.tab_hits[0].0.y);
-        assert!(left(tab_row).contains("Projects"), "tabs paint in the sidebar: {}", left(tab_row));
-        let all = lines.join("\n");
-        assert!(all.contains("src/") && all.contains("README.md") && all.contains("repo/"));
-        for (y, line) in lines.iter().enumerate() {
-            let right: String = line.chars().skip(34).collect();
-            assert!(!right.contains("README.md") && !right.contains("Projects"), "row {y} leaks: {right}");
-        }
-        // Every tab cell lies inside the painted column.
+        assert_eq!(drawn.sidebar, selector_area(Rect::new(0, 0, 140, 40)));
+        assert!(lines.join("\n").contains("Projects"));
         for (rect, _) in &cache.sidebar.tab_hits {
             assert!(rect.x >= drawn.sidebar.x && rect.right() <= drawn.sidebar.right());
         }
-        // A closed sidebar paints nothing and moves nothing.
-        s.sidebar.open = false;
-        let (drawn, lines) = paint_all(&s, 140, 40, &mut cache);
-        assert_eq!(drawn.sidebar.width, 0);
-        assert!(!lines.join("\n").contains("README.md"));
     }
 
     impl Snapshot {

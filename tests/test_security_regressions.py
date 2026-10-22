@@ -207,7 +207,7 @@ def test_duplicate_id_group_rejected_before_permission(workspace: Path):
     )
     evaluation = engine.evaluate(
         ToolCall(id="x", name="Bash", input={"command": "echo hi > pwned"}),
-        manager.get("bash").spec,
+        manager.get("shell").spec,
     )
     assert evaluation.outcome is Outcome.DENY
 
@@ -803,7 +803,7 @@ def test_request_for_default_rule_is_exact_scope():
         ToolCall(id="c1", name="Bash", input={"command": "git status"}), bash_spec()
     )
     request = engine.request_for(evaluation)
-    assert request.default_rule == 'bash("git status")'
+    assert request.default_rule == 'shell("git status")'
     assert request.persistence_available is True
     assert request.default_rule in request.suggestions
 
@@ -858,7 +858,7 @@ def test_keyed_request_uses_exact_home_path_default():
     )
     assert evaluation.outcome is Outcome.ASK
     request = engine.request_for(evaluation)
-    assert request.default_rule == 'bash("~/deploy.sh")'
+    assert request.default_rule == 'shell("~/deploy.sh")'
     assert request.persistence_available is True
 
 
@@ -874,7 +874,7 @@ async def test_broker_persists_exact_home_rule_on_allow_always():
     assert await future is Decision.ALLOW_ALWAYS
 
     grants = broker.grants()
-    assert grants and grants[-1].rule == 'bash("~/deploy.sh")'
+    assert grants and grants[-1].rule == 'shell("~/deploy.sh")'
     assert grants[-1].matches("Bash", "~/deploy.sh", "shell")
     assert not grants[-1].matches("Bash", "rm -rf /", "shell")
 
@@ -912,7 +912,7 @@ async def test_broker_deny_always_exact_and_overlong_fallback():
     future = broker.request(exact_request)
     assert broker.resolve(exact_request.id, Decision.DENY_ALWAYS) is True
     assert await future is Decision.DENY_ALWAYS
-    assert broker.records[0]["grant"]["rule"] == 'bash("~/deploy.sh")'
+    assert broker.records[0]["grant"]["rule"] == 'shell("~/deploy.sh")'
     assert broker.records[0]["grant"]["effect"] == "deny"
 
     long_eval = engine.evaluate(
@@ -962,7 +962,7 @@ def test_collect_grants_never_widens_keyed_record_to_bare_tool():
         {"decision": "allow_always", "tool": "Write"},
     ]
     grants = collect_grants(records)
-    assert [grant.rule for grant in grants] == ['bash("git status")']
+    assert [grant.rule for grant in grants] == ['shell("git status")']
 
 
 def test_collect_grants_rejects_broader_or_mismatched_keyed_rules():

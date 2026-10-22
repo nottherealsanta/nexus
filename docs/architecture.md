@@ -129,7 +129,7 @@ extension rebuilds. Its rules:
   strings until the adapter builds a request. The runtime never reads, logs or
   persists a secret.
 - **Per-turn tool manager, shared state.** Each turn builds a fresh `ToolManager`
-  while sharing one shell `JobRegistry` and `TodoStore`, so jobs and todos
+  while sharing one shell `JobRegistry`, so jobs
   survive between turns without a mutable runtime-global manager.
 - **Adapters live here.** `_ToolDispatcherAdapter` and `_PermissionGateAdapter`
   implement the loop's protocols so `core/loop.py` stays protocol-only.

@@ -98,6 +98,7 @@ from the durable log. No thinking duration is synthesized.
 | Anthropic, Gemini, compatible chat, Ollama, OpenCode ACP | Shared thought normalization and context lifecycle. | Offline adapter/conformance tests; no other connected accounts were available. |
 | Claude Agent SDK bridge | Buffers final text; currently exposes no live thoughts. | Explicit implementation limitation. |
 | xAI Grok over SuperGrok (2026-10-14) | Live: device sign-in, grok-4.7 text, usage (with cached input) and a normal stop over `/responses`. Reasoning summaries were not asserted live; the event shapes follow OpenCode's xAI tests. | `tests/test_xai_live.py` (2 passed) and a `nexus chat` turn; offline adapter, conformance, device-OAuth and routing tests. |
+| NVIDIA hosted catalogue (offline only) | Chat Completions `reasoning_content` streams as public thinking before the reply, then usage-free stop on a synthetic fixture. Not observed live; no key was used. | `tests/test_nvidia_provider.py` and the `nvidia_chat` conformance spec. |
 
 ### External CLI workers (Antigravity)
 
@@ -141,3 +142,12 @@ Providers Settings always includes Antigravity, with manual CLI sign-in: run `ag
 in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified
 authentication. Nexus does not run a login subcommand, manage CLI credentials, or
 perform a model turn to discover availability. A missing CLI is reported honestly.
+
+NVIDIA setup recognizes `NVIDIA_API_KEY` in the daemon environment and persists only
+`${env:NVIDIA_API_KEY}`, not the secret. Its vetted default reference is
+`nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1`; the endpoint receives
+`nvidia/llama-3.1-nemotron-ultra-253b-v1`. The unverified NVIDIA
+`openai/gpt-oss-20b` snapshot record was removed: a models.dev cache entry alone
+is insufficient NVIDIA-specific endpoint evidence. Namespaced NVIDIA IDs require
+an explicit provider prefix and cannot resolve another provider through generic lookup.
+Live API validation remains pending.

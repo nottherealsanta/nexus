@@ -34,7 +34,9 @@ async def check_mode(browser, mode, key):
         path = Path(tmp)
         daemon = Daemon(path, socket_path=path / "d.sock",
                         runtime_factory=lambda workspace, **kw: Runtime(
-                            workspace, config=config, providers={"scripted": provider}))
+                            workspace, config=config, providers={"scripted": provider},
+                            home=path / "home"),
+                        home=path / "home")
         task = asyncio.create_task(daemon.serve_forever())
         page = await browser.new_page(viewport={"width": 1000, "height": 800})
         errors = []

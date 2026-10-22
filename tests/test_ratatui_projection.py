@@ -509,6 +509,143 @@ def test_modified_file_diff_is_sent_only_while_expanded(tmp_path, monkeypatch):
     assert opened["open"] is True and opened["diff"] == ["@@ -1 +1 @@", "-old", "+new"]
 
 
+class _JobsClient:
+    def __init__(self):
+        from nexus.host import protocol as p
+        self.p = p
+        self.calls = []
+        self.log_text = "one\ntwo\x1b[31m\n"
+        import time
+        now = float(int(time.time()))
+        self.jobs = [
+            p.JobSummary(job_id="j1", command="pytest -q", cwd="/secret/work", status="running", pid=7777777,
+                         started_at=now - 5, log_bytes=2048, log_available=True, can_background=True),
+            p.JobSummary(job_id="j2", command="make", status="failed", exit_code=2, started_at=now - 10,
+                         finished_at=now - 8, source="user"),
+        ]
+
+    async def session_jobs(self, session):
+        self.calls.append(("jobs", session))
+        return self.p.SessionJobsResult(session=session, jobs=self.jobs, running=1)
+
+    async def session_job_log(self, session, job_id, *, tail_lines=200, **_):
+        self.calls.append(("log", session, job_id, tail_lines))
+        return self.p.SessionJobLogResult(session=session, job_id=job_id, text=self.log_text, start=10, end=20, size=20)
+
+    async def session_job_stop(self, session, job_id):
+        self.calls.append(("stop", session, job_id))
+        return self.p.SessionJobStopResult(session=session, job_id=job_id, outcome="killed")
+
+    async def session_job_background(self, session, job_id):
+        self.calls.append(("background", session, job_id))
+        return self.p.SessionJobBackgroundResult(session=session, job_id=job_id, outcome="requested", requested=True)
+
+
+def _jobs_shell(tmp_path, monkeypatch, tab="Jobs", visible=True):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    client = _JobsClient()
+    controller = SimpleNamespace(view=initial_state("s"), session="s", client=client)
+    shell = ShellActions(controller)
+    shell.preferences.set("details_tab", tab)
+    shell.jobs.visible = visible
+    return shell, client
+
+
+async def test_jobs_poll_only_while_the_jobs_tab_is_drawn(tmp_path, monkeypatch):
+    shell, client = _jobs_shell(tmp_path, monkeypatch, tab="Session")
+    await shell.jobs.poll(force=True)
+    assert client.calls == []
+    shell.preferences.set("details_tab", "Jobs")
+    shell.jobs.visible = False
+    await shell.jobs.poll(force=True)
+    assert client.calls == []
+    shell.jobs.visible = True
+    await shell.jobs.poll(force=True)
+    assert client.calls == [("jobs", "s")]
+    await shell.jobs.poll()
+    assert client.calls == [("jobs", "s")], "polls are paced"
+
+
+async def test_jobs_projection_names_state_and_hides_paths_and_pids(tmp_path, monkeypatch):
+    shell, _ = _jobs_shell(tmp_path, monkeypatch)
+    await shell.jobs.poll(force=True)
+    jobs = project(shell.controller, 1, shell=shell)["details_panel"]["jobs"]
+    first, second = jobs["rows"]
+    assert (first["id"], first["command"], first["label"], first["selected"]) == ("j1", "pytest -q", "running", True)
+    assert first["stop"] and first["background"] and first["log"] and first["mode"] == "foreground"
+    assert "2.0 KB log" in first["facts"]
+    assert (second["label"], second["source"], second["facts"]) == ("failed", "you", "2s · exit 2")
+    assert not second["stop"] and not second["log"]
+    assert jobs["running"] == 1 and jobs["log"] is None
+    text = repr(jobs)
+    assert "/secret" not in text and "7777777" not in text and "cwd" not in text and "pid" not in text
+
+
+async def test_job_log_is_a_bounded_escaped_tail_and_refreshes_while_open(tmp_path, monkeypatch):
+    shell, client = _jobs_shell(tmp_path, monkeypatch)
+    await shell.jobs.poll(force=True)
+    await shell.jobs.open_log("j2")
+    assert shell.jobs.log is None and "no log" in shell.jobs.notice
+    await shell.jobs.open_log("j1")
+    log = shell.jobs.projection()["log"]
+    assert log["id"] == "j1" and log["status"] == "ok" and log["clipped"] is True
+    assert log["lines"][0] == "one" and "\x1b" not in "".join(log["lines"])
+    assert ("log", "s", "j1", 120) in client.calls
+    client.log_text = "three"
+    await shell.jobs.poll(force=True)
+    assert shell.jobs.projection()["log"]["lines"] == ["three"]
+    client.jobs = client.jobs[1:]  # the job left the list: its viewer closes
+    await shell.jobs.poll(force=True)
+    assert shell.jobs.log is None
+    await shell.jobs.close_log()
+
+
+async def test_job_stop_and_background_only_where_allowed(tmp_path, monkeypatch):
+    shell, client = _jobs_shell(tmp_path, monkeypatch)
+    await shell.jobs.poll(force=True)
+    await shell.jobs.stop("j2")
+    await shell.jobs.background("j2")
+    await shell.jobs.stop("nope")
+    assert not any(call[0] in {"stop", "background"} for call in client.calls)
+    await shell.jobs.background("j1")
+    assert shell.jobs.notice == "Asked to continue in the background."
+    await shell.jobs.stop("j1")
+    assert ("stop", "s", "j1") in client.calls and shell.jobs.notice == "Stopped the job."
+    await shell.jobs.select("j2")
+    assert shell.jobs.selected == "j2"
+
+
+async def test_job_state_is_dropped_when_the_session_changes_mid_flight(tmp_path, monkeypatch):
+    shell, client = _jobs_shell(tmp_path, monkeypatch)
+    await shell.jobs.poll(force=True)
+    await shell.jobs.open_log("j1")
+    original = client.session_jobs
+
+    async def switching(session):
+        shell.controller.session = "other"
+        shell.generation += 1
+        return await original(session)
+
+    client.session_jobs = switching
+    await shell.jobs.poll(force=True)
+    jobs = shell.jobs.projection()  # the reply for the old session was dropped, the old rows are gone
+    assert jobs["rows"] == [] and jobs["log"] is None and shell.jobs.selected == ""
+    client.session_jobs = original
+    await shell.jobs.poll(force=True)
+    assert client.calls[-1] == ("jobs", "other")
+    await shell.jobs.stop("j1")
+    assert ("stop", "s", "j1") not in client.calls
+
+
+def test_the_jobs_tab_is_a_stored_tab_and_the_unvisited_projection_is_empty(tmp_path, monkeypatch):
+    from nexus.ui_support.details import normalize_tab
+    assert normalize_tab("Jobs") == "Jobs"
+    shell, _ = _jobs_shell(tmp_path, monkeypatch, visible=False)
+    jobs = project(shell.controller, 1, shell=shell)["details_panel"]["jobs"]
+    assert jobs["rows"] == [] and jobs["loaded"] is False and jobs["log"] is None
+
+
 def test_session_cards_carry_status_words_age_and_the_current_marker():
     from nexus.host.protocol import ProjectSession, ProjectSessionsListResult
     from nexus.session.manager import SessionSummary

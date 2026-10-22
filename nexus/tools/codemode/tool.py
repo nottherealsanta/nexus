@@ -26,6 +26,7 @@ from ...mcp.search import SearchIndex
 from ...model.message import Image, Text
 from ...session.context_authz import ContextDenied
 from ...util import redact_secrets
+from ..names import translate_legacy_shell_input
 from ..spec import RegisteredTool, ToolExecutionResult, ToolSpec
 from .catalog import declarations, describe, render_catalog
 from .runner import LIMITS, CodeToolError
@@ -44,6 +45,8 @@ MAX_IMAGES = 8
 APPENDIX_ARGS_CHARS = 100
 HELPERS = ('search_tools', 'describe_tool', 'store', 'load', 'store_delete')
 IMAGE_REF = re.compile(r'\bimg-(\d+)\b')
+BACKGROUND_REFUSAL = ('background shell jobs are not available inside code: the program ends with the call. '
+                      'Run the command in the foreground, or start it with a direct shell call with background=true.')
 
 HELPER_STUBS = '''
 async def search_tools(query: str, limit: int = 8) -> list[dict[str, Any]]: ...
@@ -183,7 +186,7 @@ def _to_program(tool_name, result, images):
     metrics = result.metrics or {}
     if isinstance(metrics.get('structured'), dict) and not any(isinstance(p, dict) for p in parts):
         return dict(metrics['structured'])
-    if tool_name == 'bash' and isinstance(metrics.get('exit_code'), int):
+    if tool_name in ('shell', 'bash') and isinstance(metrics.get('exit_code'), int):
         return {'exit_code': metrics['exit_code'], 'output': text}
     if not parts:
         return ''
@@ -301,6 +304,10 @@ def register(runner, catalog, config, *, events=lambda session_id: (), context_s
 
         # -- audited host functions -------------------------------------------
         async def tool_call(name, tool, kwargs, record):
+            if tool.spec.name in ('shell', 'bash') and (kwargs.get('background') or kwargs.get('run_in_background')):
+                # A program ends with its call; a background job's exit would reach the
+                # model with no program left to use it.
+                raise CodeToolError(BACKGROUND_REFUSAL)
             nested_id = f'{call_id}.{record.index}'
             outcome = await ctx.invoke_tool(tool.spec.name, kwargs, parent_call_id=call_id, nested_id=nested_id)
             record.permission = outcome.permission
@@ -405,6 +412,16 @@ def register(runner, catalog, config, *, events=lambda session_id: (), context_s
             program_stubs += '\n' + provider.stubs()
             inputs['targets'] = list(approved)
         functions = {name: audited(name, impl) for name, impl in impls.items()}
+        if 'shell' in catalog and 'bash' not in catalog:
+            # The tool was called ``bash``: keep programs written for it working,
+            # translating the renamed arguments, and audit them as ``shell``.
+            shell_call = functions['shell']
+
+            async def bash(*pos, **kw):
+                return await shell_call(*pos, **translate_legacy_shell_input('bash', kw))
+
+            functions['bash'] = bash
+            program_stubs += '\nasync def bash(**kwargs: Any) -> Any: ...'
 
         # -- run ------------------------------------------------------------------
         outcome = None
