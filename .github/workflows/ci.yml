@@ -123,4 +123,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'
+      # Allow-list, not deny-list: anything but success/skipped (failure, cancelled, or a
+      # result GitHub never reported) fails the gate.
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needs: $RESULTS"
+          for r in $RESULTS; do case "$r" in success|skipped) ;; *) exit 1 ;; esac; done

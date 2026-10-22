@@ -31,7 +31,7 @@ CI red since 2026-10-19: ruff F811 in `tests/test_ratatui_live_manager.py:26`
 | 7 | Reconcile shard command (workflow ↔ test agent), push on a branch, measure a real run | main | committed + pushed to main; hosted run pending |
 | 6 | Linux for the Python suite | — | deferred (user decision) |
 | 10 | Fix/remove the 22 CI failures (+7 local-only PTY): GPT Live + host_facade group; rest (focus, phase3, runtime_extensions, tool_integration, PTY) | 2× sonnet | done; full local `-n auto`: 0 failed |
-| 9 | Patch release 0.6.1 (`Release-As`, user chose patch over proposed 0.7.0) to time the new pipeline | sonnet (release) | in progress |
+| 9 | Patch release 0.6.1 (`Release-As`, user chose patch over proposed 0.7.0) to time the new pipeline | sonnet (release) | done: v0.6.1 on GitHub (16 assets) and PyPI; PRs #90, #89 |
 
 ## Findings
 
@@ -98,3 +98,32 @@ Shards fail on the 28 pre-existing test failures (live_manager_required etc.), a
 expected. On pushes to main `native-wheels` (~7 min) is now the long pole; PRs run
 it only when native inputs change. The API reported shards 1/4 and native-wheels
 still in progress after the run was marked failed; re-check final timings.
+
+Release 0.6.1 (2026-10-22), old (0.6.0) vs new:
+
+| Pipeline | Old | New |
+| --- | --- | --- |
+| Release-please PR `ci` | 28.8 min (full suite) | jobs ~20 s (`changes`, `lint`, `ci-ok`; tests skipped) |
+| Release PR wall clock | ~29 min | ~14 min, now bound by the separate `install` workflow |
+| Push-to-main `ci` | 28.8 min | 9.8 min (shards 0.7–2.3 min; `native-wheels` 7 min is the long pole) |
+| `release` workflow | 30.4 min | 26 min (native-wheels; `macos-15-intel` ~21 min) |
+
+Release run 39796293112 shows failure: a transient GraphQL error in the
+`release-please` job after it had tagged; wheels and PyPI publish still succeeded.
+
+Test-fix commit 0a31c51 (run 39798391499): all green. Shards 1–3 passed first
+try (1.1–1.9 min); shard 4 failed in "Set up job" (runner DNS could not reach
+codeload.github.com) and passed on rerun (2097 passed, 1m45s). Total ~6 min to
+`ci-ok` excluding the rerun. Anomaly: on the first attempt `ci-ok` reported success
+despite shard 4's failure; the gate is now an allow-list (every `needs` result must
+be success or skipped) and echoes the results it saw.
+
+## Next candidates
+
+- `release`: `macos-15-intel` wheels (~21 min) are the long pole; add Rust caching
+  to cibuildwheel or cross-compile x86_64 on arm64.
+- `install` workflow (~14 min) gates PR wall-clock; run it only on install inputs
+  (already path-filtered; the release PR touches `pyproject.toml`) or skip on version-only diffs.
+- Push-to-main `native-wheels` (7 min) could move to PRs-with-native-changes only.
+- `cargo fmt` both crates, then add `cargo fmt --check` to `lint` (step 8).
+
