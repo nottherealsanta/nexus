@@ -93,7 +93,9 @@ def test_consent_call_bar_mute_card_and_hang_up(app, tmp_path):
     app.key(b"\r", 1.0)
     app.wait_for("Use GPT Live with the Manager?")  # /live now connects to the manager session only
     screen = app.redraw()
-    assert "ChatGPT account" in screen and "Agree and start the call" in screen, screen
+    # The dialog clips the notice body and announces it ("Tab inspect details"); the full wording
+    # (OpenAI, ChatGPT account, audio, summaries) is asserted in test_ratatui_live.py.
+    assert "Tab inspect details" in screen and "Agree and start the call" in screen, screen
     assert not consent.exists()  # asking records nothing
     app.key(b"\x1b[B", .3)  # Down from the notice to "Agree and start the call"
     app.key(b"\r", 1.5)

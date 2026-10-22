@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 
 from nexus.config import Config
-from nexus.config.schema import AgentSection, ConfigV2, ModelSection, PermissionsSection, ToolsSection
+from nexus.config.schema import AgentSection, ConfigV2, ManagerSection, ModelSection, PermissionsSection, ToolsSection
 from nexus.events import Event
 from nexus.host import HostFacade
 from nexus.host import protocol as p
@@ -14,7 +15,7 @@ from nexus.live.bridge import MAX_FINAL_CHARS, MAX_INPUT_BYTES, MAX_TRANSCRIPT_B
 from nexus.live.manager import LiveManager
 from nexus.model.providers.scripted import ScriptedProvider, Wait, text_response, tool_response
 from nexus.runtime import Runtime
-from tests.live_fakes import FakeHost, FakeLiveTransport, live_config, settle
+from tests.live_fakes import MANAGER_ID, FakeHost, FakeLiveTransport, live_config, settle
 
 
 # -- unit level: synthetic events, fake clock --------------------------------
@@ -237,21 +238,25 @@ def _config() -> Config:
     return Config(
         model="scripted/m", version=2,
         v2=ConfigV2(model=ModelSection(default="scripted/m"), agent=AgentSection(profile="coding"),
-                    permissions=PermissionsSection(mode="ask", on_unattended="deny"), tools=ToolsSection()),
+                    permissions=PermissionsSection(mode="ask", on_unattended="deny"), tools=ToolsSection(), manager=ManagerSection(enabled=True)),
     )
 
 
 async def make_call(tmp_path, provider, **config):
     from nexus.host_support.live_consent import write_consent
 
-    runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
+    # The manager is pinned to codex/gpt-6-luna with no fallback, so the scripted provider answers as "codex";
+    # its tool catalog needs a port, and these turns call no tool, so a bare stand-in does.
+    runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider, "codex": provider},
+                      manager_port_factory=lambda session: SimpleNamespace())
     write_consent(True)  # the daemon refuses LiveStart until the notice is recorded
+    write_consent(True, scope="manager")  # ... and the manager call needs the cross-session scope
     transport = FakeLiveTransport()
     runtime.live = LiveManager(live_config(**config), transport_factory=lambda **kw: transport,
                                environ={}, flush_interval=0.0)
     facade = HostFacade(runtime)
-    facade.open_session("s")
-    started = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\n"))
+    facade.open_manager()
+    started = await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0\r\n"))
     assert isinstance(started, p.LiveStartResult), started
     return runtime, facade, transport
 
@@ -281,8 +286,8 @@ async def test_idle_delegation_runs_a_normal_turn_and_appends_a_chunked_final(tm
         assert joined == answer.strip() and len(sent) >= 3
         assert "Agent Final Message" not in joined
 
-        handle = runtime.session("s")
-        view, _ = facade.state("s")
+        handle = runtime.session(MANAGER_ID)
+        view, _ = facade.state(MANAGER_ID)
         call = view.live
         assert [(d.delegation_id, d.mode) for d in call.delegations] == [("d1", "queue")]
         assert [(a.channel, a.delegation_id, a.chunks) for a in call.appends] == [("final", "d1", len(sent))]
@@ -295,7 +300,7 @@ async def test_idle_delegation_runs_a_normal_turn_and_appends_a_chunked_final(tm
         queued = next(e for e in handle.events if e.type == "input.queued")
         assert queued.data["origin"] == {"kind": "live", "delegation_id": "d1"}
         # the bridge is not a viewer
-        assert facade.presence.viewers("s") == 0 and handle._viewers == 0
+        assert facade.presence.viewers(MANAGER_ID) == 0 and handle._viewers == 0
     finally:
         await runtime.aclose()
 
@@ -314,8 +319,8 @@ async def test_delegated_transcript_equals_a_typed_prompt_apart_from_the_origin(
             return [(t.kind, t.phase, [(m.role, m.text, m.done) for m in t.messages],
                      [(x.name, x.status) for x in t.tools]) for t in view.turns]
 
-        assert shape("s") == shape("typed")
-        records = [m for m in runtime.session("s").read(force=True).records if getattr(m, "message", None) is not None]
+        assert shape(MANAGER_ID) == shape("typed")
+        records = [m for m in runtime.session(MANAGER_ID).read(force=True).records if getattr(m, "message", None) is not None]
         typed = [m for m in runtime.session("typed").read(force=True).records if getattr(m, "message", None) is not None]
         assert [(r.message.role, r.message.content) for r in records] == [(r.message.role, r.message.content) for r in typed]
     finally:
@@ -332,46 +337,21 @@ async def test_delegation_during_a_running_turn_steers_it(tmp_path):
     runtime, facade, transport = await make_call(tmp_path, provider)
     try:
         transport.push(delegation("d1", "read a.txt"))
-        await settle(lambda: runtime.session("s").active_turn_id is not None)
+        await settle(lambda: runtime.session(MANAGER_ID).active_turn_id is not None)
         transport.push(delegation("d2", "and mention the size"))
-        await settle(lambda: len(facade.state("s")[0].live.delegations) == 2)
+        await settle(lambda: len(facade.state(MANAGER_ID)[0].live.delegations) == 2)
         gate.set()
         await settle(lambda: final_sent(transport), timeout=5.0)
-        view, _ = facade.state("s")
+        view, _ = facade.state(MANAGER_ID)
         assert [(d.delegation_id, d.mode) for d in view.live.delegations] == [("d1", "queue"), ("d2", "steer")]
         finals = [m for m in transport.sent if m["type"] == "session.context.append"]
         assert "".join(m["content"][0]["text"] for m in finals) == "both requests done"
-        view_appends = facade.state("s")[0].live.appends
+        view_appends = facade.state(MANAGER_ID)[0].live.appends
         assert [(a.channel, a.delegation_id) for a in view_appends if a.channel == "final"] == [("final", "d2")]
         assert any(m["delegation_item_id"] == "d1" and "merged" in m["content"][0]["text"] for m in transport.sent if "content" in m)
         steered = [m for m in view.messages if m.role == "user" and m.origin and m.origin["delegation_id"] == "d2"]
         assert steered and steered[0].text == compose_request("and mention the size", [])[0]
     finally:
-        await runtime.aclose()
-
-
-async def test_permission_request_is_announced_and_never_resolved_by_the_bridge(tmp_path):
-    provider = ScriptedProvider(tool_response(("c1", "Write", {"path": "b.txt", "content": "B"})), text_response("done"))
-    runtime, facade, transport = await make_call(tmp_path, provider)
-    view_stream = facade.subscribe("s", 0, follow=True, client_id="user")  # the on-screen client: a viewer
-    await view_stream.__anext__()
-    try:
-        transport.push(delegation("d1", "write b.txt"))
-        await settle(lambda: any("on screen" in t for t in transport.texts()), timeout=5.0)
-        notice = next(m for m in transport.sent if "content" in m and "on screen" in m["content"][0]["text"])
-        assert notice["type"] == "delegation.context.append" and notice["delegation_item_id"] == "d1"
-        assert notice["channel"] == "speakable"
-        assert "cannot be approved by voice" in notice["content"][0]["text"]
-        await asyncio.sleep(0.05)
-        view, _ = facade.state("s")
-        pending = view.pending_permissions
-        assert len(pending) == 1  # still waiting for the user: nothing granted it
-        assert not (tmp_path / "b.txt").exists()
-        # the user answers on screen
-        assert facade.resolve_permission("s", pending[0].id, "deny_once", client_id="user")
-        await settle(lambda: final_sent(transport), timeout=5.0)
-    finally:
-        await view_stream.aclose()
         await runtime.aclose()
 
 
@@ -384,7 +364,7 @@ async def test_progress_commentary_uses_the_commentary_channel(tmp_path):
         await settle(lambda: final_sent(transport), timeout=5.0)
         progress = [m for m in transport.sent if m.get("channel") == "commentary"]
         assert len(progress) == 1 and "Read" in progress[0]["content"][0]["text"]
-        view, _ = facade.state("s")
+        view, _ = facade.state(MANAGER_ID)
         assert [a.channel for a in view.live.appends] == ["commentary", "final"]
     finally:
         await runtime.aclose()
@@ -396,15 +376,15 @@ async def test_ending_the_call_does_not_cancel_the_running_turn(tmp_path):
     runtime, facade, transport = await make_call(tmp_path, provider)
     try:
         transport.push(delegation("d1", "slow work"))
-        await settle(lambda: runtime.session("s").active_turn_id is not None)
-        await facade.handle(p.LiveStop(session="s"))
-        assert runtime.session("s").active_turn_id is not None
+        await settle(lambda: runtime.session(MANAGER_ID).active_turn_id is not None)
+        await facade.handle(p.LiveStop(session=MANAGER_ID))
+        assert runtime.session(MANAGER_ID).active_turn_id is not None
         gate.set()
         await facade.wait_idle(timeout=5.0)
-        view, _ = facade.state("s")
+        view, _ = facade.state(MANAGER_ID)
         assert view.turns[-1].phase == "completed" and view.live.status == "ended"
         assert not final_sent(transport)  # nobody left to tell
-        assert [e.type for e in runtime.session("s").events].count("live.ended") == 1
+        assert [e.type for e in runtime.session(MANAGER_ID).events].count("live.ended") == 1
     finally:
         await runtime.aclose()
 

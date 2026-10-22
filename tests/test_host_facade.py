@@ -22,6 +22,7 @@ from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
     ConfigV2,
+    ManagerSection,
     ModelSection,
     PermissionsSection,
     ToolsSection,
@@ -43,6 +44,7 @@ from nexus.runtime import Runtime
 from nexus.session.manager import SessionSummary, TrashRecord
 from nexus.tools.permissions import Decision
 from nexus.view import apply, fold
+from tests.live_fakes import MANAGER_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -330,6 +332,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ProviderModelsRefresh(provider="antigravity"),
         p.ProviderLoginCode(login_id="l", code="abc#state"),
         p.ProvidersUsage(),
+        p.UsageRefreshSettings(),
+        p.UsageRefreshSettingsSet(seconds=120),
         p.SessionArchive(session="s"),
         p.SessionUnarchive(session="s"),
         p.SessionListArchived(),
@@ -347,6 +351,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionJobBackground(session="s", job_id="job_0123456789ab"),
         p.SessionCancel(session="s"),
         p.SessionSubscribe(session="s", from_seq=3),
+        p.SessionFocus(session="s", client_id="client-1"),
+        p.SessionFocus(session=None, client_id="client-1"),
         p.SessionState(session="s", from_seq=1),
         p.SessionActivity(session="s"),
         p.LogsRead(session="s"),
@@ -458,6 +464,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ProvidersUsageResult(providers=[{"id": "codex", "windows": [{"label": "5-hour", "used_percent": 41.0}]}],
                                not_connected=["OpenCode Go"], fetched_at=1.0),
         p.SessionListResult(sessions=[summary]),
+        p.SessionFocusResult(session="s", client_id="client-1"),
+        p.UsageRefreshSettingsResult(seconds=120),
         p.SessionTreeResult(session="s"),
         p.SessionResolveResult(),
         p.SessionInspectResult(session="child", namespace="agents", view={}, request={}),
@@ -809,7 +817,10 @@ async def test_facade_health_exposes_counters_only():
         "viewers",
         "uptime",
         "dev",
+        "persistent_jobs_total",
+        "persistent_jobs",
     }
+    assert (health["persistent_jobs_total"], health["persistent_jobs"]) == (0, [])  # the fake runtime has no jobs
     assert not hasattr(facade, "config")
     assert not hasattr(facade, "environ")
 
@@ -1959,14 +1970,30 @@ async def test_project_sessions_bounded_search_does_not_list_or_rehydrate(tmp_pa
 # ---------------------------------------------------------------------------
 
 
+def _live_config() -> Config:
+    """``_config()`` with the manager enabled: GPT Live connects only to the manager session."""
+    return Config(
+        model="scripted/m",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/m"),
+            agent=AgentSection(profile="coding"),
+            permissions=PermissionsSection(mode="ask", on_unattended="deny"),
+            tools=ToolsSection(),
+            manager=ManagerSection(enabled=True),
+        ),
+    )
+
+
 def _live_runtime(tmp_path, *, transport=None, availability=None, consent=True, **config):
     from nexus.live.manager import LiveManager
     from nexus.host_support.live_consent import write_consent
     from tests.live_fakes import FakeLiveTransport, live_config
 
     if consent:  # the daemon refuses LiveStart until the notice is recorded (docs/live.md)
+        write_consent(True, scope="manager")  # the manager call carries other sessions' data
         write_consent(True)  # NEXUS_HOME is a private temp dir per test (tests/conftest.py)
-    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    runtime = Runtime(tmp_path, config=_live_config(), providers={"scripted": ScriptedProvider(text_response("unused"))})
     runtime.live = LiveManager(
         live_config(**config), transport_factory=lambda **kw: transport or FakeLiveTransport(),
         availability=availability, environ={}, flush_interval=0.0,
@@ -2017,9 +2044,9 @@ async def test_live_call_lifecycle_through_the_facade_is_durable_and_secret_free
     transport = FakeLiveTransport()
     runtime = _live_runtime(tmp_path, transport=transport)
     facade = HostFacade(runtime)
-    facade.open_session("s")
+    facade.open_manager()
     try:
-        started = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\noffer", voice="cove"))
+        started = await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0\r\noffer", voice="cove"))
         assert isinstance(started, p.LiveStartResult)
         assert started.answer_sdp == "v=0 answer" and started.voice == "cove" and started.call_id
         # the only thing the client gets back is the SDP answer
@@ -2027,34 +2054,34 @@ async def test_live_call_lifecycle_through_the_facade_is_durable_and_secret_free
         assert transport.offer == "v=0\r\noffer"
 
         status = await facade.handle(p.LiveStatus())
-        assert (status.state, status.reason, status.active_session) == ("active", "busy", "s")
-        busy = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
+        assert (status.state, status.reason, status.active_session) == ("active", "busy", MANAGER_ID)
+        busy = await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0"))
         assert isinstance(busy, p.ErrorResult) and busy.kind == "live_busy"
 
-        muted = await facade.handle(p.LiveMute(session="s", muted=None))
+        muted = await facade.handle(p.LiveMute(session=MANAGER_ID, muted=None))
         assert isinstance(muted, p.LiveStatusResult) and muted.muted is True and muted.state == "muted"
-        paused = await facade.handle(p.LivePause(session="s", paused=None))
+        paused = await facade.handle(p.LivePause(session=MANAGER_ID, paused=None))
         assert isinstance(paused, p.LiveStatusResult) and paused.paused and paused.state == "paused"
         assert paused.pause_remaining_s > 0
-        resumed = await facade.handle(p.LivePause(session="s", paused=False))
+        resumed = await facade.handle(p.LivePause(session=MANAGER_ID, paused=False))
         assert resumed.paused is False and resumed.state == "muted"
-        ack = await facade.handle(p.LiveHelperEvent(session="s", kind="dropped", detail="3"))
+        ack = await facade.handle(p.LiveHelperEvent(session=MANAGER_ID, kind="dropped", detail="3"))
         assert isinstance(ack, p.LiveHelperEventResult) and ack.ok
-        bad = await facade.handle(p.LiveHelperEvent(session="s", kind="explode"))
+        bad = await facade.handle(p.LiveHelperEvent(session=MANAGER_ID, kind="explode"))
         assert isinstance(bad, p.ErrorResult) and bad.kind == "live_bad_event"
 
-        stopped = await facade.handle(p.LiveStop(session="s"))
+        stopped = await facade.handle(p.LiveStop(session=MANAGER_ID))
         assert isinstance(stopped, p.LiveStatusResult) and stopped.state == "idle"
-        again = await facade.handle(p.LiveStop(session="s"))
+        again = await facade.handle(p.LiveStop(session=MANAGER_ID))
         assert isinstance(again, p.LiveStatusResult) and again.state == "idle"
 
-        events = [e async for e in facade.subscribe("s", 0, follow=False)]
+        events = [e async for e in facade.subscribe(MANAGER_ID, 0, follow=False)]
         live = [e for e in events if e.type.startswith("live.")]
         assert [e.type for e in live].count("live.started") == 1 and [e.type for e in live].count("live.ended") == 1
         assert all(e.turn is None for e in live)
-        view, _seq = facade.state("s")
+        view, _seq = facade.state(MANAGER_ID)
         assert view.live.status == "ended" and view.live.voice == "cove"
-        assert view.to_dict() == fold(runtime.session("s").events).to_dict()  # replay equals the live view
+        assert view.to_dict() == fold(runtime.session(MANAGER_ID).events).to_dict()  # replay equals the live view
     finally:
         await runtime.aclose()
 
@@ -2062,19 +2089,21 @@ async def test_live_call_lifecycle_through_the_facade_is_durable_and_secret_free
 async def test_live_start_validation_errors_are_bounded_and_typed(tmp_path):
     runtime = _live_runtime(tmp_path)
     facade = HostFacade(runtime)
+    facade.open_manager()
     facade.open_session("s")
     try:
         for command, kind in [
-            (p.LiveStart(session="s", offer_sdp=""), "live_bad_offer"),
-            (p.LiveStart(session="s", offer_sdp="x" * 70_000), "live_bad_offer"),
-            (p.LiveStart(session="nope", offer_sdp="v=0"), "live_no_session"),
-            (p.LiveStart(session="s", offer_sdp="v=0", voice="robot"), "live_bad_voice"),
+            (p.LiveStart(session=MANAGER_ID, offer_sdp=""), "live_bad_offer"),
+            (p.LiveStart(session=MANAGER_ID, offer_sdp="x" * 70_000), "live_bad_offer"),
+            (p.LiveStart(session="nope", offer_sdp="v=0"), "live_manager_required"),  # not the manager
+            (p.LiveStart(session="s", offer_sdp="v=0"), "live_manager_required"),  # a regular session
+            (p.LiveStart(session=MANAGER_ID, offer_sdp="v=0", voice="robot"), "live_bad_voice"),
             (p.LiveStart(session="x" * 300, offer_sdp="v=0"), "live_no_session"),
-            (p.LiveMute(session="s"), "live_not_active"),
+            (p.LiveMute(session=MANAGER_ID), "live_not_active"),
         ]:
             result = await facade.handle(command)
             assert isinstance(result, p.ErrorResult) and result.kind == kind, (command, result)
-        assert [e async for e in facade.subscribe("s", 0, follow=False) if e.type.startswith("live.")] == []
+        assert [e async for e in facade.subscribe(MANAGER_ID, 0, follow=False) if e.type.startswith("live.")] == []
     finally:
         await runtime.aclose()
 
@@ -2082,9 +2111,9 @@ async def test_live_start_validation_errors_are_bounded_and_typed(tmp_path):
 async def test_runtime_close_ends_an_active_call_once(tmp_path):
     runtime = _live_runtime(tmp_path)
     facade = HostFacade(runtime)
-    facade.open_session("s")
-    await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
-    handle = runtime.session("s")
+    facade.open_manager()
+    await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0"))
+    handle = runtime.session(MANAGER_ID)
     await runtime.aclose()
     ended = [e for e in handle.events if e.type == "live.ended"]
     assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"
@@ -2093,9 +2122,9 @@ async def test_runtime_close_ends_an_active_call_once(tmp_path):
 async def test_facade_shutdown_persists_live_ended_before_sessions_close(tmp_path):
     runtime = _live_runtime(tmp_path)
     facade = HostFacade(runtime, owns_runtime=True)
-    facade.open_session("s")
-    await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
-    handle = runtime.session("s")
+    facade.open_manager()
+    await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0"))
+    handle = runtime.session(MANAGER_ID)
     assert await facade.shutdown("bye") is True
     ended = [e for e in handle.events if e.type == "live.ended"]
     assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"

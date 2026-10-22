@@ -10,6 +10,9 @@ from nexus.live import protocol as lp
 from nexus.live.manager import SessionContext
 from nexus.live.transport import CallAnswer
 
+#: GPT Live connects only to the manager session (docs/manager.md); tests start calls on it.
+MANAGER_ID = "nexus-manager"
+
 
 async def settle(predicate, timeout: float = 2.0) -> None:
     async def wait():

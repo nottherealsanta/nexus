@@ -2096,6 +2096,11 @@ a live daemon run with a real provider.
 
 ## Left sidebar (Projects, Sessions, Files, Git)
 
+> Current state: the Projects and Sessions tabs are a fixed-size centered selector overlay
+> (`sidebar::selector_area`), not a docked column, and Files/Git moved to the details drawer. The
+> layout, width and hide-below-width paragraphs below describe the earlier docked column; the
+> stored width and the divider drag still exist but do not change the overlay.
+
 A docked column on the left, beside the conversation, with four tabs: **Projects**,
 **Sessions**, **Files**, **Git**. `/sessions` (and `Ctrl+O`/`Ctrl+S`) opens it on the
 Sessions tab instead of replacing the conversation with the old full-page dashboard. Opening

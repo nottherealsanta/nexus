@@ -1464,7 +1464,13 @@ class ContextManager:
             # Hysteresis: retire a real prefix, keep the newest complete history
             # group and the entire pinned user/tool tail. A brief alone never
             # rolls over again; required-tail overflow uses existing degradation.
-            keep = fit_suffix_count(eligible_costs, int(inputs.input_budget * env.config.v2.context.handoff_keep_fraction))
+            # The kept suffix is also bounded by the room the fixed parts (system,
+            # tools, user tail) leave in the window: when they take most of it, a
+            # plain fraction of the whole budget would keep everything and retire
+            # nothing, leaving the request over budget.
+            room = max(0, int(plan.input_budget) - sum(a.granted_tokens for a in plan.allocations))
+            keep = fit_suffix_count(eligible_costs, min(
+                int(inputs.input_budget * env.config.v2.context.handoff_keep_fraction), room))
             keep = self._repair_pairing(costs.history, ctx.user_tail(), keep)
             cut = len(costs.history) - keep
             seqs = ctx.session.active_messages()[1]

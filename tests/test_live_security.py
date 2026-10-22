@@ -16,7 +16,7 @@ from nexus.live.transport import CodexLiveTransport
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.runtime import Runtime
 from tests.test_live_bridge import _config
-from tests.live_fakes import live_config, settle
+from tests.live_fakes import MANAGER_ID, live_config, settle
 
 TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJlc2lnbmF0dXJlc2lnbmF0dXJl"
 ACCOUNT = "acct-secret-0123456789"
@@ -80,27 +80,28 @@ async def test_no_credential_reaches_events_results_or_logs(tmp_path, caplog, mo
     from nexus.host_support.live_consent import write_consent
 
     write_consent(True)  # the daemon refuses LiveStart until the notice is recorded
+    write_consent(True, scope="manager")
     facade = HostFacade(runtime)
-    facade.open_session("s")
+    facade.open_manager()
     results = []
     try:
-        started = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\noffer"))
+        started = await facade.handle(p.LiveStart(session=MANAGER_ID, offer_sdp="v=0\r\noffer"))
         results.append(started)
         if mode == "sideband_drop":
             assert isinstance(started, p.LiveStartResult)
-            await settle(lambda: any(e.type == "live.ended" for e in runtime.session("s").events), timeout=5.0)
+            await settle(lambda: any(e.type == "live.ended" for e in runtime.session(MANAGER_ID).events), timeout=5.0)
         else:
             assert isinstance(started, p.ErrorResult)
         results.append(await facade.handle(p.LiveStatus()))
-        results.append(await facade.handle(p.LiveStop(session="s")))
+        results.append(await facade.handle(p.LiveStop(session=MANAGER_ID)))
 
-        events = list(runtime.session("s").events)
+        events = list(runtime.session(MANAGER_ID).events)
         assert [e.type for e in events].count("live.started") == 1
         assert [e.type for e in events].count("live.ended") == 1
         assert_clean(json.dumps([e.data for e in events if e.type.startswith("live.")], default=str))
         assert_clean(json.dumps([msgspec.to_builtins(r) for r in results], default=str))
         assert_clean(caplog.text)
-        view, _ = facade.state("s")
+        view, _ = facade.state(MANAGER_ID)
         assert_clean(json.dumps(view.to_dict(), default=str))
         # the raw dev log (log_raw) is redacted too, and holds no audio or SDP offer secrets
         for path in (tmp_path / "home").rglob("*.jsonl"):

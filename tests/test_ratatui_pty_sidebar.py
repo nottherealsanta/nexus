@@ -1,4 +1,4 @@
-"""The left sidebar in a real PTY: tabs, wrapping, tab clicks, Ctrl+B, divider drag and width bounds.
+"""The Projects/Sessions selector (an overlay, `sidebar.rs`) in a real PTY: tabs, tab clicks, Ctrl+B, divider drag and width bounds.
 
 Build rust/tui first (`cargo build --manifest-path rust/tui/Cargo.toml`). Developer integration
 test: it needs controlling-TTY access, like ``test_ratatui_pty_sessions.py`` whose helpers it reuses.
@@ -39,33 +39,38 @@ def opened(columns, **fields):
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_the_sidebar_draws_all_tabs_and_groups_worktrees_beside_the_conversation():
+def test_the_selector_draws_both_tabs_and_groups_worktrees_over_the_conversation():
     t = opened(140)
     try:
         text = t.text()
-        for label in ("Projects", "Sessions", "Files", "Git"):
+        for label in ("Projects", "Sessions"):
             assert label in text, f"{label} tab missing:\n{text}"
+        # Files and Git live in the details drawer now, not the left sidebar.
+        assert "Files" not in text and "Git" not in text, text
         assert "nexus" in text and "main" in text and "feature-x" in text
         assert "Fix token refresh" in text, "the conversation is still there"
-        # Both start on screen row 2, the sidebar first: its tabs come left of the session tab.
-        assert text.index("Projects") < text.index("Fix token refresh")
+        # The selector is a centered overlay beneath the top bar (not a docked column): the
+        # session title in the top bar is painted before its tabs.
+        assert text.index("Fix token refresh") < text.index("Projects")
     finally:
         t.close()
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_tab_labels_wrap_in_a_narrow_sidebar_and_every_label_is_clickable():
+def test_both_selector_tabs_are_drawn_and_clickable_whatever_the_stored_width():
+    # The selector is centered at a fixed size (rust/tui/src/sidebar.rs `selector_area`), so the
+    # stored sidebar width no longer changes where the tab labels are. At 140 columns it spans
+    # columns 26..115 and its tab row is screen row 4: Projects at 27..35, Sessions at 38..47.
     t = opened(140, width=24)
     try:
         text = t.text()
-        assert all(label in text for label in ("Projects", "Sessions", "Files", "Git")), text
-        # Width 24 leaves 22 columns: Projects and Sessions share row 1, Files and Git wrap to row 2.
-        mouse(t, 0, 3, 3)
-        mouse(t, 0, 3, 3, release=True)
-        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Files"}
-        mouse(t, 0, 12, 3)
-        mouse(t, 0, 12, 3, release=True)
-        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Git"}
+        assert all(label in text for label in ("Projects", "Sessions")), text
+        mouse(t, 0, 40, 4)
+        mouse(t, 0, 40, 4, release=True)
+        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Sessions"}
+        mouse(t, 0, 30, 4)
+        mouse(t, 0, 30, 4, release=True)
+        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Projects"}
     finally:
         t.close()
 
@@ -76,9 +81,9 @@ def test_ctrl_b_toggles_the_sidebar_and_a_click_on_a_tab_asks_for_it():
     try:
         t.key(b"\x02")  # Ctrl+B
         assert t.action() == {"type": "sidebar", "op": "toggle"}
-        mouse(t, 0, 25, 2)  # the Files label in the first tab row
-        mouse(t, 0, 25, 2, release=True)
-        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Files"}
+        mouse(t, 0, 40, 4)  # the Sessions label in the selector's tab row
+        mouse(t, 0, 40, 4, release=True)
+        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Sessions"}
         t.key(b"\x11")
         assert t.action()["type"] == "quit"
     finally:
@@ -87,27 +92,30 @@ def test_ctrl_b_toggles_the_sidebar_and_a_click_on_a_tab_asks_for_it():
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
 def test_dragging_the_divider_sends_one_bounded_width_when_released():
+    # The selector is a fixed-size centered overlay, so the width has no visible effect, but the
+    # divider (its right border column, 115 at 140 columns) still reports one bounded width.
     t = opened(140)
     try:
-        mouse(t, 0, 34, 6)  # the divider is the last column of the 34-column sidebar
-        mouse(t, 32, 50, 6)
-        mouse(t, 32, 120, 6)  # beyond the maximum
-        mouse(t, 0, 120, 6, release=True)
+        mouse(t, 0, 115, 10)
+        mouse(t, 32, 50, 10)
+        mouse(t, 32, 120, 10)  # beyond the maximum
+        mouse(t, 0, 120, 10, release=True)
         assert t.action() == {"type": "sidebar", "op": "width", "width": 60}
-        mouse(t, 0, 60, 6)
-        mouse(t, 32, 2, 6)  # below the minimum
-        mouse(t, 0, 2, 6, release=True)
+        mouse(t, 0, 115, 10)
+        mouse(t, 32, 2, 10)  # below the minimum
+        mouse(t, 0, 2, 10, release=True)
         assert t.action() == {"type": "sidebar", "op": "width", "width": 24}
     finally:
         t.close()
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_the_sidebar_hides_instead_of_squeezing_the_conversation():
+def test_the_selector_still_fits_a_narrow_terminal_as_an_overlay():
+    # It overlays the conversation instead of docking beside it, so a narrow terminal no longer hides it.
     t = opened(70)
     try:
         text = t.text()
-        assert "Projects" not in text and "Sessions" not in text, text
+        assert "Projects" in text and "Sessions" in text, text
         assert "Fix token refresh" in text
     finally:
         t.close()

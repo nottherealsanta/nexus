@@ -226,7 +226,9 @@ with it the `handoff` default. The
 default was flipped under an explicit maintainer waiver of the soak and
 real-provider quality gate; it is not validated by real use (see
 [decisions.md](decisions.md)). `handoff_keep_fraction` defaults to
-0.25. After tool-result eviction the assembler chooses a pair-safe suffix,
+0.25 (also capped by the room the system, tools and user-tail parts leave in the window,
+so a tool-heavy request cannot keep its whole history and retire nothing). After
+tool-result eviction the assembler chooses a pair-safe suffix,
 keeps the entire current user/tool tail, and performs at most one handoff per
 assembly. Required brief/tail overflow is an actionable `ContextOverflow`, not
 a rollover loop. The PreCompact gate may block the write.

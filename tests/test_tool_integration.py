@@ -1213,6 +1213,7 @@ async def test_exact_persisted_event_and_message_order(tmp_path):
     assert types(events) == [
         "turn.started",
         "input.started",
+        "context.notice",  # baseline subagent roster note, first turn only
         "context.assembled",
         "model.started",
         "model.stopped",

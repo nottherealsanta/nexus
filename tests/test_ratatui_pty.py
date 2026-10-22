@@ -309,21 +309,28 @@ def test_local_disclosure_without_python_reply():
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"command" in probe.output
-        # A double click on the output label opens the rest without a Python snapshot.
+        # Every row of an expanded member carries the member's own toggle (the rest of its
+        # result stays under the `i` inspector), so a double click on the `Result:` row folds
+        # the call locally, with no Python snapshot.
         _click_row(probe, "Result:", double=True)
         time.sleep(.1)
         assert not probe.read_actions()
         from ratatui_screen import Screen
         current = Screen(40, 140)
         current.feed(bytes(probe.output))
-        assert "UNIQUE LOCAL RESULT" in current, current.text()
-        # Ordered patches preserve local expansion state.
+        assert "command" not in current.text(), current.text()
+        _click_row(probe, "Bash ls", double=True)  # reopen it
+        time.sleep(.1)
+        assert not probe.read_actions()
+        # Ordered patches preserve local expansion state: the reopened call stays open and
+        # shows the streamed change to its first row.
         updated = json.loads(json.dumps(block))
-        updated["members"][0]["local_detail"] += "\nSTREAMED RESULT"
+        updated["members"][0]["local_detail"] = updated["members"][0]["local_detail"].replace(
+            "command: ls", "command: ls STREAMED")
         probe.send({"schema":3,"revision":2,"generation":1,"blocks_from":0,"blocks":[updated]})
         time.sleep(.1)
         assert not probe.read_actions()
-        assert b"STREAMED RESULT" in probe.output
+        assert b"STREAMED" in probe.output
         assert probe.process.poll() is None
     finally:
         probe.close()
@@ -376,11 +383,14 @@ def test_tool_single_click_selects_double_click_toggles_locally():
         assert not probe.read_actions()
         assert "command" in screen_text()
         assert "UNIQUE LOCAL RESULT" not in screen_text()
+        # Every row of an expanded member carries the member's own toggle, so a double click
+        # on its `Result:` row folds the call too; the full result stays under `i`.
         time.sleep(.35)
         _click_row(probe, "Result:", double=True)
         time.sleep(.15)
         assert not probe.read_actions()
-        assert "UNIQUE LOCAL RESULT" in screen_text(), screen_text()
+        assert "command" not in screen_text(), screen_text()
+        assert "UNIQUE LOCAL RESULT" not in screen_text()
         # The keyboard `i` inspector is still a Python operation.
         probe.keys(b"i")
         time.sleep(.15)

@@ -5,6 +5,7 @@ from nexus.host.facade import HostFacade
 from nexus.host import protocol as p
 import msgspec
 import pytest
+import time
 
 
 def facade():
@@ -31,5 +32,5 @@ def test_focus_is_bounded_and_explicit():
         f.report_focus('bad id', 'root')
     with pytest.raises(ValueError):
         f.report_focus('client', 'unknown')
-    f._foreground['stale'] = ('root', 0)
+    f._foreground['stale'] = ('root', time.monotonic() - 301)  # monotonic has an arbitrary origin; 0 is not 'old' on a fresh host
     assert 'stale' not in f.focused_clients('root')
