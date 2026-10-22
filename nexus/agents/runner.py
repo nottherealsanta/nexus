@@ -2152,12 +2152,11 @@ class SubagentRunner:
                     worktree_root = self._worktree_root
                     if self._worktree_root_for is not None:
                         worktree_root = Path(self._worktree_root_for(self._workspace))
-                    record = await _maybe_await(
-                        create_worktree(
-                            self._workspace, session_id, root=worktree_root
-                        )
-                    )
+                    record, interrupted = await _shielded(_worktree_step(
+                        create_worktree, self._workspace, session_id, root=worktree_root))
                     worktree = _worktree_record(record)
+                    if interrupted:
+                        raise asyncio.CancelledError
                 except OperationCancelled:
                     raise
                 except Exception as exc:
@@ -2695,13 +2694,7 @@ class SubagentRunner:
                         else "failed"
                     }
                     finalized, interrupted = await _shielded(
-                        _maybe_await(
-                            mark_finished(
-                                session_id,
-                                final_outcome,
-                                root=worktree_root,
-                            )
-                        )
+                        _worktree_step(mark_finished, session_id, final_outcome, root=worktree_root)
                     )
                     if interrupted:
                         task_cancelled = True
@@ -3077,6 +3070,16 @@ def _worktree_record(record: object) -> dict[str, Any]:
         for name, value in values.items()
         if value is not None
     }
+
+
+async def _worktree_step(operation, *args, **kwargs):
+    from ..resources import process_slot
+    async with process_slot():
+        if inspect.iscoroutinefunction(operation):
+            return await operation(*args, **kwargs)
+        if getattr(getattr(operation, "__self__", None), "blocking", False):
+            return await _maybe_await(await asyncio.to_thread(operation, *args, **kwargs))
+        return await _maybe_await(operation(*args, **kwargs))
 
 
 async def _maybe_await(value: object) -> Any:

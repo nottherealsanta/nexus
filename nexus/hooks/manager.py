@@ -41,6 +41,8 @@ session layer. Cancellation is accepted structurally (anything with a coroutine
 
 from __future__ import annotations
 
+import uuid
+
 import asyncio
 import contextlib
 import hashlib
@@ -341,6 +343,7 @@ class HookModuleLoader:
 
     def __init__(self, *, origin: str = "hook") -> None:
         self._origin = origin
+        self._namespace = uuid.uuid4().hex
         self._owned: set[str] = set()
         self._lock = threading.RLock()
 
@@ -364,7 +367,7 @@ class HookModuleLoader:
             raise HookLoadError("staged source has no content hash")
         if not self._verify(staged, expected):
             raise HookLoadError("staged source changed before import; refusing")
-        module_name = module_name_for(staged.source_identity, generation)
+        module_name = module_name_for(self._namespace + staged.source_identity, generation)
         with self._lock:
             if module_name in sys.modules:
                 raise HookLoadError(f"module {module_name!r} is already loaded")
@@ -567,7 +570,13 @@ async def _collect_reader(task: asyncio.Task[_Capture]) -> _Capture:
         return _Capture()
 
 
-async def _run_process(
+async def _run_process(*args, **kwargs):
+    from ..resources import process_slot
+    async with process_slot():
+        return await _run_process_unlimited(*args, **kwargs)
+
+
+async def _run_process_unlimited(
     argv: Sequence[str],
     *,
     env: Mapping[str, str],
@@ -670,7 +679,9 @@ class HookManager:
         quarantine: Quarantine | None = None,
         loader: Any | None = None,
         sink: Any | None = None,
+        environ: Any | None = None,
     ) -> None:
+        self._environ = dict(os.environ if environ is None else environ)
         self._workspace = _absolute(workspace)
         self._home = _absolute(home) if home is not None else Path.home()
         #: The current, writable project location (STATE_PLAN §5.4).
@@ -1215,7 +1226,7 @@ class HookManager:
                 f"hook input exceeds {MAX_STDIN_BYTES} bytes",
                 timed_out=False,
             )
-        env = _build_command_env(spec, invocation)
+        env = _build_command_env(spec, invocation, self._environ)
         argv = _expand_argv(spec.argv, env) if not spec.shell else spec.argv
         outcome = await _run_process(
             argv,
@@ -1438,7 +1449,7 @@ def _parse_env(value: object) -> dict[str, str]:
     return env
 
 
-def _build_command_env(spec: HookSpec, invocation: HookInvocation) -> dict[str, str]:
+def _build_command_env(spec: HookSpec, invocation: HookInvocation, environ=None) -> dict[str, str]:
     """The bounded environment handed to a command hook.
 
     Starts from a tiny allow-list of the host environment (never the whole of
@@ -1447,7 +1458,7 @@ def _build_command_env(spec: HookSpec, invocation: HookInvocation) -> dict[str, 
     """
     env: dict[str, str] = {}
     for key in _ENV_ALLOWLIST:
-        value = os.environ.get(key)
+        value = (os.environ if environ is None else environ).get(key)
         if value is not None:
             env[key] = value
     env.update(invocation.env())

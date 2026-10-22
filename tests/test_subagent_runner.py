@@ -1008,6 +1008,66 @@ async def test_worktree_is_retained_and_inspected_on_cancellation(tmp_path):
     assert service.get("root/sub/1", root=root).final_status == "cancelled"
 
 
+async def test_task_cancellation_during_worktree_creation_finishes_and_finalizes(tmp_path):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    created = asyncio.Event()
+    finalized = []
+    path = tmp_path / "cancelled-worktree"
+
+    class GatedWorktreeService:
+        async def create(self, _parent, child_id, **_kwargs):
+            started.set()
+            await release.wait()
+            path.mkdir()
+            created.set()
+            return {"child_id": child_id, "path": path, "lifecycle": "created"}
+
+        async def mark_finished(self, child_id, outcome, **_kwargs):
+            finalized.append((child_id, outcome.status))
+            return {
+                "child_id": child_id,
+                "path": path,
+                "dirty_status": "",
+                "final_dirty_status": "",
+                "final_status": outcome.status,
+                "lifecycle": "finalized",
+            }
+
+    factory = Factory()
+    service = GatedWorktreeService()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        worktree_service=service,
+        worktree_root=tmp_path / "daemon",
+        runtime_supports_workspace=True,
+    )
+    spawn = asyncio.create_task(
+        runner.spawn(TaskRequest(prompt="cancel during create", worktree=True))
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        spawn.cancel()
+        await asyncio.sleep(0)
+        assert not spawn.done()
+        assert finalized == []
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(spawn, 5)
+    finally:
+        release.set()
+        if not spawn.done():
+            await asyncio.gather(spawn, return_exceptions=True)
+
+    assert created.is_set()
+    assert path.is_dir()
+    assert finalized == [("root/sub/1", "cancelled")]
+    assert factory.specs == []  # Cancellation happened before child construction.
+    assert runner.budget.active == 0
+
+
 async def test_worktree_finalization_failure_is_reported_and_releases_budget(tmp_path):
     parent = _git_repo(tmp_path / "parent")
     factory = Factory()

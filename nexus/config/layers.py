@@ -45,6 +45,7 @@ LEGACY_KEYS = frozenset(
 )
 V2_SECTION_KEYS = frozenset(
     {
+        "daemon",
         "agent",
         "model",
         "models",
@@ -398,6 +399,8 @@ USER_ONLY_PROVIDER_KEYS = ("worker_dangerously_skip_permissions",)
 
 
 def _reject_project_user_only_keys(doc: Mapping[str, Any], source: str) -> None:
+    if "daemon" in doc:
+        raise ConfigError(f"{source}: [daemon] may only be set in the user-level config")
     providers = doc.get("providers")
     if not isinstance(providers, Mapping):
         return

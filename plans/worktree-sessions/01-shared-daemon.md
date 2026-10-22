@@ -3,13 +3,95 @@
 Phases: **F0** (prep, no behavior change) and **F1** (shared mode, project switching).
 Foundation for everything else in this directory.
 
+## Implementation ledger — 2026-10-22
+
+The shared-daemon foundation is implemented on protocol v4. This ledger records
+scope decisions and supersedes the pre-implementation assumptions below.
+
+- [x] One socket per Nexus home / Python install; lazy, bounded project hosts.
+  Main checkout, linked worktree and subdirectory resolve to the same project;
+  submodules remain separate. Identity resolution is subprocess-free and bounded.
+- [x] Mutable connection focus, explicit project selectors, session-owner routing
+  (including drafts), and project-tagged events. Project switching keeps the UDS
+  connection and subscriptions. Parked UI sessions are keyed by project and id.
+- [x] Project-local environment snapshots, hooks, dynamically loaded modules,
+  shell jobs, diagnostics and lifecycle. Runtime construction runs off the event
+  loop. Invalid/slow project loads leave other projects responsive.
+- [x] Shared turn ceiling (32), process leases (16), and per-provider model stream
+  leases (6), fair by project then session. Leases survive background shell jobs
+  and release on errors/cancellation. Shell, grep, command hooks and current
+  worktree creation/review/integration commands use process admission.
+- [x] Per-project idle eviction, reference pinning, orphan cleanup and crash
+  recovery; daemon exits after a further empty idle window. Unload retires the
+  host atomically and replacement acquisition waits for teardown.
+- [x] One HTTP listener with `/w/<project-key>/` routes, separate tickets/cookies
+  and upload authentication. HTTP can address loaded projects; UDS supplies the
+  environment needed to load a new project.
+- [x] `projects`, `projects open`, daemon project status/logs/stop/reload, and
+  process-wide stop/restart/update guards with `--force`.
+- [x] Matching architecture, host, CLI, configuration, security, session and
+  module-map documentation.
+
+Decisions applied in this implementation:
+
+- No backwards compatibility, per-workspace escape hatch, `socket_path` shim,
+  or historical linked-worktree alias migration, as requested. Protocol v3 is
+  rejected. Old alias project rows are not rewritten or merged.
+- Git top level wins for subdirectories, including ignored directories; no
+  project-root opt-out is introduced. Environment is captured per project,
+  inherited by its sessions, and refreshed by project reload.
+- Worktree-bound root sessions, external-root adoption and launch-directory shell
+  cwd belong to files 02–03. This foundation preserves `launch_root` and
+  `launch_worktree` in identity; sessions currently use the canonical project
+  root. Merge/land/setup machinery belongs to files 06–07 and must use the same
+  resource leases when added.
+- Process limits are user-global `[daemon]` settings and are rejected in project
+  config. Shell/grep report process-slot waits. Provider leases enforce admission;
+  a dedicated provider-wait UI state is not added here.
+- Loop-lag diagnostics report the last-routed project as a hint, rather than
+  claiming reliable attribution of a synchronous extension stall. Projects share
+  the owner's process and trust boundary. Voice keeps project configuration and
+  environment; model pooling for voice is not part of the model-stream limiter.
+- The historical audit branch/path cited below is unavailable in this checkout;
+  this ledger makes no claim that every item in that unavailable audit is closed.
+
+Validation: identity, routing, environment/module isolation, eviction, missing
+roots, resources, cancellation, CLI/HTTP behavior and project switching have
+regression coverage. The real Chromium project-session check and a real native
+PTY journey (A → B, submit in B, both projects visible) pass. The native binary
+builds with `cargo build --locked --manifest-path rust/tui/Cargo.toml`.
+Final verification:
+
+- Full offline suite: **8,042 passed, 364 skipped, 6 deselected, 14 failed**.
+  The 12 native rendering failures also fail on unchanged HEAD with the same
+  freshly built binary (baseline subset: 12 failed, 1 passed). They are outside
+  this implementation; no Rust source changes are included.
+- The two other full-run failures are
+  `test_hide_placeholders_drops_throwaway_titles_before_the_limit_but_search_finds_them`
+  (a randomly generated name also matches `go`) and
+  `test_timeout_kills_the_process_group_and_changes_nothing` (the 0.5-second
+  timeout fires before the fixture writes its child PID). Rerunning both complete
+  suites passes **64 tests**; the timeout failure also reproduces on unchanged
+  HEAD. These unchanged tests/implementations were not modified to hide failures.
+- Scheduler, subagent and resource regression run: **97 passed**. Final shared
+  daemon/race/fairness/resources/native-switch run: **43 passed**. The additional
+  gated creation-cancellation regression passes independently (**1 passed**).
+- Real Chromium project-session navigation/auth isolation: passed.
+- Rust native build, Ruff (`nexus tests`) and `git diff --check`: passed.
+
+The Node-dependent tests use Playwright's bundled Node because the system Node
+installation is missing its libuv library. Socket/PTY tests require execution
+outside the filesystem sandbox. The results above do not claim an all-green
+full suite.
+
+
 ## 1. Why this comes first
 
 The user's requirement: "nexus daemon is not bound to one project. It should be able to handle
 multiple projects, each project with multiple worktrees, and the ability to easily switch between
 them. So it should not matter where nexus is launched from."
 
-Today (verified on `main`):
+Baseline before implementation (historical references):
 
 - One daemon per resolved workspace path. Socket `~/.nexus/daemon/<project_key>.sock`, with
   `.pid`, `.lock`, `.log`, `.http` beside it (`nexus/host/daemon.py:148-186`).
@@ -66,17 +148,18 @@ queue.
 | Git linked worktree | the **main checkout** that owns it (`git rev-parse --git-common-dir` → its parent; `host_support/git_head.py` already finds `main_root` without a subprocess) | the main checkout's key |
 | Subdirectory of a repo | the repo top level | the top level's key |
 | Non-git folder | the folder itself | `sha256(resolved folder)[:16]` |
-| Bare repo / `GIT_DIR` tricks / submodule checkout | *not verified*; a submodule checkout is treated as its own repo (its own `.git` file points into the superproject's modules dir, so `git_head` would report it as a worktree; must special-case `modules/` gitdirs) | — |
+| Submodule checkout | its own checkout top level; its modules gitdir does not have a linked-worktree `commondir` | its own root hash |
+| Bare repo / `GIT_DIR` tricks | no environment-driven Git discovery; folders without recognized checkout metadata fall back to plain identity | folder hash |
 
 Consequences:
 
 - For every main checkout and non-git folder, the key is **the same as today**, so existing
   sessions, state dirs (`~/.nexus/projects/<key>/`) and DB rows keep working.
 - Launching from a subdirectory changes today's behavior (today the subdirectory would be its own
-  workspace). The launch directory becomes the **initial shell cwd** of a new session (it must
-  be inside the session root), not a project. *Decision needed* (§10 Q1).
+  workspace). The project is the repo top level; preserving launch-directory cwd for
+  worktree-bound sessions is deferred to files 02–03.
 - Sessions recorded today under a manually created linked worktree (`nexus --workspace <wt>`)
-  have their own project key. Migration (§8) re-parents them.
+  have their own project key. They remain under their original key; this change does not migrate aliases (§8).
 
 Implementation: `nexus/host_support/project_identity.py` (new): `resolve_project(path) ->
 ProjectIdentity{key, root, kind: "git"|"plain", launch_root, launch_worktree: str | None}`,
@@ -103,7 +186,7 @@ nexus run  (cwd=/a)      ─Hello{v4, focus=/a, env}──────┤
 - **`ProjectHost`** (new, `nexus/host/projects.py`): one runtime per project, built lazily on
   first use, ref-counted by connections and subscriptions, evicted when idle (shared-daemon plan
   C6). `acquire(identity, env, client) -> ProjectHost`.
-- **`Daemon`** loses `workspace`, gains `projects: ProjectRegistry`. Daemon-level commands
+- **`Daemon`** owns `projects: ProjectRegistry`; `workspace` is only initial launch metadata. Daemon-level commands
   (`Health`, `Shutdown`, `UpdateStatus`, `ProjectList`, `ProjectOpen`) answer for the process.
 - **Socket**: `~/.nexus/daemon/shared-v<PROTOCOL_VERSION>-<sha8(sys.prefix)>.sock` (+ `.pid`,
   `.lock`, `.log`, `.http`), so two installs (editable checkout vs `uv tool`) run two daemons
@@ -128,7 +211,7 @@ Protocol v4 changes (`nexus/host/protocol.py`, `transports/__init__.py`):
 ```
 Hello{version: 4, client_id, client, focus: str  # absolute path, required
       env: dict[str,str] | None}                 # bounded; UDS only, never echoed
-Welcome{..., focus: ProjectRef}                   # resolved identity
+Welcome{..., focus: ProjectRef | None} # None for control clients                   # resolved identity
 ProjectRef{key, root, name, kind: "git"|"plain"}
 ProjectFocus{project: str}  -> ProjectFocusResult{project: ProjectRef}
 ProjectOpen{path: str}      -> ProjectOpenResult{project: ProjectRef, created: bool}
@@ -142,7 +225,7 @@ ProjectRow{project: ProjectRef, loaded: bool, exists: bool, sessions: int,
 - `ProjectFocus` does not cancel subscriptions; a client may watch sessions in several projects
   at once (the dashboard does). It only changes the default for project-scoped commands.
 - `ProjectSessionOpen` stops returning another daemon's socket: it focuses the session's project
-  and returns the session handle. `socket_path` is kept empty for one release, then removed.
+  and returns the session handle. `socket_path` is removed immediately; no compatibility shim is provided.
 - Events delivered to a client carry their project key so the TUI can badge activity in other
   projects (file 08).
 
@@ -174,39 +257,31 @@ jobs. A waiting step shows `waiting for a process slot` in its row.
 Idle: per-project eviction after `idle_timeout` with no viewer, no turn, no queued turn and no
 land in progress; daemon exit when no project is loaded for `idle_timeout`.
 
-## 8. Migration
+## 8. Protocol cutover
 
-1. v4 clients refuse v3 daemons (`VersionMismatch`); `nexus update` already stops old daemons;
-   stale `<hash>.sock` files are reclaimed by the existing stale-socket path.
-2. Escape hatch: `NEXUS_DAEMON=per-workspace` for one minor release after the default flips
-   (shared-daemon plan C3); in that mode worktree sessions are unavailable and say so.
-3. **Re-parenting linked-worktree projects**: at first load, for every `projects` row whose root
-   is a linked worktree of a known main checkout (via `git_head`), record an alias
-   (`project_aliases(alias_id, project_id, root, created_at)`, new table) so its sessions list
-   under the main project with `root = <worktree>` (external root, file 02 §5). Rows are not
-   rewritten; the alias is reversible. Per-project state dirs of the alias are left in place and
-   listed in Doctor.
-4. No change to session records.
+Protocol v4 replaces v3 without a compatibility mode. Main-checkout and plain
+folder project keys retain their path hash. Existing records are left intact;
+linked-worktree project aliases are not migrated. A new launch in a linked
+worktree resolves to its main checkout. External-root adoption is file 02 work.
 
 ## 9. Failure modes
 
 | Failure | Behavior |
 | --- | --- |
 | One project's runtime fails to build (bad config, extension error) | that project shows the error in its focus view; other projects unaffected; retry via `nexus daemon reload` |
-| Event-loop stall from one project's extension | loop-lag watchdog logs and names the project (C3); all projects stall (accepted, documented in `docs/security.md`) |
+| Event-loop stall from one project's extension | loop-lag watchdog logs the last-routed project as an attribution hint; all projects stall (accepted, documented in `docs/security.md`) |
 | Daemon crash | every project's turns stop; durable logs replay on restart (existing recovery); merge queue recovery (file 07 §3) |
 | Project root deleted while loaded | project marked `exists=false`; sessions read-only; no Git operations |
 | Two installs | two daemons by socket name; a project open in both shows the existing session/worktree locks (flock-based, cross-process safe) |
 
-## 10. Open questions
+## 10. Resolved decisions
 
-1. **Subdirectory launch**: project = repo top level (recommended; matches Git and the worktree
-   model) vs today's "the folder is the workspace". The former changes which `.agents/` is read
-   when users run Nexus in a monorepo package folder. Recommended: top level, with
-   `[project] root = "subdir"` opt-out in a `.agents/nexus.toml` found at the launch folder.
-2. **Env per project vs per session**: worktree sessions inherit the project's captured env.
-   Recommended: yes; `.envrc` differences between worktrees are out of scope.
-3. **Non-git folders inside a repo's ignored dirs**: treated as the repo (top level wins).
+1. Subdirectory launches use the Git top level as the project, including ignored
+   directories. No `[project] root` opt-out is introduced. Launch-directory cwd
+   for worktree-bound sessions is deferred to files 02–03.
+2. Environment is captured per project. Its sessions inherit that snapshot;
+   worktree-specific `.envrc` differences are out of scope. Reload refreshes it.
+3. No backwards compatibility or linked-worktree alias migration is required.
 
 ## 11. Tests (F0, F1)
 
@@ -218,7 +293,7 @@ limits, credentials, eviction, CLI semantics, static guards), plus:
 - `tests/test_host_daemon_projects.py`: two projects in one daemon; `ProjectFocus` changes the
   default without dropping subscriptions; session commands route by session; a project-scoped
   command with an explicit key reaches only that project; events carry the project key.
-- `tests/test_project_aliases.py`: migration of a linked-worktree project row.
+- No alias migration tests: compatibility migration is explicitly omitted.
 - Native PTY journey: launch in project A, switch to B from the picker, run a turn in each,
   both visible in the dashboard.
 

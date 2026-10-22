@@ -1,5 +1,22 @@
 # CLI, one-shot runs and chat commands
 
+## Shared daemon project commands
+
+`--workspace PATH` selects the initial focus. Launching inside a Git subdirectory
+or linked worktree selects its owning main checkout.
+
+- `nexus projects`: list known project keys and roots.
+- `nexus projects open PATH`: register and load a project.
+- `nexus daemon status`: process status and per-project running/queued counts.
+- `nexus daemon stop`: unload the focus project; `--force` permits active work.
+- `nexus daemon stop --all`: stop processes; active turns require `--force`.
+- `nexus daemon reload`: rebuild the unused focus project with the caller env.
+- `nexus daemon restart`: restart the shared process; active turns require `--force`.
+- `nexus daemon logs`: focus-project log lines; `--all` includes process/all projects.
+
+Process-wide restart and update require `--force` when turns are active.
+
+
 `nexus/cli.py` is the canonical terminal entry (`nexus = nexus.cli:main`). It is
 a **pure client**: every subcommand except a few local ones (`init`, `auth`,
 `claude`, `update`, `uninstall`, `searchserver`, `daemon`) is a host command over the daemon's
@@ -77,7 +94,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/details` | | | model, context, queue, approvals, subagents |
 | `/context` | | | assembled prompt, tools, messages, accounting |
 | `/reconnect` | | | reattach and replay missed events |
-| `/restart` | | | restart the workspace daemon and reconnect (native TUI; see below) |
+| `/restart` | | | restart the shared daemon and reconnect (native TUI; see below) |
 | `/cancel` | | | cancel the active turn |
 | `/close` | | | close the current tab (native TUI only; same action as the tab close button) |
 | `/fork` | `[at_seq]` | | branch this session |
@@ -114,7 +131,7 @@ start a new session via `/new` instead; the original session tab is retained.
 Running sessions may appear again through the existing background-tab discovery.
 Use `/cancel` explicitly to stop a turn, or `/exit` (`/quit`) to leave chat.
 
-In the native TUI, `/restart` takes no arguments. The client stops the workspace
+In the native TUI, `/restart` takes no arguments. The client stops the shared
 daemon (`nexus.host.daemon.stop`, whose refusal is an error), waits up to 10 s for
 the old process to exit (`daemon.wait_stopped`: the recorded pid, or the daemon lock
 when none was running — `status` is not trusted, it reads "not running" while the

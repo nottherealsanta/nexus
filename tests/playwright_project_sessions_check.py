@@ -25,24 +25,26 @@ async def main():
         ))
         def factory(path, **kwargs):
             return Runtime(path, home=home, config=config, providers={"scripted": ScriptedProvider(text_response("hello"))})
-        daemons = []
+        daemon = Daemon(root, home=home, runtime_factory=factory)
+        hosts = []
         try:
+            await daemon.start()
+            from nexus.host_support.project_identity import resolve_project
             for prefix in ("one", "two"):
                 workspace = root / prefix / "demo"
                 workspace.mkdir(parents=True)
-                daemon = Daemon(workspace, home=home, runtime_factory=factory)
-                await daemon.start()
-                daemon.facade.open_session("same", create=True)
-                await daemon.facade.start_turn("same", f"{prefix} project message")
-                await daemon.facade.wait_idle(timeout=10)
-                daemons.append(daemon)
+                host = await daemon.projects.acquire(resolve_project(workspace), {}, "browser-test")
+                host.facade.open_session("same", create=True)
+                await host.facade.start_turn("same", f"{prefix} project message")
+                await host.facade.wait_idle(timeout=10)
+                hosts.append(host)
             async with async_playwright() as pw:
                 browser = await pw.chromium.launch()
                 page = await browser.new_page()
                 await page.emulate_media(reduced_motion="reduce")
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                await page.goto(await daemons[0].web_launch())
+                await page.goto(await daemon.web_launch(hosts[0]))
                 await page.locator("#session-list .session-project").nth(1).wait_for()
                 headings = await page.locator("#session-list .session-project").all_text_contents()
                 assert headings == [str(root / "two/demo"), str(root / "one/demo")], headings
@@ -65,9 +67,9 @@ async def main():
                             await page.locator("#sidebar-toggle").click()
                             await page.wait_for_function("() => !document.querySelector('#app').classList.contains('sidebar-open')")
                 await page.set_viewport_size({"width": 1440, "height": 900})
-                await daemons[1].web_launch()
+                await daemon.web_launch(hosts[1])
                 await page.locator("#session-list .session-item:not(:has(.session-delete)) .session-row").click()
-                await page.wait_for_url(f"http://127.0.0.1:{daemons[1]._http.port}/s/same")
+                await page.wait_for_url(f"http://127.0.0.1:{daemon._http.port}/w/{hosts[1].identity.key}/s/same")
                 await page.locator("#timeline").get_by_text("two project message", exact=True).wait_for()
                 await page.reload()
                 await page.locator("#session-list .session-project").nth(1).wait_for()
@@ -75,8 +77,7 @@ async def main():
                 assert not errors, errors
                 await browser.close()
         finally:
-            for daemon in reversed(daemons):
-                await daemon.aclose()
+            await daemon.aclose()
     print("Project session browser checks passed")
 
 

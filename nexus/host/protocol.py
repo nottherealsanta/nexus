@@ -39,7 +39,7 @@ from ..session.manager import SessionSummary
 
 #: Bumped when a command/result shape changes incompatibly, so a transport can
 #: refuse a peer built from a different protocol revision instead of misreading.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 
 # ---------------------------------------------------------------------------
@@ -47,16 +47,74 @@ PROTOCOL_VERSION = 3
 # ---------------------------------------------------------------------------
 
 
+class ProjectRef(msgspec.Struct, frozen=True):
+    key: str
+    root: str
+    name: str
+    kind: Literal["git", "plain"]
+
+
+class ProjectFocus(msgspec.Struct, tag=True, frozen=True):
+    project: str
+
+
+class ProjectOpen(msgspec.Struct, tag=True, frozen=True):
+    path: str
+
+
+class ProjectList(msgspec.Struct, tag=True, frozen=True):
+    limit: int = 100
+
+
+class ProjectUnload(msgspec.Struct, tag=True, frozen=True):
+    project: str = ""
+    force: bool = False
+
+
+class ProjectReload(msgspec.Struct, tag=True, frozen=True):
+    project: str = ""
+
+
+class ProjectFocusResult(msgspec.Struct, tag=True, frozen=True):
+    project: ProjectRef
+
+
+class ProjectOpenResult(msgspec.Struct, tag=True, frozen=True):
+    project: ProjectRef
+    created: bool
+
+
+class ProjectRow(msgspec.Struct, frozen=True):
+    project: ProjectRef
+    loaded: bool
+    exists: bool
+    sessions: int = 0
+    running: int = 0
+    queued: int = 0
+    worktrees: int = 0
+    behind: int = 0
+    last_activity: float = 0.0
+    loaded_at: float = 0.0
+    environment_from: str = ""
+
+
+class ProjectListResult(msgspec.Struct, tag=True, frozen=True):
+    projects: list[ProjectRow] = msgspec.field(default_factory=list)
+    truncated: bool = False
+
+
 class SessionList(msgspec.Struct, tag=True, frozen=True):
     """List every session as a transport-neutral summary."""
 
     include_children: bool = False
+    project: str = ""
 
 
 class SessionResolve(msgspec.Struct, tag=True, frozen=True):
     ref: str
     namespace: str | None = None
     include_retired: bool = False
+    project: str = ""
 
 
 class SessionResolveResult(msgspec.Struct, tag=True, frozen=True):
@@ -68,6 +126,7 @@ class SessionTree(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     namespace: str = "main"
+    project: str = ""
 
 
 class SessionTreeResult(msgspec.Struct, tag=True, frozen=True):
@@ -87,12 +146,14 @@ class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
     #: newest opened first, the active workspace always included) whether or not they have a
     #: listed session; 0 returns none. Bounded at 500 by the host.
     projects: int = 0
+    project: str = ""
 
 
 class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
     workspace: str
     session: str
     browser: bool = False
+    project: str = ""
 
 
 class ProjectSession(msgspec.Struct, frozen=True):
@@ -136,18 +197,21 @@ class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class ProjectSessionOpenResult(msgspec.Struct, tag=True, frozen=True):
-    socket_path: str = ""
+    project: ProjectRef | None = None
+    session: str = ""
     url: str = ""
 
 
 class SettingsInventory(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
+    project: str = ""
 
 
 class SettingsRead(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
     id: str
+    project: str = ""
 
 
 class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
@@ -156,6 +220,7 @@ class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
     id: str
     body: str
     expected_sha256: str | None = None
+    project: str = ""
 
 
 class SettingsMcpLoadingSet(msgspec.Struct, tag=True, frozen=True):
@@ -163,6 +228,7 @@ class SettingsMcpLoadingSet(msgspec.Struct, tag=True, frozen=True):
     server: str
     mode: Literal["search", "all"]
     expected_sha256: str
+    project: str = ""
 
 
 class SettingsMcpEnabledSet(msgspec.Struct, tag=True, frozen=True):
@@ -170,6 +236,7 @@ class SettingsMcpEnabledSet(msgspec.Struct, tag=True, frozen=True):
     server: str
     enabled: bool
     expected_sha256: str
+    project: str = ""
 
 
 class SettingsMcpAdd(msgspec.Struct, tag=True, frozen=True):
@@ -194,17 +261,20 @@ class SettingsMcpAdd(msgspec.Struct, tag=True, frozen=True):
     def __repr__(self) -> str:
         return (f"SettingsMcpAdd(scope={self.scope!r}, name={self.name!r}, entry=<masked>, "
                 f"expected_sha256={self.expected_sha256!r}, dry_run={self.dry_run!r})")
+    project: str = ""
 
 
 class SettingsReset(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
+    project: str = ""
 
 
 class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
     id: str
+    project: str = ""
 
 
 class SkillsInstall(msgspec.Struct, tag=True, frozen=True):
@@ -219,10 +289,12 @@ class SkillsInstall(msgspec.Struct, tag=True, frozen=True):
     source: str
     skills: list[str] = msgspec.field(default_factory=list)
     overwrite: bool = False
+    project: str = ""
 
 
 class SetupStatus(msgspec.Struct, tag=True, frozen=True):
     """Read-only first-run provider connection state; no credentials cross the wire."""
+    project: str = ""
 
 
 class SetupSave(msgspec.Struct, tag=True, frozen=True):
@@ -233,10 +305,12 @@ class SetupSave(msgspec.Struct, tag=True, frozen=True):
 
     provider: str
     model: str = ""
+    project: str = ""
 
 
 class ProvidersStatus(msgspec.Struct, tag=True, frozen=True):
     """Settings → Providers: sign-in state per provider; never a credential."""
+    project: str = ""
 
 
 class ProviderLogin(msgspec.Struct, tag=True, frozen=True):
@@ -248,14 +322,17 @@ class ProviderLogin(msgspec.Struct, tag=True, frozen=True):
     provider: str
     method: str = ""
     domain: str = ""
+    project: str = ""
 
 
 class ProviderLoginPoll(msgspec.Struct, tag=True, frozen=True):
     login_id: str
+    project: str = ""
 
 
 class ProviderLoginCancel(msgspec.Struct, tag=True, frozen=True):
     login_id: str
+    project: str = ""
 
 
 class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
@@ -270,12 +347,14 @@ class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=T
 
     def __repr__(self) -> str:
         return f"ProviderKeySet(provider={self.provider!r}, key='***')"
+    project: str = ""
 
 
 class ProviderLogout(msgspec.Struct, tag=True, frozen=True):
     """Remove one provider's credential from the private credential file."""
 
     provider: str
+    project: str = ""
 
 
 class ProviderModelsRefresh(msgspec.Struct, tag=True, frozen=True):
@@ -285,6 +364,7 @@ class ProviderModelsRefresh(msgspec.Struct, tag=True, frozen=True):
     """
 
     provider: str
+    project: str = ""
 
 
 class ProviderLoginCode(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
@@ -298,10 +378,12 @@ class ProviderLoginCode(msgspec.Struct, tag=True, frozen=True, repr_omit_default
 
     def __repr__(self) -> str:
         return f"ProviderLoginCode(login_id={self.login_id!r}, code='***')"
+    project: str = ""
 
 
 class ProvidersUsage(msgspec.Struct, tag=True, frozen=True):
     """Plan limits (5-hour, weekly, monthly…) for every connected provider."""
+    project: str = ""
 
 
 class SessionHandoff(msgspec.Struct, tag=True, frozen=True):
@@ -311,18 +393,21 @@ class SessionHandoff(msgspec.Struct, tag=True, frozen=True):
     summary: str | None = None
     continuation: str | None = None
     request_id: str = ""
+    project: str = ""
 
 
 class SessionHandoffRead(msgspec.Struct, tag=True, frozen=True):
     session: str
     namespace: str = "main"
     handoff_id: str = ""
+    project: str = ""
 
 
 class SessionInspect(msgspec.Struct, tag=True, frozen=True):
     """Bounded durable read without opening a session handle."""
     session: str
     namespace: str = "agents"
+    project: str = ""
 
 
 class SessionInspectResult(msgspec.Struct, tag=True, frozen=True):
@@ -337,6 +422,7 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     session: str
     create: bool = True
     recover: bool = True
+    project: str = ""
 
 
 class AttachmentPrepare(msgspec.Struct, tag=True, frozen=True):
@@ -345,6 +431,7 @@ class AttachmentPrepare(msgspec.Struct, tag=True, frozen=True):
     name: str = ""
     path: str = ""
     data: bytes = b""
+    project: str = ""
 
 
 class AttachmentPrepareResult(msgspec.Struct, tag=True, frozen=True):
@@ -359,6 +446,7 @@ class AttachmentPreview(msgspec.Struct, tag=True, frozen=True):
 
     attachment_id: str
     max_bytes: int = 4 * 1024 * 1024
+    project: str = ""
 
 
 class AttachmentPreviewResult(msgspec.Struct, tag=True, frozen=True):
@@ -375,6 +463,8 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
     attachment_labels: list[str] = msgspec.field(default_factory=list)
 
     client_request_id: str = ""
+    project: str = ""
+
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     session: str
@@ -385,6 +475,8 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     attachment_labels: list[str] = msgspec.field(default_factory=list)
 
     client_request_id: str = ""
+    project: str = ""
+
 
 class SessionShell(msgspec.Struct, tag=True, frozen=True):
     """Run a user-typed ``!`` command with bash in the workspace.
@@ -395,6 +487,7 @@ class SessionShell(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     command: str
+    project: str = ""
 
 
 class SessionJobs(msgspec.Struct, tag=True, frozen=True):
@@ -405,6 +498,7 @@ class SessionJobs(msgspec.Struct, tag=True, frozen=True):
     """
 
     session: str
+    project: str = ""
 
 
 class SessionJobLog(msgspec.Struct, tag=True, frozen=True):
@@ -420,6 +514,7 @@ class SessionJobLog(msgspec.Struct, tag=True, frozen=True):
     tail_lines: int = 200
     offset: int | None = None
     limit: int = 32768
+    project: str = ""
 
 
 class SessionJobStop(msgspec.Struct, tag=True, frozen=True):
@@ -427,6 +522,7 @@ class SessionJobStop(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     job_id: str
+    project: str = ""
 
 
 class SessionJobBackground(msgspec.Struct, tag=True, frozen=True):
@@ -438,6 +534,7 @@ class SessionJobBackground(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     job_id: str
+    project: str = ""
 
 
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
@@ -445,6 +542,7 @@ class SessionCancel(msgspec.Struct, tag=True, frozen=True):
     reason: str = ""
     drop_queue: bool = True
     return_queue: bool = False  # recover removed queued text for the composer
+    project: str = ""
 
 
 class SessionQueueMove(msgspec.Struct, tag=True, frozen=True):
@@ -453,6 +551,7 @@ class SessionQueueMove(msgspec.Struct, tag=True, frozen=True):
     session: str
     queued_id: str
     offset: int = -1  # -1 earlier, 1 later
+    project: str = ""
 
 
 class SessionQueueRemove(msgspec.Struct, tag=True, frozen=True):
@@ -465,6 +564,7 @@ class SessionQueueRemove(msgspec.Struct, tag=True, frozen=True):
     session: str
     queued_id: str
     return_content: bool = False
+    project: str = ""
 
 
 class SessionQueueSetMode(msgspec.Struct, tag=True, frozen=True):
@@ -473,12 +573,14 @@ class SessionQueueSetMode(msgspec.Struct, tag=True, frozen=True):
     session: str
     queued_id: str
     mode: str  # steer | interrupt
+    project: str = ""
 
 
 class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
     session: str
     from_seq: int = 0
     follow: bool = True
+    project: str = ""
 
 
 class SessionFocus(msgspec.Struct, tag=True, frozen=True):
@@ -486,6 +588,7 @@ class SessionFocus(msgspec.Struct, tag=True, frozen=True):
 
     session: str | None
     client_id: str
+    project: str = ""
 
 
 class SessionFocusResult(msgspec.Struct, tag=True, frozen=True):
@@ -496,12 +599,14 @@ class SessionFocusResult(msgspec.Struct, tag=True, frozen=True):
 class SessionState(msgspec.Struct, tag=True, frozen=True):
     session: str
     from_seq: int = 0
+    project: str = ""
 
 
 class SessionActivity(msgspec.Struct, tag=True, frozen=True):
     """Is the session quiescent? Used by one-shot runs that wait for background subagents."""
 
     session: str
+    project: str = ""
 
 
 class LogsRead(msgspec.Struct, tag=True, frozen=True):
@@ -511,6 +616,7 @@ class LogsRead(msgspec.Struct, tag=True, frozen=True):
     daemon_cursor: str | None = None
     session_cursor: int | None = None
     limit: int = 50
+    project: str = ""
 
 
 class AgentCancel(msgspec.Struct, tag=True, frozen=True):
@@ -523,6 +629,7 @@ class AgentCancel(msgspec.Struct, tag=True, frozen=True):
     session: str
     agent_id: str
     reason: str = ""
+    project: str = ""
 
 
 class AgentClose(msgspec.Struct, tag=True, frozen=True):
@@ -535,6 +642,7 @@ class AgentClose(msgspec.Struct, tag=True, frozen=True):
     session: str
     agent_id: str
     reason: str = ""
+    project: str = ""
 
 
 class AgentTranscript(msgspec.Struct, tag=True, frozen=True):
@@ -542,22 +650,26 @@ class AgentTranscript(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     agent_id: str
+    project: str = ""
 
 
 class SessionFork(msgspec.Struct, tag=True, frozen=True):
     session: str
     at_seq: int | None = None
     new_id: str | None = None
+    project: str = ""
 
 
 class SessionDelete(msgspec.Struct, tag=True, frozen=True):
     session: str
     force: bool = False
     reason: str = ""
+    project: str = ""
 
 
 class SessionRestore(msgspec.Struct, tag=True, frozen=True):
     trash_id: str
+    project: str = ""
 
 
 class SessionRename(msgspec.Struct, tag=True, frozen=True):
@@ -565,11 +677,13 @@ class SessionRename(msgspec.Struct, tag=True, frozen=True):
 
     session_id: str
     title: str
+    project: str = ""
 
 
 class SessionExport(msgspec.Struct, tag=True, frozen=True):
     session: str
     format: str = "json"
+    project: str = ""
 
 
 class PermissionResolve(msgspec.Struct, tag=True, frozen=True):
@@ -577,6 +691,7 @@ class PermissionResolve(msgspec.Struct, tag=True, frozen=True):
     request_id: str
     decision: str
     client_id: str | None = None
+    project: str = ""
 
 
 class QuestionAnswer(msgspec.Struct, tag=True, frozen=True):
@@ -590,14 +705,17 @@ class QuestionAnswer(msgspec.Struct, tag=True, frozen=True):
     answer: str
     call_id: str = ""
     question_id: str = ""
+    project: str = ""
 
 
 class ExtensionsReload(msgspec.Struct, tag=True, frozen=True):
     trigger: str = "api"
+    project: str = ""
 
 
 class ExtensionsList(msgspec.Struct, tag=True, frozen=True):
     """A sanitized view of the live external modules."""
+    project: str = ""
 
 
 class ExtensionsValidate(msgspec.Struct, tag=True, frozen=True):
@@ -608,6 +726,7 @@ class ExtensionsValidate(msgspec.Struct, tag=True, frozen=True):
     """
 
     target: str | None = None
+    project: str = ""
 
 
 class ExtensionsTrash(msgspec.Struct, tag=True, frozen=True):
@@ -621,10 +740,12 @@ class ExtensionsTrash(msgspec.Struct, tag=True, frozen=True):
     target: str
     reason: str = ""
     force: bool = False
+    project: str = ""
 
 
 class ModelsRefresh(msgspec.Struct, tag=True, frozen=True):
     """Force a catalogue acquisition and report the resulting status."""
+    project: str = ""
 
 
 class ModelsList(msgspec.Struct, tag=True, frozen=True):
@@ -653,16 +774,19 @@ class ModelsList(msgspec.Struct, tag=True, frozen=True):
     selectable_only: bool = False
     search: str | None = None
     scope: Literal["main", "subagents", "all"] = "all"
+    project: str = ""
 
 
 class ModelShow(msgspec.Struct, tag=True, frozen=True):
     """Resolve one model reference to its descriptive registry row."""
 
     ref: str
+    project: str = ""
 
 
 class ModelTiers(msgspec.Struct, tag=True, frozen=True):
     """The tier table: ordering, default, curated map, and user overrides."""
+    project: str = ""
 
 
 class ModelTierSet(msgspec.Struct, tag=True, frozen=True):
@@ -676,32 +800,38 @@ class ModelTierSet(msgspec.Struct, tag=True, frozen=True):
     tier: str
     refs: list[str]
     efforts: dict[str, str] | None = None
+    project: str = ""
 
 
 class ModelTierReset(msgspec.Struct, tag=True, frozen=True):
     """Remove the user's list for ``tier`` (back to the built-in or price rule)."""
 
     tier: str
+    project: str = ""
 
 
 class AgentMaxTierSet(msgspec.Struct, tag=True, frozen=True):
     """Legacy command, refused: the configurable subagent ceiling was removed."""
 
     tier: str
+    project: str = ""
 
 
 class DefaultModelSettings(msgspec.Struct, tag=True, frozen=True):
     """Read the ordered global default model chain."""
+    project: str = ""
 
 
 class DefaultModelSet(msgspec.Struct, tag=True, frozen=True):
     """Atomically save the first model and its ordered global fallbacks."""
 
     refs: list[str]
+    project: str = ""
 
 
 class SessionTitleSettings(msgspec.Struct, tag=True, frozen=True):
     """Read the automatic session-title settings (Settings -> Session titles)."""
+    project: str = ""
 
 
 class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
@@ -709,20 +839,24 @@ class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
 
     enabled: bool | None = None
     model: str | None = None
+    project: str = ""
 
 
 class UsageRefreshSettings(msgspec.Struct, tag=True, frozen=True):
     """Read ``[models] usage_refresh_seconds`` (Settings -> Providers)."""
+    project: str = ""
 
 
 class UsageRefreshSettingsSet(msgspec.Struct, tag=True, frozen=True):
     """Set how often the daemon re-reads provider plan usage (60-3600 seconds); applies at once."""
 
     seconds: int
+    project: str = ""
 
 
 class ClaudeCodeSettings(msgspec.Struct, tag=True, frozen=True):
     """Read ``[models] claude_code_main_enabled`` and ``claude_code_subagent_backend``."""
+    project: str = ""
 
 
 class ClaudeCodeSettingsSet(msgspec.Struct, tag=True, frozen=True):
@@ -736,6 +870,7 @@ class ClaudeCodeSettingsSet(msgspec.Struct, tag=True, frozen=True):
 
     main_enabled: bool | None = None
     subagent_backend: str | None = None
+    project: str = ""
 
 
 class ModelSelect(msgspec.Struct, tag=True, frozen=True):
@@ -748,6 +883,7 @@ class ModelSelect(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     ref: str
+    project: str = ""
 
 
 class ReasoningEffortSelect(msgspec.Struct, tag=True, frozen=True):
@@ -755,23 +891,28 @@ class ReasoningEffortSelect(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     effort: str | None
+    project: str = ""
 
 
 class AgentsList(msgspec.Struct, tag=True, frozen=True):
     """The discovered subagent definitions (sanitized index rows)."""
+    project: str = ""
 
 
 class AgentCurrent(msgspec.Struct, tag=True, frozen=True):
     session: str
+    project: str = ""
 
 
 class AgentSelect(msgspec.Struct, tag=True, frozen=True):
     session: str
     name: str
+    project: str = ""
 
 
 class AgentReset(msgspec.Struct, tag=True, frozen=True):
     session: str
+    project: str = ""
 
 
 class AgentDefaultSet(msgspec.Struct, tag=True, frozen=True):
@@ -779,10 +920,12 @@ class AgentDefaultSet(msgspec.Struct, tag=True, frozen=True):
 
     name: str
     scope: Literal["global", "project"] = "global"
+    project: str = ""
 
 
 class ToolsList(msgspec.Struct, tag=True, frozen=True):
     """The model-facing tool catalog for the current config and manifest."""
+    project: str = ""
 
 
 class ContextExtensionSelect(msgspec.Struct, tag=True, frozen=True):
@@ -790,18 +933,21 @@ class ContextExtensionSelect(msgspec.Struct, tag=True, frozen=True):
     category: Literal["skills", "mcp", "tools"]
     name: str
     enabled: bool
+    project: str = ""
 
 
 class ContextMcpLoadingSelect(msgspec.Struct, tag=True, frozen=True):
     session: str
     server: str
     mode: Literal["search", "all"] | None
+    project: str = ""
 
 
 class ContextInspect(msgspec.Struct, tag=True, frozen=True):
     """Preview one session's next-turn standing context without starting a turn."""
 
     session: str
+    project: str = ""
 
 
 class McpServerShow(msgspec.Struct, tag=True, frozen=True):
@@ -810,6 +956,7 @@ class McpServerShow(msgspec.Struct, tag=True, frozen=True):
     session: str
     name: str
     max_bytes: int = 262_144
+    project: str = ""
 
 
 class McpServerRestart(msgspec.Struct, tag=True, frozen=True):
@@ -821,6 +968,7 @@ class McpServerRestart(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     name: str
+    project: str = ""
 
 
 class SkillInspect(msgspec.Struct, tag=True, frozen=True):
@@ -829,6 +977,7 @@ class SkillInspect(msgspec.Struct, tag=True, frozen=True):
     session: str
     name: str
     max_body_bytes: int = 65_536
+    project: str = ""
 
 
 class FileSearch(msgspec.Struct, tag=True, frozen=True):
@@ -837,6 +986,7 @@ class FileSearch(msgspec.Struct, tag=True, frozen=True):
     query: str
     limit: int = 30
     include_directories: bool = False
+    project: str = ""
 
 
 class GitDiff(msgspec.Struct, tag=True, frozen=True):
@@ -844,6 +994,7 @@ class GitDiff(msgspec.Struct, tag=True, frozen=True):
 
     staged: bool = False
     ref: str = ""
+    project: str = ""
 
 
 class DirectoryList(msgspec.Struct, tag=True, frozen=True):
@@ -855,6 +1006,7 @@ class DirectoryList(msgspec.Struct, tag=True, frozen=True):
 
     path: str = ""
     limit: int = 200
+    project: str = ""
 
 
 class FilePreview(msgspec.Struct, tag=True, frozen=True):
@@ -866,20 +1018,24 @@ class FilePreview(msgspec.Struct, tag=True, frozen=True):
 
     path: str
     max_bytes: int = 65536
+    project: str = ""
 
 
 class GitStatus(msgspec.Struct, tag=True, frozen=True):
     """Read-only, bounded ``git status`` of the current workspace for the sidebar Git tab."""
+    project: str = ""
 
 
 class WorktreeList(msgspec.Struct, tag=True, frozen=True):
     """List daemon-owned agent worktrees using sanitized metadata only."""
+    project: str = ""
 
 
 class WorktreeInspect(msgspec.Struct, tag=True, frozen=True):
     """Inspect one daemon-owned child worktree by its authenticated child id."""
 
     child_id: str
+    project: str = ""
 
 
 class WorktreeReview(msgspec.Struct, tag=True, frozen=True):
@@ -889,6 +1045,7 @@ class WorktreeReview(msgspec.Struct, tag=True, frozen=True):
     review_id: str | None = None
     cursor: int = 0
     limit: int = 1
+    project: str = ""
 
 
 class WorktreeAcknowledge(msgspec.Struct, tag=True, frozen=True):
@@ -897,6 +1054,7 @@ class WorktreeAcknowledge(msgspec.Struct, tag=True, frozen=True):
     child_id: str
     review_id: str
     digest: str
+    project: str = ""
 
 
 class WorktreeIntegrate(msgspec.Struct, tag=True, frozen=True):
@@ -906,6 +1064,7 @@ class WorktreeIntegrate(msgspec.Struct, tag=True, frozen=True):
     review_id: str
     digest: str
     confirmation_token: str = ""
+    project: str = ""
 
 
 class WorktreeDiscard(msgspec.Struct, tag=True, frozen=True):
@@ -915,6 +1074,7 @@ class WorktreeDiscard(msgspec.Struct, tag=True, frozen=True):
     force: bool = False
     review_id: str | None = None
     confirmation_token: str = ""
+    project: str = ""
 
 
 class Speak(msgspec.Struct, tag=True, frozen=True):
@@ -922,10 +1082,12 @@ class Speak(msgspec.Struct, tag=True, frozen=True):
 
     session_id: str
     download: bool = False
+    project: str = ""
 
 
 class SpeakStop(msgspec.Struct, tag=True, frozen=True):
     """Stop the speech that is playing now (Esc); a no-op when nothing is playing."""
+    project: str = ""
 
 
 class SpeakResult(msgspec.Struct, tag=True, frozen=True):
@@ -935,10 +1097,12 @@ class SpeakResult(msgspec.Struct, tag=True, frozen=True):
 
 class SpeechStatus(msgspec.Struct, tag=True, frozen=True):
     """Read the local speech model status (what ``/speak download`` fetches)."""
+    project: str = ""
 
 
 class SpeechPrepare(msgspec.Struct, tag=True, frozen=True):
     """Start the one-time speech model download (after the user consented)."""
+    project: str = ""
 
 
 class SpeechStatusResult(msgspec.Struct, tag=True, frozen=True):
@@ -953,11 +1117,13 @@ class SpeechStatusResult(msgspec.Struct, tag=True, frozen=True):
 
 class VoiceStatus(msgspec.Struct, tag=True, frozen=True):
     """Read the bounded local voice model status."""
+    project: str = ""
 
 
 class VoicePrepare(msgspec.Struct, tag=True, frozen=True):
     force: bool = False
     allow_download: bool = True
+    project: str = ""
 
 
 class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
@@ -970,18 +1136,22 @@ class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=
 
     def __repr__(self) -> str:
         return f"VoiceTranscribe(request_id={self.request_id!r}, partial={self.partial!r}, audio=<redacted>)"
+    project: str = ""
 
 
 class VoiceCancel(msgspec.Struct, tag=True, frozen=True):
     request_id: str
+    project: str = ""
 
 
 class VoiceRemove(msgspec.Struct, tag=True, frozen=True):
     """Remove the cached local voice model."""
+    project: str = ""
 
 
 class LiveStatus(msgspec.Struct, tag=True, frozen=True):
     """Read the GPT Live availability and the active call (no secrets)."""
+    project: str = ""
 
 
 class LiveStart(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
@@ -999,6 +1169,7 @@ class LiveStart(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
 
     def __repr__(self) -> str:
         return f"LiveStart(session={self.session!r}, offer_sdp=<{len(self.offer_sdp)} chars>)"
+    project: str = ""
 
 
 class LiveMute(msgspec.Struct, tag=True, frozen=True):
@@ -1006,6 +1177,7 @@ class LiveMute(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     muted: bool | None = None
+    project: str = ""
 
 
 class LivePause(msgspec.Struct, tag=True, frozen=True):
@@ -1013,6 +1185,7 @@ class LivePause(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     paused: bool | None = None
+    project: str = ""
 
 
 class LiveStop(msgspec.Struct, tag=True, frozen=True):
@@ -1020,6 +1193,7 @@ class LiveStop(msgspec.Struct, tag=True, frozen=True):
 
     session: str
     reason: str = "user"
+    project: str = ""
 
 
 class LiveHelperEvent(msgspec.Struct, tag=True, frozen=True):
@@ -1028,6 +1202,7 @@ class LiveHelperEvent(msgspec.Struct, tag=True, frozen=True):
     session: str
     kind: str
     detail: str = ""
+    project: str = ""
 
 
 class LiveConsent(msgspec.Struct, tag=True, frozen=True):
@@ -1044,6 +1219,7 @@ class LiveConsent(msgspec.Struct, tag=True, frozen=True):
 
     accept: bool | None = None
     scope: Literal["", "manager"] = ""
+    project: str = ""
 
 
 class ManagerOpen(msgspec.Struct, tag=True, frozen=True):
@@ -1052,10 +1228,12 @@ class ManagerOpen(msgspec.Struct, tag=True, frozen=True):
     Refused unless ``[manager] enabled`` is true. The manager is a singleton of kind
     ``manager`` in the main namespace; ``SessionList`` and the project index never list it.
     """
+    project: str = ""
 
 
 class ManagerState(msgspec.Struct, tag=True, frozen=True):
     """Read the manager's id, pinned model, sign-in state and managed sessions (read-only)."""
+    project: str = ""
 
 
 class Doctor(msgspec.Struct, tag=True, frozen=True):
@@ -1065,6 +1243,7 @@ class Doctor(msgspec.Struct, tag=True, frozen=True):
     """
 
     explain_reload: bool = False
+    project: str = ""
 
 
 class UpdateStatus(msgspec.Struct, tag=True, frozen=True):
@@ -1080,6 +1259,7 @@ class Health(msgspec.Struct, tag=True, frozen=True):
 
 class MockList(msgspec.Struct, tag=True, frozen=True):
     """List the mock scenarios (dev mode only; MOCK_PLAN §4.1)."""
+    project: str = ""
 
 
 class MockStart(msgspec.Struct, tag=True, frozen=True):
@@ -1093,14 +1273,17 @@ class MockStart(msgspec.Struct, tag=True, frozen=True):
     speed: float = 1.0
     seed: int = 0
     session: str = ""
+    project: str = ""
 
 
 class MockClean(msgspec.Struct, tag=True, frozen=True):
     """Restore the dev sandbox workspace to its seeded state (dev mode only)."""
+    project: str = ""
 
 
 class Shutdown(msgspec.Struct, tag=True, frozen=True):
     reason: str = ""
+    force: bool = False
 
 
 class WebLaunch(msgspec.Struct, tag=True, frozen=True):
@@ -1113,7 +1296,12 @@ class WebLaunch(msgspec.Struct, tag=True, frozen=True):
 
 #: The complete command union. ``msgspec`` decodes it by the ``type`` tag.
 Command = (
-    SessionList
+    ProjectFocus
+    | ProjectOpen
+    | ProjectList
+    | ProjectUnload
+    | ProjectReload
+    | SessionList
     | SessionTree
     | SessionResolve
     | SessionInspect
@@ -1248,6 +1436,11 @@ Command = (
 )
 
 COMMANDS: tuple[type, ...] = (
+    ProjectFocus,
+    ProjectOpen,
+    ProjectList,
+    ProjectUnload,
+    ProjectReload,
     SessionList,
     SessionTree,
     SessionResolve,
@@ -2235,6 +2428,7 @@ class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class HealthResult(msgspec.Struct, tag=True, frozen=True):
+    projects: list[ProjectRow] = msgspec.field(default_factory=list)
     ok: bool = True
     version: int = PROTOCOL_VERSION
     sessions: int = 0
@@ -2295,6 +2489,9 @@ class ErrorResult(msgspec.Struct, tag=True, frozen=True):
 
 #: The complete result union. ``msgspec`` decodes it by the ``type`` tag.
 Result = (
+    ProjectFocusResult
+    | ProjectOpenResult
+    | ProjectListResult |
     ProjectSessionsListResult
     | ProjectSessionOpenResult
     | SettingsInventoryResult
@@ -2403,6 +2600,9 @@ Result = (
 )
 
 RESULTS: tuple[type, ...] = (
+    ProjectFocusResult,
+    ProjectOpenResult,
+    ProjectListResult,
     SettingsInventoryResult,
     SettingsReadResult,
     SettingsWriteResult,

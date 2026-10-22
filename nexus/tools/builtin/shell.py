@@ -735,6 +735,9 @@ async def run(
 
     per_job_max, _total, _days = _jobs.log_settings(ctx.config)
     await _prune_logs(ctx, registry)
+    from ...resources import process_waiting
+    if process_waiting():
+        await ctx.report("waiting for a process slot")
     try:
         job = await registry.spawn(
             command,

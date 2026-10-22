@@ -1196,8 +1196,20 @@ class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("code_mode.sub_model must be a non-empty model name or unset")
 
 
+class DaemonSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    max_processes: int = 16
+    max_requests_per_provider: int = 6
+
+    def __post_init__(self):
+        for name in ("max_processes", "max_requests_per_provider"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1024:
+                raise ValueError(f"daemon.{name} must be 1..1024")
+
+
 class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     config_version: Literal[2] = 2
+    daemon: DaemonSection = msgspec.field(default_factory=DaemonSection)
     agent: AgentSection = msgspec.field(default_factory=AgentSection)
     model: ModelSection = msgspec.field(default_factory=ModelSection)
     models: ModelsSection = msgspec.field(default_factory=ModelsSection)

@@ -538,7 +538,7 @@ def test_the_new_keys_are_typed_in_the_config_layers():
 def _fake_clock(monkeypatch, now: list[float]) -> None:
     """Give the daemon module its own monotonic clock without touching asyncio's."""
     monkeypatch.setattr(
-        "nexus.host.daemon.time",
+        "nexus.host.projects.time",
         SimpleNamespace(
             monotonic=lambda: now[0], time=time.time, strftime=time.strftime
         ),
@@ -553,17 +553,24 @@ def _daemon(tmp_path: Path, *, viewers=0, running=0, jobs=1, orphan_s=3600.0):
         state.stopped.append(reason)
         return state.jobs
 
-    daemon._facade = SimpleNamespace(
+    facade = SimpleNamespace(
         presence=SimpleNamespace(total_viewers=lambda: state.viewers),
         supervisor=SimpleNamespace(running=state.running, queued=0),
     )
-    daemon._runtime = SimpleNamespace(
+    runtime = SimpleNamespace(
         voice=None,
         has_active_shell_jobs=lambda: state.jobs > 0,
         persistent_shell_jobs=lambda limit=16: (state.jobs, []),
         shell_orphan_seconds=lambda: orphan_s,
         stop_persistent_shell_jobs=stop_jobs,
     )
+    from nexus.host.projects import ProjectHost
+    from nexus.host_support.project_identity import resolve_project
+    from nexus.observability.daemon import DaemonDiagnostics
+    facade.runtime = runtime
+    facade.daemon_diagnostics = DaemonDiagnostics()
+    daemon.project = ProjectHost(resolve_project(tmp_path), facade, "test")
+    daemon.projects.hosts[daemon.project.identity.key] = daemon.project
     daemon.stops = []
     daemon.request_stop = daemon.stops.append  # type: ignore[method-assign]
     return daemon, state
@@ -573,48 +580,48 @@ async def test_no_viewer_and_no_turn_stops_persistent_jobs_and_records_why(tmp_p
     daemon, state = _daemon(tmp_path)
     now = [1000.0]
     _fake_clock(monkeypatch, now)
-    assert daemon._idle() is False  # the clock starts
+    await daemon.projects.check_orphans(daemon.project)  # the clock starts
     now[0] += 3599
-    assert daemon._idle() is False and state.stopped == []
+    await daemon.projects.check_orphans(daemon.project)
+    assert state.stopped == []
     now[0] += 2
-    assert daemon._idle() is False  # the stop runs as a task; the daemon is not "idle"
-    await daemon._orphan_task
-    assert state.stopped == ["no viewer for 1 h"]
-    assert daemon.stops and daemon.stops[0].startswith("orphan_jobs")
+    await daemon.projects.check_orphans(daemon.project)
+    assert state.stopped == ["no viewer for 3600 s"]
+    assert not daemon.stops, "one project orphan cleanup must not stop the shared process"
     log = daemon._log_file.read_text()
-    assert "daemon.orphan_jobs_stopped" in log and "no viewer for 1 h" in log
+    assert "daemon.orphan_jobs_stopped" in log and "no viewer for 3600 s" in log
 
 
 async def test_a_viewer_or_a_turn_resets_the_orphan_clock(tmp_path, monkeypatch):
     daemon, state = _daemon(tmp_path)
     now = [1000.0]
     _fake_clock(monkeypatch, now)
-    daemon._idle()
+    await daemon.projects.check_orphans(daemon.project)
     now[0] += 3000
     state.viewers = 1
-    daemon._idle()
-    assert daemon._orphan_since is None
+    await daemon.projects.check_orphans(daemon.project)
+    assert daemon.project.orphan_since is None
     state.viewers = 0
     now[0] += 3000
-    daemon._idle()  # restarted at this tick, so 3000 s later it is not due
+    await daemon.projects.check_orphans(daemon.project)  # restarted at this tick, so 3000 s later it is not due
     now[0] += 3000
-    daemon._idle()
-    assert daemon._orphan_task is None and state.stopped == []
+    await daemon.projects.check_orphans(daemon.project)
+    assert state.stopped == []
 
 
 async def test_the_orphan_policy_can_be_disabled_and_needs_a_persistent_job(tmp_path, monkeypatch):
     now = [1000.0]
     _fake_clock(monkeypatch, now)
     disabled, state = _daemon(tmp_path, orphan_s=0.0)
-    disabled._idle()
+    await disabled.projects.check_orphans(disabled.project)
     now[0] += 10_000
-    disabled._idle()
-    assert disabled._orphan_task is None and state.stopped == []
+    await disabled.projects.check_orphans(disabled.project)
+    assert state.stopped == []
     none, state = _daemon(tmp_path, jobs=0)
-    none._idle()
+    await none.projects.check_orphans(none.project)
     now[0] += 10_000
-    none._idle()
-    assert none._orphan_task is None and none._orphan_since is None
+    await none.projects.check_orphans(none.project)
+    assert none.project.orphan_since is None
 
 
 def test_health_and_the_status_cli_list_persistent_jobs():

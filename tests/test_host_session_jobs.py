@@ -235,27 +235,13 @@ async def test_runtime_reports_active_jobs_per_session_and_overall(facade):
     assert runtime.session_has_active_jobs("s1") is False
 
 
-def _daemon(jobs_state: dict) -> Daemon:
-    daemon = object.__new__(Daemon)
-    daemon.idle_timeout = 5.0
+def test_the_daemon_does_not_idle_exit_with_a_loaded_project(tmp_path):
+    daemon = Daemon(tmp_path, home=tmp_path, socket_path=tmp_path / "d.sock", idle_timeout=5)
     daemon._last_activity = time.time() - 1000
-    daemon._facade = SimpleNamespace(
-        presence=SimpleNamespace(total_viewers=lambda: 0),
-        supervisor=SimpleNamespace(running=0, queued=0),
-    )
-    daemon._runtime = SimpleNamespace(
-        voice=None, has_active_shell_jobs=lambda: jobs_state["active"]
-    )
-    return daemon
-
-
-def test_the_daemon_does_not_idle_exit_with_a_running_job():
-    state = {"active": True}
-    daemon = _daemon(state)
+    daemon.projects.hosts["project"] = SimpleNamespace()
     assert daemon._idle() is False
-    # The window restarts when the job ends instead of firing at once.
-    state["active"] = False
-    assert daemon._idle() is False
+    daemon.projects.hosts.clear()
+    assert daemon._idle() is False  # An empty process gets its own idle window.
     daemon._last_activity = time.time() - 1000
     assert daemon._idle() is True
 

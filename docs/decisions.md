@@ -1,5 +1,17 @@
 # Design decisions
 
+## Shared daemon and canonical project identity (2026-10-22)
+
+Choose one daemon per Nexus home + install, with per-project runtimes and a
+mutable connection focus. Resolve Git subdirectories and linked worktrees to
+the main checkout; keep submodules independent. Settings and grants belong to
+the project. Keep full filesystem paths separate from display-truncated Git
+breadcrumbs. This replaces per-workspace daemons and cross-project socket
+reconnection. Protocol v4 rejects older clients; no compatibility escape hatch
+or old-worktree-row migration is maintained. Environment capture is per project;
+reload explicitly to change it.
+
+
 What was chosen, what was refused, and why. Each entry points to the code or doc
 that carries it. Add new decisions here, newest within a section last. Historical
 detail lives in [`plans/`](../plans/); where a plan disagrees with current code,
@@ -30,7 +42,7 @@ paths themselves. See [desktop.md](desktop.md).
 
 | Decision | Why | Where |
 | --- | --- | --- |
-| **One daemon per workspace owns the runtime; every surface is a pure client** with no in-process fallback. | One place for locks, turns and approvals; surfaces can crash or disconnect without losing work. | [host.md](host.md) |
+| **One daemon per Nexus home/install owns project runtimes; every surface is a pure client** with no in-process fallback. | One place for locks, turns and approvals; surfaces can crash or disconnect without losing work. | [host.md](host.md) |
 | **`core/loop.py` knows only protocols.** | Testable with fakes; every manager replaceable; layering enforced by tests. | [loop.md](loop.md), `tests/test_layering.py` |
 | **Events are the spine; views are pure reductions.** Every drawable state is an event, persisted before fan-out, with a monotonic per-session `seq`. | Replay reproduces live state; reconnect is "fold to `seq`, follow from `seq+1`"; SSE `Last-Event-ID` maps onto `seq`. | [events-and-view.md](events-and-view.md) |
 | **`view/` sits below `model/`** and imports only `events`. | Daemon, CLI, browser and replay share one reducer. | `view/` |
@@ -254,14 +266,14 @@ The legacy `auth = "keychain"` configuration spelling remains compatible and
 now selects the file-backed pasted-key flow. Claude CLI credentials remain
 owned by Claude.
 
-## Cross-project sessions without shared hosting
+## Cross-project sessions in shared hosting
 
 The sidebar uses the shared SQLite metadata index to group sessions by recorded
 project root, ordered by each project’s newest activity, then local date. Folder
-names label projects; equal names show full paths. Opening a foreign session
-connects to its owning daemon instead of running its tools in the current
-workspace. Foreign rows show saved activity until opened. The shared-daemon
-implementation remains separate from this navigation feature.
+names label projects; equal names show full paths. Opening a foreign session routes to its owning project runtime in the shared
+daemon, changes the connection focus and retains subscriptions. Foreign rows
+show saved activity until opened. Tools, settings and permissions belong to the
+session’s project.
 
 ## Ratatui prototype boundary
 

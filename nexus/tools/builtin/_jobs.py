@@ -932,6 +932,7 @@ class JobRegistry:
         #: Retracts a pending notification once the model got the result anyway.
         self.claim_sink = claim_sink
         self._closed = False
+        self._resource_leases = {}
         #: Restart recovery (SHELL_PLAN P7): this registry's owner lock and record
         #: live under ``state_dir``. ``None`` = no tracking and no recovery, and
         #: :meth:`job_may_be_live` then answers "yes" for every job it is asked
@@ -1273,9 +1274,17 @@ class JobRegistry:
             persistent=persistent,
         )
         partition.jobs[job_id] = job
+        from ...resources import acquire_process
         try:
+            release = await acquire_process(key)
+            self._resource_leases[job_id] = release
+            if self._closed:
+                raise JobRegistryError("JobRegistry is closed")
             await job.start()
         except BaseException:
+            release = self._resource_leases.pop(job_id, None)
+            if release is not None:
+                release()
             partition.jobs.pop(job_id, None)
             self._prune_partition(key)
             raise
@@ -1412,6 +1421,9 @@ class JobRegistry:
         """Record a completed job for retention/eviction (oldest evicted first)."""
         # Runs after the exit event is recorded, so a session opened in between
         # still sees the job as owned (and records nothing) rather than twice.
+        release = self._resource_leases.pop(job.job_id, None)
+        if release is not None:
+            release()
         self._untrack(job)
         partition = self._partitions.get(session_key)
         if partition is not None and job.job_id in partition.jobs:

@@ -10,27 +10,37 @@ from ..session.manager import SessionSummary
 class SessionArchive(msgspec.Struct, tag=True, frozen=True):
     session: str
     reason: str = "user"
+    project: str = ""
+
 
 
 class SessionUnarchive(msgspec.Struct, tag=True, frozen=True):
     session: str
+    project: str = ""
+
 
 
 class SessionListArchived(msgspec.Struct, tag=True, frozen=True):
     query: str = ""
     limit: int = 200
     cursor: int = 0
+    project: str = ""
+
 
 
 class SessionPreview(msgspec.Struct, tag=True, frozen=True):
     session: str
     max_chars: int = 6000
+    project: str = ""
+
 
 
 class SessionSearch(msgspec.Struct, tag=True, frozen=True):
     query: str
     archived_only: bool = True
     limit: int = 50
+    project: str = ""
+
 
 
 class SessionListResult(msgspec.Struct, tag=True, frozen=True):

@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
-harness. A per-workspace daemon owns sessions and turns. Four surfaces are clients
+harness. One shared daemon per Nexus home and install owns project runtimes, sessions and turns. Four surfaces are clients
 of it: a terminal chat client (the native Ratatui client), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app, and a Rust GPUI desktop client.
 

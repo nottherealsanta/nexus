@@ -1,5 +1,18 @@
 # Security model
 
+## Shared runtime trust
+
+All loaded projects share one Python process and event loop. Project Python
+extensions can inspect other runtimes' in-memory state and a blocking extension
+can stall every project. Module namespacing prevents collisions; it is not a
+sandbox. A process crash interrupts turns in every project; session logs remain
+durable. Use separate Nexus homes/installs when separate processes are needed.
+
+Client environments enter only through the owner-only UDS and are not echoed
+in health or logs. Project browser tickets and cookies are scoped to distinct
+`/w/<project-key>/` paths. Existing loopback, CSRF and permission checks apply.
+
+
 The daemon exposes a local endpoint that can run `bash` on the host. That is a
 **permanent property of the design**, stated plainly: there is **no OS sandbox**.
 Tools run on the host under the permission engine; extensions are trusted code.

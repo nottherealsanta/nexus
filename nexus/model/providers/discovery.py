@@ -26,6 +26,8 @@ Only files whose provider name is not already configured are registered, so a
 """
 from __future__ import annotations
 
+import uuid
+
 import ast
 import hashlib
 import importlib.util
@@ -164,6 +166,7 @@ class FileProviderLoader:
         if max_file_bytes < 1:
             raise ProviderError("provider loader: max_file_bytes must be positive")
         self._max_file_bytes = max_file_bytes
+        self._namespace = uuid.uuid4().hex
 
     def directories(
         self, workspace: Path, home: Path | None = None
@@ -244,7 +247,7 @@ class FileProviderLoader:
             # object holds its own class references, and an edited file would
             # otherwise leave its previous content-hash module behind on every
             # reload. Popping here keeps repeated runtime builds leak-free.
-            sys.modules.pop(_module_name(sha), None)
+            sys.modules.pop(_module_name(self._namespace + sha), None)
         if not providers:
             return {}, self._diagnostic(
                 path,
@@ -267,7 +270,7 @@ class FileProviderLoader:
     def _import(
         self, path: Path, source: str, sha: str
     ) -> Any | ProviderFileDiagnostic:
-        module_name = _module_name(sha)
+        module_name = _module_name(self._namespace + sha)
         try:
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:

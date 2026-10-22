@@ -3172,7 +3172,7 @@ class Runtime:
 
             voice_engine_factory.available = BarkEngine.available
         self.voice = VoiceManager(
-            voice_config, engine_factory=voice_engine_factory,
+            voice_config, engine_factory=voice_engine_factory, environ=self._environ,
             store=voice_store if voice_store is not None else ModelStore(nexus_home(self._home), revision=voice_config.revision),
         )
 
@@ -6039,7 +6039,7 @@ class Runtime:
         if section is None or not getattr(section, "enabled", True):
             return None
         try:
-            return HookManager(self.workspace, home=self._home, config=config)
+            return HookManager(self.workspace, home=self._home, config=config, environ=self._environ)
         except Exception:  # noqa: BLE001 - a broken hooks dir must not stop boot
             return None
 

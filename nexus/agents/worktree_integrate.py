@@ -6,6 +6,8 @@ transactions can be rolled back with :func:`recover_transactions`.
 """
 from __future__ import annotations
 
+from ..resources import resource_environment
+
 import contextlib
 import fcntl
 import hashlib
@@ -75,7 +77,7 @@ def _git(root: Path, *args: str) -> str:
 
 
 def _git_environment() -> dict[str, str]:
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment = {key: value for key, value in resource_environment().items() if not key.startswith("GIT_")}
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["GIT_CONFIG_GLOBAL"] = os.devnull

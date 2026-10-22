@@ -80,6 +80,8 @@ class Hello(msgspec.Struct, tag="hello", frozen=True):
     """Client -> daemon: the first frame, carrying the protocol revision."""
 
     version: int
+    focus: str = ""
+    env: dict[str, str] | None = msgspec.field(default=None)
     client_id: str = ""
     client: str = ""
 
@@ -88,6 +90,7 @@ class Welcome(msgspec.Struct, tag="welcome", frozen=True):
     """Daemon -> client: the handshake succeeded; the peer may now speak."""
 
     version: int
+    focus: p.ProjectRef | None = None
     pid: int = 0
     workspace: str = ""
     socket: str = ""
@@ -122,6 +125,7 @@ class EventFrame(msgspec.Struct, tag="event", frozen=True):
 
     id: str
     event: Event
+    project: str = ""
 
 
 class SubscribeDone(msgspec.Struct, tag="subscribe_done", frozen=True):

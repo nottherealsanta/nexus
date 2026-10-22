@@ -428,7 +428,7 @@ def test_update_upgrades_then_restarts_running_daemons(monkeypatch, capsys):
 
     stopped = []
 
-    async def stop_all(home=None):
+    async def stop_all(home=None, *, force=False):
         stopped.append(True)
         return 1
 

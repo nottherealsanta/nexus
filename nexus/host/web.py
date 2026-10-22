@@ -38,7 +38,10 @@ class _BrowserSession:
 class BrowserRoutes:
     """Routes attached to one loopback listener; credentials die on restart."""
 
-    def __init__(self, facade, *, workspace: str, port: int):
+    def __init__(self, facade, *, workspace: str, port: int, prefix: str = "", project_open=None):
+        self.project_open = project_open
+        self.prefix = prefix
+        self.cookie_name = COOKIE_NAME + ("_" + prefix.split("/")[2] if prefix else "")
         self.facade = facade
         self.workspace = workspace
         self.port = port
@@ -89,7 +92,7 @@ class BrowserRoutes:
     def _cookie(self, headers: dict[str, str]) -> str | None:
         for part in headers.get("cookie", "").split(";"):
             name, sep, value = part.strip().partition("=")
-            if sep and name == COOKIE_NAME:
+            if sep and name == self.cookie_name:
                 return value
         return None
 
@@ -142,7 +145,7 @@ class BrowserRoutes:
                     oldest = min(self._sessions, key=lambda item: self._sessions[item].expires)
                     del self._sessions[oldest]
                 self._sessions[key] = _BrowserSession(csrf, time.monotonic() + COOKIE_TTL)
-            common["Set-Cookie"] = f"{COOKIE_NAME}={key}; HttpOnly; SameSite=Strict; Path=/; Max-Age={int(COOKIE_TTL)}"
+            common["Set-Cookie"] = f"{self.cookie_name}={key}; HttpOnly; SameSite=Strict; Path={self.prefix or "/"}; Max-Age={int(COOKIE_TTL)}"
             common["Content-Type"] = "application/json"
             await server._write_response(writer, 200, self._json({"csrf": csrf, "workspace": self.workspace}), headers=common)
             return True
@@ -152,7 +155,7 @@ class BrowserRoutes:
                 await server._write_response(writer, 403, self._json({"error": "forbidden"}), headers=common)
                 return True
             self._sessions.pop(active[0], None)
-            common["Set-Cookie"] = f"{COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"
+            common["Set-Cookie"] = f"{self.cookie_name}=; HttpOnly; SameSite=Strict; Path={self.prefix or "/"}; Max-Age=0"
             await server._write_response(writer, 204, headers=common)
             return True
         if path.startswith("/v1/web/"):
@@ -224,7 +227,10 @@ class BrowserRoutes:
                     if isinstance(command, (p.Shutdown, getattr(p, "WebLaunch", p.Shutdown))):
                         await server._write_response(writer, 403, self._json({"error": "command unavailable to browser"}), headers=common)
                         return True
-                    result = await self.facade.handle(command)
+                    if isinstance(command, p.ProjectSessionOpen) and self.project_open is not None:
+                        result = await self.project_open(command)
+                    else:
+                        result = await self.facade.handle(command)
                     data = p.encode_result(result)
                 except (msgspec.DecodeError, msgspec.ValidationError, ValueError):
                     await server._write_response(writer, 400, self._json({"error": "malformed command"}), headers=common)
@@ -268,6 +274,9 @@ class BrowserRoutes:
         except (ValueError, OSError):
             await server._write_response(writer, 404, self._json({"error": "not found"}), headers=common)
             return True
+        if self.prefix and target.suffix in {".html", ".css"}:
+            for segment in (b"/styles/", b"/js/", b"/assets/"):
+                data = data.replace(segment, self.prefix.encode() + segment)
         common.update({"Content-Type": mimetypes.guess_type(target.name)[0] or "application/octet-stream", "Cache-Control": "no-cache"})
         if path == "/" or is_session_page:
             common["Permissions-Policy"] = "microphone=(self)"

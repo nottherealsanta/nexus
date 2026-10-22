@@ -359,6 +359,7 @@ class HTTPSSEServer:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
         self._web: BrowserRoutes | None = None
+        self.project_web = {}
 
     # -- introspection -----------------------------------------------------
 
@@ -533,6 +534,18 @@ class HTTPSSEServer:
             served += 1
             # Browser pages and local assets share this listener but use a
             # separate cookie/CSRF path. Peer routes below retain bearer auth.
+            if request.path.startswith("/w/"):
+                from dataclasses import replace
+                parts = request.path.split("/", 3)
+                web = self.project_web.get(parts[2]) if len(parts) == 4 else None
+                if web is None:
+                    await self._write_response(writer, 404, _error_body("Project browser is unavailable"))
+                    return
+                scoped = replace(request, path="/" + parts[3])
+                if await web.route(scoped, writer, self):
+                    return
+                await self._write_response(writer, 404, _error_body("Not found"))
+                return
             if self._web is not None and await self._web.route(request, writer, self):
                 return
             origin_header = request.headers.get("origin", "")
@@ -648,22 +661,27 @@ class HTTPSSEServer:
             if length < 0:
                 return _RequestError(400, "malformed content-length")
 
+        route_path, web = split.path, self._web
+        if route_path.startswith("/w/"):
+            parts = route_path.split("/", 3)
+            web = self.project_web.get(parts[2]) if len(parts) == 4 else None
+            route_path = "/" + parts[3] if len(parts) == 4 else route_path
         # Authenticate before buffering larger voice/attachment bodies; the route checks again.
-        if method == "POST" and split.path in ("/v1/web/voice", "/v1/web/attachment") and self._web is not None:
-            if not self._web._host_ok(headers.get("host", "")):
+        if method == "POST" and route_path in ("/v1/web/voice", "/v1/web/attachment") and web is not None:
+            if not web._host_ok(headers.get("host", "")):
                 return _RequestError(421, "invalid host")
-            active = self._web._session(headers)
+            active = web._session(headers)
             if not active:
                 return _RequestError(401, "unauthorized")
-            if not self._web._origin_ok(headers.get("origin", "")) or not self._web._csrf_matches(
+            if not web._origin_ok(headers.get("origin", "")) or not web._csrf_matches(
                 headers.get("x-csrf-token", ""), active[1].csrf
             ):
                 return _RequestError(403, "forbidden")
 
         route_body_limit = (
             MAX_WEB_VOICE_BODY_BYTES
-            if split.path == "/v1/web/voice"
-            else 12 * 1024 * 1024 if split.path == "/v1/web/attachment"
+            if route_path == "/v1/web/voice"
+            else 12 * 1024 * 1024 if route_path == "/v1/web/attachment"
             else self.max_body_bytes
         )
         if length > route_body_limit:

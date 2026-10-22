@@ -80,6 +80,9 @@ class Supervisor:
         #: against the cap, so the sessions they wait for can run at cap 1.
         self._lent: set[str] = set()
         self._rotation: deque[str] = deque()
+        self._scopes = {}
+        self._project_rotation: deque[str] = deque()
+        self._last_project: str | None = None
         self._watchers: dict[str, asyncio.Task] = {}
         self._idle = asyncio.Event()
         self._idle.set()
@@ -197,6 +200,8 @@ class Supervisor:
         the session's own persisted input queue at start time.
         """
         turn_id = turn_id or new_id()
+        from ..resources import current_scope
+        self._scopes[session_id] = current_scope.get()
         self._sessions[session_id] = session
         queue = self._queues.setdefault(session_id, deque())
         (queue.appendleft if priority else queue.append)(
@@ -334,6 +339,7 @@ class Supervisor:
         """
         if session_id in self._active or self.queued_for(session_id):
             return False
+        self._scopes.pop(session_id, None)
         self._sessions.pop(session_id, None)
         self._starting.pop(session_id, None)
         self._cancel_requested.pop(session_id, None)
@@ -369,7 +375,16 @@ class Supervisor:
         """Start as many queued turns as the global cap allows, fairly."""
         async with self._lock:
             while self.slots_used < self._max and self._rotation:
-                session_id = self._rotation.popleft()
+                available = dict.fromkeys((sid.partition(":")[0] if ":" in sid else "") for sid in self._rotation)
+                self._project_rotation = deque(key for key in self._project_rotation if key in available)
+                self._project_rotation.extend(key for key in available if key not in self._project_rotation)
+                if len(self._project_rotation) > 1 and self._project_rotation[0] == self._last_project:
+                    self._project_rotation.rotate(-1)
+                project = self._project_rotation.popleft()
+                self._project_rotation.append(project)
+                self._last_project = project
+                session_id = next(sid for sid in self._rotation if (sid.partition(":")[0] if ":" in sid else "") == project)
+                self._rotation.remove(session_id)
                 queue = self._queues.get(session_id)
                 if not queue:
                     continue
@@ -394,7 +409,12 @@ class Supervisor:
         self._active.add(session_id)
         self._starting[session_id] = pending
         try:
-            await session.start_turn(pending.content, turn_id=pending.turn_id)
+            from ..resources import current_scope
+            token = current_scope.set(self._scopes.get(session_id))
+            try:
+                await session.start_turn(pending.content, turn_id=pending.turn_id)
+            finally:
+                current_scope.reset(token)
         except Exception as exc:  # noqa: BLE001 - a bad turn must not wedge the pump
             self._starting.pop(session_id, None)
             self._active.discard(session_id)

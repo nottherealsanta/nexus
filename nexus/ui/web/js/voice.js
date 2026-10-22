@@ -25,7 +25,7 @@ export function createRecorder({maxSeconds = 120, onLevel = () => {}, onLimit = 
     try {
       if (stopped) throw new DOMException('Voice capture cancelled.', 'AbortError');
       context = new AudioContext();
-      await context.audioWorklet.addModule('/js/voice-worklet.js');
+      await context.audioWorklet.addModule(`${location.pathname.match(/^\/w\/[a-f0-9]{16}/)?.[0] || ''}/js/voice-worklet.js`);
       source = context.createMediaStreamSource(stream);
       processor = new AudioWorkletNode(context, 'nexus-voice-resampler');
       mute = context.createGain(); mute.gain.value = 0;

@@ -674,6 +674,9 @@ async def test_the_daemon_start_sweeps_a_killed_daemons_orphans(_reap_strays):
     daemon = Daemon(workspace, socket_path=base / "d.sock", runtime_factory=factory)
     try:
         await daemon.start()
+        from nexus.host_support.project_identity import resolve_project
+        host = await daemon.projects.acquire(resolve_project(workspace), {}, "test")
+        daemon.projects.release(host)
         try:
             assert wait_gone(pid)
             assert not (owners / f"{OWNER}.json").exists()
@@ -695,8 +698,7 @@ async def test_a_failing_sweep_never_stops_the_daemon_starting():
                 raise RuntimeError("boom")
 
         daemon = Daemon(workspace, socket_path=base / "d.sock")
-        daemon._runtime = Broken()
-        await daemon._recover_shell_orphans()  # must not raise
+        await daemon.projects.recover_shell_orphans(Broken(), "test")  # must not raise
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

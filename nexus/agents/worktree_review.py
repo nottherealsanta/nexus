@@ -8,6 +8,8 @@ working-tree edits.
 """
 from __future__ import annotations
 
+from ..resources import resource_environment
+
 import difflib
 import hashlib
 import json
@@ -101,7 +103,7 @@ def _git(cwd: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
 
 
 def _git_environment() -> dict[str, str]:
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment = {key: value for key, value in resource_environment().items() if not key.startswith("GIT_")}
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["GIT_CONFIG_GLOBAL"] = os.devnull

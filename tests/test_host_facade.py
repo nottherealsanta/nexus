@@ -442,6 +442,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.WebLaunch(),
         p.Shutdown(reason="bye"),
     ]
+    commands.extend([p.ProjectFocus(project="/a"), p.ProjectOpen(path="/a"), p.ProjectList(),
+                     p.ProjectUnload(), p.ProjectReload()])
     assert {type(command) for command in commands} == set(p.COMMANDS)
     for command in commands:
         assert p.decode_command(p.encode_command(command)) == command
@@ -576,6 +578,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ShutdownResult(stopping=True),
         p.ErrorResult(kind="SessionError", message="no"),
     ]
+    project = p.ProjectRef("key", "/a", "a", "plain")
+    results.extend([p.ProjectFocusResult(project), p.ProjectOpenResult(project, True), p.ProjectListResult()])
     assert {type(result) for result in results} == set(p.RESULTS)
     for result in results:
         assert p.decode_result(p.encode_result(result)) == result
@@ -1770,27 +1774,9 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
     assert {(row.workspace, row.session.id) for row in result.sessions} == {
         (str(tmp_path), "same"), (str(other), "same"),
     }
-    calls = []
-    class Peer:
-        async def call(self, command):
-            calls.append(command)
-            if isinstance(command, p.WebLaunch):
-                return p.WebLaunchResult(url="http://127.0.0.1:3210/#ticket=secret")
-            return SimpleNamespace()
-        async def close(self):
-            calls.append("closed")
-    async def connect(workspace, **kwargs):
-        assert workspace == str(other)
-        return Peer()
-    monkeypatch.setattr("nexus.host.daemon.ensure_daemon", connect)
-    opened = await facade.handle(p.ProjectSessionOpen(workspace=str(other), session="same", browser=True))
-    assert isinstance(opened, p.ProjectSessionOpenResult)
-    assert opened.url == "http://127.0.0.1:3210/s/same#ticket=secret"
-    assert calls[-1] == "closed"
-    calls.clear()
-    rejected = await facade.handle(p.ProjectSessionOpen(workspace="/unknown", session="same"))
-    assert isinstance(rejected, p.ErrorResult)
-    assert not calls
+    opened = await facade.handle(p.ProjectSessionOpen(workspace=str(other), session="same"))
+    assert isinstance(opened, p.ErrorResult)
+    assert "daemon connection" in opened.message
     await runtime.aclose()
 
 

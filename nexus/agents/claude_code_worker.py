@@ -32,6 +32,8 @@ imports the runtime, host or UI.
 """
 from __future__ import annotations
 
+from ..resources import resource_environment
+
 import asyncio
 import errno
 import json
@@ -559,7 +561,7 @@ def derive_transcript_path(config_dir: Path | None, workspace: Path, session: st
     2.1.x. It is not a documented contract, so the path given by the
     SessionStart/Stop hook always replaces it.
     """
-    base = config_dir or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    base = config_dir or Path(resource_environment().get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     return base / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workspace.resolve())) / f"{session}.jsonl"
 
 
@@ -1077,7 +1079,7 @@ def snapshot_workspace(workspace: Path, since: Mapping[str, Any] | None = None) 
     capped at :data:`MAX_SNAPSHOT_FILES`. Paths are relative to ``workspace``.
     """
     workspace = Path(workspace).resolve()
-    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
+    env = {**resource_environment(), "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
     try:
         top = subprocess.run(
             ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],

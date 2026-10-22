@@ -149,17 +149,22 @@ async def running_daemons(home: str | Path | None = None) -> list[dict[str, Any]
     found: list[dict[str, Any]] = []
     for socket in _daemon_sockets(home):
         try:
-            client = await UDSClient.connect(socket, timeout=2.0)
+            client = await UDSClient.connect(socket, timeout=2.0, focus=str(Path.home()), client="control")
         except (DaemonUnavailable, VersionMismatch, TransportError, OSError):
             continue
         try:
             info = client.info
+            from ..host import protocol as p
+            health = await client.call(p.Health())
             found.append(
                 {
                     "socket": str(socket),
                     "pid": getattr(info, "pid", 0),
-                    "workspace": getattr(info, "workspace", ""),
+                    "workspace": next((row.project.root for row in getattr(health, "projects", []) if row.loaded), ""),
                     "server": getattr(info, "server", ""),
+                    "projects": [row.project.root for row in getattr(health, "projects", []) if row.loaded],
+                    "running_turns": getattr(health, "running", 0),
+                    "queued": getattr(health, "queued", 0),
                 }
             )
         finally:
@@ -167,7 +172,7 @@ async def running_daemons(home: str | Path | None = None) -> list[dict[str, Any]
     return found
 
 
-async def stop_all_daemons(home: str | Path | None = None) -> int:
+async def stop_all_daemons(home: str | Path | None = None, *, force: bool = False) -> int:
     """Gracefully stop every live daemon; returns how many were stopped."""
     from ..host import daemon as daemon_mod
 
@@ -175,7 +180,9 @@ async def stop_all_daemons(home: str | Path | None = None) -> int:
     for entry in await running_daemons(home):
         socket = Path(entry["socket"])
         try:
-            was_running = await daemon_mod.stop(".", socket_path=socket)
+            was_running = await daemon_mod.stop(".", socket_path=socket, force=force)
+        except daemon_mod.DaemonError:
+            raise
         except Exception:  # noqa: BLE001 - an exiting daemon may drop the socket
             was_running = False
         if not was_running:

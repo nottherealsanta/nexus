@@ -195,7 +195,15 @@ async def _kill_worker(proc: asyncio.subprocess.Process) -> None:
         await proc.wait()
 
 
-async def _scan_in_worker(
+async def _scan_in_worker(request, ctx, timeout):
+    from ...resources import process_slot, process_waiting
+    if process_waiting():
+        await ctx.report("waiting for a process slot")
+    async with process_slot():
+        return await _scan_in_worker_unlimited(request, ctx, timeout)
+
+
+async def _scan_in_worker_unlimited(
     request: dict[str, Any], ctx: ToolContext, timeout: float
 ) -> dict[str, Any]:
     proc = await _spawn_worker()

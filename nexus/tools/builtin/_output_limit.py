@@ -10,6 +10,8 @@ Spilling is best effort: when the file cannot be written the notice says so.
 """
 from __future__ import annotations
 
+from ...resources import resource_environment
+
 import os
 import tempfile
 from dataclasses import dataclass
@@ -51,7 +53,7 @@ class LimitedOutput:
 
 def spill_dir() -> Path:
     """The per-user directory holding full copies of oversized output."""
-    override = os.environ.get("NEXUS_OUTPUT_DIR")
+    override = resource_environment().get("NEXUS_OUTPUT_DIR")
     if override:
         return Path(override)
     return Path(tempfile.gettempdir()) / f"nexus-output-{os.getuid()}"

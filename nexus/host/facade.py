@@ -138,6 +138,9 @@ _MAX_MANAGED_LISTED = 50
 class HostFacade:
     """Wrap one runtime as the complete, transport-neutral surface API."""
 
+    resource_limits = None
+    project_key = ""
+
     def __init__(
         self,
         runtime: Any,
@@ -145,9 +148,12 @@ class HostFacade:
         max_concurrent_turns: int = DEFAULT_MAX_CONCURRENT_TURNS,
         owns_runtime: bool = False,
         emit: Any | None = None,
+        supervisor: Any | None = None,
     ) -> None:
         self.runtime = runtime
         self.daemon_info: dict[str, Any] = {}
+        self.resource_limits = None
+        self.project_key = ""
         self.attachments = AttachmentStore(runtime)
         self.titles = AutoTitler(runtime)
         self.shells = UserShells(runtime)
@@ -158,7 +164,7 @@ class HostFacade:
         self.usage = UsageSnapshotService(runtime)
         if getattr(runtime, "usage_kick", False) is None:
             runtime.usage_kick = self.usage.kick
-        self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
+        self.supervisor = supervisor if supervisor is not None else Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
         self._owns_runtime = bool(owns_runtime)
         self._started = time.time()
         self._foreground: dict[str, tuple[str, float]] = {}
@@ -1746,8 +1752,33 @@ class HostFacade:
     # -- wire dispatch -----------------------------------------------------
 
     async def handle(self, command: p.Command) -> p.Result:
+        from ..resources import ResourceScope, current_scope
+        token = None
+        if self.resource_limits is not None:
+            session = getattr(command, "session", "") or getattr(command, "session_id", "")
+            token = current_scope.set(ResourceScope(self.resource_limits, self.project_key, session,
+                                                   getattr(self.runtime, "_environ", {})))
+        try:
+            git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
+                            p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate, p.WorktreeDiscard)
+            if isinstance(command, git_commands):
+                from ..resources import process_slot
+                async with process_slot():
+                    return await self._handle(command)
+            return await self._handle(command)
+        finally:
+            if token is not None:
+                current_scope.reset(token)
+
+    async def _handle(self, command: p.Command) -> p.Result:
         """Dispatch one protocol command, converting failures to a redacted error."""
         try:
+            if self.resource_limits is not None and not Path(self.runtime.workspace).is_dir():
+                readonly = (p.SessionState, p.SessionPreview, p.SessionExport, p.SessionTree,
+                            p.SessionInspect, p.SessionActivity, p.SessionList, p.SessionListArchived,
+                            p.SessionSearch, p.Doctor, p.LogsRead, p.Health)
+                if not isinstance(command, readonly):
+                    raise ValueError("Project root is missing; sessions are read-only")
             if isinstance(command, p.SessionFocus):
                 return self.report_focus(command.client_id, command.session)
             return await self._dispatch(command)
@@ -1906,25 +1937,7 @@ class HostFacade:
             return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=truncated or len(rows) > limit,
                                                projects=projects)
         if isinstance(command, p.ProjectSessionOpen):
-            # Only recorded project/session pairs may start another workspace host.
-            rows = self.runtime.sessions.store.db.project_sessions(limit=10_000)
-            if not any(row["workspace"] == command.workspace and row["id"] == command.session for row in rows):
-                raise ValueError("Project session is no longer available")
-            from .daemon import ensure_daemon, default_socket_path
-            client = await ensure_daemon(command.workspace, home=self.runtime._home)
-            try:
-                await client.call(p.SessionOpen(session=command.session, create=False, recover=True))
-                url = ""
-                if command.browser:
-                    launch = await client.call(p.WebLaunch())
-                    url = launch.url
-                    base, ticket = url.split("/#", 1)
-                    url = f"{base}/s/{command.session}#{ticket}"
-                return p.ProjectSessionOpenResult(
-                    socket_path=str(default_socket_path(command.workspace, home=self.runtime._home)), url=url,
-                )
-            finally:
-                await client.close()
+            raise ValueError("Project navigation requires a daemon connection")
         if isinstance(command, p.SessionResolve):
             return p.SessionResolveResult(resolution=self.runtime.sessions.resolve(
                 command.ref, namespace=command.namespace, include_retired=command.include_retired

@@ -18,6 +18,8 @@ The framing (a 4-byte big-endian length plus compact JSON, capped at
 """
 from __future__ import annotations
 
+import msgspec
+
 import asyncio
 import contextlib
 from typing import Any, Self
@@ -142,6 +144,8 @@ class UDSClient:
         client: str = "",
         timeout: float = 5.0,
         buffer: int = DEFAULT_SUBSCRIPTION_BUFFER,
+        focus: str = "",
+        environ: Any = None,
     ) -> UDSClient:
         """Connect and complete the version handshake.
 
@@ -157,21 +161,23 @@ class UDSClient:
         instance = cls(reader, writer, client_id=client_id or new_id())
         instance._buffer = buffer
         try:
-            await instance._handshake(version=version, client=client, timeout=timeout)
+            await instance._handshake(version=version, client=client, timeout=timeout, focus=focus, environ=environ)
         except BaseException:
             await instance._abort()
             raise
         instance._reader_task = asyncio.ensure_future(instance._read_loop())
         return instance
 
-    async def _handshake(self, *, version: int, client: str, timeout: float) -> None:
-        await self._write(Hello(version=version, client_id=self.client_id, client=client))
+    async def _handshake(self, *, version: int, client: str, timeout: float, focus: str, environ: Any) -> None:
+        await self._write(Hello(version=version, focus=focus, env=environ, client_id=self.client_id, client=client))
         try:
             frame = await asyncio.wait_for(read_frame(self._reader), timeout)
         except TimeoutError as exc:
             raise DaemonUnavailable("handshake timed out") from exc
         if frame is None:
             raise DaemonUnavailable("daemon closed the connection during handshake")
+        if isinstance(frame, Reject) and frame.reason != "version_mismatch":
+            raise ProtocolError(frame.reason)
         if isinstance(frame, Reject):
             raise VersionMismatch(frame.expected or p.PROTOCOL_VERSION, frame.got or version)
         if not isinstance(frame, Welcome):
@@ -326,6 +332,9 @@ class UDSClient:
                     if future is not None and not future.done():
                         future.set_result(frame.result)
                 elif isinstance(frame, EventFrame):
+                    if frame.project:
+                        frame = msgspec.structs.replace(frame, event=msgspec.structs.replace(
+                            frame.event, data={**frame.event.data, "project": frame.project}))
                     subscription = self._subs.get(frame.id)
                     if subscription is not None:
                         await subscription.feed(frame.event)

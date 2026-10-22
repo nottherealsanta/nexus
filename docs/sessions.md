@@ -1,5 +1,20 @@
 # Sessions and durable state
 
+## Project identity in the shared daemon
+
+A project's key hashes its full resolved canonical root. Main Git checkouts keep
+their existing keys. Git subdirectories and linked worktrees use the main
+checkout's key; a submodule remains its own repository. Non-Git directories use
+the launch directory. Resolution walks at most 64 parent directories and reads
+bounded Git metadata without running a subprocess.
+
+Draft sessions also have project ownership before their first durable input.
+Switching project focus does not move a session or cancel its subscriptions.
+Existing independently keyed worktree rows are not migrated; export important
+old sessions before adopting this identity model. Session roots in worktrees
+are a subsequent worktree-sessions phase, not implemented by identity resolution.
+
+
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup
 and presence events remain in memory and snapshots are not written. The first
 user message atomically saves the draft's buffered records and the session row.

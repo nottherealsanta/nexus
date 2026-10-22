@@ -1,4 +1,6 @@
-const API = '/v1/web';
+export const projectBase = location.pathname.match(/^\/w\/[a-f0-9]{16}/)?.[0] || '';
+const API = `${projectBase}/v1/web`;
+export function routePath(){return location.pathname.slice(projectBase.length) || '/';}
 let csrf = '';
 let workspace = 'Nexus';
 

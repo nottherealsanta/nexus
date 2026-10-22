@@ -40,6 +40,8 @@ never the runtime, session, or core loop.
 
 from __future__ import annotations
 
+import uuid
+
 import hashlib
 import importlib.util
 import inspect
@@ -403,9 +405,14 @@ class ToolLoader:
         if not isinstance(origin, str) or not origin:
             raise ToolLoadError("origin must be a non-empty string")
         self._origin = origin
+        self._namespace = uuid.uuid4().hex
         self._module_prefix = module_prefix
         self._owned = _Owned()
         self._lock = threading.RLock()
+
+    def module_name(self, source_identity: str, generation: int) -> str:
+        """A name private to this loader, stable across its generations."""
+        return module_name_for(self._namespace + source_identity, generation)
 
     @property
     def origin(self) -> str:
@@ -455,7 +462,7 @@ class ToolLoader:
         if not isinstance(effective_origin, str) or not effective_origin:
             raise ToolLoadError("origin must be a non-empty string")
         expected = expected_sha256 if expected_sha256 is not None else staged.sha256
-        module_name = module_name_for(staged.source_identity, generation)
+        module_name = self.module_name(staged.source_identity, generation)
         with self._lock:
             if expected is None or staged.sha256 != expected:
                 return self._fail(
@@ -619,8 +626,9 @@ class ToolLoader:
         for name, module in extra.items():
             if not isinstance(name, str) or not isinstance(module, ModuleType):
                 raise ToolLoadError("extra modules must map module names to modules")
-            if name not in sys.modules:
-                sys.modules[name] = module
+            if name in sys.modules and sys.modules[name] is not module:
+                raise ToolLoadError(f"extra module {name!r} is owned by another loader")
+            sys.modules[name] = module
 
     def _build_tools(
         self,

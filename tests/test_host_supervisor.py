@@ -728,3 +728,14 @@ async def test_cancel_with_drop_queue_leaves_reports_queued_and_uncounted():
     assert a.queued_ids == ("report-1",)
     # The parked turn for the report is gone too: nothing wakes the root after Esc.
     assert sup.queued_for("a") == 0
+
+
+async def test_shared_project_rotation_yields_to_other_projects_before_backlog():
+    clock = _Clock()
+    sup = Supervisor(max_concurrent=1)
+    sessions = {name: _FakeSession(name, clock) for name in ("a:one", "a:two", "b:one", "c:one")}
+    for name in ("a:one", "a:one", "a:two", "b:one", "b:one", "c:one", "c:one"):
+        await sup.submit(name, sessions[name], name)
+    await drive(sup, *sessions.values())
+    starts = [entry[1:].split(":")[0] for entry in clock.order if entry.startswith("+")]
+    assert starts == ["a", "b", "c", "a", "b", "c", "a"]

@@ -101,6 +101,7 @@ def test_parser_exposes_the_canonical_command_set():
         "gateway",
         "replay",
         "daemon",
+        "projects",
         "restart",
         "searchserver",
         "sessions",

@@ -528,7 +528,7 @@ async def test_sigterm_closes_http_and_removes_the_token_file(daemon_env):
     assert read_http_endpoint(
         daemon_env.workspace, socket_path=daemon_env.socket
     ) is None
-    text = logs(daemon_env.workspace, log_path=daemon_env.socket.with_suffix(".log"))
+    text = logs(daemon_env.workspace, log_path=daemon_env.socket.with_suffix(".log"), all_projects=True)
     assert "daemon.stopping" in text and "daemon.stopped" in text
 
 
@@ -538,7 +538,7 @@ async def test_restart_mints_a_fresh_token_and_keeps_the_session(daemon_env):
     await client.call(p.SessionStart(session="s", content="Persist this session"))
     first_token = endpoint["token"]
     await client.close()
-    await stop(daemon_env.workspace, socket_path=daemon_env.socket)
+    await stop(daemon_env.workspace, socket_path=daemon_env.socket, force=True)
     await wait_for(lambda: not daemon_env.socket.exists(), timeout=10.0)
 
     second, endpoint2 = await _open_http_daemon(daemon_env)
@@ -550,4 +550,4 @@ async def test_restart_mints_a_fresh_token_and_keeps_the_session(daemon_env):
         assert view.session == "s"
     finally:
         await second.close()
-        await stop(daemon_env.workspace, socket_path=daemon_env.socket)
+        await stop(daemon_env.workspace, socket_path=daemon_env.socket, force=True)

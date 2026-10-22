@@ -1114,6 +1114,25 @@ async def _daemon_command(
     from .host import daemon as daemon_mod
 
     action = args.daemon_action
+    if action in {"reload", "stop"} and not getattr(args, "all", False):
+        from .host import protocol as p
+        from .host.transports.uds import UDSClient
+        try:
+            peer = await UDSClient.connect(daemon_mod.default_socket_path(workspace),
+                focus=str(workspace), environ=dict(os.environ), client="control")
+        except daemon_mod.TransportError:
+            stdout.write("not running\n")
+            return 0
+        try:
+            command = p.ProjectReload() if action == "reload" else p.ProjectUnload(force=args.force)
+            result = await peer.call(command)
+            if isinstance(result, p.ErrorResult):
+                stderr.write(result.message + "\n")
+                return 1
+            stdout.write("reloaded\n" if action == "reload" else "unloaded\n")
+            return 0
+        finally:
+            await peer.close()
     if action == "status":
         report = await daemon_mod.status(workspace)
         if args.json:
@@ -1124,6 +1143,9 @@ async def _daemon_command(
                 f"sessions={report.get('sessions', 0)} "
                 f"running_turns={report.get('running', 0)}\n"
             )
+            for row in report.get("projects", []):
+                project = row["project"]
+                stdout.write(f"  {project['name']} {project['root']} running={row['running']} queued={row['queued']}\n")
             total = report.get("persistent_jobs_total", 0)
             if total:
                 stdout.write(f"persistent_jobs={total}\n")
@@ -1141,7 +1163,7 @@ async def _daemon_command(
     if action == "stop" and args.all:
         from .host_support.install import stop_all_daemons
 
-        count = await stop_all_daemons()
+        count = await stop_all_daemons(force=getattr(args, "force", False))
         stdout.write(f"stopped {count} daemon{'' if count == 1 else 's'}\n")
         return 0
     if action == "stop":
@@ -1149,7 +1171,7 @@ async def _daemon_command(
         stdout.write("stopped\n" if stopped else "not running\n")
         return 0
     if action == "restart":
-        await daemon_mod.stop(workspace)
+        await daemon_mod.stop(workspace, force=getattr(args, "force", False))
         # Shutdown is acknowledged before the process exits; wait (bounded) so
         # the new client does not reconnect to the daemon that is going away.
         for _ in range(_RESTART_POLLS):
@@ -1165,7 +1187,7 @@ async def _daemon_command(
         stdout.write(f"restarted pid={report.get('pid', '?')}\n")
         return 0
     if action == "logs":
-        text = daemon_mod.logs(workspace, lines=args.lines)
+        text = daemon_mod.logs(workspace, lines=args.lines, all_projects=args.all)
         stdout.write(text if text.endswith("\n") or not text else text + "\n")
         return 0
     raise ValueError(f"unknown daemon action {action!r}")
@@ -1213,6 +1235,11 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
         return 1
     before = install.package_version()
     running = await install.running_daemons()
+    busy = [entry for entry in running if entry.get("running_turns", 0) or entry.get("queued", 0)]
+    if busy and not getattr(args, "force", False):
+        roots = [root for entry in busy for root in entry.get("projects", [entry.get("workspace", "")])]
+        stderr.write("Projects have running or queued turns: " + ", ".join(roots) + "; use --force\n")
+        return 1
     if source == "git" and args.channel == "stable" and not args.release:
         stdout.write(
             "Moving this install from git to PyPI releases "
@@ -1239,10 +1266,11 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
         if running:
             stdout.write("Running daemons keep the old code; `nexus daemon stop --all`.\n")
         return 0
-    await install.stop_all_daemons()
+    await install.stop_all_daemons(force=getattr(args, "force", False))
     failed = 0
     for entry in running:
-        workspace = entry.get("workspace") or ""
+        roots = entry.get("projects") or [entry.get("workspace") or ""]
+        workspace = roots[0]
         if not workspace:
             continue
         result = await asyncio.to_thread(
@@ -1254,6 +1282,13 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
         )
         if result.returncode == 0:
             stdout.write(f"Restarted daemon for {workspace}\n")
+            for root in roots[1:]:
+                reopened = await asyncio.to_thread(subprocess.run,
+                    [binary, "--workspace", workspace, "projects", "open", root],
+                    capture_output=True, text=True, timeout=30, check=False)
+                if reopened.returncode:
+                    failed += 1
+                    stderr.write(f"Could not reload project {root}\n")
         else:
             failed += 1
             stderr.write(f"Could not restart the daemon for {workspace}\n")
@@ -1697,8 +1732,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     restart = sub.add_parser("restart", help="Restart the workspace daemon (alias for daemon restart)")
     restart.set_defaults(command="daemon", daemon_action="restart")
+    restart.add_argument("--force", action="store_true")
 
-    daemon = sub.add_parser("daemon", help="Manage the workspace daemon")
+    projects = sub.add_parser("projects", help="List or register projects")
+    projects_sub = projects.add_subparsers(dest="projects_action")
+    projects_open = projects_sub.add_parser("open", help="Register a project path")
+    projects_open.add_argument("path")
+    daemon = sub.add_parser("daemon", help="Manage the shared daemon")
     daemon_sub = daemon.add_subparsers(dest="daemon_action", required=True)
     daemon_status = daemon_sub.add_parser("status", help="Report daemon liveness")
     daemon_status.add_argument("--json", action="store_true")
@@ -1706,9 +1746,13 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_stop.add_argument(
         "--all", action="store_true", help="Stop every workspace's daemon"
     )
-    daemon_sub.add_parser("restart", help="Stop the daemon and start a fresh one")
+    daemon_restart = daemon_sub.add_parser("restart", help="Stop the daemon and start a fresh one")
+    daemon_restart.add_argument("--force", action="store_true")
+    daemon_sub.add_parser("reload", help="Reload the focus project with the caller environment")
+    daemon_stop.add_argument("--force", action="store_true")
     daemon_logs = daemon_sub.add_parser("logs", help="Tail the daemon log")
     daemon_logs.add_argument("--lines", type=int, default=200)
+    daemon_logs.add_argument("--all", action="store_true")
 
     update = sub.add_parser("update", help="Upgrade Nexus and restart running daemons")
     update.add_argument(
@@ -1717,6 +1761,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="stable",
         help="stable = PyPI releases (default); git = the newest code from GitHub",
     )
+    update.add_argument("--force", action="store_true", help="Permit restart of projects with active turns")
     update.add_argument("--ref", help="Branch, tag or commit for --channel git (default: main)")
     update.add_argument("--version", dest="release", help="Install exactly this release (e.g. 0.1.0)")
     update.add_argument(
@@ -1968,6 +2013,28 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_web(workspace, open_browser=not args.no_browser))
         if args.command == "replay":
             return asyncio.run(_replay(workspace, args, stdout))
+        if args.command == "projects":
+            async def manage_projects():
+                from .host.daemon import ensure_daemon
+                from .host import protocol as p
+                peer = await ensure_daemon(workspace, client="cli-projects")
+                try:
+                    if args.projects_action == "open":
+                        result = await peer.call(p.ProjectOpen(path=str(Path(args.path).expanduser().resolve())))
+                    else:
+                        result = await peer.call(p.ProjectList())
+                    if isinstance(result, p.ErrorResult):
+                        stderr.write(result.message + "\n")
+                        return 1
+                    if isinstance(result, p.ProjectOpenResult):
+                        stdout.write(result.project.root + "\n")
+                    else:
+                        for row in result.projects:
+                            stdout.write(f"{row.project.key}  {row.project.root}  {'loaded' if row.loaded else 'idle'}\n")
+                    return 0
+                finally:
+                    await peer.close()
+            return asyncio.run(manage_projects())
         if args.command == "daemon":
             return asyncio.run(_daemon_command(workspace, args, stdout, stderr))
         if args.command == "auth":

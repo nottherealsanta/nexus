@@ -410,11 +410,13 @@ async def test_real_daemon_injects_its_generation_diagnostics_into_facade(tmp_pa
         runtime_factory=make_runtime,
     )
     await daemon.start()
+    from nexus.host_support.project_identity import resolve_project
+    host = await daemon.projects.acquire(resolve_project(tmp_path), {}, "test")
     try:
-        result = await daemon.facade.handle(p.LogsRead())
+        result = await host.facade.handle(p.LogsRead())
         assert isinstance(result, p.LogsReadResult)
         assert result.daemon.entries
-        assert result.daemon.entries[0].kind == "daemon.started"
+        assert result.daemon.entries[0].kind == "daemon.project_loaded"
     finally:
         await daemon.aclose()
 

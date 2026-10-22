@@ -49,3 +49,16 @@ async def test_forgotten_or_unknown_sessions_rebuild_from_the_start():
     await controller.switch_session("a")
     await controller.bootstrap()
     assert client.streams[-1] == ("a", 0) and controller.cursor == 2
+
+
+async def test_identical_session_ids_in_different_projects_do_not_share_replay_cursors():
+    client = FakeClient()
+    controller = SessionController(client, 'a')
+    await controller.bootstrap()
+    assert controller.cursor == 2
+    await controller.switch_session('a', project='second')
+    await controller.bootstrap()
+    assert client.streams[-1] == ('a', 0)
+    await controller.switch_session('a', project='')
+    await controller.bootstrap()
+    assert client.streams[-1] == ('a', 2)

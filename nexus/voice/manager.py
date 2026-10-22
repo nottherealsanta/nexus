@@ -36,7 +36,11 @@ class VoiceManager:
         engine_factory: Callable[[Path], Engine],
         store: Store,
         request_timeout: float | None = None,
+        environ: Any = None,
     ) -> None:
+        import os
+        snapshot = dict(os.environ if environ is None else environ)
+        self._environment_disabled = snapshot.get("NEXUS_VOICE", "").strip().lower() == "off"
         self.config = config
         self.engine_factory = engine_factory
         self.store = store
@@ -60,12 +64,7 @@ class VoiceManager:
         self._unload_task: asyncio.Task[None] | None = None
 
     def _enabled(self) -> bool:
-        import os
-
-        return (
-            bool(getattr(self.config, "enabled", False))
-            and os.environ.get("NEXUS_VOICE", "").lower() != "off"
-        )
+        return bool(getattr(self.config, "enabled", False)) and not self._environment_disabled
 
     @property
     def active(self) -> bool:

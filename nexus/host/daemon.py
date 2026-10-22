@@ -1,14 +1,13 @@
 """Daemon lifecycle, socket, handshake, and shutdown (PLAN section 14.8).
 
 The daemon always owns the :class:`~nexus.runtime.Runtime`; a surface is a pure
-client with no in-process fallback. One daemon serves one workspace, addressed by
-a deterministic socket path derived from the workspace path, so a workspace maps
-to exactly one daemon. This module owns:
+client with no in-process fallback. One daemon serves many project runtimes, addressed by
+a deterministic socket path derived from the protocol and Python install identity. This module owns:
 
-* **a deterministic socket path** — ``~/.nexus/daemon/<hash>.sock``, mode ``0600``
+* **a deterministic socket path** — ``~/.nexus/daemon/shared-v4-<install>.sock``, mode ``0600``
   inside a ``0700`` directory;
 * **duplicate prevention** — an exclusive ``flock`` on a sibling lock file plus a
-  pid file, so a second daemon for the same workspace refuses to start;
+  pid file, so a second daemon for the same home/install refuses to start;
 * **stale-socket cleanup** — under the lock, a socket left by a dead daemon is
   removed and replaced rather than reported as an error;
 * **a version handshake** — a client built against a different protocol revision
@@ -37,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import os
 import secrets
 import signal
@@ -53,7 +53,7 @@ import msgspec
 from ..config.paths import nexus_home, project_key
 from ..errors import NexusError
 from ..events import Event
-from ..host_support.session_archive import reap_with_archive_sweep, sweep_stale_sessions
+from ..host_support.session_archive import sweep_stale_sessions
 from ..host_support.socket_dir import (
     MAX_SOCKET_PATH_BYTES,
     ensure_private_dir,
@@ -64,7 +64,10 @@ from ..host_support.socket_dir import (
 from ..observability.daemon import DaemonDiagnostics
 from ..util import new_id, redact_secrets
 from . import protocol as p
-from .facade import DEFAULT_MAX_CONCURRENT_TURNS, HostFacade
+from .facade import HostFacade
+from .projects import ProjectRegistry, project_ref, validate_environment
+from ..host_support.project_identity import resolve_project
+
 from .transports import (
     Bye,
     CommandFrame,
@@ -85,6 +88,8 @@ from .transports import (
 )
 from .transports.http_sse import LOOPBACK_HOST, HTTPSSEServer
 from .transports.uds import UDSClient
+
+DEFAULT_MAX_CONCURRENT_TURNS = 32
 
 #: Default idle window before a view-less, turn-less daemon exits.
 DEFAULT_IDLE_TIMEOUT = 300.0
@@ -148,8 +153,9 @@ def _ensure_private_fallback_dir(path: Path) -> None:
 def default_socket_path(
     workspace: str | Path, *, home: str | Path | None = None
 ) -> Path:
-    """The one socket a workspace's daemon listens on."""
-    filename = f"{workspace_hash(workspace)}.sock"
+    """The socket shared by this Nexus home, protocol and Python install."""
+    install = hashlib.sha256(str(Path(sys.prefix).resolve()).encode()).hexdigest()[:8]
+    filename = f"shared-v{p.PROTOCOL_VERSION}-{install}.sock"
     path = daemon_dir(home) / filename
     if len(str(path).encode("utf-8")) <= MAX_SOCKET_PATH_BYTES:
         return path
@@ -224,6 +230,7 @@ def read_http_endpoint(
 
 @dataclass
 class _Subscription:
+    project: str
     session: str
     task: asyncio.Task[None]
 
@@ -237,6 +244,10 @@ class _ClientConnection:
         self.writer = writer
         self.client_id = new_id()
         self._subs: dict[str, _Subscription] = {}
+        self.focus = None
+        self.environment = {}
+        self.client_name = ""
+        self.initial_path = ""
         self._write_lock = asyncio.Lock()
         self._slow: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -261,13 +272,26 @@ class _ClientConnection:
                     )
                 )
                 return
+            try:
+                if not hello.focus or not Path(hello.focus).is_absolute():
+                    raise ValueError("Hello.focus must be an absolute project path")
+                self.environment = validate_environment(hello.env)
+                self.client_name = hello.client
+                self.initial_path = hello.focus
+                if hello.client != "control":
+                    self.focus = await asyncio.wait_for(self.daemon.projects.acquire(
+                        resolve_project(hello.focus), self.environment, hello.client), 10)
+            except Exception as exc:
+                await self._send(Reject(reason=redact_secrets(str(exc))))
+                return
             if hello.client_id:
                 self.client_id = hello.client_id
             await self._send(
                 Welcome(
                     version=p.PROTOCOL_VERSION,
                     pid=os.getpid(),
-                    workspace=str(self.daemon.workspace),
+                    workspace=str(self.focus.identity.root) if self.focus else self.initial_path,
+                    focus=project_ref(self.focus.identity) if self.focus else None,
                     socket=str(self.daemon.socket),
                     server=_server_version(),
                     client_id=self.client_id,
@@ -304,53 +328,147 @@ class _ClientConnection:
                 await self._send(Reject(reason=f"unexpected_frame:{type(frame).__name__}"))
                 break
 
+    async def _route(self, command):
+        projects = self.daemon.projects
+        if isinstance(command, p.Health):
+            totals = {"sessions": 0, "running": 0, "queued": 0, "viewers": 0,
+                      "persistent_jobs_total": 0}
+            jobs = []
+            for host in list(projects.hosts.values()):
+                health = host.facade.health()
+                for key in totals:
+                    totals[key] += health[key]
+                jobs.extend(health["persistent_jobs"])
+            return p.HealthResult(**totals, persistent_jobs=jobs[:32],
+                                  max_concurrent=projects.supervisor.max_concurrent,
+                                  projects=projects.loaded_rows())
+        if isinstance(command, p.UpdateStatus):
+            return await self.daemon.update_status(command.announce)
+        if isinstance(command, p.ProjectList):
+            return projects.rows(command.limit)
+        if isinstance(command, p.Shutdown):
+            if (projects.supervisor.running or projects.supervisor.queued) and not command.force:
+                raise ValueError("Projects have running or queued turns; use --force")
+            self.daemon.request_stop("client shutdown")
+            return p.ShutdownResult()
+        if isinstance(command, (p.ProjectFocus, p.ProjectOpen)):
+            target = command.path if isinstance(command, p.ProjectOpen) else command.project
+            identity = projects.identity(target)
+            existed = projects.registered(identity.key)
+            host = await projects.acquire(identity, self.environment, self.client_name)
+            if isinstance(command, p.ProjectOpen):
+                projects.release(host)
+                return p.ProjectOpenResult(project_ref(identity), not existed)
+            if self.focus is not None:
+                projects.release(self.focus)
+            self.focus = host
+            return p.ProjectFocusResult(project_ref(identity))
+        if isinstance(command, (p.ProjectUnload, p.ProjectReload)):
+            identity = projects.identity(command.project or self.initial_path) if self.focus is None else (projects.identity(command.project) if command.project else self.focus.identity)
+            host = projects.hosts.get(identity.key)
+            # This administrative connection's focus is not an active viewer.
+            if host is not None and host is self.focus:
+                projects.release(host)
+            try:
+                await projects.unload(identity.key, force=getattr(command, "force", False))
+            except BaseException:
+                if host is self.focus:
+                    host.references += 1
+                raise
+            if isinstance(command, p.ProjectReload):
+                replacement = await projects.acquire(identity, self.environment, self.client_name)
+                if self.focus is None or host is self.focus:
+                    self.focus = replacement
+                else:
+                    projects.release(replacement)
+            return p.ProjectFocusResult(project_ref(identity))
+        if isinstance(command, p.WebLaunch):
+            return p.WebLaunchResult(url=await self.daemon.web_launch(self.focus))
+        if isinstance(command, p.ProjectSessionOpen):
+            target = resolve_project(command.workspace)
+            identity = projects.session_project(command.session, self.focus, target.key)
+            host = await projects.acquire(identity, self.environment, self.client_name)
+            try:
+                opened = await host.facade.handle(p.SessionOpen(session=command.session, create=False, recover=True))
+                if isinstance(opened, p.ErrorResult):
+                    projects.release(host)
+                    return opened
+            except BaseException:
+                projects.release(host)
+                raise
+            if self.focus is not None:
+                projects.release(self.focus)
+            self.focus = host
+            return p.ProjectSessionOpenResult(project=project_ref(identity), session=command.session)
+        if self.focus is None:
+            raise ValueError("Control connections require an explicit project operation")
+        session = getattr(command, "session", "") or getattr(command, "session_id", "")
+        explicit = getattr(command, "project", "")
+        identity = (projects.session_project(session, self.focus, explicit) if session else
+                    projects.identity(explicit) if explicit else self.focus.identity)
+        if not identity.root.is_dir() and identity.key not in projects.hosts:
+            raise ValueError("Project root is missing")
+        host = await projects.acquire(identity, self.environment, self.client_name)
+        self.daemon._last_routed_project = identity.key
+        try:
+            host.facade.daemon_info.update({"pid": os.getpid(), "socket": str(self.daemon.socket)})
+            return await host.facade.handle(command)
+        finally:
+            projects.release(host)
+
     async def _command(self, frame: CommandFrame) -> None:
-        if isinstance(frame.command, getattr(p, "WebLaunch", ())):
-            endpoint = await self.daemon.web_launch()
-            result = p.WebLaunchResult(url=endpoint)
-            await self._send(ResultFrame(id=frame.id, result=result))
-            return
-        if (
-            isinstance(frame.command, SLOW_COMMANDS)
-            and len(self._slow) < MAX_SLOW_COMMANDS_PER_CLIENT
-        ):
-            # Results are matched by frame id, so replies may arrive out of order.
+        if (isinstance(frame.command, SLOW_COMMANDS)
+                and len(self._slow) < MAX_SLOW_COMMANDS_PER_CLIENT):
             task = asyncio.ensure_future(self._slow_command(frame))
             self._slow.add(task)
             task.add_done_callback(self._slow.discard)
             return
-        result = await self.daemon.facade.handle(frame.command)
-        await self._send(ResultFrame(id=frame.id, result=result))
-        if isinstance(frame.command, p.SessionSubscribe) and isinstance(
-            result, p.SessionSubscribeResult
-        ):
-            self._start_sub(
-                frame.id, frame.command.session, frame.command.from_seq, frame.command.follow
-            )
-        if isinstance(frame.command, p.Shutdown):
-            self.daemon.request_stop("client shutdown")
+        await self._slow_command(frame)
 
     async def _slow_command(self, frame: CommandFrame) -> None:
-        """Run one slow command off the read loop; ``handle`` never raises."""
-        result = await self.daemon.facade.handle(frame.command)
+        try:
+            result = await self._route(frame.command)
+        except Exception as exc:
+            result = p.ErrorResult(kind=type(exc).__name__, message=redact_secrets(str(exc)))
+        subscription_host = None
+        if isinstance(frame.command, p.SessionSubscribe) and isinstance(result, p.SessionSubscribeResult):
+            identity = self.daemon.projects.session_project(frame.command.session, self.focus, frame.command.project)
+            subscription_host = self.daemon.projects.hosts[identity.key]
+            subscription_host.references += 1
+        try:
+            await self._send(ResultFrame(id=frame.id, result=result))
+            if subscription_host is not None:
+                self._start_sub(frame.id, frame.command.session, frame.command.from_seq, frame.command.follow,
+                                subscription_host)
+        finally:
+            if subscription_host is not None:
+                self.daemon.projects.release(subscription_host)
         self.daemon.touch()
-        await self._send(ResultFrame(id=frame.id, result=result))
 
     # -- subscriptions -----------------------------------------------------
 
-    def _start_sub(self, sub_id: str, session: str, from_seq: int, follow: bool) -> None:
+    def _start_sub(self, sub_id: str, session: str, from_seq: int, follow: bool, host) -> None:
         if len(self._subs) >= MAX_SUBSCRIPTIONS_PER_CLIENT:
             asyncio.ensure_future(
                 self._send(SubscribeDone(id=sub_id, error="subscription limit reached"))
             )
             return
-        task = asyncio.ensure_future(self._stream(sub_id, session, from_seq, follow))
-        self._subs[sub_id] = _Subscription(session=session, task=task)
+        self._stop_sub(sub_id)
+        host.references += 1
+        task = asyncio.ensure_future(self._stream(sub_id, session, from_seq, follow, host))
+        self._subs[sub_id] = _Subscription(project=host.identity.key, session=session, task=task)
+        def finished(done):
+            self.daemon.projects.release(host)
+            current = self._subs.get(sub_id)
+            if current is not None and current.task is done:
+                self._subs.pop(sub_id, None)
+        task.add_done_callback(finished)
 
     async def _stream(
-        self, sub_id: str, session: str, from_seq: int, follow: bool
+        self, sub_id: str, session: str, from_seq: int, follow: bool, focus
     ) -> None:
         error = ""
+        host = focus
         try:
             if follow:
                 # Reconnect-safe: a (re)attached follower learns whether this
@@ -358,11 +476,11 @@ class _ClientConnection:
                 await self._send(EventFrame(id=sub_id, event=Event(
                     type="daemon.session_slot", session=session,
                     data={"session": session,
-                          "slot_wait": self.daemon.facade.supervisor.slot_wait(session)})))
-            async for event in self.daemon.facade.subscribe(
+                          "slot_wait": host.facade.supervisor.slot_wait(session)}), project=host.identity.key))
+            async for event in host.facade.subscribe(
                 session, from_seq, follow=follow, client_id=self.client_id
             ):
-                await self._send(EventFrame(id=sub_id, event=event))
+                await self._send(EventFrame(id=sub_id, event=event, project=host.identity.key))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a bad stream ends itself
@@ -381,8 +499,11 @@ class _ClientConnection:
     async def deliver(self, event: Event) -> None:
         """Fan one daemon-level event out to every matching subscription."""
         for sub_id, subscription in list(self._subs.items()):
+            project = event.data.get("project", "")
+            if project and project != subscription.project:
+                continue
             if event.session is None or event.session == subscription.session:
-                await self._send(EventFrame(id=sub_id, event=event))
+                await self._send(EventFrame(id=sub_id, event=event, project=subscription.project))
 
     # -- writes ------------------------------------------------------------
 
@@ -421,6 +542,9 @@ class _ClientConnection:
                 self.daemon._log(
                     "connection_task_timeout", client=self.client_id
                 )
+        if self.focus is not None:
+            self.daemon.projects.release(self.focus)
+            self.focus = None
         self.daemon._client_left(self)
         with contextlib.suppress(Exception):
             self.writer.close()
@@ -457,11 +581,7 @@ def _http_requested(
 
 
 class Daemon:
-    """Own one runtime, one socket, and one lifecycle for a workspace."""
-
-    # Class-level defaults so a partially built daemon (tests) still has them.
-    _orphan_since: float | None = None
-    _orphan_task: asyncio.Future[None] | None = None
+    """Own one socket and a bounded registry of project runtimes."""
 
     def __init__(
         self,
@@ -500,6 +620,24 @@ class Daemon:
         self.max_concurrent_turns = int(max_concurrent_turns)
         self.handshake_timeout = float(handshake_timeout)
         self._runtime_factory = runtime_factory or _default_runtime_factory
+        from ..resources import ResourceLimits
+        from ..config.schema import DaemonSection, UpdatesSection
+        import tomllib
+        config_path = nexus_home(home) / "config.toml"
+        settings = DaemonSection()
+        document = {}
+        if config_path.is_file():
+            with config_path.open("rb") as handle:
+                raw = handle.read(256 * 1024 + 1)
+            if len(raw) > 256 * 1024:
+                raise DaemonError("User config exceeds 256 KiB")
+            document = tomllib.loads(raw.decode())
+            settings = msgspec.convert(document.get("daemon", {}), type=DaemonSection)
+        self._update_check = msgspec.convert(document.get("updates", {}), type=UpdatesSection).check
+        self.projects = ProjectRegistry(self._runtime_factory, home=home,
+            limits=ResourceLimits(max_processes=settings.max_processes,
+                                  max_requests_per_provider=settings.max_requests_per_provider),
+                                        max_concurrent=max_concurrent_turns, emit=self._emit)
         self._reap_interval = reap_interval or max(
             0.05, min(1.0, self.idle_timeout / 2) if self.idle_timeout > 0 else 1.0
         )
@@ -515,8 +653,6 @@ class Daemon:
         self._web_start_lock = asyncio.Lock()
         self.diagnostics = DaemonDiagnostics()
 
-        self._runtime: Any | None = None
-        self._facade: HostFacade | None = None
         self._server: asyncio.AbstractServer | None = None
         self._http: HTTPSSEServer | None = None
         self._lock_fd: int | None = None
@@ -524,10 +660,8 @@ class Daemon:
         self._clients: set[_ClientConnection] = set()
         self._stop_event = asyncio.Event()
         self._reaper: asyncio.Task[None] | None = None
-        #: Monotonic time the persistent-job orphan clock started, and the task
-        #: that stops the jobs once it expires (see :meth:`_check_orphans`).
-        self._orphan_since: float | None = None
-        self._orphan_task: asyncio.Future[None] | None = None
+        self._watchdog: asyncio.Task[None] | None = None
+        self._last_routed_project = ""
         self._last_activity = time.time()
         self._started_at = 0.0
         self._closed = False
@@ -553,9 +687,9 @@ class Daemon:
 
     @property
     def facade(self) -> HostFacade:
-        if self._facade is None:
-            raise DaemonError("daemon has not started")
-        return self._facade
+        if self.projects.hosts:
+            return next(iter(self.projects.hosts.values())).facade
+        raise DaemonError("no project is loaded")
 
     @property
     def started(self) -> bool:
@@ -574,16 +708,47 @@ class Daemon:
         """The bound HTTP/SSE port, or ``0`` when the surface is not running."""
         return self._http.port if self._http is not None else 0
 
-    async def web_launch(self) -> str:
-        """Start or attach the local browser listener and mint a one-use URL."""
-        if self._closed or self._facade is None:
+    async def update_status(self, announce=False):
+        from ..host_support.update_check import update_status, claim_announcement
+        status = await asyncio.to_thread(update_status, home=self._home,
+                                         config_enabled=self._update_check)
+        if announce:
+            status["announce"] = await asyncio.to_thread(claim_announcement, status.get("available"), home=self._home)
+        return p.UpdateStatusResult(**status)
+
+    async def web_launch(self, host=None) -> str:
+        """Mint a ticket bound to one project's cookie and URL namespace."""
+        if self._closed:
             raise DaemonError("daemon is stopping")
+        if host is None:
+            host = next(iter(self.projects.hosts.values()), None)
+        if host is None:
+            raise DaemonError("No project is loaded")
         async with self._web_start_lock:
             if self._http is None:
                 await self._start_http()
-            assert self._http is not None and self._http._web is not None
-            ticket = self._http._web.issue_ticket()
-            return f"http://127.0.0.1:{self._http.port}/#ticket={ticket}"
+            from .web import BrowserRoutes
+            key = host.identity.key
+            web = self._http.project_web.get(key)
+            if web is None:
+                web = BrowserRoutes(host.facade, workspace=str(host.identity.root),
+                                    port=self._http.port, prefix=f"/w/{key}", project_open=self._browser_project_open)
+                self._http.project_web[key] = web
+            ticket = web.issue_ticket()
+            return f"http://127.0.0.1:{self._http.port}/w/{key}/#ticket={ticket}"
+
+    async def _browser_project_open(self, command):
+        identity = resolve_project(command.workspace)
+        host = self.projects.hosts.get(identity.key)
+        if host is None:
+            raise ValueError("Open this project with nexus web before navigating to it")
+        opened = await host.facade.handle(p.SessionOpen(session=command.session, create=False, recover=True))
+        if isinstance(opened, p.ErrorResult):
+            return opened
+        url = await self.web_launch(host)
+        base, ticket = url.split("/#", 1)
+        return p.ProjectSessionOpenResult(project_ref(identity), command.session,
+                                         url=f"{base}/s/{command.session}#{ticket}")
 
     @property
     def http_endpoint(self) -> dict[str, Any] | None:
@@ -611,8 +776,9 @@ class Daemon:
             "uptime": max(0.0, time.time() - self._started_at) if self._started_at else 0.0,
             "http": self._http is not None,
         }
-        if self._facade is not None:
-            base.update(self._facade.health())
+        base["projects"] = self.projects.loaded_rows()
+        base["running"] = self.projects.supervisor.running
+        base["queued"] = self.projects.supervisor.queued
         return base
 
     # -- lifecycle ---------------------------------------------------------
@@ -625,28 +791,8 @@ class Daemon:
         self._acquire_lock()
         try:
             self._reclaim_stale()
-            self._runtime = self._runtime_factory(
-                self.workspace, home=self._home, environ=self._environ
-            )
-            self._facade = HostFacade(
-                self._runtime,
-                max_concurrent_turns=self.max_concurrent_turns,
-                owns_runtime=True,
-                emit=self._emit,
-            )
-            await self._recover_shell_orphans()
-            self._facade.start_usage_polling()
-            stranded = await self._facade.recover_admissions()
-            if stranded:
-                self._log(
-                    "daemon.admissions_pending",
-                    count=len(stranded),
-                    unreadable=sum(1 for item in stranded if item.get("error")),
-                )
-            # Diagnostics are owned by this daemon generation and shared with
-            # the facade's read-only LogsRead projection.
-            self._facade.daemon_diagnostics = self.diagnostics
-            self._facade.daemon_info = {"pid": os.getpid(), "socket": str(self._socket)}
+            # Project construction is lazy: bad config in one project must not
+            # prevent the process listener from serving other projects.
             self._server = await asyncio.start_unix_server(
                 self._on_connection, path=str(self._socket)
             )
@@ -659,12 +805,8 @@ class Daemon:
             self._last_activity = self._started_at
             self._stop_event = asyncio.Event()
             self._log("daemon.started", pid=os.getpid(), socket=str(self._socket))
-            voice = getattr(self._runtime, "voice", None)
-            if voice is not None and voice.config.enabled:
-                # Warm cached models only. First download requires the client's
-                # explicit confirmation and is never a daemon-start side effect.
-                voice.schedule_prepare(allow_download=False)
             self._reaper = asyncio.ensure_future(self._reap())
+            self._watchdog = asyncio.create_task(self._watch_loop_lag())
         except BaseException:
             # Close a partially-bound listener before releasing the lock so a
             # failed start (for example a refused HTTP bind) leaks no fd.
@@ -677,36 +819,9 @@ class Daemon:
                 with contextlib.suppress(Exception):
                     await self._http.aclose()
                 self._http = None
-            if self._facade is not None:
-                with contextlib.suppress(Exception):
-                    await self._facade.shutdown("daemon start failed")
-                self._facade = None
-            self._runtime = None
+            await self.projects.aclose()
             await self._release()
             raise
-
-    async def _recover_shell_orphans(self) -> None:
-        """Stop the process groups a previous, killed daemon left running (P7).
-
-        Runs under the daemon lock, before the socket is bound, so nothing can
-        start a job concurrently. Bounded and best effort: a failure or timeout is
-        logged and never stops the daemon from starting. It writes no session
-        event and starts no turn; a session records its own interrupted jobs
-        when it is next opened.
-        """
-        recover = getattr(self._runtime, "recover_shell_orphans", None)
-        if not callable(recover):
-            return
-        try:
-            counts = await asyncio.wait_for(recover(), timeout=SHELL_RECOVERY_TIMEOUT_S)
-        except Exception as exc:  # noqa: BLE001 - includes TimeoutError
-            self._log(
-                "daemon.shell_recovery_failed",
-                error=redact_secrets(str(exc)) or type(exc).__name__,
-            )
-            return
-        if counts and (counts.get("jobs") or counts.get("invalid")):
-            self._log("daemon.shell_orphans_swept", **counts)
 
     async def serve_forever(self) -> None:
         await self.start()
@@ -756,16 +871,16 @@ class Daemon:
             self._log("daemon.stopped")
 
     async def _shutdown(self) -> None:
+        if self._watchdog is not None:
+            self._watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watchdog
+            self._watchdog = None
         if self._reaper is not None:
             self._reaper.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reaper
             self._reaper = None
-        orphan_task, self._orphan_task = self._orphan_task, None
-        if orphan_task is not None and orphan_task is not asyncio.current_task():
-            orphan_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await orphan_task
         if self._server is not None:
             # Stop accepting first, but do not await ``wait_closed`` yet: since
             # Python 3.12 ``Server.wait_closed`` does not return until every
@@ -798,12 +913,7 @@ class Daemon:
                     self._server.wait_closed(), timeout=TEARDOWN_TIMEOUT
                 )
             self._server = None
-        if self._facade is not None:
-            with contextlib.suppress(Exception):
-                await self._facade.shutdown("daemon stopping")
-            self._facade = None
-        self._runtime = None
-
+        await self.projects.aclose()
     # -- connections -------------------------------------------------------
 
     async def _on_connection(self, reader: Any, writer: Any) -> None:
@@ -829,107 +939,43 @@ class Daemon:
 
     # -- idle policy -------------------------------------------------------
 
+    async def _watch_loop_lag(self):
+        while True:
+            started = time.monotonic()
+            await asyncio.sleep(0.5)
+            lag = time.monotonic() - started - 0.5
+            if lag > 1:
+                # Attribution is a hint: arbitrary extension callbacks can run
+                # outside a command, so never claim this identifies the offender.
+                self._log("daemon.loop_lag", lag_seconds=round(lag, 3),
+                          last_routed_project=self._last_routed_project)
+
     async def _reap(self) -> None:
-        await reap_with_archive_sweep(
-            self._stop_event,
-            self._reap_interval,
-            self._archive_sweep,
-            self._idle,
-            self.request_stop,
-            self._log,
-        )
+        next_archive = 0.0
+        while not self._stop_event.is_set():
+            await asyncio.sleep(self._reap_interval)
+            await self.projects.evict_idle(self.idle_timeout)
+            if time.monotonic() >= next_archive:
+                try:
+                    await self._archive_sweep()
+                except Exception as exc:
+                    self._log("daemon.archive_failed", error=redact_secrets(str(exc)))
+                next_archive = time.monotonic() + 3600
+            if self._idle():
+                self.request_stop("idle")
 
     async def _archive_sweep(self) -> None:
         """Best-effort startup/hourly auto-archive; never blocks request handling."""
-        runtime = self._runtime
-        sessions = getattr(runtime, "sessions", None)
-        idle_seconds = getattr(runtime, "auto_archive_idle_seconds", None)
-        if sessions is None or not callable(idle_seconds):
-            return
-        count = await sweep_stale_sessions(sessions, idle_seconds)
-        if count:
-            self._log("sessions.auto_archived", count=count)
-
-    def _present_or_busy(self) -> bool:
-        """A viewer is attached, a turn runs or is queued, or a voice call is live."""
-        facade = self._facade
-        if facade is None:
-            return False
-        return bool(
-            facade.presence.total_viewers() > 0
-            or facade.supervisor.running
-            or facade.supervisor.queued
-            or getattr(getattr(self._runtime, "voice", None), "active", False)
-        )
-
-    def _check_orphans(self) -> None:
-        """Start the orphan policy once persistent jobs have had no viewer and no turn
-        for ``tools.shell_orphan_s``.
-
-        The clock is monotonic and separate from the idle clock (which restarts
-        whenever a job is running). Anyone present, or a running turn, resets it.
-        """
-        runtime = self._runtime
-        orphan_s = getattr(runtime, "shell_orphan_seconds", None)
-        jobs = getattr(runtime, "persistent_shell_jobs", None)
-        if self._facade is None or not callable(orphan_s) or not callable(jobs):
-            return
-        if self._orphan_task is not None:
-            return
-        limit = orphan_s()
-        try:
-            total = jobs(1)[0]
-        except Exception:  # noqa: BLE001 - a bad probe must not end the reaper
-            total = 0
-        if (
-            not isinstance(limit, (int, float))
-            or isinstance(limit, bool)
-            or limit <= 0
-            or not isinstance(total, int)
-            or total <= 0
-            or self._present_or_busy()
-        ):
-            self._orphan_since = None
-            return
-        now = time.monotonic()
-        if self._orphan_since is None:
-            self._orphan_since = now
-        if now - self._orphan_since >= limit:
-            reason = f"no viewer for {_duration_text(limit)}"
-            self._orphan_task = asyncio.ensure_future(self._stop_orphans(reason))
-
-    async def _stop_orphans(self, reason: str) -> None:
-        """Stop the persistent jobs, then end the daemon.
-
-        The jobs are stopped first, while sessions are still open, so each
-        ``shell.job_exited`` (with ``stopped: <reason>``) is written durably;
-        the daemon log records the same reason. Anyone who arrives before the
-        stop starts cancels it.
-        """
-        try:
-            if self._present_or_busy():
-                self._orphan_since = None
-                return
-            stopper = getattr(self._runtime, "stop_persistent_shell_jobs", None)
-            stopped = int(await stopper(reason)) if callable(stopper) else 0
-            self._log("daemon.orphan_jobs_stopped", reason=reason, count=stopped)
-            self.request_stop(f"orphan_jobs: {reason}")
-        except Exception as exc:  # noqa: BLE001 - never leave the policy half-done
-            self._log("daemon.orphan_stop_failed", error=redact_secrets(str(exc)))
-            self.request_stop("orphan_jobs")
-        finally:
-            self._orphan_task = None
+        for host in list(self.projects.hosts.values()):
+            sessions = getattr(host.runtime, "sessions", None)
+            idle_seconds = getattr(host.runtime, "auto_archive_idle_seconds", None)
+            if sessions is not None and callable(idle_seconds):
+                count = await sweep_stale_sessions(sessions, idle_seconds)
+                if count:
+                    self._log("sessions.auto_archived", project=host.identity.key, count=count)
 
     def _idle(self) -> bool:
-        self._check_orphans()
-        if self.idle_timeout <= 0 or self._facade is None:
-            return False
-        if self._present_or_busy():
-            return False
-        has_jobs = getattr(self._runtime, "has_active_shell_jobs", None)
-        if callable(has_jobs) and has_jobs() is True:
-            # A shell job outlives its turn; the idle window restarts once the
-            # last one ends instead of firing immediately.
+        if self.idle_timeout <= 0 or self._clients or self.projects.hosts:
             self.touch()
             return False
         return (time.time() - self._last_activity) >= self.idle_timeout
@@ -941,6 +987,11 @@ class Daemon:
 
     def _emit(self, event_type: str, data: dict[str, Any]) -> None:
         """Supervisor sink: log and fan a ``daemon.*`` event to subscribers."""
+        data = dict(data)
+        session = data.get("session", "")
+        if ":" in session:
+            project, logical = session.split(":", 1)
+            data.update(project=project, session=logical)
         safe = {key: _redact_value(value) for key, value in data.items()}
         self._log(event_type, **safe)
         event = Event(type=event_type, data=safe, session=safe.get("session"))
@@ -1018,6 +1069,56 @@ class Daemon:
 
     # -- HTTP/SSE surface --------------------------------------------------
 
+    def _http_project(self, command):
+        hosts = self.projects.hosts
+        if not hosts:
+            raise ValueError("Open the project over the local socket first")
+        focus = next(iter(hosts.values()))
+        explicit = getattr(command, "project", "")
+        session = getattr(command, "session", "") or getattr(command, "session_id", "")
+        if session:
+            identity = self.projects.session_project(session, focus, explicit)
+            key = identity.key
+        elif explicit:
+            key = explicit
+        elif len(hosts) == 1:
+            key = focus.identity.key
+        else:
+            raise ValueError("Specify the project key")
+        if key not in hosts:
+            raise ValueError("Open the project over the local socket first")
+        return hosts[key]
+
+    async def handle(self, command):
+        try:
+            if isinstance(command, p.UpdateStatus):
+                return await self.update_status(command.announce)
+            if isinstance(command, p.Health):
+                rows = self.projects.loaded_rows()
+                return p.HealthResult(projects=rows,
+                    running=self.projects.supervisor.running,
+                    queued=self.projects.supervisor.queued,
+                    max_concurrent=self.projects.supervisor.max_concurrent,
+                    sessions=sum(row.sessions for row in rows))
+            if isinstance(command, p.Shutdown):
+                if (self.projects.supervisor.running or self.projects.supervisor.queued) and not command.force:
+                    raise ValueError("Projects have running or queued turns; use --force")
+                self.request_stop("HTTP shutdown")
+                return p.ShutdownResult()
+            host = self._http_project(command)
+            return await host.facade.handle(command)
+        except Exception as exc:
+            return p.ErrorResult(kind=type(exc).__name__, message=redact_secrets(str(exc)))
+
+    async def subscribe(self, session, from_seq=0, **kwargs):
+        host = self._http_project(p.SessionSubscribe(session=session))
+        host.references += 1
+        try:
+            async for event in host.facade.subscribe(session, from_seq, **kwargs):
+                yield event
+        finally:
+            self.projects.release(host)
+
     async def _start_http(self) -> None:
         """Start the opt-in HTTP/SSE surface over the shared facade.
 
@@ -1030,13 +1131,13 @@ class Daemon:
         self._http_token = token
         try:
             server = HTTPSSEServer(
-                self._facade,
+                self,
                 host=self.http_host,
                 port=self._http_port,
                 token=token,
                 allowed_origins=self._http_origins,
                 on_shutdown=self.request_stop,
-                web_workspace=str(self.workspace),
+                web_workspace="",
             )
             await server.start()
         except (ValueError, TransportError, OSError) as exc:
@@ -1044,6 +1145,7 @@ class Daemon:
                 f"HTTP/SSE surface failed to start: {redact_secrets(str(exc))}"
             ) from exc
         self._http = server
+        self.projects.on_unload = lambda key: server.project_web.pop(key, None)
         self._write_http_endpoint()
         # The token is deliberately absent from the log; only the address is.
         self._log(
@@ -1101,6 +1203,9 @@ class Daemon:
         # The diagnostics store independently selects reviewed categories and
         # fields; keep the owner log's existing raw-field/redaction behavior.
         self.diagnostics.capture(message, fields)
+        host = self.projects.hosts.get(fields.get("project", ""))
+        if host is not None:
+            host.facade.daemon_diagnostics.capture(message, fields)
         line = f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {message}"
         if fields:
             pairs = " ".join(f"{key}={value!r}" for key, value in fields.items())
@@ -1208,6 +1313,7 @@ def _default_spawn(
         sink: Any = os.open(early, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     except OSError:
         sink = subprocess.DEVNULL
+    nexus_home(home).mkdir(parents=True, exist_ok=True)
     try:
         return subprocess.Popen(
             argv,
@@ -1215,7 +1321,7 @@ def _default_spawn(
             stdout=sink,
             stderr=sink,
             start_new_session=True,
-            cwd=str(workspace),
+            cwd=str(nexus_home(home)),
             env=env,
         )
     finally:
@@ -1277,6 +1383,7 @@ async def ensure_daemon(
             client_id=client_id,
             version=version,
             client=client,
+            focus=str(resolved), environ=dict(os.environ if environ is None else environ),
             timeout=min(timeout, 2.0),
         )
     except VersionMismatch:
@@ -1304,7 +1411,8 @@ async def ensure_daemon(
     while True:
         try:
             return await UDSClient.connect(
-                path, client_id=client_id, version=version, client=client, timeout=1.0
+                path, client_id=client_id, version=version, client=client, timeout=1.0,
+                focus=str(resolved), environ=dict(os.environ if environ is None else environ)
             )
         except VersionMismatch:
             raise
@@ -1347,7 +1455,7 @@ async def status(
         else default_socket_path(resolved, home=home)
     )
     try:
-        client = await UDSClient.connect(path, timeout=timeout)
+        client = await UDSClient.connect(path, timeout=timeout, focus=str(resolved), environ=dict(os.environ), client="control")
     except (DaemonUnavailable, VersionMismatch, TransportError, OSError) as exc:
         return {
             "running": False,
@@ -1365,7 +1473,7 @@ async def status(
                 "socket": str(path),
                 "error": redact_secrets(str(exc) or type(exc).__name__),
             }
-        data = msgspec.structs.asdict(result) if isinstance(result, p.HealthResult) else {}
+        data = msgspec.to_builtins(result) if isinstance(result, p.HealthResult) else {}
         info = client.info
         # Health carries a ``running`` *turn* count; the daemon's own liveness
         # flag is set last so it can never be clobbered by the health payload.
@@ -1386,6 +1494,7 @@ async def stop(
     home: str | Path | None = None,
     socket_path: str | Path | None = None,
     timeout: float = 5.0,
+    force: bool = False,
 ) -> bool:
     """Stop the daemon gracefully; fall back to a pid-file signal if needed."""
     resolved = Path(workspace).expanduser().resolve()
@@ -1395,11 +1504,13 @@ async def stop(
         else default_socket_path(resolved, home=home)
     )
     try:
-        client = await UDSClient.connect(path, timeout=timeout)
+        client = await UDSClient.connect(path, timeout=timeout, focus=str(resolved), environ=dict(os.environ), client="control")
     except (DaemonUnavailable, VersionMismatch, TransportError, OSError):
         return _signal_stale(path)
     try:
-        result = await client.call(p.Shutdown(reason="stop"), timeout=timeout)
+        result = await client.call(p.Shutdown(reason="stop", force=force), timeout=timeout)
+        if isinstance(result, p.ErrorResult):
+            raise DaemonError(result.message)
         return isinstance(result, p.ShutdownResult) and result.stopping
     except (DaemonUnavailable, TransportError, OSError):
         # Teardown may close the socket before its ShutdownResult reaches us.
@@ -1512,6 +1623,7 @@ def logs(
     home: str | Path | None = None,
     log_path: str | Path | None = None,
     lines: int = 200,
+    all_projects: bool = False,
 ) -> str:
     """Return the last ``lines`` of the daemon log (empty when absent)."""
     resolved = Path(workspace).expanduser().resolve()
@@ -1523,7 +1635,11 @@ def logs(
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return "\n".join(text.splitlines()[-max(0, lines) :])
+    rows = text.splitlines()
+    if not all_projects:
+        key = resolve_project(resolved).key
+        rows = [row for row in rows if f"project={key!r}" in row]
+    return "\n".join(rows[-max(0, lines) :])
 
 
 # ---------------------------------------------------------------------------

@@ -191,7 +191,7 @@ def test_module_handle_metadata_is_json_safe(tmp_path: Path):
 
     loader, outcome = load_fixture("echo_spec.py", 4, tmp_path=tmp_path)
     handle = outcome.record.handle
-    assert handle.name == module_name_for(staged_source_identity("echo_spec.py"), 4)
+    assert handle.name == loader.module_name(staged_source_identity("echo_spec.py"), 4)
     assert handle.name.endswith("__g4")
     assert handle.generation == 4
     assert handle.sha256 == hashlib.sha256(fixture("echo_spec.py").read_bytes()).hexdigest()
@@ -246,7 +246,7 @@ def test_loader_refuses_invalid_modules_and_leaves_nothing(
     loader = ToolLoader()
     q = quarantiner(tmp_path)
     staged = q.stage(q.open(fixture(name)))
-    expected_name = module_name_for(staged.source_identity, 1)
+    expected_name = loader.module_name(staged.source_identity, 1)
     outcome = loader.load(staged, 1)
     assert outcome.ok is False
     assert outcome.code is code
@@ -262,7 +262,7 @@ def test_loader_returns_refusal_for_a_module_that_cannot_be_imported(tmp_path: P
     loader = ToolLoader()
     q = quarantiner(tmp_path)
     staged = q.stage(q.open(fixture("import_error.py")))
-    expected_name = module_name_for(staged.source_identity, 1)
+    expected_name = loader.module_name(staged.source_identity, 1)
     # inspect() is fine (syntax valid); the loader's own import raises.
     outcome = loader.load(staged, 1)
     assert outcome.ok is False
@@ -277,7 +277,7 @@ def test_failed_load_discards_the_partial_module(tmp_path: Path, monkeypatch):
     loader = ToolLoader()
     q = quarantiner(tmp_path)
     staged = q.stage(q.open(fixture("echo_spec.py")))
-    name = module_name_for(staged.source_identity, 1)
+    name = loader.module_name(staged.source_identity, 1)
 
     monkeypatch.setattr(
         loader_mod,
@@ -388,7 +388,7 @@ def test_generations_coexist_in_sys_modules(tmp_path: Path):
         assert outcome.record.handle.name in sys.modules
     assert len(set(names)) == 3
     assert names == [
-        module_name_for(staged_source_identity("echo_spec.py"), gen)
+        loader.module_name(staged_source_identity("echo_spec.py"), gen)
         for gen in (1, 2, 3)
     ]
     loader.release(names)
@@ -417,7 +417,7 @@ def test_evil_module_absent_after_failed_generation(tmp_path: Path):
     q = quarantiner(tmp_path)
     loader = ToolLoader()
     staged = q.stage(q.open(fixture("import_error.py")))
-    expected_name = module_name_for(staged.source_identity, 5)
+    expected_name = loader.module_name(staged.source_identity, 5)
     outcome = loader.load(staged, 5)
     assert outcome.ok is False
     assert expected_name not in sys.modules
@@ -632,10 +632,10 @@ def test_same_source_fresh_stage_reloads_to_distinct_generation_name(tmp_path: P
     first = loader.load(q.stage(q.open(fixture("echo_spec.py"))), 11)
     second = loader.load(q.stage(q.open(fixture("echo_spec.py"))), 12)
     assert first.ok and second.ok
-    assert first.record.handle.name == module_name_for(
+    assert first.record.handle.name == loader.module_name(
         staged_source_identity("echo_spec.py"), 11
     )
-    assert second.record.handle.name == module_name_for(
+    assert second.record.handle.name == loader.module_name(
         staged_source_identity("echo_spec.py"), 12
     )
     assert first.record.handle.name != second.record.handle.name
@@ -643,3 +643,17 @@ def test_same_source_fresh_stage_reloads_to_distinct_generation_name(tmp_path: P
     # newer generation is installed.
     assert asyncio.run(first.tools[0].run({"message": "old"}, None)).content[0].text == "echo:old"
     loader.release(loader.owned_modules)
+
+
+def test_two_loaders_keep_identical_source_generations_independent(tmp_path):
+    first, left = load_fixture('echo_spec.py', 1, tmp_path=tmp_path / 'left')
+    second, right = load_fixture('echo_spec.py', 1, tmp_path=tmp_path / 'right')
+    try:
+        assert left.ok and right.ok
+        assert left.record.handle.name != right.record.handle.name
+        first.release(first.owned_modules)
+        assert right.record.handle.name in sys.modules
+        assert asyncio.run(right.tools[0].run({'message': 'still here'}, None)).content[0].text == 'echo:still here'
+    finally:
+        first.release(first.owned_modules)
+        second.release(second.owned_modules)

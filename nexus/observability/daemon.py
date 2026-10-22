@@ -146,6 +146,10 @@ def _reviewed_summary(
     category: str, fields: dict[str, Any]
 ) -> tuple[str, str] | None:
     """Return a fixed safe summary for the explicitly reviewed event set."""
+    if category == "daemon.project_loaded":
+        return "info", "Project runtime loaded; environment captured from its first client."
+    if category == "daemon.loop_lag":
+        return "warning", "Shared daemon event loop stalled for more than one second."
     if category == "daemon.started":
         pid = _count(fields, "pid")
         return "info", f"Daemon started (pid {pid})." if pid is not None else "Daemon started."

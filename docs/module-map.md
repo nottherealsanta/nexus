@@ -66,6 +66,7 @@ here, so add a row when you add a file.
 | `errors.py` | Exception taxonomy shared across Nexus |
 | `events.py` | The public UI boundary: JSON-serializable events, no rendering or input |
 | `runtime.py` | `Runtime`: the composition root that owns every manager ([architecture.md](architecture.md#runtime-runtimepy)) |
+| `resources.py` | Fair process-wide process and provider resource admission |
 | `util.py` | Small dependency-free helpers shared by the lower layers |
 
 ### `nexus/agents/`
@@ -203,6 +204,10 @@ here, so add a row when you add a file.
 
 ### `nexus/host/`
 
+| File | Owns |
+| --- | --- |
+| `projects.py` | Bounded project registry, routing and scoped supervisor |
+
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | The host layer (L4½): the transport-neutral surface over one runtime |
@@ -226,6 +231,10 @@ here, so add a row when you add a file.
 | `uds.py` | The local Unix-socket transport: length-framed JSON for the CLI |
 
 ### `nexus/host_support/`
+
+| File | Owns |
+| --- | --- |
+| `project_identity.py` | Canonical Git/plain project identity |
 
 | File | Purpose |
 | --- | --- |

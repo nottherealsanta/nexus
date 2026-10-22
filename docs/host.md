@@ -1,5 +1,39 @@
 # Host: daemon, protocol, facade, transports
 
+## Shared daemon (protocol v4)
+
+One socket per Nexus home and Python install serves up to 32 project runtimes:
+`shared-v4-<sha8(sys.prefix)>.sock`. Runtime construction is lazy. `Hello.focus`
+is an absolute launch path; its bounded environment (1,024 variables / 256 KiB)
+is captured once per project and is never returned or logged. `Welcome.focus`
+identifies the resolved project. Administrative connections use `client=control`
+and do not load a runtime.
+
+`ProjectFocus` changes the connection default without cancelling subscriptions.
+Session commands route to the owning project, including drafts that are still
+in memory. An explicit `project` key selects a project; ambiguous historical
+session ids require it when the focus cannot disambiguate them. `ProjectOpen`
+registers/loads a path and `ProjectList` lists known roots, including empty ones.
+`ProjectSessionOpen` focuses and opens the session on the existing connection;
+its result contains `project` and `session`, with no reconnect socket.
+
+Each runtime has its own settings, grants, presence, MCP connections, shell jobs,
+environment and diagnostics. A shared supervisor names sessions by project and
+schedules projects round-robin under a ceiling of 32 turns. Shell jobs and model
+requests also take process-wide resource leases (16 processes; 6 requests per
+provider). Those leases are fair by project then session and cancellation-safe.
+
+Unreferenced idle projects are evicted independently; connections and active
+subscriptions pin their runtime. The empty daemon then waits another idle window
+before exiting. A failed project load does not stop other projects. Browser tabs
+use `/w/<project-key>/` URLs with separate path-scoped cookies and tickets on one
+listener. HTTP peers can address loaded projects explicitly; loading a project
+and supplying its environment requires the owner-only Unix socket.
+
+No per-workspace compatibility mode or migration of
+old linked-worktree project rows is provided.
+
+
 The optional device gateway is separate from and does not change the host
 service. See [gateway documentation](gateway.md) before enabling it.
 
@@ -11,7 +45,7 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 
 | File | Owns |
 | --- | --- |
-| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (3); `decode_command`; `ErrorResult` |
+| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (4); `decode_command`; `ErrorResult` |
 | `facade.py` | `HostFacade`: implements every command (`handle`), `subscribe`, `state`, `web_snapshot`, `subscribe_web`, `subscribe_workspace` |
 | `daemon.py` | `Daemon`: lifecycle, socket, handshake, idle shutdown, `web_launch`, `ensure_daemon`/`status`/`stop`/`logs`, daemon entrypoint |
 | `supervisor.py` | `Supervisor`: turn scheduling under a global cap; a cancel keeps queued subagent reports |
@@ -246,8 +280,8 @@ by a dead view is released.
 
 ## Daemon
 
-One daemon per workspace, addressed by a deterministic socket
-`~/.nexus/daemon/<hash>.sock` (mode `0600` in a `0700` dir; a private short
+One daemon per Nexus home and Python install, addressed by a deterministic socket
+`~/.nexus/daemon/shared-v4-<sha8(sys.prefix)>.sock` (mode `0600` in a `0700` dir; a private short
 fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 
 - `flock` on a sibling lock plus a pid file prevent duplicates; a stale socket
@@ -258,8 +292,8 @@ fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 - Each runtime captures its supplied environment (or the process environment)
   at construction. Later caller mapping or process-environment changes do not
   alter its configuration/provider inputs or shell job inheritance.
-- **Idle shutdown:** exit after 300s with no viewers, no running and no queued
-  turn; never with a turn in flight.
+- **Idle shutdown:** idle unreferenced projects unload after 300s; an empty
+  daemon exits after another idle window. Active turns and jobs pin their project.
 - SIGINT/SIGTERM stop the accept loop and close every session through the facade.
   Every log line and peer-visible error passes `redact_secrets`. ≤ 64
   subscriptions per client.
@@ -292,7 +326,7 @@ or `Daemon(http=True)`; off by default; the `nexus` CLI has no flag for it):
 
 The browser surface rides the same listener: `nexus web` sends `WebLaunch` over
 UDS; `Daemon.web_launch()` starts the listener and returns
-`http://127.0.0.1:<port>/#ticket=…`. Routes, auth and CSP are in [web.md](web.md).
+`http://127.0.0.1:<port>/w/<project-key>/#ticket=…`. Routes, auth and CSP are in [web.md](web.md).
 
 ## `host_support/` and `observability/`
 
@@ -393,11 +427,10 @@ when a historical root is no longer a directory (one bounded `isdir` per entry; 
 for it) and clients omit such entries; the current workspace is never omitted. Session rows
 under a vanished root are dropped from `sessions` as well (same `isdir` check), so clients cannot
 regroup them into projects.
-`ProjectSessionOpen` validates a
-recorded workspace/session pair before connecting to its owning daemon, returning
-a socket path for the terminal or a one-use browser launch URL. Each workspace
-keeps its own runtime, settings and permissions. This does not implement the
-shared-daemon plan.
+`ProjectSessionOpen` validates the session's owning project, opens it in that
+project's loaded runtime and changes the connection focus. The terminal retains
+its socket and existing subscriptions. Browser navigation returns a one-use URL
+under `/w/<project-key>/`. Settings and permissions remain project-local.
 
 ### Native diagnostics identity
 

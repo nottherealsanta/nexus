@@ -1,5 +1,22 @@
 # Configuration and on-disk state
 
+## Shared daemon environment and limits
+
+Each UDS client's `Hello` supplies its environment inward only (at most 1,024
+variables and 256 KiB). The first load captures it for that project; later clients
+do not overwrite it. `daemon reload` replaces the idle project runtime with the
+caller's environment. Provider, MCP, shell and command-hook environments are
+project-owned; `NEXUS_VOICE` is applied to the runtime's voice configuration.
+`NEXUS_HOME`, `NEXUS_DEV` and HTTP listener options remain process settings.
+The shared process starts in `nexus_home()`, independent of any project cwd.
+Resource defaults are 16 child processes and 6 model streams per provider, with
+a turn ceiling of 32. Set `[daemon] max_processes` and
+`max_requests_per_provider` in the user config (integer 1–1024); project layers
+cannot set these process-wide limits. Shell, grep, command hooks and current
+worktree commands take process leases. Later worktree setup/land steps must use
+the same pool when implemented.
+
+
 `nexus/config/` (L0) loads layered TOML into frozen `msgspec` structs. Every
 struct forbids unknown fields: **a typo is a hard error**, never a silently
 ignored setting. Field defaults are the built-in layer.
@@ -187,7 +204,7 @@ reports. The section cannot be the main, plan, fast, fallback or title model.
 | `~/.nexus/credentials.json` | provider secrets and OAuth refresh records; plaintext, owner-only `0600`, parent `0700` |
 | `~/.nexus/config.toml` | user config; Settings → Providers/Setup write `[providers.*]` and `[models].default` here |
 | `~/.nexus/{agents,skills,tools,providers}/`, `mcp.json`, `hooks.toml`, `SOUL.md` | user-scope extensions |
-| `~/.nexus/daemon/<hash>.sock` (+ pid, lock, log, http discovery) | one daemon per workspace ([host.md](host.md)); falls back to a private short dir when the path is too long |
+| `~/.nexus/daemon/shared-v4-<install>.sock` (+ pid, lock, log, http discovery) | one daemon per home/install ([host.md](host.md)); falls back to a private short dir when the path is too long |
 | `~/.nexus/locks/sessions/<project-hash>/` | per-session `flock` files |
 | `~/.nexus/projects/<project-hash>/` | per-project machine state: cache, logs (incl. `logs/mcp/`), `stage/`, extension trash |
 | `~/.nexus/cache/` | shared models.dev cache, `agy-models.json` (last good `agy models` list), `update-check.json` |

@@ -318,26 +318,27 @@ class ShellActions:
     async def _switch_project(self, workspace, session):
         if self.attachment_draft_key is None:
             self.attachment_draft_key = (self.workspace, self.controller.session)
+        project = None
         if workspace != self.workspace:
             self.usage_cache = None
             if self.usage_task:
                 self.usage_task.cancel()
             try:
                 result = await self.client.open_project_session(workspace, session)
-                from ..cli import open_client
-                client = await open_client(workspace, socket_path=result.socket_path)
+                self.workspace = result.project.root
+                project = result.project.key
             except Exception as exc:
                 from ...host_support.errors import error_text
                 reason = error_text(exc)
                 self.flash(f"Could not open the session in {workspace}: {reason}", "error")
                 raise ProjectOpenError(reason) from exc
-            previous = self.controller.replace_client(client)
-            self.workspace = workspace
             from pathlib import Path
             from ..cli import open_client
-            self.reconnect = lambda: open_client(Path(workspace))
-            await previous.aclose()
-        await self.switch(session)
+            self.reconnect = lambda: open_client(Path(self.workspace))
+        if project is None:
+            await self.switch(session)
+        else:
+            await self.switch(session, project=project)
 
     def mark_current_seen(self):
         """Acknowledge both replayed snapshots and streamed events for this session."""
@@ -348,7 +349,7 @@ class ShellActions:
                 getattr(self.controller, "completion_seq", 0),
             )
 
-    async def switch(self, session):
+    async def switch(self, session, *, project=None):
         self.mark_current_seen()  # a reply watched live must not read as unseen after leaving
         self.workflows.close_dashboard()  # a replaced session never keeps a dashboard over it
         await self.voice.discard()
@@ -375,7 +376,10 @@ class ShellActions:
         self.items = []
         self.preview = None
         self.preview_at = None
-        await self.controller.switch_session(session)
+        if project is None:
+            await self.controller.switch_session(session)
+        else:
+            await self.controller.switch_session(session, project=project)
         # A foreground change is a host-API signal, not a model input. Sent before the replay so
         # the host knows this client is on the manager by the time the user can type to it.
         self.focus.report(session)

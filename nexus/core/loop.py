@@ -862,7 +862,18 @@ async def _collect_stream(
         thinking_open = False
 
     try:
-        stream = _aiter_cancellable(provider.stream(request), token)
+        from ..resources import request_slot
+        async def limited_stream():
+            async with request_slot(request.provider or getattr(provider, "name", "unknown")):
+                source = provider.stream(request)
+                try:
+                    async for event in source:
+                        yield event
+                finally:
+                    closer = getattr(source, "aclose", None)
+                    if callable(closer):
+                        await closer()
+        stream = _aiter_cancellable(limited_stream(), token)
         async with contextlib.aclosing(stream) as events:
             async for event in events:
                 if isinstance(event, TextDelta):

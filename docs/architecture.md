@@ -1,6 +1,16 @@
 # Architecture
 
-Nexus is a provider-agnostic agent harness. One **daemon per workspace** owns the
+## Shared project ownership
+
+The process boundary is one daemon per Nexus home and Python install. A bounded
+`ProjectRegistry` lazily owns one `Runtime` and `HostFacade` per canonical
+project. Git subdirectories and linked worktrees resolve to the main checkout;
+submodules are separate projects. Connections have a mutable project focus,
+while session commands and subscriptions retain their owning project.
+Project runtimes share a process; their settings, grants and sessions remain isolated.
+
+
+Nexus is a provider-agnostic agent harness. One **daemon per Nexus home and install** owns the
 runtime, sessions and turns. Four surfaces are pure clients of it: the native Ratatui terminal app (`nexus chat`,
 sole terminal client), a one-shot CLI and JSONL stream (`nexus run`), a plain-JS
 browser app (`nexus web`), and the GPUI desktop app (`nexus desktop`).
@@ -35,7 +45,7 @@ project only the changed tail. Other events and child pages use full projection.
 
 ```
 client (TUI / CLI / browser / desktop)
-  └─ host/protocol.py command ──► host/daemon.py      one per workspace: UDS (+ loopback HTTP)
+  └─ host/protocol.py command ──► host/daemon.py      one per home/install: UDS (+ loopback HTTP)
                                     └─ host/facade.py HostFacade   the only surface API
                                          ├─ host/supervisor.py     global turn cap, per-session FIFO
                                          ├─ host/presence.py       viewers, first-responder approvals

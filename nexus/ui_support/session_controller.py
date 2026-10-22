@@ -35,6 +35,7 @@ class SessionController:
     def __init__(self, client: Client, session: str) -> None:
         self.client = client
         self.session = session
+        self.project = ""
         self.view: ConversationView = initial_state(session)
         self.cursor = 0
         self.completion_seq = 0
@@ -64,12 +65,12 @@ class SessionController:
         self._bootstrap_revision = 0
         # Reduced views of sessions left behind: (view, cursor, completion_seq).
         # Returning to one re-reads only the events after its cursor.
-        self._parked: OrderedDict[str, tuple[ConversationView, int, int]] = OrderedDict()
+        self._parked: OrderedDict[tuple[str, str], tuple[ConversationView, int, int]] = OrderedDict()
         self._resume_cursor = False  # set by switch_session; consumed by the next bootstrap
 
     def forget(self, session: str) -> None:
         """Drop a parked view (its tab was closed)."""
-        self._parked.pop(session, None)
+        self._parked.pop((self.project, session), None)
 
     async def _refresh_agent_metadata(
         self,
@@ -233,7 +234,7 @@ class SessionController:
                 if self.on_stream_end is not None:
                     self.on_stream_end()
 
-    async def switch_session(self, session: str) -> None:
+    async def switch_session(self, session: str, *, project: str | None = None) -> None:
         """Detach a prior session's live stream before replacing its projection."""
         self._bootstrap_revision += 1
         task = self._task
@@ -244,14 +245,17 @@ class SessionController:
         self._task = None
         self.running = False
         if self.session and self.cursor > 0 and self.view.session_id == self.session:
-            self._parked[self.session] = (self.view, self.cursor, self.completion_seq)
-            self._parked.move_to_end(self.session)
+            key = (self.project, self.session)
+            self._parked[key] = (self.view, self.cursor, self.completion_seq)
+            self._parked.move_to_end(key)
             while len(self._parked) > PARKED_SESSIONS:
                 self._parked.popitem(last=False)
         self.session = session
+        if project is not None:
+            self.project = project
         self.slot_wait = None
         self._agent_metadata_revision += 1
-        resumed = self._parked.pop(session, None)
+        resumed = self._parked.pop((self.project, session), None)
         self.view, self.cursor, self.completion_seq = resumed or (initial_state(session), 0, 0)
         self._resume_cursor = resumed is not None
         self.agent_name = "orchestrator"

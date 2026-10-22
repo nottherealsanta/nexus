@@ -7,6 +7,8 @@ worktree allocated by that failed creation.
 """
 from __future__ import annotations
 
+from ..resources import resource_environment
+
 import contextlib
 import fcntl
 import hashlib
@@ -118,6 +120,8 @@ class WorktreeReviewPage:
 
 class WorktreeService:
     """Injected facade over the standalone worktree operations."""
+
+    blocking = True
 
     def __init__(
         self,
@@ -275,7 +279,7 @@ def _git_environment() -> dict[str, str]:
     """Build a Git environment that cannot redirect repository discovery."""
     env = {
         key: value
-        for key, value in os.environ.items()
+        for key, value in resource_environment().items()
         if not key.startswith("GIT_")
         and key.lower() not in _GIT_PROXY_ENV
         and "proxy_" not in key.lower()

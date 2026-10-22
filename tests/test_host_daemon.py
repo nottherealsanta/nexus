@@ -50,7 +50,6 @@ from nexus.host.daemon import (
     read_http_endpoint,
     status,
     stop,
-    workspace_hash,
 )
 from nexus.host.transports.http_sse import COMMAND_PATH, EVENTS_PATH, loopback_origins
 from nexus.host.transports.uds import UDSClient
@@ -203,6 +202,9 @@ async def running_daemon(
             await wait_for(lambda: daemon.http_endpoint is not None or task.done())
             if task.done():
                 task.result()
+        from nexus.host_support.project_identity import resolve_project
+        loaded = await daemon.projects.acquire(resolve_project(workspace), dict(os.environ), "test")
+        daemon.projects.release(loaded)
         yield daemon, sock, workspace
     finally:
         daemon.request_stop("test teardown")
@@ -360,7 +362,7 @@ async def test_status_stop_and_logs(short_dir):
         assert Path(report["socket"]).resolve() == sock.resolve()
 
         daemon._log("custom", token="sk-live-supersecret123456")
-        text = logs(workspace, log_path=sock.with_suffix(".log"))
+        text = logs(workspace, log_path=sock.with_suffix(".log"), all_projects=True)
         assert "daemon.started" in text
         assert "sk-live-supersecret123456" not in text
 
@@ -371,21 +373,21 @@ async def test_status_stop_and_logs(short_dir):
 async def test_handshake_version_mismatch_fails_loudly(short_dir):
     async with running_daemon(short_dir) as (_daemon, sock, _workspace):
         with pytest.raises(t.VersionMismatch) as info:
-            await UDSClient.connect(sock, version=p.PROTOCOL_VERSION + 1)
+            await UDSClient.connect(sock, focus=str(_workspace), version=p.PROTOCOL_VERSION + 1)
         assert info.value.expected == p.PROTOCOL_VERSION
         assert info.value.got == p.PROTOCOL_VERSION + 1
 
 
 async def test_zero_view_turn_survives_client_disconnect(short_dir):
     async with running_daemon(short_dir, delay=0.4) as (_daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await client.call(p.SessionOpen(session="s"))
         await client.call(p.SessionStart(session="s", content="long"))
         # No subscription was ever opened; the client now vanishes mid-turn.
         await client.close()
 
         await asyncio.sleep(1.2)
-        late = await UDSClient.connect(sock)
+        late = await UDSClient.connect(sock, focus=str(_workspace))
         view = await late.call(p.SessionState(session="s"))
         assert isinstance(view, p.SessionStateResult)
         events = [
@@ -398,8 +400,8 @@ async def test_zero_view_turn_survives_client_disconnect(short_dir):
 
 async def test_concurrent_clients_share_one_session(short_dir):
     async with running_daemon(short_dir, delay=0.1) as (_daemon, sock, _workspace):
-        first = await UDSClient.connect(sock, client_id="view-a")
-        second = await UDSClient.connect(sock, client_id="view-b")
+        first = await UDSClient.connect(sock, focus=str(_workspace), client_id="view-a")
+        second = await UDSClient.connect(sock, focus=str(_workspace), client_id="view-b")
         sub_a = await first.subscribe("s", 0, follow=True)
         sub_b = await second.subscribe("s", 0, follow=True)
         await first.call(p.SessionStart(session="s", content="go"))
@@ -423,7 +425,7 @@ async def test_concurrent_clients_share_one_session(short_dir):
 
 async def test_reconnect_replays_from_the_log(short_dir):
     async with running_daemon(short_dir) as (_daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await client.call(p.SessionOpen(session="s"))
         subscription = await client.subscribe("s", 0, follow=True)
         await client.call(p.SessionStart(session="s", content="hello"))
@@ -432,7 +434,7 @@ async def test_reconnect_replays_from_the_log(short_dir):
                 break
         await client.close()
 
-        reconnected = await UDSClient.connect(sock)
+        reconnected = await UDSClient.connect(sock, focus=str(_workspace))
         events = [
             event async for event in await reconnected.subscribe("s", 0, follow=False)
         ]
@@ -458,7 +460,7 @@ async def test_slow_command_does_not_block_the_next_command_on_one_connection(sh
             return {}
 
         daemon.facade.doctor = slow_doctor  # type: ignore[method-assign]
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         try:
             doctor = asyncio.ensure_future(client.call(p.Doctor()))
             await wait_for(started.is_set)
@@ -528,7 +530,7 @@ async def test_secrets_are_redacted_from_error_results(short_dir):
         await wait_for(lambda: daemon.started or task.done())
         if task.done():
             task.result()
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(workspace))
         result = await client.call(p.SessionOpen(session="s"))
         assert isinstance(result, p.ErrorResult)
         assert "sk-live-supersecret123456" not in result.message
@@ -544,7 +546,7 @@ async def test_idle_shutdown_never_fires_with_a_turn_in_flight(short_dir):
         sock,
         _workspace,
     ):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await client.call(p.SessionStart(session="s", content="work"))
         await client.close()
         # No viewer, but a turn is running, so the idle policy must hold off.
@@ -558,7 +560,7 @@ async def test_idle_shutdown_never_fires_with_a_turn_in_flight(short_dir):
 
 async def test_idle_shutdown_waits_for_the_last_viewer(short_dir):
     async with running_daemon(short_dir, idle_timeout=0.4) as (daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         subscription = await client.subscribe("s", 0, follow=True)
         await asyncio.sleep(0.8)
         assert not daemon.stopped
@@ -582,7 +584,7 @@ async def test_idle_shutdown_completes_with_an_idle_connected_client(short_dir):
     async with running_daemon(short_dir, idle_timeout=0.4) as (daemon, sock, _workspace):
         # Connect, then stop feeding the subscription: the connection is idle yet
         # live, exactly like a shell parked on the prompt past its idle window.
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         subscription = await client.subscribe("s", 0, follow=True)
         await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
         await asyncio.sleep(0.8)
@@ -592,6 +594,9 @@ async def test_idle_shutdown_completes_with_an_idle_connected_client(short_dir):
         # still return promptly -- not block on ``wait_closed`` behind the live
         # connection -- and release the socket so the next start can proceed.
         await subscription.aclose()
+        await asyncio.sleep(0.5)
+        assert not daemon.stopped, "the connected client pins its focus project"
+        await client.close()
         await asyncio.wait_for(_wait_stopped(daemon, sock), timeout=3.0)
         assert daemon.stopped
         assert daemon._lock_fd is None, "the exclusive lock must be released"
@@ -628,7 +633,7 @@ async def test_shutdown_releases_lock_when_teardown_raises(short_dir, monkeypatc
     exclusive ``flock``.
     """
     async with running_daemon(short_dir) as (daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
         connection = next(iter(daemon._clients))
 
@@ -651,7 +656,7 @@ async def test_shutdown_bounds_a_stuck_writer_close(short_dir, monkeypatch):
     """
     monkeypatch.setattr(daemon_module, "TEARDOWN_TIMEOUT", 0.05)
     async with running_daemon(short_dir) as (daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
         connection = next(iter(daemon._clients))
 
@@ -668,7 +673,7 @@ async def test_shutdown_bounds_a_stuck_writer_close(short_dir, monkeypatch):
 async def test_shutdown_cancellation_still_releases_lock(short_dir, monkeypatch):
     """Cancelling ``aclose`` mid-teardown must still release the lock."""
     async with running_daemon(short_dir) as (daemon, sock, _workspace):
-        client = await UDSClient.connect(sock)
+        client = await UDSClient.connect(sock, focus=str(_workspace))
         await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
         connection = next(iter(daemon._clients))
         entered = asyncio.Event()
@@ -708,7 +713,7 @@ async def test_late_handshake_after_shutdown_is_not_left_active(short_dir):
         await daemon.aclose()
         assert daemon._lock_fd is None
         # Completing the handshake now must not register an active client.
-        await t.write_frame(writer, t.Hello(version=p.PROTOCOL_VERSION))
+        await t.write_frame(writer, t.Hello(version=p.PROTOCOL_VERSION, focus=str(workspace)))
         with contextlib.suppress(Exception):
             await asyncio.wait_for(reader.read(), timeout=2.0)
         assert daemon.client_count == 0
@@ -753,7 +758,7 @@ async def test_http_token_never_reaches_logs_or_status(short_dir):
     async with running_daemon(short_dir, http=True) as (daemon, sock, workspace):
         token = daemon.http_endpoint["token"]
         daemon._log("probe", detail="x")
-        text = logs(workspace, log_path=daemon.log_file)
+        text = logs(workspace, log_path=daemon.log_file, all_projects=True)
         assert "daemon.http_started" in text
         assert token not in text
 
@@ -818,7 +823,7 @@ async def test_uds_and_http_views_share_one_live_session(short_dir):
         port, token = endpoint["port"], endpoint["token"]
         origin = f"http://127.0.0.1:{port}"
 
-        terminal = await UDSClient.connect(sock, client_id="terminal")
+        terminal = await UDSClient.connect(sock, focus=str(_workspace), client_id="terminal")
         await terminal.call(p.SessionOpen(session="s"))
         terminal_sub = await terminal.subscribe("s", 0, follow=True)
         reader, writer, status, _ = await _http_open_sse(
@@ -1223,10 +1228,10 @@ async def test_sigterm_is_a_graceful_close(subprocess_env):
     await wait_for(lambda: not subprocess_env.socket.exists(), timeout=10.0)
     log_path = subprocess_env.socket.with_suffix(".log")
     await wait_for(
-        lambda: "daemon.stopped" in logs(subprocess_env.workspace, log_path=log_path),
+        lambda: "daemon.stopped" in logs(subprocess_env.workspace, log_path=log_path, all_projects=True),
         timeout=10.0,
     )
-    text = logs(subprocess_env.workspace, log_path=log_path)
+    text = logs(subprocess_env.workspace, log_path=log_path, all_projects=True)
     assert "daemon.stopping" in text
     assert "daemon.stopped" in text
 
@@ -1283,16 +1288,16 @@ async def test_subprocess_idle_shutdown(short_dir):
 # ---------------------------------------------------------------------------
 
 
-def test_socket_path_is_deterministic_and_per_workspace(tmp_path):
+def test_socket_path_is_deterministic_and_shared(tmp_path):
     # Keep this explicit home short so this test exercises the ordinary layout.
     home = Path("/tmp") / f"nx-{os.getpid()}-{tmp_path.name[-8:]}"
     first = default_socket_path(tmp_path / "a", home=home)
     second = default_socket_path(tmp_path / "a", home=home)
     other = default_socket_path(tmp_path / "b", home=home)
     assert first == second
-    assert first != other
+    assert first == other
     assert first.parent == home / ".nexus" / "daemon"
-    assert first.name == f"{workspace_hash(tmp_path / 'a')}.sock"
+    assert first.name.startswith(f"shared-v{p.PROTOCOL_VERSION}-")
 
 
 def test_socket_path_uses_nexus_home_environment(tmp_path, monkeypatch):
@@ -1309,7 +1314,8 @@ def test_socket_path_uses_nexus_home_environment(tmp_path, monkeypatch):
     assert first != second
     assert first == repeated
     assert first.parent != second.parent
-    assert first.name == second.name == f"{workspace_hash(workspace)}.sock"
+    assert first.name == second.name
+    assert first.name.startswith(f"shared-v{p.PROTOCOL_VERSION}-")
     assert len(str(first).encode("utf-8")) <= 100
     assert len(str(second).encode("utf-8")) <= 100
     assert first.parent.stat().st_mode & 0o777 == 0o700
@@ -1329,9 +1335,9 @@ def test_http_path_is_deterministic_and_colocated(tmp_path):
     home = tmp_path / "home"
     first = default_http_path(tmp_path / "a", home=home)
     assert first == default_http_path(tmp_path / "a", home=home)
-    assert first != default_http_path(tmp_path / "b", home=home)
+    assert first == default_http_path(tmp_path / "b", home=home)
     assert first.parent == default_socket_path(tmp_path / "a", home=home).parent
-    assert first.name == f"{workspace_hash(tmp_path / 'a')}.http"
+    assert first.name == default_socket_path(tmp_path / "a", home=home).with_suffix(".http").name
 
 
 def test_layering_daemon_does_not_import_a_ui():
