@@ -23,14 +23,15 @@ MANAGER = "nexus-manager"
 
 
 @pytest.fixture
-def shell(live_shell):
+def shell(request):
     """The live shell, but the manager is a different session from the one on screen."""
-    client = live_shell.client
+    base = request.getfixturevalue("live_shell")  # the shared fixture, imported above
+    client = base.client
     client.manager_state.return_value = msgspec.structs.replace(client.manager_state.return_value, session=MANAGER)
     client.manager_open.return_value = SimpleNamespace(session=SimpleNamespace(id=MANAGER), created=False)
-    live_shell.controller.session = "work"
-    live_shell.controller.view = initial_state("work")
-    return live_shell
+    base.controller.session = "work"
+    base.controller.view = initial_state("work")
+    return base
 
 
 def ask(view, **fields):

@@ -1402,3 +1402,17 @@ still no detached child, report queue, wake, idle slot or `subagent_send`. Decis
   follow-up, so a refusal leaves the append-only child log untouched and the child continuable
   (`agent.completed.unchanged`). The cost: a long-lived child ends with "start a new subagent"
   instead of silently shrinking.
+
+## CI compiles Rust once and shards the Python suite (2026-10-22)
+
+The serial macOS job took about 29 minutes: Rust was built three times (`uv sync` editable
+install, the `build` job, cibuildwheel) and 6,971 tests ran serially. Now `rust` builds and tests
+the TUI once (cached) and hands the debug binary to the Python shards through
+`NEXUS_TUI_BINARY`; the shards set `CARGO=false`, which setuptools-rust honours, so the
+`optional` bins are skipped instead of compiled (`uv sync` drops from about 2 minutes to
+seconds). The separate `build` job is gone: the packaging tests build the wheel in-process and
+already run in the shards, and `native-wheels` covers real wheels whenever native inputs change.
+A PR that changes only `CHANGELOG.md`, the release manifest and version lines (release-please)
+skips the heavy jobs; `ci-ok` treats skipped as success. Trade-off: a `CARGO=false` run does
+not prove the bins still build from the editable install; `rust` and `native-wheels` do.
+Not verified on hosted CI yet.

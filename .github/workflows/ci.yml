@@ -12,30 +12,11 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  test:             # macOS only for now (Linux jobs are deactivated), on the minimum supported Python
-    runs-on: macos-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
-        with: {enable-cache: true, python-version: "3.13"}
-      - run: cargo test --locked --manifest-path rust/tui/Cargo.toml
-      - run: cargo build --locked --manifest-path rust/tui/Cargo.toml
-      - run: uv sync --locked --extra dev
-      - run: uvx ruff check nexus tests
-      - run: uv run pytest -q
-  build:
-    runs-on: macos-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: uv build
-      - run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
-  changes:          # the wheel build is slow: pull requests build it only when native inputs change
-    runs-on: macos-latest
+  changes:          # decides what runs: release-only PRs skip everything heavy; wheels build only for native inputs
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      code: ${{ steps.filter.outputs.code }}
       native: ${{ steps.filter.outputs.native }}
     steps:
       - uses: actions/checkout@v7
@@ -46,15 +27,91 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          code=true
           native=true
           if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only "$BASE" "$HEAD")
             native=false
-            if git diff --name-only "$BASE" "$HEAD" | grep -Eq '^(rust/|pyproject\.toml$|MANIFEST\.in$|uv\.lock$|nexus/ui/ratatui/|\.github/workflows/(ci|native-wheels)\.yml$)'; then
+            if printf '%s\n' "$files" | grep -Eq '^(rust/|pyproject\.toml$|MANIFEST\.in$|uv\.lock$|nexus/ui/ratatui/|\.github/workflows/(ci|native-wheels)\.yml$)'; then
               native=true
             fi
+            # A release-please PR touches only CHANGELOG.md, the manifest, and the `version =`
+            # line of pyproject.toml (plus the matching uv.lock line). Nothing there can break
+            # tests, so skip the heavy jobs. Any other changed line keeps them on.
+            release_only=true
+            for f in $files; do
+              case "$f" in
+                CHANGELOG.md|.release-please-manifest.json) ;;
+                pyproject.toml|uv.lock)
+                  # every changed line (excluding the +++/--- headers) must be a `version = ` line
+                  other=$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' | grep -Ev '^[+-]version = ' || true)
+                  [ -z "$other" ] || release_only=false ;;
+                *) release_only=false ;;
+              esac
+            done
+            if [ -n "$files" ] && [ "$release_only" = true ]; then
+              code=false
+              native=false
+            fi
           fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "native=$native" >> "$GITHUB_OUTPUT"
-  native-wheels:
+  lint:             # fast-fail, independent of the tests and of Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with: {enable-cache: true, python-version: "3.13"}
+      - run: uvx ruff@0.16.7 check nexus tests
+      # `cargo fmt --check` is deliberately absent: rust/tui and rust/live are not rustfmt-clean today.
+      # Run `cargo fmt` in both crates in a dedicated commit, then add the check here.
+      - run: uv build --sdist   # pure packaging check: no compilation involved
+  rust:             # compile the TUI once; tests and the PTY checks reuse this debug binary
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2.8.0
+        with: {workspaces: rust/tui}
+      - run: cargo test --locked --manifest-path rust/tui/Cargo.toml
+      - run: cargo build --locked --manifest-path rust/tui/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-ratatui-debug
+          path: rust/tui/target/debug/nexus-ratatui
+          if-no-files-found: error
+          retention-days: 1
+  test:             # macOS only for now (Linux Python jobs are deactivated), on the minimum supported Python
+    needs: [changes, rust]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      # Skip the optional setuptools-rust bins (nexus-ratatui, nexus-live) in the editable install
+      # and in the in-process wheel build of the packaging tests. The TUI binary comes from the
+      # `rust` job below; the wheel path is covered by native-wheels.
+      CARGO: "false"
+      NEXUS_TUI_BINARY: ${{ github.workspace }}/nexus-ratatui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with: {enable-cache: true, python-version: "3.13"}
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexus-ratatui-debug
+          path: ${{ github.workspace }}
+      - run: chmod +x "$NEXUS_TUI_BINARY"
+      - run: uv sync --locked --extra dev
+      # SHARD COMMAND (single line; the sharding mechanism is decided with the test-isolation work):
+      - run: uv run pytest -q -n auto --splits 4 --group ${{ matrix.shard }} --durations=25
+  native-wheels:    # wheel build is slow: pull requests build it only when native inputs change
     needs: changes
     if: needs.changes.outputs.native == 'true'
     uses: ./.github/workflows/native-wheels.yml
@@ -62,7 +119,8 @@ jobs:
       runners: '["macos-15"]'   # one macOS runner for now; releases still build every platform
   ci-ok:            # the one required status check; its name never changes with the matrix
     if: always()
-    needs: [test, build, changes, native-wheels]  # a skipped matrix is not a failure
-    runs-on: macos-latest
+    needs: [changes, lint, rust, test, native-wheels]  # a skipped job is not a failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
       - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'

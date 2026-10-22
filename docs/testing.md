@@ -21,6 +21,7 @@ a throwaway workspace in the real `~/.nexus/nexus.db`. Keep that when adding a s
 ```sh
 uv sync --extra dev                                 # or: pip install -e '.[dev]'  (Python ≥ 3.13)
 .venv/bin/python -m pytest -q                       # full offline suite
+.venv/bin/python -m pytest -q -n auto               # same suite in parallel (pytest-xdist)
 .venv/bin/python -m pytest -q tests/test_host_facade.py -k name
 ruff check nexus tests                              # ruff is installed separately; rules E4 E9 F E713
 ./rust-build-test.sh                                # locked Rust build and unit tests (Ratatui)
@@ -35,6 +36,25 @@ NEXUS_XAI_LIVE=1 pytest -m live tests/test_xai_live.py           # xAI over an e
 CI (`.github/workflows/ci.yml`) runs locked Rust builds/tests, Ruff and the full
 Python offline suite on Linux, Python 3.13. A second job builds the wheel and runs
 packaging/installer tests. The required check is `ci-ok`. See [release.md](release.md).
+
+### Running in parallel and sharding
+
+The suite is safe under `pytest-xdist`: every test already gets a private
+`NEXUS_HOME` and temp workspace, and daemons use per-test sockets and ephemeral
+ports, so no marker or serial lane is needed. Measured on a 10-core Mac, the full
+suite took about 10 min serially and about 2 to 2.5 min with `-n auto`
+(`--dist load` or `--dist loadfile`; both gave the same results).
+
+For CI, shard with `pytest-split` and run each shard under xdist:
+
+```sh
+pytest -n auto -q --splits 4 --group 1 --splitting-algorithm least_duration   # groups 1..4
+```
+
+Without a stored `.test_durations` file `pytest-split` balances by test count. Shards
+and `--dist loadfile` require **deterministic collection**: never put timestamps,
+random values or raw bytes in a test id (use `pytest.param(..., id=...)`), or workers
+and shards collect different names.
 
 The worktree is often dirty with unrelated work. If an unrelated test already
 fails, say so; do not change it.

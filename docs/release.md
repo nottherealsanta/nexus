@@ -173,19 +173,30 @@ release-please reads.
 `ci.yml` runs on PRs and on pushes to `main` (skipping docs-only changes: `**.md`,
 `docs/`, `plans/`, `artifacts/`) and by hand.
 
-- `test`: one macOS job on Python 3.13 (Linux CI is deactivated for now). `uv sync --locked --extra dev`, `ruff check`,
-  then `pytest -q`. `--locked` fails when `uv.lock` is stale, which is why the release
-  PR must update it.
-- `build`: `uv build`, then the wheel/installer tests
-  (`tests/test_model_data_package.py`, `tests/test_install_script.py`). It needs
-  `pytest-asyncio` because one installer test is async.
-- `ci-ok`: passes if `test` and `build` did not fail. Require this name, not the jobs.
+- `changes` (ubuntu): decides what runs. On a PR whose diff touches only `CHANGELOG.md`,
+  `.release-please-manifest.json`, and `version =` lines of `pyproject.toml`/`uv.lock` (a
+  release-please PR), `rust`, `test` and `native-wheels` are skipped. Any other changed line
+  keeps them on. Pushes to `main` always run everything.
+- `lint` (ubuntu): `ruff check` (version pinned in the workflow to match local) and
+  `uv build --sdist`. `cargo fmt --check` is not run: `rust/tui` and `rust/live` are not
+  rustfmt-clean today (not verified in CI).
+- `rust` (macOS, `Swatinem/rust-cache`): `cargo test --locked` and a debug build of
+  `nexus-ratatui`, uploaded as an artifact (the PTY tests need it).
+- `test`: macOS, Python 3.13 (Linux CI is deactivated for now), 4 shards
+  (`pytest -n auto --splits 4 --group N --durations=25`). It downloads the `rust` binary and
+  points `NEXUS_TUI_BINARY` at it. `CARGO=false` makes setuptools-rust skip its `optional`
+  bins, so `uv sync --locked --extra dev` (and the in-process wheel build in
+  `tests/test_model_data_package.py`) never compile Rust. `--locked` fails when `uv.lock`
+  is stale, which is why the release PR must update it. The packaging tests
+  (`test_model_data_package.py`, `test_install_script.py`) run inside the shards; there is
+  no separate `build` job. Wheels that include the Rust bins are covered by `native-wheels`.
+- `ci-ok`: passes if no job failed or was cancelled (skipped is fine). Require this name, not the jobs.
 - There is no macOS or 3.14 job; developer machines cover them. The Playwright checks
   (`tests/playwright_*.py`) are manual.
 - Ruff rules are pinned in `pyproject.toml` (`E4`, `E9`, `F`, `E713`) so a new ruff
   release cannot change what fails.
-- Push runs of `ci` queue behind each other; only PR runs cancel in progress. The suite
-  takes about 6 minutes.
+- Push runs of `ci` queue behind each other; only PR runs cancel in progress. The serial
+  suite took 18 minutes; sharding targets a few minutes (not yet measured on hosted CI).
 
 ## One-time setup (already done for this repo)
 
@@ -392,7 +403,7 @@ installer.
 
 On pull requests the wheel matrix runs only when native inputs change (`rust/`,
 `pyproject.toml`, `MANIFEST.in`, `uv.lock`, `nexus/ui/ratatui/`, or the CI and
-wheel workflows), decided by the `changes` job in `ci.yml`; pushes to `main` and
+wheel workflows), decided by the `changes` job in `ci.yml` (never on release-only PRs); pushes to `main` and
 releases always run it, and a skipped matrix does not fail `ci-ok`. The wheel test also imports the native surface and asserts `textual` stays out of
 `sys.modules`, and macOS runners pin Rust 1.88. Building
 from source (no matching wheel) needs a Rust toolchain of at least 1.88

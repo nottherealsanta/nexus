@@ -522,6 +522,8 @@ async def test_sigterm_closes_http_and_removes_the_token_file(daemon_env):
 
     os.kill(pid, signal.SIGTERM)
     await wait_for(lambda: not daemon_env.socket.exists(), timeout=10.0)
+    # The daemon removes the socket and the token file in separate steps; wait for both.
+    await wait_for(lambda: not token_file.exists(), timeout=10.0)
     assert not token_file.exists()
     assert read_http_endpoint(
         daemon_env.workspace, socket_path=daemon_env.socket

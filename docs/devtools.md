@@ -163,6 +163,8 @@ steps.
 
 - `scripts/hooks/commit-msg`: Conventional Commits check; enable once per clone
   with `git config core.hooksPath scripts/hooks` ([release.md](release.md)).
+- `scripts/hooks/pre-commit`: runs `ruff check` on staged `nexus/` and `tests/` Python files
+  (warns and skips if `ruff` is not on PATH); enabled by the same `core.hooksPath` setting.
 - `install.sh`, `install.ps1`: installers ([release.md](release.md)); design in
   `plans/install.md`.
 

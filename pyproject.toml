@@ -37,6 +37,8 @@ claude-agent = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.6",  # CI runs `pytest -n auto`
+    "pytest-split>=0.10",  # CI shards: pytest --splits N --group K
     "playwright==1.57.0",
     "wsproto>=1.2,<2",  # Native PTY browser checks use Uvicorn WebSockets.
     # Builds the wheel in tests/test_model_data_package.py to prove the vendored

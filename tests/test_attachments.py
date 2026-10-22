@@ -32,17 +32,19 @@ def store(tmp_path):
     return AttachmentStore(runtime)
 
 
+# Explicit ids: payload bytes (zip timestamps) must not leak into test ids, or
+# xdist workers and pytest-split shards collect different names.
 @pytest.mark.parametrize(
     "name,payload,expected",
     [
-        ("report.pdf", pdf_bytes(), "Attachment PDF works"),
-        ("renamed.data", pdf_bytes(), "Attachment PDF works"),
-        ("unicode.txt", "Unicode attachment".encode("utf-16"), "Unicode attachment"),
-        ("report.docx", docx_bytes(), "Attachment Word works"),
-        ("table.csv", b"name,value\nAda,42\n", "Ada"),
-        ("report.rtf", rb"{\rtf1\ansi Attachment RTF works}", "Attachment RTF works"),
-        ("code.py", b'print("hello")\n', 'print("hello")'),
-        ("custom.extension", b"# custom text\n", "# custom text"),
+        pytest.param("report.pdf", pdf_bytes(), "Attachment PDF works", id="report.pdf"),
+        pytest.param("renamed.data", pdf_bytes(), "Attachment PDF works", id="renamed.data"),
+        pytest.param("unicode.txt", "Unicode attachment".encode("utf-16"), "Unicode attachment", id="unicode.txt"),
+        pytest.param("report.docx", docx_bytes(), "Attachment Word works", id="report.docx"),
+        pytest.param("table.csv", b"name,value\nAda,42\n", "Ada", id="table.csv"),
+        pytest.param("report.rtf", rb"{\rtf1\ansi Attachment RTF works}", "Attachment RTF works", id="report.rtf"),
+        pytest.param("code.py", b'print("hello")\n', 'print("hello")', id="code.py"),
+        pytest.param("custom.extension", b"# custom text\n", "# custom text", id="custom.extension"),
     ],
 )
 async def test_real_document_conversion(store, name, payload, expected):

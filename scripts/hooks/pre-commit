@@ -1,0 +1,11 @@
+#!/bin/sh
+# Ruff lint on the staged Python files under nexus/ and tests/ (the same check CI runs).
+# Skips quietly when nothing relevant is staged, and warns without blocking when ruff
+# is not installed. Install once per clone:  git config core.hooksPath scripts/hooks
+files=$(git diff --cached --name-only --diff-filter=ACMR -- 'nexus/*.py' 'tests/*.py')
+[ -z "$files" ] && exit 0
+if ! command -v ruff >/dev/null 2>&1; then
+  echo "pre-commit: ruff not on PATH; skipping lint (install ruff to check staged files)." >&2
+  exit 0
+fi
+printf '%s\n' "$files" | xargs ruff check
