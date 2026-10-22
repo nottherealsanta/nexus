@@ -2,6 +2,97 @@
 
 Phases: **F3** (create, commit, agent tool, events) and **F7** (promotion). Depends on F2.
 
+## Implementation ledger — 2026-10-23
+
+The session-worktree backend and promotion are implemented. Protocol **v6** adds
+session selection, status, promotion, detach and digest-bound setup trust actions;
+no compatibility shim is maintained. Validation and remaining boundaries are recorded below.
+
+- [x] Lazy first-turn allocation from a selected local branch, offline friendly-name
+  slugs with a six-hex suffix, dirty-main warning counts, non-Git refusal, live
+  worktree limits, unsupported-layout refusal and exact failure cleanup.
+- [x] Separate authenticated v3 session records in the existing locked service root;
+  pending intent precedes Git creation. Epoch timestamps advance with lifecycle
+  changes. Existing subagent records keep their own review lifecycle.
+- [x] Accepted prompts are durable before provisioning. Context, AGENTS and tools
+  freeze after the owned root exists; preparation runs outside the event loop.
+  Creation failures keep drafts editable. Stop kills setup and records cancellation.
+- [x] Missing owned directories recreate on the existing branch and rerun setup;
+  missing branches fail with a labelled error. Pending creation and promotion
+  records recover without touching the original checkout.
+- [x] Harness commits before the terminal event on completed, failed or cancelled
+  changed turns; no commit for unchanged turns. Session/turn/agent trailers,
+  deterministic subjects, bounded file summaries, identity fallback, size limits,
+  conflict and branch guards, and non-fatal commit warnings are implemented.
+- [x] `worktree_commit`, `worktree_status` and approval-required `worktree_promote`;
+  selected commits preserve unrelated staged files and use literal pathspecs.
+  Shell commits are observed with bounded file/count metadata. Durable turn-head
+  events recover commit observation after an interrupted turn.
+- [x] Setup argv/shell mode, output/tail limits, timeout, fail/warn policy,
+  submodule policy, bounded untracked-file copy and explicit shared-directory
+  symlinks. Native permission UI asks about untrusted project setup; unattended
+  setup skips unless approved. One-time grants belong to their session; project
+  trust is stored in machine state and bound to the reviewed digest.
+- [x] Promotion carries successful session edit-tool writes only. Before-image
+  blob IDs and after-image hashes reject earlier foreign changes, intervening
+  writers and later edits. The original checkout and its index remain unchanged;
+  excluded and remaining files are listed. Carry commits, continuation origin and
+  interrupted promotion intents are durable and retryable.
+- [x] Owned forks allocate a distinct branch at their first turn, based on their
+  parent's current committed tip; composer/tools cannot borrow the parent's
+  owned root before then. Detach keeps the owned checkout and branch.
+- [x] Bounded event/view projections, last 200 commits and authoritative turn-ID
+  links; docs, module map and real-Git/native regression coverage.
+
+Resolved implementation decisions:
+
+- Commits use an **isolated temporary index, `commit-tree` and compare-and-swap
+  `update-ref`** rather than porcelain `git commit`. This prevents an unrelated
+  pre-staged file from entering a selected commit and prevents a racing shell
+  ref move from advancing a user branch. Hooks and signing are disabled. The
+  normal owned index is refreshed only against the committed object; failures
+  leave an explicit warning. Main/external indexes are never used for commits.
+- Before-image reads are capped at 50 MiB; unknown or unstable ownership refuses
+  carry-over. Promotion is capped at 500 files and 128 MiB total. File receipts
+  store hashes and session/call identity, never file bytes. Forks do not inherit
+  ownership of another session's main-checkout edits.
+- Git subprocesses have a 60-second deadline and a streaming 1 MiB output cap.
+  Dirty-main counts use a separate streaming 10,000-entry cap, so a large dirty
+  checkout produces a clipped warning instead of refusing worktree creation.
+- Git observation and status are bounded snapshots. Target watching, sync, queue
+  position and landing are file 06. Writer-subagent isolation/auto-merge is file 05;
+  automatic removal policies are file 07. External roots remain user-owned.
+- The new-session toggle/base picker, session action menus and expanded timeline
+  controls are the dedicated native UI work in file 08; this phase supplies their
+  host contract and existing native tool/permission rendering. Non-Git status
+  returns the disabled reason. No deprecated browser feature UI was added.
+- No automatic restore of promoted files is offered: the notice leaves the
+  original bytes for the user. A separate confirmed restore action belongs to
+  the later session-action UI. Checkpoint refs/diffs are file 04; before those
+  exist, promotion conservatively proves a continuous edit chain from HEAD.
+
+Verification (2026-10-23):
+
+- Full offline suite: **8,180 passed, 364 skipped, 6 deselected, 17 failed** in
+  24m18s. Twelve failures are the native rendering failures reproduced on the
+  unchanged baseline in files 01/02. One unchanged Claude-worker cancellation
+  test cancelled before its startup file was written; its complete file passed
+  **48 tests** on rerun. Four event/replay regressions from an unnecessary
+  selection-lock event were fixed by using the existing durable `turn.started`
+  lock instead. The full suite was not rerun after these fixes.
+- Final acceptance: **45 passed**, covering config, host commands, views, setup
+  trust and both native session-root/worktree PTY checks. Real Chromium project
+  navigation also passed.
+- Service creation/commit checks: **21 passed** after bounded status/history
+  fixes; final commit checks **11 passed**, including the configured size-limit
+  upper bound. Runtime/promotion/tool checks: **25 passed**. Receipt/file/patch
+  checks previously passed **137 tests**, and legacy child worktree regression
+  checks passed **66 tests**.
+- Final event/replay/worktree rerun: **118 passed**, including all four full-suite
+  regressions, golden view replay, event catalog, runtime, promotion and security.
+- Ruff and `git diff --check` pass. This is not a green full-suite claim; the
+  baseline rendering failures and timing failure remain visible above.
+
 ## 1. Contract
 
 - With `[worktrees] sessions = true` (or the toggle on in the new-session modal), a new root

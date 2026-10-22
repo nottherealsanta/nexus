@@ -30,7 +30,7 @@ the root. Before a turn or file/Git operation, it checks the canonical project,
 linked-worktree common directory and reverse Git registration. Missing roots,
 foreign repositories and copied `.git` pointers fail closed. Owned roots also
 require an active service record at the expected path. Automatic creation,
-promotion, recreation and land belong to the subsequent worktree phases.
+promotion and recreation are implemented below; landing belongs to phase 06.
 
 A new session opened after launching inside a user-made linked worktree adopts
 that checkout as `external`. Reopening a saved session preserves its recorded
@@ -44,6 +44,35 @@ Settings, grants, extensions, memory and MCP connections remain project-owned.
 root notice explains the working checkout and that worktree extension edits
 become live after land. Filesystem-rooted MCP servers continue seeing the project
 checkout; they are not cloned per root.
+
+### Owned session worktrees
+
+`[worktrees] sessions = true` creates an isolated `nexus/session/...` branch on
+the first turn of an eligible Git session. The selection can be changed only
+while the session is an idle draft. Once a turn starts, it is locked; a main or
+external session can later use the explicit promotion action to move into an
+owned worktree. Promotion carries only verified successful file-tool writes,
+commits those bytes in the new worktree, and leaves the original checkout
+unchanged. Detach returns the session to the main checkout; it does not delete
+the owned branch.
+
+Owned worktrees commit at turn boundaries. Harness commits are bounded by
+`commit_max_files` and `commit_max_file_mb`; skipped commits leave changes in
+the worktree for a later retry. Harness and agent-tool commits use `commit-tree` with signing
+disabled, bypassing project hooks; explicit agent shell commits use
+normal Git behavior. Setup commands, submodule initialization, copied files and
+shared directories follow `[worktrees]` policy. Project-sourced setup requires
+an explicit trust decision bound to the reviewed setup digest; stale reviews
+cannot approve changed setup. One-time approval is consumed for the next setup,
+while project approval is stored in private per-project state.
+
+The event log is the view contract: `session.root_set` identifies the selected
+root, `worktree.created` and `worktree.setup_ran` describe provisioning,
+`worktree.committed`/`worktree.commit_skipped` report commit outcomes, and
+`worktree.promoted`/`worktree.detached` record lifecycle actions. The reducer
+folds these into the normal conversation timeline and current root metadata;
+clients render the event/view projection rather than inspect runtime-controller
+or service records. See [events-and-view.md](events-and-view.md).
 
 
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup

@@ -145,16 +145,107 @@ class WorktreeService:
     ) -> WorktreeRecord:
         return create(parent_workspace, child_id, root=root)
 
+    def create_session(
+        self,
+        parent_workspace: str | Path,
+        session_id: str,
+        name: str,
+        *,
+        root: str | Path,
+        base: str = "current",
+        max_worktrees: int = 16,
+    ):
+        """Create a pending authenticated root-session worktree (plan 03)."""
+        from .session_worktrees import create_session
+
+        return create_session(
+            parent_workspace, session_id, name, root=root, base=base,
+            max_worktrees=max_worktrees,
+        )
+
+    @staticmethod
+    def _is_session_record(child_id: str, root: str | Path) -> bool:
+        """Dispatch v3 records only after inspecting their untrusted envelope.
+
+        The selected reader authenticates the envelope before returning any
+        record data. A forged v3 header can only make that reader fail closed.
+        """
+        try:
+            service_root, records = _service_layout(root)
+            path = records / _record_name(child_id)
+            envelope = json.loads(_read_metadata_bytes(path))
+            payload = envelope.get("record", {})
+            return payload.get("version") == 3 and payload.get("kind") == "session"
+        except (OSError, ValueError, TypeError, WorktreeError):
+            return False
+
+    def activate_session(self, record_id: str, *, root: str | Path):
+        from .session_worktrees import activate_session
+
+        return activate_session(record_id, root=root)
+
+    def abort_session(self, record_id: str, *, root: str | Path):
+        from .session_worktrees import abort_session
+
+        return abort_session(record_id, root=root)
+
+    def detach_session(self, record_id: str, *, root: str | Path):
+        from .session_worktrees import detach_session
+
+        return detach_session(record_id, root=root)
+
+    def recover_sessions(
+        self,
+        *,
+        root: str | Path,
+        created_ids: set[str],
+        pending_ids: set[str] | frozenset[str] = frozenset(),
+    ):
+        from .session_worktrees import recover_sessions
+
+        return recover_sessions(root=root, created_ids=created_ids, pending_ids=pending_ids)
+
+    def recreate_session(self, record_id: str, *, root: str | Path):
+        from .session_worktrees import recreate_session
+
+        return recreate_session(record_id, root=root)
+
+    def session_status(self, record_id: str, *, root: str | Path):
+        from .session_worktrees import session_status
+
+        return session_status(record_id, root=root)
+
+    def commit_session(self, record_id: str, *, root: str | Path, **kwargs):
+        from .session_worktrees import commit_session
+
+        return commit_session(record_id, root=root, **kwargs)
+
+    def session_commits(self, record_id: str, *, root: str | Path, since: str | None = None):
+        from .session_worktrees import session_commits
+
+        return session_commits(record_id, root=root, since=since)
+
     def inspect(self, child_id: str, *, root: str | Path) -> WorktreeRecord:
+        if self._is_session_record(child_id, root):
+            from .session_worktrees import inspect_session
+
+            return inspect_session(child_id, root=root)
         return _inspect(child_id, root=root, runtime_ownership=self._runtime_ownership)
 
     def get(self, child_id: str, *, root: str | Path) -> WorktreeRecord:
         """Load and verify one record using this service's legacy ownership check."""
+        if self._is_session_record(child_id, root):
+            from .session_worktrees import get_session
+
+            return get_session(child_id, root=root)
         return _get(child_id, root=root, runtime_ownership=self._runtime_ownership)
 
     def list(self, *, root: str | Path) -> tuple[WorktreeRecord, ...]:
         """List verified records using this service's legacy ownership check."""
-        return _list(root=root, runtime_ownership=self._runtime_ownership)
+        children = _list(root=root, runtime_ownership=self._runtime_ownership)
+        from .session_worktrees import list_sessions
+
+        return (*children, *list_sessions(root=root))
 
     def mark_finished(
         self,
@@ -1137,7 +1228,12 @@ def _list(
         for path in sorted(records_dir.glob("*.json")):
             try:
                 envelope = json.loads(_read_metadata_bytes(path))
-                child_id = envelope["record"]["child_id"]
+                payload = envelope["record"]
+                if payload.get("version") == 3 and payload.get("kind") == "session":
+                    # The session-aware WorktreeService.list() validates these
+                    # through the dedicated v3 reader after this legacy pass.
+                    continue
+                child_id = payload["child_id"]
             except (OSError, ValueError, KeyError, TypeError, WorktreeError) as exc:
                 raise WorktreeError(f"invalid worktree record file {path.name}: {exc}") from exc
             child_id = _validate_child_id(child_id)

@@ -1060,6 +1060,104 @@ class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("sessions.title_model must be a tier or model reference")
 
 
+class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """``[worktrees]``: session isolation and bounded worktree setup policy."""
+
+    sessions: bool = False
+    base: str = "current"
+    max_worktrees: int = 16
+    commit_max_files: int = 2000
+    commit_max_file_mb: int = 50
+    setup: list[str] | str | None = None
+    setup_shell: bool = False
+    setup_timeout: int = 300
+    setup_on_fail: Literal["fail", "warn"] = "fail"
+    setup_for_subagents: Literal["full", "copy_only", "none"] = "copy_only"
+    copy: list[str] = msgspec.field(default_factory=list)
+    copy_max_mb: int = 20
+    share_dirs: list[str] = msgspec.field(default_factory=list)
+    submodules: Literal["none", "top", "recursive"] = "none"
+
+    def __post_init__(self) -> None:
+        if type(self.sessions) is not bool:
+            raise ValueError("worktrees.sessions must be true or false")
+        if type(self.setup_shell) is not bool:
+            raise ValueError("worktrees.setup_shell must be true or false")
+        if self.setup_on_fail not in {"fail", "warn"}:
+            raise ValueError("worktrees.setup_on_fail must be 'fail' or 'warn'")
+        if self.setup_for_subagents not in {"full", "copy_only", "none"}:
+            raise ValueError("worktrees.setup_for_subagents must be full, copy_only or none")
+        if self.submodules not in {"none", "top", "recursive"}:
+            raise ValueError("worktrees.submodules must be none, top or recursive")
+        if (
+            not isinstance(self.base, str)
+            or not self.base
+            or len(self.base) > 255
+            or any(ord(char) < 33 or ord(char) == 127 for char in self.base)
+            or self.base.startswith("-")
+            or self.base.endswith(("/", "."))
+            or self.base.endswith(".lock")
+            or self.base == "@"
+            or "//" in self.base
+            or ".." in self.base
+            or "@{" in self.base
+            or any(part.startswith(".") or part.endswith(".lock") for part in self.base.split("/"))
+            or any(char in self.base for char in "~^:?*[\\\\")
+        ):
+            raise ValueError("worktrees.base must be 'current' or a valid local branch name")
+        for name, value, minimum, maximum in (
+            ("max_worktrees", self.max_worktrees, 1, 256),
+            ("commit_max_files", self.commit_max_files, 1, 100_000),
+            ("commit_max_file_mb", self.commit_max_file_mb, 1, 2_048),
+            ("setup_timeout", self.setup_timeout, 1, 1_800),
+            ("copy_max_mb", self.copy_max_mb, 1, 2_048),
+        ):
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError(
+                    f"worktrees.{name} must be an integer from {minimum} to {maximum}"
+                )
+        setup = self.setup
+        if setup is not None:
+            if isinstance(setup, str):
+                valid_setup = bool(setup.strip()) and len(setup) <= 8192 and "\x00" not in setup
+                if not self.setup_shell:
+                    raise ValueError("worktrees.setup must be an argv list unless setup_shell is true")
+            else:
+                valid_setup = (
+                    isinstance(setup, list)
+                    and 1 <= len(setup) <= 64
+                    and all(
+                        isinstance(item, str)
+                        and bool(item.strip())
+                        and len(item) <= 4096
+                        and "\x00" not in item
+                        for item in setup
+                    )
+                    and sum(len(item) for item in setup if isinstance(item, str)) <= 8192
+                )
+                if self.setup_shell:
+                    raise ValueError("worktrees.setup_shell requires worktrees.setup as a string")
+            if not valid_setup:
+                raise ValueError("worktrees.setup must be a bounded command or argv list")
+        elif self.setup_shell:
+            raise ValueError("worktrees.setup_shell requires worktrees.setup")
+        for name, values in (("copy", self.copy), ("share_dirs", self.share_dirs)):
+            if not isinstance(values, list) or len(values) > 200:
+                raise ValueError(f"worktrees.{name} must be a list of at most 200 paths")
+            for value in values:
+                if (
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > 1024
+                    or value.startswith(("/", "\\"))
+                    or "\\" in value
+                    or "\x00" in value
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                    or any(part == ".." for part in value.split("/"))
+                ):
+                    raise ValueError(f"worktrees.{name} entries must be safe relative paths")
+
+
 class SettingsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     confirm_edits: bool = False
 
@@ -1223,6 +1321,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     mcp: MCPSection = msgspec.field(default_factory=MCPSection)
     session: SessionSection = msgspec.field(default_factory=SessionSection)
     sessions: SessionsSection = msgspec.field(default_factory=SessionsSection)
+    worktrees: WorktreesSection = msgspec.field(default_factory=WorktreesSection)
     settings: SettingsSection = msgspec.field(default_factory=SettingsSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
     voice: VoiceSection = msgspec.field(default_factory=VoiceSection)

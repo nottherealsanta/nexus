@@ -433,6 +433,14 @@ class _SessionEventSink:
         self._fanout = fanout
 
     async def emit(self, event: Event) -> EventRecord:
+        if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+            callback = self._session._before_terminal
+            if callback is not None:
+                completion = asyncio.create_task(callback(self._session, event))
+                try:
+                    await asyncio.shield(completion)
+                except asyncio.CancelledError:
+                    await completion
         record = self._session.append_event(event)
         self._session._observe_event(event)
         if event.type == "turn.completed":
@@ -441,6 +449,11 @@ class _SessionEventSink:
             # missing/old snapshot only costs a full replay on resume.
             self._session._snapshot_after_completed_turn()
         self._session._publish(record.event)
+        handoff = self._session._deferred_turn_end
+        if event.type == "tool.result" and handoff and event.data.get("tool_use_id") == handoff[0]:
+            self._session._deferred_turn_end = None
+            if not event.data.get("is_error"):
+                self._session._turn_handoff_ready = True
         if self._fanout is not None:
             await self._fanout.put(
                 record.event, critical=event.type in _CRITICAL_EVENTS
@@ -509,6 +522,9 @@ class Session:
         turn_cleanup: Callable[[str, str], None] | None = None,
         hooks: Callable[[], Any] | None = None,
         job_probe: Callable[[str, str], bool] | None = None,
+        workspace_required: Callable[[Any], bool] | None = None,
+        prepare_workspace: Callable[..., Any] | None = None,
+        before_terminal: Callable[..., Any] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
@@ -516,6 +532,11 @@ class Session:
         #: the runtime (this layer imports nothing from ``tools``); ``None`` means
         #: nothing can prove a job dead, so no recovery event is ever written.
         self._job_probe = job_probe
+        self._workspace_required = workspace_required
+        self._prepare_workspace = prepare_workspace
+        self._before_terminal = before_terminal
+        self._deferred_turn_end = None
+        self._turn_handoff_ready = False
         self._kind: str | None = None
         self._lock = lock if lock is not None else SessionLock(store.lock_path(self._id))
         self._read: ReadResult | None = None
@@ -1972,6 +1993,8 @@ class Session:
                     f"Session {self._id!r} has been deleted; refusing to start a turn"
                 )
             self._idle.clear()
+            self._turn_handoff_ready = False
+            self._deferred_turn_end = None
             token = CancelToken()
             state = TurnState.new(
                 turn_id=turn_id or new_id(), session_id=self._id
@@ -2625,12 +2648,13 @@ class Session:
             self._turn_is_new = not self.read().records
             self._turn_agent_definition = None
             self._turn_agent_selection_source = None
-            assembler = self._assemble_for_turn()
+            deferred = self._workspace_required is not None and self._workspace_required(self)
+            assembler = None if deferred else self._assemble_for_turn()
             # An explicit per-turn ``limits`` argument wins over the config
             # snapshot; only derive from the snapshot when the caller passed none.
             if limits is None:
                 lease.limits = self._limits_for_turn(assembler)
-            tool_turn = self._tool_turn_for(assembler, lease, attended)
+            tool_turn = None if deferred else self._tool_turn_for(assembler, lease, attended)
             # Keep the definition resolved at turn start even when an explicit
             # model selection suppresses the assembler's agent defaults. It is
             # still the effective root agent for prompts/tools and turn history.
@@ -2712,6 +2736,11 @@ class Session:
             raise
         return lease, assembler, tool_turn
 
+    def consume_turn_handoff(self) -> bool:
+        requested = self._turn_handoff_ready
+        self._turn_handoff_ready = False
+        return requested
+
     def _launch_turn(
         self,
         lease: TurnLease,
@@ -2726,24 +2755,49 @@ class Session:
         """Start the detached producer task for a prepared turn."""
         sink = _SessionEventSink(self, fanout)
         self._attached_fanout = fanout
-        task = asyncio.create_task(
-            run_turn(
-                session=self,
-                user_input=content,
-                assemble=assembler,
-                provider_for=self._provider_for,
-                emit=sink,
+        async def produce():
+            nonlocal assembler, tool_turn
+            try:
+                if self._prepare_workspace is not None:
+                    await self._prepare_workspace(self, lease, content)
+                if assembler is None:
+                    assembler = self._assemble_for_turn()
+                    tool_turn = self._tool_turn_for(assembler, lease, self.attended)
+                    self._active_tools = tool_turn
+                    agent = self._turn_agent_definition or getattr(assembler, "agent_definition", None)
+                    if agent is not None:
+                        self._turn_agent_metadata = {
+                            "name": agent.name, "source": "session",
+                            "fingerprint": agent.fingerprint(), "read_only": bool(agent.read_only),
+                            "profile": agent.profile or getattr(getattr(tool_turn, "manager", None), "profile", None),
+                            "tools": list(getattr(getattr(tool_turn, "manager", None), "names", ())),
+                        }
+            except BaseException as exc:
+                # The accepted prompt is durable even if provisioning fails. No model
+                # call occurs; the failed draft can change its worktree selection.
+                try:
+                    await sink.emit(Event(type="turn.started", session=self.id, turn=lease.turn_id, data={"preparation": True}))
+                    from ..util import redact_secrets
+                    cancelled = isinstance(exc, (asyncio.CancelledError, OperationCancelled))
+                    await sink.emit(Event(type="turn.cancelled" if cancelled else "turn.failed", session=self.id, turn=lease.turn_id,
+                                          data={"reason" if cancelled else "error": redact_secrets(f"Worktree preparation {'cancelled' if cancelled else 'failed'}: {exc}")[:500], "iterations": 0}))
+                finally:
+                    lease.release()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                return None
+            return await run_turn(
+                session=self, user_input=content, assemble=assembler,
+                provider_for=self._provider_for, emit=sink,
                 tools=getattr(tool_turn, "dispatcher", None),
-                gate=getattr(tool_turn, "gate", None),
-                lease=lease,
-                persist_user_message=False,
-                input_id=input_id,
-                input_content=input_content,
+                gate=getattr(tool_turn, "gate", None), lease=lease,
+                persist_user_message=False, input_id=input_id, input_content=input_content,
                 manifest_ref=getattr(tool_turn, "manifest_ref", None),
                 environment_for=getattr(tool_turn, "environment_for", None),
                 hooks=getattr(tool_turn, "hooks", None),
             )
-        )
+
+        task = asyncio.create_task(produce())
         self._turn_task = task
         if fanout is not None:
             def _close_fanout(_task: asyncio.Task) -> None:

@@ -41,6 +41,25 @@ glob rules keep their original keys. Grants remain local to the session log;
 this phase does not add a project-wide grant store or import other sessions'
 approvals. Project settings and permission rules are shared independently.
 
+## Session worktree tools
+
+The Runtime adds dynamic `worktree_status` and, by session root, one matching
+mutation: `worktree_commit` for a Nexus-owned worktree or `worktree_promote` for
+a main/external root. Tool implementations live in
+`tools/builtin/worktree.py` and receive only bound callbacks; they cannot reach
+Git managers or Runtime directly. Status is read-only. Commit arguments are
+bounded to a 4,000-character message and 500 optional paths; the callback
+checks each path against the active session root. Promotion accepts a bounded
+reason and optional continuation and queues that continuation only after the
+root move succeeds.
+
+`worktree_promote` must be registered with the session permission engine's
+forced-confirmation set (`require_confirmation_for({"worktree_promote"})`). Its
+mutating/exclusive declaration controls dispatch scheduling, but alone does
+not guarantee an operator approval when policy is permissive. This explicit
+approval is required because promotion changes the checkout used by future
+turns.
+
 ## Files
 
 | File | Owns |

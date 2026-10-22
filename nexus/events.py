@@ -42,6 +42,23 @@ SHUTDOWN_CANCEL_REASON = "supervisor closing"
 #: ``session.linked`` is a supervision edge recorded in the *manager's* log
 #: (``kind: "managed"``, ``child``, ``origin_message_id``, ``instruction_digest``).
 SESSION_EVENTS = ("session.named", "session.opened", "session.closed", "session.forked", "session.linked", "session.root_set")
+WORKTREE_EVENTS = (
+    "session.worktree_set",
+    "worktree.created",
+    "worktree.setup_ran",
+    "worktree.setup_output",
+    "worktree.setup_trust",
+    "worktree.identity_fallback",
+    "worktree.file_written",
+    "worktree.provenance_clipped",
+    "worktree.promoted",
+    "worktree.promotion_requested",
+    "worktree.promotion_failed",
+    "worktree.turn_started",
+    "worktree.committed",
+    "worktree.commit_skipped",
+    "worktree.detached",
+)
 TURN_EVENTS = (
     "turn.started",
     "turn.completed",
@@ -219,6 +236,7 @@ COMPAT_EVENTS = (
 #: names are not groups because ``error`` already lives in ``misc``.
 EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "session": SESSION_EVENTS,
+    "worktree": WORKTREE_EVENTS,
     "turn": TURN_EVENTS,
     "context": CONTEXT_EVENTS,
     "model": MODEL_EVENTS,
@@ -267,6 +285,7 @@ __all__ = [
     "QUESTION_EVENTS",
     "REGISTRY_EVENTS",
     "SESSION_EVENTS",
+    "WORKTREE_EVENTS",
     "SHELL_EVENTS",
     "SKILL_EVENTS",
     "TOOL_EVENTS",

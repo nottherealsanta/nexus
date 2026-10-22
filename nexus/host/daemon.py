@@ -4,7 +4,7 @@ The daemon always owns the :class:`~nexus.runtime.Runtime`; a surface is a pure
 client with no in-process fallback. One daemon serves many project runtimes, addressed by
 a deterministic socket path derived from the protocol and Python install identity. This module owns:
 
-* **a deterministic socket path** — ``~/.nexus/daemon/shared-v5-<install>.sock``, mode ``0600``
+* **a deterministic socket path** — ``~/.nexus/daemon/shared-v6-<install>.sock``, mode ``0600``
   inside a ``0700`` directory;
 * **duplicate prevention** — an exclusive ``flock`` on a sibling lock file plus a
   pid file, so a second daemon for the same home/install refuses to start;

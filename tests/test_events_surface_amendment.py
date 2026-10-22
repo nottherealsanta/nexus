@@ -66,6 +66,7 @@ def test_plan_groups_registered_in_catalogue():
 def test_catalogue_group_names_and_order():
     assert list(EVENT_GROUPS) == [
         "session",
+        "worktree",
         "turn",
         "context",
         "model",

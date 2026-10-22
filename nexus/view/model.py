@@ -31,6 +31,8 @@ __all__ = [
     "RegistryView",
     "RetryView",
     "RootView",
+    "WorktreeCommitView",
+    "WorktreeView",
     "SkillView",
     "ToolCallView",
     "TurnView",
@@ -67,6 +69,8 @@ def _dump(value: object) -> Any:
         for item in fields(value):
             field_value = getattr(value, item.name)
             if item.name in {"code_mode", "code_store", "nested_calls"} and not field_value:
+                continue
+            if item.name == "promotion_error" and not field_value:
                 continue
             if isinstance(value, BlockView) and item.name == "image_url":
                 if field_value is not None:
@@ -112,6 +116,8 @@ def _dump(value: object) -> Any:
             if item.name == "origin" and field_value is None:
                 continue
             if item.name in {"live_calls", "jobs"} and not field_value:
+                continue
+            if item.name == "commit_shas" and not field_value:
                 continue
             if (
                 item.name in {"assistant_ts", "elapsed_ms"}
@@ -365,6 +371,8 @@ class TurnView(_View):
     limits: dict[str, Any] = field(default_factory=dict)
     messages: list[MessageView] = field(default_factory=list)
     tools: list[ToolCallView] = field(default_factory=list)
+    #: SHAs of worktree commits attributed to this turn.
+    commit_shas: list[str] = field(default_factory=list)
     permission_ids: list[str] = field(default_factory=list)
     context: list[ContextView] = field(default_factory=list)
     skills: list[SkillView] = field(default_factory=list)
@@ -405,6 +413,41 @@ class RootView(_View):
     base_ref: str = ""
     base_sha: str = ""
     worktree_id: str = ""
+
+@dataclass
+class WorktreeCommitView(_View):
+    """One bounded commit recorded for the session worktree."""
+
+    sha: str = ""
+    seq: int = 0
+    by: str = "harness"
+    agent_id: str = ""
+    subject: str = ""
+    files: list[str] = field(default_factory=list)
+    clipped: int = 0
+    insertions: int = 0
+    deletions: int = 0
+
+@dataclass
+class WorktreeView(_View):
+    """Replayable worktree selection, lifecycle and recent commit history."""
+
+    enabled: bool = False
+    base_ref: str = ""
+    base_sha: str = ""
+    branch: str = ""
+    state: str = "none"  # none|pending|promotion_pending|active|detached|landed|removed
+    locked: bool = False
+    identity_fallback: bool = False
+    provenance_clipped: bool = False
+    setup_trusted: bool | None = None
+    ahead: int = 0
+    behind: int = 0
+    uncommitted: dict[str, int] = field(default_factory=dict)
+    dirty_main: dict[str, int] = field(default_factory=dict)
+    commits: list[WorktreeCommitView] = field(default_factory=list)
+    last_skip: dict[str, str] | None = None
+    promotion_error: str = ""
 
 @dataclass
 class QueuedInputView(_View):
@@ -637,6 +680,7 @@ class ConversationView(_View):
     phase: str = "idle"  # idle|running|awaiting_input|awaiting_permission|closed
     opened: bool = False
     root: RootView = field(default_factory=RootView)
+    worktree: WorktreeView = field(default_factory=WorktreeView)
     closed: bool = False
     turns: list[TurnView] = field(default_factory=list)
     permissions: list[PermissionView] = field(default_factory=list)

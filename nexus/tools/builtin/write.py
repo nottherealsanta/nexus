@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import secrets
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,67 @@ from .read import (
 )
 
 _ATOMIC_CHUNK = 64 * 1024
+_MAX_BEFORE_IMAGE_BYTES = 50 * 1024 * 1024
+
+
+def git_blob_oids(data: bytes) -> dict[str, str]:
+    """Return Git blob OIDs for both repository hash formats, bounded to 50 MiB."""
+    if len(data) > _MAX_BEFORE_IMAGE_BYTES:
+        return {"unknown": "too_large"}
+    header = f"blob {len(data)}\0".encode("ascii")
+    return {
+        "sha1": hashlib.sha1(header + data).hexdigest(),
+        "sha256": hashlib.sha256(header + data).hexdigest(),
+    }
+
+
+def _previous_blob_oids(directory_fd: int, name: str) -> dict[str, str] | None:
+    """Hash an existing regular file through the checked directory FD, never following links."""
+    try:
+        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return {"unknown": "unreadable"}
+    if not stat.S_ISREG(info.st_mode):
+        return {"unknown": "not_regular"}
+    if info.st_size > _MAX_BEFORE_IMAGE_BYTES:
+        return {"unknown": "too_large"}
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        file_fd = os.open(name, flags, dir_fd=directory_fd)
+    except OSError:
+        return {"unknown": "unreadable"}
+    try:
+        opened = os.fstat(file_fd)
+        identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if not stat.S_ISREG(opened.st_mode) or (
+            opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns
+        ) != identity:
+            return {"unknown": "changed"}
+        header = f"blob {opened.st_size}\0".encode("ascii")
+        sha1 = hashlib.sha1(header)
+        sha256 = hashlib.sha256(header)
+        total = 0
+        while True:
+            chunk = os.read(file_fd, min(_ATOMIC_CHUNK, _MAX_BEFORE_IMAGE_BYTES + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_BEFORE_IMAGE_BYTES:
+                return {"unknown": "too_large"}
+            sha1.update(chunk)
+            sha256.update(chunk)
+        after = os.fstat(file_fd)
+        if total != opened.st_size or (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) != identity:
+            return {"unknown": "changed"}
+        return {"sha1": sha1.hexdigest(), "sha256": sha256.hexdigest()}
+    except OSError:
+        return {"unknown": "unreadable"}
+    finally:
+        os.close(file_fd)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -111,12 +174,16 @@ async def atomic_write_bytes(
                 handle.flush()
                 os.fsync(handle.fileno())
             _check_cancel(ctx)
+            recorder = getattr(ctx, "record_write", None)
+            before_oids = _previous_blob_oids(directory_fd, target.name) if callable(recorder) else None
             os.replace(
                 temp_name,
                 target.name,
                 src_dir_fd=directory_fd,
                 dst_dir_fd=directory_fd,
             )
+            if callable(recorder):
+                recorder(target, data, before_oids)
             _fsync_directory(parent)
         except BaseException:
             try:
@@ -205,4 +272,4 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     )
 
 
-__all__ = ["SPEC", "atomic_write_bytes", "run"]
+__all__ = ["SPEC", "atomic_write_bytes", "git_blob_oids", "run"]

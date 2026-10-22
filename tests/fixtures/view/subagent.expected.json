@@ -90,6 +90,23 @@
           "base_ref": "",
           "base_sha": "",
           "worktree_id": ""
+        },
+        "worktree": {
+          "enabled": false,
+          "base_ref": "",
+          "base_sha": "",
+          "branch": "",
+          "state": "none",
+          "locked": false,
+          "identity_fallback": false,
+          "provenance_clipped": false,
+          "setup_trusted": null,
+          "ahead": 0,
+          "behind": 0,
+          "uncommitted": {},
+          "dirty_main": {},
+          "commits": [],
+          "last_skip": null
         }
       },
       "clamped": true,
@@ -252,5 +269,22 @@
     "input_tokens": 9,
     "output_tokens": 3,
     "reasoning_tokens": 0
+  },
+  "worktree": {
+    "enabled": false,
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "state": "none",
+    "locked": true,
+    "identity_fallback": false,
+    "provenance_clipped": false,
+    "setup_trusted": null,
+    "ahead": 0,
+    "behind": 0,
+    "uncommitted": {},
+    "dirty_main": {},
+    "commits": [],
+    "last_skip": null
   }
 }

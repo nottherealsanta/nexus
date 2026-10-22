@@ -2229,6 +2229,10 @@ async def run_turn(
                 terminal = state.complete(stop)
                 break
             token.raise_if_cancelled()
+            handoff = getattr(session, "consume_turn_handoff", None)
+            if callable(handoff) and handoff():
+                terminal = state.complete("end_turn")
+                break
 
             consume_steering = getattr(session, "consume_steering", None)
             if callable(consume_steering):

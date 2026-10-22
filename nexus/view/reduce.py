@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from ..events import EVENT_GROUPS, SHUTDOWN_CANCEL_REASON, Event
+from ..events import EVENT_GROUPS, SHUTDOWN_CANCEL_REASON, WORKTREE_EVENTS, Event
 from .fold import accumulate, finalize_text, finalize_thinking
 from .model import (
     AgentView,
@@ -36,6 +36,7 @@ from .model import (
     RegistryView,
     RetryView,
     RootView,
+    WorktreeCommitView,
     SkillView,
     ToolCallView,
     TurnView,
@@ -247,6 +248,108 @@ def _error(state: ConversationView, event: Event, message: str, data: Mapping[st
     )
     return replace(state, errors=[*state.errors, entry])
 
+
+def _bounded_count(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1_000_000 else 0
+
+
+def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Fold bounded worktree lifecycle and commit audit events."""
+    current = state.worktree
+    if event.type in {"worktree.setup_output", "worktree.file_written"}:
+        # Setup output can contain project secrets, and write receipts are for
+        # internal promotion provenance only; neither belongs in the view.
+        return state
+    if event.type == "worktree.identity_fallback":
+        return replace(state, worktree=replace(current, identity_fallback=True))
+    if event.type == "worktree.provenance_clipped":
+        return replace(state, worktree=replace(current, provenance_clipped=True))
+    if event.type == "worktree.setup_trust":
+        trusted = data.get("trusted")
+        if not isinstance(trusted, bool):
+            return _diagnostic(state, event, data)
+        return replace(state, worktree=replace(current, setup_trusted=trusted))
+    if event.type == "worktree.promotion_requested":
+        return replace(state, worktree=replace(current, state="promotion_pending", promotion_error=""))
+    if event.type == "worktree.promotion_failed":
+        detail = data.get("detail", "Promotion failed")
+        if not isinstance(detail, str) or len(detail) > 500 or "\x00" in detail:
+            return _diagnostic(state, event, data)
+        return replace(state, worktree=replace(
+            current, state="promotion_failed", promotion_error=detail or "Promotion failed",
+        ))
+    if event.type == "worktree.turn_started":
+        # Internal commit boundary (head, seq and worktree id), not UI state.
+        return state
+    if event.type == "worktree.promoted":
+        return replace(state, worktree=replace(current, enabled=True, state="active", promotion_error=""))
+    if event.type == "session.worktree_set":
+        enabled = data.get("enabled")
+        base_ref = data.get("base_ref", "")
+        if not isinstance(enabled, bool) or not isinstance(base_ref, str) or len(base_ref) > 200 or "\x00" in base_ref:
+            return _diagnostic(state, event, data)
+        return replace(state, worktree=replace(current, enabled=enabled, base_ref=base_ref))
+    if event.type == "worktree.created":
+        branch = data.get("branch", "")
+        base_ref = data.get("base_ref", "")
+        base_sha = data.get("base_sha", "")
+        if any(not isinstance(value, str) or len(value) > 200 or "\x00" in value for value in (branch, base_ref, base_sha)):
+            return _diagnostic(state, event, data)
+        dirty_main_raw = data.get("dirty_main")
+        dirty_main = {
+            key: _bounded_count(dirty_main_raw.get(key))
+            for key in ("modified", "untracked")
+        } if isinstance(dirty_main_raw, Mapping) else {}
+        return replace(state, worktree=replace(
+            current, enabled=True, branch=branch, base_ref=base_ref,
+            base_sha=base_sha, state="active", dirty_main=dirty_main, locked=True,
+        ))
+    if event.type == "worktree.setup_ran":
+        reason = data.get("reason", "created")
+        if not isinstance(reason, str) or len(reason) > 80 or "\x00" in reason:
+            return _diagnostic(state, event, data)
+        return state
+    if event.type == "worktree.commit_skipped":
+        reason = data.get("reason")
+        detail = data.get("detail", "")
+        if reason not in {"no_changes", "too_large", "git_error", "conflict_in_progress"} or not isinstance(detail, str) or len(detail) > 500 or "\x00" in detail:
+            return _diagnostic(state, event, data)
+        return replace(state, worktree=replace(current, last_skip={"reason": reason, "detail": detail}))
+    if event.type == "worktree.detached":
+        return replace(state, worktree=replace(current, state="detached"))
+    if event.type != "worktree.committed":
+        return _diagnostic(state, event, data)
+    sha = data.get("sha")
+    by = data.get("by")
+    subject = data.get("subject", "")
+    agent_id = data.get("agent_id", "")
+    seq = data.get("seq", 0)
+    files = data.get("files", [])
+    if (
+        not isinstance(sha, str) or not 1 <= len(sha) <= 64 or "\x00" in sha
+        or by not in {"harness", "agent", "subagent"}
+        or not isinstance(subject, str) or len(subject) > 200 or "\x00" in subject
+        or not isinstance(agent_id, str) or len(agent_id) > 200 or "\x00" in agent_id
+        or not isinstance(seq, int) or isinstance(seq, bool) or not 0 <= seq <= 1_000_000
+        or not isinstance(files, (list, tuple)) or len(files) > 200
+        or any(not isinstance(path, str) or len(path) > 1024 or "\x00" in path for path in files)
+    ):
+        return _diagnostic(state, event, data)
+    commit = WorktreeCommitView(
+        sha=sha, seq=seq, by=by, agent_id=agent_id, subject=subject,
+        files=list(files), clipped=_bounded_count(data.get("clipped")),
+        insertions=_bounded_count(data.get("insertions")),
+        deletions=_bounded_count(data.get("deletions")),
+    )
+    commits = [*current.commits, commit][-200:]
+    turns = list(state.turns)
+    turn_index = _turn_index(state, event.turn) if event.turn else -1
+    if turn_index >= 0:
+        turn = turns[turn_index]
+        if sha not in turn.commit_shas:
+            turns[turn_index] = replace(turn, commit_shas=[*turn.commit_shas, sha])
+    return replace(state, turns=turns, worktree=replace(current, commits=commits, last_skip=None))
+
 def _agent_meta(data: Mapping[str, Any]) -> dict[str, Any] | None:
     agent = data.get("agent")
     if not isinstance(agent, Mapping):
@@ -364,6 +467,8 @@ def _recompute_phase(state: ConversationView) -> ConversationView:
 def _on_turn_started(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     turn_id = event.turn or f"turn@{event.seq}"
     limits = dict(data.get("limits")) if isinstance(data.get("limits"), Mapping) else {}
+    if not data.get("preparation"):
+        state = replace(state, worktree=replace(state.worktree, locked=True))
     index = _turn_index(state, turn_id)
     if index >= 0:
         # A queued ``input.consumed`` can precede ``turn.started``; keep its message.
@@ -2097,6 +2202,8 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         # Manager bookkeeping (supervision edges, refused launches, waits) is audit
         # metadata in the manager's log; the tool calls already tell the story.
         return state
+    if event_type in WORKTREE_EVENTS:
+        return _worktree_event(state, event, data)
 
     if event_type == "agent.config":
         # The child's immutable continuation record is durable metadata (it

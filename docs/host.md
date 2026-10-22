@@ -1,9 +1,9 @@
 # Host: daemon, protocol, facade, transports
 
-## Shared daemon (protocol v5)
+## Shared daemon (protocol v6)
 
 One socket per Nexus home and Python install serves up to 32 project runtimes:
-`shared-v5-<sha8(sys.prefix)>.sock`. Runtime construction is lazy. `Hello.focus`
+`shared-v6-<sha8(sys.prefix)>.sock`. Runtime construction is lazy. `Hello.focus`
 is an absolute launch path; its bounded environment (1,024 variables / 256 KiB)
 is captured once per project and is never returned or logged. `Welcome.focus`
 identifies the resolved project. Administrative connections use `client=control`
@@ -45,7 +45,7 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 
 | File | Owns |
 | --- | --- |
-| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (5); `decode_command`; `ErrorResult` |
+| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (6); `decode_command`; `ErrorResult` |
 | `facade.py` | `HostFacade`: implements every command (`handle`), `subscribe`, `state`, `web_snapshot`, `subscribe_web`, `subscribe_workspace` |
 | `daemon.py` | `Daemon`: lifecycle, socket, handshake, idle shutdown, `web_launch`, `ensure_daemon`/`status`/`stop`/`logs`, daemon entrypoint |
 | `supervisor.py` | `Supervisor`: turn scheduling under a global cap; a cancel keeps queued subagent reports |
@@ -67,7 +67,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionJobs` `SessionJobLog` `SessionJobStop` `SessionJobBackground` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionJobs` `SessionJobLog` `SessionJobStop` `SessionJobBackground` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
@@ -79,7 +79,7 @@ inward-only exceptions. Errors are
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `UsageRefreshSettings` `UsageRefreshSettingsSet` (result `UsageRefreshSettingsResult`) `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
-| Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
+| Worktrees | `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows; `session=""` selects the main root) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
@@ -97,6 +97,8 @@ inward-only exceptions. Errors are
 | `GitStatus(session="")` | Read-only `git status --porcelain=v2` of the selected root (`session` empty means project root; no shell, `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, 5 s deadline, 512 KiB output cap) → `GitStatusResult(available, message, branch, upstream, ahead, behind, rows, counts, truncated)`. Rows are `{group: conflicts\|staged\|unstaged\|untracked, code, label, path, from}`, at most 500, paths redacted and relative to the repository root. Outside a work tree `available` is false with a `message`. `GitDiff` uses the same session-root selection. File reads retain the session path guard, including project policy read-deny roots. |
 
 `SessionOpen.root` optionally links a newly created session to an absolute external linked-worktree path. It is applied only after the session is created; opening an existing session with a different root is refused. The runtime validates that the path belongs to the project's repository. An empty root keeps the session on the project root.
+
+The session worktree commands share `SessionWorktreeResult(session, state)`. `SessionWorktreeStatus` reports the current selection, root/worktree state, Git availability and a bounded local-branch list; a non-Git project reports a disabled reason. `SessionWorktreeSet(session, enabled, base="current")` changes a draft's first-turn preference. `SessionPromote(session, reason="", continuation="")` moves a main or external session at a turn boundary; `SessionDetach(session)` returns an owned session to the main checkout. Setup trust choices use `SessionWorktreeTrust(session, decision, digest)`, where decision is `allow_once`, `allow_project`, or `skip`; `digest` must match the setup digest shown by status, so a stale review cannot authorize changed setup. The runtime validates draft/boundary state and owns worktree mutations; clients receive only sanitized status data. New-session UI can call these commands without reading settings or Git directly.
 
 The shell job commands (`host_support/session_jobs.py`, [tools.md](tools.md#shell-jobs)) read the
 runtime's job registry for the **named session only**, so a job id from another session answers
@@ -283,7 +285,7 @@ by a dead view is released.
 ## Daemon
 
 One daemon per Nexus home and Python install, addressed by a deterministic socket
-`~/.nexus/daemon/shared-v5-<sha8(sys.prefix)>.sock` (mode `0600` in a `0700` dir; a private short
+`~/.nexus/daemon/shared-v6-<sha8(sys.prefix)>.sock` (mode `0600` in a `0700` dir; a private short
 fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 
 - `flock` on a sibling lock plus a pid file prevent duplicates; a stale socket

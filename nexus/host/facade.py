@@ -30,6 +30,7 @@ import contextlib
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import os  # noqa: F401 - preserves the facade's historical scandir patch seam
 import secrets
@@ -330,6 +331,21 @@ class HostFacade:
         records = tuple(self.runtime.list_worktrees())
         rows = [_worktree_record(record) for record in records[:_MAX_WORKTREE_LIST]]
         return rows, len(records) > _MAX_WORKTREE_LIST
+
+    async def _invoke_runtime_worktree(self, name: str, *args, **kwargs) -> Any:
+        """Invoke session worktree actions on their owning event loop.
+
+        Mutators append session events and touch loop-affine buses/handles. Only
+        the read-only status projection is sent to a worker thread.
+        """
+        method = getattr(self.runtime, name, None)
+        if not callable(method):
+            raise ValueError("Session worktree operations are unavailable")
+        if name == "session_worktree_status":
+            result = await asyncio.to_thread(method, *args, **kwargs)
+        else:
+            result = method(*args, **kwargs)
+        return await result if inspect.isawaitable(result) else result
 
     def inspect_worktree(self, child_id: str) -> dict[str, Any]:
         """Inspect one authenticated runtime-owned child without exposing paths."""
@@ -1763,7 +1779,8 @@ class HostFacade:
                                                    getattr(self.runtime, "_environ", {})))
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
-                            p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate, p.WorktreeDiscard)
+                            p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
+                            p.WorktreeDiscard, p.SessionWorktreeStatus)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -1802,6 +1819,8 @@ class HostFacade:
         target_commands = (p.SessionTree, p.SessionInspect, p.SessionFork,
                            p.SessionDelete, p.SessionExport,
                            p.SessionArchive, p.SessionUnarchive)
+        target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionPromote,
+                           p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust)
         if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
             namespace = getattr(command, "namespace", "main")
             if isinstance(command, p.SessionFork) and command.new_id == MANAGER_SESSION_ID:
@@ -2012,6 +2031,34 @@ class HostFacade:
             return p.GitStatusResult(**await workspace_git_status(
                 _session_workspace(self.runtime, command.session)
             ))
+        if isinstance(command, p.SessionWorktreeSet):
+            self._refuse_manager(command.session, "session worktree selection")
+            state = await self._invoke_runtime_worktree(
+                "set_session_worktree", command.session, command.enabled, base=command.base
+            )
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.SessionPromote):
+            self._refuse_manager(command.session, "session promotion")
+            state = await self._invoke_runtime_worktree(
+                "promote_session", command.session, reason=command.reason,
+                continuation=command.continuation,
+            )
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.SessionDetach):
+            self._refuse_manager(command.session, "session detach")
+            state = await self._invoke_runtime_worktree("detach_session_worktree", command.session)
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.SessionWorktreeStatus):
+            self._refuse_manager(command.session, "session worktree status")
+            state = await self._invoke_runtime_worktree("session_worktree_status", command.session)
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.SessionWorktreeTrust):
+            self._refuse_manager(command.session, "worktree setup trust")
+            state = await self._invoke_runtime_worktree(
+                "approve_worktree_setup", command.session, command.decision,
+                digest=command.digest,
+            )
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
         if isinstance(command, p.WorktreeList):
             rows, has_more = await asyncio.to_thread(self.list_worktrees)
             return p.WorktreeListResult(worktrees=rows, has_more=has_more)
@@ -2776,6 +2823,12 @@ async def _run_worktree_mutation(
 
 class _WorktreeMutationCancelled(Exception):
     """Internal cancellation signal understood by the worktree journals."""
+
+
+def _worktree_state_dict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime returned invalid session worktree state")
+    return dict(value)
 
 
 def _asdict(value: Any) -> dict[str, Any]:

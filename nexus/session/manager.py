@@ -209,6 +209,9 @@ class SessionManager:
         retention_seconds: float = DEFAULT_RETENTION_SECONDS,
         busy_check: Callable[[str], bool] | None = None,
         job_probe: Callable[[str, str], bool] | None = None,
+        workspace_required: Callable[[Any], bool] | None = None,
+        prepare_workspace: Callable[..., Any] | None = None,
+        before_terminal: Callable[..., Any] | None = None,
     ):
         if store is not None:
             self.store = store
@@ -260,6 +263,9 @@ class SessionManager:
         #: ``(session_id, job_id) -> may it still run``: lets a reopened session
         #: close the ``shell`` jobs a dead process left behind (SHELL_PLAN P7).
         self._job_probe = job_probe
+        self._workspace_required = workspace_required
+        self._prepare_workspace = prepare_workspace
+        self._before_terminal = before_terminal
         #: One live :class:`Session` handle per id, so every caller that reaches
         #: the same session through this manager shares one bus, presence count,
         #: input queue, and active turn.
@@ -353,6 +359,9 @@ class SessionManager:
             turn_cleanup=self._turn_cleanup,
             hooks=self._hooks,
             job_probe=self._job_probe,
+            workspace_required=self._workspace_required,
+            prepare_workspace=self._prepare_workspace,
+            before_terminal=self._before_terminal,
         )
 
     def evict(self, session_id: str) -> Session | None:

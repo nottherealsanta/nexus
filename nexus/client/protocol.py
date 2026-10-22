@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from ..events import Event
 from ..host import protocol as p
@@ -229,6 +229,37 @@ class Client:
         return (await self._request(
             p.SessionOpen(session=session, create=create, recover=recover, root=root)
         )).session  # type: ignore[union-attr]
+
+    async def set_session_worktree(
+        self, session: str, enabled: bool, *, base: str = "current"
+    ) -> p.SessionWorktreeResult:
+        return await self._request(  # type: ignore[return-value]
+            p.SessionWorktreeSet(session=session, enabled=enabled, base=base)
+        )
+
+    async def promote_session(
+        self, session: str, *, reason: str = "", continuation: str = ""
+    ) -> p.SessionWorktreeResult:
+        return await self._request(  # type: ignore[return-value]
+            p.SessionPromote(session=session, reason=reason, continuation=continuation)
+        )
+
+    async def detach_session_worktree(self, session: str) -> p.SessionWorktreeResult:
+        return await self._request(  # type: ignore[return-value]
+            p.SessionDetach(session=session)
+        )
+
+    async def session_worktree_status(self, session: str) -> p.SessionWorktreeResult:
+        return await self._request(  # type: ignore[return-value]
+            p.SessionWorktreeStatus(session=session)
+        )
+
+    async def approve_worktree_setup(
+        self, session: str, decision: Literal["allow_once", "allow_project", "skip"], *, digest: str
+    ) -> p.SessionWorktreeResult:
+        return await self._request(  # type: ignore[return-value]
+            p.SessionWorktreeTrust(session=session, decision=decision, digest=digest)
+        )
 
     async def prepare_attachment(self, path: str = "", *, name: str = "",
                                  data: bytes = b"") -> p.AttachmentPrepareResult:

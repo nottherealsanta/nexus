@@ -210,3 +210,17 @@ pinned current input. It does not start another turn or change session IDs.
 One cutover per assembly and a 25% retained-history target provide hysteresis;
 required-input overflow still fails explicitly. There is no provider retry
 expansion or generic background compactor in P5.
+
+Session worktree preparation runs after the accepted prompt is durable and before
+freezing its context and tools. The session retains its exclusive lease while Git
+and setup run asynchronously under a process slot. A provisioning failure records
+a labelled failed turn; cancellation records a cancelled turn and cleans up the
+pending allocation. A failed creation keeps the worktree selection editable.
+
+Before the terminal event is persisted, Runtime records observed shell commits and
+commits remaining changes on the authenticated session branch. Commit errors are
+warnings and cannot replace the turn's outcome. The callback is drained during task
+cancellation so a terminal event cannot race an unfinished Git operation. A successful
+`worktree_promote` result requests a generic loop handoff only after that result is
+durable; the loop completes without another model call, leaving Stop available
+while promotion/setup runs at the boundary.

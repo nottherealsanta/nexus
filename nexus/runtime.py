@@ -350,8 +350,10 @@ class _ToolDispatcherAdapter:
         local_search_http: LocalSearchHTTPService | None = None,
         questions: Any | None = None,
         subagent_roster_digest: Mapping[str, str] | None = None,
+        record_write: Callable[..., None] | None = None,
     ) -> None:
         self.manager = manager
+        self._record_write = record_write
         #: Digests of the tier models/efforts the ``subagent`` description in
         #: this iteration's schemas advertises, or ``None`` when it is not
         #: advertised. The loop reads it to record roster changes in history.
@@ -453,6 +455,7 @@ class _ToolDispatcherAdapter:
     def _ctx_factory(self, call: ToolCall, spec: Any) -> ToolContext:
         return ToolContext(
             workspace=self._workspace,
+            record_write=(lambda path, data, before=None: self._record_write(self._session_id, self._turn_id, call.id, path, data, before)) if self._record_write else None,
             project_root=self._project_root,
             state_home=self._state_home,
             session_id=self._session_id,
@@ -1649,7 +1652,8 @@ class _ManifestEnvironmentFactory:
             if isinstance(getattr(manifest, "tools", None), Mapping)
             else skill_tools
         )
-        base_catalog = runtime._filter_web_catalog(config, base_catalog)
+        session_tools = getattr(runtime, "_session_worktree_tools", lambda _session: ())(session_id)
+        base_catalog = runtime._filter_web_catalog(config, (*base_catalog, *session_tools))
         base_catalog = tuple(
             tool for tool in base_catalog
             if tool.name not in self._session.disabled_extensions.get("tools", ())
@@ -1722,6 +1726,7 @@ class _ManifestEnvironmentFactory:
             turn_id=self._turn_id,
             config=config,
             project_root=runtime.workspace,
+            record_write=getattr(getattr(runtime, "_session_worktrees", None), "record_write", None),
             state_home=getattr(runtime, "_home", None),
             skills=runtime._selected_skills(session),
             extensions=runtime._extensions,
@@ -3380,6 +3385,8 @@ class Runtime:
         #: touch it. Reused by :meth:`_ensure_child_sessions` so the parent and
         #: its child (``namespace="agents"``) sessions share one connection pool.
         self._state_db: StateDatabase | None = None
+        from .worktree_sessions import SessionWorktrees
+        self._session_worktrees = SessionWorktrees(self)
         if sessions is not None:
             self._sessions = sessions
             self._owns_sessions = False
@@ -3396,6 +3403,9 @@ class Runtime:
                 unattended_decision=self._unattended_decision,
                 ensure_ready=self.ensure_started,
                 turn_cleanup=self._clear_activation,
+                workspace_required=self._session_worktrees.required,
+                prepare_workspace=self._session_worktrees.prepare,
+                before_terminal=self._session_worktrees.finish,
                 hooks=self._session_hooks,
                 busy_check=self.session_has_active_jobs,
                 job_probe=self.shell_job_may_be_live,
@@ -3416,6 +3426,9 @@ class Runtime:
                 unattended_decision=self._unattended_decision,
                 ensure_ready=self.ensure_started,
                 turn_cleanup=self._clear_activation,
+                workspace_required=self._session_worktrees.required,
+                prepare_workspace=self._session_worktrees.prepare,
+                before_terminal=self._session_worktrees.finish,
                 hooks=self._session_hooks,
                 busy_check=self.session_has_active_jobs,
                 job_probe=self.shell_job_may_be_live,
@@ -3553,6 +3566,7 @@ class Runtime:
         when watching is disabled). A failed rebuild keeps the previous manifest
         and is recorded on the manager's diagnostics; it never fails a turn.
         """
+        await self._session_worktrees.recover()
         await self._ensure_registry()
         if self._extensions is None:
             return
@@ -4527,6 +4541,8 @@ class Runtime:
             self._validate_linked_root(root.path)
             if root.kind == "worktree":
                 record = self._worktree_service.get(root.worktree_id, root=self._worktree_root)
+                if getattr(record, "kind", None) == "session" and record.session_id != session:
+                    raise ValueError("Fork needs its first turn to create its own worktree before tools or shell commands can run")
                 if record.lifecycle != "active" or Path(record.path).resolve() != root.path:
                     raise ValueError("Session worktree is not active; detach to the main checkout")
         return root
@@ -4611,6 +4627,52 @@ class Runtime:
         finally:
             handle._lock.release()
         return root
+
+    def _session_worktree_tools(self, session):
+        return self._session_worktrees.tools(session)
+
+    def set_session_worktree(self, session, enabled, *, base="current"):
+        return self._session_worktrees.set(session, enabled, base=base)
+
+    def session_worktree_status(self, session):
+        return self._session_worktrees.status(session)
+
+    def approve_worktree_setup(self, session, decision, *, digest=None):
+        return self._session_worktrees.approve(session, decision, digest=digest)
+
+    async def _ask_worktree_setup(self, handle, policy, digest):
+        from types import SimpleNamespace
+        from uuid import uuid4
+        from .tools.permissions import PermissionRequest
+        gate = _PermissionGateAdapter(PermissionEngine(mode="ask", on_unattended="deny"),
+            broker=ApprovalBroker(scope="project"), attended=True)
+        command = policy.setup if isinstance(policy.setup, str) else " ".join(policy.setup or ())
+        preview = ("This project runs worktree setup: " + command +
+            f"\nSubmodules: {policy.submodules}\nAllow always approves this exact setup for this project; Deny skips it.")
+        request = PermissionRequest(id=str(uuid4()), call_id="worktree-setup-" + digest[:12],
+            tool="worktree_setup", key=digest, bundle="task", preview=redact_secrets(preview)[:8192],
+            default_rule=exact_rule("worktree_setup", digest))
+        previous = handle._active_tools
+        handle._active_tools = SimpleNamespace(gate=gate)
+        gate.open(request)
+        try:
+            self._session_worktrees._emit(handle, "permission.requested", request.to_dict(), handle.active_turn_id)
+            decision = Decision.from_value(await gate.await_decision(request, cancel=handle.cancel_token))
+            self._session_worktrees._emit(handle, "permission.resolved", dict(gate.resolution(request.id) or request.to_dict()), handle.active_turn_id)
+            if decision.allows:
+                mode = "allow_project" if decision is Decision.ALLOW_ALWAYS else "allow_once"
+                self._session_worktrees.approve(handle.id, mode, digest=digest, _during_setup=True)
+                return True
+            return False
+        finally:
+            gate.cancel_pending()
+            handle._active_tools = previous
+
+    async def promote_session(self, session, *, reason="", continuation=""):
+        return await self._session_worktrees.promote(session, reason=reason, continuation=continuation)
+
+    def detach_session_worktree(self, session):
+        return self._session_worktrees.detach(session)
 
     def session_has_active_jobs(self, session_id: str) -> bool:
         """Whether ``session_id`` still owns a running shell job (this runtime only).
@@ -4999,7 +5061,7 @@ class Runtime:
                 )
                 self._track_tool_manager(manager)
         if manager is None:
-            catalog = self._filter_web_catalog(config, ToolManager._builtin_catalog())
+            catalog = self._filter_web_catalog(config, (*ToolManager._builtin_catalog(), *self._session_worktree_tools(session.id)))
             if self._agents is not None:
                 from .tools.builtin.task import build_task_tool
 
@@ -5139,6 +5201,8 @@ class Runtime:
             engine.require_confirmation_for(
                 spec.name for spec in manager.specs if getattr(spec, "mutates", False)
             )
+        if "worktree_promote" in manager.names:
+            engine.require_confirmation_for((*getattr(engine, "_force_ask_tools", ()), "worktree_promote"))
         if root.kind != "main":
             engine.path_guard = manager.path_guard
         grants = self._session_root_grants(session, root, manager)
@@ -5226,6 +5290,7 @@ class Runtime:
             turn_id=turn_id,
             config=config,
             project_root=self.workspace,
+            record_write=self._session_worktrees.record_write,
             state_home=self._home,
             agent_id="root",
             skills=self._selected_skills(session),
@@ -6573,6 +6638,10 @@ class Runtime:
         """
         if self._agents is None:
             return None
+        root_worktree_tools = {"worktree_status", "worktree_commit", "worktree_promote"}
+        parent_tools = tuple(name for name in parent_tools if name not in root_worktree_tools)
+        if catalog is not None:
+            catalog = tuple(tool for tool in catalog if tool.name not in root_worktree_tools)
         effective = config if isinstance(config, Config) else self._load_config()
         section = self._agents_section(effective)
         if section is None or not getattr(section, "enabled", True):
@@ -6887,7 +6956,7 @@ class Runtime:
         )
 
     def list_worktrees(self) -> tuple[Any, ...]:
-        """List verified records with fresh checkout status from owned roots."""
+        """List subagent records; session roots use SessionWorktreeStatus."""
         records = []
         for root in tuple(self._worktree_roots.values()):
             if not root.exists():
@@ -6895,6 +6964,7 @@ class Runtime:
             records.extend(
                 self._worktree_service.inspect(record.child_id, root=root)
                 for record in self._worktree_service.list(root=root)
+                if getattr(record, "kind", None) != "session"
             )
         return tuple(records)
 

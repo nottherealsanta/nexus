@@ -12,6 +12,7 @@ from typing import Any
 from nexus.tools.permissions import PathGuard, PathSecurityError
 
 from ._patch_stage import StagedChange, StagedChanges
+from .write import git_blob_oids
 
 __all__ = ["PatchCommitError", "PatchFileStatus", "commit_staged"]
 
@@ -488,6 +489,17 @@ async def commit_staged(
             break
 
     if failure is None:
+        recorder = getattr(ctx, "record_write", None)
+        if callable(recorder):
+            # Report only after the entire staged transaction is committed.
+            # Failed transactions roll back and must not leave promotion
+            # receipts that falsely attribute changes to this session.
+            for snapshot in snapshots:
+                before_oids = (
+                    git_blob_oids(snapshot.change.old_bytes)
+                    if snapshot.change.old_bytes is not None else None
+                )
+                recorder(snapshot.target, snapshot.change.new_bytes, before_oids)
         return tuple(
             PatchFileStatus(
                 snapshot.change.path,

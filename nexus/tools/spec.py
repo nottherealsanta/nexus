@@ -695,6 +695,10 @@ class ToolContext:
     #: Project-owned state remains separate from the execution checkout.
     project_root: Path | None = None
     state_home: Path | None = None
+    #: Session-local write receipt for promotion change attribution. Receives
+    #: only the absolute path and resulting bytes (or ``None`` for deletion);
+    #: the runtime persists a bounded content hash, never file contents.
+    record_write: Callable[[Path, bytes | None, dict[str, str] | None], None] | None = None
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""

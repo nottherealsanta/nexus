@@ -328,5 +328,22 @@
     "output_tokens": 9,
     "reasoning_tokens": 0
   },
-  "session_name": null
+  "session_name": null,
+  "worktree": {
+    "enabled": false,
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "state": "none",
+    "locked": true,
+    "identity_fallback": false,
+    "provenance_clipped": false,
+    "setup_trusted": null,
+    "ahead": 0,
+    "behind": 0,
+    "uncommitted": {},
+    "dirty_main": {},
+    "commits": [],
+    "last_skip": null
+  }
 }

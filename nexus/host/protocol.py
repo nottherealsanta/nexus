@@ -39,7 +39,7 @@ from ..session.manager import SessionSummary
 
 #: Bumped when a command/result shape changes incompatibly, so a transport can
 #: refuse a peer built from a different protocol revision instead of misreading.
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +425,42 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     project: str = ""
     #: Optional absolute external linked-worktree path for a newly created session.
     root: str = ""
+
+
+class SessionWorktreeSet(msgspec.Struct, tag=True, frozen=True):
+    """Set a draft session's worktree preference before its first prompt."""
+
+    session: str
+    enabled: bool
+    base: str = "current"
+
+
+class SessionPromote(msgspec.Struct, tag=True, frozen=True):
+    """Promote a main/external session into an owned worktree at a turn boundary."""
+
+    session: str
+    reason: str = ""
+    continuation: str = ""
+
+
+class SessionDetach(msgspec.Struct, tag=True, frozen=True):
+    """Detach a session from its owned worktree and continue in the main checkout."""
+
+    session: str
+
+
+class SessionWorktreeStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read the worktree selection and repository state for a root session."""
+
+    session: str
+
+
+class SessionWorktreeTrust(msgspec.Struct, tag=True, frozen=True):
+    """Answer setup trust for the exact setup digest shown in status."""
+
+    session: str
+    decision: Literal["allow_once", "allow_project", "skip"]
+    digest: str
 
 
 class AttachmentPrepare(msgspec.Struct, tag=True, frozen=True):
@@ -1342,6 +1378,11 @@ Command = (
     | SessionPreview
     | SessionSearch
     | SessionOpen
+    | SessionWorktreeSet
+    | SessionPromote
+    | SessionDetach
+    | SessionWorktreeStatus
+    | SessionWorktreeTrust
     | AttachmentPrepare
     | AttachmentPreview
     | SessionStart
@@ -1730,6 +1771,11 @@ class SessionHandoffResult(msgspec.Struct, tag=True, frozen=True):
 
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
     session: SessionSummary
+
+
+class SessionWorktreeResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    state: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
 class SessionStartResult(msgspec.Struct, tag=True, frozen=True):
@@ -2525,6 +2571,7 @@ Result = (
     | SessionPreviewResult
     | SessionSearchResult
     | SessionOpenResult
+    | SessionWorktreeResult
     | AttachmentPrepareResult
     | AttachmentPreviewResult
     | SessionStartResult
@@ -2900,6 +2947,12 @@ __all__ = [
     "SessionLogPage",
     "SessionOpen",
     "SessionOpenResult",
+    "SessionWorktreeSet",
+    "SessionPromote",
+    "SessionDetach",
+    "SessionWorktreeStatus",
+    "SessionWorktreeTrust",
+    "SessionWorktreeResult",
     "SessionPreview",
     "SessionPreviewResult",
     "SessionRestore",

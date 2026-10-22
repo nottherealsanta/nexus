@@ -67,6 +67,7 @@ here, so add a row when you add a file.
 | `events.py` | The public UI boundary: JSON-serializable events, no rendering or input |
 | `runtime.py` | `Runtime`: the composition root that owns every manager ([architecture.md](architecture.md#runtime-runtimepy)) |
 | `resources.py` | Fair process-wide process and provider resource admission |
+| `worktree_sessions.py` | Runtime-owned per-session worktree creation, per-turn commits, setup trust, promotion and detach |
 | `util.py` | Small dependency-free helpers shared by the lower layers |
 
 ### `nexus/agents/`
@@ -85,6 +86,7 @@ here, so add a row when you add a file.
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
+| `session_worktrees.py` | Authenticated service operations for session branches, checkout creation, commit, recreation and cleanup |
 | `worktrees.py` | Safe Git worktree lifecycle management for subagents |
 
 ### `nexus/auth/`
@@ -358,6 +360,7 @@ here, so add a row when you add a file.
 | `tree.py` | Bounded read-only, redacted ownership tree and OS-lock liveness projection |
 | `export.py` | Structured, transport-neutral SQLite session export |
 | `ids.py` | Session ID validation shared by SQLite session rows and lock paths |
+| `root.py` | Immutable validated session execution-root value and durable relative event conversion |
 | `lock.py` | Cross-process session locking |
 | `context_authz.py` | Pure ancestry authorisation for context reads: owner-edge walk with `context_read = 1` on every hop, same project, depth cap, trash denies |
 | `context_port.py` | `ContextReadPort`: bounded, redacted, untrusted-marked reads (meta, messages, tool calls, search, report) over an authorised target |
@@ -396,6 +399,7 @@ here, so add a row when you add a file.
 | `names.py` | Exact, one-way compatibility mapping for public tool names (`bash`/`Bash` → `shell`, legacy shell arguments, wildcard-rule aliases) |
 | `permissions.py` | Permission grammar, evaluation, path security, and approval primitives |
 | `questions.py` | Session-scoped question requests for tools and agents |
+| `builtin/worktree.py` | Dynamic status, commit, and promotion tools bound to per-session callbacks |
 | `shell_syntax.py` | Conservative detection and splitting of unquoted shell control syntax for glob permission rules |
 | `spec.py` | Tool contracts |
 
@@ -445,6 +449,7 @@ here, so add a row when you add a file.
 | `shell.py` | `shell` (was `bash`): run commands, control jobs, read job logs (`log`) and set the session cwd (`cd`) |
 | `skill.py` | `Skill`: progressive disclosure of a skill body or bundled resource |
 | `task.py` | `subagent` (legacy name `Task`): spawn a bounded subagent (bundle `task`) |
+| `worktree.py` | Dynamic status, commit, and promotion tools bound to per-session callbacks |
 | `webfetch.py` | Fetch a public web page and return bounded, explicitly untrusted Markdown |
 | `websearch.py` | Search configured SearXNG instances and return bounded untrusted results |
 | `write.py` | Built-in `Write`: atomic, symlink-safe file creation and replacement |

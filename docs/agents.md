@@ -274,6 +274,7 @@ yourself), a sandbox request, a browser surface, and a live-verified event schem
 | `claude_code_worker.py` | `ClaudeCodeWorker`, `WorkerPolicy`, `resolve_policy`: external Claude Code sessions |
 | `antigravity_worker.py` | `AntigravityWorker`, `WorkerPolicy`, `resolve_policy`: external headless `agy` runs |
 | `worktrees.py` | `WorktreeService`: create, finalize, record, discard |
+| `session_worktrees.py` | Runtime-owned session branch lifecycle and safe Git operations for session worktrees |
 | `worktree_review.py` | immutable, read-only review snapshots |
 | `worktree_integrate.py` | apply an acknowledged review to a clean parent, with a rollback journal |
 | `data/*.md` | packaged roles |
@@ -715,6 +716,18 @@ review state** (`final_*`, `current_review_*`, `acknowledged_*`); it is refused 
 `integrated`, `cleanup_pending` and `discarded` records, for any record with integration
 or discard metadata or a completed integration journal, for legacy-format records, and
 for a record that fails authentication.
+
+Session-selected roots use a separate authenticated v3 record and the
+`nexus/session/<…>` branch namespace. Creation first publishes a `pending` record;
+the durable session-root event is written before activation, so startup recovery can
+distinguish an incomplete promotion from an abandoned checkout. Session commits use
+an isolated index and Git's `commit-tree` plus compare-and-swap `update-ref` against
+the recorded branch head. This keeps unrelated staged files and the parent checkout
+untouched. Hooks and signing are disabled for Nexus harness and agent-tool commits;
+shell-created commits remain visible in the session history. Session worktrees are recovered or
+recreated only from authenticated records, and cleanup is limited to the owned path
+and branch. V3 records carry finite epoch-float `created_at` and `updated_at`
+timestamps plus an empty `parent_record` for root sessions.
 
 ## The manager is not a role
 

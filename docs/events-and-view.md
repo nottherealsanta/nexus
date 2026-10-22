@@ -33,6 +33,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 | Group | Types |
 | --- | --- |
 | session | `session.opened` `session.closed` `session.forked` `session.linked` (a supervision edge in the **manager's** log: `{kind: "managed", child, turn, origin_message_id, instruction_digest, agent}`; a root the manager launched also gets `session.opened {id, launched_by: {manager, origin_message_id}}`) `session.root_set` (per-session working root; `{kind, path_display, branch, base_ref, base_sha, worktree_id}`) |
+| worktree | `session.worktree_set {enabled, base_ref}` records the draft preference; `worktree.created {branch, base_ref, base_sha, dirty_main: {modified, untracked}, path_display}`; `worktree.setup_ran {reason}`; `worktree.setup_output`; `worktree.setup_trust`; `worktree.identity_fallback`; `worktree.file_written`; `worktree.provenance_clipped`; `worktree.turn_started {head, seq, worktree_id}` is an internal commit boundary; `worktree.promoted`; `worktree.promotion_requested`; `worktree.promotion_failed {request_id, detail}` replays as a bounded status warning; `worktree.committed {sha, seq, by, agent_id, subject, files, clipped, insertions, deletions}`; `worktree.commit_skipped {reason, detail}`; `worktree.detached` |
 | turn | `turn.started` `turn.completed` `turn.failed` `turn.cancelled` |
 | context | `context.assembled` `context.compacted` `context.degraded` |
 | model | `model.selected` `reasoning_effort.selected` `model.started` `text.delta` `text` `thinking.delta` `thinking.end` `thinking` `model.usage` `model.stopped` `model.retrying` |
@@ -220,6 +221,21 @@ and `worktree_id` are bounded metadata. `ConversationView.root` reduces this to
 a `RootView` with the same metadata and an empty display path for the main root.
 The frozen `SessionRoot` value object in `nexus/session/root.py` owns validation
 and the relative `to_data`/`from_data` conversion.
+
+`ConversationView.worktree` is the replayable session worktree projection. It
+keeps the selected/base branch and lifecycle state, bounded uncommitted counts,
+the last commit skip, and the newest 200 `WorktreeCommitView` records. Each
+commit carries a turn sequence and SHA; when the event envelope has a turn id,
+the reducer also adds its SHA to that `TurnView.commit_shas` row. Setup events
+and malformed lifecycle payloads cannot expand the view without bounds. Setup
+output and internal file-write receipts are intentionally not projected into
+the view; `worktree.file_written` carries promotion provenance only.
+
+Worktree tool events are audit summaries: commit file lists are capped at 200
+paths and subjects at 200 characters; skipped details are redacted/bounded by
+the emitter. Status polling is a tool result rather than a durable event, so
+ahead/behind and live dirty counts remain unknown in replay until a future
+event contract records a bounded snapshot.
 
 ## Why this shape
 

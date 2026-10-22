@@ -38,6 +38,8 @@ from .model import (
     ToolCallView,
     TurnView,
     UsageTotals,
+    WorktreeCommitView,
+    WorktreeView,
     jsonable,
 )
 from .reduce import apply, apply_many, initial_state
@@ -48,6 +50,7 @@ __all__ = [
     "LiveDelegationView", "LiveTurnView", "McpView", "MessageView",
     "PermissionView", "PresenceView", "QueuedInputView", "RegistryView",
     "RetryView", "SkillView", "ToolCallView", "TurnView", "UsageTotals",
+    "WorktreeCommitView", "WorktreeView",
     "accumulate", "apply", "apply_many", "finalize_text", "finalize_thinking",
     "fold", "fold_into", "initial_state", "jsonable",
 ]
