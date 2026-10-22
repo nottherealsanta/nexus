@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.1](https://github.com/nottherealsanta/nexus/compare/v0.6.0...v0.6.1) (2026-10-22)
+
+
+### Features
+
+* add Bark voice model, subagent continuation, and related updates ([edbdcaf](https://github.com/nottherealsanta/nexus/commit/edbdcaf2ebf5845deca94727bbdbf98d27fc9221))
+* add live settings page, narrow details drawer, and subagent rows to the TUI ([09bd639](https://github.com/nottherealsanta/nexus/commit/09bd639939e282edf676b82124f23f870b9dfd1f))
+* mirror the manager session in the desktop client ([1edba88](https://github.com/nottherealsanta/nexus/commit/1edba88b70ce58d6f4c0920b7d1704ed2e357446))
+* run subagents in the background with persistent children, reports, and usage routing ([217d47b](https://github.com/nottherealsanta/nexus/commit/217d47b83a4b1cc83d228ef026731a825119f664))
+* ship manager session, settings installs, and subagent roster controls ([1f4a3d5](https://github.com/nottherealsanta/nexus/commit/1f4a3d557d590e274066fe601ae00f108b3b498e))
+* subagents back to blocking ([17cd8f4](https://github.com/nottherealsanta/nexus/commit/17cd8f41d581a1710a040717ab274622a3e5ad52))
+
+
+### Bug fixes
+
+* release 0.6.1 as a patch ([64bc1bc](https://github.com/nottherealsanta/nexus/commit/64bc1bc1c5953c969d2c836f0c8e550c10e61e23))
+
 ## [0.6.0](https://github.com/nottherealsanta/nexus/compare/v0.5.2...v0.6.0) (2026-10-19)
 
 
