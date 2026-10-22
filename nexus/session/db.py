@@ -190,6 +190,10 @@ def _backfill_ownership(conn: sqlite3.Connection) -> None:
             )
 
 
+#: Lowercase, trimmed titles of throwaway sessions hidden from the default session lists.
+PLACEHOLDER_TITLES: tuple[str, ...] = ("start", "go")
+
+
 def _has_user_input(alias: str = "sessions") -> str:
     """SQL predicate shared by workspace and global session lists."""
     return (
@@ -485,8 +489,9 @@ class StateDatabase:
                 (project_id, root, now, now),
             )
 
-    def project_sessions(self, *, limit: int = 1000, query: str = "") -> list[dict[str, Any]]:
-        """Bounded cross-project sidebar index; excludes children, archive and trash."""
+    def _index_rows(
+        self, archived: bool, order: str, limit: int, query: str, hide_placeholders: bool,
+    ) -> list[dict[str, Any]]:
         if not 1 <= limit <= _MAX_LIMIT:
             raise ValueError("invalid project session limit")
         if not isinstance(query, str) or len(query) > 256:
@@ -500,22 +505,33 @@ class StateDatabase:
                 for column in ("s.title", "s.id", "s.name", "s.last_user", "s.last_agent", "p.root")
             ) + ") "
             params.extend([pattern] * 6)
-        params.append(limit)
-        return [
-            dict(row)
-            for row in self._connection().execute(
-                "SELECT s.*, p.root AS workspace FROM sessions s "
-                "JOIN projects p ON p.id=s.project_id "
-                "WHERE s.namespace='main' AND s.kind<>'manager' "
-                "AND s.archived_at IS NULL AND s.trash_id IS NULL "
-                f"AND {_has_user_input('s')} "
-                + search
-                + "ORDER BY CASE WHEN s.last_user_at > 0 THEN s.last_user_at "
-                "WHEN s.created_at > 0 THEN s.created_at ELSE s.last_activity END DESC, "
-                "s.project_id, s.id LIMIT ?",
-                params,
-            )
-        ]
+        elif hide_placeholders:
+            marks = ",".join("?" * len(PLACEHOLDER_TITLES))
+            search = f"AND LOWER(TRIM(COALESCE(s.title, ''))) NOT IN ({marks}) "
+            params.extend(PLACEHOLDER_TITLES)
+        sql = (
+            "SELECT s.*, p.root AS workspace FROM sessions s "
+            "JOIN projects p ON p.id=s.project_id "
+            "WHERE s.namespace='main' AND s.kind<>'manager' "
+            f"AND s.archived_at IS {'NOT NULL' if archived else 'NULL'} AND s.trash_id IS NULL "
+            f"AND {_has_user_input('s')} " + search + f"ORDER BY {order} LIMIT ? OFFSET ?"
+        )
+        return [dict(row) for row in self._connection().execute(sql, [*params, limit, 0])]
+
+    def project_sessions(
+        self, *, limit: int = 1000, query: str = "", hide_placeholders: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Bounded cross-project sidebar index; excludes children, archive and trash.
+
+        ``hide_placeholders`` leaves out throwaway titles (see ``PLACEHOLDER_TITLES``) before the
+        limit applies, unless ``query`` is set: a search still finds them. Nothing is deleted.
+        """
+        return self._index_rows(
+            False,
+            "CASE WHEN s.last_user_at > 0 THEN s.last_user_at "
+            "WHEN s.created_at > 0 THEN s.created_at ELSE s.last_activity END DESC, s.project_id, s.id",
+            limit, query, hide_placeholders,
+        )
 
     def registered_projects(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Project roots holding an eligible main session (archived included), newest activity first.
@@ -540,22 +556,12 @@ class StateDatabase:
             )
         ]
 
-    def archived_project_sessions(self, *, limit: int = 20) -> list[dict[str, Any]]:
-        """The newest archived sessions across projects (same row shape as ``project_sessions``)."""
-        if not 1 <= limit <= _MAX_LIMIT:
-            raise ValueError("invalid project session limit")
-        return [
-            dict(row)
-            for row in self._connection().execute(
-                "SELECT s.*, p.root AS workspace FROM sessions s "
-                "JOIN projects p ON p.id=s.project_id "
-                "WHERE s.namespace='main' AND s.kind<>'manager' "
-                "AND s.archived_at IS NOT NULL AND s.trash_id IS NULL "
-                f"AND {_has_user_input('s')} "
-                "ORDER BY s.archived_at DESC, s.project_id, s.id LIMIT ?",
-                [limit],
-            )
-        ]
+    def archived_project_sessions(
+        self, *, limit: int = 20, query: str = "", hide_placeholders: bool = False,
+    ) -> list[dict[str, Any]]:
+        """The newest archived sessions across projects, optionally matching ``query``
+        (same row shape and options as ``project_sessions``)."""
+        return self._index_rows(True, "s.archived_at DESC, s.project_id, s.id", limit, query, hide_placeholders)
 
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)

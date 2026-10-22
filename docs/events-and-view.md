@@ -159,7 +159,7 @@ and `continuable`. New events, both in the **root** log:
 
 | Event | Data |
 | --- | --- |
-| `agent.resumed` | `{agent, run, from: "root", message, message_chars, background, continuable, worktree}`; historical: written by the retired `subagent_send` tool (no longer emitted; old logs replay it). `message` is clipped to 3900 characters with the clip announced inside the text, the full text is the first user message of the child's new turn in its own log; `background` is false when the send waited |
+| `agent.resumed` | `{agent, run, from: "root", message, message_chars, background, model, tier, call_id, worktree}`; written by the runner for `subagent(resume=…)` (the earlier `subagent_send` tool wrote the same shape; old logs replay it). `run` is previous runs + 1. `message` is the redacted follow-up clipped to 3900 characters (ellipsis-marked); the full text is the user message of the child's new turn in its own log. `background` is always false |
 | `agent.stopped` | `{agent, by: "root"/"user"/"limit", reason, run}`; written through the root event port by host `AgentClose` (`by: "user"`; historical logs also hold `by: "root"` from the retired `subagent_stop`); terminal, the child log is kept. A running child's cancelled `agent.completed` precedes it |
 
 `AgentView.status` keeps its meaning (`spawned` = a run is in flight; `/tasks` and
@@ -174,6 +174,19 @@ carries `origin = {"kind": "root_followup", "agent", "run"}`; the child's own re
 events then land in that turn. Agent events carry no root turn id, so they never open
 a phantom root turn (tested). An `agent.resumed`/`agent.stopped` for an unknown agent
 is a diagnostic, as for `agent.completed`.
+
+Foreground continuation ([agents.md](agents.md#continuing-a-finished-subagent)) writes
+these fields again: every native child's `agent.completed` carries `run` and `continuable`
+(true only for a completed, non-worktree, non-external child with a stored record), and its
+`agent.spawned` carries `config_sha` (a digest, never the record). `agent.resumed` and
+`agent.stopped` set the view's `continuable` to false (a run in flight, or closed); the next
+`agent.completed` says again. `usage` on the view is the latest run's. The child's own log
+holds one more event, `agent.config` (the immutable configuration record, including the
+redacted role prompt). It exists only in the child log, is never relayed to the parent log
+or to a UI, is not part of the `AGENT_EVENTS` catalogue, and is not model context; consumers
+that read raw child logs must treat it as sensitive and skip it. The reducer recognises it
+and ignores it, so a child's `ConversationView` (and the inspect UI built on it) never shows
+it as a diagnostic.
 
 A user `MessageView` and a `QueuedInputView` carry an optional `origin`
 (`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is

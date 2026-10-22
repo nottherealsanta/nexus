@@ -1791,11 +1791,11 @@ async def test_project_sessions_returns_bounded_archived_rows_and_pending_reques
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
     facade = HostFacade(runtime)
     store = runtime.sessions.store
-    for name in ("live", "ask", "old1", "old2"):
+    for name in ("live", "ask", "dormant1", "dormant2"):
         store.create(name)
         store.append_message(name, Message(role="user", content=[Text(text=name)]))
-    runtime.sessions.archive("old1", "user")
-    runtime.sessions.archive("old2", "user")
+    runtime.sessions.archive("dormant1", "user")
+    runtime.sessions.archive("dormant2", "user")
     original = runtime.sessions._summary_from_row
 
     def summary(row):
@@ -1811,15 +1811,42 @@ async def test_project_sessions_returns_bounded_archived_rows_and_pending_reques
         assert {row.session.id for row in plain.sessions} == {"live", "ask"}, "archived is opt-in"
         result = await facade.handle(p.ProjectSessionsList(limit=20, archived=1))
         by_id = {row.session.id: row for row in result.sessions}
-        assert set(by_id) == {"live", "ask", "old2"} or set(by_id) == {"live", "ask", "old1"}
+        assert set(by_id) == {"live", "ask", "dormant2"} or set(by_id) == {"live", "ask", "dormant1"}
         archived = [row for row in result.sessions if row.archived]
         assert len(archived) == 1 and not by_id["live"].archived
         assert by_id["ask"].pending == {"request_id": "req-1", "kind": "permission",
                                         "summary": "Allow Bash: git push origin main", "ts": 77.0}
         assert by_id["live"].pending == {}
         searched = await facade.handle(p.ProjectSessionsList(limit=20, query="live", archived=5))
-        assert not any(row.archived for row in searched.sessions), "a search skips archived rows"
+        assert [row.session.id for row in searched.sessions] == ["live"]
+        found = await facade.handle(p.ProjectSessionsList(limit=20, query="dormant", archived=5))
+        assert {(row.session.id, row.archived) for row in found.sessions} == {("dormant1", True), ("dormant2", True)}
+        none = await facade.handle(p.ProjectSessionsList(limit=20, query="dormant"))
+        assert none.sessions == [], "archived stays opt-in"
         assert isinstance(await facade.handle(p.ProjectSessionsList(archived="1")), p.ErrorResult)
+    finally:
+        await runtime.aclose()
+
+
+async def test_project_sessions_hides_placeholder_titles_unless_searched(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    store = runtime.sessions.store
+    for name, title in (("real", "Fix parser"), ("p1", "start"), ("p2", " GO "), ("old-p", "go"), ("old-real", "Old work")):
+        store.create(name)
+        store.append_message(name, Message(role="user", content=[Text(text="hello")]))
+        store.set_auto_title(name, title)
+    runtime.sessions.archive("old-p", "user")
+    runtime.sessions.archive("old-real", "user")
+    try:
+        listed = await facade.handle(p.ProjectSessionsList(limit=20, archived=10))
+        assert {(r.session.id, r.archived) for r in listed.sessions} == {("real", False), ("old-real", True)}
+        one = await facade.handle(p.ProjectSessionsList(limit=1, archived=10))
+        assert [r.session.id for r in one.sessions if not r.archived] == ["real"] and not one.truncated
+        found = await facade.handle(p.ProjectSessionsList(limit=20, query="old-p", archived=10))
+        assert {(r.session.id, r.archived) for r in found.sessions} == {("old-p", True)}
+        found = await facade.handle(p.ProjectSessionsList(limit=20, query="p2"))
+        assert [r.session.id for r in found.sessions] == ["p2"]
     finally:
         await runtime.aclose()
 
@@ -1914,7 +1941,7 @@ async def test_project_sessions_bounded_search_does_not_list_or_rehydrate(tmp_pa
         found = await facade.handle(p.ProjectSessionsList(limit=20, query="NEEDLE 50%"))
         assert [row.session for row in found.sessions] == [expected]
         assert not found.truncated
-        assert calls[-1] == {"limit": 21, "query": "NEEDLE 50%"}
+        assert calls[-1] == {"limit": 21, "query": "NEEDLE 50%", "hide_placeholders": True}
         small = await facade.handle(p.ProjectSessionsList(limit=0))
         assert len(small.sessions) == 1 and small.truncated
         await facade.handle(p.ProjectSessionsList(limit=100_000))

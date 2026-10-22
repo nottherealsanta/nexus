@@ -1837,11 +1837,14 @@ class HostFacade:
             limit = max(1, min(command.limit, 1000))
             if type(command.archived) is not int:
                 raise ValueError("archived session count must be an integer")
-            rows = self.runtime.sessions.store.db.project_sessions(limit=limit + 1, query=command.query)
-            archived_rows = []
-            if command.archived > 0 and not command.query:
-                archived_rows = self.runtime.sessions.store.db.archived_project_sessions(limit=min(command.archived, 100))
             current = str(self.runtime.workspace)
+            db = self.runtime.sessions.store.db
+            rows = db.project_sessions(limit=limit + 1, query=command.query, hide_placeholders=True)
+            archived_rows = []
+            if command.archived > 0:
+                # A search also matches archived sessions, so they are searchable from the picker.
+                archived_rows = db.archived_project_sessions(
+                    limit=min(command.archived, 100), query=command.query, hide_placeholders=True)
             if type(command.projects) is not int:
                 raise ValueError("project count must be an integer")
             registered = []

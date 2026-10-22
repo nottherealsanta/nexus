@@ -416,10 +416,10 @@ async def test_remote_search_limits_clear_refresh_and_validation():
         for query in (None, 42, "x" * 257):
             assert not dash.accepts({"kind": "sessions_search", "query": query})
         await dash.search("workspace needle")
-        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle")
+        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle", archived=20)
         assert dash.snapshot()["query"] == "workspace needle"
         await dash.refresh()
-        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle")
+        shell.client.project_sessions.assert_awaited_with(limit=1000, query="workspace needle", archived=20)
         await dash.search("")
         shell.client.project_sessions.assert_awaited_with(limit=20, query="", archived=20)
         assert dash.snapshot()["query"] == ""
@@ -433,7 +433,7 @@ async def test_remote_search_ignores_stale_query():
     dash = SessionDashboard(shell)
     dash.visible = True
     old_gate = asyncio.Event()
-    async def listing(*, limit, query):
+    async def listing(*, limit, query, archived=0):
         if query == "old":
             await old_gate.wait()
         return SimpleNamespace(sessions=[], truncated=False)

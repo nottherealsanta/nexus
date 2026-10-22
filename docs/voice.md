@@ -26,8 +26,9 @@ and cache-only preparation check runtime availability first and report the
 | File | Owns |
 | --- | --- |
 | `voice/manager.py` | `VoiceManager`: serialized lifecycle and inference; ≤ 1 active + 2 waiting requests; `Engine` and `Store` protocols |
-| `voice/store.py` | pinned model manifest (revision `2bf12860…`, four files with sizes and SHA-256), download to `~/.nexus/models/voice/`, ≤ 256 MiB, interprocess lock, only verified files activate |
-| `voice/engine.py` | `KestrelEngine`: Kestrel 0.8.0 `ParakeetTdtRuntime` on a verified local checkpoint (model `moondream/parakeet-redux`) |
+| `voice/store.py` | pinned manifest (six files with sizes and SHA-256): `model.bark` from `ConwayResearch/Underdog-Bark-3.0-Clean` at `6d34ed86…` and five NVIDIA processor files (`config.json`, `generation_config.json`, `processor_config.json`, `tokenizer.json`, `tokenizer_config.json`) from `nvidia/parakeet-tdt-0.6b-v3` at `541d1f99…`; download to `~/.nexus/models/voice/bark-3.0-clean/<revision>`, ≤ 256 MiB, interprocess lock, atomic install, only verified files activate; the old `parakeet-redux` cache is removed |
+| `voice/bark.py` | strict reader for the `bark-levels-v2/v3` container (header, tensor sizes, element budget and LZMA output are validated before use; decoded one tensor at a time) |
+| `voice/engine.py` | `BarkEngine`: decodes `model.bark` into a stock Transformers `ParakeetForTDT`; `AutoProcessor` and `GenerationConfig` load from the verified directory with `local_files_only=True`. No `trust_remote_code`, no downloaded Python, no pickle/`torch.load`, no NVIDIA weights |
 | `voice/audio.py` | strict WAV validation: mono, 16 kHz, PCM16, ≥ 0.2 s, ≤ `voice.max_seconds` (≤ 120) |
 | `voice/model.py` | `VoiceState`, `TranscribeResult`, `VoiceError` |
 | `host_support/voice.py` | bounded, redacted host dispatch and Doctor projection |
@@ -36,10 +37,14 @@ and cache-only preparation check runtime availability first and report the
 
 ## Flow
 
-1. **Install:** `install.sh` adds the `voice` extra (`moondream==2.4.0`) by
-   default, except on musl systems such as Alpine (no `kestrel-native` wheels) or
-   with `--no-voice`; `sounddevice` is always installed. Any other install gets
-   both pieces from `nexus voice init`: when `kestrel` is not importable it adds
+1. **Install:** `install.sh` adds the `voice` extra (`transformers`, `torch`,
+   `constriction`, `numpy`) by default, except on musl systems such as Alpine, Intel
+   Macs (no Torch wheels) or with `--no-voice`; `sounddevice` is always installed.
+   Torch's current wheels cover macOS arm64, Linux x86_64/aarch64 (glibc) and
+   Windows x86_64 on Python 3.13/3.14; the supported set is Torch's, and
+   `constriction` wheel coverage and a full resolve are **not verified**. Any other
+   install gets both pieces from `nexus voice init`: when Torch, Transformers or
+   `constriction` is not importable it adds
    the runtime (a uv tool is reinstalled at the same version and source with
    `voice` added to its extras, so `nexus update` keeps it; `nexus update` also
    keeps `voice` whenever the runtime is importable or a model is downloaded, so a
@@ -49,7 +54,7 @@ and cache-only preparation check runtime availability first and report the
    `uv pip install --python <interpreter>` or `pip`), restarts the workspace
    daemon and downloads the model in a fresh interpreter, since a uv reinstall
    replaces the running venv. It refuses on musl. With the runtime present it is
-   `nexus voice download`. The model (~179 MB) is **not** bundled.
+   `nexus voice download`. The model (~180 MB) is **not** bundled.
 2. **Consent:** the first use shows a confirmation dialog in the TUI and web;
    `nexus voice download` is itself an explicit action. `VoicePrepare` carries no
    consent token, so UI consent is a client-flow contract, not host-enforced.
@@ -81,16 +86,22 @@ and cache-only preparation check runtime availability first and report the
 
 Config: `[voice]` (`enabled`, `autoload` false, `max_seconds`, `device`
 `auto|cpu|mps|cuda`, `auto_send`, `unload_after_minutes`); `model` and `revision`
-are pinned to the one trusted manifest. `NEXUS_VOICE=off` disables it.
+are pinned to the one trusted manifest (Bark `6d34ed86…`). `NEXUS_VOICE=off` disables it.
 
 ## Decisions and caveats
 
-- The adapter uses Kestrel's internal `ParakeetTdtRuntime`, **not** the high-level
-  Photon runtime, because Photon emits telemetry with no discovered opt-out. The
-  internal API is version-sensitive.
-- Real inference, platform support, benchmarks and network behavior are **not
-  verified**. Do not describe the path as proven offline.
-- The model weights are CC-BY-4.0; keep the attribution in `nexus/voice/NOTICE`.
+- Dictation uses Underdog Bark 3.0 Clean, a Parakeet TDT 0.6B v3 fine-tune that also
+  drops fillers and false starts, through stock Transformers. It replaces the Kestrel
+  runtime (`moondream/parakeet-redux`); `voice.model` and `voice.revision` in an old
+  config are now rejected, so delete them.
+- Weights are decoded to float32 on the worker thread, one tensor at a time, then
+  moved to the device: expect roughly 2.4 GB for the model plus the 180 MB file
+  while loading. CPU inference is capped at 4 threads. These figures are estimates;
+  memory, speed and the platforms above are **not measured**.
+- Real inference and network behavior are **not verified**. Do not describe the path
+  as proven offline.
+- The weights and processor files are CC-BY-4.0; keep the attribution in
+  `nexus/voice/NOTICE`.
 - Legacy/web UI behavior (orange dot only while recording, the floating live strip with
   waveform and preview text, any key stops, `Esc` discards, no auto
   "loading/ready" model labels): [surfaces.md](surfaces.md#dictation).
@@ -193,55 +204,58 @@ sudo apt-get install libportaudio2
 nexus daemon restart
 ```
 
-The speak extra is onnxruntime (CPU), [misaki](https://github.com/hexgrad/misaki)
-(Kokoro's grapheme-to-phoneme library, with spaCy's `en_core_web_sm`), huggingface_hub,
-numpy and sounddevice. It does not install torch.
+The speak extra is `ptts` (`>=0.4.1,<1`), `sounddevice` and `numpy`. `ptts` is the
+official Rust runtime (a Python wheel) for gradium's phonon models and needs only
+numpy: no torch, onnxruntime, phonemizer or spaCy.
 
-The model is [`sahilmahendrakar/Paradee-8M-v1.0`](https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0)
-at revision `v1.0` (Apache 2.0): an 8M-parameter int8 ONNX model distilled from
-[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) that speaks one voice, Kokoro's
-`af_heart`, US English, 24 kHz mono. Two files are cached: `onnx/paradee_int8.onnx`
-(9 MB) and `config.json` (the phoneme vocabulary). The worker phonemizes each
-sentence with misaki (`fallback=None`, so no espeak), maps the phonemes to ids with
-a 0 pad at each end (at most 510 phonemes per chunk, so 512 positions) and runs the
-graph at speed 1.
+The model is [`gradium/phonon-31m-en`](https://huggingface.co/gradium/phonon-31m-en)
+(Apache 2.0), loaded as `ptts.TTS("hf://gradium/phonon-31m-en", lang="en",
+quant="q8")`: the int8 variant of a 31M-parameter English model, run on the CPU
+with the model's default voice. ptts itself fetches the files from the Hugging Face
+Hub into the standard cache (`models--gradium--phonon-31m-en`), about 60 MB
+(`MODEL_BYTES`, approximate and used only for the progress display). The worker
+splits the answer into sentences (at most 400 characters each, cut at the last
+space that fits), synthesizes one chunk at a time with `tts.synth(text)` and plays
+each as float32 audio at the model's sample rate through `sounddevice`. The
+reported backend is `ptts-cpu`.
 
 **Download flow (like `/voice download`).** `/speak` first asks the host for the
 model status (`SpeechStatus`: `unsupported`, `absent`, `downloading`, `ready`,
-`error`; status never imports onnxruntime, it looks for the packages and the Hugging
-Face cache files). When the model is missing both clients show a consent dialog
-with the size (about 25 MB: the 9 MB model, its config and the English phonemizer
-package) and say it runs on this device. Confirming sends `SpeechPrepare`, which starts one
-background download in the isolated worker; the dialog polls the status and shows
-`Downloading… 42% · 10 / 25 MB` (progress is the Hugging Face cache and the
-phonemizer folder growing against the approximate total), then offers "Speak latest answer" (or "Done"
+`error`; status never imports ptts, it looks for the packages `ptts`, `sounddevice`
+and `numpy` and the Hugging Face cache files, and a snapshot with a leftover
+`*.incomplete` blob is not ready). When the model is missing both clients show a
+consent dialog with the size (about 60 MB) and say it runs on this device. Confirming
+sends `SpeechPrepare`, which starts one background download in the isolated worker
+(it loads the model online, so ptts fetches it); the dialog polls the status and shows
+`Downloading… 42% · 25 / 60 MB` (progress is the Hugging Face cache blobs growing
+against the approximate total), then offers "Speak latest answer" (or "Done"
 when opened from `/speak download` or Settings → Speech). A failed download shows
 the reason and a Retry; missing packages show the install steps below and only a
 Close button. `/speak download` with the model present just says it is ready.
 Settings → Speech shows the model state with a Download button.
 
 **Upgrades never ask again.** Consent is durable: `SpeechPrepare` writes
-`~/.nexus/models/speech/consent`, and a Paradee or Kokoro model already in the
-Hugging Face cache counts as earlier consent (both were only fetched after the
+`~/.nexus/models/speech/consent`, and an earlier Paradee or Kokoro model already in
+the Hugging Face cache counts as earlier consent (both were only fetched after the
 dialog). When the model is missing after that (a release that switches models,
 an upgrade, a cleared cache), `SpeechStatus` starts the download itself and
 reports `downloading`; `/speak` then shows the progress, refreshes it every
 second (bounded to 10 minutes) and speaks when it is ready, with no dialog. Leaving
 the page stops the wait; the download continues. A failed automatic download
-shows the error and Retry and is not retried in a loop. spaCy's `en_core_web_sm`
-wheel is unpacked under `~/.nexus/models/speech/python` (never pip-installed into
-the tool venv: uv tool venvs have no pip, and `nexus update` replaces the venv),
-and `nexus update` keeps the `speak` extra (see [release.md](release.md)).
+shows the error and Retry and is not retried in a loop. `nexus update` keeps the
+`speak` extra (see [release.md](release.md)).
 
-Playing is cached-only: Hugging Face is offline and a missing spaCy English
-package is reported as not cached, never downloaded. `Speak.download` still exists
+Playing is cached-only: the worker runs with `HF_HUB_OFFLINE=1` and a model that is
+not cached is reported as not cached, never fetched. `Speak.download` still exists
 on the wire for scripts but the clients use `SpeechPrepare`. Installing dependencies and the initial
 download require network access; the answer is synthesized locally, not sent
 to a speech service. Hugging Face stores model files in its standard cache.
 
-Synthesis runs on the CPU only, through onnxruntime's CPU provider with its
-default intra-op thread count. There is no device setting and no GPU or MPS path, and
-`NEXUS_SPEAK_DEVICE` is ignored (the previous torch/MPS option is gone). Windows
+Synthesis runs on the CPU only, through the ptts runtime. There is no device
+setting and no GPU or MPS path, and `NEXUS_SPEAK_DEVICE` is ignored. The `[speech]`
+keys (`voice`, `language`, `speed`, `device`) keep their single supported values
+(`af_heart`, `a`, `1.0`, `cpu`) for config compatibility; the worker does not pass
+them to ptts, which uses the model's default voice. Windows
 needs working PortAudio output; not verified.
 
 **Esc.** Speaking shows no notice (only a failure does). Both clients run the
@@ -250,9 +264,8 @@ tells the warm worker to stop playing (the model stays loaded). Esc does nothing
 extra when nothing is playing.
 
 **Warm worker.** The first `/speak` starts a long-lived worker process that
-loads onnxruntime, misaki/spaCy and the model (about 2 s on an Apple M4, see the
-benchmark below). The model then stays in memory, so later answers start in about
-0.1 s.
+imports ptts and loads the model. The model then stays in memory, so later answers
+start without reloading.
 The daemon unloads it (kills the worker, freeing the memory) after 10 idle minutes
 (`IDLE_UNLOAD_SECONDS`) and the next `/speak` loads it again. Esc stops the
 current answer without unloading. A failed request, a timeout or a download-mode
@@ -264,12 +277,7 @@ audio limit; exceeding a limit is reported, not silently clipped. Each sentence
 plays as soon as it is synthesized, so an answer that crosses the audio limit is
 spoken up to that point and then reported. The worker lives between requests (see Warm worker) and exits on idle unload or daemon exit.
 Environment changes require restarting the daemon. Actual speaker playback, Windows
-support and other CPUs are **not verified**; offline tests use fake onnxruntime,
-misaki, huggingface_hub and sounddevice modules. The model card reports about
-18x real time on one CPU thread. One benchmark on an Apple M4 (3 fresh runs,
-median) measured: cold load 2.0 s (Kokoro-82M: 2.5 s with a warm file cache),
-first short sentence 0.10 s (Kokoro 0.34 s), a 645-character paragraph in 1.1 s,
-about 34x real time with default threads and 18x with one (Kokoro 9x), peak
-memory 0.5 GB (Kokoro 2.6 GB). Other machines are not verified. Words misaki does not know (for
-example "Paradee") are dropped from the phonemes rather than spelled out, because
-the fallback is disabled; the speech is then missing that word.
+support and other CPUs are **not verified**; offline tests use fake `ptts` and
+`sounddevice` modules (numpy is real). Latency, speed and memory of the phonon model
+on real hardware are **not measured** here; the earlier Paradee benchmark no longer
+applies.

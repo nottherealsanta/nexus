@@ -727,6 +727,8 @@ def test_orchestrator_prompt_has_roster_and_difficult_problem_workflow(tmp_path)
     assert "root agents" in body.lower() and "subagents" in body.lower()
     assert "code tool" in body and "evidence bundle" in body
     assert body.index("`advisor`") < body.index("actionable brief for `task`")
+    assert "cannot be spawned" not in body
+    assert "never shared automatically" in body
 
 
 def test_legacy_names_resolve_to_the_new_builtins(tmp_path):

@@ -1637,6 +1637,8 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
     if not agent_id or agent_id not in state.agents:
         return _diagnostic(state, event, data)
     agent = state.agents[agent_id]
+    if data.get("unchanged") and len(agent.body.turns) >= 2:
+        return _on_follow_up_refused(state, event, data, agent)
     status = _as_str(data.get("status")) or "completed"
     stop_reason = _as_str(data.get("stop_reason"))
     body = agent.body
@@ -1673,6 +1675,44 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
     )
     agents = dict(state.agents)
     agents[agent_id] = agent
+    return replace(state, agents=agents, agent_order=list(state.agent_order))
+
+
+def _on_follow_up_refused(
+    state: ConversationView, event: Event, data: Mapping[str, Any], agent: AgentView
+) -> ConversationView:
+    """A follow-up was refused before it touched the child's log.
+
+    No child run happened, so the child keeps the result of its last completed
+    run (a follow-up is only accepted from a completed child) and stays
+    continuable. The attempt still counts as a run, the follow-up row stays as
+    the audit trail of what the root sent, and the refusal is recorded on the
+    agent's diagnostics and as the refused turn's stop reason.
+    """
+    *earlier, refused = agent.body.turns
+    previous = earlier[-1]
+    reason = (_as_str(data.get("error")) or "follow-up refused")[:500]
+    refused = replace(
+        refused, phase="completed", stop_reason="refused", error=reason, updated_ts=event.ts
+    )
+    body = _recompute_phase(replace(agent.body, turns=[*earlier, refused]))
+    run = _as_int(data.get("run"), agent.runs)
+    agent = replace(
+        agent,
+        status="completed",
+        ok=True,
+        is_error=False,
+        error=None,
+        stop_reason=previous.stop_reason,
+        completed_ts=previous.completed_ts or previous.updated_ts or event.ts,
+        runs=max(agent.runs, run),
+        continuable=bool(data.get("continuable")) if "continuable" in data else True,
+        last_run_ts=event.ts,
+        diagnostics=[*agent.diagnostics, f"follow-up run {run} refused: {reason}"][-20:],
+        body=body,
+    )
+    agents = dict(state.agents)
+    agents[agent.id] = agent
     return replace(state, agents=agents, agent_order=list(state.agent_order))
 
 
@@ -1717,6 +1757,8 @@ def _on_agent_resumed(state: ConversationView, event: Event, data: Mapping[str, 
         error=None,
         stop_reason=None,
         completed_ts=None,
+        # A run in flight cannot take another follow-up; its completion says again.
+        continuable=False,
         runs=max(agent.runs, run),
         last_run_ts=event.ts,
         body=body,
@@ -1736,6 +1778,7 @@ def _on_agent_stopped(state: ConversationView, event: Event, data: Mapping[str, 
     agent = replace(
         agent,
         stopped=True,
+        continuable=False,
         stopped_by=(_as_str(data.get("by")) or "")[:40] or None,
         stopped_reason=(_as_str(data.get("reason")) or "")[:500] or None,
         last_run_ts=event.ts,
@@ -2054,6 +2097,10 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         # metadata in the manager's log; the tool calls already tell the story.
         return state
 
+    if event_type == "agent.config":
+        # The child's immutable continuation record is durable metadata (it
+        # holds the role prompt), never conversation content or a diagnostic.
+        return state
     if event_type == "agent.spawned":
         meta = _agent_meta(data) or dict(data)
         owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))

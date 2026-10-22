@@ -129,8 +129,9 @@ ensure_uv() {
     say "installed uv: $UV"
 }
 
-# Local dictation (the `voice` extra) is on by default, but its runtime ships no
-# musl wheels, so Alpine and other musl systems install without it.
+# Local dictation (the `voice` extra) is on by default, but its runtime (Torch) ships no
+# musl wheels, so Alpine and other musl systems install without it. Intel Macs have no
+# current Torch wheels either.
 is_musl() {
     [ "$os" = Linux ] || return 1
     ls /lib/ld-musl-* >/dev/null 2>&1 && return 0
@@ -141,6 +142,10 @@ add_voice_extra() {
     [ -n "${NEXUS_NO_VOICE:-}" ] && return 0
     if is_musl; then
         say "musl libc detected; installing without local dictation (voice)"
+        return 0
+    fi
+    if [ "$os" = Darwin ] && [ "$arch" = x86_64 ]; then
+        say "Intel Mac detected; installing without local dictation (voice)"
         return 0
     fi
     case ",$NEXUS_EXTRAS," in

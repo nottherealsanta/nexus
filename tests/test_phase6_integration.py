@@ -634,7 +634,8 @@ async def test_parallel_tasks_both_run(tmp_path):
     for result in (first, second):
         head, _, body = result.content[0].text.partition("\n")
         assert head.startswith("[model: ") and "; tier: " in head
-        bodies.add(body.strip())
+        # The report is followed by the continuation footer (agent_id/run/continuable).
+        bodies.add(body.strip().split("\n")[0])
     assert bodies == {"report-a", "report-b"}
     spawned = [e for e in events if e.type == "agent.spawned"]
     assert len(spawned) == 2

@@ -310,10 +310,14 @@ line, then how to work (understand, change only what was asked, verify,
 delegate with self-contained briefs) and what to report. Orchestrator never
 edits code itself; it plans, delegates, and verifies subagent reports. `build`
 names no specific role. `orchestrator` carries a fixed roster and workflow
-(roots `build`/`orchestrator` are not spawnable; subagents `scout` low, `quick`
-low, `task` medium/high, `advisor` medium/high). For difficult problems it
-gathers evidence with the code tool (optionally via `scout`), gives an evidence
-bundle to `advisor`, hands the recommendation to `task`, and verifies. The live
+(subagents `scout` low, `quick` low, `task` medium/high, `advisor`
+medium/high). Information flows sequentially: `scout` (low, parallel when
+independent) gathers `path:line` evidence, the full relevant findings go to
+`advisor` (medium/high) as an evidence bundle, and the advisor's complete
+recommendation is turned into one or more actionable `task` briefs (parallel
+when independent). Small `quick` steps may sit in between, and every handoff
+must carry all relevant findings rather than assuming they are shared. The
+orchestrator then verifies. The live
 tool list and `subagent` roster still come from runtime.
 
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
@@ -348,9 +352,10 @@ An explicit `color` in the agent definition frontmatter always wins.
 
 ## Spawning (`subagent` tool)
 
-`subagent(prompt, subagent_type?, tools?, model?, description?, worktree?)` runs a
+`subagent(prompt, subagent_type?, tools?, model?, description?, worktree?, resume?)` runs a
 named role or an ad-hoc agent. The child does not see the parent conversation:
-the prompt is the whole assignment.
+the prompt is the whole assignment. `resume` sends a follow-up to a finished child
+instead (see [Continuing a finished subagent](#continuing-a-finished-subagent)).
 
 An omitted, null, or blank `model` override uses the role's configured model (or
 its first tier, see below), falling back to the parent's model. Surrounding whitespace is trimmed from model
@@ -396,12 +401,13 @@ authority its parent lacks:
 
 The `subagent` tool always blocks: the call returns the child's report as its tool
 result, and the root's turn continues once the report is in. Its schema is `prompt`,
-`subagent_type`, `tools`, `model`, `description` and `worktree`; there is no `background`
+`subagent_type`, `tools`, `model`, `description`, `worktree` and `resume`; there is no `background`
 or `wait` parameter. To run children concurrently the model issues **independent
 `subagent` calls together in one batch** (the tool is `concurrency="parallel"`) and the
 turn waits for every report. Nothing is delivered later: there are no report wakes, no
-report replay and no idle children to continue. To change direction or retry, the root
-starts a new subagent whose prompt carries what it needs. The model is taught this in the
+report replay and no live idle children (a follow-up is a new blocking call that reopens
+the child's stored transcript). To change direction or retry, the root
+starts a new subagent whose prompt carries what it needs, or continues a finished one. The model is taught this in the
 `subagent` description and in the `build` and `orchestrator` role bodies
 (`nexus/agents/data/`).
 
@@ -415,6 +421,97 @@ preparing, comes back as an ordinary error result with nothing running.
 
 `agents.background` is deprecated: it still parses for config compatibility and is
 ignored (see [config.md](config.md)).
+
+### Continuing a finished subagent
+
+`subagent(resume="<agent_id>", prompt="…")` sends one more message to a child that already
+reported, so it keeps its conversation, tool results and reasoning. The report footer of
+every native child names the handle: `agent_id: <parent>/sub/<n>`, `run: n` and
+`continuable: yes` or `continuable: no (<reason>)`. The call is still blocking and
+foreground: no slot, process or lease is held between runs; the child's durable SQLite
+session is reopened (`_run_child` only evicts the in-memory handle), the new prompt is
+appended to it and one more turn runs. **Nexus reuses the stored transcript. Whether a
+provider also reuses a prompt-cache prefix for the follow-up is the provider's choice and
+nothing here depends on it**; the report shows measured usage and a follow-up still costs
+input tokens for the whole history that is sent.
+
+*Identity and authorization.* A resume names no role: omitting `subagent_type` does not
+mean the default role. The permission gate keys the call as `Task(<recorded role>:<recorded
+tier>)` taken from the child's stored record, so an allow for `task` never authorizes
+resuming an `advisor`, and a later `deny` on the recorded role blocks the resume. An
+unresolvable id (unknown, another session's, legacy) is keyed `resume:unresolved`. An
+explicit `subagent_type` must equal the recorded role; `tools`, `model`, `worktree` and
+`context_read` are refused on a resume.
+
+*Filler `resume`.* Some models fill every optional parameter of a fresh call with a placeholder
+(seen: `resume=","` beside `subagent_type`, `tools` and `model`, which the runner then refused every
+time). The `subagent` tool treats a `resume` that is not shaped like a handle (`<parent>/sub/<n>`)
+and sits beside `subagent_type`/`tools`/`model`/`worktree` as omitted (`_resume_of` in
+`tools/builtin/task.py`), for the call, its permission key and the request.
+
+*The stored record.* At spawn the child's own log gets one immutable `agent.config` event
+(written before its first message, never relayed to the parent log, the root or a UI, and
+never put in model context): role name and body hash, the role prompt snapshot (passed
+through the spawn-text redaction; a prompt that changes under redaction is not continuable),
+tools, model reference and fallbacks, tier, reasoning effort, `max_iterations`,
+`context_tokens`, workspace, and `context_read`. It holds no grants, permission rules,
+environment, endpoints or credentials. The parent log's `agent.spawned` carries only
+`config_sha`. A continued child runs on that snapshot, so editing the role file does not change
+it. Authority is never snapshotted: tools are `current parent ∩ current role ∩ recorded
+tools` (a recorded tool that is no longer available is dropped, a newly allowed one is not
+added), permissions and grants are the current ones, and the tier is re-resolved against the
+current `max_tier` and the role's tiers.
+
+*Refused* (an ordinary error result; unknown and not-yours share one message so a foreign id
+is not confirmable): the last run was not `completed` (failed, cancelled, interrupted or still
+running), the child was closed, it is external (Claude Code / Antigravity) or a worktree
+child, it has no record (created before this feature), a legacy background child, its role or
+workspace is gone, its tier no longer routes, or another follow-up to it is already running
+in this process (the child's session turn lease also guards other processes). A failed or
+cancelled follow-up leaves the child not continuable; nothing retries automatically.
+
+*Bounds.* A follow-up is not a new child: it never counts toward `max_fanout`. It reserves
+tokens/cost exactly like a spawn, and is bounded by two separate limits, both fixed defaults
+(not configuration): 8 follow-ups per root turn across all children
+(`DEFAULT_MAX_CONTINUATIONS_PER_TURN`) and 4 total runs per child
+(`DEFAULT_MAX_RUNS_PER_CHILD`, counted from the parent log so a restart cannot reset it).
+Failed and cancelled follow-ups count.
+
+*Events.* The runner emits `agent.resumed {run, message, …}` through the spawning call's
+emitter and a closing `agent.completed` carrying `run` and `continuable`; the reducer and
+crash recovery already fold both (an unclosed `agent.resumed` is closed `interrupted`, which
+is not continuable). The view's `usage` is the latest run's, not cumulative.
+
+*Context is never touched.* A follow-up appends to the child's durable transcript and
+changes nothing already in it. It reopens the same session (`create=False`, no new
+allocation), writes no second `agent.config`, does not rebuild or re-inject the system
+prompt into the log, and never compacts, summarizes or hands off the transcript. The only
+records it adds are its one user message and the new run's ordinary turn events
+(`context.assembled`, assistant/tool records). Two things stay distinct: the *durable
+conversation* (the SQLite log, append-only) and the *assembled request* (rebuilt from that log
+every model call, as for any turn). A resumed child's assembler sends the stored history
+verbatim and in order: no tool-result eviction, summary, drop or handoff, whatever
+`context.compaction` says. The system prompt (recorded role snapshot) and tool schemas are
+rebuilt each call and the environment block is not frozen, so the request prefix is *not*
+promised byte-identical; a provider *may* still reuse its cache, which is provider-dependent
+and never guaranteed (model change, expiry or provider limits miss, and new input and output
+are always billed). If the history plus the new message would not fit, the follow-up is
+refused **before** its user message is appended (a dry-run assembly in the child runtime): the
+child log is unchanged, the report says "start a new subagent instead", nothing is lost
+because the root still holds the prompt it sent, and the child stays continuable. The
+`agent.completed` event for that run carries `unchanged: true` and lifecycle folding returns
+the child to its previous completed state; the refused run still counts toward the run caps.
+The compaction threshold (`compact_at_fraction`) is not applied to a resumed child, so the
+refusal happens only when the raw stored history plus the new message exceeds the budget; an
+expected dry-run failure (`ContextFullError`, or a `ProviderError` from the token counter) is
+refused the same way, while programming errors and cancellation propagate. In the view the
+child keeps its last completed status, result and continuability; the follow-up row stays as
+the audit trail, its turn closes with stop reason `refused` and the reason, and the reason is
+added to the agent's diagnostics.
+The log is append-only, so nothing is rolled back; the refusal simply happens before the
+append. A conversation that outgrows the budget mid-run (tool results added during the
+follow-up) raises `ContextFullError` after the message is stored and fails that run; the
+child is then not continuable. The per-child run cap bounds how long a child lives.
 
 The session `SubagentBudget` keeps its semantics: owned by the per-session `AgentPool`
 (`agents/pool.py`), concurrency (`max_concurrent`), fan-out (`max_fanout`) and aggregate

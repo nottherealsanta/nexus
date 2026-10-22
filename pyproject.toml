@@ -29,8 +29,8 @@ codemode = ["pydantic-monty==1.1.0"]
 # ptts is the official Rust runtime for gradium's phonon TTS models; it needs only numpy.
 speak = ["ptts>=0.4.1,<1", "sounddevice>=0.5,<1", "numpy>=1.26"]
 # claude-agent and documents are compatibility aliases, included by default.
-# voice is separate: its runtime (kestrel-native) has no musl wheels, so a default
-# dependency would break installs on Alpine. install.sh adds it except on musl.
+# voice is separate: its runtime (Torch) has no musl or Intel macOS wheels, so a default
+# dependency would break installs there. install.sh adds it except on those platforms.
 claude-agent = [
     "claude-agent-sdk==0.2.162",
 ]
@@ -48,7 +48,12 @@ documents = [
     "firecrawl-anydoc==0.2.4",
 ]
 voice = [
-    "moondream==2.4.0",
+    # Bark (a Parakeet TDT checkpoint) runs on stock Transformers; constriction
+    # decodes the .bark container (nexus/voice/bark.py).
+    "transformers>=5.19,<6",
+    "torch>=2.6,<3",
+    "constriction>=0.5,<0.6",
+    "numpy>=1.26",
     "sounddevice>=0.5,<1",
 ]
 # Compatibility alias: websockets is a base dependency now, so `nexus-harness[live]`

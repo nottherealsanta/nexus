@@ -12,8 +12,8 @@ Differences from :class:`~nexus.host_support.manager_port.HostManagerPort`, all 
 the caller is a developer's debugging agent and not the in-app manager session:
 
 * No manager log exists, so there is no user-message provenance or on-screen approval.
-  The MCP client's own tool-call approval is the human gate; the server is opt-in
-  (``NEXUS_DEBUG_MCP=1``) and its tools are labelled debug-only.
+  The MCP client's own tool-call approval is the human gate; its tools are labelled
+  debug-only.
 * ``launch``, ``send`` and ``cancel`` are rate-limited per server process, ``launch``
   honours the daemon's ``[manager] max_live_managed`` cap, and ``cancel`` only reaches
   roots this server process launched (the managed-link rule, kept in memory).

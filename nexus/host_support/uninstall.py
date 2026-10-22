@@ -19,7 +19,7 @@ from pathlib import Path
 from ..config.paths import nexus_home
 from .install import PACKAGE
 from .socket_dir import fallback_daemon_dir
-from .speech import _LEGACY_REPO_DIR, _REPO_DIR, _hub_cache
+from .speech import _LEGACY_REPO_DIRS, _REPO_DIR, _hub_cache
 
 #: Sizes are informational; stop counting a tree after this many entries.
 _SIZE_MAX_ENTRIES = 200_000
@@ -76,11 +76,14 @@ def uninstall_plan(home: str | Path | None = None) -> list[Target]:
     hub = _hub_cache()
     candidates = [
         (root, "Nexus home: all sessions (nexus.db), credentials, settings, user extensions, "
-               "logs, caches, the dictation model and the speech phonemizer"),
+               "logs, caches, the dictation model and speech settings"),
         (fallback_daemon_dir(home), "daemon sockets (private temp directory)"),
         (_tui_preferences(), "terminal preferences"),
-        (hub / _REPO_DIR, "speech model (Paradee, Hugging Face cache)"),
-        (hub / _LEGACY_REPO_DIR, "earlier speech model (Kokoro, Hugging Face cache)"),
+        (hub / _REPO_DIR, "speech model (Phonon, Hugging Face cache)"),
+        *(
+            (hub / name, "earlier speech model (Hugging Face cache)")
+            for name in _LEGACY_REPO_DIRS
+        ),
     ]
     return [Target(path, label, _size(path)) for path, label in candidates if _exists(path)]
 

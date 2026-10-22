@@ -104,9 +104,9 @@ class SessionDashboard:
         epoch, query = self.epoch, self.query
         self.list_generation += 1
         generation = self.list_generation
-        # Newest archived sessions ride along (collapsed "Archived" section); a search skips them.
-        extra = {} if query else {"archived": ARCHIVED_LIMIT}
-        result = await self.shell.client.project_sessions(limit=1000 if query else 20, query=query, **extra)
+        # Archived sessions ride along (collapsed "Archived" section); a search matches them too.
+        result = await self.shell.client.project_sessions(
+            limit=1000 if query else 20, query=query, archived=ARCHIVED_LIMIT)
         if not self.visible or epoch != self.epoch or query != self.query or generation != self.list_generation:
             return
         self.rows = _plain(session_rows(result, self.shell.controller.session, self.shell.seen_seq))

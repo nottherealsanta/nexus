@@ -66,7 +66,7 @@ export function createSpeech({api, el, notify, showText, getSession, isWorking})
         if (!['absent', 'error'].includes(result.state)) throw new Error('Unknown speech status');
         if (prepared) throw new Error(text(result.message) || 'Speech model download failed');
         const root = el('div', 'speech-confirm');
-        root.append(el('p', '', `${text(result.message)}\nDownload the local Paradee speech model (about 25 MB) and English phonemizer on the daemon host? Answers are not sent to a speech service. Playback uses the host speakers, not this browser.`));
+        root.append(el('p', '', `${text(result.message)}\nDownload the local ptts speech model (about 60 MB) on the daemon host? Answers are not sent to a speech service. Playback uses the host speakers, not this browser.`));
         const accept = el('button', 'toolbar-button', 'Download on host'), cancel = el('button', 'toolbar-button', 'Not now');
         accept.type = cancel.type = 'button';
         let decided = false;

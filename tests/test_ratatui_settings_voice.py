@@ -46,7 +46,7 @@ async def test_voice_and_speech_are_one_page_and_opening_it_never_records(shell)
     assert shell.panel_title == "Settings · Voice & speech" and shell.settings_nav == "voice"
     assert shell.voice.phase == "idle", "opening the page never starts capture"
     headings = [b["text"] for b in page["blocks"] if b.get("t") == "heading"]
-    assert headings == ["Voice Input · local dictation", "Speech · /speak, local Paradee"]
+    assert headings == ["Voice Input · local dictation", "Speech · /speak, local ptts"]
     assert _row(page, "device")["control"]["value"] == "cpu"
     assert _row(page, "max_seconds")["control"]["value"] == "60 seconds"
     assert page["scope"] is None and all(b.get("scope", "") == "" for b in page["blocks"] if b.get("t") == "row")
@@ -112,7 +112,7 @@ async def test_speech_model_download_asks_with_the_size_and_shows_progress(shell
     await shell.workflows.settings_area("voice")
     ask = _buttons(shell.workflows.settings_page)["Download speech model…"]
     await shell.workflows.operate(ask)
-    assert "about 25 MB" in shell.panel_title
+    assert "about 60 MB" in shell.panel_title
     await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.speech_prepare.assert_awaited_once()
     shell.client.speech_status = AsyncMock(return_value=p.SpeechStatusResult(state="downloading", progress=0.4, bytes_done=10_000_000, bytes_total=25_000_000))

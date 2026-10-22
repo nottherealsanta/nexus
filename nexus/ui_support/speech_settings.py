@@ -1,6 +1,6 @@
-"""Host-backed Paradee speech configuration shared by terminal UIs.
+"""Host-backed ptts speech configuration shared by terminal UIs.
 
-Paradee speaks one voice (Kokoro af_heart, US English) on CPU, so the choices are
+The ptts phonon model speaks its default English voice on CPU, so the choices are
 single-valued. Existing [speech] values outside these choices fall back to the defaults.
 """
 from __future__ import annotations
@@ -118,7 +118,7 @@ async def reset_speech_config(client: Any) -> None:
 
 
 def compatible_voices(language: str) -> tuple[str, ...]:
-    """Return the voices offered for a language: Paradee has only af_heart for US English."""
+    """Return the voices offered for a language: ptts offers one default English voice (af_heart)."""
     return tuple(str(voice) for voice in SPEECH_CHOICES["voice"]) if language == "a" else ()
 
 

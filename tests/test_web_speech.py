@@ -24,7 +24,7 @@ class WebSpeechTests(unittest.TestCase):
             for state in ("unsupported", "absent", "downloading", "ready", "error")
         }
         payloads["spoken"] = msgspec.to_builtins(p.SpeakResult(
-            message="Finished speaking the latest answer", backend="paradee-cpu"))
+            message="Finished speaking the latest answer", backend="ptts-cpu"))
         payloads["stopped"] = msgspec.to_builtins(p.SpeakResult(message="", backend=""))
         payloads["voice"] = msgspec.to_builtins(p.VoiceStatusResult(
             state="disabled", enabled=False, cached=True, device="cpu",
@@ -67,7 +67,7 @@ for (const state of ['absent', 'error']) {
  assert.equal(calls.length, 1); assert.equal(calls[0].type, 'SpeechStatus');
  assert.equal(views.at(-1)[1], '');
  assert(descendants(views.at(-1)[2].node).some(node => node.textContent.includes('<img')));
- assert(descendants(views.at(-1)[2].node).some(node => node.textContent.includes('25 MB')));
+ assert(descendants(views.at(-1)[2].node).some(node => node.textContent.includes('60 MB')));
  await button('Download on host').onclick();
  assert.deepEqual(calls[1], {type:'SpeechPrepare'});
  assert(!calls.some(call => call.type === 'Speak'));

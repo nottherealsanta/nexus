@@ -555,5 +555,31 @@ def test_project_session_search_is_bounded_literal_and_filters_before_limit(tmp_
     assert db.project_sessions(query="' OR 1=1 --") == []
     store.archive("old-id", "user")
     assert db.project_sessions(query="UserNeedle") == []
+    assert [r["id"] for r in db.archived_project_sessions(query="UserNeedle")] == ["old-id"]
+    assert [r["id"] for r in db.archived_project_sessions(query="titleneedle")] == ["old-id"]
+    assert db.archived_project_sessions(query="unrelated") == []
+    assert [r["id"] for r in db.archived_project_sessions()] == ["old-id"]
     with pytest.raises(ValueError):
         db.project_sessions(query="x" * 257)
+    with pytest.raises(ValueError):
+        db.archived_project_sessions(query="x" * 257)
+
+
+def test_hide_placeholders_drops_throwaway_titles_before_the_limit_but_search_finds_them(tmp_path):
+    db = _db(tmp_path)
+    store = SqliteSessionStore(db, "a", root="/workspace/a")
+    for sid, title in (("real", "Fix the parser"), ("s1", "start"), ("s2", "  Go "), ("s3", "START"),
+                       ("s4", "starting point"), ("old-go", "go"), ("old-real", "Old work")):
+        store.create(sid)
+        store.append_message(sid, _msg("hello"))
+        store.set_auto_title(sid, title)
+    store.archive("old-go", "user")
+    store.archive("old-real", "user")
+    assert len(db.project_sessions()) == 5
+    assert {r["id"] for r in db.project_sessions(hide_placeholders=True)} == {"real", "s4"}
+    # Hidden rows never use up the limit.
+    assert len(db.project_sessions(limit=2, hide_placeholders=True)) == 2
+    # A query is the way back to them, and archived search still works.
+    assert {r["id"] for r in db.project_sessions(query="start", hide_placeholders=True)} == {"s1", "s3", "s4"}
+    assert [r["id"] for r in db.archived_project_sessions(hide_placeholders=True)] == ["old-real"]
+    assert [r["id"] for r in db.archived_project_sessions(query="go", hide_placeholders=True)] == ["old-go"]

@@ -74,6 +74,34 @@ def test_follow_up_row_lands_on_the_child_page_with_root_followup_origin():
     assert [t.phase for t in closed.body.turns] == ["completed", "completed"]
 
 
+def test_refused_follow_up_keeps_the_last_completed_result_and_records_the_refusal():
+    events = [
+        _spawned(continuable=True),
+        _completed(2, run=1, continuable=True, stop_reason="end_turn"),
+        _resumed(3, 2, "also check the tests"),
+        _completed(
+            4, run=2, continuable=True, status="failed", ok=False, is_error=True,
+            unchanged=True, error="ContextFullError: no room",
+        ),
+    ]
+    agent = _agent(events)
+    assert (agent.status, agent.ok, agent.is_error, agent.error) == ("completed", True, False, None)
+    assert (agent.runs, agent.continuable, agent.stop_reason) == (2, True, "end_turn")
+    assert agent.last_run_ts == 4.0 and agent.completed_ts is not None
+    assert agent.diagnostics == ["follow-up run 2 refused: ContextFullError: no room"]
+    # The audit trail keeps what the root sent, closed as refused (no child run began).
+    refused = agent.body.turns[-1]
+    assert refused.phase == "completed" and refused.stop_reason == "refused"
+    assert refused.error == "ContextFullError: no room"
+    assert [m.text for m in refused.messages] == ["also check the tests"]
+    # A later follow-up works normally and replay equals the live fold.
+    again = _agent([*events, _resumed(5, 3), _completed(6, run=3, continuable=True)])
+    assert (again.status, again.runs, again.error, again.diagnostics) == (
+        "completed", 3, None, agent.diagnostics,
+    )
+    assert fold(events) == fold(events)
+
+
 def test_follow_up_text_is_bounded():
     agent = _agent([_spawned(), _resumed(2, 2, "x" * 9000)])
     [row] = agent.body.turns[-1].messages

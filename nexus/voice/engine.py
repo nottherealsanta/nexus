@@ -1,42 +1,114 @@
-"""Local Parakeet Redux adapter (VOICE_PLAN.md §7).
+"""Local Bark dictation adapter (VOICE_PLAN.md §7).
 
-Kestrel 0.8.0's high-level Photon ``InferenceEngine`` emits startup and
-periodic telemetry without an opt-out. This adapter uses Kestrel's registered
-Parakeet single-pass runtime with a verified local checkpoint directory, which
-keeps audio and runtime setup local while retaining Kestrel's decoder.
+The model is Underdog Bark 3.0 Clean: NVIDIA Parakeet TDT 0.6B v3 weights in the
+custom ``.bark`` container. ``nexus.voice.bark`` decodes that file as data into a
+stock Transformers ``ParakeetForTDT``, and the tokenizer and feature extractor
+load from the pinned processor files beside it. Everything is local: the
+``from_pretrained`` calls take a verified directory with ``local_files_only``,
+no remote code is trusted or executed, and nothing is unpickled.
 """
 
 from __future__ import annotations
 
 import asyncio
+import gc
+import os
 from concurrent.futures import ThreadPoolExecutor
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Callable
 
-MODEL_ID = "moondream/parakeet-redux"
-_REQUIRED_FILES = (
-    "config.json",
-    "model.safetensors",
-    "ternary.json",
-    "tokenizer.json",
-)
+from .store import MANIFEST, MODEL_FILE, MODEL_ID
+
+_REQUIRED_FILES = tuple(MANIFEST)
+_PACKAGES = ("numpy", "torch", "transformers", "constriction")
+MAX_CPU_THREADS = 4  # dictation must not take over every core of the machine
 
 
 def _build_runtime(model_dir: Path, device: str) -> tuple[Any, str]:
-    """Build the local runtime without importing Photon or creating a reporter."""
+    """Load the verified checkpoint directory into a Transformers Parakeet model."""
+    import numpy as np
     import torch
-    from kestrel.config import RuntimeConfig
-    from kestrel.models.parakeet_tdt import ParakeetTdtRuntime
+    from transformers import (
+        AutoProcessor,
+        GenerationConfig,
+        ParakeetForTDT,
+        ParakeetTDTConfig,
+    )
+
+    from .bark import open_bark
 
     resolved_device = _resolve_device(torch, device)
-    config = RuntimeConfig(
-        model=MODEL_ID,
-        model_path=str(model_dir),
-        device=resolved_device,
+    if resolved_device == "cpu":
+        torch.set_num_threads(max(1, min(MAX_CPU_THREADS, os.cpu_count() or 1)))
+    config, tensors = open_bark(model_dir / MODEL_FILE)
+    model = ParakeetForTDT(ParakeetTDTConfig.from_dict(config))
+    _load_tensors(model, tensors, torch)
+    model.generation_config = GenerationConfig.from_pretrained(
+        str(model_dir), local_files_only=True,
     )
-    runtime = ParakeetTdtRuntime(config)
-    return runtime, str(config.resolved_device())
+    processor = AutoProcessor.from_pretrained(
+        str(model_dir), local_files_only=True, trust_remote_code=False,
+    )
+    model = model.eval().to(resolved_device)
+    return _BarkRuntime(model, processor, torch, np, resolved_device), resolved_device
+
+
+def _load_tensors(model: Any, tensors: Any, torch: Any) -> None:
+    """Copy decoded tensors into ``model`` one at a time; every name and shape must match."""
+    state = model.state_dict()
+    seen: set[str] = set()
+    with torch.no_grad():
+        for name, value in tensors:
+            target = state.get(name)
+            if target is None or tuple(target.shape) != tuple(value.shape) or name in seen:
+                raise ValueError("bark tensors do not match the Parakeet model")
+            target.copy_(torch.from_numpy(value))
+            seen.add(name)
+    missing = [n for n in state if n not in seen and "num_batches_tracked" not in n]
+    if missing:
+        raise ValueError("bark file is missing Parakeet tensors")
+
+
+class _BarkRuntime:
+    """One loaded model plus its processor; callers serialize access."""
+
+    def __init__(self, model: Any, processor: Any, torch: Any, np: Any, device: str) -> None:
+        self._model = model
+        self._processor = processor
+        self._torch = torch
+        self._np = np
+        self._device = device
+
+    def transcribe(self, wav: bytes) -> str:
+        from .audio import SAMPLE_RATE, parse_wav
+
+        np, torch = self._np, self._torch
+        pcm = parse_wav(wav).pcm
+        wave = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        inputs = self._processor(
+            [wave], sampling_rate=SAMPLE_RATE, return_tensors="pt", padding=True,
+        )
+        dtype = next(self._model.parameters()).dtype
+        inputs = {
+            key: value.to(self._device, dtype) if value.is_floating_point() else value.to(self._device)
+            for key, value in inputs.items()
+        }
+        with torch.inference_mode():
+            output = self._model.generate(**inputs)
+        return str(self._processor.batch_decode(output.sequences, skip_special_tokens=True)[0]).strip()
+
+    def close(self) -> None:
+        self._model = self._processor = None
+        gc.collect()
+        torch = self._torch
+        try:
+            if self._device == "cuda":
+                torch.cuda.empty_cache()
+            elif self._device == "mps":
+                torch.mps.empty_cache()
+        except Exception:  # noqa: BLE001 - cache release is best effort
+            pass
 
 
 def _resolve_device(torch: Any, device: str) -> str:
@@ -56,8 +128,10 @@ def _resolve_device(torch: Any, device: str) -> str:
     return "cpu"
 
 
-class KestrelEngine:
+class BarkEngine:
     """Serialize local WAV transcription through one dedicated worker thread."""
+
+    model_id = MODEL_ID
 
     def __init__(
         self,
@@ -82,7 +156,7 @@ class KestrelEngine:
     def available() -> bool:
         """Return whether the local inference runtime is installed."""
         try:
-            return find_spec("kestrel") is not None
+            return all(find_spec(name) is not None for name in _PACKAGES)
         except (ImportError, ValueError):
             return False
 
@@ -113,20 +187,10 @@ class KestrelEngine:
         if not isinstance(audio, bytes):
             raise TypeError("voice audio must be bytes")
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            self._executor,
-            self._runtime.forward,
-            "transcribe",
-            [{"audio": audio, "timestamps": "none"}],
-        )
-        if not isinstance(result, tuple) or len(result) != 1:
-            raise RuntimeError("Parakeet returned an invalid result")
-        item = result[0]
-        if isinstance(item, BaseException):
-            raise item
-        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
-            raise RuntimeError("Parakeet returned an invalid transcript")
-        return item["text"]
+        text = await loop.run_in_executor(self._executor, self._runtime.transcribe, audio)
+        if not isinstance(text, str):
+            raise RuntimeError("Bark returned an invalid transcript")
+        return text
 
     async def close(self) -> None:
         if self._closed:
@@ -136,10 +200,10 @@ class KestrelEngine:
         try:
             if runtime is not None:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(self._executor, runtime.shutdown)
+                await loop.run_in_executor(self._executor, runtime.close)
         finally:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._loaded = False
 
 
-__all__ = ["KestrelEngine"]
+__all__ = ["BarkEngine"]

@@ -112,14 +112,12 @@ async def test_session_show_is_explicitly_unsupported_and_touches_nothing():
     assert (await server.call_tool("session_show", {"id": "t", "origin_message_id": "m1"}))["isError"]
 
 
-def test_off_without_the_env_flag(capsys):
-    assert dbg.main([], environ={}) == 2
-    assert "DEBUG ONLY" in capsys.readouterr().err
-    assert dbg.debug_enabled({dbg.DEBUG_ENV: "1"}) and not dbg.debug_enabled({dbg.DEBUG_ENV: "0"})
+def test_has_no_env_gate():
+    assert not hasattr(dbg, "DEBUG_ENV") and not hasattr(dbg, "debug_enabled")
 
 
 def test_list_tools_flag_prints_names_without_running(capsys):
-    assert dbg.main(["--list-tools"], environ={}) == 0
+    assert dbg.main(["--list-tools"]) == 0
     assert capsys.readouterr().out.split() == list(MANAGER_TOOL_NAMES)
 
 
@@ -306,7 +304,7 @@ def test_stdio_subprocess_handshake_and_clean_exit(tmp_path):
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    env = {**os.environ, dbg.DEBUG_ENV: "1"}
+    env = {k: v for k, v in os.environ.items() if k != "NEXUS_DEBUG_MCP"}  # starts with no env flag
     proc = subprocess.Popen(
         [sys.executable, "-m", "nexus.devtools.manager_debug_mcp", "--workspace", str(tmp_path)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -346,13 +344,13 @@ def test_stdio_subprocess_handshake_and_clean_exit(tmp_path):
     assert proc.returncode == 0
 
 
-def test_registered_in_the_project_config_disabled_by_default():
+def test_registered_in_the_project_config_enabled_without_env_gate():
     from pathlib import Path
 
     config = json.loads((Path(__file__).resolve().parent.parent / ".agents" / "mcp.json").read_text())
     entry = config["mcpServers"]["nexus-manager-debug"]
-    assert entry["enabled"] is False
-    assert entry["env"] == {"NEXUS_DEBUG_MCP": "1"}
+    assert entry.get("enabled", True) is True
+    assert "env" not in entry
     assert "nexus.devtools.manager_debug_mcp" in entry["args"]
     assert "browser-use" in config["mcpServers"]  # existing settings preserved
 

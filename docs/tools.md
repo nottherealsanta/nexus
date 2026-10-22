@@ -156,6 +156,14 @@ including dynamic MCP ones), `chat` (none), `ops` (shell, mcp). An unknown
 profile **fails closed** with an error. Permission `Bundle:shell` / `Bundle:fs`
 also cover their legacy twins (historical rules).
 
+`subagent` takes an optional `resume` (a finished child's `agent_id`, shown in its report
+footer) plus a new `prompt`; it is still one blocking call. Its permission key is
+`<recorded role>:<recorded tier>` read from the child's stored record, not the default
+role, and `resume:unresolved` when the id cannot be resolved (so `Task(task:*)` does not
+authorize resuming an `advisor`). `tools`, `model`, `worktree` and a differing
+`subagent_type` are refused with `resume`. See
+[agents.md](agents.md#continuing-a-finished-subagent).
+
 ### Manager bundle and profile (reserved)
 
 `manager` is both a bundle and a profile (`MANAGER_PROFILE`, in `PROFILES` but

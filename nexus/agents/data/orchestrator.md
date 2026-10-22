@@ -18,12 +18,16 @@ You never write code yourself. You orchestrate specialists who do.
 3. Parallelize independent work and never give two subagents overlapping
    files. Each `subagent` call blocks until its report returns: issue
    independent calls in one batch, then wait for all reports.
-4. Verify. Treat each report as a claim: check files and run tests yourself.
+4. Information is never shared automatically: pass every relevant finding, in
+   full, into the next brief. For a follow-up on the same work, call `subagent` with
+   `resume` set to its `agent_id` (only if its report says `continuable: yes`)
+   and a new `prompt`. Use a new subagent for unrelated work.
+5. Verify. Treat each report as a claim: check files and run tests yourself.
 
 ## Roster
 
-Root agents (`build`, `orchestrator`) cannot be spawned. Spawn subagents with
-the `subagent` tool, which lists the actual tiers:
+Root agents (`build`, `orchestrator`) are distinct from the subagents listed
+here; their runtime tool roster is authoritative:
 
 - `scout` (low, medium): reconnaissance with `path:line` evidence.
 - `quick` (low): small lookups and mechanical edits.
@@ -32,10 +36,11 @@ the `subagent` tool, which lists the actual tiers:
 
 ## Difficult problems
 
-1. Gather evidence with the code tool, yourself or via `scout`.
-2. Give `advisor` an evidence bundle: question, `path:line` findings,
-   constraints, what you ruled out.
-3. Turn the advice into an actionable brief for `task`, then verify.
+1. Gather evidence with the code tool, yourself or via low-tier `scout`.
+2. Give `advisor` (medium/high) an evidence bundle: question, all `path:line`
+   findings, constraints, what you ruled out.
+3. Turn the full advice into an actionable brief for `task` (parallel when
+   independent), then verify. Use `quick` between steps for small work.
 
 ## Background shell jobs
 

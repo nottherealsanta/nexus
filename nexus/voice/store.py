@@ -15,23 +15,38 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-REVISION = "2bf128600aac4b16946f7ed8372e56117fe5e23b"
+MODEL_ID = "ConwayResearch/Underdog-Bark-3.0-Clean"
+REVISION = "6d34ed8639b2b9a33e764acf06748519bbb950cf"
+# The Bark weights are a custom container (nexus/voice/bark.py). The tokenizer and
+# feature-extractor files come from NVIDIA's processor repo at a pinned commit; no
+# NVIDIA weights are fetched.
+PROCESSOR_ID = "nvidia/parakeet-tdt-0.6b-v3"
+PROCESSOR_REVISION = "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+MODEL_FILE = "model.bark"
 MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 MANIFEST = {
+    MODEL_FILE: (
+        179_458_613,
+        "b67ca90d94b79a36af4616f1cb3f241884925de7aa9f3e673a8d5c6c4cfd3436",
+    ),
     "config.json": (
-        12_988, "503c653b2e3bb788adbcb04f5abdee532d958686564081baeed133ff10143f6e",
+        1_153, "e747b85e1bdfd300c8b8ac63bac8dd5221f8fe9bc275b48d06c735fcd6971b6e",
+    ),
+    "generation_config.json": (
+        289, "b141de6ec6d7f982ece13f98f604e3fe1807ea9c0e839185d0ab7064604209d0",
+    ),
+    "processor_config.json": (
+        392, "8346a93a3b987fa1dec57a78f045cd0817d21786589a5a096b41a57a446fd1d7",
     ),
     "tokenizer.json": (
         1_159_960, "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91",
     ),
-    "ternary.json": (
-        57_970, "1221c6d3ce901ffe09c089da758a8db8b76189f80cff41c5afc244fc61e2051d",
-    ),
-    "model.safetensors": (
-        177_774_490,
-        "78ec25733ee0d0c1586d1346fc86db9d0c2e436e3a8ab1d32a82d1bb8f848d21",
+    "tokenizer_config.json": (
+        290, "0b2fe0037599ee335f0b972fa682bf0ece74e4ccfec755cb7daa3405d3d3e874",
     ),
 }
+_DIRECTORY = "bark-3.0-clean"
+_LEGACY_DIRECTORIES = ("parakeet-redux",)  # the Kestrel-era cache; unused and removed
 
 
 def models_root(home: Path) -> Path:
@@ -56,8 +71,16 @@ class ModelStore:
             if Path(name).name != name or name in {".", ".."} or size < 0 or len(digest) != 64:
                 raise ValueError("invalid voice manifest entry")
         self.root = models_root(home)
-        self.path = self.root / "parakeet-redux" / revision
+        self.path = self.root / _DIRECTORY / revision
         self._fetch = fetch or urllib.request.urlopen
+
+    def _url(self, name: str) -> str:
+        """Every file is fetched by immutable commit: the weights from Bark, the rest from NVIDIA."""
+        if name == MODEL_FILE:
+            repo, revision = MODEL_ID, self.revision
+        else:
+            repo, revision = PROCESSOR_ID, PROCESSOR_REVISION
+        return f"https://huggingface.co/{repo}/resolve/{revision}/{name}"
 
     async def ensure(self, progress_cb: Callable[[int, int], None], *, allow_download: bool = True) -> Path:
         loop = asyncio.get_running_loop()
@@ -108,8 +131,9 @@ class ModelStore:
                 progress(0, total)
                 try:
                     for name, (size, digest) in self.manifest.items():
-                        url = f"https://huggingface.co/moondream/parakeet-redux/resolve/{self.revision}/{name}"
-                        request = urllib.request.Request(url, headers={"User-Agent": "Nexus-voice"})
+                        request = urllib.request.Request(
+                            self._url(name), headers={"User-Agent": "Nexus-voice"},
+                        )
                         with self._fetch(request, timeout=60) as response:
                             if hasattr(response, "geturl") and not response.geturl().startswith("https://"):
                                 raise ValueError("insecure model redirect")
@@ -131,6 +155,8 @@ class ModelStore:
                     if self.path.exists():
                         shutil.rmtree(self.path)
                     os.replace(partial, self.path)
+                    for legacy in _LEGACY_DIRECTORIES:
+                        shutil.rmtree(self.root / legacy, ignore_errors=True)
                     return self.path
                 except Exception:
                     shutil.rmtree(partial, ignore_errors=True)
@@ -147,4 +173,6 @@ class ModelStore:
         with (self.root / ".lock").open("a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             shutil.rmtree(self.path, ignore_errors=True)
+            for legacy in _LEGACY_DIRECTORIES:
+                shutil.rmtree(self.root / legacy, ignore_errors=True)
             shutil.rmtree(self.path.with_name(self.revision + ".partial"), ignore_errors=True)

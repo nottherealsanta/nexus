@@ -10,7 +10,7 @@ from nexus.ui_support.speech_settings import (
 )
 
 
-def test_speech_choices_are_paradee_single_voice():
+def test_speech_choices_are_ptts_single_voice():
     assert compatible_voices("a") == ("af_heart",)
     assert compatible_voices("b") == ()
 

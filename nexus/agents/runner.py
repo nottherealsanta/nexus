@@ -72,12 +72,20 @@ __all__ = [
     "AGENT_CLAMPED",
     "AGENT_ROUTED",
     "AGENT_COMPLETED",
+    "AGENT_CONFIG",
+    "AGENT_RESUMED",
     "AGENT_SPAWNED",
+    "RESUME_UNRESOLVED_KEY",
+    "CHILD_CONFIG_VERSION",
     "CHILD_SESSION_SEGMENT",
+    "ChildLifecycle",
     "DEFAULT_CHILD_TYPE",
     "DEFAULT_MAX_CONCURRENT",
+    "DEFAULT_MAX_CONTINUATIONS_PER_TURN",
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_FANOUT",
+    "DEFAULT_MAX_RUNS_PER_CHILD",
+    "fold_child_lifecycle",
     "DEFAULT_MAX_TIER",
     "TierDecision",
     "MAX_REPORTED_FILES",
@@ -133,12 +141,27 @@ AGENT_CLAMPED = "agent.clamped"
 #: Quota-aware routing decision for one child (docs/models.md); recorded only when
 #: a candidate was skipped or every candidate was blocked.
 AGENT_ROUTED = "agent.routed"
+#: A follow-up run of a finished child (``subagent(resume=...)``).
+AGENT_RESUMED = "agent.resumed"
+#: The child-log record of how a child was configured (never relayed upward).
+AGENT_CONFIG = "agent.config"
+#: Schema version of the ``agent.config`` record.
+CHILD_CONFIG_VERSION = 1
+#: ``agent.resumed.message`` is clipped here (the view clips at 4000).
+RESUME_MESSAGE_CHARS = 3_900
 
 #: Defaults for the four bounding rules (plan section 15.8).
 DEFAULT_MAX_TIER = "high"
 DEFAULT_MAX_CONCURRENT = 4
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
+#: Gate key for a resume whose child cannot be resolved (unknown, foreign, legacy).
+RESUME_UNRESOLVED_KEY = "resume:unresolved"
+#: Follow-up runs allowed per root turn, across all children. They never count
+#: as fan-out (a continuation is not a new child).
+DEFAULT_MAX_CONTINUATIONS_PER_TURN = 8
+#: Total runs one child may ever have (the first run plus its follow-ups).
+DEFAULT_MAX_RUNS_PER_CHILD = 4
 #: The role an ad-hoc ``Task`` request uses when none is named.
 DEFAULT_CHILD_TYPE = "task"
 #: Namespace a model may prefix onto requested tool names (OpenAI Responses).
@@ -225,19 +248,32 @@ class TaskRequest:
     """
 
     prompt: str
-    subagent_type: str = DEFAULT_CHILD_TYPE
+    #: ``None`` means *omitted*. Without ``resume`` it becomes the default role;
+    #: with ``resume`` it stays ``None`` so the recorded role, never the default,
+    #: decides identity and authorization.
+    subagent_type: str | None = DEFAULT_CHILD_TYPE
     tools: tuple[str, ...] | None = None
     model: str | None = None
     description: str | None = None
     worktree: bool = False
     context_read: bool = False
+    #: The logical id of a finished child to send ``prompt`` to as a follow-up.
+    resume: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context_read, bool):
             raise SubagentError("context_read must be boolean")
         if not isinstance(self.prompt, str) or not self.prompt.strip():
             raise SubagentError("prompt must be a non-empty string")
-        if (
+        if self.resume is not None and (
+            not isinstance(self.resume, str) or not self.resume.strip()
+        ):
+            raise SubagentError("resume must be a non-empty agent_id string")
+        if isinstance(self.resume, str):
+            object.__setattr__(self, "resume", self.resume.strip())
+        if self.subagent_type is None and self.resume is None:
+            object.__setattr__(self, "subagent_type", DEFAULT_CHILD_TYPE)
+        if self.subagent_type is not None and (
             not isinstance(self.subagent_type, str)
             or not self.subagent_type.strip()
         ):
@@ -286,23 +322,31 @@ class TaskRequest:
                 tools = tuple(str(item) for item in tools)
             elif tools is not None:
                 raise SubagentError("tools must be a list of tool names")
+            resume = value.get("resume")
             return cls(
                 prompt=value.get("prompt"),  # type: ignore[arg-type]
-                subagent_type=value.get("subagent_type", DEFAULT_CHILD_TYPE),
+                subagent_type=value.get(
+                    "subagent_type", None if resume is not None else DEFAULT_CHILD_TYPE
+                ),
                 tools=tools,
                 model=value.get("model"),
                 description=value.get("description"),
                 worktree=value.get("worktree", False),
+                resume=resume,
             )
         if value is None:
             raise SubagentError("a Task request is required")
+        resume = getattr(value, "resume", None)
         return cls(
             prompt=value.prompt,  # type: ignore[attr-defined]
-            subagent_type=getattr(value, "subagent_type", DEFAULT_CHILD_TYPE),
+            subagent_type=getattr(
+                value, "subagent_type", None if resume is not None else DEFAULT_CHILD_TYPE
+            ),
             tools=_tuple_or_none(getattr(value, "tools", None)),
             model=getattr(value, "model", None),
             description=getattr(value, "description", None),
             worktree=getattr(value, "worktree", False),
+            resume=resume,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -313,6 +357,7 @@ class TaskRequest:
             "model": self.model,
             "description": self.description,
             "worktree": self.worktree,
+            **({"resume": self.resume} if self.resume is not None else {}),
         }
 
 
@@ -434,6 +479,15 @@ class SubagentOutcome:
     #: events. Empty means unavailable (never started, or an external worker
     #: started without reporting a model), not "the tier's model".
     models: tuple[str, ...] = ()
+    #: The child's logical id (``<parent>/sub/<n>``), the handle for ``resume``.
+    #: Empty for a refusal that never reached a child.
+    agent_id: str = ""
+    #: Which run of the child this report closes (1 = the spawn).
+    run: int = 1
+    #: Whether ``subagent(resume=agent_id)`` would be accepted now; ``None`` unknown.
+    continuable: bool | None = None
+    #: Short reason shown when ``continuable`` is false.
+    continuable_note: str = ""
 
     @property
     def ok(self) -> bool:
@@ -482,6 +536,11 @@ class SubagentOutcome:
             "files_changed": list(self.files_changed),
             "handoff_path": self.handoff_path,
             "attention": self.attention,
+            **(
+                {"agent_id": self.agent_id, "run": self.run, "continuable": self.continuable}
+                if self.agent_id
+                else {}
+            ),
             **self._external_dict(),
         }
 
@@ -573,6 +632,16 @@ class SubagentOutcome:
             lines.append(self.handoff)
         if len(lines) == 1:
             lines.append(f"{label}: no report")
+        if self.agent_id:
+            lines.append(f"agent_id: {self.agent_id}")
+            lines.append(f"run: {self.run}")
+            if self.continuable is not None:
+                lines.append(
+                    "continuable: yes"
+                    if self.continuable
+                    else "continuable: no"
+                    + (f" ({self.continuable_note})" if self.continuable_note else "")
+                )
         return "\n".join(lines)
 
 
@@ -664,7 +733,17 @@ class SubagentBudget:
         max_fanout: int | None = DEFAULT_MAX_FANOUT,
         token_budget: int | None = None,
         cost_budget: float | None = None,
+        max_continuations: int | None = DEFAULT_MAX_CONTINUATIONS_PER_TURN,
+        max_runs_per_child: int | None = DEFAULT_MAX_RUNS_PER_CHILD,
     ) -> None:
+        for label, bound in (
+            ("max_continuations", max_continuations),
+            ("max_runs_per_child", max_runs_per_child),
+        ):
+            if bound is not None and (
+                isinstance(bound, bool) or not isinstance(bound, int) or bound < 0
+            ):
+                raise SubagentError(f"{label} must be a non-negative integer or None")
         if (
             isinstance(max_concurrent, bool)
             or not isinstance(max_concurrent, int)
@@ -702,11 +781,16 @@ class SubagentBudget:
         self.max_fanout = max_fanout
         self.token_budget = token_budget
         self.cost_budget = None if cost_budget is None else float(cost_budget)
+        #: Follow-up runs per root-turn window, and total runs per child. Neither
+        #: is fan-out: a follow-up never raises ``children``.
+        self.max_continuations = max_continuations
+        self.max_runs_per_child = max_runs_per_child
 
         self._slots = asyncio.Semaphore(max_concurrent)
         self._lock = asyncio.Lock()
         self._active = 0
         self._children = 0
+        self._continuations = 0
         self._reserved_tokens = 0
         self._reserved_cost = 0.0
         self._spent_tokens = 0
@@ -733,8 +817,14 @@ class SubagentBudget:
         stay held until then.
         """
         self._children = 0
+        self._continuations = 0
         self._spent_tokens = 0
         self._spent_cost = 0.0
+
+    @property
+    def continuations(self) -> int:
+        """Follow-up runs admitted this window (never part of ``children``)."""
+        return self._continuations
 
     @property
     def spent_tokens(self) -> int:
@@ -770,6 +860,9 @@ class SubagentBudget:
             "max_concurrent": self.max_concurrent,
             "max_fanout": self.max_fanout,
             "children": self._children,
+            "continuations": self._continuations,
+            "max_continuations": self.max_continuations,
+            "max_runs_per_child": self.max_runs_per_child,
             "active": self._active,
             "token_budget": self.token_budget,
             "spent_tokens": self._spent_tokens,
@@ -811,6 +904,48 @@ class SubagentBudget:
             self._reserved_tokens += max(0, tokens)
             self._reserved_cost += max(0.0, cost)
             return SubagentReservation(tokens=max(0, tokens), cost=max(0.0, cost))
+
+    async def reserve_continuation(
+        self, *, runs: int, tokens: int = 0, cost: float = 0.0
+    ) -> tuple[SubagentReservation | None, str]:
+        """Admit one follow-up run of an existing child, or say why not.
+
+        Same token/cost admission as :meth:`reserve`, but it never touches the
+        fan-out counter (``children``): a follow-up is not a new child. It is
+        bounded instead by ``max_continuations`` per window and by
+        ``max_runs_per_child`` (``runs`` is the child's durable run count, so
+        failed and cancelled runs count and a restart cannot reset it). The
+        counter is not given back on release: a failed or cancelled follow-up
+        still used its allowance, and nothing retries automatically.
+        """
+        async with self._lock:
+            if self.max_runs_per_child is not None and runs >= self.max_runs_per_child:
+                return None, (
+                    f"this subagent already ran {runs} times "
+                    f"(limit {self.max_runs_per_child}); start a new subagent"
+                )
+            if (
+                self.max_continuations is not None
+                and self._continuations >= self.max_continuations
+            ):
+                return None, (
+                    f"this turn already sent {self._continuations} follow-ups "
+                    f"(limit {self.max_continuations})"
+                )
+            if (
+                self.token_budget is not None
+                and self._spent_tokens + self._reserved_tokens + max(0, tokens)
+                > self.token_budget
+            ) or (
+                self.cost_budget is not None
+                and self._spent_cost + self._reserved_cost + max(0.0, cost)
+                > self.cost_budget
+            ):
+                return None, f"the subagent tree budget is exhausted ({_budget_label(self)})"
+            self._continuations += 1
+            self._reserved_tokens += max(0, tokens)
+            self._reserved_cost += max(0.0, cost)
+            return SubagentReservation(tokens=max(0, tokens), cost=max(0.0, cost)), ""
 
     async def settle(
         self, reservation: SubagentReservation, usage: SubagentUsage
@@ -908,6 +1043,14 @@ class ChildSpec:
     fallback: tuple[str, ...] = ()
     #: Model-facing note when the role's tiers or ``max_tier`` moved the request.
     clamp_note: str = ""
+    #: True when ``prompt`` is a follow-up to an existing child session: the
+    #: runtime must open the stored session (never create one) and run another
+    #: turn on it. ``run`` is the 1-based run number.
+    resume: bool = False
+    run: int = 1
+    #: The immutable ``agent.config`` record a first run persists in the child's
+    #: own log (secret-safe; never relayed). ``None`` for a follow-up.
+    config_record: Mapping[str, Any] | None = None
 
 
 class ChildRuntime(Protocol):
@@ -1134,6 +1277,98 @@ class PreparedChild:
     child_workspace: Path
     spawn_event: object | None
     error: BaseException | None
+    #: The role body the child runs with (spawn) and the immutable record of how
+    #: it was configured: written on a first run, loaded for a follow-up.
+    system_prompt: str = ""
+    config_record: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    #: 1-based run number; ``resume`` marks a follow-up on an existing session.
+    run: int = 1
+    resume: bool = False
+
+
+_LIFECYCLE_EVENTS = frozenset({"agent.spawned", "agent.resumed", "agent.completed", "agent.stopped"})
+
+
+@dataclass(frozen=True)
+class ChildLifecycle:
+    """What a parent log says about one child (``found`` is false when it names none)."""
+
+    found: bool = False
+    #: Runs started so far (1 = the spawn); failed and cancelled runs count.
+    runs: int = 0
+    #: Status of the last finished run (``None`` while a run is open).
+    status: str | None = None
+    #: A run was started and never closed.
+    open: bool = False
+    stopped: bool = False
+    background: bool = False
+
+
+def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecycle:
+    """Fold the parent's lifecycle events for exactly ``agent_id``.
+
+    Identity is the exact logical id in the event's ``agent`` block, so a
+    descendant's relayed events and other children never match.
+    """
+    found = open_run = stopped = background = False
+    runs = 0
+    status: str | None = None
+    before: str | None = None
+    for event in events:
+        if event.type not in _LIFECYCLE_EVENTS or not isinstance(event.data, Mapping):
+            continue
+        meta = event.data.get("agent")
+        ident = meta.get("id") if isinstance(meta, Mapping) else event.data.get("id")
+        if ident != agent_id:
+            continue
+        run = event.data.get("run")
+        run = run if isinstance(run, int) and not isinstance(run, bool) and run > 0 else None
+        if event.type == "agent.spawned":
+            found, open_run, runs, status = True, True, 1, None
+            background = bool(event.data.get("background"))
+        elif not found:
+            continue
+        elif event.type == "agent.resumed":
+            before = status
+            open_run, status = True, None
+            runs = run if run is not None else runs + 1
+        elif event.type == "agent.completed":
+            open_run = False
+            status = str(event.data.get("status") or "completed")
+            if event.data.get("unchanged") and before is not None:
+                status = before  # the refused follow-up left the child as it was
+            if run is not None:
+                runs = max(runs, run)
+        elif event.type == "agent.stopped":
+            stopped = True
+    return ChildLifecycle(
+        found=found, runs=runs, status=status, open=open_run,
+        stopped=stopped, background=background,
+    )
+
+
+_UNKNOWN_CHILD = (
+    "no finished subagent with that agent_id belongs to this session; "
+    "start a new subagent"
+)
+
+
+def _canonical_sha(record: Mapping[str, Any]) -> str:
+    """Digest of a JSON record; the parent log carries this, never the body."""
+    import json
+
+    return hashlib.sha256(
+        json.dumps(record, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()[:16]
+
+
+def _clip_followup(prompt: str) -> str:
+    """The redacted follow-up text for ``agent.resumed.message`` (the child gets it whole)."""
+    text = redact_secrets(prompt)
+    if len(text) <= RESUME_MESSAGE_CHARS:
+        return text
+    return text[: RESUME_MESSAGE_CHARS - 1] + "…"
 
 
 class SubagentRunner:
@@ -1183,6 +1418,7 @@ class SubagentRunner:
         tier_efforts: Callable[[], Mapping[str, Mapping[str, str]]] | None = None,
         route_gate: Callable[[str], Any] | None = None,
         stop_child_jobs: Callable[[str], Any] | None = None,
+        parent_events: Callable[[], Iterable[Event]] | None = None,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -1239,6 +1475,10 @@ class SubagentRunner:
         #: left running when its run ends. Children never wake on a job exit, so
         #: a job that outlives the child's run would have no owner.
         self._stop_child_jobs = stop_child_jobs
+        #: ``() -> durable events of this runner's parent session``: the lifecycle
+        #: authority for ``resume`` (finished, closed, running). Absent, no child
+        #: is continuable.
+        self._parent_events = parent_events
         self._sessions: SessionFacade = (
             sessions if sessions is not None else DefaultSessionFacade(
                 segment=child_session_segment
@@ -1430,17 +1670,11 @@ class SubagentRunner:
         req = TaskRequest.from_value(request)
         if req.model and req.model not in self._tiers.order and req.model != MODEL_INHERIT:
             if "/" not in req.model and req.model not in self._tiers.order:
-                try:
-                    role = self._agents.resolve(req.subagent_type, context="subagent")
-                except AgentNotFoundError:
-                    role = None
+                role = self._role_for(req)
                 if role is not None and role.provider:
                     return f"{role.provider}/{req.model}"
             return req.model
-        try:
-            role = self._agents.resolve(req.subagent_type, context="subagent")
-        except AgentNotFoundError:
-            role = None
+        role = self._role_for(req)
         if role is not None and role.model and role.model != MODEL_INHERIT:
             if role.model in self._tiers.order or "/" in role.model:
                 return role.model
@@ -1457,15 +1691,14 @@ class SubagentRunner:
         req = TaskRequest.from_value(request)
         if req.model and "/" in req.model:
             return req.model.split("/", 1)[0]
-        try:
-            role = self._agents.resolve(req.subagent_type, context="subagent")
-        except AgentNotFoundError:
+        role = self._role_for(req)
+        if role is None:
             return None
-        if req.model and "/" in req.model:
-            return req.model.split("/", 1)[0]
         return role.provider
 
     def _role_for(self, req: TaskRequest) -> AgentDef | None:
+        if req.subagent_type is None:  # a resume request names no role
+            return None
         try:
             return self._agents.resolve(req.subagent_type, context="subagent")
         except AgentNotFoundError:
@@ -1562,6 +1795,15 @@ class SubagentRunner:
     def permission_key(self, request: object) -> str:
         """The gate key ``"<subagent_type>:<tier>"`` (plan section 15.6)."""
         req = TaskRequest.from_value(request)
+        if req.resume is not None:
+            # A follow-up is authorized as the child it continues: the recorded
+            # role and tier, never the default role and never the caller's
+            # claim. Anything unresolvable (unknown, foreign, legacy) fails
+            # closed to a key no role rule names.
+            record = self._child_record(req.resume)
+            if record is None:
+                return RESUME_UNRESOLVED_KEY
+            return f"{record.get('role')}:{record.get('tier')}"
         resolution = self.resolve_tier(req)
         return f"{req.subagent_type}:{resolution.tier}"
 
@@ -1749,9 +1991,14 @@ class SubagentRunner:
 
         if self._depth >= 1:
             return self._refusal(
-                agent=req.subagent_type,
+                agent=req.subagent_type or "subagent",
                 error="Task: subagents cannot spawn subagents; only the root session may",
                 request=req,
+            )
+
+        if req.resume is not None:
+            return await self._prepare_resume(
+                req, cancel=cancel, emit=emit, call_id=call_id
             )
 
         try:
@@ -1882,6 +2129,10 @@ class SubagentRunner:
         worktree_root: Path | None = None
         spawn_event: object | None = None
         error: BaseException | None = None
+        system_prompt = ""
+        reasoning_effort: str | None = None
+        config_record: dict[str, Any] | None = None
+        config_sha = ""
         try:
             if req.worktree:
                 if not self._runtime_supports_workspace:
@@ -1919,12 +2170,25 @@ class SubagentRunner:
                 )
                 child_workspace = Path(str(worktree["path"]))
                 meta["worktree"] = dict(worktree)
+            system_prompt = self._agents.load_body(role)
+            reasoning_effort = self._reasoning_effort(role, tier, child_model)
+            config_record = self._config_record(
+                role=role, req=req, system_prompt=system_prompt,
+                selection=selection, dropped=dropped, child_model=child_model,
+                child_provider=child_provider, tier=tier, decision=decision,
+                resolution=resolution, clamped=clamped, clamp_note=clamp_note,
+                reasoning_effort=reasoning_effort, workspace=child_workspace,
+                task_id=task_id, index=index,
+                isolated=worktree is not None or self._worktree_scope,
+            )
+            config_sha = _canonical_sha(config_record)
             spawn_event = await _forward(
                 sink,
                 AGENT_SPAWNED,
                 {
                     "agent": dict(meta),
                     **meta,
+                    "config_sha": config_sha,
                     "description": req.description or role.description,
                     "model": child_model,
                     "requested_tier": (
@@ -1973,7 +2237,309 @@ class SubagentRunner:
             relay=relay, reservation=reservation, call_id=call_id, worktree=worktree,
             worktree_root=worktree_root, mark_finished=mark_finished,
             child_workspace=child_workspace, spawn_event=spawn_event, error=error,
+            system_prompt=system_prompt, config_record=config_record,
+            reasoning_effort=reasoning_effort,
         )
+
+    # -- continuation ------------------------------------------------------
+
+    def _reasoning_effort(self, role: AgentDef, tier: str, child_model: str | None) -> str | None:
+        return role.reasoning_effort or getattr(
+            getattr(getattr(self._config, "v2", None), "models", None),
+            "tier_efforts", {},
+        ).get(tier, {}).get(child_model)
+
+    def _config_record(
+        self, *, role: AgentDef, req: TaskRequest, system_prompt: str,
+        selection: AgentToolSelection, dropped: tuple[str, ...],
+        child_model: str | None, child_provider: str | None, tier: str,
+        decision: TierDecision, resolution: TierResolution, clamped: bool,
+        clamp_note: str, reasoning_effort: str | None, workspace: Path,
+        task_id: str, index: int, isolated: bool,
+    ) -> dict[str, Any]:
+        """The immutable ``agent.config`` record a first run persists in the child log.
+
+        Names, references, the redacted role prompt and limits only: no grants,
+        permission rules, environment, endpoints or credentials. Authority is
+        always recomputed from the *current* parent on a follow-up.
+        """
+        safe_prompt = redact_secrets(system_prompt)
+        return {
+            "version": CHILD_CONFIG_VERSION,
+            "role": role.name,
+            "role_sha": hashlib.sha256(system_prompt.encode()).hexdigest()[:16],
+            "system_prompt": safe_prompt,
+            "prompt_redacted": safe_prompt != system_prompt,
+            "description": req.description or role.description,
+            "tools": sorted(selection.selected),
+            "dropped_tools": list(dropped),
+            "model": child_model,
+            "requested_model": req.model,
+            "provider": child_provider,
+            "fallback": list(role.fallback),
+            "tier": tier,
+            "requested_tier": decision.requested or resolution.reference or self._parent_tier,
+            "clamped": clamped,
+            "clamp_note": clamp_note,
+            "reasoning_effort": reasoning_effort,
+            "max_iterations": role.max_iterations or 0,
+            "context_tokens": role.context_tokens,
+            "workspace": str(workspace),
+            "context_read": req.context_read,
+            "worktree": bool(isolated),
+            "task": task_id,
+            "index": index,
+        }
+
+    def _lifecycle(self, agent_id: str) -> ChildLifecycle | None:
+        if self._parent_events is None:
+            return None
+        try:
+            return fold_child_lifecycle(self._parent_events(), agent_id)
+        except Exception:  # noqa: BLE001 - an unreadable log means not continuable
+            return None
+
+    def _child_record(self, agent_id: str) -> Mapping[str, Any] | None:
+        """The stored ``agent.config`` of one of *this* session's children, else ``None``.
+
+        The facade verifies the child's ownership edge, so a foreign or unknown
+        id and a legacy child without a record are indistinguishable here.
+        """
+        reader = getattr(self._sessions, "child_config", None)
+        if not callable(reader):
+            return None
+        try:
+            record = reader(self._parent_session, agent_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(record, Mapping) or record.get("version") != CHILD_CONFIG_VERSION:
+            return None
+        if not isinstance(record.get("role"), str) or not isinstance(record.get("tier"), str):
+            return None
+        return record
+
+    async def _prepare_resume(
+        self,
+        req: TaskRequest,
+        *,
+        cancel: object | None,
+        emit: object | None,
+        call_id: str,
+    ) -> PreparedChild | SubagentOutcome:
+        """Validate a follow-up, reserve a run, and emit ``agent.resumed``.
+
+        Order: overrides; ownership and lifecycle (unknown and foreign share one
+        message); the stored record; role identity; current authority; budget.
+        Nothing is emitted or reserved before every check passed.
+        """
+        agent_id = str(req.resume)
+        label = req.subagent_type or "subagent"
+
+        def refuse(reason: str) -> SubagentOutcome:
+            return self._refusal(
+                agent=label, request=req,
+                error=f"Task: cannot continue {agent_id!r}: {reason}",
+            )
+
+        if req.tools is not None or req.model is not None or req.worktree or req.context_read:
+            return refuse(
+                "a continued subagent keeps its recorded tools, model and workspace; "
+                "pass only agent_id and prompt"
+            )
+        lifecycle = self._lifecycle(agent_id)
+        if lifecycle is None or not lifecycle.found:
+            return refuse(_UNKNOWN_CHILD)
+        if lifecycle.stopped:
+            return refuse("it was closed; start a new subagent")
+        if lifecycle.background:
+            return refuse("it was a background subagent from an older version")
+        if agent_id in _LIVE_CHILDREN or lifecycle.open:
+            return refuse("it is still running")
+        if lifecycle.status != "completed":
+            return refuse(
+                f"its last run ended {lifecycle.status!r}; only a completed subagent "
+                "can be continued, so start a new subagent"
+            )
+        record = self._child_record(agent_id)
+        if record is None:
+            return refuse(
+                "it has no recorded configuration (started by an older version or "
+                "an external worker); start a new subagent"
+            )
+        if record.get("worktree"):
+            return refuse("worktree subagents cannot be continued; start a new subagent")
+        if record.get("prompt_redacted"):
+            return refuse("its role prompt contained redacted text; start a new subagent")
+        role_name = str(record["role"])
+        if req.subagent_type is not None and req.subagent_type != role_name:
+            try:  # a legacy alias that resolves to the recorded role is equal
+                asked = self._agents.resolve(req.subagent_type, context="subagent").name
+            except AgentNotFoundError:
+                asked = None
+            if asked != role_name:
+                return refuse(f"a continued subagent keeps its role {role_name!r}")
+        try:
+            role = self._agents.resolve(role_name, context="subagent")
+        except AgentNotFoundError:
+            role = None
+        if role is None:
+            return refuse(f"its role {role_name!r} is no longer available; start a new subagent")
+        try:
+            workspace = Path(str(record.get("workspace", "")))
+            same_workspace = workspace.resolve() == self._workspace.resolve() and workspace.is_dir()
+        except (OSError, ValueError):
+            same_workspace = False
+        if not same_workspace:
+            return refuse("its workspace is no longer this session's workspace")
+        try:
+            resolution = self._tiers.resolve(
+                str(record["tier"]), parent=self._parent_tier, max_tier=self._max_tier
+            )
+        except Exception:  # noqa: BLE001 - an unknown tier is a refusal, not a crash
+            return refuse(f"its tier {record['tier']!r} no longer resolves")
+        tier = resolution.tier
+        allowed = self.allowed_tiers(role)
+        if allowed and tier not in allowed:
+            return refuse(f"its tier {tier!r} is no longer allowed for role {role.name!r}")
+        # A tier lowered below the recorded one moves the child down to it; a
+        # concrete recorded model is kept only while the tier did not move.
+        child_model = tier if resolution.clamped else record.get("model")
+        if not self._runnable(tier):
+            # A first run whose tier had no runnable model ran on the parent's
+            # model (see ``_tiered_child_model``) and recorded that model. It
+            # continues only on that same model, still the parent's; the child is
+            # never moved to a different one.
+            recorded = child_model if isinstance(child_model, str) else None
+            pinned_fallback = (
+                recorded is not None
+                and recorded not in self._tiers.order
+                and bool(self._parent_model)
+                and recorded == self._parent_model
+            )
+            if not pinned_fallback:
+                return refuse(f"no model is available for its tier {tier!r} right now")
+        recorded_tools = tuple(str(name) for name in record.get("tools") or ())
+        selection = self.select_tools(
+            role, TaskRequest(prompt=req.prompt, subagent_type=role.name, tools=recorded_tools)
+        )
+        dropped = tuple(sorted(selection.dropped))
+
+        if _is_cancelled(cancel):
+            raise OperationCancelled(_cancel_reason(cancel) or "cancelled")
+        # Claim the child before the first await: every check above is
+        # synchronous, so two follow-ups to one child in a batch cannot both pass.
+        parent_cancel = cancel
+        child_cancel = _ChildCancel(parent_cancel)
+        _LIVE_CHILDREN[agent_id] = child_cancel
+        try:
+            reservation, why = await self._budget.reserve_continuation(
+                runs=lifecycle.runs, tokens=self._reserved_tokens, cost=self._reserved_cost
+            )
+        except BaseException:
+            _LIVE_CHILDREN.pop(agent_id, None)
+            raise
+        if reservation is None:
+            _LIVE_CHILDREN.pop(agent_id, None)
+            return refuse(why)
+
+        try:
+            sink = emit if emit is not None else self._event_sink
+            run = lifecycle.runs + 1
+            task_id = str(record.get("task") or new_id())
+            meta = {
+                "id": agent_id,
+                "parent": self._parent_agent_id or self._parent_session,
+                "parent_session": self._parent_session,
+                "root_id": (
+                    self._sessions.root_id(self._parent_session)
+                    if callable(getattr(self._sessions, "root_id", None))
+                    else self._parent_session
+                ),
+                "parent_agent_id": self._parent_agent_id,
+                "parent_call_id": call_id if isinstance(call_id, str) else "",
+                "root_turn_id": self._root_turn_id,
+                "depth": self._depth + 1,
+                "type": role.name,
+                "task": task_id,
+                "agent_id": agent_id,
+                "tier": tier,
+                "index": record.get("index"),
+                "session": agent_id,
+            }
+            relay = _ChildRelay(sink, meta, agent_id)
+            resumed_event: object | None = None
+            error: BaseException | None = None
+            try:
+                resumed_event = await _forward(
+                    sink,
+                    AGENT_RESUMED,
+                    {
+                        "agent": dict(meta),
+                        **meta,
+                        "run": run,
+                        "from": "root",
+                        "message": _clip_followup(req.prompt),
+                        "message_chars": len(req.prompt),
+                        "background": False,
+                        "model": child_model,
+                        "tier": tier,
+                        "call_id": call_id if isinstance(call_id, str) else "",
+                        "worktree": None,
+                    },
+                    session=self._parent_session,
+                )
+            except (Exception, asyncio.CancelledError) as exc:
+                error = exc
+            return PreparedChild(
+                req=req, role=role, depth=self._depth + 1, selection=selection,
+                decision=TierDecision(
+                    resolution=resolution, requested=str(record.get("requested_tier") or "") or None
+                ),
+                resolution=resolution, tier=tier, child_model=child_model,
+                child_provider=record.get("provider"), clamped=bool(resolution.clamped),
+                clamp_note="", dropped=dropped, sink=sink, session_id=agent_id,
+                task_id=task_id, agent_id=agent_id, parent_cancel=parent_cancel,
+                cancel=child_cancel, meta=meta, relay=relay, reservation=reservation,
+                call_id=call_id, worktree=None, worktree_root=None, mark_finished=None,
+                child_workspace=workspace, spawn_event=resumed_event, error=error,
+                system_prompt=str(record.get("system_prompt") or ""),
+                config_record=dict(record),
+                reasoning_effort=record.get("reasoning_effort"),
+                run=run, resume=True,
+            )
+        except BaseException:
+            # Nothing past this point hands the claim to ``_execute``, whose
+            # ``finally`` normally clears it: give both back here.
+            _LIVE_CHILDREN.pop(agent_id, None)
+            with contextlib.suppress(Exception):
+                await self._budget.release_reservation(reservation)
+            raise
+
+    def _continuability(
+        self, outcome: SubagentOutcome, p: PreparedChild, worktree: Mapping[str, Any] | None
+    ) -> tuple[bool | None, str]:
+        """Whether ``outcome``'s child can take a follow-up: ``(flag, short reason)``.
+
+        ``None`` means the facade cannot say (no stored records), which keeps the
+        report silent rather than wrong.
+        """
+        if p.run > 1 and outcome.metrics.get("unchanged"):
+            # A follow-up refused before it touched the stored transcript: the
+            # child is exactly as the previous completed run left it.
+            return True, ""
+        if outcome.status != "completed" or outcome.is_error:
+            return False, outcome.status or "failed"
+        if worktree is not None or p.req.worktree or self._worktree_scope:
+            return False, "worktree subagent"
+        if outcome.usage_unknown or outcome.metrics.get("authority"):
+            return False, "external worker"
+        if p.config_record is not None and p.config_record.get("prompt_redacted"):
+            return False, "role prompt contained redacted text"
+        if not callable(getattr(self._sessions, "child_config", None)):
+            return None, ""
+        if self._child_record(p.session_id) is None:
+            return False, "no recorded configuration"
+        return True, ""
 
     async def _execute(self, p: PreparedChild) -> SubagentOutcome:
         """Run a prepared child, finalize its worktree, settle budget, emit ``agent.completed``."""
@@ -2000,12 +2566,19 @@ class SubagentRunner:
             acquired = True
             if _is_cancelled(cancel):
                 raise OperationCancelled(_cancel_reason(cancel) or "cancelled")
-            system_prompt = self._agents.load_body(role)
+            # A follow-up runs on the role prompt, limits and fallbacks the child
+            # was created with (the stored record), never on the role file as it
+            # is now; authority (tools, tier) was re-intersected in ``_prepare``.
+            rec: Mapping[str, Any] = p.config_record if p.resume and p.config_record else {}
+            system_prompt = (
+                p.system_prompt if (p.resume or p.system_prompt)
+                else self._agents.load_body(role)
+            )
             spec = ChildSpec(
                 task_id=task_id,
                 agent_id=agent_id,
                 agent=role.name,
-                description=req.description or role.description,
+                description=req.description or str(rec.get("description") or "") or role.description,
                 system_prompt=system_prompt,
                 prompt=req.prompt,
                 session_id=session_id,
@@ -2020,22 +2593,22 @@ class SubagentRunner:
                 tools=tuple(sorted(selection.selected)),
                 dropped_tools=dropped,
                 model=child_model,
-                requested_model=req.model,
+                requested_model=rec.get("requested_model") if p.resume else req.model,
                 parent_model=self._parent_model,
                 provider=child_provider,
-                reasoning_effort=role.reasoning_effort or getattr(
-                    getattr(getattr(self._config, "v2", None), "models", None),
-                    "tier_efforts", {},
-                ).get(tier, {}).get(child_model),
-                fallback=tuple(role.fallback),
+                reasoning_effort=(
+                    rec.get("reasoning_effort") if p.resume
+                    else self._reasoning_effort(role, tier, child_model)
+                ),
+                fallback=tuple(rec.get("fallback") or ()) if p.resume else tuple(role.fallback),
                 tier=tier,
                 requested_tier=(
                     decision.requested or resolution.reference or self._parent_tier
                 ),
                 clamped=clamped,
                 clamp_note=clamp_note,
-                max_iterations=role.max_iterations or 0,
-                context_tokens=role.context_tokens,
+                max_iterations=int(rec.get("max_iterations") or 0) if p.resume else (role.max_iterations or 0),
+                context_tokens=rec.get("context_tokens") if p.resume else role.context_tokens,
                 workspace=child_workspace,
                 worktree=worktree,
                 worktree_scope=self._worktree_scope or req.worktree,
@@ -2052,6 +2625,9 @@ class SubagentRunner:
                     "workspace": str(child_workspace),
                     "worktree": dict(worktree) if worktree is not None else None,
                 },
+                resume=p.resume,
+                run=p.run,
+                config_record=None if p.resume else p.config_record,
             )
             outcome = await self._run_child(spec, cancel)
         except OperationCancelled:
@@ -2210,6 +2786,11 @@ class SubagentRunner:
             raise SubagentError("subagent run produced no outcome")
         if not outcome.models and relay.models:
             outcome = replace(outcome, models=relay.models)
+        continuable, why_not = self._continuability(outcome, p, worktree)
+        outcome = replace(
+            outcome, agent_id=agent_id, run=p.run,
+            continuable=continuable, continuable_note=why_not,
+        )
         await self._emit_completed(sink, meta, outcome)
         if task_cancelled:
             raise asyncio.CancelledError
@@ -2300,6 +2881,9 @@ class SubagentRunner:
                 "is_error": outcome.is_error,
                 "usage": outcome.usage.to_dict(),
                 **({"usage_unknown": True} if outcome.usage_unknown else {}),
+                **({"run": outcome.run} if outcome.agent_id else {}),
+                **({"continuable": outcome.continuable} if outcome.continuable is not None else {}),
+                **({"unchanged": True} if outcome.metrics.get("unchanged") else {}),
                 "iterations": outcome.iterations,
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),

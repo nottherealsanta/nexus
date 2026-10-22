@@ -290,7 +290,7 @@ Config lives in `release-please-config.json`:
 
   Extras are read back from `uv-receipt.toml` (bounded to 64 KiB) and the running
   Python's `X.Y` is passed, so an update keeps both. `voice` is also kept when the
-  receipt lost it but the user dictates: the runtime (`kestrel`) is importable, or a
+  receipt lost it but the user dictates: the runtime (Torch, Transformers, `constriction`) is importable, or a
   model is downloaded under `~/.nexus/models/voice/` (`install.update_extras`; never
   on musl). The update says `Keeping local dictation (voice)`; `--no-voice` drops it.
   `speak` follows the same rule: kept when the receipt lists it, the speech runtime

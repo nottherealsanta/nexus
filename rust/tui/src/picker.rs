@@ -262,10 +262,10 @@ impl Dashboard {
         }
     }
 
-    /// Archived headings start collapsed; every other heading starts open.
+    /// Archived headings start collapsed (a search shows its archived matches); every other heading starts open.
     pub fn is_collapsed(&self, key: &str) -> bool {
         if key.starts_with("Archived") {
-            !self.archived_open
+            !self.archived_open && self.query.is_empty()
         } else {
             self.collapsed.contains(key)
         }

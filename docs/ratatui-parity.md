@@ -1751,7 +1751,8 @@ first (`updated`). With `g` (group by project) the project is appended to the st
 heading (`Idle · nexus › main · Today`), which can be noisy: not verified in a PTY capture.
 Each row draws its status glyph once (`title_spans` owns it; `draw_at` only indents; a unit test counts it).
 **Archived** rows come with the dashboard payload (the newest 20, `archived: true`,
-`status: "archived"`) and the group is collapsed until its heading is opened; Enter on one
+`status: "archived"`) and the group is collapsed until its heading is opened (a search also matches archived sessions and shows the
+group open); Enter on one
 opens the existing archived preview, whose **Resume** unarchives it. A **Needs you** row
 has two more lines under the title: the pending question (`Allow Bash: git push origin
 main`) with `waiting mm:ss` (counted from the request's `ts`, one redraw per second via

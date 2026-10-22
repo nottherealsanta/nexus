@@ -50,6 +50,8 @@ def env(tmp_path):
     stubs = tmp_path / "stubs"
     stubs.mkdir()
     _exe(stubs / "uv", UV_STUB)
+    # Apple silicon: the host's own platform must not decide whether voice installs.
+    _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; *) echo arm64 ;; esac\n')
     _exe(bin_dir / "nexus", NEXUS_STUB)
     log = tmp_path / "uv.log"
     log.write_text("")
@@ -121,8 +123,18 @@ def test_no_voice_skips_dictation(env):
     assert "nexus-harness[voice]\n" in log.read_text()  # not duplicated
 
 
+def test_intel_mac_installs_without_voice(env):
+    """Torch (voice) has no Intel macOS wheels; those Macs must still install."""
+    vars_, log, stubs = env
+    _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; *) echo x86_64 ;; esac\n')
+    result = run(vars_, "--no-doctor")
+    assert result.returncode == 0, result.stderr
+    assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
+    assert "Intel Mac detected" in result.stdout
+
+
 def test_musl_installs_without_voice(env):
-    """kestrel-native (voice) ships no musl wheels; Alpine must still install."""
+    """Torch (voice) ships no musl wheels; Alpine must still install."""
     vars_, log, stubs = env
     _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Linux ;; *) echo x86_64 ;; esac\n')
     _exe(stubs / "ldd", "#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n")
@@ -272,7 +284,7 @@ def test_voice_install_command_argv():
         "/u/uv", method="editable", source="unknown", extras=[], direct_url=None, **kw
     )
     assert editable[:5] == ["/u/uv", "pip", "install", "--python", "/venv/bin/python"]
-    assert any(req.startswith("moondream") for req in editable[5:])
+    assert any(req.startswith("transformers") for req in editable[5:])
     assert voice_install_command(
         None, method="pip", source="pypi", extras=[], direct_url=None, **kw
     )[:4] == ["/venv/bin/python", "-m", "pip", "install"]
@@ -282,7 +294,7 @@ def test_voice_requirements_come_from_package_metadata():
     from nexus.host_support.install import voice_requirements
 
     reqs = voice_requirements()
-    assert any(req.startswith("moondream") for req in reqs)
+    assert any(req.startswith("transformers") for req in reqs)
     assert not any(req.startswith("pytest") for req in reqs)
 
 
@@ -583,12 +595,31 @@ def test_update_extras_keep_speak_for_a_user_who_speaks(monkeypatch, tmp_path, r
     assert install.update_extras(keep_speak=keep, home=tmp_path) == expected
 
 
-def test_a_cached_kokoro_model_keeps_speak_after_the_paradee_switch(monkeypatch, tmp_path):
+@pytest.mark.parametrize("repo", [
+    "models--gradium--phonon-31m-en",
+    "models--sahilmahendrakar--Paradee-8M-v1.0",
+    "models--hexgrad--Kokoro-82M",
+])
+def test_a_cached_speech_model_keeps_speak(monkeypatch, tmp_path, repo):
     from nexus.host_support import install
 
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
-    (tmp_path / "hub/models--hexgrad--Kokoro-82M/snapshots/x").mkdir(parents=True)
+    (tmp_path / "hub" / repo / "snapshots" / "x").mkdir(parents=True)
     assert install.speech_model_downloaded(tmp_path)
+
+
+@pytest.mark.parametrize("present,expected", [
+    ({"ptts", "sounddevice"}, True),
+    ({"ptts"}, False),
+    ({"onnxruntime", "misaki", "sounddevice"}, False),
+])
+def test_speak_runtime_needs_ptts_and_sounddevice(monkeypatch, present, expected):
+    import importlib.util
+
+    from nexus.host_support import install
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object() if name in present else None)
+    assert install.speak_runtime_installed() is expected
 
 
 @pytest.mark.parametrize("argv,speak", [(["update"], True), (["update", "--no-speak"], False)])

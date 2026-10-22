@@ -43,9 +43,12 @@ async def test_the_call_blocks_and_returns_the_report_as_its_result(tmp_path):
     # The child ran entirely inside the root turn, before the root's final answer.
     assert types.index("agent.spawned") < types.index("agent.completed") < types.index("turn.completed")
     assert completed.data["status"] == "completed"
-    # New logs carry no background-mode fields.
+    # New logs carry no background-mode fields. The close of a run names its run
+    # and whether a follow-up (``subagent(resume=...)``) would be accepted.
     for key in ("background", "continuable", "run"):
-        assert key not in spawned.data and key not in completed.data
+        assert key not in spawned.data
+    assert "background" not in completed.data
+    assert completed.data["run"] == 1 and completed.data["continuable"] is True
     # No report is queued back to the root; the tool result was the delivery.
     assert not [
         e for e in events

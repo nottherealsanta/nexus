@@ -115,8 +115,58 @@ def test_task_spec_shape_and_bundle():
         "model",
         "description",
         "worktree",
+        "resume",
     }
     assert "background" not in schema["properties"] and "wait" not in schema["properties"]
+
+
+def test_resume_key_never_falls_back_to_the_default_role():
+    # Static (no service): fails closed to a key no role rule names.
+    for data in (
+        {"prompt": "x", "resume": "root/sub/1"},
+        {"prompt": "x", "resume": "root/sub/1", "subagent_type": "advisor", "model": "low"},
+    ):
+        assert task.TASK_SPEC.resolve_permission_key(data) == "resume:unresolved"
+    from nexus.tools.permissions import parse_rule
+
+    assert not parse_rule("Task(task:*)").matches("subagent", "resume:unresolved", "task")
+
+
+def test_bound_resume_key_is_the_services_and_gets_no_default_type():
+    seen: list[dict] = []
+
+    class Service(FakeService):
+        def permission_key(self, request):
+            seen.append(dict(request))
+            return "advisor:high"
+
+    service = Service(outcome())
+    spec = task.make_task_spec(service)
+    assert spec.resolve_permission_key({"prompt": "x", "resume": "root/sub/1"}) == "advisor:high"
+    assert "subagent_type" not in seen[-1]
+    spec.resolve_permission_key({"prompt": "x"})
+    assert seen[-1]["subagent_type"] == "general"
+
+
+async def test_resume_request_is_forwarded_without_a_default_type(tmp_path):
+    service = FakeService(outcome())
+    await task.run({"prompt": "and the tests?", "resume": "root/sub/1"}, make_ctx(tmp_path, subagents=service))
+    assert service.requests[-1] == {"prompt": "and the tests?", "resume": "root/sub/1"}
+    bad = await task.run({"prompt": "x", "resume": ""}, make_ctx(tmp_path, subagents=service))
+    assert bad.is_error and len(service.requests) == 1
+
+
+@pytest.mark.parametrize("filler", [",", "no", "none", "null"])
+async def test_filler_resume_beside_fresh_arguments_starts_a_new_subagent(tmp_path, filler):
+    """Regression: a model filled ``resume`` with ``","`` on a fresh call (session-5283e69c)."""
+    service = FakeService(outcome())
+    args = {"prompt": "x", "subagent_type": "scout", "resume": filler, "tools": ["read"], "model": "low"}
+    result = await task.run(args, make_ctx(tmp_path, subagents=service))
+    assert not result.is_error
+    assert "resume" not in service.requests[-1]
+    assert service.requests[-1]["subagent_type"] == "scout"
+    assert task.TASK_SPEC.resolve_permission_key(args) == "scout:low"
+    assert task.make_task_spec(service).resolve_permission_key(args) == "general:medium"
 
 
 @pytest.mark.parametrize(

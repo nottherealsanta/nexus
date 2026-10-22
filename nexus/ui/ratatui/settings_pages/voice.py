@@ -1,4 +1,4 @@
-"""Settings → Voice & speech: local dictation and local Paradee speech on one page.
+"""Settings → Voice & speech: local dictation and local ptts speech on one page.
 
 Both are local features, so every value is global and no scope control is shown. Model downloads
 always ask first (a confirmation page, the one allowed drill-in) and then show progress here.
@@ -50,8 +50,8 @@ async def build(workflows) -> dict:
         blocks.append(sp.buttons("voice-download", [("Download local model…", sp.op(AREA, "voice_download_ask"), "primary")]))
     blocks.append(sp.gap())
 
-    blocks += [sp.heading("Speech · /speak, local Paradee"),
-               sp.note("/speak reads the latest answer aloud with Paradee, a small CPU model with one voice (Kokoro's af_heart). Settings are saved in nexus.toml [speech]. Nothing downloads without your consent.")]
+    blocks += [sp.heading("Speech · /speak, local ptts"),
+               sp.note("/speak reads the latest answer aloud with ptts (gradium phonon, int8), a small CPU model with one English voice. Settings are saved in nexus.toml [speech]. Nothing downloads without your consent.")]
     blocks.append(sp.row("language", "Language", sp.select(next((l for l, v in LANGUAGES if v == language), language),
                                                             [(l, v) for l, v in LANGUAGES], sp.op(AREA, "speech", name="language"))))
     blocks.append(sp.row("speech_voice", "Voice", sp.select(str(speech_values["voice"]), [(v, v) for v in compatible_voices(language)],

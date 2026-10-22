@@ -231,7 +231,7 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 `nexus/devtools/manager_debug_mcp.py` exposes the manager's eight tools (`sessions_find`,
 `session_launch`, `session_status`, `session_wait`, `session_result`, `session_cancel`,
 `session_send`, `session_show`) to an MCP client a developer uses to debug Nexus. **Debug only**: not used by
-the product path, off unless `NEXUS_DEBUG_MCP=1`, and every tool description starts with
+the product path, and every tool description starts with
 `[DEBUG ONLY]`. It reuses the manager's own tool functions (validation, bounds, result
 wrapping) against `DaemonManagerPort` (`devtools/debug_mcp_port.py`), which is a plain
 host-protocol client (`SessionList`, `SessionState`, `SessionEnqueue`, `SessionCancel`,
@@ -242,9 +242,9 @@ session in this path.
 | --- | --- |
 | Transport | newline-delimited JSON-RPC on stdio; no listener. Requests ≤ 1 MB, ≤ 8 in flight, reply ≤ 64 KiB |
 | Daemon | connects to the workspace's **running** daemon (`--workspace`, default cwd); never starts or restarts one. No daemon → an error reply per call |
-| Run | `NEXUS_DEBUG_MCP=1 uv run python -m nexus.devtools.manager_debug_mcp`; `--list-tools` prints the names |
-| Project setup | `.agents/mcp.json` entry `nexus-manager-debug`, shipped `enabled: false`; switch it on in Settings > MCP (a session then lists it under MCP search) or set `"enabled": true` |
-| Other clients | e.g. `claude mcp add nexus-manager-debug -e NEXUS_DEBUG_MCP=1 -- uv run python -m nexus.devtools.manager_debug_mcp` from the repo |
+| Run | `uv run python -m nexus.devtools.manager_debug_mcp`; `--list-tools` prints the names |
+| Project setup | `.agents/mcp.json` entry `nexus-manager-debug`, shipped enabled like any other MCP and needs no environment variable (a session lists it under MCP search); turn it off in Settings > MCP or with `"enabled": false` |
+| Other clients | e.g. `claude mcp add nexus-manager-debug -- uv run python -m nexus.devtools.manager_debug_mcp` from the repo |
 
 Differences from the in-app manager, all because there is no manager log and no on-screen
 approval here (the MCP client's tool approval is the human gate):

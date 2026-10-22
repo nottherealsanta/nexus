@@ -18,10 +18,12 @@ def machine(tmp_path, monkeypatch):
     """A fake machine: Nexus home with sessions and models, HF speech caches, TUI prefs."""
     home = tmp_path / "user" / ".nexus"
     (home / "models" / "voice" / "parakeet").mkdir(parents=True)
-    (home / "models" / "speech" / "python" / "en_core_web_sm").mkdir(parents=True)
+    (home / "models" / "speech").mkdir(parents=True)
+    (home / "models" / "speech" / "consent").write_text("1")
     (home / "nexus.db").write_bytes(b"x" * 2048)
     (home / "credentials.json").write_text("{}")
     hub = tmp_path / "hub"
+    (hub / "models--gradium--phonon-31m-en" / "snapshots").mkdir(parents=True)
     (hub / "models--sahilmahendrakar--Paradee-8M-v1.0" / "snapshots").mkdir(parents=True)
     (hub / "models--hexgrad--Kokoro-82M" / "snapshots").mkdir(parents=True)
     (hub / "models--someone--other").mkdir(parents=True)
@@ -55,6 +57,7 @@ def test_plan_lists_home_models_and_preferences_but_not_other_caches(machine):
     paths = {t.path for t in un.uninstall_plan()}
     assert machine.home in paths
     assert machine.xdg / "nexus" / "tui.json" in paths
+    assert machine.hub / "models--gradium--phonon-31m-en" in paths
     assert machine.hub / "models--sahilmahendrakar--Paradee-8M-v1.0" in paths
     assert machine.hub / "models--hexgrad--Kokoro-82M" in paths
     assert machine.hub / "models--someone--other" not in paths
@@ -74,6 +77,7 @@ def test_confirming_removes_everything_then_the_program(machine, monkeypatch, ca
     _answer(monkeypatch, "y")
     assert cli.main(["uninstall"]) == 0
     assert not machine.home.exists() and not (machine.xdg / "nexus").exists()
+    assert not (machine.hub / "models--gradium--phonon-31m-en").exists()
     assert not (machine.hub / "models--sahilmahendrakar--Paradee-8M-v1.0").exists()
     assert not (machine.hub / "models--hexgrad--Kokoro-82M").exists()
     assert (machine.hub / "models--someone--other").exists()

@@ -81,10 +81,16 @@ by joining session metadata to recorded project roots; it excludes archive,
 trash and child namespaces and orders by newest user prompt (`last_user_at`, else
 `created_at`, else `last_activity`; ties by project then session id). Its optional `limit`
 (default 1,000) bounds SQL results, and `query` (default empty, at most 256
-characters) filters title, session ID, saved user/agent snippets and workspace
+characters) filters title, session ID, name, saved user/agent snippets and workspace
 root before applying the limit. Search is case-insensitive literal substring
 matching: `%` and `_` are text, not wildcard operators. It searches metadata,
-not full conversation logs.
+not full conversation logs. `archived_project_sessions` takes an optional `limit`
+(default 20), the same `query` and returns archived rows (newest archive first). Both
+accept `hide_placeholders`, which leaves out throwaway sessions titled exactly `start` or
+`go` (case-insensitive, trimmed; `PLACEHOLDER_TITLES`) in SQL before the limit, so they
+never use up slots. It only applies to an unfiltered list: with a `query` they are
+matched like any other session, and nothing is deleted. The host's dashboard listing
+(`ProjectSessionsList`) enables it.
 
 Legacy JSONL session directories are not imported. JSONL is an export format only.
 
@@ -136,7 +142,7 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   A background child that is running in this process (registered by the agent pool
   with `register_live_agent`) is skipped, so a second handle never closes it; an
   `agent.resumed` with no later `agent.completed` is an open run like an unclosed
-  spawn, and an `agent.stopped` child has nothing left to close. The `agent.completed(interrupted)` it writes names the run (`run`: 1 for the spawn, the `agent.resumed` run number otherwise). Continuations (the retired `subagent_send`) are no longer produced; a legacy `agent.resumed` run in an old log is still recovered the same way.
+  spawn, and an `agent.stopped` child has nothing left to close. The `agent.completed(interrupted)` it writes names the run (`run`: 1 for the spawn, the `agent.resumed` run number otherwise). `agent.resumed` is produced again by the foreground `subagent(resume=…)` continuation ([agents.md](agents.md#continuing-a-finished-subagent)); a follow-up that crashed mid-run is recovered by exactly this rule and closes `interrupted`, which makes the child not continuable. Legacy `agent.resumed` runs in old logs recover the same way. A continuation reopens the child's stored session (it never creates one), takes the child's turn lease like any run, and reads its immutable `agent.config` record from the child's own log; a child without that record (older logs, external workers) is not continuable.
   This covers crashes before child promotion or `turn.started` too. This
   parent-log recovery runs alongside owned-log recovery: proven child rows
   are traversed recursively using the project-scoped ownership index, and each

@@ -14,6 +14,23 @@ def test_defaults_and_disable_override():
     }
 
 
+def test_default_model_is_the_pinned_bark_release():
+    from nexus.voice import store
+
+    section = VoiceSection()
+    assert section.model == store.MODEL_ID == "ConwayResearch/Underdog-Bark-3.0-Clean"
+    assert section.revision == store.REVISION == "6d34ed8639b2b9a33e764acf06748519bbb950cf"
+
+
+@pytest.mark.parametrize("values", [
+    {"model": "moondream/parakeet-redux"},
+    {"revision": "2bf128600aac4b16946f7ed8372e56117fe5e23b"},
+])
+def test_retired_kestrel_model_is_rejected(values):
+    with pytest.raises(ConfigError):
+        build_v2({"voice": values})
+
+
 def test_environment_voice_fields_are_schema_typed():
     section = build_v2(env_overlay_v2({
         "NEXUS_VOICE__AUTO_SEND": "true",

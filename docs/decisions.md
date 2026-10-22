@@ -108,7 +108,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
 | **`Ctrl+U` opens usage even in the composer.** | One direct key in both surfaces; the TUI composer loses readline's delete-to-line-start (`Cmd+Backspace` still works). | `ui/ratatui/actions.py` |
 | **Thinking summaries are provider-supplied and never invented;** no duration is fabricated. | Honest presentation. | [loop.md](loop.md#thinking) |
-| **Voice uses Kestrel's internal Parakeet runtime, not Photon** (telemetry, no opt-out). Model download is consent-gated and never implicit. | Privacy. Real inference is unverified. | [voice.md](voice.md) |
+| **Voice runs Underdog Bark 3.0 Clean (a Parakeet TDT fine-tune) on stock Transformers; the `.bark` file is parsed as bounded data, never code.** Pinned sizes and SHA-256, no `trust_remote_code`, no pickle, no NVIDIA weights. Model download is consent-gated and never implicit. | Privacy and supply-chain safety; replaces the Kestrel runtime (telemetry, no opt-out). Real inference is unverified. | [voice.md](voice.md) |
 | **Live dictation re-transcribes the growing recording as non-queueing `partial` previews; the final transcript still comes from one pass over the whole recording.** | Parakeet TDT here is offline, not streaming; whole-recording passes avoid word-boundary seams between chunks, and previews can never delay or replace the final text. Cost grows with length, bounded by `max_seconds`. | [voice.md](voice.md#flow) |
 
 ## Web
@@ -208,10 +208,10 @@ Stated so nobody builds on a false assumption.
 
 Claude Agent SDK and `sounddevice` are required package dependencies; the old
 `claude-agent` extra remains a compatibility alias. The voice runtime
-(`moondream`, which needs `kestrel-native`) stays in the `voice` extra because
-`kestrel-native` publishes no musl wheels: as a hard dependency it made
+(Transformers, Torch, `constriction`) stays in the `voice` extra because
+Torch publishes no musl or Intel macOS wheels: as a hard dependency it made
 `install.sh` fail outright on Alpine. PEP 508 markers cannot tell musl from glibc,
-so `install.sh` adds `voice` itself except on musl (or with `--no-voice`), and
+so `install.sh` adds `voice` itself except on musl, Intel Macs (or with `--no-voice`), and
 `nexus update` keeps installed extras. Plain `pip`/`uv tool install nexus-harness`
 does not get it, so `nexus voice init` installs the runtime into the current
 install (keeping version, source and extras) before downloading the model. Claude login and the
@@ -862,8 +862,8 @@ on a light theme.
 Supersedes the time grouping in the next entry. The P-SES design groups by status (Needs
 you, Working, Idle, Archived) so what waits on the user is first; a Needs you row shows the
 pending question and `a`/`d` answer it through `PermissionResolve` without opening the
-session. The host adds `ProjectSessionsList.archived` (newest N archived rows, opt-in, off
-during a search) and `ProjectSession.pending`; the bridge accepts an answer only for the
+session. The host adds `ProjectSessionsList.archived` (newest N archived rows, opt-in; a search
+matches archived rows too and the picker opens the Archived group while searching) and `ProjectSession.pending`; the bridge accepts an answer only for the
 `request_id` the listed row carries and only `allow_once`/`deny_once`, so a stale or forged
 operation cannot widen authority. "Open Previous" was removed (`/resume` remains).
 `PermissionView.ts` of a pending request is now the request time, so a prompt can count
@@ -1357,3 +1357,48 @@ auto-add that attached them to `subagent`. Reasons:
   unchanged.
 - **Budget semantics are unchanged**: the session tree budget (concurrency, fan-out,
   tokens, cost, per-root-turn window) is kept as is.
+
+## A finished native subagent can be continued, still foreground-only
+
+Amends the decision above without reviving it: `subagent` gains an optional `resume`
+(a finished child's `agent_id`), and a follow-up is another **blocking** call. There is
+still no detached child, report queue, wake, idle slot or `subagent_send`. Decisions:
+
+- **One tool.** `resume` extends `subagent` rather than adding a tool, so the registry,
+  code-mode catalog and the `Task(<role>:<tier>)` rule family are unchanged.
+- **Cold continuation over durable state.** The child's SQLite session is the storage of
+  record; a follow-up reopens it and appends one user message. No provider conversation id
+  is stored. Provider prompt caching is an optional optimization that is neither promised
+  nor asserted; the report states measured usage only.
+- **Identity is the recorded one.** A resume is authorized under the child's recorded role
+  and tier, never the default role (the omitted `subagent_type` is kept distinct from an
+  explicit one); unresolvable ids fail closed to `resume:unresolved`; incompatible
+  overrides are refused. Authority is recomputed (`current parent ∩ current role ∩
+  recorded tools`, current permissions, re-resolved tier) and never widened.
+- **Immutable config in the child log.** `agent.config` (role prompt snapshot, tools,
+  model/fallbacks, tier, effort, limits, workspace) is written once, redacted, never
+  relayed or sent to a model; the parent log carries `config_sha` only. A role-file edit
+  does not change a continued child. Children without a record (older, external) are not
+  continuable. Chosen over fields on `agent.spawned` (bloats and relays a sensitive
+  prompt to every UI) and over a new table (migration).
+- **Continuation is not fan-out.** `SubagentBudget.reserve_continuation` charges
+  tokens/cost like a spawn but does not touch `children`; separate caps (8 follow-ups per
+  root turn, 4 runs per child, from the durable log) are fixed defaults, not config, since
+  nothing yet shows users need to tune them. Failed and cancelled runs count; nothing
+  retries.
+- **v1 limits.** Native Nexus children that ended `completed`, without a worktree. Failed,
+  cancelled, interrupted, closed, external, worktree and legacy children, and user-initiated
+  continuation from a UI, are out of scope. The run closes `continuable: no` for any
+  non-completed outcome.
+- **A continuation never touches the child's context.** It appends one user message to the
+  same session; it writes no second `agent.config`, rebuilds no stored setup and rewrites no
+  prior record. The request is still reassembled from the full log each call (the durable
+  conversation and the assembled context are different things), with the recorded prompt
+  snapshot, so provider caching *may* apply, unguaranteed (the system/environment prefix is
+  not promised byte-identical). Compaction is refused rather than performed on a resumed child
+  (`ContextManager._refuse_compaction`): history goes out verbatim, with no tool-result
+  eviction, summary or handoff (the `compact_at_fraction` trigger is skipped too), and
+  `ContextFullError` is raised only when the raw history would have to be cut. The runtime dry-runs the assembly (`ContextManager.preflight`) before appending the
+  follow-up, so a refusal leaves the append-only child log untouched and the child continuable
+  (`agent.completed.unchanged`). The cost: a long-lived child ends with "start a new subagent"
+  instead of silently shrinking.

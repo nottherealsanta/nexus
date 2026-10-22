@@ -551,6 +551,74 @@ def test_hybrid_no_drop_returns_evicted_messages_and_fits(tmp_path):
     assert any(len(block.content[0].text) == 3000 for block in log_results)
 
 
+def _refusing_context(tmp_path, max_tokens):
+    context = ContextManager(
+        tmp_path,
+        config=v2_config(max_tokens=max_tokens, safety=0),  # hybrid
+        counter=char_counter(),
+        identity="I",
+        keep_recent=0,
+    )
+    context._refuse_compaction = True
+    return context.for_turn()
+
+
+def test_refuse_compaction_sends_history_verbatim_without_eviction(tmp_path):
+    messages = [m for index in range(3) for m in _tool_exchange(index, body_len=300)]
+    messages.append(Message(role="user", content=[Text(text="current")]))
+    request = _refusing_context(tmp_path, 100_000).assemble(FakeSession(*messages))
+
+    sent = [b for m in request.messages for b in m.content if isinstance(b, ToolResult)]
+    assert len(sent) == 3 and all(len(b.content[0].text) == 300 for b in sent)
+    assert request.messages[: len(messages) - 1] == messages[:-1]
+    assert request.metadata["context"]["evicted"] == 0
+    assert request.metadata["context"]["history_dropped"] == 0
+
+
+def test_refuse_compaction_refuses_a_history_that_only_fits_once_evicted(tmp_path):
+    from nexus.context.manager import ContextFullError
+
+    messages = [m for index in range(3) for m in _tool_exchange(index, body_len=3000)]
+    messages.append(Message(role="user", content=[Text(text="current")]))
+    with pytest.raises(ContextFullError):  # eviction would shrink it, but may not rewrite
+        _refusing_context(tmp_path, 1000).assemble(FakeSession(*messages))
+
+
+def test_refuse_compaction_ignores_the_compaction_threshold(tmp_path):
+    messages = _small_history(6, size=20)
+
+    def manager():
+        return ContextManager(
+            tmp_path,
+            config=_fraction_config(fraction=0.01),
+            identity="I",
+            counter=char_counter(),
+        )
+
+    # The early trigger cuts this history when compaction is allowed...
+    allowed = manager()
+    allowed.assemble(FakeSession(*messages))
+    assert allowed.last_compaction["dropped"] > 0
+    # ...but a no-compaction manager refuses only on a true raw overflow.
+    refusing = manager()
+    refusing._refuse_compaction = True
+    request = refusing.assemble(FakeSession(*messages))
+    assert request.messages[: len(messages) - 1] == messages[:-1]
+    assert refusing.last_budget["history_budget"] == _full_history_allowance(refusing.last_budget)
+
+
+async def test_preflight_checks_a_message_that_is_not_in_any_session(tmp_path):
+    from nexus.context.manager import ContextFullError
+
+    context = _refusing_context(tmp_path, 1000)
+    fits = [Message(role="user", content=[Text(text="hi")])]
+    await context.preflight(fits)
+    big = [*fits, Message(role="assistant", content=[Text(text="x" * 5000)]),
+           Message(role="user", content=[Text(text="more")])]
+    with pytest.raises(ContextFullError):
+        await context.preflight(big)
+
+
 def test_hybrid_no_drop_preserves_keep_recent(tmp_path):
     from nexus.session.manager import SessionManager
 

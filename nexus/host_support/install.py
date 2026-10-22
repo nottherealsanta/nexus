@@ -257,13 +257,16 @@ VOICE_EXTRA = "voice"
 
 
 def voice_runtime_installed() -> bool:
-    """Whether the local dictation runtime (``kestrel``) is importable here."""
+    """Whether the local dictation runtime (Torch, Transformers, constriction) is importable here."""
     import importlib
     import importlib.util
 
     importlib.invalidate_caches()
     try:
-        return importlib.util.find_spec("kestrel") is not None
+        return all(
+            importlib.util.find_spec(name) is not None
+            for name in ("numpy", "torch", "transformers", "constriction")
+        )
     except (ImportError, ValueError):
         return False
 
@@ -359,15 +362,13 @@ SPEAK_EXTRA = "speak"
 
 
 def speak_runtime_installed() -> bool:
-    """Whether a ``/speak`` runtime is importable here: Paradee's, or Kokoro from earlier releases."""
+    """Whether the ``/speak`` runtime (ptts and sounddevice) is importable here."""
     import importlib
     import importlib.util
 
     importlib.invalidate_caches()
     try:
-        return all(importlib.util.find_spec(name) is not None for name in ("onnxruntime", "misaki")) or (
-            importlib.util.find_spec("kokoro") is not None
-        )
+        return all(importlib.util.find_spec(name) is not None for name in ("ptts", "sounddevice"))
     except (ImportError, ValueError):
         return False
 
@@ -379,13 +380,13 @@ def speech_model_downloaded(home: str | Path | None = None) -> bool:
     outlive a reinstall, so they mark a user who speaks answers.
     """
     from ..config.paths import nexus_home
-    from .speech import _LEGACY_REPO_DIR, _REPO_DIR, _hub_cache
+    from .speech import _LEGACY_REPO_DIRS, _REPO_DIR, _hub_cache
 
     try:
         if (nexus_home(home) / "models" / "speech").is_dir():
             return True
         hub = _hub_cache()
-        return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, _LEGACY_REPO_DIR))
+        return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, *_LEGACY_REPO_DIRS))
     except OSError:
         return False
 

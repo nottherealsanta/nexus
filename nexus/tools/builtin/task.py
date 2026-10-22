@@ -58,8 +58,32 @@ __all__ = [
 
 #: The role an ad-hoc request uses when none is named (plan section 15.7).
 DEFAULT_SUBAGENT_TYPE = "task"
+#: Gate key for a resume whose child's role is unknown (mirrors the runner's).
+_RESUME_UNRESOLVED_KEY = "resume:unresolved"
 #: The fallback cap on the returned report, matching the other builtins.
 _FALLBACK_MAX_RESULT_TOKENS = 25_000
+
+
+def _resume_of(data: Mapping[str, Any]) -> object:
+    """The call's effective ``resume`` value, or ``None`` when it is a filler.
+
+    Some models fill every optional parameter of a fresh call with a placeholder
+    (observed: ``resume=","`` next to ``subagent_type``/``tools``/``model``).
+    A real handle is a child session id (``<parent>/sub/<n>``) and a resume
+    refuses those other arguments, so a value that is not shaped like a handle
+    and sits beside them is a filler, never a resume.
+    """
+    resume = data.get("resume")
+    if resume is None:
+        return None
+    if (
+        isinstance(resume, str)
+        and "/sub/" not in resume
+        and resume
+        and any(data.get(k) for k in ("subagent_type", "tools", "model", "worktree"))
+    ):
+        return None
+    return resume
 
 
 class _TaskToolError(ToolError):
@@ -82,7 +106,17 @@ _TASK_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "description": (
                 "Name of an available agent listed in this tool's description. "
-                "Defaults to the configured default role."
+                "Defaults to the configured default role. Omit it when resuming."
+            ),
+        },
+        "resume": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "The agent_id from an earlier subagent report whose footer said "
+                "'continuable: yes'. Sends `prompt` as a follow-up to that "
+                "subagent, which remembers its earlier work. Pass only `prompt` "
+                "with it: the subagent keeps its role, tools, model and workspace."
             ),
         },
         "tools": {
@@ -130,6 +164,9 @@ _TASK_DESCRIPTION = (
     "goal, relevant paths, constraints, and what to report. Subagents that edit "
     "files list them in their report. A subagent inherits only the parent's "
     "authority and cannot exceed it."
+    " To ask a finished subagent a follow-up, pass its `agent_id` as `resume` "
+    "and only `prompt`; it remembers its earlier work. Prefer a new subagent "
+    "for an unrelated task."
     " Tiers are for subagents only. If a provider or model fails as a subagent, "
     "call the next model in line for that tier. Do not repeat a failed route; "
     "include the failure and any partial work in the next subagent's prompt."
@@ -182,6 +219,10 @@ def _static_permission_key(data: Mapping[str, Any]) -> str:
     The tier component is the requested model when it is a reserved tier name,
     otherwise ``"auto"`` for a concrete reference or ``"inherit"`` for none.
     """
+    if _resume_of(data):
+        # Without the service the continued child's role cannot be read, and the
+        # default role must not stand in for it: fail closed to a key no role rule names.
+        return _RESUME_UNRESOLVED_KEY
     subagent_type = data.get("subagent_type")
     if not isinstance(subagent_type, str) or not subagent_type.strip():
         subagent_type = DEFAULT_SUBAGENT_TYPE
@@ -213,7 +254,12 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
         # around a rule for a non-general default role.
         def key(data: Mapping[str, Any]) -> str:
             request = dict(data)
-            request.setdefault("subagent_type", service.default_type)
+            if _resume_of(request) is None:
+                request.pop("resume", None)
+            if not request.get("resume"):
+                # A resume names no role: the service reads the continued
+                # child's recorded one, so the default must not be applied.
+                request.setdefault("subagent_type", service.default_type)
             resolved = service.permission_key(request)
             return f"{resolved}:worktree" if request.get("worktree") is True else resolved
     return ToolSpec(
@@ -257,8 +303,9 @@ def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(prompt, str) or not prompt.strip():
         raise _TaskToolError("'prompt' must be a non-empty string")
     request: dict[str, Any] = {"prompt": prompt}
-    for name in ("subagent_type", "model", "description"):
-        value = args.get(name)
+    resume = _resume_of(args)
+    for name in ("subagent_type", "model", "description", "resume"):
+        value = resume if name == "resume" else args.get(name)
         if value is None:
             continue
         if name == "model" and isinstance(value, str):
@@ -367,7 +414,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     service = _service(ctx)
     if service is not None:
         try:
-            request.setdefault("subagent_type", service.default_type)
+            if not request.get("resume"):
+                request.setdefault("subagent_type", service.default_type)
             spawn = service.spawn
             kwargs = {"cancel": ctx.cancel_token, "emit": ctx.emit}
             try:

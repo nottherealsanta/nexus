@@ -108,7 +108,7 @@ def test_built_wheel_ships_web_and_agent_assets(tmp_path: Path):
 
 
 def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
-    """moondream stays in the ``voice`` extra: its runtime has no musl wheels."""
+    """The Torch/Transformers runtime stays in the ``voice`` extra: it has no musl wheels."""
     from email.parser import Parser
 
     wheel = _build_wheel(tmp_path)
@@ -120,5 +120,7 @@ def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
     for package in ("claude-agent-sdk", "sounddevice"):
         assert any(requirement.startswith(package) and ";" not in requirement
                    for requirement in requirements), (package, requirements)
-    moondream = [r for r in requirements if r.startswith("moondream")]
-    assert moondream and all('extra == "voice"' in r for r in moondream), requirements
+    for package in ("transformers", "torch", "constriction"):
+        heavy = [r for r in requirements if r.startswith(package)]
+        assert heavy and all('extra == "voice"' in r for r in heavy), (package, requirements)
+    assert not any(r.startswith("moondream") for r in requirements), requirements

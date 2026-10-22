@@ -50,7 +50,7 @@ import msgspec
 import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
-from .agents.runner import qualify_model
+from .agents.runner import AGENT_CONFIG, qualify_model
 from .agents.pool import AgentPool
 from .agents.handoff import build_handoff, write_handoff
 from .agents.handoff import digest as handoff_digest
@@ -68,11 +68,12 @@ from .config.paths import (
     state_db_path,
 )
 from .context import ContextManager
+from .context.manager import ContextFullError
 from .context.cache import TokenCountCache
 from .context.counting import RequestTokenCounter
 from .core.bus import DROP_OLDEST, Bus
 from .core.cancel import CancelToken
-from .core.loop import run_turn
+from .core.loop import _coerce_input, run_turn
 from .core.turn import TurnLimits
 from .agents.manager_prompt import (
     MANAGER_KIND,
@@ -82,7 +83,7 @@ from .agents.manager_prompt import (
     MANAGER_PROVIDER,
     MANAGER_SIGN_IN_HINT,
 )
-from .errors import ConfigError, OperationCancelled, SessionError
+from .errors import ConfigError, OperationCancelled, ProviderError, SessionError
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
 from .model.http import DEFAULT_TIMEOUT
@@ -2204,6 +2205,34 @@ class _ChildSessionFacade:
         with contextlib.suppress(Exception):
             self._manager.evict(self._manager.store.resolve_child_id(session_id))
 
+    def child_config(self, parent_id: str, identity: str) -> dict[str, Any] | None:
+        """The ``agent.config`` record of a child of ``parent_id``, else ``None``.
+
+        ``None`` is every non-answer alike -- unknown id, another session's child,
+        a trashed or external child, a legacy child that never wrote a record -- so
+        a caller cannot tell a foreign child from a missing one. Ownership is the
+        stored owner edge (parent session, main namespace), not an id prefix.
+        """
+        store = self._manager.store
+        try:
+            real_id = store.resolve_child_id(identity)
+            row = store.session_row(real_id)
+            if (
+                not row or row.get("trash_id") or row.get("kind") != "child"
+                or row.get("owner_id") != parent_id
+                or row.get("owner_namespace") != "main"
+                or identity not in (row.get("logical_session_id"), row.get("agent_id"))
+            ):
+                return None
+            for record in store.records(real_id):
+                event = getattr(record, "event", None)
+                if getattr(event, "type", None) == AGENT_CONFIG:
+                    data = event.data
+                    return dict(data) if isinstance(data, Mapping) else None
+        except Exception:  # noqa: BLE001 - an unreadable child is simply not continuable
+            return None
+        return None
+
 
 def _child_models(session: Any) -> tuple[str, ...]:
     """Concrete models a child session started, from its own durable events.
@@ -2578,16 +2607,29 @@ class _ChildRuntime:
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
         real_id = facade.manager.store.resolve_child_id(spec.session_id)
+        resuming = bool(getattr(spec, "resume", False))
+        # A follow-up reopens the stored session and never creates one: a child
+        # deleted since the runner checked it fails instead of restarting empty.
         session = facade.manager.open(
-            real_id, create=True, recover=False, ownership=_child_ownership(spec),
+            real_id, create=not resuming, recover=False, ownership=_child_ownership(spec),
         )
         # A Nexus-run child on a ``spawned`` edge is readable by its ancestors
         # through the context namespace (plan 03 section 3.2 rule 3); external
-        # workers (the other ``open`` below) keep the default 0.
+        # workers (the other ``open`` below) keep the default 0. A follow-up keeps
+        # the allocation policy it was created with.
         grant = getattr(facade.manager.store, "grant_child_context_read", None)
-        if callable(grant):  # lightweight runtime fakes have no allocation table
+        if callable(grant) and not resuming:  # lightweight runtime fakes have no allocation table
             with contextlib.suppress(SessionError):
                 grant(spec.session_id, allowed=True)
+        record = getattr(spec, "config_record", None)
+        if record and not resuming:
+            # The immutable record a later follow-up is built from. It goes
+            # straight to the child's own log (before the first user message, so
+            # it commits with it) and through no relay: the prompt it holds
+            # never reaches the parent log, the root or a UI.
+            with contextlib.suppress(Exception):
+                session.append_event(Event(type=AGENT_CONFIG, data=dict(record), session=real_id))
+        history = len(session.messages) if resuming else 0
         try:
             config = (
                 spec.config
@@ -2648,6 +2690,23 @@ class _ChildRuntime:
             # Subagents have no wall-clock deadline (``[agent] max_turn_seconds``
             # applies to root turns only); iterations and cancellation still bound them.
             limits = TurnLimits(max_iterations=max_iterations, max_seconds=0.0)
+            if resuming:
+                # Refuse before the follow-up is appended: the stored transcript is
+                # append-only, so a message persisted ahead of a failed assembly
+                # could not be taken back and would strand the child behind it.
+                try:
+                    await assembler.preflight((
+                        *assembler._active_messages(session),
+                        Message(role="user", content=_coerce_input(spec.prompt)),
+                    ))
+                except (ContextFullError, ProviderError) as exc:
+                    # Expected refusals only (no room, or the token counter / provider
+                    # failed): the log is still untouched. Programming errors and
+                    # cancellation propagate.
+                    return self._failed(
+                        spec, session, f"{type(exc).__name__}: {exc}",
+                        metrics={"unchanged": True}, handoff=False,
+                    )
             lease = session.begin_turn(limits=limits)
             sink = _ChildEventSink(session, spec.emit)
             crash: Exception | None = None
@@ -2674,7 +2733,11 @@ class _ChildRuntime:
             if crash is not None:
                 return self._failed(spec, session, f"{type(crash).__name__}: {crash}")
             cost = runtime._child_cost(session, outcome)
-            result = runtime._child_outcome(spec, session, outcome, cost=cost)
+            result = (
+                runtime._child_outcome(spec, session, outcome, cost=cost, since=history)
+                if history
+                else runtime._child_outcome(spec, session, outcome, cost=cost)
+            )
             attention = sink.attention()
             escalated = getattr(runtime, "_child_escalations", {}).pop(spec.session_id, [])
             if escalated:
@@ -2921,6 +2984,7 @@ class _ChildRuntime:
         *,
         metrics: Mapping[str, Any] | None = None,
         files_changed: tuple[str, ...] = (),
+        handoff: bool = True,
     ) -> SubagentOutcome:
         """A failed outcome for a run that raised or could not start."""
         message = redact_secrets(message)  # raw exception text may carry credentials
@@ -2940,7 +3004,7 @@ class _ChildRuntime:
             files_changed=files_changed,
             models=_child_models(session),
         )
-        return self._with_handoff(base, spec, session)
+        return self._with_handoff(base, spec, session) if handoff else base
 
     async def aclose(self) -> None:
         self._drop_escalations()
@@ -3101,12 +3165,12 @@ class Runtime:
         if voice_environ.get("NEXUS_VOICE", "").strip().lower() == "off":
             voice_config = msgspec.structs.replace(voice_config, enabled=False)
         if voice_engine_factory is None:
-            from .voice.engine import KestrelEngine
+            from .voice.engine import BarkEngine
 
             def voice_engine_factory(path):
-                return KestrelEngine(path, device=self.voice.config.device)
+                return BarkEngine(path, device=self.voice.config.device)
 
-            voice_engine_factory.available = KestrelEngine.available
+            voice_engine_factory.available = BarkEngine.available
         self.voice = VoiceManager(
             voice_config, engine_factory=voice_engine_factory,
             store=voice_store if voice_store is not None else ModelStore(nexus_home(self._home), revision=voice_config.revision),
@@ -6381,9 +6445,18 @@ class Runtime:
                 runtime_supports_workspace=runtime_supports_workspace,
                 worktree_scope=worktree_scope,
                 stop_child_jobs=self._stop_child_jobs,
+                parent_events=lambda sid=parent_session or session_id: self._parent_log_events(sid),
             )
         except Exception:  # noqa: BLE001 - an invalid agents config disables Task
             return None
+
+    def _parent_log_events(self, session_id: str) -> list[Event]:
+        """The durable events of one parent session: the lifecycle authority for ``resume``."""
+        return [
+            record.event
+            for record in self._sessions.store.records(session_id)
+            if getattr(record, "event", None) is not None
+        ]
 
     async def _stop_child_jobs(self, child_session_id: str) -> list[str]:
         """Stop the shell jobs a child left running; return their ids.
@@ -6913,6 +6986,10 @@ class Runtime:
             },
         )()
         assembler._agent_effort_supported = selected_agent_effort is not None
+        if getattr(spec, "resume", False):
+            # A follow-up appends to the stored transcript and never compacts it:
+            # an assembly that would drop or summarize history refuses instead.
+            assembler._refuse_compaction = True
         return assembler
 
     def _build_child_tool_manager(
@@ -7016,10 +7093,12 @@ class Runtime:
 
     @staticmethod
     def _child_outcome(
-        spec: Any, session: Any, outcome: Any, *, cost: float | None = None
+        spec: Any, session: Any, outcome: Any, *, cost: float | None = None, since: int = 0
     ) -> SubagentOutcome:
         text = ""
-        for message in reversed(session.messages):
+        # ``since``: a follow-up reports its own run, not the earlier runs' text or edits.
+        messages = list(session.messages)[since:]
+        for message in reversed(messages):
             if getattr(message, "role", None) != "assistant":
                 continue
             chunk = "".join(
@@ -7061,7 +7140,7 @@ class Runtime:
             requested_tier=spec.requested_tier,
             error=getattr(outcome, "error", None),
             files_changed=files_changed(
-                session.messages, workspace=getattr(spec, "workspace", None)
+                messages, workspace=getattr(spec, "workspace", None)
             ),
             models=_child_models(session),
         )

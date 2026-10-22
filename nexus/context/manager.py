@@ -411,6 +411,18 @@ class _Costs:
     line_costs: dict[str, tuple[int, ...]]
 
 
+class ContextFullError(RuntimeError):
+    """A no-compaction assembly (a resumed subagent) cannot fit its history."""
+
+
+@dataclass(frozen=True)
+class _PreflightSession:
+    """A session stand-in for a dry-run assembly: messages only, nothing durable."""
+
+    messages: tuple[Message, ...]
+    id: str = "preflight"
+
+
 class ContextManager:
     """Assembles a token-budgeted, compaction-aware :class:`ModelRequest`."""
 
@@ -526,6 +538,12 @@ class ContextManager:
         #: Set when the gate blocked: no further pass of this assemble may
         #: compact (so a refinement pass can never persist a partial summary).
         self._precompact_blocked = False
+        #: A resumed subagent must keep its transcript intact: when set, history
+        #: goes out verbatim (no tool-result eviction, summary or handoff) and an
+        #: assembly that would have to drop any of it raises
+        #: :class:`ContextFullError`. :meth:`preflight` lets the caller check
+        #: before appending the new user message.
+        self._refuse_compaction = False
 
     # -- config ------------------------------------------------------------
 
@@ -757,6 +775,7 @@ class ContextManager:
             self, "_agent_effort_supported", True
         )
         snapshot._env = self._env
+        snapshot._refuse_compaction = self._refuse_compaction
         return snapshot
 
     def for_iteration(
@@ -1420,8 +1439,13 @@ class ContextManager:
             plan = replace(
                 plan, history_budget=max(0, int(history_budget_override))
             )
-        else:
+        elif not self._refuse_compaction:
+            # A no-compaction manager has no use for the early trigger: it
+            # refuses only when the raw history truly exceeds the budget.
             plan = self._apply_compaction_threshold(env, plan, costs)
+
+        if self._refuse_compaction:
+            return self._assemble_untouched(env, ctx, outputs, costs, plan, inputs)
 
         eligible_costs = (
             costs.evicted_costs
@@ -1486,6 +1510,45 @@ class ContextManager:
             env, ctx, outputs, costs, plan, inputs, eligible_costs,
             compaction,
         )
+
+    def _assemble_untouched(
+        self,
+        env: AssemblyEnvironment,
+        ctx: AssemblyContext,
+        outputs: tuple[PartOutput | None, ...],
+        costs: _Costs,
+        plan: Any,
+        inputs: BudgetInputs,
+    ) -> ModelRequest:
+        """Send the stored history verbatim, or refuse; never evict, summarize or hand off.
+
+        Fit is judged on the *raw* message costs (not the eviction-shrunk ones),
+        so a history that only fits after tool results were replaced by
+        placeholders is refused rather than silently rewritten.
+        """
+        cut = len(costs.history) - fit_suffix_count(costs.history_costs, plan.history_budget)
+        if cut > 0:
+            raise ContextFullError(
+                f"the conversation no longer fits the context budget ({cut} of "
+                f"{len(costs.history)} earlier messages would have to be dropped or "
+                "summarized); it is left untouched. Start a new subagent instead."
+            )
+        self._precompact_budgets = (int(plan.input_budget), int(plan.history_budget))
+        self._precompact_evicted = 0
+        return self._build_request(
+            env, ctx, outputs, costs, plan, inputs, costs.history_costs,
+            CompactionResult(messages=costs.history, strategy="none"),
+        )
+
+    async def preflight(self, messages: Sequence[Message]) -> None:
+        """Assemble ``messages`` without a session and discard the request.
+
+        For a no-compaction manager this raises :class:`ContextFullError` when
+        the conversation (including a not-yet-persisted new user message) would
+        not fit, so the caller can refuse before appending anything durable.
+        """
+        probe = _PreflightSession(tuple(messages))
+        await _await_if_needed(self.assemble(probe))
 
     async def _await_compaction(
         self,

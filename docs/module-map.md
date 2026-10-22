@@ -146,7 +146,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Developer tooling that only runs in dev mode |
 | `debug_mcp_port.py` | `DaemonManagerPort`: the manager port over the host daemon protocol, for the debug MCP only |
-| `manager_debug_mcp.py` | DEBUG-ONLY stdio MCP server exposing the manager's eight session tools (`session_show` always refused: no UI); needs `NEXUS_DEBUG_MCP=1` |
+| `manager_debug_mcp.py` | DEBUG-ONLY stdio MCP server exposing the manager's eight session tools (`session_show` always refused: no UI); enabled by its project `mcp.json` entry, no env gate |
 
 ### `nexus/devtools/mock/`
 
@@ -546,10 +546,11 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Local-only voice inference with bounded, transient audio processing |
 | `audio.py` | Strict bounded PCM WAV handling for voice input |
-| `engine.py` | Local Parakeet Redux adapter |
+| `bark.py` | Strict, bounded reader for `.bark` weight files (untrusted data; lazy per-tensor decode) |
+| `engine.py` | Local Bark adapter: `.bark` weights into a stock Transformers `ParakeetForTDT` |
 | `manager.py` | Serialized voice lifecycle and inference |
 | `model.py` | Voice lifecycle and transcription values |
-| `store.py` | Pinned, bounded local voice model storage |
+| `store.py` | Pinned, bounded local storage for the Bark weights and NVIDIA processor files |
 
 
 ### `nexus/ui/desktop/`

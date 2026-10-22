@@ -86,7 +86,7 @@ async def test_background_true_still_runs_the_child_in_the_foreground(tmp_path):
     events = await drain(session)
 
     # ``max_live = 1`` no longer refuses the second parallel child.
-    bodies = {tool_result_for(session, call).content[0].text.partition("\n")[2].strip() for call in "ab"}
+    bodies = {tool_result_for(session, call).content[0].text.partition("\n")[2].strip().split("\n")[0] for call in "ab"}
     assert bodies == {"report-one", "report-two"}
     assert [e.data["status"] for e in events if e.type == "agent.completed"] == ["completed"] * 2
     budget = runtime.agent_pool.budget("root")

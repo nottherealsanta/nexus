@@ -1080,8 +1080,8 @@ class VoiceSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     enabled: bool = True
     autoload: bool = False
-    model: str = "moondream/parakeet-redux"
-    revision: str = "2bf128600aac4b16946f7ed8372e56117fe5e23b"
+    model: str = "ConwayResearch/Underdog-Bark-3.0-Clean"
+    revision: str = "6d34ed8639b2b9a33e764acf06748519bbb950cf"
     device: Literal["auto", "cpu", "mps", "cuda"] = "auto"
     max_seconds: int = 120
     timestamps: bool = False
@@ -1093,9 +1093,9 @@ class VoiceSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("voice.max_seconds must be an integer from 1 to 120")
         if type(self.unload_after_minutes) is not int or not 0 <= self.unload_after_minutes <= 1440:
             raise ValueError("voice.unload_after_minutes must be an integer from 0 to 1440")
-        if self.model != "moondream/parakeet-redux":
-            raise ValueError("voice.model must be moondream/parakeet-redux")
-        if self.revision != "2bf128600aac4b16946f7ed8372e56117fe5e23b":
+        if self.model != "ConwayResearch/Underdog-Bark-3.0-Clean":
+            raise ValueError("voice.model must be ConwayResearch/Underdog-Bark-3.0-Clean")
+        if self.revision != "6d34ed8639b2b9a33e764acf06748519bbb950cf":
             raise ValueError("voice.revision has no trusted manifest")
         if self.device not in {"auto", "cpu", "mps", "cuda"}:
             raise ValueError("voice.device must be auto, cpu, mps or cuda")

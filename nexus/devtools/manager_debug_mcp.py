@@ -9,10 +9,10 @@ It talks to the workspace daemon through the host protocol
 (:class:`~nexus.devtools.debug_mcp_port.DaemonManagerPort`); it never reads session
 storage, starts no daemon, opens no socket and listens on nothing but its own stdin.
 
-It is off unless ``NEXUS_DEBUG_MCP=1`` is set, and it is not part of the product path:
-nothing in the runtime or host imports it. Run (from the repo)::
+It is not part of the product path: nothing in the runtime or host imports it. Like any
+other MCP it is switched on or off by its ``mcp.json`` entry. Run (from the repo)::
 
-    NEXUS_DEBUG_MCP=1 uv run python -m nexus.devtools.manager_debug_mcp [--workspace DIR]
+    uv run python -m nexus.devtools.manager_debug_mcp [--workspace DIR]
 
 Newline-delimited JSON-RPC over stdio, one reply per line. Protocol subset:
 ``initialize``, ``ping``, ``tools/list``, ``tools/call`` and the cancel notification;
@@ -26,9 +26,7 @@ import asyncio
 import contextlib
 import copy
 import json
-import os
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +38,8 @@ from ..tools.manager_port import ManagerPort
 from ..tools.manager_tools import MANAGER_TOOLS, ManagerToolDef
 from .debug_mcp_port import DaemonManagerPort
 
-__all__ = ["DEBUG_ENV", "DebugMcpServer", "debug_enabled", "main", "tool_descriptors"]
+__all__ = ["DebugMcpServer", "main", "tool_descriptors"]
 
-DEBUG_ENV = "NEXUS_DEBUG_MCP"
 SERVER_NAME = "nexus-manager-debug"
 SERVER_VERSION = "0.1.0"
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -96,11 +93,6 @@ _DESCRIPTIONS = {
         "and a native UI; this server has neither."
     ),
 }
-
-
-def debug_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    env = os.environ if environ is None else environ
-    return str(env.get(DEBUG_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _descriptor(tool: ManagerToolDef) -> dict[str, Any]:
@@ -300,7 +292,7 @@ async def _run(workspace: Path) -> None:
         await port.aclose()
 
 
-def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--workspace", default=".", help="workspace whose daemon to use (default: current directory)")
     parser.add_argument("--list-tools", action="store_true", help="print the tool names and exit")
@@ -308,9 +300,6 @@ def main(argv: list[str] | None = None, environ: Mapping[str, str] | None = None
     if args.list_tools:
         print("\n".join(tool["name"] for tool in tool_descriptors()))
         return 0
-    if not debug_enabled(environ):
-        print(f"{SERVER_NAME}: DEBUG ONLY and off by default; set {DEBUG_ENV}=1 to run it.", file=sys.stderr)
-        return 2
     workspace = Path(args.workspace).expanduser().resolve()
     try:
         asyncio.run(_run(workspace))
