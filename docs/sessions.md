@@ -11,8 +11,39 @@ bounded Git metadata without running a subprocess.
 Draft sessions also have project ownership before their first durable input.
 Switching project focus does not move a session or cancel its subscriptions.
 Existing independently keyed worktree rows are not migrated; export important
-old sessions before adopting this identity model. Session roots in worktrees
-are a subsequent worktree-sessions phase, not implemented by identity resolution.
+old sessions before adopting this identity model. Linked worktrees share this
+project identity while their sessions can select independent working roots.
+
+
+## Per-session working roots
+
+A session belongs to a project and has a separate working root. No root event
+means the project checkout (`main`). `session.root_set` records an `external`
+linked worktree or a service-owned `worktree`, with branch/base/record metadata.
+Its path is a bounded spelling relative to the project parent, including `..`
+when necessary; the daemon reconstructs the absolute path and never treats the
+display spelling as authorization. See [events-and-view.md](events-and-view.md).
+
+The runtime lazily indexes the last root event for opened sessions (at most 512
+entries, refreshed when the durable sequence changes). Replay and forks retain
+the root. Before a turn or file/Git operation, it checks the canonical project,
+linked-worktree common directory and reverse Git registration. Missing roots,
+foreign repositories and copied `.git` pointers fail closed. Owned roots also
+require an active service record at the expected path. Automatic creation,
+promotion, recreation and land belong to the subsequent worktree phases.
+
+A new session opened after launching inside a user-made linked worktree adopts
+that checkout as `external`. Reopening a saved session preserves its recorded
+root. An in-root launch subdirectory initializes the fresh session's shell cwd;
+the composer `!` command starts at the session root. Root changes hold the
+session lock and require a turn boundary with no queued inputs or shell jobs.
+External roots are never committed, removed or landed by root selection.
+
+Settings, grants, extensions, memory and MCP connections remain project-owned.
+`AGENTS.md` comes from the working root and is frozen for the turn. A labelled
+root notice explains the working checkout and that worktree extension edits
+become live after land. Filesystem-rooted MCP servers continue seeing the project
+checkout; they are not cloned per root.
 
 
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup

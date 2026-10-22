@@ -394,7 +394,7 @@ def _checked_dir(root: Path, candidate: Path, label: str, raw: object) -> Path:
     return candidate
 
 
-def _session_base(workspace: Path, session_id: str, *, strict: bool) -> Path:
+def _session_base(workspace: Path, session_id: str, *, strict: bool, state_workspace: Path | None = None, home=None) -> Path:
     """The session cwd (recorded by ``cd``), else the workspace root.
 
     A recorded cwd that vanished or left the workspace is an error naming it and
@@ -402,7 +402,7 @@ def _session_base(workspace: Path, session_id: str, *, strict: bool) -> Path:
     itself) resolves from the workspace root instead so ``cd .`` can reset.
     """
     root = _workspace_root(workspace)
-    stored = _shell_logs.read_session_cwd(workspace, session_id)
+    stored = _shell_logs.read_session_cwd(state_workspace or workspace, session_id, home=home)
     if stored is None:
         return root
     try:
@@ -419,12 +419,13 @@ def _session_base(workspace: Path, session_id: str, *, strict: bool) -> Path:
 
 
 def _resolve_dir(
-    workspace: Path, session_id: str, raw: object, *, label: str, strict: bool = True
+    workspace: Path, session_id: str, raw: object, *, label: str, strict: bool = True,
+    state_workspace: Path | None = None, home=None
 ) -> Path:
     """Resolve ``raw`` (``None`` = the session cwd) to a real in-workspace directory."""
     try:
         root = _workspace_root(workspace)
-        base = _session_base(workspace, session_id, strict=strict)
+        base = _session_base(workspace, session_id, strict=strict, state_workspace=state_workspace, home=home)
         if raw is None:
             return _checked_dir(root, base, label, raw)
         if not isinstance(raw, str) or not raw or not raw.strip():
@@ -470,11 +471,13 @@ async def _cd(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     if not workspace.is_dir():
         return _error(f"shell: workspace does not exist: {workspace}")
     try:
-        previous = _session_base(workspace, session_id, strict=False)
+        state_workspace = getattr(ctx, "project_root", None) or workspace
+        previous = _session_base(workspace, session_id, strict=False, state_workspace=state_workspace, home=getattr(ctx, "state_home", None))
         target = _resolve_dir(
-            workspace, session_id, args["path"], label="path", strict=False
+            workspace, session_id, args["path"], label="path", strict=False,
+            state_workspace=state_workspace, home=getattr(ctx, "state_home", None)
         )
-        _shell_logs.write_session_cwd(workspace, session_id, str(target))
+        _shell_logs.write_session_cwd(state_workspace, session_id, str(target), home=getattr(ctx, "state_home", None))
     except (OSError, ValueError) as exc:
         return _error(f"shell: {exc}")
     shown = _display_path(workspace, target)
@@ -566,7 +569,7 @@ async def _log(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     elif _shell_logs.JOB_ID_RE.fullmatch(job_id):
         # Evicted from memory: the file is addressed by (session, job) only, so
         # another session's id can never resolve here.
-        path = _shell_logs.log_path(Path(ctx.workspace), session_id, job_id)
+        path = _shell_logs.log_path(getattr(ctx, "project_root", None) or Path(ctx.workspace), session_id, job_id, home=getattr(ctx, "state_home", None))
     if path is None or not path.is_file():
         if job is None:
             return _error(
@@ -649,9 +652,10 @@ async def _prune_logs(ctx: ToolContext, registry: _jobs.JobRegistry) -> None:
     try:
         await asyncio.to_thread(
             _shell_logs.prune_logs,
-            Path(ctx.workspace),
+            getattr(ctx, "project_root", None) or Path(ctx.workspace),
             max_total_bytes=total,
             retention_days=days,
+            home=getattr(ctx, "state_home", None),
             protected=registry.active_log_paths(),
         )
     except Exception:  # noqa: BLE001 - retention must never block a command
@@ -724,7 +728,8 @@ async def run(
         return _error(f"shell: {exc}")
 
     def resolve_cwd() -> Path:
-        return _resolve_dir(workspace, session_id, args.get("cwd"), label="cwd")
+        return _resolve_dir(workspace, session_id, args.get("cwd"), label="cwd",
+                            state_workspace=getattr(ctx, "project_root", None), home=getattr(ctx, "state_home", None))
 
     try:
         # Resolve here and immediately before spawn; never pass an untrusted
@@ -746,7 +751,7 @@ async def run(
             env=env,
             shell=shell,
             cwd_check=resolve_cwd,
-            log_dir=_shell_logs.session_dir(workspace, session_id),
+            log_dir=_shell_logs.session_dir(getattr(ctx, "project_root", None) or workspace, session_id, home=getattr(ctx, "state_home", None)),
             log_max_bytes=per_job_max,
             background=background,
             persistent=persistent,

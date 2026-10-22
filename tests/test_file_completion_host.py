@@ -283,10 +283,10 @@ def test_file_search_wire_field_defaults_to_files_only():
     assert p.FileSearch(query="a", include_directories=True).include_directories is True
 
 
-async def test_file_search_dispatch_and_client_forward_include_directories(tmp_path):
+async def test_file_search_dispatch_and_client_forward_session_and_directories(tmp_path):
     (tmp_path / "src").mkdir()
     facade = _facade(tmp_path)
-    command = p.FileSearch(query="sr", include_directories=True)
+    command = p.FileSearch(query="sr", include_directories=True, session="session-1")
     assert p.decode_command(p.encode_command(command)) == command
     assert await facade.handle(command) == p.FileSearchResult(paths=["src/"])
     assert await facade.handle(p.FileSearch(query="sr")) == p.FileSearchResult(paths=[])
@@ -298,7 +298,9 @@ async def test_file_search_dispatch_and_client_forward_include_directories(tmp_p
         async def aclose(self):
             pass
 
-    assert await Client(Transport()).search_files("sr", include_directories=True) == ["src/"]
+    assert await Client(Transport()).search_files(
+        "sr", include_directories=True, session="session-1"
+    ) == ["src/"]
     assert await Client(Transport()).search_files("sr") == []
 
 

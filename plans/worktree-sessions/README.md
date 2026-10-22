@@ -1,6 +1,8 @@
 # Worktree sessions: plan index
 
-Status: **proposal**, agreed with the user in a planning conversation on 2026-10-22. No code yet.
+Status: **in progress**, agreed with the user in a planning conversation on 2026-10-22.
+Files 01 (shared daemon) and 02 (per-session roots) are implemented; their ledgers record
+validation and remaining boundaries. Subsequent files remain plans until their ledgers say otherwise.
 `docs/` is the source of truth and the code wins over these files (see `AGENTS.md`). Each phase
 lands with its tests, its `docs/` updates and, where marked, a `docs/decisions.md` entry.
 

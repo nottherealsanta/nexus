@@ -365,6 +365,7 @@ here, so add a row when you add a file.
 | `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export; `kind_of`, `manager_summary`, and the manager session's archive/delete/fork refusal |
 | `records.py` | Versioned records persisted by the SQLite session store |
 | `session.py` | The public session handle over SQLite records; `Session.kind`, and no hooks for a `manager` session |
+| `root.py` | Immutable per-session working root and bounded relative event serialization |
 | `title.py` | Automatic session titles: the small side call to a cheap model, the title prompt and reply cleaning |
 | `snapshot.py` | Versioned, derived snapshots for fast session resume |
 | `submissions.py` | Request-id validation and canonical admission digests; no scheduling or effect replay |

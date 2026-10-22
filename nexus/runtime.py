@@ -40,6 +40,7 @@ import re
 import subprocess
 import time
 import weakref
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -148,6 +149,8 @@ from .tools.permissions import (
     PathGuard,
     PermissionEngine,
     collect_grants,
+    exact_rule,
+    permission_bundle_matches,
     synthetic_call,
 )
 from .tools.questions import QuestionBroker
@@ -336,6 +339,8 @@ class _ToolDispatcherAdapter:
         session_id: str,
         turn_id: str,
         config: Config,
+        project_root: Path | None = None,
+        state_home: Path | None = None,
         agent_id: str = "root",
         skills: Any | None = None,
         extensions: Any | None = None,
@@ -352,6 +357,8 @@ class _ToolDispatcherAdapter:
         #: advertised. The loop reads it to record roster changes in history.
         self.subagent_roster_digest = subagent_roster_digest
         self._workspace = Path(workspace)
+        self._project_root = project_root or self._workspace
+        self._state_home = state_home
         self._session_id = session_id
         self._turn_id = turn_id
         self._config = config
@@ -446,6 +453,8 @@ class _ToolDispatcherAdapter:
     def _ctx_factory(self, call: ToolCall, spec: Any) -> ToolContext:
         return ToolContext(
             workspace=self._workspace,
+            project_root=self._project_root,
+            state_home=self._state_home,
             session_id=self._session_id,
             turn_id=self._turn_id,
             config=self._config,
@@ -841,6 +850,7 @@ class _ContextCoordinator:
         runtime: Any | None = None,
     ) -> None:
         self._context = context
+        self._runtime = runtime
         self._resolver = resolver
         self._token_cache = token_cache
         self._agents = agents
@@ -1230,7 +1240,13 @@ class _ContextCoordinator:
                 selected_agent_effort = self._effective_effort(
                     session, agent_definition, resolved, provider_name=provider_name
                 )
+        root_options = {}
+        if self._runtime is not None and session is not None:
+            root = self._runtime.validate_session_root(session.id)
+            if root.kind != "main":
+                root_options["workspace"] = root.path
         assembler = for_turn(
+            **root_options,
             capabilities=capabilities,
             request_counter=request_counter,
             model=model,
@@ -1243,6 +1259,11 @@ class _ContextCoordinator:
             from .context.budget import BudgetInputs
             reserve = int(BudgetInputs.from_config_and_caps(config, capabilities).input_budget * 0.1)
             assembler._summarizer = HandoffSummarizer(resolved.provider, model, reserve)
+        if root_options and session is not None:
+            active_turn = getattr(session, "active_turn_id", None)
+            if active_turn is None or getattr(session, "_turn_root_agents_key", None) != active_turn:
+                session._turn_root_agents = getattr(getattr(assembler, "_env", None), "agents_text", "")
+                session._turn_root_agents_key = active_turn
         assembler._tier_name = tier_name
         assembler._effort_explicit = (
             getattr(session, "reasoning_effort_selection", None) is not None
@@ -1365,6 +1386,8 @@ class _ContextCoordinator:
         *,
         config: Config | None,
         system_files: Any = None,
+        workspace: Path | None = None,
+        agents_text: str | None = None,
         skills_index: Any = None,
         mcp_index: Any = None,
         pre_compact: Any = None,
@@ -1447,7 +1470,11 @@ class _ContextCoordinator:
                 selected_agent_effort = (
                     reasoning_effort if reasoning_effort in supported else None
                 )
+        root_options = {"workspace": workspace} if workspace is not None else {}
+        if agents_text is not None:
+            root_options["agents_text"] = agents_text
         assembler = for_iteration(
+            **root_options,
             config=config,
             system_files=system_files,
             skills_index=skills_index,
@@ -1586,7 +1613,7 @@ class _ManifestEnvironmentFactory:
             hooks_service = _HookService(
                 runtime._hooks,
                 getattr(manifest, "hooks", None),
-                workspace=runtime.workspace,
+                workspace=getattr(self._path_guard, "workspace", runtime.workspace),
             )
         session_id = getattr(session, "id", self._session.id)
         pre_compact = runtime._pre_compact_gate(
@@ -1595,6 +1622,9 @@ class _ManifestEnvironmentFactory:
         assembler = runtime._assembler.for_iteration(
             config=config,
             system_files=system_files,
+            **({"workspace": self._path_guard.workspace,
+                "agents_text": getattr(self._session, "_turn_root_agents", "")}
+               if self._path_guard is not None and self._path_guard.workspace != runtime.workspace else {}),
             skills_index=skills_index,
             # The pinned generation's MCP view: connected servers and their
             # resource roots only, folded by the context layer into its
@@ -1687,10 +1717,12 @@ class _ManifestEnvironmentFactory:
             freeze(tuple(manager.schemas()))
         dispatcher = _ToolDispatcherAdapter(
             manager,
-            workspace=runtime.workspace,
+            workspace=getattr(self._path_guard, "workspace", runtime.workspace),
             session_id=session_id,
             turn_id=self._turn_id,
             config=config,
+            project_root=runtime.workspace,
+            state_home=getattr(runtime, "_home", None),
             skills=runtime._selected_skills(session),
             extensions=runtime._extensions,
             activations=runtime._activations,
@@ -1825,6 +1857,7 @@ class _ManifestEnvironmentFactory:
             catalog=base_catalog,
             hooks=hooks,
             budget=self._budget,
+            workspace=getattr(self._path_guard, "workspace", runtime.workspace),
             runtime_supports_workspace=runtime._supports_child_workspace(),
         )
 
@@ -1983,7 +2016,8 @@ class _HookService:
     ``hook.blocked``.
     """
 
-    def __init__(self, manager: Any, specs_by_event: Any, *, workspace: Path) -> None:
+    def __init__(self, manager: Any, specs_by_event: Any, *, workspace: Path, project_root: Path | None = None, root_for=None) -> None:
+        self._root_for = root_for
         self._manager = manager
         self._specs = {
             str(event): tuple(specs)
@@ -1991,6 +2025,7 @@ class _HookService:
             if specs
         }
         self._workspace = workspace
+        self._project_root = project_root or getattr(manager, "workspace", workspace)
 
     @property
     def enabled(self) -> bool:
@@ -2006,8 +2041,14 @@ class _HookService:
         specs = self._specs.get(event, ())
         if not specs or self._manager is None:
             return HookOutcome.allow(event)
+        root_options = {}
+        if isinstance(self._manager, HookManager):
+            workspace = self._workspace
+            if self._root_for is not None and invocation.session_id:
+                workspace = self._root_for(invocation.session_id).path
+            root_options = {"workspace": workspace, "project_root": self._project_root}
         return await self._manager.run(
-            HookEvent.coerce(event), invocation, cancel=cancel, specs=specs
+            HookEvent.coerce(event), invocation, cancel=cancel, specs=specs, **root_options
         )
 
     async def lifecycle(
@@ -2673,6 +2714,8 @@ class _ChildRuntime:
             dispatcher = _ToolDispatcherAdapter(
                 manager,
                 workspace=workspace,
+                project_root=getattr(runtime, "workspace", workspace),
+                state_home=getattr(runtime, "_home", None),
                 session_id=real_id,
                 turn_id="",
                 config=config,
@@ -3069,6 +3112,7 @@ class Runtime:
         manager_port_factory: Callable[[Session], Any | None] | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
+        self._session_roots = OrderedDict()
         #: ``callable(Session) -> ManagerPort | None``, injected by the host. A
         #: manager session's eight tools talk to the port it returns; ``None``
         #: (no factory or no port) fails the manager turn visibly. Assignable
@@ -4404,6 +4448,170 @@ class Runtime:
             provider_name=selection.provider,
         )
 
+    def _session_root_grants(self, session, root, manager):
+        """Replay exact file grants by relative path within this session only.
+
+        The root_set history identifies the checkout an audited canonical grant
+        belonged to. Shell/MCP keys and explicitly absolute glob rules retain
+        their exact meaning. Hard PathGuard checks still precede every match.
+        """
+        from .session.root import SessionRoot
+        source = SessionRoot.main(self.workspace)
+        path_tools = {canonical_tool_name(spec.name) for spec in manager.specs
+                      if spec.path_mode or permission_bundle_matches("fs", spec.bundle)}
+        grants = []
+        for event in session.events:
+            if event.type == "session.root_set":
+                source = SessionRoot.from_data(self.workspace, event.data)
+            elif event.type == "permission.resolved":
+                for grant in _grants_from_events((event,)):
+                    rule = grant.compiled()
+                    if rule.kind == "tool_exact" and rule.tool in path_tools and rule.pattern:
+                        try:
+                            relative = Path(rule.pattern).relative_to(source.path)
+                        except ValueError:
+                            pass
+                        else:
+                            if ".." not in relative.parts:
+                                grant = replace(grant, rule=exact_rule(rule.tool, str(root.path / relative)))
+                    grants.append(grant)
+        return tuple(grants)
+
+    def session_root(self, session: str):
+        """Replay the last durable root selection; an absent selection is main.
+
+        The index contains only sessions actually opened by this runtime and is
+        bounded independently of the number of durable historical sessions.
+        """
+        from .session.root import SessionRoot
+        handle = self.sessions.open(session, create=False, recover=False)
+        roots = self._session_roots
+        row = handle._store.session_row(session)
+        revision = (row.get("created_at"), row.get("last_seq", 0)) if row else (None, 0)
+        cached = roots.get(session)
+        if cached is not None and cached[0] == revision:
+            roots.move_to_end(session)
+            return cached[1]
+        root = SessionRoot.main(self.workspace)
+        for event in handle.read(force=True).events():
+            if event.type == "session.root_set":
+                root = SessionRoot.from_data(self.workspace, event.data)
+        roots[session] = (revision, root)
+        while len(roots) > 512:
+            roots.popitem(last=False)
+        return root
+
+    def _validate_linked_root(self, path: Path):
+        from .host_support.project_identity import resolve_project
+        from .host_support.git_head import _read
+        identity = resolve_project(path)
+        if identity.root != self.workspace or identity.launch_worktree != str(path):
+            raise ValueError("Session root must be a linked worktree of this project")
+        # Authenticate the reverse registration too: copying another checkout's
+        # .git pointer must not grant an arbitrary directory worktree authority.
+        pointer = _read(path / ".git").strip()
+        gitdir = (path / pointer.removeprefix("gitdir:").strip()).resolve()
+        registration = (gitdir / _read(gitdir / "gitdir").strip()).resolve()
+        if registration != (path / ".git").resolve():
+            raise ValueError("Session root is not the registered linked worktree")
+        return identity
+
+    def validate_session_root(self, session: str):
+        """Fail closed before running tools in a missing or replaced checkout."""
+        root = self.session_root(session)
+        if not self.workspace.is_dir():
+            raise ValueError("Project root is missing; sessions are read-only")
+        if not root.path.is_dir():
+            raise ValueError(f"Session worktree {root.to_data(self.workspace)['path_display']} no longer exists")
+        if root.kind != "main":
+            self._validate_linked_root(root.path)
+            if root.kind == "worktree":
+                record = self._worktree_service.get(root.worktree_id, root=self._worktree_root)
+                if record.lifecycle != "active" or Path(record.path).resolve() != root.path:
+                    raise ValueError("Session worktree is not active; detach to the main checkout")
+        return root
+
+    def session_path_guard(self, session: str, *, config=None):
+        """Project authority, rebased within the session's hard write boundary."""
+        root = self.validate_session_root(session)
+        config = config or self._load_config()
+        permissions = getattr(getattr(config, "v2", None), "permissions", None)
+        guard = PathGuard(self.workspace,
+            write_roots=tuple(permissions.write_roots) if permissions is not None else ("./",),
+            read_denyroots=tuple(permissions.read_denyroots) if permissions is not None else (),
+            home=self._home)
+        return guard if root.kind == "main" else guard.for_worktree(root.path)
+
+    def initialize_session_cwd(self, session: str, directory: Path):
+        """Preserve an in-root launch directory for a newly opened session."""
+        from .tools.builtin._shell_logs import read_session_cwd, write_session_cwd
+        root = self.validate_session_root(session)
+        directory = Path(directory).resolve()
+        if (directory != root.path and directory.is_relative_to(root.path)
+                and read_session_cwd(self.workspace, session, home=self._home) in (None, str(root.path))):
+            try:
+                write_session_cwd(self.workspace, session, str(directory), home=self._home)
+            except OSError:
+                self.sessions.open(session, create=False, recover=False).emit_session_event(
+                    "context.notice", {"kind": "session_root_cwd",
+                    "message": "Session opened; the launch directory could not be saved as shell cwd. Use shell cd to select it."})
+
+    def set_session_root(self, session: str, path, *, kind="external", **metadata):
+        """Persist a root change under the session lock at a turn boundary.
+
+        External roots must already be linked worktrees of the same project.
+        Worktree creation/recreation and promotion are supplied by later phases.
+        """
+        from .errors import SessionBusy
+        from .session.root import SessionRoot
+        handle = self.sessions.open(session, create=False, recover=False)
+        if handle.active or handle.queued_ids or self.session_has_active_jobs(session):
+            raise SessionBusy("Session root can only change at a turn boundary with no jobs or queued inputs")
+        running_shells = set()
+        for event in handle.events:
+            if event.type == "shell.started":
+                running_shells.add(event.data.get("shell_id"))
+            elif event.type == "shell.completed":
+                running_shells.discard(event.data.get("shell_id"))
+        if running_shells:
+            raise SessionBusy("Session root cannot change while a composer shell command is running")
+        target = Path(path).resolve()
+        if kind == "main":
+            if target != self.workspace:
+                raise ValueError("Main session root must be the project root")
+            root = SessionRoot.main(self.workspace)
+        else:
+            self._validate_linked_root(target)
+            from .host_support.git_head import git_head
+            metadata.setdefault("branch", git_head(target).get("branch", ""))
+            root = SessionRoot(kind=kind, path=target, project_key=project_key(self.workspace), **metadata)
+        handle._lock.acquire(shared=False, blocking=False)
+        try:
+            if self.sessions._has_pending_work(session):
+                raise SessionBusy("Session root requires a turn boundary without queued inputs or pending work")
+            data = root.to_data(self.workspace)
+            handle.emit_session_event("session.root_set", data)
+            if root.kind != "main":
+                handle.emit_session_event("context.notice", {"kind": "session_root",
+                    "message": f"Working in {data['path_display']} ({root.branch or root.kind}). "
+                    "Project settings, memory, extensions and MCP servers use the main checkout. "
+                    "Extension changes in this worktree are not live until landed."})
+            from .tools.builtin._shell_logs import write_session_cwd
+            try:
+                write_session_cwd(self.workspace, session, str(root.path), home=self._home)
+            except OSError:
+                handle.emit_session_event("context.notice", {"kind": "session_root_cwd",
+                    "message": "Working root selected; shell cwd could not be reset. Use shell cd '.' before running commands."})
+            row = handle._store.session_row(session)
+            revision = (row.get("created_at"), row.get("last_seq", 0)) if row else (None, 0)
+            self._session_roots[session] = (revision, root)
+            self._session_roots.move_to_end(session)
+            while len(self._session_roots) > 512:
+                self._session_roots.popitem(last=False)
+        finally:
+            handle._lock.release()
+        return root
+
     def session_has_active_jobs(self, session_id: str) -> bool:
         """Whether ``session_id`` still owns a running shell job (this runtime only).
 
@@ -4728,6 +4936,11 @@ class Runtime:
             )
         if config is None:
             config = self._load_config()
+        root = self.validate_session_root(session.id)
+        workspace = root.path
+        root_guard = self.session_path_guard(session.id, config=config)
+        if root.kind != "main":
+            config = self._child_workspace_config(config, root_guard)
         # Freeze the session's model override here, at turn start, and hand it to
         # both environment paths. The running turn therefore cannot observe a
         # selection made after this point.
@@ -4780,7 +4993,7 @@ class Runtime:
             if len(filtered) != len(manager.tools):
                 manager = ToolManager(
                     config,
-                    workspace=self.workspace,
+                    workspace=workspace,
                     tools=filtered,
                     job_registry=self._job_registry,                    path_guard=manager.path_guard,
                 )
@@ -4796,7 +5009,7 @@ class Runtime:
                 )
             manager = ToolManager(
                 config,
-                workspace=self.workspace,
+                workspace=workspace,
                 tools=catalog,
                 job_registry=self._job_registry,            )
             self._track_tool_manager(manager)
@@ -4810,7 +5023,7 @@ class Runtime:
             original_names = manager.names
             manager = ToolManager(
                 config,
-                workspace=self.workspace,
+                workspace=workspace,
                 tools=(*manager.tools, build_task_tool(None)),
                 restrict=(*original_names, "subagent"),
                 job_registry=self._job_registry,                path_guard=manager.path_guard,
@@ -4834,7 +5047,7 @@ class Runtime:
             if self._extensions is None:
                 manager = ToolManager(
                     config,
-                    workspace=self.workspace,
+                    workspace=workspace,
                     tools=manager.tools,
                     restrict=tuple(name for name in manager.names if name in selected.selected),
                     job_registry=self._job_registry,                    path_guard=manager.path_guard,
@@ -4874,6 +5087,24 @@ class Runtime:
                     ),
                     path_guard=manager.path_guard,
                 )
+        if root.kind != "main":
+            baseline = manager.path_guard
+            baseline = baseline if baseline.workspace == workspace else baseline.for_worktree(workspace)
+            intersections = []
+            for allowed in root_guard.write_roots:
+                for restricted in baseline.write_roots:
+                    if allowed.is_relative_to(restricted):
+                        intersections.append(str(allowed))
+                    elif restricted.is_relative_to(allowed):
+                        intersections.append(str(restricted))
+            root_guard = PathGuard(workspace, write_roots=tuple(dict.fromkeys(intersections)),
+                read_denyroots=tuple(str(path) for path in dict.fromkeys(
+                    (*root_guard.read_denyroots, *baseline.read_denyroots))),
+                home=self._home, _allow_empty_write_roots=True, _worktree_boundary=True)
+            manager = ToolManager(config, workspace=workspace, tools=manager.tools,
+                                  restrict=manager.names, job_registry=self._job_registry,
+                                  path_guard=root_guard)
+            self._track_tool_manager(manager)
         if agent_definition is not None and getattr(agent_definition, "write_roots", ()):
             settings_guard = self._settings_agent_guard(
                 manager.path_guard, agent_definition.write_roots
@@ -4886,13 +5117,19 @@ class Runtime:
                 path_guard=settings_guard,
             )
         engine = self._permissions
+        if engine is not None and root.kind != "main":
+            engine = PermissionEngine(mode=engine.mode,
+                allow=tuple(rule.raw for rule in engine._allow),
+                ask=tuple(rule.raw for rule in engine._ask),
+                deny=tuple(rule.raw for rule in engine._deny),
+                on_unattended=engine.on_unattended, path_guard=root_guard)
         if engine is None:
             permissions = getattr(getattr(config, "v2", None), "permissions", None)
             if permissions is None:
-                engine = PermissionEngine(workspace=self.workspace, home=self._home)
+                engine = PermissionEngine(workspace=workspace, home=self._home)
             else:
                 engine = PermissionEngine.from_config(
-                    permissions, workspace=self.workspace, home=self._home
+                    permissions, workspace=workspace, home=self._home
                 )
         if (
             agent_definition is not None
@@ -4902,7 +5139,9 @@ class Runtime:
             engine.require_confirmation_for(
                 spec.name for spec in manager.specs if getattr(spec, "mutates", False)
             )
-        grants = _grants_from_events(session.events)
+        if root.kind != "main":
+            engine.path_guard = manager.path_guard
+        grants = self._session_root_grants(session, root, manager)
         gate = _PermissionGateAdapter(
             engine, manager=manager, grants=grants, attended=attended
         )
@@ -4912,7 +5151,7 @@ class Runtime:
             hooks_service = _HookService(
                 self._hooks,
                 getattr(current_manifest, "hooks", None),
-                workspace=self.workspace,
+                workspace=workspace,
             )
         runner = None
         roster_digest = None
@@ -4935,6 +5174,7 @@ class Runtime:
                 catalog=manager.tools,
                 hooks=hooks_service,
                 budget=self._turn_subagent_budget(session.id, turn_id, config),
+                workspace=workspace,
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
             if static_runner is not None and "subagent" in manager.names:
@@ -4943,7 +5183,7 @@ class Runtime:
                 roster_digest = _roster_digest(static_runner)
                 manager = ToolManager(
                     config,
-                    workspace=self.workspace,
+                    workspace=workspace,
                     tools=(
                         *(
                             build_task_tool(static_runner) if tool.name == "subagent" else tool
@@ -4971,6 +5211,7 @@ class Runtime:
                 catalog=manager.tools,
                 hooks=hooks_service,
                 budget=self._turn_subagent_budget(session.id, turn_id, config),
+                workspace=workspace,
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
         gate.bind_manager(manager)
@@ -4980,10 +5221,12 @@ class Runtime:
         # caller-owned unless it was explicitly registered as owned at init.
         dispatcher = _ToolDispatcherAdapter(
             manager,
-            workspace=self.workspace,
+            workspace=workspace,
             session_id=session.id,
             turn_id=turn_id,
             config=config,
+            project_root=self.workspace,
+            state_home=self._home,
             agent_id="root",
             skills=self._selected_skills(session),
             extensions=self._extensions,
@@ -5109,11 +5352,12 @@ class Runtime:
                     intersections.append(existing)
         intersections = list(dict.fromkeys(intersections))
         return PathGuard(
-            self.workspace,
+            current.workspace,
             write_roots=[str(root) for root in intersections],
             read_denyroots=[str(root) for root in current.read_denyroots],
             home=home,
             _allow_empty_write_roots=True,
+            _worktree_boundary=current.workspace != self.workspace,
             settings_scopes=[str(root) for root in roots.values()],
         )
 
@@ -5154,7 +5398,7 @@ class Runtime:
         catalog = self._filter_web_catalog(config, catalog, add_available=add_available)
         manager = ToolManager(
             config,
-            workspace=self.workspace,
+            workspace=path_guard.workspace if path_guard is not None else self.workspace,
             tools=catalog,
             restrict=restrict,
             job_registry=self._job_registry,            path_guard=path_guard or PathGuard(
@@ -5193,7 +5437,7 @@ class Runtime:
                                      context_session=lambda sid: self._sessions.open(sid, create=False),
                                      **options)
                 manager = ToolManager(
-                    config, workspace=self.workspace, tools=(*manager.tools, code_tool),
+                    config, workspace=path_guard.workspace if path_guard is not None else self.workspace, tools=(*manager.tools, code_tool),
                     restrict=restrict, job_registry=self._job_registry,
                     path_guard=manager.path_guard,
                 )
@@ -6057,7 +6301,7 @@ class Runtime:
         specs = getattr(manifest, "hooks", None)
         if not specs:
             return None
-        return _HookService(self._hooks, specs, workspace=self.workspace)
+        return _HookService(self._hooks, specs, workspace=self.workspace, root_for=self.validate_session_root)
 
     def _pre_compact_gate(
         self,
@@ -6491,6 +6735,10 @@ class Runtime:
         checkout = Path(workspace).expanduser().resolve()
         if checkout == self.workspace:
             return self._worktree_root
+        if any(root.path == checkout and root.kind != "main"
+               for _, root in self._session_roots.values()):
+            self._validate_linked_root(checkout)
+            return self._worktree_root_for(checkout)
         owned_roots = (
             root / "worktrees"
             for root in tuple(self._worktree_roots.values())

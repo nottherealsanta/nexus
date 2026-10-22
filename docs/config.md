@@ -204,7 +204,7 @@ reports. The section cannot be the main, plan, fast, fallback or title model.
 | `~/.nexus/credentials.json` | provider secrets and OAuth refresh records; plaintext, owner-only `0600`, parent `0700` |
 | `~/.nexus/config.toml` | user config; Settings → Providers/Setup write `[providers.*]` and `[models].default` here |
 | `~/.nexus/{agents,skills,tools,providers}/`, `mcp.json`, `hooks.toml`, `SOUL.md` | user-scope extensions |
-| `~/.nexus/daemon/shared-v4-<install>.sock` (+ pid, lock, log, http discovery) | one daemon per home/install ([host.md](host.md)); falls back to a private short dir when the path is too long |
+| `~/.nexus/daemon/shared-v5-<install>.sock` (+ pid, lock, log, http discovery) | one daemon per home/install ([host.md](host.md)); falls back to a private short dir when the path is too long |
 | `~/.nexus/locks/sessions/<project-hash>/` | per-session `flock` files |
 | `~/.nexus/projects/<project-hash>/` | per-project machine state: cache, logs (incl. `logs/mcp/`), `stage/`, extension trash |
 | `~/.nexus/cache/` | shared models.dev cache, `agy-models.json` (last good `agy models` list), `update-check.json` |

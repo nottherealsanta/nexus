@@ -1300,13 +1300,41 @@ class PermissionEngine:
         *,
         input_data: Mapping[str, Any] | None = None,
         effect: str | None = None,
+        relative_key: str | None = None,
     ) -> Rule | None:
         for rule in rules:
-            if rule.matches(
-                tool, key, bundle, input_data=input_data, effect=effect
+            if rule.matches(tool, key, bundle, input_data=input_data, effect=effect):
+                return rule
+            if relative_key is not None and rule.matches(
+                tool, relative_key, bundle, input_data=input_data, effect=effect
             ):
                 return rule
         return None
+
+    def _relative_path_key(
+        self, key: str | None, bundle: str | None, *, for_write: bool
+    ) -> str | None:
+        """Return the root-relative policy key for an in-root filesystem path.
+
+        Canonical permission keys remain the audit and hard-boundary identity.
+        Relative matching is an additional candidate only for ``fs`` tools and
+        absolute paths inside this guard's workspace; command and service keys
+        (shell, MCP, etc.) never enter filesystem-relative matching.
+        """
+        guard = self.path_guard
+        if (
+            guard is None
+            or not permission_bundle_matches("fs", bundle)
+            or not isinstance(key, str)
+            or not Path(key).is_absolute()
+        ):
+            return None
+        try:
+            canonical = guard.resolve(key, for_write=for_write).absolute
+            relative = canonical.relative_to(guard.workspace)
+        except (PathSecurityError, ValueError):
+            return None
+        return relative.as_posix() or "."
 
     def evaluate(
         self,
@@ -1360,10 +1388,14 @@ class PermissionEngine:
                 suggestions=suggestions,
             )
 
+        relative_key = self._relative_path_key(
+            key, bundle, for_write=spec.mutates
+        )
+
         public_name = canonical_tool_name(call.name)
         denied = self._first_match(
             self._deny, public_name, key, bundle, input_data=call.input,
-            effect="deny",
+            effect="deny", relative_key=relative_key,
         )
         if denied is not None:
             return self._verdict(
@@ -1391,7 +1423,7 @@ class PermissionEngine:
 
         allowed = self._first_match(
             self._allow, public_name, key, bundle, input_data=call.input,
-            effect="allow",
+            effect="allow", relative_key=relative_key,
         )
         if allowed is not None:
             return self._verdict(
@@ -1415,7 +1447,7 @@ class PermissionEngine:
 
         ask = self._first_match(
             self._ask, public_name, key, bundle, input_data=call.input,
-            effect="ask",
+            effect="ask", relative_key=relative_key,
         )
         if ask is not None:
             return self._ask_verdict(call, spec, key, ask, attended, suggestions)
@@ -1668,8 +1700,12 @@ class PermissionEngine:
                 )
 
         tool = canonical_tool_name(call.name)
+        relative_key = self._relative_path_key(
+            key, spec.bundle, for_write=True
+        )
         denied = self._first_match(
-            self._deny, tool, key, spec.bundle, input_data=call.input
+            self._deny, tool, key, spec.bundle, input_data=call.input,
+            relative_key=relative_key,
         )
         if denied is not None:
             return PathTargetEvaluation(
@@ -1715,7 +1751,8 @@ class PermissionEngine:
                 f"Allowed by session grant {grant.rule!r}",
             )
         allowed = self._first_match(
-            self._allow, tool, key, spec.bundle, input_data=call.input
+            self._allow, tool, key, spec.bundle, input_data=call.input,
+            relative_key=relative_key,
         )
         if allowed is not None:
             return PathTargetEvaluation(
@@ -1728,7 +1765,8 @@ class PermissionEngine:
                 allowed,
             )
         ask = self._first_match(
-            self._ask, tool, key, spec.bundle, input_data=call.input
+            self._ask, tool, key, spec.bundle, input_data=call.input,
+            relative_key=relative_key,
         )
         if ask is not None:
             verdict = self._ask_verdict(call, spec, key, ask, attended, ())

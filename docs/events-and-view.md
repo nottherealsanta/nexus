@@ -32,7 +32,7 @@ shutdown) folds to `phase="cancelled"` with no `TurnView.error`, so views show n
 
 | Group | Types |
 | --- | --- |
-| session | `session.opened` `session.closed` `session.forked` `session.linked` (a supervision edge in the **manager's** log: `{kind: "managed", child, turn, origin_message_id, instruction_digest, agent}`; a root the manager launched also gets `session.opened {id, launched_by: {manager, origin_message_id}}`) |
+| session | `session.opened` `session.closed` `session.forked` `session.linked` (a supervision edge in the **manager's** log: `{kind: "managed", child, turn, origin_message_id, instruction_digest, agent}`; a root the manager launched also gets `session.opened {id, launched_by: {manager, origin_message_id}}`) `session.root_set` (per-session working root; `{kind, path_display, branch, base_ref, base_sha, worktree_id}`) |
 | turn | `turn.started` `turn.completed` `turn.failed` `turn.cancelled` |
 | context | `context.assembled` `context.compacted` `context.degraded` |
 | model | `model.selected` `reasoning_effort.selected` `model.started` `text.delta` `text` `thinking.delta` `thinking.end` `thinking` `model.usage` `model.stopped` `model.retrying` |
@@ -210,6 +210,16 @@ queued event.
 
 `ToolCallView.diff` (bounded, durable) is the only source for an Edit/Patch diff
 in any UI; a surface never reads files to render one.
+
+`session.root_set` is the durable root change event. Its `path_display` is a
+bounded path relative to the project's parent, which lets replay reconstruct
+the absolute root without storing an absolute path in the log or adding a
+separate root table. `kind` is `worktree` or `external`; main roots are implicit
+and remain the default when no event exists. `branch`, `base_ref`, `base_sha`,
+and `worktree_id` are bounded metadata. `ConversationView.root` reduces this to
+a `RootView` with the same metadata and an empty display path for the main root.
+The frozen `SessionRoot` value object in `nexus/session/root.py` owns validation
+and the relative `to_data`/`from_data` conversion.
 
 ## Why this shape
 

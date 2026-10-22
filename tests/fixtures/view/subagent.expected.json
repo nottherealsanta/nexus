@@ -82,7 +82,15 @@
               "reasoning_tokens": 0
             }
           }
-        ]
+        ],
+        "root": {
+          "kind": "main",
+          "path_display": "",
+          "branch": "",
+          "base_ref": "",
+          "base_sha": "",
+          "worktree_id": ""
+        }
       },
       "clamped": true,
       "completed_ts": 12.0,
@@ -170,6 +178,14 @@
     "viewers": 0
   },
   "registry": null,
+  "root": {
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "kind": "main",
+    "path_display": "",
+    "worktree_id": ""
+  },
   "session_id": "s1",
   "session_name": null,
   "turns": [

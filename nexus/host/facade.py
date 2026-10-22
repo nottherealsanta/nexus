@@ -77,6 +77,7 @@ from ..host_support.session_archive import (
 from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
+from ..host_support.workspace import session_workspace as _session_workspace
 from ..host_support.live_consent import read_consent
 from ..host_support.manager_port import FacadeManagerHost, HostManagerPort, scan_manager_log
 from ..host_support.provider_auth import connected as provider_connected
@@ -305,7 +306,8 @@ class HostFacade:
             raise ConfigError(f"the manager session does not support {what}")
 
     def search_files(
-        self, query: str, limit: int = 30, *, include_directories: bool = False
+        self, query: str, limit: int = 30, *, include_directories: bool = False,
+        session: str = "",
     ) -> list[str]:
         """Return bounded, visible workspace-relative file path matches."""
         return _search_files(
@@ -314,6 +316,7 @@ class HostFacade:
             limit,
             max_entries=_MAX_FILE_SEARCH_ENTRIES,
             include_directories=include_directories,
+            session=session,
         )
 
     def _file_search_denied_roots(self) -> tuple[Path, ...]:
@@ -1984,24 +1987,31 @@ class HostFacade:
                 command.query,
                 command.limit,
                 include_directories=command.include_directories,
+                session=command.session,
             )
             return p.FileSearchResult(paths=paths)
         if isinstance(command, p.GitDiff):
             patch, truncated = await git_diff(
-                self.runtime.workspace, staged=command.staged, ref=command.ref
+                _session_workspace(self.runtime, command.session), staged=command.staged, ref=command.ref
             )
             return p.GitDiffResult(patch=patch, truncated=truncated)
         if isinstance(command, p.DirectoryList):
             path, entries, truncated = await asyncio.to_thread(
-                list_directory, self.runtime, command.path, command.limit
+                list_directory, self.runtime, command.path, command.limit,
+                session=command.session,
             )
             return p.DirectoryListResult(path=path, entries=entries, truncated=truncated)
         if isinstance(command, p.FilePreview):
             return p.FilePreviewResult(
-                **await asyncio.to_thread(preview_file, self.runtime, command.path, command.max_bytes)
+                **await asyncio.to_thread(
+                    preview_file, self.runtime, command.path, command.max_bytes,
+                    session=command.session,
+                )
             )
         if isinstance(command, p.GitStatus):
-            return p.GitStatusResult(**await workspace_git_status(Path(self.runtime.workspace)))
+            return p.GitStatusResult(**await workspace_git_status(
+                _session_workspace(self.runtime, command.session)
+            ))
         if isinstance(command, p.WorktreeList):
             rows, has_more = await asyncio.to_thread(self.list_worktrees)
             return p.WorktreeListResult(worktrees=rows, has_more=has_more)
@@ -2066,11 +2076,22 @@ class HostFacade:
                     from ..session.names import valid_name
                     if valid_name(target) or not command.create:
                         raise
-            return p.SessionOpenResult(
-                session=self.open_session(
-                    target, create=command.create, recover=command.recover
-                )
-            )
+            if command.root:
+                root = Path(command.root)
+                if not root.is_absolute():
+                    raise ValueError("Session root must be an absolute path")
+                if not command.create or self.runtime.sessions.exists(target):
+                    raise ValueError("An external root can only be set when creating a new session")
+                validate_linked_root = getattr(self.runtime, "_validate_linked_root", None)
+                if callable(validate_linked_root):
+                    validate_linked_root(root.resolve())
+            summary = self.open_session(target, create=command.create, recover=command.recover)
+            if command.root:
+                setter = getattr(self.runtime, "set_session_root", None)
+                if not callable(setter):
+                    raise ValueError("External session roots are unavailable")
+                setter(target, command.root, kind="external")
+            return p.SessionOpenResult(session=summary)
         if isinstance(command, p.AttachmentPrepare):
             return await self.attachments.prepare(command)
         if isinstance(command, p.AttachmentPreview):

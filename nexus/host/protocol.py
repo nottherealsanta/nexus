@@ -39,7 +39,7 @@ from ..session.manager import SessionSummary
 
 #: Bumped when a command/result shape changes incompatibly, so a transport can
 #: refuse a peer built from a different protocol revision instead of misreading.
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +423,8 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     create: bool = True
     recover: bool = True
     project: str = ""
+    #: Optional absolute external linked-worktree path for a newly created session.
+    root: str = ""
 
 
 class AttachmentPrepare(msgspec.Struct, tag=True, frozen=True):
@@ -986,6 +988,7 @@ class FileSearch(msgspec.Struct, tag=True, frozen=True):
     query: str
     limit: int = 30
     include_directories: bool = False
+    session: str = ""
     project: str = ""
 
 
@@ -994,6 +997,7 @@ class GitDiff(msgspec.Struct, tag=True, frozen=True):
 
     staged: bool = False
     ref: str = ""
+    session: str = ""
     project: str = ""
 
 
@@ -1006,6 +1010,7 @@ class DirectoryList(msgspec.Struct, tag=True, frozen=True):
 
     path: str = ""
     limit: int = 200
+    session: str = ""
     project: str = ""
 
 
@@ -1018,11 +1023,13 @@ class FilePreview(msgspec.Struct, tag=True, frozen=True):
 
     path: str
     max_bytes: int = 65536
+    session: str = ""
     project: str = ""
 
 
 class GitStatus(msgspec.Struct, tag=True, frozen=True):
     """Read-only, bounded ``git status`` of the current workspace for the sidebar Git tab."""
+    session: str = ""
     project: str = ""
 
 

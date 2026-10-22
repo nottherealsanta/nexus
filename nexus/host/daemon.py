@@ -4,7 +4,7 @@ The daemon always owns the :class:`~nexus.runtime.Runtime`; a surface is a pure
 client with no in-process fallback. One daemon serves many project runtimes, addressed by
 a deterministic socket path derived from the protocol and Python install identity. This module owns:
 
-* **a deterministic socket path** — ``~/.nexus/daemon/shared-v4-<install>.sock``, mode ``0600``
+* **a deterministic socket path** — ``~/.nexus/daemon/shared-v5-<install>.sock``, mode ``0600``
   inside a ``0700`` directory;
 * **duplicate prevention** — an exclusive ``flock`` on a sibling lock file plus a
   pid file, so a second daemon for the same home/install refuses to start;
@@ -248,6 +248,7 @@ class _ClientConnection:
         self.environment = {}
         self.client_name = ""
         self.initial_path = ""
+        self.launch_path = None
         self._write_lock = asyncio.Lock()
         self._slow: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -278,6 +279,7 @@ class _ClientConnection:
                 self.environment = validate_environment(hello.env)
                 self.client_name = hello.client
                 self.initial_path = hello.focus
+                self.launch_path = Path(hello.focus).resolve()
                 if hello.client != "control":
                     self.focus = await asyncio.wait_for(self.daemon.projects.acquire(
                         resolve_project(hello.focus), self.environment, hello.client), 10)
@@ -362,6 +364,7 @@ class _ClientConnection:
             if self.focus is not None:
                 projects.release(self.focus)
             self.focus = host
+            self.launch_path = identity.launch_root if Path(target).is_absolute() else identity.root
             return p.ProjectFocusResult(project_ref(identity))
         if isinstance(command, (p.ProjectUnload, p.ProjectReload)):
             identity = projects.identity(command.project or self.initial_path) if self.focus is None else (projects.identity(command.project) if command.project else self.focus.identity)
@@ -399,6 +402,7 @@ class _ClientConnection:
             if self.focus is not None:
                 projects.release(self.focus)
             self.focus = host
+            self.launch_path = identity.root
             return p.ProjectSessionOpenResult(project=project_ref(identity), session=command.session)
         if self.focus is None:
             raise ValueError("Control connections require an explicit project operation")
@@ -412,7 +416,25 @@ class _ClientConnection:
         self.daemon._last_routed_project = identity.key
         try:
             host.facade.daemon_info.update({"pid": os.getpid(), "socket": str(self.daemon.socket)})
-            return await host.facade.handle(command)
+            fresh = (isinstance(command, p.SessionOpen) and command.create
+                     and not host.runtime.sessions.exists(command.session))
+            if fresh:
+                from ..errors import SessionError
+                try:
+                    host.runtime.sessions.resolve(command.session, namespace="main")
+                except SessionError:
+                    pass
+                else:
+                    fresh = False
+            launch = self.launch_path if host is self.focus else None
+            if fresh and not command.root and launch is not None:
+                launch_identity = resolve_project(launch)
+                if launch_identity.key == identity.key and launch_identity.launch_worktree:
+                    command = msgspec.structs.replace(command, root=launch_identity.launch_worktree)
+            result = await host.facade.handle(command)
+            if fresh and isinstance(result, p.SessionOpenResult) and launch is not None:
+                host.runtime.initialize_session_cwd(result.session.id, launch)
+            return result
         finally:
             projects.release(host)
 

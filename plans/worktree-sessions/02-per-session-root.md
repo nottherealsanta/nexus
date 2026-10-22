@@ -3,6 +3,80 @@
 Phase: **F2**. Depends on F1 (file 01). No user-visible change on its own: every existing
 session's root is its project root.
 
+## Implementation ledger — 2026-10-22
+
+F2 is implemented. Existing sessions without a root event still use the project
+checkout. The protocol is now **v5**; no compatibility shim is provided.
+
+- [x] Immutable `SessionRoot`, bounded relative event serialization,
+  `session.root_set`, `ConversationView.root`, replay and fork inheritance.
+- [x] Runtime-owned lazy root index (512 entries), refreshed against durable
+  sequence/creation metadata. Roots anywhere on disk use a relative spelling
+  from the project parent, including `..`; the spelling is never authority.
+- [x] Before a turn or session-scoped file/Git operation, authenticate canonical
+  project identity, Git common directory and the worktree's reverse `gitdir`
+  registration. Foreign roots, missing roots and copied `.git` pointers fail
+  closed. Owned roots require an active authenticated service record.
+- [x] Root changes hold the session lock and refuse active turns, pending work,
+  queued input and shell jobs. The durable queue is rechecked under the lock.
+- [x] Fresh sessions launched in a user worktree adopt it as `external`.
+  Reopening an existing session, including a friendly-name reference, retains
+  its root. `ProjectFocus(path)` preserves that path; focus by project key uses
+  the canonical checkout. In-root launch subdirectories initialize shell cwd.
+- [x] Tool managers, dispatchers, code-mode nested calls and child runners use
+  the selected root. Rebased hard guards intersect existing injected/agent
+  restrictions; the main checkout and other roots remain outside write scopes.
+- [x] Shell cwd/logs remain under the project's state key and explicit state
+  home. `cd` is bounded by the root. Composer `!` starts at the root, regardless
+  of saved shell cwd, and revalidates it before spawn. A failed auxiliary cwd
+  write reports a notice without falsely reporting that root selection failed.
+- [x] Root AGENTS instructions freeze for each turn and stay frozen across
+  iterations and read-only context inspection. Project SOUL/MEMORY/config,
+  extensions, hooks and MCP remain project-owned. Hooks get session cwd,
+  `NEXUS_WORKSPACE` and `NEXUS_PROJECT_ROOT` without shared-manager mutation.
+- [x] Git status/diff, directory listing, file preview and file search accept a
+  session selector. Client, native sidebar, `/diff` and completion forward it;
+  stale same-project results are rejected after switching sessions.
+- [x] The shared local Claude SDK provider takes a per-request execution root;
+  worker cleanup retains process leases through exit/cancellation.
+- [x] Matching docs, module map, event/view golden fixtures and regression tests.
+
+Decisions and boundaries:
+
+- Relative configured filesystem rules (`write(src/**)`) match within each
+  root after canonical hard-boundary checks. Denies precede grants/allow.
+  Exact path grants replay by the relative file within the **same session**,
+  using root history; canonical audit records remain unchanged. The baseline
+  has no project-wide grant store, so no approvals are imported from other
+  sessions. Shell/MCP keys and explicitly absolute globs keep their meaning.
+- One project manifest/config/hook manager and one MCP connection set remain
+  authoritative. Worktree-local `.agents/` content is not discovered. A labelled
+  root notice explains these semantics and the fact that MCP uses the project
+  checkout; diff-specific extension badges belong to file 08.
+- PathGuard confines path-aware tools and shell `cd`. Arbitrary shell commands
+  retain the existing command-permission model; cwd checks are not OS sandboxing.
+- Worktree provisioning, promotion and per-turn commits are file 03. Recovery
+  that recreates a missing owned checkout is file 07. F2 refuses that turn rather
+  than recreating or silently switching roots. External roots are never
+  committed, removed or landed by root selection.
+- Native clients consume the new selectors. The deprecated browser keeps its
+  existing UI; the host contract accepts explicit session selectors for it.
+
+Verification: the final targeted root/runtime/host/provider/shell run passed
+**217 tests**. The real native PTY journey verifies a composer command creates
+its result in the external checkout, with no file in main. The existing real
+Chromium project-session check passes. Permission/tool-focused checks passed
+243 tests; client/sidebar/completion-focused checks passed 175 tests. Ruff and
+whitespace checks pass. The full run finished with **8,090 passed, 364 skipped,
+6 deselected, 16 failed** in 1,194.90 seconds. Twelve native rendering failures
+and the placeholder-search and skills-timeout failures match the baseline
+recorded in file 01. The other two exposed a stale browse-test helper signature
+and an optional injected iteration guard; both were corrected. The complete
+reasoning/context rerun passes **44 tests**, browse/root-host passes **42**, and
+the final runtime/root tools/permissions run passes **50**. This is not a green full suite; the unrelated baseline failures
+remain outside this change.
+
+
 ## 1. Contract
 
 A session has a **project** (file 01 §3: settings, grants, extensions, queue) and a **root**
@@ -54,9 +128,9 @@ absolute path to clients; the daemon keeps the absolute path in its records). Ap
 Reducer: `ConversationView.root` (kind, display path, branch, base) in `nexus/view/reduce.py`;
 documented in `docs/events-and-view.md`.
 
-The daemon keeps an in-memory index `session_id → SessionRoot` per `ProjectHost`, rebuilt from
-logs on load (only the last `session.root_set` per session matters; bounded by the session
-count already loaded).
+The project Runtime keeps a lazy, bounded `session_id → SessionRoot` index.
+It replays the last root event when a session is opened or its durable revision
+changes, avoiding a scan of all historical sessions when a project loads.
 
 ## 4. What resolves against what
 
@@ -69,7 +143,7 @@ count already loaded).
 | `AGENTS.md` / project instructions in context | workspace | **session root** (the worktree's committed copy, including edits the session made) | frozen per turn as today |
 | `MEMORY.md` | workspace | **project root** (memory is about the project, shared across sessions) | *not verified* where MEMORY.md is read; check `context/` |
 | `.agents/` extensions (tools, hooks, skills, agents, MCP config, `nexus.toml`) | workspace | **project root** only. Edits a session makes to `.agents/` inside its worktree take effect after land; the TUI shows "extension changes in this worktree are not live until landed" when the session's diff touches `.agents/` | one manifest per project; hot reload watches the project root only |
-| Permission rules and session grants | runtime | **project** (shared by all sessions, as today across tabs) | grants that name paths are stored relative to the root they were granted in; a grant for `src/**` in worktree A applies to `src/**` in worktree B (*decision*, §7 Q1) |
+| Permission rules and session grants | runtime | **project configuration**, with grants local to each session log | configured relative rules apply across roots; exact file grants follow a relative path when that session changes root (§7 Q1) |
 | Hooks | workspace cwd | cwd = **session root**; `NEXUS_WORKSPACE` = session root, new `NEXUS_PROJECT_ROOT` = project root | `docs/extensions.md:120-131` |
 | MCP servers | started with workspace cwd | **project root**, shared by all sessions | a filesystem-rooted MCP server sees the main checkout, not the worktree; shown as a warning on worktree sessions using such a server (§7 Q2) |
 | Code mode (`code` tool) | workspace | session root | same as tools |
@@ -106,14 +180,14 @@ launched inside one, or the user picks "New session in…" an existing linked wo
 **Changing a session's root** happens only through file 03 (create, promote) or §5 (external
 open), always at a turn boundary, never mid-turn.
 
-## 7. Open questions
+## 7. Resolved decisions
 
-1. **Path grants across worktrees**: shared by relative path (recommended; the user approved
-   "edit `src/**`" for the project) vs per root.
-2. **MCP servers with a filesystem root**: run one instance per worktree on demand (costly) vs
-   one per project with a warning (recommended for v1).
-3. **`.agents/` edits in a worktree**: live for that session only (needs a per-session manifest)
-   vs live after land (recommended, simpler, matches "project config is the main checkout").
+1. Path policy uses relative filesystem rules. Exact file grants are portable
+   across one session's roots while preserving canonical audit records; grants
+   are not implicitly shared across different sessions. A project grant store
+   would be a separate permission feature.
+2. MCP stays one instance per project; the root notice states its checkout.
+3. Worktree `.agents/` changes are not live until landed; no per-session manifest.
 
 ## 8. Failure modes
 

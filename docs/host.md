@@ -1,9 +1,9 @@
 # Host: daemon, protocol, facade, transports
 
-## Shared daemon (protocol v4)
+## Shared daemon (protocol v5)
 
 One socket per Nexus home and Python install serves up to 32 project runtimes:
-`shared-v4-<sha8(sys.prefix)>.sock`. Runtime construction is lazy. `Hello.focus`
+`shared-v5-<sha8(sys.prefix)>.sock`. Runtime construction is lazy. `Hello.focus`
 is an absolute launch path; its bounded environment (1,024 variables / 256 KiB)
 is captured once per project and is never returned or logged. `Welcome.focus`
 identifies the resolved project. Administrative connections use `client=control`
@@ -45,7 +45,7 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 
 | File | Owns |
 | --- | --- |
-| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (4); `decode_command`; `ErrorResult` |
+| `protocol.py` | the wire contract: frozen, tagged `msgspec` commands and `*Result` structs; `PROTOCOL_VERSION` (5); `decode_command`; `ErrorResult` |
 | `facade.py` | `HostFacade`: implements every command (`handle`), `subscribe`, `state`, `web_snapshot`, `subscribe_web`, `subscribe_workspace` |
 | `daemon.py` | `Daemon`: lifecycle, socket, handshake, idle shutdown, `web_launch`, `ensure_daemon`/`status`/`stop`/`logs`, daemon entrypoint |
 | `supervisor.py` | `Supervisor`: turn scheduling under a global cap; a cancel keeps queued subagent reports |
@@ -80,7 +80,7 @@ inward-only exceptions. Errors are
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `UsageRefreshSettings` `UsageRefreshSettingsSet` (result `UsageRefreshSettingsResult`) `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
-| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
+| Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows; `session=""` selects the main root) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
 | Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
@@ -92,9 +92,11 @@ inward-only exceptions. Errors are
 
 | Command | Contract |
 | --- | --- |
-| `DirectoryList(path="", limit=200)` | One workspace directory → `DirectoryListResult(path, entries, truncated)`. `path` is workspace-relative POSIX; absolute paths, `..`, empty or hidden segments, backslashes, NUL/control characters and paths over 1,024 characters are refused, as is any path through a symlink or under a configured read-deny root. Entries are `{name, path, kind: dir\|file\|link, size}`, directories first, then case-insensitive names. Symlinks are listed (`link`) and never followed; hidden entries, special files, control-character names and credential-looking names are omitted. `limit` is 1..500 (default 200); at most 5,000 directory entries are read; `truncated` says when either cut applied. |
-| `FilePreview(path, max_bytes=65536)` | The start of one workspace file as text → `FilePreviewResult(path, status, text, size, shown, truncated, message)`. `path` follows the `DirectoryList` rules and must also be a regular file (no symlink on the path, no special files, no credential-looking name, no read-deny root); the file is opened with `O_NOFOLLOW` and at most `max_bytes` (1..262,144) are read. `status` is `text` (redacted; a clip never splits a UTF-8 character; `truncated` says the file is longer), `binary` (NUL bytes or not UTF-8: no text is returned, `message` says so) or `empty`. Unsafe or unreadable paths are errors. |
-| `GitStatus()` | Read-only `git status --porcelain=v2` of the workspace (no shell, `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, 5 s deadline, 512 KiB output cap) → `GitStatusResult(available, message, branch, upstream, ahead, behind, rows, counts, truncated)`. Rows are `{group: conflicts\|staged\|unstaged\|untracked, code, label, path, from}`, at most 500, paths redacted and relative to the repository root. Outside a work tree `available` is false with a `message`. |
+| `DirectoryList(path="", limit=200, session="")` | One directory under the selected root → `DirectoryListResult(path, entries, truncated)`. `session` selects that session's root; empty selects the project root. `path` is root-relative POSIX; absolute paths, `..`, empty or hidden segments, backslashes, NUL/control characters and paths over 1,024 characters are refused, as is any path through a symlink or under a configured read-deny root. Entries are `{name, path, kind: dir\|file\|link, size}`, directories first, then case-insensitive names. Symlinks are listed (`link`) and never followed; hidden entries, special files, control-character names and credential-looking names are omitted. `limit` is 1..500 (default 200); at most 5,000 directory entries are read; `truncated` says when either cut applied. |
+| `FilePreview(path, max_bytes=65536, session="")` | The start of one file under the selected root as text → `FilePreviewResult(path, status, text, size, shown, truncated, message)`. `session` selects that session's root; empty selects the project root. `path` follows the `DirectoryList` rules and must also be a regular file (no symlink on the path, no special files, no credential-looking name, no read-deny root); the file is opened with `O_NOFOLLOW` and at most `max_bytes` (1..262,144) are read. `status` is `text` (redacted; a clip never splits a UTF-8 character; `truncated` says the file is longer), `binary` (NUL bytes or not UTF-8: no text is returned, `message` says so) or `empty`. Unsafe or unreadable paths are errors. |
+| `GitStatus(session="")` | Read-only `git status --porcelain=v2` of the selected root (`session` empty means project root; no shell, `GIT_OPTIONAL_LOCKS=0`, `core.fsmonitor=false`, 5 s deadline, 512 KiB output cap) → `GitStatusResult(available, message, branch, upstream, ahead, behind, rows, counts, truncated)`. Rows are `{group: conflicts\|staged\|unstaged\|untracked, code, label, path, from}`, at most 500, paths redacted and relative to the repository root. Outside a work tree `available` is false with a `message`. `GitDiff` uses the same session-root selection. File reads retain the session path guard, including project policy read-deny roots. |
+
+`SessionOpen.root` optionally links a newly created session to an absolute external linked-worktree path. It is applied only after the session is created; opening an existing session with a different root is refused. The runtime validates that the path belongs to the project's repository. An empty root keeps the session on the project root.
 
 The shell job commands (`host_support/session_jobs.py`, [tools.md](tools.md#shell-jobs)) read the
 runtime's job registry for the **named session only**, so a job id from another session answers
@@ -281,7 +283,7 @@ by a dead view is released.
 ## Daemon
 
 One daemon per Nexus home and Python install, addressed by a deterministic socket
-`~/.nexus/daemon/shared-v4-<sha8(sys.prefix)>.sock` (mode `0600` in a `0700` dir; a private short
+`~/.nexus/daemon/shared-v5-<sha8(sys.prefix)>.sock` (mode `0600` in a `0700` dir; a private short
 fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 
 - `flock` on a sibling lock plus a pid file prevent duplicates; a stale socket

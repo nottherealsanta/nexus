@@ -126,6 +126,14 @@ returns a `HookDecision`.
 - **Python hooks:** `.agents/hooks/*.py` (`HOOKS` or `register()`), loaded through
   quarantine; loading emits `TRUSTED_CODE_WARNING`. Project shadows legacy
   shadows user by file stem.
+- Hooks are discovered and loaded from the project only. At invocation, the
+  session root is passed as `NEXUS_WORKSPACE` and the project root as
+  `NEXUS_PROJECT_ROOT`; Python hooks receive the session root as
+  `HookContext.workspace`. A command hook with no `cwd` starts at the session
+  root. Relative `cwd` values, and absolute paths inside the project, are
+  rebased under the session root; explicit absolute paths outside the project
+  keep their declared location. These are per-call overrides, so simultaneous
+  sessions do not mutate the shared hook manager or its loaded specs.
 - Hooks run in `Runtime._HookService`, not in `core`. `SessionStart` and
   `UserPromptSubmit` run in the session layer before the prompt is persisted, so a
   block leaves no orphan message. All failures are isolated and sanitised.

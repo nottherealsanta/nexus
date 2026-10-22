@@ -86,7 +86,7 @@ async def test_directory_listing_honours_read_deny_roots(tmp_path, monkeypatch):
     (tmp_path / "secret" / "key.txt").write_text("k")
     (tmp_path / "open").mkdir()
     denied = ((tmp_path / "secret").resolve(),)
-    monkeypatch.setattr(wb, "_file_search_denied_roots", lambda runtime: denied)
+    monkeypatch.setattr(wb, "_file_search_denied_roots", lambda runtime, **_kwargs: denied)
 
     root = await _facade(tmp_path).handle(p.DirectoryList())
     assert [row["name"] for row in root.entries] == ["open"]
@@ -152,7 +152,10 @@ async def test_file_preview_refuses_credential_names_special_files_and_deny_root
     (tmp_path / "secret").mkdir()
     (tmp_path / "secret" / "key.txt").write_text("k")
     (tmp_path / "sk-abcdef123456.txt").write_text("k")
-    monkeypatch.setattr(wb, "_file_search_denied_roots", lambda runtime: ((tmp_path / "secret").resolve(),))
+    monkeypatch.setattr(
+        wb, "_file_search_denied_roots",
+        lambda runtime, **_kwargs: ((tmp_path / "secret").resolve(),),
+    )
     for path in ("secret/key.txt", "sk-abcdef123456.txt"):
         assert isinstance(await _facade(tmp_path).handle(p.FilePreview(path=path)), p.ErrorResult)
     if hasattr(os, "mkfifo"):

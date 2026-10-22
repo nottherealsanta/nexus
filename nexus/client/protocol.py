@@ -175,21 +175,29 @@ class Client:
     async def skills_install(self, scope: str, source: str, skills: list[str] | None = None, overwrite: bool = False) -> p.SkillsInstallResult:
         return await self._request(p.SkillsInstall(scope=scope, source=source, skills=list(skills or []), overwrite=overwrite))  # type: ignore[return-value]
 
-    async def search_files(self, query: str, limit: int = 30, *, include_directories: bool = False) -> list[str]:
-        command = p.FileSearch(query=query, limit=limit, include_directories=include_directories)
+    async def search_files(
+        self, query: str, limit: int = 30, *, include_directories: bool = False, session: str = ""
+    ) -> list[str]:
+        command = p.FileSearch(
+            query=query, limit=limit, include_directories=include_directories, session=session
+        )
         return list((await self._request(command)).paths)  # type: ignore[union-attr]
 
-    async def git_diff(self, *, staged: bool = False, ref: str = "") -> p.GitDiffResult:
-        return await self._request(p.GitDiff(staged=staged, ref=ref))  # type: ignore[return-value]
+    async def git_diff(self, *, staged: bool = False, ref: str = "", session: str = "") -> p.GitDiffResult:
+        return await self._request(p.GitDiff(staged=staged, ref=ref, session=session))  # type: ignore[return-value]
 
-    async def list_directory(self, path: str = "", limit: int = 200) -> p.DirectoryListResult:
-        return await self._request(p.DirectoryList(path=path, limit=limit))  # type: ignore[return-value]
+    async def list_directory(
+        self, path: str = "", limit: int = 200, *, session: str = ""
+    ) -> p.DirectoryListResult:
+        return await self._request(p.DirectoryList(path=path, limit=limit, session=session))  # type: ignore[return-value]
 
-    async def file_preview(self, path: str, max_bytes: int = 65536) -> p.FilePreviewResult:
-        return await self._request(p.FilePreview(path=path, max_bytes=max_bytes))  # type: ignore[return-value]
+    async def file_preview(
+        self, path: str, max_bytes: int = 65536, *, session: str = ""
+    ) -> p.FilePreviewResult:
+        return await self._request(p.FilePreview(path=path, max_bytes=max_bytes, session=session))  # type: ignore[return-value]
 
-    async def git_status(self) -> p.GitStatusResult:
-        return await self._request(p.GitStatus())  # type: ignore[return-value]
+    async def git_status(self, *, session: str = "") -> p.GitStatusResult:
+        return await self._request(p.GitStatus(session=session))  # type: ignore[return-value]
 
     async def list_worktrees(self) -> p.WorktreeListResult: return await self._request(p.WorktreeList())  # type: ignore[return-value]
 
@@ -215,8 +223,12 @@ class Client:
         command = p.WorktreeDiscard(child_id=child_id, force=force, review_id=review_id, confirmation_token=confirmation_token)
         return await self._request(command)  # type: ignore[return-value]
 
-    async def open_session(self, session: str, *, create: bool = True, recover: bool = True) -> Any:
-        return (await self._request(p.SessionOpen(session=session, create=create, recover=recover))).session  # type: ignore[union-attr]
+    async def open_session(
+        self, session: str, *, create: bool = True, recover: bool = True, root: str = ""
+    ) -> Any:
+        return (await self._request(
+            p.SessionOpen(session=session, create=create, recover=recover, root=root)
+        )).session  # type: ignore[union-attr]
 
     async def prepare_attachment(self, path: str = "", *, name: str = "",
                                  data: bytes = b"") -> p.AttachmentPrepareResult:

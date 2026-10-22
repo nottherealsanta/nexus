@@ -14,7 +14,7 @@ import os
 import signal
 import sys
 from collections.abc import AsyncIterator, Mapping
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from pathlib import Path
 from uuid import uuid4
 
@@ -136,11 +136,24 @@ class ClaudeAgentProvider:
         await asyncio.gather(*(self._stop(process) for process in tuple(self._active)))
 
     async def stream(self, req: ModelRequest) -> AsyncIterator[StreamEvent]:
+        from ...resources import process_slot
+        async with process_slot():
+            async with aclosing(self._stream(req)) as events:
+                async for event in events:
+                    yield event
+
+    async def _stream(self, req: ModelRequest) -> AsyncIterator[StreamEvent]:
         if self._closed:
             raise ProviderError("claude-agent provider is closed")
         payload = json.dumps(request_payload(req, self._model, self._executable)).encode()
         if len(payload) > MAX_BYTES:
             raise ProviderError("claude-agent request exceeds 8 MiB")
+        execution_root = req.metadata.get("execution_root", self._workspace)
+        if not isinstance(execution_root, (str, Path)):
+            raise ProviderError("Invalid local provider execution root")
+        execution_root = Path(execution_root)
+        if not execution_root.is_absolute() or not execution_root.is_dir():
+            raise ProviderError("Local provider execution root must be an existing absolute directory")
         env = build_child_env(self._environ)
         # The official CLI owns the credential store. No API keys, OAuth tokens,
         # cloud-provider switches, PYTHONPATH, or unrelated secrets are inherited.
@@ -151,7 +164,7 @@ class ClaudeAgentProvider:
             async with asyncio.timeout(self._timeout):
                 process = await asyncio.create_subprocess_exec(
                     sys.executable, "-I", "-c", bootstrap,
-                    cwd=self._workspace, env=env, stdin=asyncio.subprocess.PIPE,
+                    cwd=execution_root, env=env, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                     limit=MAX_BYTES + 1, start_new_session=os.name == "posix")
                 self._active.add(process)

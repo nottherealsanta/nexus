@@ -1086,6 +1086,8 @@ class HookManager:
         *,
         cancel: Any | None = None,
         specs: Sequence[HookSpec] | None = None,
+        workspace: str | os.PathLike[str] | None = None,
+        project_root: str | os.PathLike[str] | None = None,
     ) -> HookOutcome:
         """Run every matching hook for one event, in declaration order.
 
@@ -1108,6 +1110,8 @@ class HookManager:
             if specs is not None
             else self._set.for_event(hook_event.value)
         )
+        project_workspace = _absolute(project_root or self._workspace)
+        session_workspace = _absolute(workspace or project_workspace)
         original = dict(invocation.tool_input)
         working = dict(original)
         decisions: list[HookDecision] = []
@@ -1128,7 +1132,13 @@ class HookManager:
                 continue
             current = invocation.with_tool_input(working)
             try:
-                decision = await self._run_hook(spec, current, cancel=cancel)
+                decision = await self._run_hook(
+                    spec,
+                    current,
+                    cancel=cancel,
+                    workspace=session_workspace,
+                    project_root=project_workspace,
+                )
             except OperationCancelled:
                 raise
             except asyncio.CancelledError:
@@ -1207,10 +1217,17 @@ class HookManager:
         invocation: HookInvocation,
         *,
         cancel: Any | None,
+        workspace: Path,
+        project_root: Path,
     ) -> HookDecision:
         if spec.is_python:
-            return await self._run_python(spec, invocation, cancel=cancel)
-        return await self._run_command(spec, invocation, cancel=cancel)
+            return await self._run_python(
+                spec, invocation, cancel=cancel, workspace=workspace
+            )
+        return await self._run_command(
+            spec, invocation, cancel=cancel, workspace=workspace,
+            project_root=project_root,
+        )
 
     async def _run_command(
         self,
@@ -1218,6 +1235,8 @@ class HookManager:
         invocation: HookInvocation,
         *,
         cancel: Any | None,
+        workspace: Path,
+        project_root: Path,
     ) -> HookDecision:
         payload = invocation.to_json().encode("utf-8")
         if len(payload) > MAX_STDIN_BYTES:
@@ -1226,12 +1245,15 @@ class HookManager:
                 f"hook input exceeds {MAX_STDIN_BYTES} bytes",
                 timed_out=False,
             )
-        env = _build_command_env(spec, invocation, self._environ)
+        env = _build_command_env(
+            spec, invocation, self._environ,
+            workspace=workspace, project_root=project_root,
+        )
         argv = _expand_argv(spec.argv, env) if not spec.shell else spec.argv
         outcome = await _run_process(
             argv,
             env=env,
-            cwd=spec.cwd,
+            cwd=_hook_cwd(spec.cwd, workspace, project_root),
             stdin=payload,
             timeout_s=spec.timeout_s,
             limit=MAX_OUTPUT_BYTES,
@@ -1248,11 +1270,12 @@ class HookManager:
         invocation: HookInvocation,
         *,
         cancel: Any | None,
+        workspace: Path,
     ) -> HookDecision:
         if cancel is not None and getattr(cancel, "cancelled", False):
             raise OperationCancelled(getattr(cancel, "reason", None) or "hook cancelled")
         ctx = HookContext(
-            workspace=self._workspace,
+            workspace=workspace,
             event=spec.event,
             session_id=invocation.session_id,
             turn_id=invocation.turn_id,
@@ -1449,7 +1472,30 @@ def _parse_env(value: object) -> dict[str, str]:
     return env
 
 
-def _build_command_env(spec: HookSpec, invocation: HookInvocation, environ=None) -> dict[str, str]:
+def _hook_cwd(cwd: str | None, workspace: Path, project_root: Path) -> str:
+    """Resolve declared project-relative hook cwd for this session invocation."""
+    if cwd is None:
+        return str(workspace)
+    candidate = Path(cwd)
+    if not candidate.is_absolute():
+        return str(workspace / candidate)
+    absolute = _absolute(candidate)
+    try:
+        relative = absolute.relative_to(project_root)
+    except ValueError:
+        # Existing policy preserves explicitly external absolute directories.
+        return str(absolute)
+    return str(workspace / relative)
+
+
+def _build_command_env(
+    spec: HookSpec,
+    invocation: HookInvocation,
+    environ=None,
+    *,
+    workspace: Path | None = None,
+    project_root: Path | None = None,
+) -> dict[str, str]:
     """The bounded environment handed to a command hook.
 
     Starts from a tiny allow-list of the host environment (never the whole of
@@ -1463,6 +1509,10 @@ def _build_command_env(spec: HookSpec, invocation: HookInvocation, environ=None)
             env[key] = value
     env.update(invocation.env())
     env.update(spec.env)
+    if workspace is not None:
+        env["NEXUS_WORKSPACE"] = str(workspace)
+    if project_root is not None:
+        env["NEXUS_PROJECT_ROOT"] = str(project_root)
     return env
 
 

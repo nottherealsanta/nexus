@@ -33,6 +33,7 @@ class SidebarController:
         #: Bumped only by an explicit ``show(focus=True)``; opening alone leaves focus alone.
         self.focus = 0
         self.workspace = ""
+        self.session = ""
         self.tasks: set[asyncio.Task] = set()
         self._reset()
 
@@ -107,11 +108,12 @@ class SidebarController:
     # -- data --------------------------------------------------------------------------
 
     def _sync_workspace(self, *, kick=True):
-        """Files and Git describe the current project: drop them when the project changes."""
+        """Files and Git describe the current session root; drop them when it changes."""
         workspace = str(getattr(self.shell, "workspace", "") or "")
-        if workspace == self.workspace:
+        session = str(getattr(self.shell.controller, "session", "") or "")
+        if (workspace, session) == (self.workspace, self.session):
             return
-        self.workspace = workspace
+        self.workspace, self.session = workspace, session
         self._reset()
         if kick and self.open:
             self._spawn(self.refresh(force=True))
@@ -150,10 +152,13 @@ class SidebarController:
         self.due[tab] = now + DUE_SECONDS[tab]
         self.sequence[tab] += 1
         sequence, workspace = self.sequence[tab], str(self.shell.workspace or "")
+        session = str(self.shell.controller.session or "")
 
         def current() -> bool:
             return (self.enabled and sequence == self.sequence[tab]
-                    and workspace == str(self.shell.workspace or "") and workspace == self.workspace)
+                    and workspace == str(self.shell.workspace or "") and workspace == self.workspace
+                    and session == str(self.shell.controller.session or "")
+                    and session == self.session)
 
         client = self.shell.client
         try:
@@ -170,7 +175,7 @@ class SidebarController:
                                  "error": "", "loaded": True}
             elif tab == "Files":
                 target = self._files_path if path is None else path
-                result = await client.list_directory(target)
+                result = await client.list_directory(target, session=session)
                 if not current():
                     return
                 payload = view.files_payload(result, workspace)
@@ -179,7 +184,7 @@ class SidebarController:
                 self._previewable = view.previewable(payload)
                 self.files = {**payload, "loaded": True}
             else:
-                result = await client.git_status()
+                result = await client.git_status(session=session)
                 if not current():
                     return
                 self.git = {**view.git_payload(result), "loaded": True}
@@ -212,25 +217,28 @@ class SidebarController:
     # -- actions from the client -------------------------------------------------------
 
     async def navigate(self, path):
+        self._sync_workspace(kick=False)
         if not isinstance(path, str) or path not in self._dirs:
             raise ValueError("That folder is not listed")
         await self.refresh("Files", force=True, path=path)
 
     async def preview(self, path):
         """Show a listed file's start in the read-only modal; the host reads and bounds it."""
+        self._sync_workspace(kick=False)
         if not isinstance(path, str) or path not in self._previewable:
             raise ValueError("That file is not listed")
         self._preview_sequence += 1
-        sequence, workspace = self._preview_sequence, self.workspace
+        sequence, workspace, session = self._preview_sequence, self.workspace, self.session
         try:
-            result = await self.shell.client.file_preview(path)
+            result = await self.shell.client.file_preview(path, session=session)
             title, body = view.preview_panel(result)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the modal says why the file cannot be shown
             title, body = f"File · {view.clean(path, 1024)}", f"Path: {view.clean(path, 1024)}\nError: {view.clean(error_text(exc))}"
-        if sequence != self._preview_sequence or workspace != str(self.shell.workspace or ""):
-            return  # a newer preview was asked for, or the project changed meanwhile
+        if (sequence != self._preview_sequence or workspace != str(self.shell.workspace or "")
+                or session != str(self.shell.controller.session or "")):
+            return  # a newer preview was asked for, or the selected root changed meanwhile
         self.shell.show(title, body)
 
     async def open_session(self, workspace, session):

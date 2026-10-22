@@ -468,6 +468,9 @@ class ContextManager:
         if type(min_content_chars) is not int or min_content_chars < 0:
             raise ValueError("min_content_chars must be a non-negative integer")
         self.workspace = Path(workspace).resolve()
+        # Context instructions may come from a selected session root while
+        # configuration and shared system files remain owned by the project.
+        self._agents_workspace = self.workspace
         self._config = config
         self._config_loader = config_loader
         self._identity = identity
@@ -645,6 +648,7 @@ class ContextManager:
         mcp_index: Any | None = None,
         agent_definition: Any | None = None,
         reasoning_effort: str | None = None,
+        workspace: str | Path | None = None,
     ) -> ContextManager:
         """Return a snapshot manager with config and rendered inputs frozen.
 
@@ -679,7 +683,16 @@ class ContextManager:
                 else freeze_mcp_index(mcp_index)
             ),
         )
-        snapshot._env = snapshot._build_env(config)
+        snapshot._agents_workspace = (
+            Path(workspace).expanduser().resolve()
+            if workspace is not None
+            else self._agents_workspace
+        )
+        snapshot._env = snapshot._build_env(
+            config,
+            workspace=snapshot._agents_workspace,
+            agents_workspace=snapshot._agents_workspace,
+        )
         return snapshot
 
     def _spawn(
@@ -775,6 +788,7 @@ class ContextManager:
             self, "_agent_effort_supported", True
         )
         snapshot._env = self._env
+        snapshot._agents_workspace = self._agents_workspace
         snapshot._refuse_compaction = self._refuse_compaction
         return snapshot
 
@@ -798,6 +812,7 @@ class ContextManager:
         iteration: int | None = None,
         agent_definition: Any | None = None,
         reasoning_effort: str | None = None,
+        workspace: str | Path | None = None,
     ) -> ContextManager:
         """Return a sibling snapshot for one loop iteration.
 
@@ -832,6 +847,11 @@ class ContextManager:
             if mcp_index is _UNSET
             else freeze_mcp_index(mcp_index)
         )
+        agents_workspace = (
+            Path(workspace).expanduser().resolve()
+            if workspace is not None
+            else self._agents_workspace
+        )
         snapshot = self._spawn(
             config=config,
             capabilities=capabilities,
@@ -845,6 +865,7 @@ class ContextManager:
             iteration=iteration,
             reasoning_effort=reasoning_effort,
         )
+        snapshot._agents_workspace = agents_workspace
         snapshot._reasoning_effort = reasoning_effort
         snapshot._agent_effort_supported = reasoning_effort is not None
         snapshot.agent_definition = agent_definition
@@ -855,12 +876,17 @@ class ContextManager:
                 snapshot._env = replace(snapshot._env)
             else:
                 snapshot._env = snapshot._build_env(config or snapshot.effective_config())
-        if config is not None and (
+        has_system_snapshot = (
             system_files is not None
             or soul_text is not None
             or memory_text is not None
             or agents_text is not None
+        )
+        root_specific_agents = agents_workspace != self.workspace
+        if (config is not None and has_system_snapshot) or (
+            root_specific_agents and has_system_snapshot
         ):
+            effective = config or snapshot.effective_config()
             frozen_soul = (
                 _system_file_text(system_files, "soul")
                 if soul_text is None
@@ -871,19 +897,45 @@ class ContextManager:
                 if memory_text is None
                 else memory_text
             )
+            if system_files is None and snapshot._env is not None:
+                if soul_text is None:
+                    frozen_soul = snapshot._env.soul_text
+                if memory_text is None:
+                    frozen_memory = snapshot._env.memory_text
             frozen_agents = (
-                _system_file_text(system_files, "agents")
-                if agents_text is None
-                else agents_text
+                agents_text
+                if agents_text is not None
+                else snapshot._read(effective.agents_file, workspace=agents_workspace)
+                if root_specific_agents
+                else _system_file_text(system_files, "agents")
             )
             snapshot._env = snapshot._build_env(
-                config,
+                effective,
                 soul_text="" if frozen_soul is None else frozen_soul,
                 memory_text="" if frozen_memory is None else frozen_memory,
                 agents_text="" if frozen_agents is None else frozen_agents,
+                workspace=agents_workspace,
+                agents_workspace=agents_workspace,
             )
-        elif config is not None:
-            snapshot._env = snapshot._build_env(config)
+        elif config is not None or workspace is not None:
+            effective = config or snapshot.effective_config()
+            if workspace is not None and config is None and snapshot._env is not None:
+                snapshot._env = snapshot._build_env(
+                    effective,
+                    soul_text=snapshot._env.soul_text,
+                    memory_text=snapshot._env.memory_text,
+                    agents_text=snapshot._read(
+                        effective.agents_file, workspace=agents_workspace
+                    ),
+                    workspace=agents_workspace,
+                    agents_workspace=agents_workspace,
+                )
+            else:
+                snapshot._env = snapshot._build_env(
+                    effective,
+                    workspace=agents_workspace,
+                    agents_workspace=agents_workspace,
+                )
         if agent_definition is not None:
             snapshot.agent_definition = agent_definition
             snapshot.append_agent_prompt(agent_definition.load_body())
@@ -979,7 +1031,19 @@ class ContextManager:
         soul_text: str | None = None,
         memory_text: str | None = None,
         agents_text: str | None = None,
+        workspace: str | Path | None = None,
+        agents_workspace: str | Path | None = None,
     ) -> AssemblyEnvironment:
+        context_workspace = (
+            Path(workspace).expanduser().resolve()
+            if workspace is not None
+            else self.workspace
+        )
+        instructions_workspace = (
+            Path(agents_workspace).expanduser().resolve()
+            if agents_workspace is not None
+            else self.workspace
+        )
         capabilities = (
             self._capabilities
             if self._capabilities is not None
@@ -988,7 +1052,7 @@ class ContextManager:
         environment = self._environment
         if environment is None:
             environment = capture_environment(
-                self.workspace, profile=self._profile(config)
+                context_workspace, profile=self._profile(config)
             )
         provider, model = self._reference(config)
         return AssemblyEnvironment(
@@ -1008,7 +1072,7 @@ class ContextManager:
                 else memory_text
             ),
             agents_text=(
-                self._read(config.agents_file)
+                self._read(config.agents_file, workspace=instructions_workspace)
                 if agents_text is None
                 else agents_text
             ),
@@ -1020,7 +1084,7 @@ class ContextManager:
             summarizer_async=_is_async_summarizer(self._summarizer),
             request_counter=self._request_counter,
             max_file_bytes=self.max_file_bytes,
-            workspace=self.workspace,
+            workspace=context_workspace,
             system_override=self._system_override,
             strategy=self._strategy(config),
             keep_recent=self.keep_recent,
@@ -1082,11 +1146,13 @@ class ContextManager:
             reasoning_effort=reasoning_effort,
         )
 
-    def _read(self, filename: str) -> str:
+    def _read(self, filename: str, *, workspace: str | Path | None = None) -> str:
         # ``resolve_within`` rejects ``../``, symlink escapes, and NUL bytes as
         # ConfigError. Reading a bounded prefix avoids the stat-then-read TOCTOU
         # race and never allocates more than the cap.
-        path = resolve_within(self.workspace, filename)
+        path = resolve_within(
+            self.workspace if workspace is None else Path(workspace), filename
+        )
         try:
             with open(path, "rb") as handle:
                 data = handle.read(self.max_file_bytes + 1)
@@ -1668,6 +1734,11 @@ class ContextManager:
             },
             "cache": cache_metadata,
         }
+        # The local Claude Agent worker must start in the selected session
+        # checkout. Keep this provider-specific so other providers' request
+        # metadata and historical request snapshots remain unchanged.
+        if env.provider == "claude-agent":
+            metadata["execution_root"] = str(env.workspace)
         if self._last_precompact is not None:
             metadata["pre_compact"] = dict(self._last_precompact)
         agent_fallback = getattr(

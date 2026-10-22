@@ -41,7 +41,7 @@ Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
 | `soul` | 0 | `SOUL.md` plus the selected agent's prompt (`append_agent_prompt`) |
 | `environment` | 1 | workspace, platform, profile, Git branch and status (`capture_environment`; capped by `context.limits.environment`) |
 | `tools` | 0 | structured schemas on `ModelRequest.tools`; never in system text |
-| `agents_md` | 1 | workspace `AGENTS.md` (`context.limits.agents_md`) |
+| `agents_md` | 1 | selected session-root `AGENTS.md` (`context.limits.agents_md`) |
 | `skills_index` | 1 | sanitised `name: description` lines only; bodies load via the `skill` tool |
 | `mcp_index` | 2 | bounded, untrusted-data index of servers/roots/resources (≤ `MCP_INDEX_MAX_CHARS`) |
 | `memory` | 1 | `MEMORY.md` (`context.limits.memory`) |
@@ -49,8 +49,11 @@ Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
 | `history` | 3 | contiguous suffix of messages; compacts itself to fit |
 | `user` | 0 | the current user turn |
 
-`SOUL.md`/`MEMORY.md`/`AGENTS.md` resolve through `resolve_within` (escapes fail
-closed; oversized files are a named error, `max_file_bytes` default from `[ext]`).
+`SOUL.md` and `MEMORY.md` resolve under the project root. `AGENTS.md` resolves
+under the selected session root (the project root for main sessions). All three
+use `resolve_within` (escapes fail closed; oversized files are a named error,
+`max_file_bytes` default from `[ext]`). Project configuration still selects the
+filenames and limits; a session root only changes the source of `AGENTS.md`.
 
 ## Header sections and literal inspection
 
@@ -173,9 +176,12 @@ schemas.
 
 ## Per-turn freeze and inspection
 
-`ContextManager.for_turn(...)` snapshots config, environment and the rendered
-system files once, so every iteration of a turn sees identical inputs; a config
-edit affects only the next turn. `Runtime.inspect_context` builds a read-only
+`ContextManager.for_turn(..., workspace=root)` snapshots project config, shared
+`SOUL.md`/`MEMORY.md`, and `AGENTS.md` from the selected root once, so every
+assembly in the turn sees identical inputs; a file edit affects only the next
+turn. `for_iteration(..., workspace=root)` returns an independent assembler for
+that root and leaves the project manager and its snapshots unchanged. When the
+root is omitted, existing callers use the project root. `Runtime.inspect_context` builds a read-only
 next-turn preview (no provider count calls, no summarizer) for `ContextInspect`;
 `host_support/context_preview.py` redacts and bounds it (≤ 4,000,000 chars) and
 `ui_support/context.py` groups it for display

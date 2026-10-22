@@ -89,7 +89,8 @@ class UserShells:
             raise ValueError(
                 f"{MAX_RUNNING_PER_SESSION} shell commands are already running in this session"
             )
-        workspace = Path(self._runtime.workspace)
+        root_for = getattr(self._runtime, "validate_session_root", None)
+        workspace = root_for(session_id).path if callable(root_for) else Path(self._runtime.workspace)
         shell_id = new_id()
         handle.emit_session_event(
             "shell.started",
@@ -125,8 +126,10 @@ class UserShells:
         status = "completed"
         output = ""
         try:
+            root_for = getattr(self._runtime, "validate_session_root", None)
             job = await self._registry().spawn(
                 command, session_id=handle.id, cwd=workspace, shell=_SHELL,
+                cwd_check=(lambda: root_for(handle.id).path) if callable(root_for) else None,
                 announce=False,  # ``!`` runs have their own shell.started/completed
             )
             outcome = await _jobs.await_job(job, timeout=limit)

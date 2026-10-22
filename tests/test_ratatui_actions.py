@@ -269,6 +269,7 @@ async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
     await shell.command("/fork", ("nope",))
     shell.controller.client.fork.assert_awaited_with("s", None)
     await shell.command("/diff", ())
+    shell.controller.client.git_diff.assert_awaited_once_with(staged=False, ref="", session="s")
     assert shell.panel_lines == ["No changes"] or "No changes" in "\n".join(shell.panel_lines)
     with pytest.raises(ValueError, match="/diff"):
         await shell.command("/diff", ("a", "b"))

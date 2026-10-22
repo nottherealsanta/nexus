@@ -35,6 +35,7 @@ from .model import (
     QueuedInputView,
     RegistryView,
     RetryView,
+    RootView,
     SkillView,
     ToolCallView,
     TurnView,
@@ -2155,6 +2156,27 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         return _on_legacy(state, event, data)
     if event_type == "session.named":
         return replace(state, session_name=_as_str(data.get("name")) or state.session_name)
+    if event_type == "session.root_set":
+        kind = data.get("kind")
+        if kind not in {"main", "worktree", "external"}:
+            return _diagnostic(state, event, data)
+        def root_text(key: str, limit: int) -> str:
+            value = data.get(key, "")
+            return value if isinstance(value, str) and len(value) <= limit and "\x00" not in value else ""
+        path_display = root_text("path_display", 1024)
+        if path_display.startswith("/") or "\\" in path_display:
+            return _diagnostic(state, event, data)
+        worktree_id = root_text("worktree_id", 200)
+        if kind == "worktree" and not worktree_id:
+            return _diagnostic(state, event, data)
+        return replace(state, root=RootView(
+            kind=kind,
+            path_display=path_display,
+            branch=root_text("branch", 200),
+            base_ref=root_text("base_ref", 200),
+            base_sha=root_text("base_sha", 128),
+            worktree_id=worktree_id,
+        ))
     if event_type == "session.opened":
         return replace(
             state,

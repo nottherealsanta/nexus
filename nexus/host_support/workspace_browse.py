@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..util import redact_secrets
-from .workspace import _file_search_denied_roots, _path_is_denied
+from .workspace import _file_search_denied_roots, _path_is_denied, session_workspace
 
 MAX_PATH_CHARS = 1024
 MAX_LIST_ENTRIES = 500
@@ -58,7 +58,9 @@ def normalize_relative(path: object) -> str:
     return "/".join(parts)
 
 
-def list_directory(runtime: object, path: str = "", limit: int = DEFAULT_LIST_ENTRIES) -> tuple[str, list[dict[str, Any]], bool]:
+def list_directory(
+    runtime: object, path: str = "", limit: int = DEFAULT_LIST_ENTRIES, *, session: str = ""
+) -> tuple[str, list[dict[str, Any]], bool]:
     """List one workspace directory: ``(path, entries, truncated)``.
 
     Entries are ``{"name", "path", "kind", "size"}`` with ``kind`` one of ``dir``, ``file``
@@ -70,8 +72,8 @@ def list_directory(runtime: object, path: str = "", limit: int = DEFAULT_LIST_EN
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("directory limit must be a positive integer")
     limit = min(limit, MAX_LIST_ENTRIES)
-    workspace = Path(runtime.workspace).resolve()
-    denied = _file_search_denied_roots(runtime)
+    workspace = session_workspace(runtime, session)
+    denied = _file_search_denied_roots(runtime, session=session, workspace=workspace)
     target = workspace
     for part in relative.split("/") if relative else ():
         target = target / part
@@ -126,10 +128,12 @@ def list_directory(runtime: object, path: str = "", limit: int = DEFAULT_LIST_EN
     return relative, entries[:limit], truncated
 
 
-def _walk_workspace_path(runtime: object, relative: str, noun: str) -> tuple[Path, Path]:
+def _walk_workspace_path(
+    runtime: object, relative: str, noun: str, *, session: str = ""
+) -> tuple[Path, Path]:
     """Resolve ``relative`` below the workspace without crossing a symlink or a read-deny root."""
-    workspace = Path(runtime.workspace).resolve()
-    denied = _file_search_denied_roots(runtime)
+    workspace = session_workspace(runtime, session)
+    denied = _file_search_denied_roots(runtime, session=session, workspace=workspace)
     target = workspace
     for part in relative.split("/"):
         target = target / part
@@ -149,7 +153,9 @@ def _walk_workspace_path(runtime: object, relative: str, noun: str) -> tuple[Pat
     return workspace, resolved
 
 
-def preview_file(runtime: object, path: str, max_bytes: int = DEFAULT_PREVIEW_BYTES) -> dict[str, Any]:
+def preview_file(
+    runtime: object, path: str, max_bytes: int = DEFAULT_PREVIEW_BYTES, *, session: str = ""
+) -> dict[str, Any]:
     """Read the start of one workspace file as text: ``{path, status, text, size, shown, truncated, message}``.
 
     ``status`` is ``text`` (``text`` holds the redacted, control-escaped start of the file),
@@ -166,7 +172,7 @@ def preview_file(runtime: object, path: str, max_bytes: int = DEFAULT_PREVIEW_BY
     max_bytes = min(max_bytes, MAX_PREVIEW_BYTES)
     if any(redact_secrets(part) != part for part in relative.split("/")):  # names the listing omits
         raise ValueError("file is not readable")
-    _, resolved = _walk_workspace_path(runtime, relative, "file")
+    _, resolved = _walk_workspace_path(runtime, relative, "file", session=session)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(resolved, flags)

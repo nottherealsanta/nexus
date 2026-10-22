@@ -24,6 +24,7 @@ def search_files(
     *,
     max_entries: int = _MAX_FILE_SEARCH_ENTRIES,
     include_directories: bool = False,
+    session: str = "",
 ) -> list[str]:
     """Return bounded, visible workspace-relative file path matches.
 
@@ -50,8 +51,8 @@ def search_files(
     if limit == 0:
         return []
 
-    workspace = Path(runtime.workspace).resolve()
-    denied_roots = _file_search_denied_roots(runtime)
+    workspace = session_workspace(runtime, session)
+    denied_roots = _file_search_denied_roots(runtime, session=session, workspace=workspace)
     visible = _git_visible(workspace)
     needle = query.casefold()
     found: list[str] = []
@@ -171,8 +172,26 @@ def _git_visible(workspace: Path) -> tuple[frozenset[str], frozenset[str]] | Non
     return result
 
 
-def _file_search_denied_roots(runtime: object) -> tuple[Path, ...]:
+def session_workspace(runtime: object, session: str = "") -> Path:
+    """Return the selected session root, or the project's main workspace."""
+    validator = getattr(runtime, "validate_session_root", None)
+    if session and callable(validator):
+        root = validator(session)
+        return Path(getattr(root, "path", root)).resolve()
+    resolver = getattr(runtime, "session_root", None)
+    if session and callable(resolver):
+        root = resolver(session)
+        return Path(getattr(root, "path", root)).resolve()
+    return Path(runtime.workspace).resolve()
+
+
+def _file_search_denied_roots(
+    runtime: object, *, session: str = "", workspace: Path | None = None
+) -> tuple[Path, ...]:
     """Read current hard read boundaries without exposing other config."""
+    guard_for_session = getattr(runtime, "session_path_guard", None)
+    if session and callable(guard_for_session):
+        return tuple(guard_for_session(session).read_denyroots)
     context = getattr(runtime, "context", None)
     effective_config = getattr(context, "effective_config", None)
     try:
@@ -185,7 +204,7 @@ def _file_search_denied_roots(runtime: object) -> tuple[Path, ...]:
         return ()
     from ..tools.permissions import PathGuard
 
-    guard = PathGuard(runtime.workspace, read_denyroots=tuple(raw_roots))
+    guard = PathGuard(workspace or runtime.workspace, read_denyroots=tuple(raw_roots))
     return guard.read_denyroots
 
 
@@ -193,4 +212,4 @@ def _path_is_denied(path: Path, denied_roots: tuple[Path, ...]) -> bool:
     return any(path == root or path.is_relative_to(root) for root in denied_roots)
 
 
-__all__ = ["search_files"]
+__all__ = ["search_files", "session_workspace"]

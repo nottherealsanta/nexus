@@ -43,6 +43,14 @@
     "viewers": 0
   },
   "registry": null,
+  "root": {
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "kind": "main",
+    "path_display": "",
+    "worktree_id": ""
+  },
   "session_id": "s1",
   "session_name": null,
   "turns": [

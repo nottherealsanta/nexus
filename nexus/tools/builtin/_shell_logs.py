@@ -50,18 +50,18 @@ def _component(value: str) -> str:
     return "x-" + hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:32]
 
 
-def shell_root(workspace: Path | str) -> Path:
-    return project_state_dir(workspace) / "shell"
+def shell_root(workspace: Path | str, *, home=None) -> Path:
+    return project_state_dir(workspace, home) / "shell"
 
 
-def session_dir(workspace: Path | str, session_id: str) -> Path:
-    return shell_root(workspace) / _component(session_id)
+def session_dir(workspace: Path | str, session_id: str, *, home=None) -> Path:
+    return shell_root(workspace, home=home) / _component(session_id)
 
 
-def log_path(workspace: Path | str, session_id: str, job_id: str) -> Path:
+def log_path(workspace: Path | str, session_id: str, job_id: str, *, home=None) -> Path:
     if JOB_ID_RE.fullmatch(job_id) is None:
         raise ValueError("invalid job id")
-    return session_dir(workspace, session_id) / f"{job_id}.log"
+    return session_dir(workspace, session_id, home=home) / f"{job_id}.log"
 
 
 def _private_dir(path: Path) -> None:
@@ -253,6 +253,7 @@ def prune_logs(
     *,
     max_total_bytes: int,
     retention_days: int,
+    home=None,
     protected: Iterable[Path] = (),
     now: float | None = None,
     force: bool = False,
@@ -262,7 +263,7 @@ def prune_logs(
     ``protected`` paths (running jobs) are never deleted. Throttled to one sweep
     a minute per project unless ``force``. Returns the number of files removed.
     """
-    root = shell_root(workspace)
+    root = shell_root(workspace, home=home)
     key = str(root)
     clock = time.time() if now is None else now
     if not force and clock - _last_prune.get(key, 0.0) < _PRUNE_INTERVAL_S:
@@ -304,23 +305,23 @@ def prune_logs(
 # -- session cwd -----------------------------------------------------------------
 
 
-def _cwd_file(workspace: Path | str, session_id: str) -> Path:
-    return session_dir(workspace, session_id) / _CWD_FILE
+def _cwd_file(workspace: Path | str, session_id: str, *, home=None) -> Path:
+    return session_dir(workspace, session_id, home=home) / _CWD_FILE
 
 
-def read_session_cwd(workspace: Path | str, session_id: str) -> str | None:
+def read_session_cwd(workspace: Path | str, session_id: str, *, home=None) -> str | None:
     """The session's recorded cwd (an absolute path string), or ``None``."""
     try:
-        data = json.loads(_cwd_file(workspace, session_id).read_text("utf-8"))
+        data = json.loads(_cwd_file(workspace, session_id, home=home).read_text("utf-8"))
     except (OSError, ValueError):
         return None
     value = data.get("cwd") if isinstance(data, dict) else None
     return value if isinstance(value, str) and value else None
 
 
-def write_session_cwd(workspace: Path | str, session_id: str, cwd: str) -> None:
+def write_session_cwd(workspace: Path | str, session_id: str, cwd: str, *, home=None) -> None:
     """Record the session cwd atomically (private file, rename into place)."""
-    path = _cwd_file(workspace, session_id)
+    path = _cwd_file(workspace, session_id, home=home)
     _private_dir(path.parent)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     payload = json.dumps({"cwd": cwd}, ensure_ascii=False)

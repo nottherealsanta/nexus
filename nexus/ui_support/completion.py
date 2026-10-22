@@ -116,7 +116,8 @@ def filter_prefix(values: Sequence[str], query: str, limit: int = ARGUMENT_LIMIT
 
 
 async def complete(
-    client: Any, prefix: str, query: str, *, efforts: Sequence[str] = (), include_directories: bool = False
+    client: Any, prefix: str, query: str, *, efforts: Sequence[str] = (),
+    include_directories: bool = False, session: str = "",
 ) -> list[str]:
     """Candidates for the token ``query`` at the end of composer text ``prefix``.
 
@@ -132,14 +133,18 @@ async def complete(
         if query.startswith("/"):
             return command_matches(query)
         if query.startswith("@"):
-            return await _files(client, query[1:], include_directories)
+            return await _files(client, query[1:], include_directories, session=session)
     except (ClientError, TransportError, OSError, ValueError):
         return []
     return []
 
 
-async def _files(client: Any, query: str, include_directories: bool = False) -> list[str]:
+async def _files(
+    client: Any, query: str, include_directories: bool = False, *, session: str = ""
+) -> list[str]:
     options = {"include_directories": True} if include_directories else {}
+    if session:
+        options["session"] = session
     hits = list(await client.search_files(query, limit=FILE_LIMIT, **options))[:FILE_LIMIT]
     if len(hits) >= MENU_LIMIT:
         return hits

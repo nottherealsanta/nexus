@@ -47,6 +47,7 @@ class BackgroundActions:
                 rows = await complete(
                     client, prefix, query, efforts=shell.controller.supported_levels,
                     include_directories=action.get("directories") is True,
+                    session=session,
                 )
                 if not current() or serial != self.completion_serial:
                     return

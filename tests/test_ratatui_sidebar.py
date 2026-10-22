@@ -315,13 +315,13 @@ async def test_files_navigate_only_through_folders_the_host_listed(shell):
         "src": SimpleNamespace(path="src", truncated=False, entries=[
             {"name": "deep", "path": "src/deep", "kind": "dir", "size": None}]),
     }
-    shell.client.list_directory = AsyncMock(side_effect=lambda path: listings[path])
+    shell.client.list_directory = AsyncMock(side_effect=lambda path, *, session="": listings[path])
     await shell.sidebar.show("Files")
     assert shell.sidebar.files["loaded"] and [r["name"] for r in shell.sidebar.files["rows"]] == ["src", "a.txt"]
     for refused in ("../etc", "/etc", "src/deep", "a.txt", "", None, 3):
         with pytest.raises(ValueError):
             await shell.sidebar.handle({"op": "dir", "path": refused})
-    shell.client.list_directory.assert_awaited_once_with("")
+    shell.client.list_directory.assert_awaited_once_with("", session="s")
     await shell.sidebar.handle({"op": "dir", "path": "src"})
     assert shell.sidebar.files["path"] == "src" and shell.sidebar.files["label"] == "repo/src"
     assert [(r["kind"], r["path"]) for r in shell.sidebar.files["rows"]] == [("up", ""), ("dir", "src/deep")]
@@ -349,7 +349,7 @@ async def test_files_preview_only_listed_files_and_goes_through_the_host(shell):
             await shell.sidebar.handle({"op": "file", "path": refused})
     shell.client.file_preview.assert_not_awaited()
     await shell.sidebar.handle({"op": "file", "path": "a.txt"})
-    shell.client.file_preview.assert_awaited_once_with("a.txt")
+    shell.client.file_preview.assert_awaited_once_with("a.txt", session="s")
     assert shell.panel_title == "File · a.txt" and shell.panel_layout == "modal"
     assert shell.panel_lines[:3] == ["Path: a.txt", "Size: 15 bytes (15B)", "Showing the whole file"]
     assert "\x1b" not in "\n".join(shell.panel_lines) and "\\x1b[31mred" in shell.panel_lines[-1]
@@ -385,7 +385,7 @@ async def test_a_stale_preview_is_dropped_when_the_project_changes(shell):
         {"name": "a.txt", "path": "a.txt", "kind": "file", "size": 1}]))
     gate = asyncio.Event()
 
-    async def slow(path):
+    async def slow(path, *, session=""):
         await gate.wait()
         return _preview()
 
@@ -400,6 +400,58 @@ async def test_a_stale_preview_is_dropped_when_the_project_changes(shell):
 
 
 @pytest.mark.asyncio
+async def test_files_and_git_requests_name_the_active_session_root(shell):
+    _fake_dashboard(shell)
+    shell.client.list_directory = AsyncMock(return_value=SimpleNamespace(path="", truncated=False, entries=[]))
+    shell.client.git_status = AsyncMock(return_value=SimpleNamespace(
+        available=False, message="not a repo", rows=[], counts={}))
+    await shell.sidebar.show("Files")
+    shell.client.list_directory.assert_awaited_once_with("", session="s")
+    await shell.sidebar.refresh("Git", force=True)
+    shell.client.git_status.assert_awaited_once_with(session="s")
+
+
+@pytest.mark.asyncio
+async def test_a_stale_files_answer_is_dropped_after_a_same_project_session_switch(shell):
+    _fake_dashboard(shell)
+    gate = asyncio.Event()
+
+    async def listing(path, *, session=""):
+        await gate.wait()
+        return SimpleNamespace(path="", truncated=False, entries=[
+            {"name": "from-old-root.txt", "path": "from-old-root.txt", "kind": "file", "size": 1}])
+
+    shell.client.list_directory = AsyncMock(side_effect=listing)
+    pending = asyncio.create_task(shell.sidebar.refresh("Files", force=True))
+    await asyncio.sleep(0)
+    shell.controller.session = "other"
+    gate.set()
+    await pending
+    assert not shell.sidebar.files["loaded"]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_preview_is_dropped_after_a_same_project_session_switch(shell):
+    _fake_dashboard(shell)
+    shell.client.list_directory = AsyncMock(return_value=SimpleNamespace(path="", truncated=False, entries=[
+        {"name": "a.txt", "path": "a.txt", "kind": "file", "size": 1}]))
+    gate = asyncio.Event()
+
+    async def preview(path, *, session=""):
+        await gate.wait()
+        return _preview()
+
+    shell.client.file_preview = AsyncMock(side_effect=preview)
+    await shell.sidebar.show("Files")
+    pending = asyncio.create_task(shell.sidebar.preview("a.txt"))
+    await asyncio.sleep(0)
+    shell.controller.session = "other"
+    gate.set()
+    await pending
+    assert shell.panel_title == ""
+
+
+@pytest.mark.asyncio
 async def test_a_slow_answer_cannot_replace_a_newer_one(shell):
     _fake_dashboard(shell)
     await shell.sidebar.show("Files")
@@ -407,7 +459,7 @@ async def test_a_slow_answer_cannot_replace_a_newer_one(shell):
     a = SimpleNamespace(path="a", truncated=False, entries=[])
     b = SimpleNamespace(path="b", truncated=False, entries=[])
 
-    async def listing(path):
+    async def listing(path, *, session=""):
         if path == "a":
             await gate.wait()
             return a

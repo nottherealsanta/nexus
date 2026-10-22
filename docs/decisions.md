@@ -1,5 +1,28 @@
 # Design decisions
 
+## Session roots retain project authority (2026-10-22)
+
+Protocol v5 separates working directories from project identity. Each root is a
+durable session fact; file/Git commands take a session selector, and native
+sidebar/completion requests include it. Project configuration, extensions,
+grants, memory and MCP stay anchored to the canonical project. Root-specific
+AGENTS instructions are frozen per turn. Root selection authenticates both the
+Git common directory and the reverse registration and holds the session lock.
+The relative event path is a display/replay format, never an authority check.
+
+User-created linked worktrees are external roots and are never automatically
+committed or deleted. Owned-root creation and recovery are later phases.
+
+
+Configured filesystem rules may match root-relative paths such as
+`write(src/**)`. Canonical boundaries and configured denies are checked first;
+absolute rules keep their absolute meaning. Exact file grants retain canonical
+audit records, but replay uses the recorded root history to apply the same
+relative file after that session changes roots. Shell/MCP grants and absolute
+glob rules keep their original keys. Grants remain local to the session log;
+this phase does not add a project-wide grant store or import other sessions'
+approvals. Project settings and permission rules are shared independently.
+
 ## Shared daemon and canonical project identity (2026-10-22)
 
 Choose one daemon per Nexus home + install, with per-project runtimes and a
@@ -7,7 +30,7 @@ mutable connection focus. Resolve Git subdirectories and linked worktrees to
 the main checkout; keep submodules independent. Settings and grants belong to
 the project. Keep full filesystem paths separate from display-truncated Git
 breadcrumbs. This replaces per-workspace daemons and cross-project socket
-reconnection. Protocol v4 rejects older clients; no compatibility escape hatch
+reconnection. Protocol v5 rejects older clients; no compatibility escape hatch
 or old-worktree-row migration is maintained. Environment capture is per project;
 reload explicitly to change it.
 

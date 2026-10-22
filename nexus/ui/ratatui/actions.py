@@ -826,7 +826,9 @@ class ShellActions:
             refs = [arg for arg in args if arg != "--staged"]
             if len(refs) > 1:
                 raise ValueError("Use /diff [--staged] [ref]")
-            result = await self.client.git_diff(staged="--staged" in args, ref=refs[0] if refs else "")
+            result = await self.client.git_diff(
+                staged="--staged" in args, ref=refs[0] if refs else "", session=session
+            )
             self.show("Git diff", (result.patch or "No changes") + ("\n\n[diff truncated]" if result.truncated else ""))
         elif name == "/worktrees":
             await self.workflows.operate({"kind": "worktrees"})

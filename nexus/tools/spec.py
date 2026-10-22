@@ -692,6 +692,9 @@ class ToolContext:
     #: ``run_in_background`` and no ``timeout_s``: its background job keeps the
     #: ``tools.shell_max_s`` lifetime cap and is never a persistent job.
     legacy_capped_background: bool = False
+    #: Project-owned state remains separate from the execution checkout.
+    project_root: Path | None = None
+    state_home: Path | None = None
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""

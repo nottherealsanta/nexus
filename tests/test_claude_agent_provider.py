@@ -350,3 +350,32 @@ async def test_worker_exposes_mcp_proxy_tools_without_executing_them():
     await worker.run(request_payload(req, "sonnet", None), sdk)
     assert seen["allowed_tools"] == ["mcp__nexus__McpSearch", "mcp__nexus__McpCall"]
     assert [tool[1] for tool in seen["mcp_servers"]["nexus"]["tools"]] == [MCP_SEARCH_SCHEMA, MCP_CALL_SCHEMA]
+
+
+async def test_shared_provider_uses_request_execution_root(tmp_path, fake_worker, monkeypatch):
+    root = tmp_path / "worktree"
+    root.mkdir()
+    provider = ClaudeAgentProvider(workspace=tmp_path)
+    spawn = asyncio.create_subprocess_exec
+    seen = []
+    async def capture(*args, **kwargs):
+        seen.append(kwargs["cwd"])
+        return await spawn(*args, **kwargs)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+    req = request()
+    req.metadata["execution_root"] = str(root)
+    assert TextDelta("hello") in [event async for event in provider.stream(req)]
+    assert seen == [root]
+    assert provider._workspace == tmp_path
+    await provider.aclose()
+
+
+@pytest.mark.parametrize("root", ["relative", "/definitely/not/a/nexus/root"])
+async def test_worker_refuses_invalid_execution_root(tmp_path, fake_worker, root):
+    provider = ClaudeAgentProvider(workspace=tmp_path)
+    req = request()
+    req.metadata["execution_root"] = root
+    with pytest.raises(ProviderError, match="execution root"):
+        _ = [event async for event in provider.stream(req)]
+    assert fake_worker == []
+    await provider.aclose()

@@ -114,6 +114,14 @@
     "stale": true,
     "status": "stale"
   },
+  "root": {
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "kind": "main",
+    "path_display": "",
+    "worktree_id": ""
+  },
   "session_id": "s1",
   "turns": [
     {

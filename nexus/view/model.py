@@ -30,6 +30,7 @@ __all__ = [
     "QueuedInputView",
     "RegistryView",
     "RetryView",
+    "RootView",
     "SkillView",
     "ToolCallView",
     "TurnView",
@@ -395,6 +396,17 @@ class PresenceView(_View):
     attended: bool = False
 
 @dataclass
+class RootView(_View):
+    """Durable, presentation-safe root metadata for a conversation."""
+
+    kind: str = "main"
+    path_display: str = ""
+    branch: str = ""
+    base_ref: str = ""
+    base_sha: str = ""
+    worktree_id: str = ""
+
+@dataclass
 class QueuedInputView(_View):
     queued_id: str = ""
     mode: str = "queue"
@@ -624,6 +636,7 @@ class ConversationView(_View):
     code_store: dict[str, Any] = field(default_factory=dict)
     phase: str = "idle"  # idle|running|awaiting_input|awaiting_permission|closed
     opened: bool = False
+    root: RootView = field(default_factory=RootView)
     closed: bool = False
     turns: list[TurnView] = field(default_factory=list)
     permissions: list[PermissionView] = field(default_factory=list)

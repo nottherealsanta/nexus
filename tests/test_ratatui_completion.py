@@ -87,7 +87,7 @@ async def test_background_complete_reads_directories_flag():
     await background._run({"type": "complete", "text": "@s", "prefix": "@s", "directories": True}, 0)
     await background._run({"type": "complete", "text": "@s", "prefix": "@s", "directories": "yes"}, 0)
     await background._run({"type": "complete", "text": "@s", "prefix": "@s"}, 0)
-    assert seen == [{"include_directories": True}] * 2 + [{}] * 4
+    assert seen == [{"include_directories": True, "session": "s"}] * 2 + [{"session": "s"}] * 4
 
 
 @pytest.mark.asyncio

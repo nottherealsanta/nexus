@@ -41,7 +41,7 @@ SHUTDOWN_CANCEL_REASON = "supervisor closing"
 
 #: ``session.linked`` is a supervision edge recorded in the *manager's* log
 #: (``kind: "managed"``, ``child``, ``origin_message_id``, ``instruction_digest``).
-SESSION_EVENTS = ("session.named", "session.opened", "session.closed", "session.forked", "session.linked")
+SESSION_EVENTS = ("session.named", "session.opened", "session.closed", "session.forked", "session.linked", "session.root_set")
 TURN_EVENTS = (
     "turn.started",
     "turn.completed",

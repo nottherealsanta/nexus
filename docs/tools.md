@@ -13,6 +13,34 @@ keep matching the tool through its old spellings, so a stored wildcard deny stay
 effective. Old session history is shown to the model as `shell` calls (the log is
 untouched).
 
+## Session execution roots
+
+`ToolContext.workspace` is the session's selected checkout. `project_root`
+identifies its shared configuration and state owner. Tool managers, file/edit
+operations, grep and code-mode calls use a root-scoped `PathGuard`; configured
+relative write scopes rebase to that root, absolute scopes are clipped, and
+read-deny scopes retain both project and root locations. A worktree session's
+path-aware tools cannot write to the main checkout or another worktree.
+
+Shell cwd and `cd` stay inside the session root. Cwd records and shell logs are
+stored under the project's state key, still partitioned by session id. Composer
+`!` commands start at the session root and revalidate it before spawning. Local
+Claude SDK workers receive the execution root per request; the shared provider
+and captured credentials stay project-owned. Process admission applies to those
+workers too.
+
+These are path-aware tool boundaries and cwd checks. Shell commands retain the
+existing command-permission policy; cwd bounds are not an OS filesystem sandbox.
+
+Configured filesystem rules may match root-relative paths such as
+`write(src/**)`. Canonical boundaries and configured denies are checked first;
+absolute rules keep their absolute meaning. Exact file grants retain canonical
+audit records, but replay uses the recorded root history to apply the same
+relative file after that session changes roots. Shell/MCP grants and absolute
+glob rules keep their original keys. Grants remain local to the session log;
+this phase does not add a project-wide grant store or import other sessions'
+approvals. Project settings and permission rules are shared independently.
+
 ## Files
 
 | File | Owns |
