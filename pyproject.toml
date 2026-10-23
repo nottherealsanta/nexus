@@ -21,16 +21,28 @@ dependencies = [
     "websockets>=14,<16",
     # Code mode (docs/tools.md) is on by default, so its sandbox ships with the base install.
     "pydantic-monty==1.1.0",
+    # Local speech (/speak, docs/voice.md). ptts is the official Rust runtime for gradium's
+    # phonon TTS models and ships wheels for every supported platform, musl included.
+    "ptts>=0.4.1,<1",
+    "numpy>=1.26",
+    # Local dictation (docs/voice.md) is on by default too, so a plain `uv sync` and
+    # `uv tool install` keep it. Torch has no musl or Intel macOS wheels and
+    # `constriction` only macOS and Linux x86_64 wheels (see uv.lock), so the dictation runtime is
+    # limited to macOS arm64 and glibc Linux x86_64. Python markers cannot
+    # distinguish musl; install.sh rejects musl x86_64 with a clear diagnostic.
+    "transformers>=5.19,<6; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "torch>=2.6,<3; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "constriction>=0.5,<0.6; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
+    "librosa>=0.11,<1; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64')",
 ]
 
 [project.optional-dependencies]
 # Compatibility alias, included by default.
 codemode = ["pydantic-monty==1.1.0"]
-# ptts is the official Rust runtime for gradium's phonon TTS models; it needs only numpy.
+# Compatibility alias: speech is a base dependency now, so `nexus-harness[speak]` (still
+# named by older hints and receipts) installs nothing extra. Keep the pins equal.
 speak = ["ptts>=0.4.1,<1", "sounddevice>=0.5,<1", "numpy>=1.26"]
 # claude-agent and documents are compatibility aliases, included by default.
-# voice is separate: its runtime (Torch) has no musl or Intel macOS wheels, so a default
-# dependency would break installs there. install.sh adds it except on those platforms.
 claude-agent = [
     "claude-agent-sdk==0.2.162",
 ]
@@ -49,12 +61,16 @@ dev = [
 documents = [
     "firecrawl-anydoc==0.2.4",
 ]
+# Compatibility alias for the base dictation runtime, deliberately without the platform
+# markers: `nexus voice init` uses it to attempt an install on platforms outside the default set.
 voice = [
     # Bark (a Parakeet TDT checkpoint) runs on stock Transformers; constriction
     # decodes the .bark container (nexus/voice/bark.py).
     "transformers>=5.19,<6",
     "torch>=2.6,<3",
     "constriction>=0.5,<0.6",
+    # Required by Transformers' ParakeetFeatureExtractor.
+    "librosa>=0.11,<1",
     "numpy>=1.26",
     "sounddevice>=0.5,<1",
 ]

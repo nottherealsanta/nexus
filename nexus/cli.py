@@ -979,7 +979,10 @@ async def _voice_init(
         stderr.write(f"Error: the install exited with status {code}; nothing was changed.\n")
         return 1
     if method == "editable":
-        stdout.write("Note: a later `uv sync` removes it unless you pass `--extra voice`.\n")
+        stdout.write(
+            "Note: on macOS arm64 and Linux x86_64 a plain `uv sync` keeps the voice and speech "
+            "runtimes; elsewhere a later `uv sync` removes this one unless you pass `--extra voice`.\n"
+        )
     stdout.flush()
     fresh = [sys.executable, "-m", "nexus", "--workspace", str(workspace)]
     for step in (["daemon", "restart"], ["voice", "download"]):
@@ -1246,9 +1249,9 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
             "(use --channel git to stay on git).\n"
         )
     if install.VOICE_EXTRA in extras:
-        stdout.write("Keeping local dictation (voice); use --no-voice to drop it.\n")
+        stdout.write("Keeping local dictation (voice) compatibility extra; base dependencies remain with --no-voice.\n")
     if install.SPEAK_EXTRA in extras:
-        stdout.write("Keeping local speech (speak); use --no-speak to drop it.\n")
+        stdout.write("Keeping local speech (speak) compatibility extra; base dependencies remain with --no-speak.\n")
     stdout.write(f"Updating nexus (currently {before}) ...\n")
     stdout.flush()
     code = await asyncio.to_thread(install.run_update, command)
@@ -1770,12 +1773,12 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--no-voice",
         action="store_true",
-        help="Drop local dictation; by default it is kept when installed or its model is downloaded",
+        help="Drop the voice extra from the reinstall (base dependencies remain; disable dictation with voice.enabled=false)",
     )
     update.add_argument(
         "--no-speak",
         action="store_true",
-        help="Drop local speech (/speak); by default it is kept when installed or its model is downloaded",
+        help="Drop the speak extra from the reinstall (speech base dependencies remain)",
     )
 
     uninstall = sub.add_parser(

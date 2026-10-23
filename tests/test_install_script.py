@@ -81,7 +81,9 @@ def test_installs_from_pypi_by_default(env):
     result = run(vars_, "--no-modify-path")
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
-    assert "tool install --force --python 3.13 nexus-harness[voice]\n" in calls
+    # Dictation and speech are base dependencies: no extra, no override.
+    assert "tool install --force --python 3.13 nexus-harness\n" in calls
+    assert "--overrides" not in calls
     assert "git+" not in calls
     assert "nexus --version" in calls
     assert "nexus daemon stop --all" in calls
@@ -94,7 +96,7 @@ def test_git_source_uses_ref(env):
     assert result.returncode == 0, result.stderr
     assert (
         "tool install --force --python 3.13 "
-        "nexus-harness[voice] @ git+https://github.com/nottherealsanta/nexus@abc123"
+        "nexus-harness @ git+https://github.com/nottherealsanta/nexus@abc123"
     ) in log.read_text()
 
     log.write_text("")
@@ -109,39 +111,147 @@ def test_pypi_source_with_version_and_extras(env):
         "--no-doctor",
     )
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.13 nexus-harness[documents,voice]==0.2.0" in log.read_text()
+    assert "tool install --force --python 3.13 nexus-harness[documents]==0.2.0" in log.read_text()
 
 
-def test_no_voice_skips_dictation(env):
+def test_no_voice_is_a_documented_legacy_flag(env):
     vars_, log, _ = env
     result = run(vars_, "--no-voice", "--no-doctor")
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
-
-    log.write_text("")
-    run({**vars_, "NEXUS_EXTRAS": "voice"}, "--no-doctor")
-    assert "nexus-harness[voice]\n" in log.read_text()  # not duplicated
+    assert "--overrides" not in log.read_text()
+    assert "legacy flag" in result.stderr
+    assert "base dependency" in result.stderr
 
 
-def test_intel_mac_installs_without_voice(env):
-    """Torch (voice) has no Intel macOS wheels; those Macs must still install."""
+def test_intel_mac_installs_without_dictation_runtime_wheels(env):
+    """Torch has no Intel macOS wheels; pyproject's markers skip it, so no override is needed."""
     vars_, log, stubs = env
     _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; *) echo x86_64 ;; esac\n')
     result = run(vars_, "--no-doctor")
     assert result.returncode == 0, result.stderr
     assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
-    assert "Intel Mac detected" in result.stdout
+    assert "no dictation runtime wheels" in result.stdout
 
 
-def test_musl_installs_without_voice(env):
-    """Torch (voice) ships no musl wheels; Alpine must still install."""
+@pytest.mark.parametrize("flags", [(), ("--no-voice",)])
+def test_musl_x86_fails_with_actionable_diagnostic(env, flags):
     vars_, log, stubs = env
     _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Linux ;; *) echo x86_64 ;; esac\n')
     _exe(stubs / "ldd", "#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n")
+    result = run(vars_, "--no-doctor", *flags)
+    assert result.returncode == 2
+    assert "glibc-based" in result.stderr
+    assert "tool install" not in log.read_text()
+    assert "--overrides" not in log.read_text()
+
+
+def test_glibc_linux_x86_installs_everything(env):
+    vars_, log, stubs = env
+    _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Linux ;; *) echo x86_64 ;; esac\n')
+    _exe(stubs / "ldd", "#!/bin/sh\necho 'ldd (GNU libc) 2.39'\n")
     result = run(vars_, "--no-doctor")
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
-    assert "musl libc detected" in result.stdout
+    assert "--overrides" not in log.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Packaging: dictation and speech are default dependencies
+# ---------------------------------------------------------------------------
+
+ROOT = SCRIPT.parent
+
+
+def _pyproject() -> dict:
+    import tomllib
+
+    return tomllib.loads((ROOT / "pyproject.toml").read_text())
+
+
+def _names(requirements: list[str]) -> dict[str, str]:
+    from packaging.requirements import Requirement
+
+    return {Requirement(r).name: r for r in requirements}
+
+
+def test_voice_and_speech_runtimes_are_base_dependencies():
+    from packaging.requirements import Requirement
+
+    base = _names(_pyproject()["project"]["dependencies"])
+    for name in ("ptts", "numpy", "sounddevice", "torch", "transformers", "constriction", "librosa"):
+        assert name in base, f"{name} must install with a plain `uv sync` / `uv tool install`"
+    for name in ("ptts", "numpy", "sounddevice"):
+        assert Requirement(base[name]).marker is None
+    # Torch/constriction wheels exist only for macOS arm64 and Linux x86_64.
+    for name in ("torch", "transformers", "constriction", "librosa"):
+        marker = Requirement(base[name]).marker
+        assert marker is not None
+        env = {"sys_platform": "darwin", "platform_machine": "arm64"}
+        assert marker.evaluate(env)
+        assert marker.evaluate({"sys_platform": "linux", "platform_machine": "x86_64"})
+        assert not marker.evaluate({"sys_platform": "darwin", "platform_machine": "x86_64"})
+        assert not marker.evaluate({"sys_platform": "linux", "platform_machine": "aarch64"})
+
+
+def test_compatibility_extras_remain():
+    extras = _pyproject()["project"]["optional-dependencies"]
+    assert "voice" in extras and "speak" in extras
+    assert any(r.startswith("torch") for r in extras["voice"])
+    assert any(r.startswith("librosa") for r in extras["voice"])
+    assert any(r.startswith("ptts") for r in extras["speak"])
+
+
+def test_voice_runtime_probe_requires_librosa(monkeypatch):
+    import importlib.util
+
+    from nexus.host_support import install
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a: object() if name != "librosa" else None
+    )
+    assert install.voice_runtime_installed() is False
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: object())
+    assert install.voice_runtime_installed() is True
+    monkeypatch.setattr(importlib.util, "find_spec", real)
+
+
+def test_uv_lock_records_the_default_runtime_dependencies():
+    import tomllib
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
+    package = next(p for p in lock["package"] if p["name"] == "nexus-harness")
+    locked = {d["name"] for d in package["dependencies"]}
+    assert {"ptts", "numpy", "torch", "transformers", "constriction", "librosa"} <= locked
+
+
+def test_voice_and_speech_are_enabled_by_default_without_auto_capture():
+    from nexus.config.schema import VoiceSection
+
+    voice = VoiceSection()
+    assert voice.enabled is True
+    # Enabled does not mean active: no model load, recording or sending on its own.
+    assert voice.autoload is False and voice.auto_send is False
+
+
+def test_voice_init_hint_does_not_claim_uv_sync_removes_default_runtimes(monkeypatch):
+    import asyncio
+    import io
+
+    from nexus import cli
+    from nexus.host_support import install
+
+    monkeypatch.setattr(install, "voice_runtime_installed", lambda: False)
+    monkeypatch.setattr(install, "is_musl", lambda: False)
+    monkeypatch.setattr(install, "install_method", lambda: "editable")
+    monkeypatch.setattr(install, "find_uv", lambda environ=None: None)
+    monkeypatch.setattr(install, "voice_requirements", lambda: ["torch"])
+    monkeypatch.setattr(install, "run_update", lambda command: 0)
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0)
+    )
+    out = io.StringIO()
+    asyncio.run(cli._voice_init(ROOT, out, io.StringIO()))
+    assert "plain `uv sync` keeps the voice and speech" in out.getvalue()
 
 
 def test_flags_beat_environment(env):

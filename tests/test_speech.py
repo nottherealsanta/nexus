@@ -305,7 +305,7 @@ def test_status_reports_missing_packages_with_the_install_hint(monkeypatch):
     monkeypatch.setattr(speech, "_missing_packages", lambda: ["ptts", "sounddevice"])
     status = speech.speech_status()
     assert status["state"] == "unsupported"
-    assert "ptts, sounddevice" in status["message"] and "uv sync --extra speak" in status["message"]
+    assert "ptts, sounddevice" in status["message"] and "uv sync" in status["message"] and "--extra" not in status["message"]
 
 
 def test_status_absent_downloading_ready_and_error(tmp_path, monkeypatch):

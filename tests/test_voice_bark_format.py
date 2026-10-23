@@ -24,6 +24,19 @@ def test_valid_raw_roundtrip_layout():
     assert entries[0].name == "w" and entries[0].shape == (2, 3)
 
 
+def test_scalar_raw_layout_counts_one_element():
+    entry = dict(RAW, dtype="torch.int64", shape=[], b=8)
+    _, entries = bark.parse_layout(build([entry], bytes(8)))
+    assert entries[0].shape == ()
+
+
+@pytest.mark.parametrize("size", [0, 7, 9, 16])
+def test_scalar_raw_rejects_wrong_payload_size(size):
+    entry = dict(RAW, dtype="torch.int64", shape=[], b=size)
+    with pytest.raises(bark.BarkFormatError, match="raw size"):
+        bark.parse_layout(build([entry], bytes(size)))
+
+
 @pytest.mark.parametrize("mutate", [
     lambda: b"short",
     lambda: (10**9).to_bytes(8, "little") + b"{}",
@@ -39,6 +52,8 @@ def test_valid_raw_roundtrip_layout():
     lambda: build([dict(RAW, b=13)], bytes(13)),  # size != shape * dtype
     lambda: build([dict(RAW, k="mystery")], bytes(12)),
     lambda: build([dict(RAW, shape=[True, 3])], bytes(12)),
+    lambda: build([dict(RAW, shape=None)], bytes(12)),
+    lambda: build([{"n": "l", "k": "levels2", "shape": []}], b""),
     lambda: build([{"n": "q", "k": "ansint9", "shape": [2, 2], "s": 4, "meta": 8, "b": 4}], bytes(16)),
     lambda: build([{"n": "l", "k": "levels2", "K": 200, "shape": [2, 2],
                     "lev": 1, "meta": 1, "b": 4}], bytes(6)),
@@ -73,6 +88,28 @@ def test_open_bark_decodes_raw_tensors_lazily(tmp_path):
     assert decoded["n"].tolist() == [7] and decoded["n"].dtype == np.int64
     state, _ = bark.load_state_dict(path)
     assert sorted(state) == ["n", "w"]
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_open_bark_decodes_scalar_batch_counter(tmp_path, compressed):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("constriction")
+    counter = np.array(7, dtype=np.int64)
+    payload = counter.tobytes()
+    if compressed:
+        payload = lzma.compress(payload)
+    entry = {
+        "n": "encoder.layers.0.conv.norm.num_batches_tracked",
+        "k": "raw", "dtype": "torch.int64", "shape": [],
+        "b": len(payload), "zr": compressed,
+    }
+    path = tmp_path / "model.bark"
+    path.write_bytes(build([entry], payload))
+    _, tensors = bark.open_bark(path)
+    name, value = next(tensors)
+    assert name == entry["n"]
+    assert value.shape == () and value.dtype == np.int64
+    assert value.item() == 7
 
 
 def test_open_bark_rejects_bad_files_before_decoding(tmp_path):

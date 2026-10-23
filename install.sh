@@ -11,8 +11,8 @@
 #   --source S          NEXUS_SOURCE       pypi (default) | git | any package spec or path
 #   --git-ref R         NEXUS_GIT_REF      branch, tag or commit for the git source (main)
 #   --python V          NEXUS_PYTHON       Python for the tool venv (3.13)
-#   --extras E          NEXUS_EXTRAS       e.g. documents (voice is added by default)
-#   --no-voice          NEXUS_NO_VOICE     skip local dictation (always skipped on musl)
+#   --extras E          NEXUS_EXTRAS       e.g. documents (dictation and speech are built in)
+#   --no-voice          NEXUS_NO_VOICE     legacy flag; cannot remove base dependencies
 #   --no-modify-path    NEXUS_NO_MODIFY_PATH
 #   --no-doctor         NEXUS_NO_DOCTOR    skip the post-install smoke check
 #   --strict            NEXUS_STRICT       make a failed smoke check fatal
@@ -129,29 +129,25 @@ ensure_uv() {
     say "installed uv: $UV"
 }
 
-# Local dictation (the `voice` extra) is on by default, but its runtime (Torch) ships no
-# musl wheels, so Alpine and other musl systems install without it. Intel Macs have no
-# current Torch wheels either.
+# Python dependency markers cannot distinguish musl from glibc. Do not pretend
+# an override can safely remove required packages from the installed distribution.
 is_musl() {
     [ "$os" = Linux ] || return 1
     ls /lib/ld-musl-* >/dev/null 2>&1 && return 0
     ldd --version 2>&1 | grep -qi musl
 }
 
-add_voice_extra() {
-    [ -n "${NEXUS_NO_VOICE:-}" ] && return 0
-    if is_musl; then
-        say "musl libc detected; installing without local dictation (voice)"
-        return 0
+check_voice_platform() {
+    if [ -n "${NEXUS_NO_VOICE:-}" ]; then
+        warn "--no-voice is a legacy flag; dictation is now a base dependency on supported platforms. Disable it with voice.enabled=false in config."
     fi
-    if [ "$os" = Darwin ] && [ "$arch" = x86_64 ]; then
-        say "Intel Mac detected; installing without local dictation (voice)"
-        return 0
-    fi
-    case ",$NEXUS_EXTRAS," in
-        *,voice,*) ;;
-        ,,) NEXUS_EXTRAS=voice ;;
-        *) NEXUS_EXTRAS="$NEXUS_EXTRAS,voice" ;;
+    case "$os-$arch" in
+        Linux-x86_64 | Linux-amd64)
+            if is_musl; then
+                die 2 "musl Linux x86_64 is not supported by the default dictation dependencies (Torch/constriction). Use a glibc-based Linux distribution. --no-voice cannot remove base dependencies."
+            fi ;;
+        Darwin-arm64) ;;
+        *) say "no dictation runtime wheels for $os $arch; installing without local dictation (voice)" ;;
     esac
 }
 
@@ -257,7 +253,7 @@ main() {
     parse_args "$@"
     detect_platform
     ensure_uv
-    add_voice_extra
+    check_voice_platform
     package_spec
     BIN_DIR=$("$UV" tool dir --bin 2>/dev/null) || BIN_DIR="$HOME/.local/bin"
     "$UV" python find ">=$MIN_PYTHON" >/dev/null 2>&1 ||

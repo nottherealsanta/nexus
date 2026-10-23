@@ -300,14 +300,16 @@ Config lives in `release-please-config.json`:
   | path / unknown source | refused; re-run the installer or use `--channel git` |
 
   Extras are read back from `uv-receipt.toml` (bounded to 64 KiB) and the running
-  Python's `X.Y` is passed, so an update keeps both. `voice` is also kept when the
-  receipt lost it but the user dictates: the runtime (Torch, Transformers, `constriction`) is importable, or a
-  model is downloaded under `~/.nexus/models/voice/` (`install.update_extras`; never
-  on musl). The update says `Keeping local dictation (voice)`; `--no-voice` drops it.
-  `speak` follows the same rule: kept when the receipt lists it, the speech runtime
-  (onnxruntime and misaki, or Kokoro from earlier releases) is importable, or
-  `~/.nexus/models/speech/` or a Paradee/Kokoro Hugging Face cache exists. It says
-  `Keeping local speech (speak)`; `--no-speak` drops it. Downloaded models live
+  Python's `X.Y` is passed, so an update keeps both. Dictation and speech runtimes
+  are base dependencies (dictation on macOS arm64 and Linux x86_64 only, see
+  [voice.md](voice.md)), so every update brings them. The `voice` and `speak` extras are
+  compatibility aliases that are still kept when the receipt lists them, the runtime is
+  importable (voice never on musl) or a model is downloaded under `~/.nexus/models/voice/`
+  or `~/.nexus/models/speech/` / the Hugging Face cache (`install.update_extras`); the update says
+  `Keeping local dictation (voice)` / `Keeping local speech (speak)`. `--no-voice` and
+  `--no-speak` only drop those compatibility aliases from the reinstall, not the base dependencies.
+  `install.sh --no-voice` is also a legacy flag and warns; use `voice.enabled=false`
+  to disable dictation. Downloaded models live
   outside the venv, so neither feature asks for a new download or `init` after an
   update (a model that changed between releases is fetched on its own, see
   [voice.md](voice.md#speak-the-latest-answer-terminal-clients)). The migration prints

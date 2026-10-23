@@ -87,6 +87,31 @@ async def test_prepare_lifecycle_and_retry_after_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["load", "transcribe"])
+async def test_prepare_failure_is_logged_and_reported_bounded_and_redacted(phase, caplog):
+    class Broken(FakeEngine):
+        async def load(self):
+            if phase == "load":
+                raise TypeError("bad /Users/me/.nexus/models/x " + "y" * 500)
+
+        async def transcribe(self, audio):
+            raise RuntimeError("boom")
+
+    engine = Broken()
+    manager, _ = make_manager(engine=engine)
+    with caplog.at_level("WARNING", logger="nexus.voice"):
+        state = await manager.prepare(allow_download=False)
+    assert state.state == "error"
+    expected = "engine load: TypeError" if phase == "load" else "warmup: RuntimeError: boom"
+    assert expected in state.message
+    assert "/Users/me" not in state.message
+    assert len(state.message) < 260
+    assert engine.closed
+    assert any(r.exc_info for r in caplog.records)
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_cached_status_survives_idle_unload_and_loads_without_download():
     store = FakeStore()
     manager, _ = make_manager(store=store)

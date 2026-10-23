@@ -264,7 +264,7 @@ VOICE_EXTRA = "voice"
 
 
 def voice_runtime_installed() -> bool:
-    """Whether the local dictation runtime (Torch, Transformers, constriction) is importable here."""
+    """Whether the local dictation runtime (Torch, Transformers, constriction, librosa) is importable here."""
     import importlib
     import importlib.util
 
@@ -272,7 +272,7 @@ def voice_runtime_installed() -> bool:
     try:
         return all(
             importlib.util.find_spec(name) is not None
-            for name in ("numpy", "torch", "transformers", "constriction")
+            for name in ("numpy", "torch", "transformers", "constriction", "librosa")
         )
     except (ImportError, ValueError):
         return False

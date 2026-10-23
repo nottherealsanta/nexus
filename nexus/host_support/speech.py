@@ -45,8 +45,8 @@ MODEL_BYTES = 60_000_000
 _PREPARE_TIMEOUT_SECONDS = 1800
 _REPO_DIR = "models--gradium--phonon-31m-en"
 _INSTALL_HINT = (
-    "Install the speak extra in the daemon's environment (uv sync --extra speak), plus "
-    "portaudio (brew install portaudio), then restart the daemon."
+    "Reinstall Nexus in the daemon's environment (uv sync, or the installer; speech is "
+    "built in), plus portaudio (brew install portaudio), then restart the daemon."
 )
 
 

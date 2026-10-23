@@ -21,7 +21,7 @@ from typing import Any, Callable
 from .store import MANIFEST, MODEL_FILE, MODEL_ID
 
 _REQUIRED_FILES = tuple(MANIFEST)
-_PACKAGES = ("numpy", "torch", "transformers", "constriction")
+_PACKAGES = ("numpy", "torch", "transformers", "constriction", "librosa")
 MAX_CPU_THREADS = 4  # dictation must not take over every core of the machine
 
 

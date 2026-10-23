@@ -35,21 +35,49 @@ and cache-only preparation check runtime availability first and report the
 | `ui_support/voice_capture.py`, `ui/ratatui/voice.py`; `ui/web/js/voice.js`, `voice-worklet.js` | TUI and browser capture and consent flow |
 | `ui/ratatui/voice.py`, `ui/web/js/voice-strip.js` | the live dictation strip (waveform + running transcript) |
 
+## Diagnosing setup failures
+
+Two independent failures were identified: `uv sync --extra speak` removed the
+previously optional dictation runtime, and, with the runtime restored, the cached
+checkpoint failed at `bark.py`'s shape validation (`invalid bark tensor shape`).
+The latter is a parser issue, not evidence of a corrupt download: the checkpoint
+contains scalar `int64` batch-counter tensors with `shape: []`. The parser now
+accepts those scalars (one element), while retaining shape limits and rejecting
+scalar quantized `levels2` tensors. With the processor fixes in `engine.py` and
+`librosa` added to the runtime, a cached `BarkEngine` was verified to load on `mps`
+and to transcribe synthetic silence, which returned the hallucinated text "Yeah.".
+That verifies model loading and the inference path only. It says nothing about
+transcription accuracy or microphone quality: real speech, noisy input and live
+capture have not been validated.
+Model preparation reports the failing phase and a bounded, path-redacted exception
+summary, with the full traceback in the `nexus.voice` logger.
+
 ## Flow
 
-1. **Install:** `install.sh` adds the `voice` extra (`transformers`, `torch`,
-   `constriction`, `numpy`) by default, except on musl systems such as Alpine, Intel
-   Macs (no Torch wheels) or with `--no-voice`; `sounddevice` is always installed.
-   Torch's current wheels cover macOS arm64, Linux x86_64/aarch64 (glibc) and
-   Windows x86_64 on Python 3.13/3.14; the supported set is Torch's, and
-   `constriction` wheel coverage and a full resolve are **not verified**. Any other
-   install gets both pieces from `nexus voice init`: when Torch, Transformers or
-   `constriction` is not importable it adds
+1. **Install:** dictation and speech runtimes are **base dependencies** of
+   `nexus-harness`, so `install.sh`, `uv tool install nexus-harness`, `uv sync` and
+   `pip install` all include them; no extra is needed and a plain `uv sync` no longer
+   removes them. Dictation (`transformers`, `torch`, `constriction`, `librosa`, which
+   Transformers' `ParakeetFeatureExtractor` requires; `numpy` and
+   `sounddevice` are shared) is gated by environment markers in `pyproject.toml` to
+   macOS arm64 and Linux x86_64, the platforms where `uv.lock` shows wheels for both
+   Torch and `constriction` (which has no Linux aarch64 or musl wheel). Intel Macs and
+   Linux aarch64 install without it. Python markers cannot distinguish musl from
+   glibc; `install.sh` rejects musl x86_64 with an actionable diagnostic because
+   supported dictation wheels are unavailable. It does not use dependency overrides.
+   The `voice` and `speak` extras remain compatibility aliases (`voice` has no platform
+   markers). `install.sh --no-voice` is now a legacy flag that warns; it cannot
+   omit base dependencies. Disable dictation with `voice.enabled=false` in config.
+   `nexus update --no-voice` / `--no-speak` remove only the compatibility extras,
+   not base dependencies. Wheel coverage beyond the lock is **not verified**.
+   Any other
+   install gets both pieces from `nexus voice init`: when Torch, Transformers,
+   `constriction` or `librosa` is not importable it adds
    the runtime (a uv tool is reinstalled at the same version and source with
    `voice` added to its extras, so `nexus update` keeps it; `nexus update` also
    keeps `voice` whenever the runtime is importable or a model is downloaded, so a
    receipt that lost the extra (installs from before 0.3.3, a plain reinstall) does
-   not drop dictation, and `--no-voice` opts out; editable and pip
+   not drop the compatibility extra; `--no-voice` drops only that extra; editable and pip
    installs get the extra's requirements, read from package metadata, through
    `uv pip install --python <interpreter>` or `pip`), restarts the workspace
    daemon and downloads the model in a fresh interpreter, since a uv reinstall
@@ -193,18 +221,22 @@ Playback happens on the daemon machine's default output device, not remotely
 on the client. Both Ratatui dispatch the same `Speak` host command;
 the deprecated browser client has no new speech UI.
 
-Install in the environment used to run the daemon (source checkout shown):
+Speech is enabled by default: its runtime installs with Nexus and no `[speech]`
+switch exists. Nothing speaks on its own (only `/speak` does) and the model download
+still needs consent. Install the system audio library, then restart the daemon
+(source checkout shown; the dictation runtime is included, so one command covers both):
 
 ```sh
-uv sync --extra speak
+uv sync
 # macOS (Intel or Apple Silicon)
 brew install portaudio
 # Debian/Ubuntu instead
 sudo apt-get install libportaudio2
 nexus daemon restart
+nexus voice init     # optional: download the dictation model (~180 MB) now
 ```
 
-The speak extra is `ptts` (`>=0.4.1,<1`), `sounddevice` and `numpy`. `ptts` is the
+Speech needs `ptts` (`>=0.4.1,<1`), `sounddevice` and `numpy`. `ptts` is the
 official Rust runtime (a Python wheel) for gradium's phonon models and needs only
 numpy: no torch, onnxruntime, phonemizer or spaCy.
 
@@ -242,8 +274,8 @@ an upgrade, a cleared cache), `SpeechStatus` starts the download itself and
 reports `downloading`; `/speak` then shows the progress, refreshes it every
 second (bounded to 10 minutes) and speaks when it is ready, with no dialog. Leaving
 the page stops the wait; the download continues. A failed automatic download
-shows the error and Retry and is not retried in a loop. `nexus update` keeps the
-`speak` extra (see [release.md](release.md)).
+shows the error and Retry and is not retried in a loop. `nexus update` keeps both
+runtimes (see [release.md](release.md)).
 
 Playing is cached-only: the worker runs with `HF_HUB_OFFLINE=1` and a model that is
 not cached is reported as not cached, never fetched. `Speak.download` still exists
