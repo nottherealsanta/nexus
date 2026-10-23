@@ -1397,7 +1397,12 @@ the snapshot's `worktree` key, set by `prototype._worktree_name` when the worksp
 linked Git worktree, or by `worktree_bar.session_worktree_label` from the host's
 `session_worktree_choice` state: a session whose root is its own worktree shows `⎇ <name>` and
 the session's branch; a draft with a worktree selected (mode Always, or `selected`) shows
-`⎇ <pending name>` or the placeholder `⎇ worktree · name on first message`; read keys are
+`⎇ <pending name>` or the placeholder `⎇ worktree · name on first message`; a session in the
+main checkout of a Git workspace (`kind` `main`, not a pending draft) shows `main checkout`, so the
+location is always stated (non-Git or unknown state shows nothing new). The snapshot's
+`worktree_kind` (`worktree` | `pending` | `main` | empty, from `worktree_bar.session_worktree_kind`)
+styles it: worktree is bold `purple`, pending `purple`, main `muted`, anything else `quiet`; Rust
+never parses the label. Read keys are
 `kind`, `branch`, `worktree_name`, `pending_name`, `selected`, `mode`, `editable`, `git`, missing
 keys count as empty. The state is cached 3 s per session, bounded to 2 s, reread after a worktree
 answer and when a turn is submitted, and a failure leaves the workspace values), right the update notice and `[Sessions]`, separated by quiet `│`.

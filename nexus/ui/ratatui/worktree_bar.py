@@ -3,8 +3,11 @@
 Contract: ``session_worktree_label(state, git_branch, workspace_worktree)`` maps the host's
 ``session_worktree_choice`` state to the top bar's ``(branch, worktree)`` texts. A session whose
 root is its own worktree shows ``⎇ <name>`` and the session's branch; a draft with a worktree
-selected shows ``⎇ <pending name>`` or a placeholder until the first message names it; anything
-else keeps the workspace's own values. Missing state keys count as empty/False, so this works
+selected shows ``⎇ <pending name>`` or a placeholder until the first message names it; a session in the
+main checkout of a Git workspace (``kind == "main"``) shows ``main checkout`` (plain text, so ASCII
+mode needs no variant) so the location is always stated; anything else (unknown state, non-Git workspace) keeps the
+workspace's own values. ``session_worktree_kind`` gives the matching renderer style key
+(``worktree`` | ``pending`` | ``main`` | ``""``) so Rust never parses the label. Missing state keys count as empty/False, so this works
 before the host reports them. ``refresh_session_worktree`` reads the state off the hot path:
 cached for a few seconds per session, bounded by a timeout, failures leave the bar unchanged.
 """
@@ -32,11 +35,30 @@ def session_worktree_label(state: dict, git_branch: str, workspace_worktree: str
         name = str(state.get("worktree_name") or "")
         branch = str(state.get("branch") or git_branch)
         return branch, (_glyph() + name)[:80] if name else workspace_worktree
-    draft = bool(state.get("editable")) and state.get("git") is not False
-    if draft and (state.get("selected") or state.get("mode") == "always"):
+    if _pending_draft(state):
         pending = str(state.get("pending_name") or "")
         return git_branch, (_glyph() + (pending or PLACEHOLDER))[:80]
+    if state.get("kind") == "main" and state.get("git") is not False:
+        return git_branch, "main checkout"
     return git_branch, workspace_worktree
+
+
+def _pending_draft(state: dict) -> bool:
+    draft = bool(state.get("editable")) and state.get("git") is not False
+    return draft and bool(state.get("selected") or state.get("mode") == "always")
+
+
+def session_worktree_kind(state: dict, workspace_worktree: str = "") -> str:
+    """Style key for the top-bar location text: ``worktree``, ``pending``, ``main`` or ``""``."""
+    if not isinstance(state, dict):
+        return "worktree" if workspace_worktree else ""
+    if state.get("kind") == "worktree":
+        return "worktree" if (state.get("worktree_name") or workspace_worktree) else ""
+    if _pending_draft(state):
+        return "pending"
+    if state.get("kind") == "main" and state.get("git") is not False:
+        return "main"
+    return "worktree" if workspace_worktree else ""
 
 
 async def session_worktree_state(shell, *, force: bool = False) -> dict:

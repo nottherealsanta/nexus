@@ -471,7 +471,13 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 }
                 Seg::New => background.fg(p.muted),
                 Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
-                Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap | Seg::Divider => {
+                Seg::Worktree => match s.worktree_kind.as_str() {
+                    "worktree" => background.fg(p.purple).add_modifier(Modifier::BOLD),
+                    "pending" => background.fg(p.purple),
+                    "main" => background.fg(p.muted),
+                    _ => background.fg(p.quiet),
+                },
+                Seg::Branch | Seg::Sep | Seg::Gap | Seg::Divider => {
                     background.fg(p.quiet)
                 }
                 Seg::Path => background.fg(p.text),
@@ -768,6 +774,21 @@ mod chrome_tests {
             !text.contains("Nexus") && !text.contains("opaque-session-id"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn top_bar_states_a_main_checkout_session_and_styles_the_location_by_kind() {
+        let s = Snapshot {
+            breadcrumb: "~/repo:main".into(),
+            worktree: "main checkout".into(),
+            worktree_kind: "main".into(),
+            tabs: open_tabs(1, 0),
+            ..Snapshot::default()
+        };
+        assert!(bar_rows(&s, 100)[1].contains("~/repo main main checkout"));
+        let parsed: Snapshot =
+            serde_json::from_str(r#"{"worktree":"⎇ x","worktree_kind":"worktree"}"#).unwrap();
+        assert_eq!(parsed.worktree_kind, "worktree");
     }
 
     #[test]

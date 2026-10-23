@@ -77,12 +77,14 @@ async def refresh_branch(shell) -> None:
     branch = str(head.get("branch") or "")
     shell.branch = branch
     shell.worktree = worktree
+    shell.worktree_kind = "worktree" if worktree else ""
     shell.breadcrumb = workspace + (" › " + branch if branch else "")
-    from .worktree_bar import session_worktree_label, session_worktree_state
+    from .worktree_bar import session_worktree_kind, session_worktree_label, session_worktree_state
     state = await session_worktree_state(shell)
     if str(shell.workspace or "") != workspace:
         return
     shell.branch, shell.worktree = session_worktree_label(state, branch, worktree)
+    shell.worktree_kind = session_worktree_kind(state, worktree)
     shell.breadcrumb = workspace + (" › " + shell.branch if shell.branch else "")
 
 
@@ -1353,6 +1355,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "worktree": escape_controls(str(getattr(shell, "worktree", "") or ""))[:80] if shell else "",
+            "worktree_kind": str(getattr(shell, "worktree_kind", "") or "") if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
@@ -1752,6 +1755,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         from .run import progress
         await progress(process, 3)  # the session loaded: milestone 3, before the first snapshot
         shell.worktree = _worktree_name(workspace)
+        shell.worktree_kind = "worktree" if shell.worktree else ""
         shell.breadcrumb = str(workspace)  # the branch joins it when the doctor report arrives
         await update()
         controller.resume(update)

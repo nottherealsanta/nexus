@@ -135,6 +135,9 @@ pub struct Snapshot {
     /// Linked-worktree name of the workspace ("" in a main checkout).
     #[serde(default)]
     pub worktree: String,
+    /// Style key of the location text: "worktree", "pending", "main" or "" (unstyled).
+    #[serde(default)]
+    pub worktree_kind: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,
     pub theme: String,
@@ -985,6 +988,7 @@ impl Snapshot {
         }
         if !present.contains_key("worktree") {
             self.worktree = std::mem::take(&mut previous.worktree);
+            self.worktree_kind = std::mem::take(&mut previous.worktree_kind);
         }
         if !present.contains_key("details_panel") {
             let tab = previous.details_panel.tab.clone();
