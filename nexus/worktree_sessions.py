@@ -259,7 +259,9 @@ class SessionWorktrees:
             seq, _ = self._turn_data(handle, lease.turn_id)
             git_root = await self._thread(handle.id, self._git, root.path, "rev-parse", "--show-toplevel", check=False)
             if not git_root.strip():
-                self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "not_git", "detail": ""}, lease.turn_id)
+                # Report at the terminal boundary so non-Git turns retain their
+                # normal turn.started-first stream ordering.
+                handle._checkpoint_not_git = True
             else:
                 baseline_ok = await self._thread(handle.id, self._checkpoint_baseline, root.path, handle.id, seq)
                 if baseline_ok:
@@ -348,9 +350,16 @@ class SessionWorktrees:
                             self._commit_event(handle, {**result, "kind": "committed", "by": "agent", "via": "shell"}, seq=seq, agent="root", turn_id=terminal.turn)
                 await self.commit(handle, terminal.turn)
             elif root.kind in {"main", "external"} and self.policy().checkpoints:
-                if not any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events):
+                already_not_git = any(e.type == "checkpoint.skipped" and e.data.get("reason") == "not_git" for e in handle.events)
+                if getattr(handle, "_checkpoint_not_git", False) and not already_not_git:
                     seq, _ = self._turn_data(handle, terminal.turn)
-                    changed_by_session = any(e.type == "worktree.file_written" and e.turn == terminal.turn for e in handle.events)
+                    self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "not_git", "detail": ""}, terminal.turn)
+                elif not any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events):
+                    seq, _ = self._turn_data(handle, terminal.turn)
+                    changed_by_session = any(e.turn == terminal.turn and (
+                        e.type == "worktree.file_written" or
+                        (e.type == "context.notice" and e.data.get("kind") == "subagent_merged")
+                    ) for e in handle.events)
                     shell_ran = any(e.type == "shell.started" and e.turn == terminal.turn for e in handle.events)
                     if not changed_by_session and not shell_ran:
                         result = {"kind": "skipped", "event": {"seq": seq, "reason": "no_changes", "detail": ""}}
@@ -465,6 +474,9 @@ class SessionWorktrees:
                 _git(directory, "update-ref", "-d", stale)
             self._prune_checkpoint_sessions(directory)
             touched = {e.data.get("path") for e in handle.events if e.type == "worktree.file_written" and e.turn == turn_id}
+            touched.update(path for event in handle.events
+                if event.type == "context.notice" and event.turn == turn_id and event.data.get("kind") == "subagent_merged"
+                for path in event.data.get("files", []))
             shell_ran = any(e.type == "shell.started" and e.turn == turn_id for e in handle.events)
             owned = [path for path in changed if shell_ran or path in touched]
             start = next((e.data for e in reversed(handle.events) if e.type == "checkpoint.started" and e.turn == turn_id), {})

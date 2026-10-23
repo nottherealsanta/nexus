@@ -158,8 +158,8 @@ def test_task_request_defaults_and_mapping_coercion():
     assert req.tools == ("read",)
     assert req.model is None
     assert req.to_dict()["tools"] == ["read"]
-    assert req.worktree is False
-    assert req.to_dict()["worktree"] is False
+    assert req.worktree is None
+    assert req.to_dict()["worktree"] is None
     assert TaskRequest.from_value({"prompt": "go", "worktree": True}).worktree is True
 
 
@@ -354,6 +354,71 @@ async def test_normal_child_keeps_parent_bash_authority(tmp_path):
     assert outcome.ok
     assert "shell" in factory.specs[-1].tools
     assert factory.specs[-1].worktree_scope is False
+
+
+async def test_default_writer_is_isolated_but_explicit_false_shares_checkout(tmp_path):
+    factory = Factory()
+    calls = []
+
+    class ManagedWorktrees:
+        def create(self, parent, child_id, *, root):
+            path = tmp_path / f"checkout-{child_id.rsplit('/', 1)[-1]}"
+            path.mkdir()
+            calls.append(("create", parent, child_id, root))
+            return {"path": path, "branch": "child-branch", "base_commit": "base"}
+
+        def mark_finished(self, child_id, outcome, *, root):
+            calls.append(("finish", child_id, outcome.status, root))
+            return {
+                "child_id": child_id,
+                "path": tmp_path / f"checkout-{child_id.rsplit('/', 1)[-1]}",
+                "final_status": outcome.status,
+                "final_dirty_status": "",
+                "merge": {"state": "merged", "detail": "Integrated 1 file", "files": ["out.txt"]},
+            }
+
+    runner = make_runner(
+        tmp_path,
+        factory,
+        parent_tools={"read", "write"},
+        worktree_service=ManagedWorktrees(),
+        worktree_root=tmp_path / "registry",
+        runtime_supports_workspace=True,
+        managed_worktrees=True,
+    )
+
+    isolated = await runner.spawn(TaskRequest(prompt="write", tools=("write",)))
+    assert isolated.ok
+    assert factory.specs[-1].workspace == tmp_path / "checkout-1"
+    assert "write" in factory.specs[-1].tools
+    assert isolated.worktree["merge"]["state"] == "merged"
+    assert "Child worktree integration: merged" in isolated.text
+
+    shared = await runner.spawn(
+        TaskRequest(prompt="write here", tools=("write",), worktree=False)
+    )
+    assert shared.ok
+    assert factory.specs[-1].workspace == tmp_path
+    assert shared.worktree is None
+    assert len(calls) == 2  # create and finish only for the automatic writer
+
+
+async def test_default_read_only_child_keeps_parent_checkout(tmp_path):
+    factory = Factory()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        parent_tools={"read", "grep"},
+        worktree_root=tmp_path / "registry",
+        runtime_supports_workspace=True,
+        managed_worktrees=True,
+    )
+
+    outcome = await runner.spawn(TaskRequest(prompt="inspect", tools=("read",)))
+
+    assert outcome.ok
+    assert factory.specs[-1].workspace == tmp_path
+    assert outcome.worktree is None
 
 
 async def test_explore_role_keeps_write_tools_the_parent_has(tmp_path):

@@ -217,6 +217,15 @@ def test_bound_spec_uses_the_service_permission_key():
     )
 
 
+def test_managed_worktree_service_uses_the_normal_task_permission_key():
+    service = FakeService(outcome(), key="explore:low")
+    service.managed_worktrees = True
+    spec = task.make_task_spec(service)
+    assert spec.resolve_permission_key({"prompt": "x", "worktree": True}) == (
+        "explore:low"
+    )
+
+
 def test_build_task_tool_returns_a_registered_task_tool():
     service = FakeService(outcome(), key="planner:medium")
     tool = task.build_task_tool(service)

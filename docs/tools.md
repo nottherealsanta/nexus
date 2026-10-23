@@ -41,6 +41,12 @@ glob rules keep their original keys. Grants remain local to the session log;
 this phase does not add a project-wide grant store or import other sessions'
 approvals. Project settings and permission rules are shared independently.
 
+`subagent.worktree` is independent of the session worktree mode. Omission chooses
+isolation for a child whose selected tools can mutate files; explicit `false`
+shares the session checkout and explicit `true` isolates it. Successful isolated
+children return their saved diff automatically; conflict and failure results name
+the retained branch. The root session's turn-save behavior remains unchanged.
+
 ## Session worktree tools
 
 The Runtime adds dynamic `worktree_status` and, by session root, one matching

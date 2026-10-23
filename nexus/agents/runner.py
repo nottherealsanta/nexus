@@ -219,6 +219,10 @@ WORKTREE_CHILD_TOOLS = frozenset(
         "websearch",
     }
 )
+# Automatically isolated writer children retain the parent's approved code
+# execution tools inside their checkout. Explicit legacy worktree requests keep
+# the smaller reviewed tool surface above.
+AUTO_WORKTREE_CHILD_TOOLS = WORKTREE_CHILD_TOOLS | frozenset({"shell", "code"})
 #: Tools only the root session may hold; a child never gets them.
 ROOT_ONLY_TOOLS = frozenset({"subagent"})
 #: The child session path segment: ``<parent>/sub/<n>``.
@@ -255,7 +259,10 @@ class TaskRequest:
     tools: tuple[str, ...] | None = None
     model: str | None = None
     description: str | None = None
-    worktree: bool = False
+    #: ``None`` selects the safe default (isolate children whose selected tools
+    #: can mutate files); ``False`` shares the parent checkout and ``True``
+    #: requests an isolated worktree even for a read-only child.
+    worktree: bool | None = None
     context_read: bool = False
     #: The logical id of a finished child to send ``prompt`` to as a follow-up.
     resume: str | None = None
@@ -308,8 +315,8 @@ class TaskRequest:
             raise SubagentError(
                 "model must be a non-empty reference without whitespace"
             )
-        if not isinstance(self.worktree, bool):
-            raise SubagentError("worktree must be a boolean")
+        if self.worktree is not None and not isinstance(self.worktree, bool):
+            raise SubagentError("worktree must be a boolean when given")
 
     @classmethod
     def from_value(cls, value: object) -> TaskRequest:
@@ -331,7 +338,7 @@ class TaskRequest:
                 tools=tools,
                 model=value.get("model"),
                 description=value.get("description"),
-                worktree=value.get("worktree", False),
+                worktree=value.get("worktree"),
                 resume=resume,
             )
         if value is None:
@@ -345,7 +352,7 @@ class TaskRequest:
             tools=_tuple_or_none(getattr(value, "tools", None)),
             model=getattr(value, "model", None),
             description=getattr(value, "description", None),
-            worktree=getattr(value, "worktree", False),
+            worktree=getattr(value, "worktree", None),
             resume=resume,
         )
 
@@ -1411,6 +1418,7 @@ class SubagentRunner:
         worktree_service: object | None = None,
         worktree_root: str | Path | None = None,
         worktree_root_for: Callable[[str | Path], str | Path] | None = None,
+        managed_worktrees: bool = False,
         runtime_supports_workspace: bool = False,
         worktree_scope: bool = False,
         tier_probe: Callable[[str], bool] | None = None,
@@ -1444,6 +1452,7 @@ class SubagentRunner:
         self._worktree_service = worktree_service
         self._worktree_root = Path(worktree_root) if worktree_root is not None else None
         self._worktree_root_for = worktree_root_for
+        self.managed_worktrees = managed_worktrees is True
         self._runtime_supports_workspace = runtime_supports_workspace is True
         self._worktree_scope = bool(worktree_scope)
         self._parent_session = parent_session
@@ -1837,8 +1846,13 @@ class SubagentRunner:
             bundle_map=self._bundle_map_or_default(),
             mutating=self._mutating_tools,
         )
-        if self._worktree_scope or req.worktree:
-            selected = selection.selected & WORKTREE_CHILD_TOOLS
+        if self._worktree_scope or req.worktree is True:
+            worktree_tools = (
+                AUTO_WORKTREE_CHILD_TOOLS
+                if self.managed_worktrees and req.worktree is True
+                else WORKTREE_CHILD_TOOLS
+            )
+            selected = selection.selected & worktree_tools
             excluded = selection.selected - selected
             selection = replace(
                 selection,
@@ -2134,7 +2148,29 @@ class SubagentRunner:
         config_record: dict[str, Any] | None = None
         config_sha = ""
         try:
-            if req.worktree:
+            mutating_names = {
+                canonical_tool_name(name) for name in self._mutating_tools
+            }
+            may_mutate = bool(selection.selected & mutating_names)
+            isolate_worktree = (
+                req.worktree is True
+                or (
+                    req.worktree is None
+                    and may_mutate
+                    and self.managed_worktrees
+                )
+            )
+            if isolate_worktree and req.worktree is None:
+                selected = selection.selected & AUTO_WORKTREE_CHILD_TOOLS
+                excluded = selection.selected - selected
+                selection = replace(
+                    selection,
+                    selected=frozenset(selected),
+                    dropped=selection.dropped | excluded,
+                    stripped=selection.stripped | excluded,
+                )
+                dropped = tuple(sorted(selection.dropped))
+            if isolate_worktree:
                 if not self._runtime_supports_workspace:
                     raise _WorktreeRefusal(
                         "worktree requested but the child runtime does not declare "
@@ -2340,7 +2376,12 @@ class SubagentRunner:
                 error=f"Task: cannot continue {agent_id!r}: {reason}",
             )
 
-        if req.tools is not None or req.model is not None or req.worktree or req.context_read:
+        if (
+            req.tools is not None
+            or req.model is not None
+            or req.worktree is not None
+            or req.context_read
+        ):
             return refuse(
                 "a continued subagent keeps its recorded tools, model and workspace; "
                 "pass only agent_id and prompt"
@@ -2610,7 +2651,7 @@ class SubagentRunner:
                 context_tokens=rec.get("context_tokens") if p.resume else role.context_tokens,
                 workspace=child_workspace,
                 worktree=worktree,
-                worktree_scope=self._worktree_scope or req.worktree,
+                worktree_scope=self._worktree_scope or worktree is not None,
                 config=self._config,
                 permissions=self._permissions,
                 grants=self._grants,
@@ -2718,6 +2759,18 @@ class SubagentRunner:
                         "dirty_status": status,
                     }
                     meta["worktree"] = dict(worktree)
+                    merge = finalized_record.get("merge")
+                    if outcome is not None and isinstance(merge, Mapping):
+                        merge_state = str(merge.get("state", "finished"))
+                        merge_detail = _safe(merge.get("detail", ""))
+                        integration_note = (
+                            f"Child worktree integration: {merge_state}"
+                            + (f" — {merge_detail}" if merge_detail else "")
+                        )
+                        outcome = replace(
+                            outcome,
+                            text=(outcome.text + "\n" + integration_note).strip(),
+                        )
                 except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - retain checkout on finalization failure
                     task_cancelled = task_cancelled or isinstance(
                         exc, asyncio.CancelledError
@@ -3058,6 +3111,9 @@ def _worktree_record(record: object) -> dict[str, Any]:
         "final_status",
         "final_dirty_status",
         "finalized_at",
+        "owned_session",
+        "merge",
+        "committed",
     )
     if isinstance(record, Mapping):
         values = {name: record.get(name) for name in fields}

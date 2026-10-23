@@ -599,10 +599,19 @@ class _PermissionGateAdapter:
             attended=self._attended,
         )
         evaluations = []
+        specs = prepared.spec_map()
         for evaluation in plan.evaluations:
+            spec = specs.get(evaluation.call.name)
+            permission_key = (
+                spec.resolve_permission_key(dict(evaluation.call.input))
+                if spec is not None
+                else None
+            )
             if (
                 evaluation.call.name == "subagent"
                 and evaluation.call.input.get("worktree") is True
+                and isinstance(permission_key, str)
+                and permission_key.endswith(":worktree")
                 and evaluation.outcome is not Outcome.DENY
             ):
                 if self._attended:
@@ -6648,14 +6657,27 @@ class Runtime:
             return None
         if worktree_service is not None and worktree_service is not self._worktree_service:
             raise ValueError("subagent runners must use the Runtime-owned WorktreeService")
-        expected_worktree_root = self._owned_worktree_root_for(
-            workspace or self.workspace
-        )
-        if worktree_root is not None and Path(worktree_root) not in {
-            self._worktree_root,
-            expected_worktree_root,
-        }:
-            raise ValueError("subagent runners must use the Runtime-owned worktree root")
+        managed_worktree_service = None
+        parent_checkout = Path(workspace or self.workspace).expanduser().resolve()
+        git_checkout = parent_checkout.is_dir() and subprocess.run(
+            ["git", "-C", str(parent_checkout), "rev-parse", "--show-toplevel"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0
+        if runtime_supports_workspace and git_checkout:
+            from .agents.session_subagents import SessionSubagentService
+
+            managed_worktree_service = SessionSubagentService(
+                self._session_worktrees,
+                parent_session or session_id,
+                turn_id=root_turn_id,
+            )
+            task_worktree_root = self._worktree_root
+        else:
+            task_worktree_root = worktree_root or self._worktree_root
+        if worktree_root is not None and Path(worktree_root) != Path(task_worktree_root):
+            raise ValueError("subagent runners must use the Runtime-owned worktree registry")
         if not parent_tier:
             agent_reference = parent_model
             if agent_definition is not None:
@@ -6748,13 +6770,17 @@ class Runtime:
                 bundle_map=self._bundle_map(catalog),
                 mutating_tools=self._mutating_names(catalog),
                 hooks=hooks,
-                worktree_service=self._worktree_service,
+                worktree_service=managed_worktree_service or self._worktree_service,
+                managed_worktrees=managed_worktree_service is not None,
                 tier_probe=self._tier_runnable,
                 route_gate=self.route_subagent,
                 tier_candidates=self._router.tier_candidates,
                 tier_efforts=lambda: getattr(self._router, "tier_efforts", None),
-                worktree_root=expected_worktree_root,
-                worktree_root_for=self._owned_worktree_root_for,
+                worktree_root=task_worktree_root,
+                worktree_root_for=(
+                    None if managed_worktree_service is not None
+                    else self._owned_worktree_root_for
+                ),
                 runtime_supports_workspace=runtime_supports_workspace,
                 worktree_scope=worktree_scope,
                 stop_child_jobs=self._stop_child_jobs,
@@ -7171,7 +7197,90 @@ class Runtime:
             )
         if workspace == parent_guard.workspace:
             return parent_guard
-        return parent_guard.for_worktree(workspace)
+        if not parent_guard._worktree_boundary:
+            # Main/external checkouts retain the normal PathGuard semantics:
+            # configured absolute roots stay tied to their named checkout.
+            return parent_guard.for_worktree(workspace)
+        parent_workspace = parent_guard.workspace
+
+        def child_scope(specs, roots):
+            translated = []
+            for original, canonical in zip(specs, roots):
+                if canonical.is_relative_to(parent_workspace):
+                    relative = canonical.relative_to(parent_workspace)
+                    translated.append(relative.as_posix() if relative.parts else "./")
+                else:
+                    translated.append(original)
+            return translated
+
+        # Session-root guards carry canonical absolute intersections. When a
+        # parent is already in a Nexus-owned checkout, those roots name paths
+        # in the parent checkout, so PathGuard.for_worktree would correctly see
+        # them as disjoint from the sibling child checkout and remove them.
+        # Re-express only scopes inside the parent as project-relative scopes;
+        # external absolute grants remain absolute and therefore cannot widen
+        # into the child checkout.
+        write_roots = child_scope(
+            parent_guard._write_root_specs, parent_guard.write_roots
+        )
+        read_denyroots = child_scope(
+            parent_guard._read_denyroot_specs, parent_guard.read_denyroots
+        )
+        if not parent_guard.write_roots:
+            return PathGuard(
+                workspace,
+                write_roots=(),
+                read_denyroots=read_denyroots,
+                home=parent_guard._home,
+                _allow_empty_write_roots=True,
+                _worktree_boundary=True,
+                settings_scopes=parent_guard._settings_scopes,
+            )
+        inherited = PathGuard(
+            parent_workspace,
+            write_roots=write_roots,
+            read_denyroots=read_denyroots,
+            home=parent_guard._home,
+            settings_scopes=parent_guard._settings_scopes,
+        )
+        inherited_child = inherited.for_worktree(workspace)
+        permissions = getattr(getattr(spec.config, "v2", None), "permissions", None)
+        policy_guard = PathGuard(
+            parent_workspace,
+            write_roots=(
+                tuple(permissions.write_roots)
+                if permissions is not None and permissions.write_roots
+                else ("./",)
+            ),
+            read_denyroots=(
+                tuple(permissions.read_denyroots)
+                if permissions is not None
+                else ()
+            ),
+            home=self._home,
+        ).for_worktree(workspace)
+        intersections = []
+        for configured in policy_guard.write_roots:
+            for inherited_root in inherited_child.write_roots:
+                if configured.is_relative_to(inherited_root):
+                    intersections.append(configured)
+                elif inherited_root.is_relative_to(configured):
+                    intersections.append(inherited_root)
+        read_denies = tuple(dict.fromkeys((
+            *policy_guard._read_denyroot_specs,
+            *(str(root) for root in policy_guard.read_denyroots),
+            *inherited_child._read_denyroot_specs,
+            *(str(root) for root in inherited_child.read_denyroots),
+        )))
+        return PathGuard(
+            workspace,
+            write_roots=tuple(str(root) for root in dict.fromkeys(intersections)),
+            read_denyroots=read_denies,
+            home=parent_guard._home,
+            _allow_empty_write_roots=True,
+            _worktree_boundary=True,
+            settings_scopes=parent_guard._settings_scopes,
+        )
 
     def _child_workspace_config(self, config: Config, guard: PathGuard) -> Config:
         """Pin permission roots to the child-scoped hard boundary.

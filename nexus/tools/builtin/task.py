@@ -145,10 +145,10 @@ _TASK_SCHEMA: dict[str, Any] = {
         },
         "worktree": {
             "type": "boolean",
-            "default": False,
             "description": (
-                "Run the subagent in an isolated Git worktree. Use it when "
-                "parallel subagents could edit the same files."
+                "Override the default checkout choice. Omit this to isolate "
+                "subagents that have file-mutating tools; pass false to share "
+                "the parent checkout, or true to isolate a read-only subagent."
             ),
         },
     },
@@ -261,7 +261,12 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
                 # child's recorded one, so the default must not be applied.
                 request.setdefault("subagent_type", service.default_type)
             resolved = service.permission_key(request)
-            return f"{resolved}:worktree" if request.get("worktree") is True else resolved
+            return (
+                f"{resolved}:worktree"
+                if request.get("worktree") is True
+                and not getattr(service, "managed_worktrees", False)
+                else resolved
+            )
     return ToolSpec(
         name="subagent",
         description=_describe(service),

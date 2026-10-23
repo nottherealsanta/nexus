@@ -314,3 +314,9 @@ snapshot is permitted. IPC is bounded, framed JSON with finite numbers and a
 mode fallback always `ask` (`mode = allow` does not cover it), `deny` absolute; only an
 explicit `allow` rule or a grant skips the prompt.
 Linux execution of the sandbox is not verified.
+
+Isolated subagent results return only to their parent session. For a shared root,
+Git checks and applies the saved child diff to working files without changing HEAD
+or the real index; overlapping edits refuse integration and retain the child.
+Owned session branches accept local child merges; automatic conflict merges abort.
+The worktree parameter does not change the independent session preference.

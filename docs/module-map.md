@@ -87,6 +87,7 @@ here, so add a row when you add a file.
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
+| `session_subagents.py` | Saves isolated child work and integrates its diff into its parent session. |
 | `session_worktrees.py` | Authenticated service operations for session branches, checkout creation, commit, recreation and cleanup |
 | `worktrees.py` | Safe Git worktree lifecycle management for subagents |
 

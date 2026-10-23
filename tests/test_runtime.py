@@ -593,6 +593,69 @@ def test_child_workspace_config_fails_closed_without_scoped_permissions(tmp_path
         runtime._child_workspace_config(Config(model="scripted/sm"), guard)
 
 
+async def test_child_path_guard_rebases_owned_root_without_widening_absolute_policy(tmp_path):
+    from types import SimpleNamespace
+
+    from nexus.runtime import _ChildAuthority
+    from nexus.tools.permissions import PathGuard, PathSecurityError
+
+    parent = tmp_path / "owned-parent"
+    child = tmp_path / "owned-child"
+    parent.mkdir()
+    child.mkdir()
+    config = Config(
+        model="scripted/sm",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/sm"),
+            permissions=PermissionsSection(write_roots=["./"]),
+        ),
+    )
+    owned_guard = PathGuard(
+        parent,
+        write_roots=[str(parent)],
+        _worktree_boundary=True,
+    )
+    runtime = Runtime(
+        parent,
+        home=tmp_path / "home",
+        config=config,
+        providers={"scripted": ScriptedProvider(text_response("unused"))},
+    )
+    spec = SimpleNamespace(
+        config=config,
+        permissions=_ChildAuthority(engine=object(), path_guard=owned_guard),
+    )
+    try:
+        guard = runtime._child_path_guard(spec, child)
+        assert guard.resolve("child.txt", for_write=True).absolute == child / "child.txt"
+
+        absolute_config = Config(
+            model="scripted/sm",
+            version=2,
+            v2=ConfigV2(
+                model=ModelSection(default="scripted/sm"),
+                permissions=PermissionsSection(write_roots=[str(parent / "src")]),
+            ),
+        )
+        absolute_spec = SimpleNamespace(
+            config=absolute_config,
+            permissions=_ChildAuthority(
+                engine=object(),
+                path_guard=PathGuard(
+                    parent,
+                    write_roots=[str(parent / "src")],
+                    _worktree_boundary=True,
+                ),
+            ),
+        )
+        absolute_guard = runtime._child_path_guard(absolute_spec, child)
+        with pytest.raises(PathSecurityError):
+            absolute_guard.resolve("src/child.txt", for_write=True)
+    finally:
+        await runtime.aclose()
+
+
 @pytest.mark.parametrize(("configured", "effective"), [(3, 1), (1, 1), (0, 0)])
 async def test_root_runner_clamps_max_depth_to_one(tmp_path, configured, effective):
     from nexus.agents import AgentManager

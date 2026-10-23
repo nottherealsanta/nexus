@@ -3,12 +3,13 @@
 Status: active proposal, revised 2026-10-23. Files 01–03 have already been pushed
 and record their historical implementation. The backend checkpoint work in 04 is
 implemented in commit `19dc207`; its ledger records unfinished UI work and retention-based cleanup.
-Files 05–10 are proposals unless their own implementation record says otherwise.
+File 05 implements independent child isolation and automatic return of saved work.
+Files 06–10 remain proposals until their implementation records say otherwise.
 This plan index does not declare unfinished work complete.
 
 The proposal is deliberately small: every changed turn is saved in Git; each
 session chooses No worktree, Ask every time, or Always worktree; every subagent
-that may edit gets its own worktree. The user can inspect saved turns. User
+that may edit defaults to its own worktree, with an independent per-call override. The user can inspect saved turns. User
 branches change only after the user requests integration.
 
 ## User-confirmed direction
@@ -16,13 +17,12 @@ branches change only after the user requests integration.
 - Worktree modes: No worktree, Ask every time, and Always worktree. Remember the
   project preference. Ask mode prompts once before the first turn of each new
   session and reuses that choice on later turns.
-- Every subagent that may edit gets its own worktree, whether or not it runs in
-  parallel. Read-only children do not need one. Successful child work integrates
+- Subagents have an independent `worktree` parameter: omitted defaults on for
+  editing children and off for read-only children; an explicit boolean overrides it. Successful child work integrates
   automatically; conflicts stop and are reported.
 - Implement the plans sequentially, completing and reviewing each focused step.
-- Whether writer-child changes should apply automatically to a main/external
-  session’s working files remains the one open question. Other user-branch changes require an explicit
-  user request.
+- Successful isolated children return changes automatically. In a shared checkout,
+  apply only their diff to working files without moving HEAD or the index.
 
 ## Plans
 
@@ -32,7 +32,7 @@ branches change only after the user requests integration.
 | [02 Per-session root](02-per-session-root.md) | Session working root | Existing, pushed |
 | [03 Session worktrees and turn commits](03-session-worktrees-and-turn-commits.md) | Worktree sessions and per-turn commits | Existing, pushed |
 | [04 Checkpoints](04-checkpoints-for-main-checkout.md) | Save changed turns in the current checkout | Backend implemented; TUI incomplete |
-| [05 Subagent worktrees](05-subagent-worktrees.md) | Isolate writing children and merge into session | Proposed |
+| [05 Subagent worktrees](05-subagent-worktrees.md) | Independent child isolation and saved-work integration | Implemented, focused tests |
 | [06 Integration](06-merge-queue-and-landing.md) | Manual integration at user's request | Proposed |
 | [07 Lifecycle](07-setup-cleanup-recovery.md) | Three session modes, create/reuse/list, safe removal | Proposed |
 | [08 TUI and host](08-tui-and-host-protocol.md) | Per-session choice, saved-turn labels, diffs, clear errors | Proposed |

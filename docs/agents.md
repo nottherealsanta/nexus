@@ -689,7 +689,25 @@ not verified: whether a final model wrap-up turn near the limit would be worth i
 
 ## Worktrees
 
-`subagent(worktree=true)` runs the child in an isolated Git worktree on a branch
+Session mode and child isolation are independent. On `subagent`, omitted
+`worktree` defaults to isolation when the selected tools may write; explicit
+`true` or `false` overrides that default. Read-only children share the session
+checkout unless isolation is requested. Outside Git, automatic isolation is
+unavailable; an explicit request reports the reason.
+
+Isolated children reuse the authenticated session-worktree service. They start
+from current parent files: an owned parent commits leftovers first; a shared
+parent captures an isolated baseline without changing its HEAD or index. On
+completion, the child saves its changes. Success merges into an owned session
+branch, or applies only the child's diff to shared working files. Failed children
+and conflicts keep the saved branch and checkout, with a labelled result for the
+parent. Integrations within a batch serialize on the existing service lock.
+There is no queue, watcher, new role frontmatter or automatic user-branch landing.
+Worktree children still cannot be continued; start a new child for follow-up work.
+
+### Existing explicit legacy worktree records
+
+Older explicit-worktree records use the legacy branch namespace
 `nexus/subagent/<…>` so parallel children cannot edit the same files. Children in
 a worktree get only `WORKTREE_CHILD_TOOLS` (read, glob, grep, edit, write,
 apply_patch, question, skill, webfetch, websearch), no shell and no
