@@ -1159,6 +1159,11 @@ def _is_opencode_host(base_url: str) -> bool:
     return host == "opencode.ai" or host.endswith(".opencode.ai")
 
 
+def _is_codex_host(base_url: str) -> bool:
+    """True for the ChatGPT-subscription Codex backend (rejects sampling params)."""
+    return (urlsplit(base_url).hostname or "").lower() == "chatgpt.com"
+
+
 class OpenAIProvider:
     """A :class:`~nexus.model.provider.Provider` for OpenAI and its dialects."""
 
@@ -1398,7 +1403,14 @@ class OpenAIProvider:
         return req
 
     def _finalize_body(self, body: dict[str, Any], api: str) -> dict[str, Any]:
-        """Vendor hook: adjust the translated wire body (identity here)."""
+        """Vendor hook: adjust the translated wire body.
+
+        The ChatGPT/Codex backend answers HTTP 400 ``Unsupported parameter:
+        temperature``, so sampling knobs are dropped for that host only.
+        """
+        if _is_codex_host(self._base_url):
+            for key in ("temperature", "top_p"):
+                body.pop(key, None)
         return body
 
     async def _stream_api(self, req: ModelRequest, model: str, api: str) -> AsyncIterator[StreamEvent]:

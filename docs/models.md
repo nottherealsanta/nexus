@@ -228,6 +228,7 @@ Luna on `/responses` is learned after Copilot rejects `/chat/completions`.
 Live `/models` and Luna inference were verified; the device sign-in flow was not
 live-tested. CLI: `nexus auth codex login|status|logout`, `nexus claude init`.
 xAI signs in from Settings → Providers only (no CLI subcommand).
+The Codex backend (`chatgpt.com`) rejects `temperature` and `top_p` with HTTP 400, so `OpenAIProvider._finalize_body` drops both for that host only (this is what broke session auto-titles).
 Claude sign-in from Settings was verified up to the printed URL and the code
 prompt; completing it with a real code was not live-tested (it would replace the
 machine's Claude Code login).

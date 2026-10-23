@@ -361,3 +361,43 @@ async def test_opencode_session_header_only_for_opencode_hosts(base_url, expecte
         pass
     assert seen == [expected]
     await provider.aclose()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "api", "expected"),
+    [
+        ("https://chatgpt.com/backend-api/codex", "responses", False),
+        ("https://api.openai.com/v1", "responses", True),
+        ("https://api.openai.com/v1", "chat", True),
+    ],
+)
+async def test_codex_backend_omits_temperature_and_top_p(base_url, api, expected):
+    from nexus.model.request import SamplingParams  # noqa: PLC0415
+
+    bodies: list[dict[str, Any]] = []
+    done = _sse(
+        ("response.created", {"type": "response.created", "response": {"id": "r", "model": "m", "status": "in_progress"}}),
+        ("response.completed", {"type": "response.completed", "response": {"id": "r", "status": "completed"}}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=done, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAIProvider(
+        api_key="k", model="m", api=api, base_url=base_url, environ={},
+        http_transport=httpx.MockTransport(handler),
+    )
+    req = ModelRequest(
+        model="m", messages=[Message(role="user", content=[Text(text="hi")])],
+        params=SamplingParams(temperature=0.0, top_p=0.5, max_output_tokens=20),
+    )
+    try:
+        async for _ in provider.stream(req):
+            pass
+    except Exception:  # chat dialect gets a Responses stream; only the body matters
+        pass
+    await provider.aclose()
+    assert bodies
+    assert ("temperature" in bodies[0]) is expected
+    assert ("top_p" in bodies[0]) is expected
