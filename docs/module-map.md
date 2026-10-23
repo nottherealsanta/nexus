@@ -676,3 +676,5 @@ streaming, input and CPU cost.
   bounded IPC and daemon-side runner. `monty_adapter.py` is the isolated helper
   and sole importer of `pydantic_monty`; `runner.ContextNamespaceProvider` defines
   the context integration seam (`bind(session, targets) -> dict` of callables).
+
+- `rust/tui/src/mermaid_image.rs` — native Ondine SVG → resvg fallback for non-Unicode Mermaid types. Rasterises directly to the half-block grid (`columns` × `2·rows` pixels, 4× supersampled and box-filtered, aspect-preserving, upscaled to fill the width, ≤48 rows), keeps transparency, lightens near-black ink and drops solid white panels for the dark canvas, then paints `▀`/`▄` cells straight into the ratatui buffer one terminal row at a time (viewport clipping is per row; transparent halves leave the transcript background). Does not use ratatui-image or the detected image protocol. The raster cache is bounded to 8 entries.

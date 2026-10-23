@@ -105,10 +105,18 @@ while project approval is stored in private per-project state.
 Manual integration is available through the host contract for one owned
 session at a time. The preview shows its branch, target branch, commits and
 changed files. After explicit confirmation, Nexus rechecks the preview and
-fast-forwards the original local target branch only when both checkouts are
-clean, idle, and the target still contains the session's base. A diverged or
+fast-forwards the original local target branch only when the session
+checkout is clean and idle, the target still contains the session's base, and
+no uncommitted target path overlaps a landed file. A diverged or
 stale state is refused with guidance. Integration never pushes or changes
 another session.
+
+The agent lands its own work with `nexus merge -m MESSAGE` (host `SessionMerge`,
+`session_integration.squash_merge_session`): one squashed commit on the target
+branch, the session branch moved to it, `worktree.merged` recorded. It runs
+inside the agent's turn, so the idle and session-lock checks are skipped for that
+session only. A shell command with `nexus merge` always asks the user for
+approval. See [decisions.md](decisions.md#agents-merge-their-own-session-worktree-2026-10-23).
 
 The event log is the view contract: `session.root_set` identifies the selected
 root, `worktree.created` and `worktree.setup_ran` describe provisioning,

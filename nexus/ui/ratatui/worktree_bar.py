@@ -83,3 +83,14 @@ async def refresh_session_worktree(shell, *, force: bool = False) -> None:
     if force:
         shell._worktree_state_cache = None
     await refresh_branch(shell)
+
+
+def merge_instruction(state: dict, note: str = "") -> str:
+    """The user turn ``/merge`` sends (shown verbatim in the transcript); ``note`` is appended."""
+    base = str((state or {}).get("base_branch") or "").strip() or "its base branch"
+    text = (f"Merge this worktree into {base}: make sure all work is committed and checks pass, "
+            'then run `nexus merge -m "<descriptive message>"` in the shell. '
+            f"If {base} has diverged, "
+            "merge it into this branch first, resolve conflicts, rerun checks, and retry.")
+    note = note.strip()
+    return text + ("\n\nNote from the user: " + note if note else "")

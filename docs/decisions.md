@@ -8,9 +8,40 @@ That one name is the session title, the worktree folder and the branch
 validated up front and refused (not suffixed) when the branch or folder exists.
 Without a name (noninteractive runs) the generated `<slug>-<token>` stays. The
 agent is told its environment as a labelled block (worktree directory, main
-checkout, branch, base branch, base commit) every turn, and is told to describe
-landing rather than do it: it never merges into the base branch itself; the user
-lands the work through `/worktrees` (SessionIntegrate preview and confirm).
+checkout, branch, base branch, base commit) every turn, together with how to
+finish: it lands its own work with `nexus merge` (next entry); the user can also
+land it through `/worktrees` (SessionIntegrate preview and confirm).
+
+## Agents merge their own session worktree (2026-10-23)
+
+Finishing means landing. When the work is done and verified, the agent runs
+`nexus merge -m "<message>"` through its normal shell tool (there is deliberately
+no model tool; the instructions in the per-turn environment block teach the
+steps). The command is a host client (`SessionMerge`): it resolves the session
+from `--session` or from the worktree containing the current directory, and
+`squash_merge_session` lands the branch as ONE commit, built with
+`commit-tree <session tree> -p <target head>` (no hooks, no signing, Nexus
+trailers) and fast-forwarded into the target checkout with `merge --ff-only`.
+The session branch is then moved to that commit with a compare-and-swap
+`update-ref`; because the commit has the session head's tree and the worktree is
+clean, this is a soft reset and no file changes, and a later merge cannot land
+the same work twice. A durable `worktree.merged` event and a `context.notice`
+("Merged into main @ sha") record it.
+
+The user always approves: a shell command containing `nexus merge` is a built-in
+forced ask in the permission engine (every mode, despite allow rules and
+grants; deny rules still win), so auto mode cannot skip it. A user running the
+command in their own terminal is the approval. Refused with a reason: uncommitted
+session changes, a diverged base (the agent merges the base into the session
+branch, rechecks, retries), an in-progress Git operation, a target checkout on
+another branch, or uncommitted target changes that overlap the files being
+landed (listed, bounded). Uncommitted target changes that do not overlap are
+allowed and kept, and the same relaxation applies to the `/worktrees`
+fast-forward. The in-turn entry skips the idle/session-lock checks for the
+calling session only (its own turn holds the lock) and keeps the registry lock
+and record re-verification. The `/merge` chat command asks the agent to do this.
+Not verified: behavior on an unattended daemon with `on_unattended = "allow"`,
+which allows the command like any forced ask.
 
 ## Subagent worktrees are disabled for now (2026-10-23)
 
@@ -107,6 +138,8 @@ paths themselves. See [desktop.md](desktop.md).
 
 Simplified session integration (worktree-sessions/06) uses an explicit host preview
 and a single-use confirmation, then a local fast-forward to the reviewed commit.
+A dirty target checkout is accepted when none of its changed or untracked paths
+overlap the landed files (Git's own `--ff-only` check stays as a second guard).
 Diverged targets require normal Git resolution first. No queue, watcher, push or
 automated merge strategy is introduced.
 
@@ -926,7 +959,10 @@ host still loads Appearance behind the root on open. Appearance and Layout rows 
 allow-list); Keyboard stays a drill row. Every framed dialog
 (pickers, panels, Settings) shares `dialog_frame`: `border` outline, bold title top-left,
 clickable `[×]` top-right (`render::close_rect`), and `element` selection fill. Not verified
-on a light theme.
+on a light theme. Every open starts at the root: `RootState::track` runs each frame, also while
+the panel is closed (a close used to leave a drilled page behind, so a reopen landed on the
+host's default area, Theme). A drill keeps the root up until a snapshot selects another area,
+so the previous area's page never flashes.
 
 ## Sessions dashboard groups by status, answers permissions in place (2026-10)
 
@@ -1515,3 +1551,21 @@ The manager prompt makes `session_launch` use `worktree=true` with a descriptive
 user's main checkout is untouched unless they explicitly ask for it. A non-Git workspace falls back to
 `worktree=false` with a disclosure to the user. The tool schema default stays `false` (debug MCP and other callers
 are unchanged); the policy is prompt-level, so offline tests pin the wording only. See [manager.md](manager.md).
+
+## System-prompt parts are uncapped by default
+
+`context.limits.*` (`memory`, `agents_md`, `skills_index`, `environment`, `attachments`) used to default to
+8000/8000/4000/2000/20000 tokens, which silently truncated users' `AGENTS.md` and memory. They now default to
+`None` (uncapped): users want those files delivered whole. The input budget, the priority-0 overflow check and
+the drop/truncate-by-priority allocation still bound every part, and an explicitly configured cap still
+truncates. Budget metadata reports `cap: null` for an uncapped part. See [context.md](context.md).
+
+## Continuing a subagent is its own tool
+
+`subagent_continue(agent_id, prompt)` replaced `resume` on `subagent`. Models such as codex/gpt-6.1-sol fill
+every optional field of every call (`resume: "none"`, `tools: []`, `model: ""`, `description: ". "`), so each
+attempt to start a subagent was refused as a malformed continuation and retried dozens of times; rewording the
+schema text did not help. Splitting the tool removes the field that caused the confusion instead of asking the
+model not to fill it. Empty or placeholder optionals on `subagent` now count as omitted (an empty `tools` must
+not mean "no tools"). The new tool sits in the same bundle and permission family (`subagent(...)` rules match
+it) and reuses the runner's resume path unchanged. See [agents.md](agents.md#continuing-a-finished-subagent).

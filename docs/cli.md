@@ -40,6 +40,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `agents list\|select\|current\|reset` | subagent definitions and the session's root agent |
 | `tools list` | the model-facing tool catalogue for the current config |
 | `ext list\|reload\|validate\|trash` | extension inspection, rebuild, quarantine check, safe trash |
+| `merge -m MESSAGE [--session ID]` | land this session's worktree branch on its base branch as one squashed commit (`SessionMerge`); session defaults to the one whose worktree contains the current directory; prints target branch, before -> after, landed commit and files (clipping announced); non-zero exit with a reason on refusal (diverged base, uncommitted session changes, overlapping target changes). Agents run it through the shell tool and the user is always asked to approve; run from your own terminal it is its own approval |
 | `worktrees list\|inspect\|review\|acknowledge\|integrate\|discard` | child worktree review flow ([agents.md](agents.md#worktrees)) |
 | `voice status\|init\|download\|remove\|transcribe` | local dictation; `init` installs the runtime when missing, then downloads the model ([voice.md](voice.md)) |
 | `doctor [--json] [--explain-reload]` | config, providers, registry, extensions, MCP; no model request |
@@ -115,6 +116,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/reload` | | | native only: rebuild TUI, restart workspace daemon, reopen same session |
 | `/reload-extensions` | | | reload extensions and MCP in place |
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
+| `/merge [note]` | | | worktree sessions only: sends the agent a visible user turn asking it to commit, pass checks and run `nexus merge -m` in the shell (which always asks permission); elsewhere shows a notice and sends nothing |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
 | `/live` | `[stop\|pause\|resume\|mute\|new\|status\|revoke]` | | spoken GPT Live call on this session, again to hang up (`Ctrl+X D`); `pause` toggles pause (`Ctrl+X P`, bounded by `[live].pause_seconds`, [live.md](live.md#pause-vs-stop)); first use asks for consent ([live.md](live.md#client-flow-ratatui-m4)) |

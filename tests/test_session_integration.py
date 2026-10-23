@@ -68,7 +68,8 @@ def test_integrate_fast_forwards_only_target_branch(tmp_path: Path):
 def test_preview_refuses_dirty_target_and_wrong_branch(tmp_path: Path):
     project, _record, controller = _controller(tmp_path)
     (project / "base.txt").write_text("dirty\n")
-    assert "target checkout changes" in integration_preview(controller, "session")["reason"]
+    # A dirty target no longer blocks integration unless it overlaps the landed files.
+    assert integration_preview(controller, "session")["ready"] is True
     _git(project, "checkout", "-f", "-b", "other")
     assert "Check out target branch" in integration_preview(controller, "session")["reason"]
 

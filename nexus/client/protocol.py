@@ -264,6 +264,9 @@ class Client:
     async def integrate_session(self, session: str, *, confirmation_token: str = "") -> p.SessionWorktreeResult:
         return await self._request(p.SessionIntegrate(session=session, confirm_token=confirmation_token))  # type: ignore[return-value]
 
+    async def merge_session(self, message: str, *, session: str = "", cwd: str = "") -> p.SessionWorktreeResult:
+        return await self._request(p.SessionMerge(message=message, session=session, cwd=cwd))  # type: ignore[return-value]
+
     async def remove_worktree(self, child_id: str, *, confirmation_token: str = "", project: str = "") -> p.SessionWorktreeResult:
         return await self._request(p.WorktreeRemove(child_id=child_id, confirm_token=confirmation_token, project=project))  # type: ignore[return-value]
 

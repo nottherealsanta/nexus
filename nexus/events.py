@@ -58,6 +58,7 @@ WORKTREE_EVENTS = (
     "worktree.committed",
     "worktree.commit_skipped",
     "worktree.detached",
+    "worktree.merged",
     "checkpoint.captured",
     "checkpoint.skipped",
     "checkpoint.started",

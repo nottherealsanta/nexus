@@ -1028,6 +1028,29 @@ class SessionWorktrees:
         handle._deferred_turn_end = (ctx.call_id, "Moving session to a worktree")
         return {"state": "promotion_pending", "reason": pending["reason"], "continuation_queued": bool(pending["continuation"])}
 
+    def merge(self, session, message, cwd=""):
+        """Squash-land this session's branch on its base branch (``nexus merge``); returns a state dict.
+
+        The caller is the session's own shell command (inside its turn, which holds
+        the session lock) or the user's terminal, so idle and lock checks are skipped
+        for this session; the registry lock and record verification still run.
+        """
+        from .session_integration import session_for_checkout, squash_merge_session
+        if not session:
+            session = session_for_checkout(self, cwd or ".")
+        handle = self.handle(session)
+        seq, _prompt = self._turn_data(handle, handle.active_turn_id or "")
+        result = squash_merge_session(self, session, message, session_name=self._name(handle),
+                                      agent_id="root", turn_seq=seq, in_turn=True)
+        short = result["after"][:12]
+        handle.emit_session_event("worktree.merged", {
+            "target_branch": result["target_branch"], "session_branch": result["session_branch"],
+            "sha": result["after"], "before": result["before"], "subject": result["subject"],
+            "commits": result["total_commits"], "files": [row["path"][:1024] for row in result["files"][:200]],
+            "clipped": result["clipped"]})
+        self.notice(handle, f"Merged into {result['target_branch']} @ {short}: {result['subject']}")
+        return {**result, "session": session}
+
     def detach(self, session):
         handle = self.handle(session)
         self._idle(handle)

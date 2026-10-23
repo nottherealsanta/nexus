@@ -83,6 +83,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/reload", "Rebuild native TUI and restart workspace daemon"),
     CommandSpec("/reload-extensions", "Reload extensions and MCP"),
     CommandSpec("/review", "Ask the agent to review changes"),
+    CommandSpec("/merge", "Ask the agent to merge this session's worktree into its base branch (worktree sessions)", "[note]"),
     CommandSpec("/commit", "Ask the agent to commit changes"),
     CommandSpec("/archived", "Browse archived sessions", aliases=("/resume",)),
     CommandSpec("/voice", "Dictate into the composer", "[status|download|on|off]"),

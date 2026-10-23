@@ -336,6 +336,13 @@ def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, An
         if reason not in {"no_changes", "too_large", "git_error", "conflict_in_progress"} or not isinstance(detail, str) or len(detail) > 500 or "\x00" in detail:
             return _diagnostic(state, event, data)
         return replace(state, worktree=replace(current, last_skip={"reason": reason, "detail": detail}))
+    if event.type == "worktree.merged":
+        target_branch, sha, landed = data.get("target_branch", ""), data.get("sha", ""), data.get("subject", "")
+        if any(not isinstance(v, str) or len(v) > 200 or "\x00" in v for v in (target_branch, sha, landed)):
+            return _diagnostic(state, event, data)
+        # The timeline row ("Merged into <branch> @ <sha>") is the paired context.notice;
+        # this event is the durable machine record and changes no view field.
+        return state
     if event.type == "worktree.detached":
         return replace(state, worktree=replace(current, state="detached"))
     if event.type != "worktree.committed":

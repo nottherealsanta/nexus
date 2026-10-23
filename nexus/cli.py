@@ -502,6 +502,44 @@ async def _tools_command(
         await client.aclose()
 
 
+def merge_lines(state: dict[str, Any]) -> list[str]:
+    """Labelled, bounded lines for a landed ``nexus merge``; clipping is announced."""
+    lines = [
+        f"merged into: {state.get('target_branch', '?')}",
+        f"session branch: {state.get('session_branch', '?')}"
+        + ("" if state.get("session_branch_moved", True) else " (not moved)"),
+        f"target: {str(state.get('before', ''))[:12]} -> {str(state.get('after', ''))[:12]}",
+        f"landed commit: {state.get('commit', '')}",
+        f"subject: {redact_secrets(str(state.get('subject', '')))}",
+        f"squashed commits: {state.get('total_commits', 0)}",
+    ]
+    files = list(state.get("files") or [])
+    total = int(state.get("total_files", len(files)) or 0)
+    lines.append(f"files ({total}):")
+    for row in files[:50]:
+        lines.append(f"  +{row.get('insertions', 0)} -{row.get('deletions', 0)}  {redact_secrets(str(row.get('path', '')))}")
+    if total > min(len(files), 50):
+        lines.append(f"  ... {total - min(len(files), 50)} more files not shown")
+    if state.get("warning"):
+        lines.append(f"warning: {state['warning']}")
+    return lines
+
+
+async def _merge_command(workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    """`nexus merge`: land this session's worktree branch on its base branch as one commit."""
+    from .ui.cli import open_client
+
+    message = sys.stdin.read() if args.message == "-" else args.message
+    client = await open_client(workspace)
+    try:
+        result = await client.merge_session(
+            message, session=args.merge_session or args.session or "", cwd=str(Path.cwd()))
+    finally:
+        await client.aclose()
+    stdout.write("\n".join(merge_lines(result.state)) + "\n")
+    return 0
+
+
 async def _worktrees_command(
     workspace: Path,
     args: argparse.Namespace,
@@ -1884,6 +1922,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     voice_transcribe.add_argument("file", metavar="FILE.wav")
 
+    merge = sub.add_parser(
+        "merge", help="Land this session's worktree branch on its base branch as one squashed commit")
+    merge.add_argument("-m", "--message", required=True, help="Commit message for the landed commit ('-' reads stdin)")
+    merge.add_argument("--session", dest="merge_session", default=None,
+                       help="Session id (default: the session whose worktree contains the current directory)")
+
     worktrees = sub.add_parser("worktrees", help="Inspect and manage child worktrees")
     worktrees_sub = worktrees.add_subparsers(dest="worktrees_action", required=True)
     worktrees_sub.add_parser("list", help="List daemon-owned child worktrees")
@@ -2060,6 +2104,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_voice_init(workspace, stdout, stderr))
         if args.command == "voice":
             return asyncio.run(_voice_command(workspace, args, stdout, stderr))
+        if args.command == "merge":
+            return asyncio.run(_merge_command(workspace, args, stdout, stderr))
         if args.command == "worktrees":
             return asyncio.run(_worktrees_command(workspace, args, stdout, stderr))
         if args.command == "claude":

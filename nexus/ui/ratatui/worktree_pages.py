@@ -58,7 +58,14 @@ class WorktreePages:
         self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form = "", [], [], None
         await self.resume_worktree_submission(pending)
 
+    def close_worktree_modal(self):
+        """Drop the Yes/No or name modal; the answered question must not outlive its answer."""
+        self.stack.clear()
+        self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form = "", [], [], None
+        self.form_target = None
+
     async def resume_worktree_submission(self, pending):
+        self.close_worktree_modal()  # the "No" answer reaches here with the question still open
         self.shell.attachments = pending["attachments"]
         self.shell.attachment_labels = pending["attachment_labels"]
         self.shell.marker_attachments = pending["marker_attachments"]
