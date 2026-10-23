@@ -89,8 +89,10 @@ def parse_layout(raw: bytes) -> tuple[dict[str, Any], list[Entry]]:
             raise BarkFormatError("invalid bark tensor name")
         seen.add(name)
         shape = item.get("shape")
-        if not isinstance(shape, list) or not 0 < len(shape) <= MAX_RANK:
+        if not isinstance(shape, list) or len(shape) > MAX_RANK:
             raise BarkFormatError("invalid bark tensor shape")
+        # An empty shape is a scalar (one element), used by the checkpoint's
+        # int64 num_batches_tracked buffers. math.prod(()) correctly returns 1.
         dims = tuple(_int(d, 1, MAX_TOTAL_ELEMENTS, "bark dimension") for d in shape)
         count = math.prod(dims)
         total += count
@@ -107,6 +109,8 @@ def parse_layout(raw: bytes) -> tuple[dict[str, Any], list[Entry]]:
         flags: dict[str, bool] = {}
         dtype, bits, extent = "", 0, 0
         if kind == "levels2":
+            if not dims:
+                raise BarkFormatError("invalid bark tensor shape")
             k = _int(item.get("K"), 1, 127, "bark level count")  # codes are uint8
             fields = {"K": k, "lev": size("lev"), "meta": size("meta"), "b": size("b")}
             flags = {"lev": bool(item.get("zl"))}

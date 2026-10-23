@@ -129,10 +129,15 @@ pip install -e '.[dev]'
 Prefer to read the script first? `curl -LsSf …/install.sh -o install.sh && less install.sh && sh install.sh`.
 Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`pypi`, the
 default, or `git`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
-`NEXUS_NO_VOICE`, `NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Local dictation (the
-`voice` extra) is added by default except on musl systems such as Alpine, whose
-platform the voice runtime does not support. Any other install can run
-`nexus voice init`, which adds the runtime if it is missing and downloads the model. Native Windows is not supported yet
+`NEXUS_NO_VOICE`, `NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Local dictation and
+speech (`/speak`) runtimes are installed by default (`uv sync` keeps them too); the
+dictation runtime is omitted on Intel Macs and Linux aarch64. On musl x86_64
+(such as Alpine), the installer fails with a clear diagnostic: the required runtime
+has no supported wheels. Use glibc Linux instead. `--no-voice` / `NEXUS_NO_VOICE`
+is a legacy compatibility option and cannot remove base dependencies; disable
+dictation with `voice.enabled=false` in config. Neither records or speaks on its own, and
+model downloads ask first. Run `nexus voice init` to add a missing dictation runtime and
+download the model. Native Windows is not supported yet
 (the daemon needs Unix sockets); use WSL.
 
 `nexus update` upgrades to the latest PyPI release through uv and restarts running

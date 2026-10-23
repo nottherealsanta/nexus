@@ -108,7 +108,7 @@ def test_built_wheel_ships_web_and_agent_assets(tmp_path: Path):
 
 
 def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
-    """The Torch/Transformers runtime stays in the ``voice`` extra: it has no musl wheels."""
+    """Speech ships by default; dictation is platform-gated with a compatibility extra."""
     from email.parser import Parser
 
     wheel = _build_wheel(tmp_path)
@@ -117,10 +117,16 @@ def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
         metadata = Parser().parsestr(archive.read(metadata_path).decode())
     requirements = metadata.get_all("Requires-Dist", [])
     assert not any(requirement.startswith("textual") for requirement in requirements)
-    for package in ("claude-agent-sdk", "sounddevice"):
+    for package in ("claude-agent-sdk", "sounddevice", "ptts", "numpy"):
         assert any(requirement.startswith(package) and ";" not in requirement
                    for requirement in requirements), (package, requirements)
-    for package in ("transformers", "torch", "constriction"):
+    for package in ("transformers", "torch", "constriction", "librosa"):
         heavy = [r for r in requirements if r.startswith(package)]
-        assert heavy and all('extra == "voice"' in r for r in heavy), (package, requirements)
+        base = [r for r in heavy if "extra ==" not in r]
+        assert len(base) == 1, (package, requirements)
+        assert 'sys_platform == "darwin"' in base[0]
+        assert 'platform_machine == "arm64"' in base[0]
+        assert 'sys_platform == "linux"' in base[0]
+        assert 'platform_machine == "x86_64"' in base[0]
+        assert any('extra == "voice"' in r for r in heavy), (package, requirements)
     assert not any(r.startswith("moondream") for r in requirements), requirements

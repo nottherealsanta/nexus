@@ -251,15 +251,20 @@ Stated so nobody builds on a false assumption.
 
 Claude Agent SDK and `sounddevice` are required package dependencies; the old
 `claude-agent` extra remains a compatibility alias. The voice runtime
-(Transformers, Torch, `constriction`) stays in the `voice` extra because
-Torch publishes no musl or Intel macOS wheels: as a hard dependency it made
-`install.sh` fail outright on Alpine. PEP 508 markers cannot tell musl from glibc,
-so `install.sh` adds `voice` itself except on musl, Intel Macs (or with `--no-voice`), and
-`nexus update` keeps installed extras. Plain `pip`/`uv tool install nexus-harness`
-does not get it, so `nexus voice init` installs the runtime into the current
-install (keeping version, source and extras) before downloading the model. Claude login and the
-consent-gated voice model download remain separate setup steps. Voice runtime
-platform support beyond macOS and glibc Linux is not verified (see [voice.md](voice.md)).
+(Transformers, Torch, `constriction`) and speech (`ptts`) became base
+dependencies after `uv sync --extra speak` removed the voice packages and
+`nexus voice init` then failed: extras are not sticky under `uv sync`. The
+dictation packages carry markers for macOS arm64 and Linux x86_64 (the platforms
+with Torch and `constriction` wheels in `uv.lock`), so Intel Macs and Linux aarch64 still install.
+PEP 508 markers cannot tell musl from glibc, so `install.sh` rejects musl x86_64
+with an actionable diagnostic rather than pretending to remove required dependencies
+using always-false override markers. `--no-voice` is retained as a legacy flag with
+a warning; disable dictation with `voice.enabled=false`, not dependency removal. The `voice` and `speak`
+extras stay as compatibility aliases, and `nexus voice init` still installs the
+runtime elsewhere. Claude login and the consent-gated model downloads remain
+separate setup steps; defaults enable the features but never record or speak
+unprompted. Platform support beyond the lock's wheels is not verified (see
+[voice.md](voice.md)).
 
 ## The 2026-10 UI redesign: picks from the design mock-ups
 

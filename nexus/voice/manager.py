@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -10,6 +12,17 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .model import TranscribeResult, VoiceError, VoiceState
+
+
+_LOG = logging.getLogger("nexus.voice")
+_PATH = re.compile(r"(?:[A-Za-z]:\\|~?/)[^\s'\",;)]*")
+
+
+def _describe(exc: BaseException) -> str:
+    """Bounded, path-redacted ``Type: message`` for user-visible failures."""
+    text = " ".join(_PATH.sub("[path]", str(exc)).split())
+    text = f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+    return text if len(text) <= 160 else text[:159] + "…"
 
 
 class Engine(Protocol):
@@ -156,6 +169,7 @@ class VoiceManager:
                 return self._state
             if self._state.state == "ready" and self._engine is not None:
                 return self._state
+            phase = "setup"
             try:
                 if self._engine is not None:
                     await self._engine.close()
@@ -177,6 +191,7 @@ class VoiceManager:
                         message="Voice runtime is not installed. Run `nexus voice init` to install it and download the model (not available on musl/Alpine).",
                     )
                     return self._state
+                phase = "model files"
                 path = await self.store.ensure(
                     self._progress, allow_download=allow_download
                 )
@@ -184,11 +199,13 @@ class VoiceManager:
                 if self._closed or self._removing or not self._enabled():
                     return self._state
                 self._state = self._new_state("loading", progress=1.0)
+                phase = "engine load"
                 engine = self.engine_factory(path)
                 try:
                     await engine.load()
                     from .audio import silence
 
+                    phase = "warmup"
                     warmup_started = time.monotonic()
                     await engine.transcribe(silence(0.5))
                     self.real_time_factor = 0.5 / max(
@@ -222,11 +239,13 @@ class VoiceManager:
                 self._sync_enabled()
                 if not self._closed and self._state.state != "disabled":
                     self._state = self._new_state("absent")
-            except Exception:
+            except Exception as exc:
+                _LOG.warning("voice model preparation failed during %s", phase, exc_info=True)
                 self._sync_enabled()
                 if self._enabled() and not self._closed and not self._removing:
                     self._set_error(
-                        "Voice model preparation failed. Retry from Voice settings."
+                        f"Voice model preparation failed ({phase}: {_describe(exc)}). "
+                        "Retry from Voice settings."
                     )
             return self._state
 

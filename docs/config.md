@@ -75,7 +75,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
-| `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
+| `[voice]` | `enabled` true (dictation is on by default but never records or loads the model by itself), `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
 | `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `pause_seconds` 120 (5-3600: a paused call ends after this long, see [live.md](live.md#pause-vs-stop)), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Editable in the native terminal under Settings → GPT Live (the model `gpt-live-1-codex` is pinned and shown read-only). Experimental, see [live.md](live.md) |
 | `[manager]` | `enabled` **false**, `max_launches_per_turn` 3 (1-20), `max_live_managed` 8 (1-50). Gates `ManagerOpen` and every operation on the workspace manager session; the caps bound its `session_launch` ([manager.md](manager.md)). Env: `NEXUS_MANAGER__ENABLED`, `NEXUS_MANAGER__MAX_LAUNCHES_PER_TURN`, `NEXUS_MANAGER__MAX_LIVE_MANAGED`. The model is not configurable: it is pinned to `codex/gpt-6-luna` |
 | `[updates]` | `check` true |

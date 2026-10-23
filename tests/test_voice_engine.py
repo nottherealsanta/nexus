@@ -112,13 +112,14 @@ async def test_non_text_result_is_rejected(tmp_path) -> None:
     await engine.close()
 
 
-def test_available_requires_every_runtime_package(monkeypatch) -> None:
+@pytest.mark.parametrize("missing", ["numpy", "torch", "transformers", "constriction", "librosa"])
+def test_available_requires_every_runtime_package(monkeypatch, missing) -> None:
     import nexus.voice.engine as engine
 
-    present = {"numpy", "torch", "transformers", "constriction"}
+    present = {"numpy", "torch", "transformers", "constriction", "librosa"}
     monkeypatch.setattr(engine, "find_spec", lambda name: object() if name in present else None)
     assert BarkEngine.available()
-    present.discard("constriction")
+    present.discard(missing)
     assert not BarkEngine.available()
 
 
