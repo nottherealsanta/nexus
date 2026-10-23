@@ -291,7 +291,6 @@ class SessionWorktrees:
             write_session_cwd(self.runtime.workspace, handle.id, str(root.path), home=self.runtime._home)
         except OSError:
             self.notice(handle, "Working root selected; shell cwd could not be saved")
-        self.notice(handle, f"Working in {root.to_data(self.runtime.workspace)['path_display']} ({record.branch}). Project settings, memory, extensions and MCP use the main checkout; worktree extension edits take effect after landing.")
         return root
 
     @staticmethod

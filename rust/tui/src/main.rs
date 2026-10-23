@@ -62,6 +62,18 @@ fn composer_editor_area(
         height: card.height.saturating_sub(2).max(1),
     })
 }
+/// The draft-state report the bridge needs to auto-close empty new tabs: `Some(nonempty)` when
+/// the (generation, emptiness) pair differs from the last one sent, so every session switch
+/// reports once and typing reports only when the draft toggles between empty and not.
+fn draft_state_report(
+    text: &str,
+    generation: u64,
+    last: Option<(bool, u64)>,
+) -> Option<(bool, u64)> {
+    let now = (!text.trim().is_empty(), generation);
+    (last != Some(now)).then_some(now)
+}
+
 /// `+ New Agent` takes the current draft with it into the new session.
 fn take_new_session_text(operation: &mut Value, draft: &mut Editor) {
     if operation.get("kind").and_then(|value| value.as_str()) != Some("session_new") {
@@ -345,6 +357,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Source offset where a left press began inside the composer text; set while dragging.
     let mut composer_press: Option<usize> = None;
     let mut typed = (String::new(), 0usize);
+    let mut draft_reported: Option<(bool, u64)> = None;
     let mut complete_due: Option<Instant> = None;
     let mut asked = String::new();
     let mut follow = true;
@@ -924,6 +937,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         // As-you-type completion : a `/command`,
         // an `@file`, or a command argument asks the host after a 120 ms pause.
+        if let Some(state) = draft_state_report(&draft.text, s.generation, draft_reported) {
+            send(json!({"type":"draft_state","nonempty":state.0,"generation":state.1}))?;
+            draft_reported = Some(state);
+        }
         if typed.0 != draft.text || typed.1 != draft.cursor {
             if typed.0 != draft.text
                 && (s.attachments > 0
@@ -3218,6 +3235,16 @@ use unicode_segmentation::UnicodeSegmentation;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draft_state_reports_once_per_generation_and_on_emptiness_toggle() {
+        assert_eq!(draft_state_report("", 1, None), Some((false, 1)));
+        assert_eq!(draft_state_report("", 1, Some((false, 1))), None);
+        assert_eq!(draft_state_report("  \n", 1, Some((false, 1))), None);
+        assert_eq!(draft_state_report("hi", 1, Some((false, 1))), Some((true, 1)));
+        assert_eq!(draft_state_report("hi", 1, Some((true, 1))), None);
+        assert_eq!(draft_state_report("hi", 2, Some((true, 1))), Some((true, 2)));
+    }
 
     #[test]
     fn completion_remains_visible_while_typing_and_backspacing() {

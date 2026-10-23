@@ -588,3 +588,43 @@ async def test_focus_is_reported_before_the_replay_so_the_host_knows_the_manager
     await shell.switch(MANAGER_ID)
     await shell.preview_task
     assert order == [f"focus:{MANAGER_ID}", "bootstrap"]
+
+
+# -- a session the manager launched takes the screen --------------------------------------------
+
+
+def launch_event(seq=7, *, child="kid", ts=None, session=MANAGER_ID, kind="managed"):
+    ts = time.time() if ts is None else ts
+    data = {"kind": kind, "child": child, "turn": "t1", "origin_message_id": "m1",
+            "instruction_digest": "d", "agent": ""}
+    return Event(type="session.linked", data=data, seq=seq, ts=ts, session=session)
+
+
+async def test_a_fresh_managed_launch_switches_to_the_new_session(shell):
+    assert shell.manager.on_event(launch_event()) is True
+    await settle(shell)
+    shell.switch_project.assert_awaited_once_with("/w", "kid")
+    assert shell.controller.session == "kid"
+
+
+async def test_launch_replays_stale_routed_duplicate_and_other_sessions_never_switch(shell):
+    event = launch_event()
+    assert shell.manager.on_event(event, fresh=False) is False
+    assert shell.manager.on_event(launch_event(ts=time.time() - 120)) is False
+    assert shell.manager.on_event(launch_event(kind="routed")) is False
+    assert shell.manager.on_event(launch_event(child="")) is False
+    shell.controller.session = "elsewhere"  # the manager is not in front on this client
+    assert shell.manager.on_event(event, session=MANAGER_ID) is False
+    shell.controller.session = MANAGER_ID
+    assert shell.manager.on_event(event) is True
+    await settle(shell)
+    shell.controller.session = MANAGER_ID
+    assert shell.manager.on_event(event) is False
+    assert shell.switch_project.await_count == 1
+
+
+async def test_a_launch_never_replaces_a_modal_a_toast_says_so(shell):
+    shell.panel_title = "Something"
+    assert shell.manager.on_event(launch_event()) is False
+    shell.switch_project.assert_not_awaited()
+    assert shell.toasts and "launched session kid" in shell.toasts[-1]["title"] + shell.toasts[-1]["body"]

@@ -175,7 +175,10 @@ class Manager:
         came from Live and this client's Live call follows that manager. A modal, form, dashboard,
         recording or pending prompt is never replaced; a toast says so instead.
         """
-        if getattr(event, "type", "") != "manager.show":
+        kind = getattr(event, "type", "")
+        if kind == "session.linked":
+            return self._on_launch(event, session, fresh, floor)
+        if kind != "manager.show":
             return False
         session = session or str(getattr(event, "session", "") or "")
         if not session or not self.is_active(session) or not fresh:
@@ -211,6 +214,45 @@ class Manager:
         if shell.controller.session == target:
             return False
         self._show_task = asyncio.get_running_loop().create_task(self._show(session, target, live))
+        return True
+
+    def _on_launch(self, event, session: str, fresh: bool, floor: float) -> bool:
+        """Switch to a session the manager just launched (``session.linked``, ``kind: "managed"``).
+
+        The same guards as a show request, minus ``clients``/``expires_at`` (a launch record has
+        neither): a fresh, recent, not-yet-acted-on event of the manager log, with the manager
+        in front on this client or this client's Live call following it. The child's tab is
+        created by ``switch`` and the stream replays its events.
+        """
+        session = session or str(getattr(event, "session", "") or "")
+        data = event.data if isinstance(getattr(event, "data", None), dict) else {}
+        child, stamp = data.get("child"), getattr(event, "ts", None)
+        if (data.get("kind") != "managed" or not fresh or not session or not self.is_active(session)
+                or not isinstance(child, str) or not 0 < len(child) <= 128
+                or isinstance(stamp, bool) or not isinstance(stamp, (int, float))):
+            return False
+        if stamp < floor or time.time() - stamp > SHOW_TTL_SECONDS:
+            return False
+        key = (session, int(getattr(event, "seq", 0) or 0), str(getattr(event, "id", "") or ""))
+        if key in self._shown:
+            return False
+        shell = self.shell
+        mine = shell.controller.session == session
+        live = self._live_follows(session)
+        if not (mine or live):
+            return False
+        self._shown[key] = None
+        while len(self._shown) > SHOWN_MEMORY:
+            self._shown.popitem(last=False)
+        if self._show_task is not None and not self._show_task.done():
+            return False
+        blocked = self._blocked()
+        if blocked:
+            shell.flash(f"The Manager launched session {child}, but {blocked}", "warning")
+            return False
+        if shell.controller.session == child:
+            return False
+        self._show_task = asyncio.get_running_loop().create_task(self._show(session, child, live))
         return True
 
     def _live_follows(self, session: str) -> bool:

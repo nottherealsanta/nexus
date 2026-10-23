@@ -137,6 +137,7 @@ class ShellActions:
         self.sessions = []
         self.workspace = ""
         self.tabs = []
+        self.draft_nonempty = {}  # (workspace, session) -> unsent composer text, from the TUI's draft_state
         self.last_completion_cue = 0
         self.breadcrumb = ""
         self.worktree = ""  # linked-worktree name of the workspace ("" in a main checkout)
@@ -349,7 +350,30 @@ class ShellActions:
                 getattr(self.controller, "completion_seq", 0),
             )
 
+    def note_draft_state(self, nonempty):
+        """Record whether the composer of the open session holds unsent text (reported by the TUI)."""
+        self.draft_nonempty[(self.workspace, self.controller.session)] = bool(nonempty)
+
+    def _leaves_empty_tab(self, target):
+        """Whether the open session is a never-used new tab that switching to ``target`` should close.
+
+        Empty means: a tab (not the manager), no turns, queued input, agents, jobs or Live calls in
+        its view, idle, no unsent composer text and no attachments. Closing only hides the tab.
+        """
+        current, view = self.controller.session, self.controller.view
+        if not current or current == target or self.manager.is_active(current) or self.manager.is_active(target):
+            return False
+        key = (self.workspace, current)
+        if not any(row["id"] == current and row["workspace"] == self.workspace for row in self.tabs):
+            return False
+        if self.draft_nonempty.get(key) or self.attachments:
+            return False
+        return not (getattr(view, "turns", None) or getattr(view, "input_queue", None)
+                    or getattr(view, "agents", None) or getattr(view, "jobs", None)
+                    or getattr(view, "live_calls", None) or view.phase != "idle")
+
     async def switch(self, session, *, project=None):
+        empty_tab = (self.workspace, self.controller.session) if self._leaves_empty_tab(session) else None
         self.mark_current_seen()  # a reply watched live must not read as unseen after leaving
         self.workflows.close_dashboard()  # a replaced session never keeps a dashboard over it
         await self.voice.discard()
@@ -380,6 +404,10 @@ class ShellActions:
             await self.controller.switch_session(session)
         else:
             await self.controller.switch_session(session, project=project)
+        if empty_tab is not None:  # the tab we left was never used: close (hide) it, as `x` does
+            self.tabs[:] = [row for row in self.tabs if (row["workspace"], row["id"]) != empty_tab]
+            self.draft_nonempty.pop(empty_tab, None)
+            self.controller.forget(empty_tab[1])
         # A foreground change is a host-API signal, not a model input. Sent before the replay so
         # the host knows this client is on the manager by the time the user can type to it.
         self.focus.report(session)

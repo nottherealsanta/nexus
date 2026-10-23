@@ -1519,11 +1519,13 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         nonlocal revision, desktop_wire, event_sent_at, event_kind, allowed_operations, displayed_prompt, stream_turn
         if event is not False and event is not None:
             event_kind = event.type
-            if event.type == "manager.show":  # before ingest: only events past the replayed cursor count
+            if event.type == "manager.show" or (event.type == "session.linked" and isinstance(event.data, dict)
+                    and event.data.get("kind") == "managed"):
+                # before ingest: only events past the replayed cursor count
                 try:
                     shell.manager.on_event(event, session=controller.session, fresh=event.seq > controller.cursor)
                 except Exception as exc:  # noqa: BLE001 - a bad request never breaks the stream
-                    shell.logs.add_notice("warning", f"manager.show ignored: {type(exc).__name__}")
+                    shell.logs.add_notice("warning", f"{event.type} ignored: {type(exc).__name__}")
             stream_turn =event.turn if event.type in STREAM_EVENTS and (stream_turn in {None, event.turn}) else False
             if event.type in {"agent.spawned", "agent.completed", "agent.failed", "agent.cancelled"}:
                 try:
@@ -1839,6 +1841,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await refresh_branch(shell)
                         if shell.breadcrumb != before:
                             await update(immediate=False)
+                elif action["type"] == "draft_state":
+                    if action.get("generation") == shell.generation:
+                        shell.note_draft_state(bool(action.get("nonempty")))
                 elif action["type"] == "draft_changed":
                     shell.reconcile_attachment_markers(action["text"])
                 elif action["type"] == "cancel":

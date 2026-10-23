@@ -104,7 +104,7 @@ def _shell(tmp_path, monkeypatch, **client):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     view = initial_state("s")
     controller = SimpleNamespace(client=SimpleNamespace(**client), session="s", view=view,
-                                 switch_session=AsyncMock(), bootstrap=AsyncMock())
+                                 switch_session=AsyncMock(), bootstrap=AsyncMock(), forget=Mock())
     return ShellActions(controller)
 
 
@@ -552,7 +552,8 @@ async def test_opening_finished_session_acknowledges_snapshot_before_switching_a
 
     async def bootstrap():
         # Snapshot replay does not advance the stream cursor.
-        shell.controller.view = replace(shell.controller.view, last_seq=8)
+        from nexus.view.model import TurnView
+        shell.controller.view = replace(shell.controller.view, last_seq=8, turns=[TurnView(id="t1")])  # has history
         shell.controller.completion_seq = 8
 
     shell.controller.switch_session.side_effect = switch
@@ -633,3 +634,48 @@ async def test_failed_project_open_toasts_the_redacted_reason_and_keeps_the_dash
 
     # An exception without a message (a timeout) still names itself.
     assert error_text(TimeoutError()) == "TimeoutError"
+
+
+def _tab_shell(tmp_path, monkeypatch, current="new1"):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.workspace = "w"
+    shell.tabs = [dict(id="old", workspace="w"), dict(id="new1", workspace="w")]
+    shell.controller.session = current
+    shell.controller.forget = Mock()
+    shell.controller.running = False
+    shell.focus.report = Mock()
+    return shell
+
+
+@pytest.mark.asyncio
+async def test_leaving_an_empty_new_tab_closes_it(tmp_path, monkeypatch):
+    shell = _tab_shell(tmp_path, monkeypatch)
+    await shell.switch("old")
+    assert [row["id"] for row in shell.tabs] == ["old"]
+    shell.controller.forget.assert_called_once_with("new1")
+
+
+@pytest.mark.asyncio
+async def test_leaving_a_tab_with_content_or_a_draft_keeps_it(tmp_path, monkeypatch):
+    from nexus.view.model import TurnView
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.note_draft_state(True)  # unsent composer text
+    await shell.switch("old")
+    assert [row["id"] for row in shell.tabs] == ["old", "new1"]
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.controller.view.turns.append(TurnView(id="t1"))  # a message was sent
+    await shell.switch("old")
+    assert [row["id"] for row in shell.tabs] == ["old", "new1"]
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.attachments.append(SimpleNamespace(attachment_id="a", kind="image"))
+    await shell.switch("old")
+    assert len(shell.tabs) == 2
+
+
+@pytest.mark.asyncio
+async def test_draft_state_is_per_session_and_cleared_by_emptying(tmp_path, monkeypatch):
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.note_draft_state(True)
+    shell.note_draft_state(False)  # the user deleted the text again
+    await shell.switch("old")
+    assert [row["id"] for row in shell.tabs] == ["old"]

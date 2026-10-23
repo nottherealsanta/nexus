@@ -53,7 +53,9 @@ class NativeProbe:
         rows=[]
         while b"\n" in self.actions:
             line,_,rest=self.actions.partition(b"\n");self.actions[:]=rest
-            rows.append(json.loads(line))
+            row=json.loads(line)
+            if row.get("type")!="draft_state":  # passive composer-emptiness report, not a user action
+                rows.append(row)
         return rows
 
     def close(self):

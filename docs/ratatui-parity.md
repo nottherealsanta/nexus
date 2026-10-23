@@ -935,6 +935,20 @@ admitted while they fit at full compact width, and only the active tab is squeez
 hit-testing both use `render::tab_cells`, so targets never overlap; the toggles are
 clickable too. The current tab reads "working" while its turn runs.
 
+Auto-close of empty new tabs: when a switch leaves a session whose tab was never used, that tab
+is closed (hidden, exactly like `×`; nothing is deleted or archived). "Never used" means all of:
+a tab (not the manager view), the view has no turns, queued inputs, agents, jobs or Live calls
+and is idle, the composer holds no non-whitespace text and there are no attachments. The Rust
+client reports composer emptiness as `draft_state {nonempty, generation}` (once per session
+switch and whenever the draft toggles between empty and not); the bridge keeps it per
+workspace/session in `draft_nonempty` (`ShellActions._leaves_empty_tab`, run in `switch`).
+Switching to the manager view, or leaving the manager, never closes a tab.
+
+Manager launches autofocus: when the manager (in front on this client, or followed by this
+client's Live call) records a fresh `session.linked` with `kind: "managed"`, the client switches
+to the `child` session like a `manager.show` (same replay, 30 s, dedupe and modal/prompt guards;
+a toast says so when blocked). Live PTY behaviour of both is not verified.
+
 ## UI polish verification (2026-10-02)
 
 Rust rendering/layout tests and native Python regressions,

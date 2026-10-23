@@ -87,7 +87,8 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             action_buffer.extend(line)
         line, _, rest = action_buffer.partition(b"\n")
         action_buffer[:] = rest
-        return json.loads(line)
+        row = json.loads(line)
+        return read_action() if row.get("type") == "draft_state" else row  # passive report, not an action
 
     try:
         process.stdin.write((json.dumps({"schema": 1, "revision": 1,
@@ -251,7 +252,8 @@ def test_context_dialog_toggle_keyboard_and_lock():
     thread.start()
     def action():
         assert select.select([process.stdout], [], [], 3)[0], "native action timed out"
-        return json.loads(process.stdout.readline())
+        row = json.loads(process.stdout.readline())
+        return action() if row.get("type") == "draft_state" else row  # passive report, not an action
     def snapshot(locked=False):
         process.stdin.write((json.dumps({"schema": 1, "status": "idle", "panel_title": "Tools", "panel_layout": "context",
             "items": [{"label": "read", "operation": {"kind": "tool_definition"}, "toggle_enabled": True,
@@ -493,7 +495,8 @@ def test_settings_native_focus_reorder_and_loading_guard():
             buffer.extend(os.read(process.stdout.fileno(), 65536))
         line, _, rest = buffer.partition(b"\n")
         buffer[:] = rest
-        return json.loads(line)
+        row = json.loads(line)
+        return action() if row.get("type") == "draft_state" else row  # passive report, not an action
     def snapshot(revision, loading=False):
         value = {"schema": 1, "revision": revision, "generation": 1, "title": "Settings PTY", "status": "idle",
             "panel_title": "Models", "panel_layout": "modal", "panel_loading": loading,

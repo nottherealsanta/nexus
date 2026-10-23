@@ -151,6 +151,11 @@ It writes one durable `manager.show` record in the manager log and a native clie
   dashboard, voice recording or pending approval/question is never replaced: a toast says the Manager asked.
   The switch (`switch_project`) runs in its own retained task, because a switch cancels the stream task that
   delivered the event, and then resumes the stream; draft and tab behaviour are the ordinary `switch`.
+* **Launch autofocus**: a fresh `session.linked` (`kind: "managed"`) in the manager log is handled by the same
+  `Manager.on_event` path with the same guards (not a replay, within 30 s, not acted on, manager in front or
+  followed by this client's Live call, nothing modal replaces) and switches to its `child`. It carries no
+  `clients`/`expires_at`, so the "manager in front on this client" check is the targeting rule. The link is written
+  before the child starts, so the child's first events arrive over the ordinary stream.
 * **Focus ordering**: `switch` reports the foreground session before replaying it, so the host knows the client is
   on the manager before the user can type. A client without a claim (old host, expired claim) gets `no_viewer`;
   there is deliberately no wider fallback.
