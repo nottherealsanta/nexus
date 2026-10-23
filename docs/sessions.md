@@ -40,10 +40,10 @@ session lock and require a turn boundary with no queued inputs or shell jobs.
 External roots are never committed, removed or landed by root selection.
 
 Settings, grants, extensions, memory and MCP connections remain project-owned.
-`AGENTS.md` comes from the working root and is frozen for the turn. A labelled
-root notice explains the working checkout and that worktree extension edits
-become live after land. Filesystem-rooted MCP servers continue seeing the project
-checkout; they are not cloned per root.
+`AGENTS.md` comes from the working root and is frozen for the turn. Worktree
+extension edits become live after land. Selecting a root emits no routine
+notice; the root is visible from session metadata. Filesystem-rooted MCP servers
+continue seeing the project checkout; they are not cloned per root.
 
 ### Session worktree choice
 

@@ -4690,11 +4690,6 @@ class Runtime:
                 raise SessionBusy("Session root requires a turn boundary without queued inputs or pending work")
             data = root.to_data(self.workspace)
             handle.emit_session_event("session.root_set", data)
-            if root.kind != "main":
-                handle.emit_session_event("context.notice", {"kind": "session_root",
-                    "message": f"Working in {data['path_display']} ({root.branch or root.kind}). "
-                    "Project settings, memory, extensions and MCP servers use the main checkout. "
-                    "Extension changes in this worktree are not live until landed."})
             from .tools.builtin._shell_logs import write_session_cwd
             try:
                 write_session_cwd(self.workspace, session, str(root.path), home=self._home)

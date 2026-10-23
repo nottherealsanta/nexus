@@ -69,6 +69,20 @@ async def test_first_changed_turn_commits_in_owned_root_and_leaves_main_untouche
         await rt.aclose()
 
 
+async def test_root_publication_emits_no_routine_checkout_notice(project, tmp_path):
+    rt = runtime(project, tmp_path, ScriptedProvider(text_response("done")), sessions=True)
+    try:
+        handle = rt.session("quiet")
+        await drain(handle, "hello")
+        root = rt.session_root(handle.id)
+        assert root.kind == "worktree"
+        assert any(e.type == "session.root_set" for e in handle.events)
+        notices = [e.data.get("message", "") for e in handle.events if e.type == "context.notice"]
+        assert not any("Working in" in m for m in notices)
+    finally:
+        await rt.aclose()
+
+
 async def test_draft_toggle_creates_nothing_and_unchanged_turn_has_no_commit(project, tmp_path):
     rt = runtime(project, tmp_path, ScriptedProvider(text_response("done")), sessions=True)
     try:

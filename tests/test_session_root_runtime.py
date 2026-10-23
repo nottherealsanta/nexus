@@ -69,6 +69,26 @@ async def test_runtime_roots_are_independent_linked_worktrees(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_set_session_root_emits_no_routine_notice(tmp_path: Path) -> None:
+    project, linked_a, _ = _project(tmp_path)
+    runtime = _runtime(project, tmp_path / "home")
+    try:
+        runtime.session("quiet").append_message(
+            Message(role="user", content=[Text(text="Create the session row")])
+        )
+        root = runtime.set_session_root("quiet", linked_a, branch="feature-a")
+        events = runtime.session("quiet").events
+        assert any(e.type == "session.root_set" for e in events)
+        assert not any(
+            e.type == "context.notice" and e.data.get("kind") == "session_root"
+            for e in events
+        )
+        assert runtime.session_root("quiet") == root
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
 async def test_root_event_replays_after_runtime_reopen(tmp_path: Path) -> None:
     project, linked_a, _ = _project(tmp_path)
     home = tmp_path / "home"
