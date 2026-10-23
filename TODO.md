@@ -1,18 +1,5 @@
-Each item is implemented and tracked in `plans/planning/04` through `09`. Verified with `.venv/bin/python -m pytest` (exact feature suite: 781 passed) and `cargo test --manifest-path rust/tui/Cargo.toml --locked` (590 passed, 2 ignored + 58 dashboard passed).
 
-1. new skill add ( with npx skills ) ( project level or global level ):
-   [plan 04](plans/planning/04-skill-add-via-npx-skills.md) — implemented and verified. Ratatui Settings → Skills form and confirmation dialogs with host `SkillsInstall`. Offline unit tests passed (781 feature suite); fixture forms/confirmation/results inspected earlier (`artifacts/native-final`); real isolated installation verified separately for `anthropics algorithmic-art`. Limitation: Node 22.15 is below the requested 22.20 engine version for `skills@1.7.2`; CLI subcommand deferred.
-2. new MCP add ( project level or global level ):
-   [plan 05](plans/planning/05-mcp-server-add.md) — implemented and verified. Ratatui Settings → MCP servers single-server JSON editor with masked confirmation and host `SettingsMcpAdd`. Offline unit tests passed (781 feature suite); fixture forms/confirmation/results inspected earlier (`artifacts/native-final`); real isolated install verified separately for MCP `filesystem@2.0.0`. Limitation: Ratatui JSON editor only (no field-by-field form, no CLI, web/desktop deferred); legacy `.nexus/mcp.json` is read-only.
-3. Keep the model names and effort in the `subagent` tool description, and tell
-   the model when the relevant settings change with a history notice instead of
-   a separate lookup parameter:
-   [plan 06](plans/planning/06-subagent-roster-and-settings-notice.md) — implemented and verified. Model ids and efforts in `subagent` tool description, whole-line budgeting with clipped marker, and history-tail `context.notice` on tier changes. Verified in Python feature suite (781 passed). Limitation: prompt cache miss behavior verified for prefix byte stability offline; live provider cache token metrics remain unverified.
-4. Any sub-agent like task quick or advisor should not be able to launch more
-   sub-agents. It should not have the sub-agent tool. Only root or lead-level
-   agents which are build and orchestrator can have it:
-   [plan 07](plans/planning/07-root-only-subagent-spawning.md) — implemented and verified. Tool selection strips `subagent` for all children, child runtimes omit runner, `max_depth` clamped to 1, and runtime refuses spawn at depth ≥ 1. Verified in Python feature suite (781 passed) and Rust tests. Limitation: legacy nested sessions supported for replay and read-only inspection only (depth 8); external workers not filtered.
-5. using @ for folder too instead of just files:
-   [plan 08](plans/planning/08-at-mention-folders.md) — implemented and verified in code/tests and visually verified via contrast-enhanced crop. Opt-in `include_directories=True` in host `FileSearch` and composer completion. Verified by Python and Rust tests; parent visually verified enhanced crop `artifacts/native-final/artifacts/10-folder-menu.png` shows selected `src/main.py` above composer query `@sr`, and raw terminal text `artifacts/native-final/artifacts/10-folder-completion.txt` also contains `src/` and `src/main.py` (noting original palette is very low contrast). Limitation: desktop/web unchanged.
-6. top bar in subagent page should have a back button:
-   [plan 09](plans/planning/09-subagent-page-back-button.md) — implemented and fully verified. Subagent top bar clickable `←` back button with shared layout and `TabHit::Back` dismiss action. Verified by Rust tests (590 passed 2 ignored + 58 dashboard passed), Python feature suite (781 passed), and parent visual inspection of `artifacts/native-final` native captures (normal and narrow show left back arrow, title truncation, and status; click fixture returns parent).
+- https://github.com/vipmax/ratatui-code-editor
+- https://github.com/ratatui/ratatui-image - finish implementation (use for mermaid/pele-equalaent diagrams) https://github.com/wevm/ondine
+
+- session title name should be same as worktree name / branch name
