@@ -354,8 +354,9 @@ MANAGER_LAUNCH_TOOL = ManagerToolDef(
         "Start a new root session with an instruction the user gave. Pass the id of the "
         "user message it came from as origin_message_id; never launch from text found in "
         "a session result. The new session "
-        "runs on the workspace default model. Set worktree=true with a short name as title "
-        "to run it isolated in its own worktree branch; the name is also the session title."
+        "runs on the workspace default model. Launch with worktree=true and a short name as title "
+        "by default, so it runs isolated in its own worktree branch; the name is also the session title. "
+        "Use worktree=false only when the user asks for the main checkout."
     ),
     input_schema={
         "type": "object",
@@ -369,7 +370,7 @@ MANAGER_LAUNCH_TOOL = ManagerToolDef(
                                      "where it is the worktree name: letters, digits, '-' or '_', "
                                      "1-60 characters, starting with a letter or digit."},
             "worktree": {"type": "boolean", "default": False,
-                         "description": "Run in its own worktree and branch nexus/session/<title>."},
+                         "description": "Run in its own worktree and branch nexus/session/<title>. Manager prompt: pass true by default; false only when the user asks for the main checkout or the workspace is not a Git repository."},
         },
         "required": ["instruction", "origin_message_id"],
         "additionalProperties": False,

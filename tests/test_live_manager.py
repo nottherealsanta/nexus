@@ -619,10 +619,11 @@ def test_bundled_instructions_separate_manager_actions_from_on_screen_approvals(
     text, _ = load_instructions(tmp_path, "build", live_config())
     assert "normal permissions and approvals" not in text
     assert "needs no extra confirmation step" in text and "do not ask the user to confirm" in text
-    assert "never answers an approval or a question on screen" in text
-    assert "Only when you are explicitly told the agent is waiting for approval or has a question" in text
+    assert "never answers a question the agent asks on screen" in text
+    assert "Only when you are explicitly told the agent has a question" in text
     assert "without being told so" in text
-    assert "never treat a spoken \"yes\" as permission" in text and "never tell the user you approved" in text
+    assert "never treat a spoken \"yes\" as an answer" in text
+    assert "approv" not in text.lower() and "permission" not in text.lower()
 
 
 def test_carried_block_is_bounded_and_ordered():

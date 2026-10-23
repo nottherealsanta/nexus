@@ -1487,3 +1487,10 @@ A PR that changes only `CHANGELOG.md`, the release manifest and version lines (r
 skips the heavy jobs; `ci-ok` treats skipped as success. Trade-off: a `CARGO=false` run does
 not prove the bins still build from the editable install; `rust` and `native-wheels` do.
 Not verified on hosted CI yet.
+
+## Manager launches default to worktrees
+
+The manager prompt makes `session_launch` use `worktree=true` with a descriptive name as title every time, so the
+user's main checkout is untouched unless they explicitly ask for it. A non-Git workspace falls back to
+`worktree=false` with a disclosure to the user. The tool schema default stays `false` (debug MCP and other callers
+are unchanged); the policy is prompt-level, so offline tests pin the wording only. See [manager.md](manager.md).

@@ -605,10 +605,10 @@ counts only by its request text; the `Voice:` lines of the transcript it carries
 
 **Consent versus approval.** The saved data-sharing consent (base plus manager scope) is the only gate on starting
 a call; it is not a per-action approval. Manager launch, send, cancel and show run without a confirmation step, so
-the bundled instructions tell the model not to ask for one. An approval exists only when the bridge reports a real
-`permission.requested` / `question.requested` event; the model then says it needs attention on screen, and is told
-not to claim a pending approval otherwise. A spoken "yes" only clarifies intent. It is never a permission, and
-nothing in Live approves on the user's behalf. Permission enforcement is unchanged.
+the bundled instructions tell the model not to ask for one. The bundled instructions do not mention approvals or permissions at all. The model is told only that when it
+is explicitly told the agent has a question it says the question needs attention on screen; answers are given on
+screen only. A spoken "yes" only clarifies intent and is never an answer. The bridge may still forward a
+`permission.requested` notice (see the event table), but nothing in Live approves on the user's behalf. Permission enforcement is unchanged.
 
 `LiveStatusResult.reason` is `disabled`, `unsupported` (the `websockets`
 client is missing from a broken install), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)

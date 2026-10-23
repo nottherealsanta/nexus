@@ -226,8 +226,9 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 | `session_send` | message ≤ 16 KiB, 3 per turn, 6 per 60 s |
 | `session_show` | 3 per turn; a request is actionable for 30 s |
 
-The manager prompt tells the model to always pass a short descriptive `title` (a few words, like a commit
-subject) to `session_launch`; with `worktree=true` the title must be the worktree name.
+The manager prompt tells the model to launch every session with `worktree=true` and a worktree name as `title`
+(short, descriptive, e.g. `release-0-7-1`), unless the user explicitly asks for the main checkout; only then does it
+pass `worktree=false` with a free-form title of a few words.
 
 ### Launching into a named worktree
 
@@ -240,7 +241,13 @@ host's `set_session_worktree(name=...)` (the same path as `SessionWorktreeSet`; 
 or folder and a non-Git workspace) and only then enqueues the instruction. The worktree itself is created
 by the first model turn. The project's Ask mode does not block this unattended launch. If the selection is
 refused, the tool returns an error with the redacted reason and the opened session's id; the instruction
-was never enqueued. With `worktree` false or omitted, `title` stays a free-form hint, as before.
+was never enqueued. With `worktree` false or omitted, `title` stays a free-form hint. The schema default stays `false` (the tool
+is also used by the debug MCP); the default-to-worktree rule lives in the manager prompt.
+
+Prompt rules: the manager launches into a worktree by default so the user's main checkout is untouched. If the
+refusal says "Worktrees need a Git repository" it launches again with `worktree=false` and tells the user the
+session ran in the main checkout (the refused draft session stays opened but not started); for any other refusal
+(name taken, ...) it retries once with another name or reports it.
 
 The result adds `worktree_name` and `worktree_branch` when a worktree was requested. The manager never
 merges the work: the user lands it with `/worktrees`.
