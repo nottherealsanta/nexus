@@ -472,19 +472,6 @@ class SessionIntegrate(msgspec.Struct, tag=True, frozen=True):
     confirm_token: str = ""
 
 
-class SessionMerge(msgspec.Struct, tag=True, frozen=True):
-    """Land a session worktree on its base branch as one squashed commit (`nexus merge`).
-
-    ``session`` may be empty when ``cwd`` is inside the session's worktree. The
-    caller is the session's own shell (or the user's terminal), so no idle or lock
-    check applies to that session; approval happens in the caller's permission prompt.
-    """
-
-    message: str
-    session: str = ""
-    cwd: str = ""
-
-
 class SessionTurnDiff(msgspec.Struct, tag=True, frozen=True):
     """Read a bounded diff of durable turn commits or a hidden checkpoint."""
 
@@ -1441,7 +1428,6 @@ Command = (
     | SessionWorktreeStatus
     | SessionWorktreeTrust
     | SessionIntegrate
-    | SessionMerge
     | SessionTurnDiff
     | SessionTurnRevert
     | AttachmentPrepare
@@ -3016,7 +3002,6 @@ __all__ = [
     "SessionWorktreeStatus",
     "SessionWorktreeTrust",
     "SessionIntegrate",
-    "SessionMerge",
     "SessionTurnDiff",
     "SessionTurnRevert",
     "SessionWorktreeResult",

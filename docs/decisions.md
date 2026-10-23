@@ -9,39 +9,46 @@ validated up front and refused (not suffixed) when the branch or folder exists.
 Without a name (noninteractive runs) the generated `<slug>-<token>` stays. The
 agent is told its environment as a labelled block (worktree directory, main
 checkout, branch, base branch, base commit) every turn, together with how to
-finish: it lands its own work with `nexus merge` (next entry); the user can also
+finish: it lands its own work with plain Git (next entry); the user can also
 land it through `/worktrees` (SessionIntegrate preview and confirm).
 
-## Agents merge their own session worktree (2026-10-23)
+## Agents land their own session worktree with Git (2026-10-23)
 
-Finishing means landing. When the work is done and verified, the agent runs
-`nexus merge -m "<message>"` through its normal shell tool (there is deliberately
-no model tool; the instructions in the per-turn environment block teach the
-steps). The command is a host client (`SessionMerge`): it resolves the session
-from `--session` or from the worktree containing the current directory, and
-`squash_merge_session` lands the branch as ONE commit, built with
-`commit-tree <session tree> -p <target head>` (no hooks, no signing, Nexus
-trailers) and fast-forwarded into the target checkout with `merge --ff-only`.
-The session branch is then moved to that commit with a compare-and-swap
-`update-ref`; because the commit has the session head's tree and the worktree is
-clean, this is a soft reset and no file changes, and a later merge cannot land
-the same work twice. A durable `worktree.merged` event and a `context.notice`
-("Merged into main @ sha") record it.
+Finishing means landing, and landing is plain Git, taught by the per-turn
+environment block (there is deliberately no tool and no Nexus command). In the
+worktree the agent commits everything, runs the checks, squashes onto the base
+(`git reset --soft $(git merge-base HEAD <base>) && git commit -m ... -m ...`),
+then fast-forwards the main checkout: `git -C <main checkout> merge --ff-only
+<session branch>`. Why no bespoke command: Git already refuses a diverged base
+(`--ff-only`; the agent runs `git merge <base>` in the worktree, rechecks,
+squashes again, retries) and refuses to overwrite uncommitted files in the main
+checkout (the agent stops and tells the user which). A first version,
+a bespoke merge command (a host command, `commit-tree` squash, session-branch
+`update-ref`), reimplemented those checks; it was removed. The rule "never edit
+files or run other git write commands in the main checkout" stays; the
+`--ff-only` merge is the single exception. The earlier session-name entry points
+here for how a named worktree is landed.
 
-The user always approves: a shell command containing `nexus merge` is a built-in
-forced ask in the permission engine (every mode, despite allow rules and
-grants; deny rules still win), so auto mode cannot skip it. A user running the
-command in their own terminal is the approval. Refused with a reason: uncommitted
-session changes, a diverged base (the agent merges the base into the session
-branch, rechecks, retries), an in-progress Git operation, a target checkout on
-another branch, or uncommitted target changes that overlap the files being
-landed (listed, bounded). Uncommitted target changes that do not overlap are
-allowed and kept, and the same relaxation applies to the `/worktrees`
-fast-forward. The in-turn entry skips the idle/session-lock checks for the
-calling session only (its own turn holds the lock) and keeps the registry lock
-and record re-verification. The `/merge` chat command asks the agent to do this.
-Not verified: behavior on an unattended daemon with `on_unattended = "allow"`,
-which allows the command like any forced ask.
+The user always approves: a shell command that runs a Git write subcommand
+(merge, commit, reset, checkout, rebase, ...) with `-C`, `--git-dir` or
+`--work-tree` options, or after a `cd`, is a built-in forced ask in the
+permission engine (`_is_git_write_elsewhere` in `tools/permissions.py`; every
+mode, despite allow rules and grants; deny rules still win), so auto mode cannot
+skip it. The engine does not know the main checkout path, so the rule is
+conservative and a false positive only asks. Plain `git merge main` or `git
+status` in the worktree is not forced. Not verified: behavior on an unattended
+daemon with `on_unattended = "allow"`, which allows the command like any forced
+ask.
+
+The host notices the landing instead of being told: at turn end
+(`SessionWorktrees.finish` -> `_landing`) it checks whether the session head has
+commits beyond the recorded base commit and is now an ancestor of the target
+branch head, and emits one durable `worktree.merged` event (plus the notice
+"Merged into main @ sha") per landed session head. An unchanged fresh worktree
+never fires. Detection runs at turn end, so the notice appears after the turn
+that landed, not mid-turn. The `/worktrees` SessionIntegrate flow and its
+relaxation (uncommitted target changes that do not overlap landed files are
+allowed) are unchanged. The `/merge` chat command asks the agent to do the above.
 
 ## Subagent worktrees are disabled for now (2026-10-23)
 

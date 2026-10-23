@@ -690,7 +690,7 @@ async def test_merge_command_sends_instruction_only_in_a_worktree_session(tmp_pa
     assert await shell.submit("/merge ship it") is True
     text = shell.client.enqueue.await_args.args[1]
     assert shell.client.enqueue.await_args.args[0] == "s"
-    assert "into main" in text and 'nexus merge -m "<descriptive message>"' in text and text.endswith("Note from the user: ship it")
+    assert "into main" in text and 'merge --ff-only' in text and text.endswith("Note from the user: ship it")
     main = AsyncMock(return_value=SimpleNamespace(state={"kind": "main"}))
     shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock(), session_worktree_choice=main)
     await shell.submit("/merge")

@@ -1780,7 +1780,7 @@ class HostFacade:
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
                             p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
-                            p.WorktreeDiscard, p.WorktreeRemove, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate, p.SessionMerge)
+                            p.WorktreeDiscard, p.WorktreeRemove, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -2043,18 +2043,6 @@ class HostFacade:
             elif state.get("ready"):
                 state = {**state, "token": self._confirmation_token("session_integrate", command.session, state, {})}
             return p.SessionWorktreeResult(session=command.session, state=state)
-        if isinstance(command, p.SessionMerge):
-            controller = self.runtime._session_worktrees
-            session = command.session
-            if session:
-                try:
-                    resolved = self.runtime.sessions.resolve(session)
-                    session = resolved.get("id") or resolved["logical_id"]
-                except (SessionError, AttributeError):
-                    pass
-            self._refuse_manager(session or "-", "session merge")
-            state = await asyncio.to_thread(controller.merge, session, command.message, command.cwd)
-            return p.SessionWorktreeResult(session=state.get("session", session), state=state)
         if isinstance(command, p.SessionTurnDiff):
             from ..worktree_turns import turn_diff
             self._refuse_manager(command.session, "turn diff")

@@ -89,8 +89,9 @@ def merge_instruction(state: dict, note: str = "") -> str:
     """The user turn ``/merge`` sends (shown verbatim in the transcript); ``note`` is appended."""
     base = str((state or {}).get("base_branch") or "").strip() or "its base branch"
     text = (f"Merge this worktree into {base}: make sure all work is committed and checks pass, "
-            'then run `nexus merge -m "<descriptive message>"` in the shell. '
+            "squash the branch into one commit on top of the base, then land it with "
+            "`git -C <main checkout> merge --ff-only <worktree branch>` in the shell. "
             f"If {base} has diverged, "
-            "merge it into this branch first, resolve conflicts, rerun checks, and retry.")
+            "merge it into this branch first, resolve conflicts, rerun checks, squash again, and retry.")
     note = note.strip()
     return text + ("\n\nNote from the user: " + note if note else "")

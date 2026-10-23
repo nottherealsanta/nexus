@@ -76,7 +76,7 @@ async def test_named_first_turn_creates_exact_folder_branch_title_and_environmen
             for fact in (f"Worktree directory: {root.path}", f"Main checkout directory: {project}",
                          "Worktree branch: nexus/session/login-fix", "Base branch: main", f"Base commit: {sha}"):
                 assert fact in text, fact
-            for step in ("Finishing and merging", 'nexus merge -m', "git merge main",
+            for step in ("Finishing and merging", 'merge --ff-only', "git merge main",
                          "branch nexus/session/login-fix", "/merge"):
                 assert step in text, step
     finally:

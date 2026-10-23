@@ -79,7 +79,7 @@ inward-only exceptions. Errors are
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `UsageRefreshSettings` `UsageRefreshSettingsSet` (result `UsageRefreshSettingsResult`) `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
-| Worktrees | `SessionWorktreeChoice` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` `WorktreeRemove` `SessionIntegrate` `SessionMerge` `SessionTurnDiff` |
+| Worktrees | `SessionWorktreeChoice` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` `WorktreeRemove` `SessionIntegrate` `SessionTurnDiff` |
 | Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows; `session=""` selects the main root) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
@@ -105,8 +105,6 @@ The session worktree commands share `SessionWorktreeResult(session, state)`. `Se
 `WorktreeRemove(child_id, confirm_token="")` previews removal of an authenticated modern checkout. Confirmation is single-use, expires after 120 seconds and binds the fresh checkout state. The owner must be idle and the checkout clean, including ignored files; removal preserves its branch and session record.
 
 `SessionIntegrate(session, confirm_token="")` uses the same result envelope. Its first call returns a bounded preview of the owned session branch, original target branch, commits and changed files, plus a short-lived confirmation token. The confirmed call rechecks the full preview and performs a local fast-forward to the reviewed session commit only when the target checkout is on its original branch, both checkouts are clean and idle, and no Git operation is active. It refuses divergence, stale state and ignored-file overwrites. It never pushes.
-
-`SessionMerge(message, session="", cwd="")` (used by `nexus merge`) squash-lands the session branch as one commit on its base branch and returns the same envelope with the landed commit, before/after target heads and bounded files; it skips the idle/lock checks for the calling session (see [decisions.md](decisions.md#agents-merge-their-own-session-worktree-2026-10-23)).
 
 The shell job commands (`host_support/session_jobs.py`, [tools.md](tools.md#shell-jobs)) read the
 runtime's job registry for the **named session only**, so a job id from another session answers

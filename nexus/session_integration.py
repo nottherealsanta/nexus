@@ -2,20 +2,17 @@
 
 Integration is local and explicit. The ``/worktrees`` flow previews one idle
 session, binds confirmation to its current Git state, then fast-forwards its
-original target branch if still safe. The agent flow (``nexus merge``,
-:func:`squash_merge_session`) lands the whole branch as ONE commit built with
-``commit-tree`` on top of the target head, fast-forwards the target to it, then
-moves the session branch to that commit. Both refuse a diverged target and allow
-a dirty target checkout only when no dirty path overlaps a landed file.
+original target branch if still safe. It refuses a diverged target and allows
+a dirty target checkout only when no dirty path overlaps a landed file. Agents land
+their own branch with plain Git instead (docs/decisions.md).
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from .agents import session_worktrees as _service
 from .agents.worktrees import WorktreeError
-from .agents.session_worktrees import _NEXUS_TRAILER, _TRAILER_LINE, _git, status_counts
+from .agents.session_worktrees import _git, status_counts
 from .errors import SessionBusy
 from .util import redact_secrets
 
@@ -74,10 +71,9 @@ def _overlap(dirty: set[str], changed: set[str]) -> list[str]:
     return hits
 
 
-def _snapshot(controller, session, *, service_locked: bool = False, in_turn: bool = False) -> dict:
+def _snapshot(controller, session, *, service_locked: bool = False) -> dict:
     handle = controller.runtime.sessions.open(session, create=False, recover=False)
-    if not in_turn:
-        controller._idle(handle)
+    controller._idle(handle)
     root = controller.runtime.session_root(session)
     if root.kind != "worktree" or root.worktree_id != "session-" + session:
         raise ValueError("Integration is available only for a session in its own worktree")
@@ -160,19 +156,6 @@ def _snapshot(controller, session, *, service_locked: bool = False, in_turn: boo
     }
 
 
-def session_for_checkout(controller, checkout: str | Path) -> str:
-    """Return the session id whose active owned worktree is ``checkout`` (or contains it)."""
-    manager = controller.runtime._session_worktrees
-    here = Path(checkout).resolve()
-    for record in _service.list_sessions(root=manager.registry):
-        if record.lifecycle != "active":
-            continue
-        base = Path(record.path).resolve()
-        if here == base or base in here.parents:
-            return record.session_id
-    raise ValueError("This directory is not a Nexus session worktree; pass --session ID")
-
-
 def integration_preview(controller, session) -> dict:
     """Return a bounded review of one session and its original target branch."""
     try:
@@ -207,61 +190,3 @@ def integrate_session(controller, session, state: dict) -> dict:
                     "before": state["target_head"], "after": after}
     finally:
         handle._lock.release()
-
-
-def _trailer_value(text: str, limit: int) -> str:
-    return re.sub(r"[\r\n\x00-\x1f\x7f]+", " ", text)[:limit]
-
-
-def squash_merge_session(controller, session, message: str, *, session_name: str = "",
-                         agent_id: str = "root", turn_seq: int = 0, in_turn: bool = True) -> dict:
-    """Land the session branch on its target as one commit, then sync the session branch.
-
-    ``in_turn`` skips the idle and session-lock checks because the caller (the
-    agent's own shell command, or the user's terminal through the host) is already
-    the one acting for the session; every other check, including the registry lock
-    and record re-verification, still runs.
-
-    Why moving the session branch is safe: the landed commit C has the tree of the
-    session head (``commit-tree <head>^{tree}``) and the session worktree is clean,
-    so its index and files already equal ``tree(C)``. Pointing the branch at C
-    (compare-and-swap on the old head) is therefore a soft reset: no file changes.
-    """
-    message = (message or "").strip()
-    if not message or len(message) > 4000 or "\0" in message:
-        raise ValueError("A merge message of 1 to 4,000 characters is required")
-    manager = controller.runtime._session_worktrees
-    with _service._base._locked(manager.registry):
-        state = _snapshot(controller, session, service_locked=True, in_turn=in_turn)
-        _service_root, _key, record = _service._read_record(Path(manager.registry), "session-" + session)
-        target = Path(state["target_workspace"])
-        head, target_head = state["session_head"], state["target_head"]
-        if head == target_head or _git(record.path, "rev-parse", f"{head}^{{tree}}") == _git(
-                target, "rev-parse", f"{target_head}^{{tree}}"):
-            raise ValueError(f"Nothing to merge: the session branch has no changes beyond {state['target_branch']}")
-        message = _TRAILER_LINE.sub("", message).strip() if _NEXUS_TRAILER.search(message) else message
-        trailers = [f"Nexus-Session: {_trailer_value(session_name or session, 200)} ({session})",
-                    f"Nexus-Turn-Seq: {int(turn_seq)}", f"Nexus-Agent: {_trailer_value(agent_id, 128)}",
-                    f"Nexus-Squashed-Commits: {state['total_commits']}"]
-        config = []
-        if not _git(record.path, "config", "--get", "user.name", check=False):
-            config += ["-c", "user.name=Nexus"]
-        if not _git(record.path, "config", "--get", "user.email", check=False):
-            config += ["-c", "user.email=nexus@localhost"]
-        config += ["-c", "commit.gpgsign=false"]
-        landed = _git(record.path, *config, "commit-tree", f"{head}^{{tree}}", "-p", target_head, "-F", "-",
-                      input_text=message + "\n\n" + "\n".join(trailers) + "\n", observational=False)
-        _git(target, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
-             "merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", landed, observational=False)
-        after = _git(target, "rev-parse", "--verify", "HEAD^{commit}")
-        moved, warning = True, ""
-        try:
-            _git(target, "update-ref", "refs/heads/" + state["session_branch"], landed, head, observational=False)
-        except WorktreeError as exc:
-            moved, warning = False, "Landed, but the session branch was not moved: " + redact_secrets(str(exc))[:300]
-        return {"kind": "merged", "target_branch": state["target_branch"],
-                "session_branch": state["session_branch"], "before": target_head, "after": after,
-                "commit": landed, "subject": redact_secrets(message.splitlines()[0])[:200],
-                "commits": state["commits"], "files": state["files"],
-                "total_commits": state["total_commits"], "total_files": state["total_files"],
-                "clipped": state["clipped"], "session_branch_moved": moved, "warning": warning}

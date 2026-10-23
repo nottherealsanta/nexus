@@ -68,10 +68,14 @@ not guarantee an operator approval when policy is permissive. This explicit
 approval is required because promotion changes the checkout used by future
 turns.
 
-There is no merge tool. Landing the branch is the shell command `nexus merge -m
-MESSAGE` ([cli.md](cli.md)); the permission engine forces an ask for any shell
-command containing it (`_is_nexus_merge` in `tools/permissions.py`), in every
-mode and despite allow rules or grants (deny rules still win).
+There is no merge tool or command. Landing the branch is plain Git in the shell
+(`git -C <main checkout> merge --ff-only <session branch>`, see
+[decisions.md](decisions.md#agents-land-their-own-session-worktree-with-git-2026-10-23));
+the permission engine forces an ask for any shell command that runs a Git write
+subcommand with `-C`, `--git-dir`, `--work-tree` or after a `cd`
+(`_is_git_write_elsewhere` in `tools/permissions.py`), in every mode and despite
+allow rules or grants (deny rules still win). Plain `git merge main` and
+read-only `git -C ... status` are not forced.
 
 ## Files
 

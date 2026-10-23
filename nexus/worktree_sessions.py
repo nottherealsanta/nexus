@@ -455,6 +455,10 @@ class SessionWorktrees:
                         if result.get("sha") not in known:
                             self._commit_event(handle, {**result, "kind": "committed", "by": "agent", "via": "shell"}, seq=seq, agent="root", turn_id=terminal.turn)
                 await self.commit(handle, terminal.turn)
+                landing = await self._thread(handle.id, self._landing, handle, root)
+                if landing is not None:
+                    self._emit(handle, "worktree.merged", landing, terminal.turn)
+                    self.notice(handle, f"Merged into {landing['target_branch']} @ {landing['sha'][:12]}: {landing['subject']}")
             elif root.kind in {"main", "external"} and self.policy().checkpoints:
                 already_not_git = any(e.type == "checkpoint.skipped" and e.data.get("reason") == "not_git" for e in handle.events)
                 if getattr(handle, "_checkpoint_not_git", False) and not already_not_git:
@@ -1028,28 +1032,52 @@ class SessionWorktrees:
         handle._deferred_turn_end = (ctx.call_id, "Moving session to a worktree")
         return {"state": "promotion_pending", "reason": pending["reason"], "continuation_queued": bool(pending["continuation"])}
 
-    def merge(self, session, message, cwd=""):
-        """Squash-land this session's branch on its base branch (``nexus merge``); returns a state dict.
+    def _landing(self, handle, root):
+        """Payload for ``worktree.merged`` when the agent landed the session branch with Git; else ``None``.
 
-        The caller is the session's own shell command (inside its turn, which holds
-        the session lock) or the user's terminal, so idle and lock checks are skipped
-        for this session; the registry lock and record verification still run.
+        The agent runs ``git -C <main checkout> merge --ff-only <session branch>``;
+        the host notices instead of being told (checked at turn end). A landing means
+        the session head has commits beyond the recorded base commit and is now an
+        ancestor of (or equal to) the target branch head. ``head`` (the landed session
+        head) dedupes: one event per landed head, so a later move of the target does
+        not repeat it. Best effort: any Git failure returns ``None``.
         """
-        from .session_integration import session_for_checkout, squash_merge_session
-        if not session:
-            session = session_for_checkout(self, cwd or ".")
-        handle = self.handle(session)
-        seq, _prompt = self._turn_data(handle, handle.active_turn_id or "")
-        result = squash_merge_session(self, session, message, session_name=self._name(handle),
-                                      agent_id="root", turn_seq=seq, in_turn=True)
-        short = result["after"][:12]
-        handle.emit_session_event("worktree.merged", {
-            "target_branch": result["target_branch"], "session_branch": result["session_branch"],
-            "sha": result["after"], "before": result["before"], "subject": result["subject"],
-            "commits": result["total_commits"], "files": [row["path"][:1024] for row in result["files"][:200]],
-            "clipped": result["clipped"]})
-        self.notice(handle, f"Merged into {result['target_branch']} @ {short}: {result['subject']}")
-        return {**result, "session": session}
+        from .agents.session_worktrees import _git
+        from .agents.worktrees import WorktreeError
+
+        def ancestor(directory, older, newer):
+            try:
+                _git(directory, "merge-base", "--is-ancestor", older, newer)
+                return True
+            except WorktreeError:
+                return False
+
+        try:
+            record = self.service.get(root.worktree_id, root=self.registry)
+            target_branch = record.base_ref.removeprefix("refs/heads/")
+            if record.lifecycle != "active" or not target_branch or target_branch == "HEAD":
+                return None
+            head = _git(record.path, "rev-parse", "--verify", "HEAD^{commit}")
+            base = record.base_commit
+            if not base or head == base:
+                return None
+            landed = [e for e in handle.events if e.type == "worktree.merged"]
+            if any(e.data.get("head") == head for e in landed):
+                return None
+            target = Path(record.parent_workspace)
+            target_head = _git(target, "rev-parse", "--verify", f"refs/heads/{target_branch}^{{commit}}")
+            if ancestor(record.path, head, base) or not ancestor(record.path, head, target_head):
+                return None
+            prior = landed[-1].data.get("head", "") if landed else base
+            before = prior if prior and ancestor(record.path, prior, head) else _git(record.path, "rev-parse", "--verify", "HEAD^", check=False) or base
+            rows = [row for row in _git(record.path, "log", "-101", "--first-parent", "--format=%H", f"{before}..{head}").split("\n") if row]
+            names = [name for name in _git(record.path, "diff", "--no-renames", "--name-only", "-z", before, head, "--").split("\0") if name]
+            subject = redact_secrets(_git(record.path, "log", "-1", "--format=%s", head))[:200]
+        except (WorktreeError, OSError, ValueError):
+            return None
+        return {"target_branch": target_branch, "session_branch": record.branch, "sha": target_head, "before": before,
+                "subject": subject, "commits": len(rows), "files": [redact_secrets(name)[:1024] for name in names[:200]],
+                "clipped": len(names) > 200 or len(rows) > 100, "head": head}
 
     def detach(self, session):
         handle = self.handle(session)

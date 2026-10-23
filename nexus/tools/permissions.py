@@ -1214,15 +1214,39 @@ _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
 _MODE_FALLBACK_ASK_TOOLS = frozenset({"ContextQuery"})
-#: ``nexus merge`` lands the session worktree on its base branch. A shell command
-#: containing it always asks, in every mode and despite allow rules or grants
-#: (docs/decisions.md, "Agents merge their own session worktree"). Deny rules
-#: still win. The match is deliberately broad: a false positive only asks.
-_NEXUS_MERGE_COMMAND = re.compile(r"(?:^|[\s;&|(`'\"])nexus(?:\s+\S+){0,6}?\s+merge(?=$|[\s;&|)`'\"])")
+#: Landing a session worktree is plain Git: the agent runs ``git -C <main checkout>
+#: merge --ff-only <session branch>``. A shell command that runs a Git *write*
+#: subcommand against another repository location (``git -C PATH``, ``--git-dir``,
+#: ``--work-tree``) or after a ``cd`` always asks, in every mode and despite allow
+#: rules or grants (docs/decisions.md, "Agents land their own session worktree
+#: with Git"). Deny rules still win. The engine does not know the main checkout
+#: path, so the rule is conservative: a false positive only asks. A plain
+#: ``git merge main`` or ``git status`` run in the session root is not forced.
+_GIT_WRITE_SUBCOMMANDS = (
+    "merge|commit|reset|checkout|switch|restore|rebase|pull|push|cherry-pick|revert|stash|clean|am|apply|"
+    "add|rm|mv|branch|tag|update-ref|symbolic-ref|fetch|gc|worktree|submodule|config|init|clone|read-tree|"
+    "commit-tree|write-tree|replace|notes|filter-branch"
+)
+_GIT_OPTIONS = (
+    r"(?:-C\s+(?:\"[^\"]*\"|'[^']*'|\S+)|-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+|"
+    r"--namespace(?:=|\s+)\S+|--no-pager|--paginate|-p|-P|--no-optional-locks|--literal-pathspecs)"
+)
+_GIT_WRITE = (
+    rf"\bgit(?P<opts>(?:\s+{_GIT_OPTIONS})*)\s+(?:{_GIT_WRITE_SUBCOMMANDS})(?=$|[\s;&|)`'\"])"
+)
+_GIT_WRITE_RE = re.compile(_GIT_WRITE)
+_GIT_AFTER_CD = re.compile(
+    r"\bcd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*(?:&&|;|\|\||\n)[^\n]*?" + _GIT_WRITE
+)
+_GIT_REDIRECT_OPTION = re.compile(r"(?:^|\s)(?:-C|--git-dir|--work-tree)(?:\s|=)")
 
 
-def _is_nexus_merge(tool: str, key: str | None) -> bool:
-    return tool == "shell" and isinstance(key, str) and _NEXUS_MERGE_COMMAND.search(key) is not None
+def _is_git_write_elsewhere(tool: str, key: str | None) -> bool:
+    if tool != "shell" or not isinstance(key, str):
+        return False
+    if _GIT_AFTER_CD.search(key) is not None:
+        return True
+    return any(_GIT_REDIRECT_OPTION.search(m.group("opts") or "") for m in _GIT_WRITE_RE.finditer(key))
 
 
 class PermissionEngine:
@@ -1413,7 +1437,7 @@ class PermissionEngine:
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
             )
 
-        if public_name in self._force_ask_tools or _is_nexus_merge(public_name, key):
+        if public_name in self._force_ask_tools or _is_git_write_elsewhere(public_name, key):
             return self._ask_verdict(
                 call, spec, key, None, attended, suggestions
             )

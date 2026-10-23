@@ -111,12 +111,12 @@ no uncommitted target path overlaps a landed file. A diverged or
 stale state is refused with guidance. Integration never pushes or changes
 another session.
 
-The agent lands its own work with `nexus merge -m MESSAGE` (host `SessionMerge`,
-`session_integration.squash_merge_session`): one squashed commit on the target
-branch, the session branch moved to it, `worktree.merged` recorded. It runs
-inside the agent's turn, so the idle and session-lock checks are skipped for that
-session only. A shell command with `nexus merge` always asks the user for
-approval. See [decisions.md](decisions.md#agents-merge-their-own-session-worktree-2026-10-23).
+The agent lands its own work with plain Git (squash in the worktree, then `git -C
+<main checkout> merge --ff-only <branch>`); a shell command that runs a Git write
+command against another checkout always asks the user. At turn end the host
+notices the landing (session head ahead of its base commit and an ancestor of the
+target head) and records `worktree.merged` once per landed head. See
+[decisions.md](decisions.md#agents-land-their-own-session-worktree-with-git-2026-10-23).
 
 The event log is the view contract: `session.root_set` identifies the selected
 root, `worktree.created` and `worktree.setup_ran` describe provisioning,

@@ -596,7 +596,8 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
 
     Rendered every turn (the environment part is never dropped) so the agent
     always knows where it works, which checkout is the main one, and who lands
-    the branch (the agent, with ``nexus merge``, after user approval).
+    the branch (the agent, with plain Git: squash, then ``git -C <main> merge
+    --ff-only``, after user approval).
     """
     if not facts:
         return ""
@@ -609,16 +610,17 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
     lines = ["<session_worktree>", *(f"{label}: {value}" for label, value in facts), "",
         f"You are working in an isolated Git worktree: branch {branch} in {where}, based on {base}"
         + (f" at {sha}" if sha else "") + ". Tools and shell run there. "
-        f"The user's main checkout is {main}: never edit files or run git write commands there.",
+        f"The user's main checkout is {main}: never edit files or run other git write commands there (the `--ff-only` merge in step 3 is the one exception).",
         "",
         "Finishing and merging. When the task is done:",
-        "1. Commit everything in this worktree (`git status` must be clean).",
-        "2. Run the project's checks and tests for what you changed.",
-        "3. Run `nexus merge -m \"<subject>\n\n<body summarising the change>\"`. "
-        f"This squashes the branch into one commit on {base}; the user is asked to approve it.",
-        f"4. If it reports that {base} has diverged, run `git merge {base}` here, resolve any conflicts, "
-        "re-run the checks, commit, then run `nexus merge` again. If it reports overlapping uncommitted "
-        "changes in the main checkout, stop and tell the user which files.",
+        "1. Commit everything in this worktree (`git status` must be clean) and run the project's checks and tests.",
+        f"2. Squash onto {base} here: `git reset --soft $(git merge-base HEAD {base}) && "
+        "git commit -m \"<subject>\" -m \"<body summarising the change>\"`.",
+        f"3. Land it by fast-forwarding the main checkout: `git -C {main} merge --ff-only {branch}`. "
+        "The user is asked to approve this command.",
+        f"4. If `--ff-only` refuses because {base} has diverged, run `git merge {base}` here, resolve any "
+        "conflicts, re-run the checks, commit, squash again (step 2) and retry. If git refuses because "
+        "uncommitted changes in the main checkout would be overwritten, stop and tell the user which files.",
         "5. After a successful merge, report the landed commit. The work is done.",
         "Merge only when the work is finished and verified, or when the user asks (for example with /merge). "
         "Never merge partial work.",
