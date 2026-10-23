@@ -844,6 +844,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ));
             if render::needs_full_repaint(painted_layout, layout) {
                 terminal.clear()?;
+                // Clearing wipes terminal graphics; the image must be transmitted again.
+                cache.forget_image();
             }
             painted_layout = Some(layout);
             terminal.draw(|frame| {

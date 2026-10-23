@@ -418,6 +418,10 @@ pub struct Cache {
     pub operations: Indexed<Option<serde_json::Value>>,
     pub image_protocol: Option<ratatui_image::protocol::StatefulProtocol>,
     image_source: String,
+    /// Where the last frame drew the preview image (monochrome keeps its colours), and the
+    /// screen it was drawn on (a resize wipes terminal graphics).
+    image_area: Rect,
+    image_screen: Rect,
     source: Vec<String>,
     width: u16,
     pub lines: Indexed<Line<'static>>,
@@ -826,6 +830,16 @@ fn same_block(a: &crate::bridge::Content, b: &crate::bridge::Content) -> bool {
     }
 }
 impl Cache {
+    /// Drop the preview image's protocol state. Kitty-style protocols transmit the pixels
+    /// only on the first render of a protocol and afterwards draw bare placeholders, so a
+    /// protocol that outlives the terminal's copy (screen cleared, resized, panel closed)
+    /// paints blank cells. The next draw decodes and transmits afresh.
+    pub fn forget_image(&mut self) {
+        self.image_protocol = None;
+        self.image_source.clear();
+        self.image_area = Rect::default();
+    }
+
     /// Rows laid out for the block at `index` (its whole card), `None` if it has no rows.
     pub fn block_rows(&self, index: usize) -> Option<usize> {
         self.active_parts
@@ -2640,6 +2654,9 @@ pub fn draw(
         // One dimmed backdrop under every modal kind (panels, Settings, pickers, prompts).
         dim_backdrop(frame, &p);
     }
+    if s.panel_title.is_empty() || s.panel_format != "image" || s.preview_image.is_empty() {
+        cache.forget_image();
+    }
     if !s.panel_title.is_empty() {
         let area = panel_area(panel_host(&r, s), s);
         let title = if s.panel_loading {
@@ -2682,6 +2699,11 @@ pub fn draw(
                 Paragraph::new(s.panel_lines.join("\n")).style(Style::default().fg(p.text)),
                 areas[0],
             );
+            if cache.image_screen != frame.area() {
+                cache.forget_image();
+                cache.image_screen = frame.area();
+            }
+            cache.image_area = areas[1];
             if cache.image_source != s.preview_image {
                 cache.image_protocol = base64::engine::general_purpose::STANDARD
                     .decode(&s.preview_image)
@@ -2942,7 +2964,19 @@ pub fn draw(
     cache.toasts.draw(frame, s, &p, r.transcript);
     if cache.mono {
         // Monochrome preference: drop every foreground/background colour, keep modifiers.
-        for cell in frame.buffer_mut().content.iter_mut() {
+        // The preview image is the exception: half blocks and Kitty placeholders carry the
+        // picture in cell colours, so stripping them leaves a blank panel.
+        let keep = cache.image_area;
+        let buffer = frame.buffer_mut();
+        let (left, top, width) = (buffer.area.x, buffer.area.y, usize::from(buffer.area.width));
+        for (index, cell) in buffer.content.iter_mut().enumerate() {
+            let at = ratatui::layout::Position::new(
+                left + (index % width) as u16,
+                top + (index / width) as u16,
+            );
+            if keep.contains(at) {
+                continue;
+            }
             cell.set_fg(ratatui::style::Color::Reset);
             cell.set_bg(ratatui::style::Color::Reset);
         }
@@ -6810,6 +6844,115 @@ mod live_pane_tests {
             regions(Rect::new(0, 0, 100, 40), &s, 8, false).live.height,
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod image_preview_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, buffer::Buffer, style::Color, Terminal};
+
+    /// A real, decodable PNG (not placeholder bytes).
+    fn png() -> String {
+        let image = image::RgbaImage::from_fn(32, 32, |x, y| {
+            image::Rgba([255, (x * 8) as u8, (y * 8) as u8, 255])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn snapshot(open: bool) -> Snapshot {
+        let mut s = Snapshot::default();
+        if open {
+            s.panel_title = "Submitted image".into();
+            s.panel_format = "image".into();
+            s.panel_lines = vec!["Media type: image/png".into(), "Size: 1 bytes".into()];
+            s.preview_image = png();
+        }
+        s
+    }
+
+    fn paint(terminal: &mut Terminal<TestBackend>, s: &Snapshot, cache: &mut Cache) -> Buffer {
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// Cells of the image area that carry the picture: a glyph drawn in a real colour.
+    fn painted(buffer: &Buffer, area: Rect) -> usize {
+        (area.top()..area.bottom())
+            .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let cell = &buffer[(x, y)];
+                cell.symbol() != " " && !matches!(cell.fg, Color::Reset)
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_decodable_image_paints_its_area() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut cache = Cache::default();
+        let buffer = paint(&mut terminal, &snapshot(true), &mut cache);
+        assert!(cache.image_protocol.is_some(), "the PNG decodes");
+        assert!(cache.image_area.area() > 0);
+        assert!(painted(&buffer, cache.image_area) > 0, "picture cells are not blank");
+    }
+
+    #[test]
+    fn monochrome_keeps_the_picture_colours_but_strips_the_rest() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut cache = Cache::default();
+        cache.mono = true;
+        let buffer = paint(&mut terminal, &snapshot(true), &mut cache);
+        assert!(painted(&buffer, cache.image_area) > 0, "mono must not blank the picture");
+        let area = cache.image_area;
+        assert!(buffer.content().iter().enumerate().all(|(index, cell)| {
+            let (x, y) = ((index % 100) as u16, (index / 100) as u16);
+            area.contains((x, y).into()) || matches!(cell.fg, Color::Reset)
+        }));
+    }
+
+    #[test]
+    fn closing_the_panel_or_resizing_makes_the_next_open_transmit_again() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut cache = Cache::default();
+        paint(&mut terminal, &snapshot(true), &mut cache);
+        assert!(cache.image_protocol.is_some());
+        paint(&mut terminal, &snapshot(false), &mut cache);
+        assert!(cache.image_protocol.is_none(), "a closed preview keeps no protocol state");
+        assert!(cache.image_source.is_empty());
+        paint(&mut terminal, &snapshot(true), &mut cache);
+        assert!(cache.image_protocol.is_some(), "reopening decodes afresh");
+        let first = cache.image_screen;
+        terminal.backend_mut().resize(90, 30);
+        let buffer = paint(&mut terminal, &snapshot(true), &mut cache);
+        assert_ne!(cache.image_screen, first, "a resize is noticed");
+        assert!(cache.image_protocol.is_some());
+        assert!(painted(&buffer, cache.image_area) > 0);
     }
 }
 

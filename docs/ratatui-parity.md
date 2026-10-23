@@ -1183,7 +1183,14 @@ for the DA1 reply. iTerm2 and tmux come from the environment; anything else fall
 back to half blocks. `NEXUS_IMAGE_PROTOCOL` forces a protocol and skips the probe
 (the test suite sets `halfblocks`, since PTY harnesses never answer). Decode
 dimensions/allocation are bounded; an undecodable image shows a labelled notice.
-Parser covered by unit tests; real Kitty/Sixel/iTerm2 rendering not verified.
+Kitty-style protocols transmit the pixels only on a protocol's first render and then
+draw bare placeholders, so the client never lets protocol state outlive the
+terminal's copy: `Cache::forget_image` runs whenever the preview is not shown, on a
+terminal resize and when the screen is cleared for a full repaint, and the next
+draw decodes and transmits afresh. Monochrome mode keeps cell colours inside the
+image area (half blocks and Kitty placeholders carry the picture in them).
+Covered by `image_preview_tests` (real PNG). Parser covered by unit tests; real
+Kitty/Sixel/iTerm2 rendering not verified.
 
 Submitted user cards list attachments as highlighted chips (`▣ Image 1 · a.png`)
 below the message text, which keeps its `[image 1]` references. Each chip is its
