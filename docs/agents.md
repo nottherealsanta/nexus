@@ -353,7 +353,7 @@ An explicit `color` in the agent definition frontmatter always wins.
 
 ## Spawning (`subagent` tool)
 
-`subagent(prompt, subagent_type?, tools?, model?, description?, worktree?, resume?)` runs a
+`subagent(prompt, subagent_type?, tools?, model?, description?, resume?)` runs a
 named role or an ad-hoc agent. The child does not see the parent conversation:
 the prompt is the whole assignment. `resume` sends a follow-up to a finished child
 instead (see [Continuing a finished subagent](#continuing-a-finished-subagent)).
@@ -402,7 +402,8 @@ authority its parent lacks:
 
 The `subagent` tool always blocks: the call returns the child's report as its tool
 result, and the root's turn continues once the report is in. Its schema is `prompt`,
-`subagent_type`, `tools`, `model`, `description`, `worktree` and `resume`; there is no `background`
+`subagent_type`, `tools`, `model`, `description` and `resume` (`worktree` is hidden while
+subagent worktrees are disabled, see [Worktrees](#worktrees)); there is no `background`
 or `wait` parameter. To run children concurrently the model issues **independent
 `subagent` calls together in one batch** (the tool is `concurrency="parallel"`) and the
 turn waits for every report. Nothing is delivered later: there are no report wakes, no
@@ -688,6 +689,14 @@ workspace. The report is not a model-written summary;
 not verified: whether a final model wrap-up turn near the limit would be worth its cost.
 
 ## Worktrees
+
+**Subagent worktrees are disabled for now** (`SUBAGENT_WORKTREES = False` in
+`runtime.py`; [decisions.md](decisions.md)). Every child, writer or not, works in the
+session's own checkout (the main checkout or the session's worktree). The `subagent`
+schema no longer offers `worktree`, and a call that still passes `worktree: true` is
+refused with "Subagent worktrees are disabled; subagents share the session checkout".
+The isolation machinery below is kept, tested with the flag switched on, and returns
+when the flag does.
 
 Session mode and child isolation are independent. On `subagent`, omitted
 `worktree` defaults to isolation when the selected tools may write; explicit

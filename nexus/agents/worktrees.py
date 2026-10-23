@@ -154,14 +154,26 @@ class WorktreeService:
         root: str | Path,
         base: str = "current",
         max_worktrees: int = 16,
+        exact_name: str = "",
     ):
-        """Create a pending authenticated root-session worktree (plan 03)."""
+        """Create a pending authenticated root-session worktree (plan 03).
+
+        ``exact_name`` (user-chosen) becomes the folder and ``nexus/session/<name>``
+        with no random suffix; empty keeps the generated ``<slug>-<token>``.
+        """
         from .session_worktrees import create_session
 
         return create_session(
             parent_workspace, session_id, name, root=root, base=base,
-            max_worktrees=max_worktrees,
+            max_worktrees=max_worktrees, exact_name=exact_name,
         )
+
+    @staticmethod
+    def check_session_name_free(parent_workspace: str | Path, name: str, *, root: str | Path) -> None:
+        """Validate a user-chosen worktree name; ValueError if unusable."""
+        from .session_worktrees import check_session_name_free
+
+        check_session_name_free(parent_workspace, name, root=root)
 
     @staticmethod
     def _is_session_record(child_id: str, root: str | Path) -> bool:

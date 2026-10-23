@@ -1,6 +1,15 @@
 """Small native session-mode, saved-diff and checkout pages (plan 08)."""
 from __future__ import annotations
 
+import re
+
+from ...ui_support.text import escape_controls
+
+#: A session worktree name: it is also the session title and the `nexus/session/<name>` branch.
+NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,59}")
+ASK_TITLE = "Create a worktree, or work in the main checkout?"
+NAME_HINT = "Letters, digits, - and _, up to 60 · also the session title and branch nexus/session/<name>"
+
 
 def outcome(state):
     """Present bounded review facts without exposing internal confirmation tokens."""
@@ -19,6 +28,55 @@ def outcome(state):
 
 
 class WorktreePages:
+    def worktree_name_step(self, pending, error=""):
+        """Open the "Name this worktree" text modal; the pending prompt stays in ``pending``."""
+        self.pending_worktree_submission = pending
+        self.edit("Name this worktree · Ctrl+S to create · Esc cancels", "",
+                  {"kind": "worktree_name", "session": pending["session"]}, replace=True)
+        self.shell.panel_layout = "modal"
+        self.shell.panel_lines = [NAME_HINT]
+        self.form["status"] = error or NAME_HINT  # the modal shows only the status line under the editor
+
+    async def submit_worktree_name(self, body):
+        """Validate locally, ask the host to create the named worktree, then send the preserved prompt.
+
+        Errors stay in the modal (``form.status``) so the user edits and retries; nothing is lost."""
+        pending = self.pending_worktree_submission
+        if not pending or pending["session"] != self.shell.controller.session:
+            self.cancel_worktree_submission()
+            raise ValueError("Session changed; open the original session and submit the prompt again")
+        name = body.strip()
+        if not NAME_PATTERN.fullmatch(name):
+            self.form["status"] = "Use letters, digits, - and _ (start with a letter or digit), up to 60 characters."
+            return
+        try:
+            await self.client.set_session_worktree(pending["session"], True, name=name)
+        except Exception as exc:  # noqa: BLE001 - the host's refusal is shown, then edited and retried
+            self.form["status"] = escape_controls(str(exc))[:300] or "The host refused this worktree name."
+            return
+        self.stack.clear()
+        self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form = "", [], [], None
+        await self.resume_worktree_submission(pending)
+
+    async def resume_worktree_submission(self, pending):
+        self.shell.attachments = pending["attachments"]
+        self.shell.attachment_labels = pending["attachment_labels"]
+        self.shell.marker_attachments = pending["marker_attachments"]
+        self.pending_worktree_submission = None
+        from .worktree_bar import refresh_session_worktree
+        await refresh_session_worktree(self.shell, force=True)
+        # The composer retains the original attachment objects and labels while
+        # the modal is open; submit consumes them only after enqueue succeeds.
+        await self.shell.submit(pending["text"], mode=pending["mode"], session=pending["session"])
+
+    def cancel_worktree_submission(self):
+        """Esc: drop the question, close the modal and give the prompt back to the composer."""
+        pending, self.pending_worktree_submission = self.pending_worktree_submission, None
+        self.stack.clear()
+        self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form = "", [], [], None
+        if pending:
+            self.shell.composer_restore = pending["text"]
+
     async def worktree_operation(self, operation):
         kind = operation["kind"]
         if kind == "worktree_mode":
@@ -46,14 +104,11 @@ class WorktreePages:
             if pending["session"] != self.shell.controller.session:
                 self.pending_worktree_submission = None
                 raise ValueError("Session changed; open the original session and submit the prompt again")
-            await self.client.set_session_worktree(pending["session"], bool(operation["enabled"]))
-            self.shell.attachments = pending["attachments"]
-            self.shell.attachment_labels = pending["attachment_labels"]
-            self.shell.marker_attachments = pending["marker_attachments"]
-            self.pending_worktree_submission = None
-            # The composer retains the original attachment objects and labels while
-            # the modal is open; submit consumes them only after enqueue succeeds.
-            await self.shell.submit(pending["text"], mode=pending["mode"], session=pending["session"])
+            if operation["enabled"]:
+                self.worktree_name_step(pending)  # step 2: name it; the host call happens on submit
+                return True
+            await self.client.set_session_worktree(pending["session"], False)
+            await self.resume_worktree_submission(pending)
         elif kind == "saved_turn_diff":
             result = await self.client.session_turn_diff(self.shell.controller.session, operation["seq"])
             state = result.state

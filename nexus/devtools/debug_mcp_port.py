@@ -30,6 +30,7 @@ Visibility, bounds, redaction and the "recent" window are the same as the manage
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import time
 from collections import deque
@@ -48,6 +49,7 @@ from ..tools.manager_port import (
     MAX_TITLE_CHARS,
     RECENT_WINDOW_SECONDS,
     SEND_RATE_WINDOW_SECONDS,
+    WORKTREE_NAME_RE,
     CancelResult,
     FindResult,
     LaunchRefused,
@@ -121,7 +123,7 @@ class DaemonManagerPort:
 
     # -- plumbing -------------------------------------------------------------
 
-    async def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
+    async def _call(self, name: str, /, *args: Any, **kwargs: Any) -> Any:
         """One host command. Failures become model-visible errors; a dead connection is dropped.
 
         The command is never retried (a half-sent ``enqueue`` could otherwise be sent twice);
@@ -256,7 +258,10 @@ class DaemonManagerPort:
         origin_message_id: str,
         agent: str | None = None,
         title: str | None = None,
+        worktree: bool = False,
     ) -> LaunchResult:
+        if worktree and not (isinstance(title, str) and re.fullmatch(WORKTREE_NAME_RE, title)):
+            raise LaunchRefused("error", "a worktree launch needs a title that is a valid worktree name")
         cap = DEFAULT_MAX_LIVE
         try:
             cap = int((await self._call("manager_state")).max_live_managed)
@@ -276,6 +281,14 @@ class DaemonManagerPort:
                     await self._call("select_agent", session_id, agent)
                 except ManagerPortError as exc:
                     raise LaunchRefused("bad_agent", f"{agent!r} is not a usable root role: {exc}") from exc
+            if worktree:
+                # Selected while the session is still a draft, so before the first enqueue.
+                try:
+                    await self._call("set_session_worktree", session_id, True, base="current", name=title)
+                except ManagerPortError as exc:
+                    raise LaunchRefused(
+                        "error", f"could not create worktree {title!r}; session {session_id} was "
+                        f"not started: {exc}") from exc
             await self._call("enqueue", session_id, instruction, mode="queue")
         except LaunchRefused:
             raise
@@ -285,7 +298,9 @@ class DaemonManagerPort:
         while len(self._launched) > _LAUNCHED_MAX:
             self._launched.pop(next(iter(self._launched)))
         applied = ""
-        if hint:
+        if worktree:
+            applied = str(title)  # the host set the title together with the worktree
+        elif hint:
             # The session exists once the enqueue is accepted; a user title also stops
             # auto-titling. The launch already happened, so a rename failure only drops the hint.
             try:
@@ -293,7 +308,8 @@ class DaemonManagerPort:
                 applied = hint
             except ManagerPortError:
                 pass
-        return LaunchResult(id=session_id, title=applied, state="queued")
+        return LaunchResult(id=session_id, title=applied, state="queued",
+                            worktree_name=str(title) if worktree else "")
 
     async def wait(
         self, ids: tuple[str, ...], until: Literal["any", "all"], max_wait_seconds: int

@@ -6,7 +6,8 @@ from test_worktree_sessions_commits import git, repository
 from test_worktree_sessions_runtime import drain, runtime
 
 
-async def test_session_worktree_child_commit_diff_integrate_remove_and_reuse(tmp_path):
+async def test_session_worktree_child_commit_diff_integrate_remove_and_reuse(tmp_path, monkeypatch):
+    monkeypatch.setattr("nexus.runtime.SUBAGENT_WORKTREES", True)  # disabled by default
     main = repository(tmp_path / "acceptance-project")
     (main / ".gitignore").write_text(".agents/\n", encoding="utf-8")
     (main / ".agents").mkdir()

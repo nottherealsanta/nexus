@@ -62,6 +62,11 @@ class FakeClient:
         self.calls.append(("enqueue", session, content, mode))
         return "q1", "t1"
 
+    async def set_session_worktree(self, session, enabled, *, base="current", name=""):
+        self.calls.append(("set_session_worktree", session, enabled, name))
+        if name == "taken":
+            raise FacadeError("ValueError", "Branch nexus/session/taken already exists")
+
     async def rename_session(self, session_id, title):
         self.calls.append(("rename_session", session_id, title))
 
@@ -88,7 +93,7 @@ def text_of(reply):
 
 
 def mutations(client):
-    return [call for call in client.calls if call[0] in {"enqueue", "cancel", "select_agent", "rename_session"}]
+    return [call for call in client.calls if call[0] in {"enqueue", "cancel", "select_agent", "rename_session", "set_session_worktree"}]
 
 
 def test_catalog_is_the_managers_without_user_message_provenance():
@@ -158,6 +163,31 @@ async def test_launch_starts_a_dbg_root_through_enqueue():
     assert mutations(client) == [("select_agent", sid, "build"), ("enqueue", sid, "fix the test", "queue")]
     bad = await server.call_tool("session_launch", {"instruction": "x", "agent": "nope"})
     assert bad["isError"] and "not a usable root role" in text_of(bad)
+
+
+async def test_launch_worktree_selects_the_named_worktree_before_the_enqueue():
+    server, client = make([])
+    schema = next(t for t in dbg.tool_descriptors() if t["name"] == "session_launch")
+    assert schema["inputSchema"]["properties"]["worktree"]["type"] == "boolean"
+    assert schema["description"].startswith("[DEBUG ONLY]") and "worktree" in schema["description"]
+    no_title = await server.call_tool("session_launch", {"instruction": "go", "worktree": True})
+    assert no_title["isError"] and mutations(client) == []
+    bad = await server.call_tool("session_launch", {"instruction": "go", "worktree": True, "title": "a b"})
+    assert bad["isError"] and mutations(client) == []
+    reply = json.loads(text_of(await server.call_tool(
+        "session_launch", {"instruction": "go", "worktree": True, "title": "fix-sync"})))
+    assert reply["id"].startswith(DEBUG_ID_PREFIX) and reply["title"] == "fix-sync"
+    assert reply["worktree_branch"] == "nexus/session/fix-sync"
+    assert mutations(client) == [
+        ("set_session_worktree", reply["id"], True, "fix-sync"), ("enqueue", reply["id"], "go", "queue"),
+    ]
+
+
+async def test_launch_worktree_refusal_starts_nothing():
+    server, client = make([])
+    refused = await server.call_tool("session_launch", {"instruction": "go", "worktree": True, "title": "taken"})
+    assert refused["isError"] and "already exists" in text_of(refused)
+    assert [c[0] for c in mutations(client)] == ["set_session_worktree"]  # no enqueue
 
 
 async def test_launch_title_is_applied_as_a_rename():

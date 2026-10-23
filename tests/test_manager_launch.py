@@ -48,7 +48,7 @@ def test_port_satisfies_the_full_protocol_and_has_no_model_override(tmp_path):
     root, agents, *_rest, port = setup(tmp_path)
     assert isinstance(port, ManagerPort)
     assert list(inspect.signature(HostManagerPort.launch).parameters) == [
-        "self", "instruction", "origin_message_id", "agent", "title",
+        "self", "instruction", "origin_message_id", "agent", "title", "worktree",
     ]
     root.close_all(); agents.close_all()
 
@@ -67,6 +67,22 @@ async def test_launch_links_in_the_manager_log_then_starts_a_normal_root(tmp_pat
     assert link.data["agent"] == "build" and len(link.data["instruction_digest"]) == 16
     assert "fix the flaky" not in str(link.data)  # a digest, never the instruction
     assert port._managed() == ("mgr-1",)
+    root.close_all(); agents.close_all()
+
+
+async def test_launch_worktree_passes_the_exact_name_to_the_host(tmp_path):
+    root, agents, manager, proxy, host, port = setup(tmp_path)
+    launched = await port.launch("risky refactor", "m1", title="risky-refactor", worktree=True)
+    assert launched.title == "risky-refactor" and launched.worktree_name == "risky-refactor"
+    assert host.worktree_names == [("mgr-1", "risky-refactor")]
+    assert host.started[0][4] == "risky-refactor"
+    plain = await port.launch("other", "m1", title="Free form")
+    assert plain.worktree_name == "" and host.worktree_names == [("mgr-1", "risky-refactor")]
+    with pytest.raises(LaunchRefused):
+        await port.launch("bad", "m1", title="has space", worktree=True)
+    with pytest.raises(LaunchRefused):
+        await port.launch("bad", "m1", worktree=True)
+    assert len(host.started) == 2  # the refusals started nothing
     root.close_all(); agents.close_all()
 
 

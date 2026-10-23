@@ -87,9 +87,10 @@ class SessionWorktrees:
             finally:
                 temporary.unlink(missing_ok=True)
             if editable:
+                kept = self.selection(handle).get("name", "") if mode == "always" else ""
                 handle.emit_session_event("session.worktree_set", {
                     "enabled": mode == "always", "base": self.policy().base,
-                    "choice_pending": mode == "ask",
+                    "choice_pending": mode == "ask", **({"name": kept} if kept else {}),
                 })
         finally:
             handle._lock.release()
@@ -98,10 +99,12 @@ class SessionWorktrees:
     def selection(self, handle):
         policy = self.policy()
         root = self.runtime.session_root(handle.id)
-        selected = {"enabled": bool(root.kind == "worktree" or (self.mode() == "always" and root.kind == "main" and not self.locked(handle))), "base": policy.base}
+        selected = {"enabled": bool(root.kind == "worktree" or (self.mode() == "always" and root.kind == "main" and not self.locked(handle))), "base": policy.base, "name": ""}
         for event in handle.events:
             if event.type == "session.worktree_set":
-                selected = {"enabled": bool(event.data.get("enabled")), "base": event.data.get("base", "current")}
+                name = event.data.get("name", "")
+                selected = {"enabled": bool(event.data.get("enabled")), "base": event.data.get("base", "current"),
+                            "name": name if isinstance(name, str) else ""}
             elif event.type == "worktree.created":
                 selected["enabled"] = True
             elif event.type == "worktree.detached":
@@ -141,8 +144,11 @@ class SessionWorktrees:
         if running:
             raise SessionBusy("Worktree actions require composer shell commands to finish")
 
-    def set(self, session, enabled, *, base="current"):
+    def set(self, session, enabled, *, base="current", name=""):
         handle = self.handle(session)
+        if not isinstance(name, str):
+            raise ValueError("Worktree name must be a string")
+        name = name if enabled else ""
         self._idle(handle)
         if type(enabled) is not bool or not isinstance(base, str) or not base or len(base) > 256 or any(ord(c) < 32 for c in base):
             raise ValueError("Worktree selection requires enabled and a bounded base branch")
@@ -154,10 +160,51 @@ class SessionWorktrees:
                 raise ValueError("Worktree selection is locked after the first turn; use Move to worktree or Detach")
             if enabled and not (self.runtime.workspace / ".git").exists():
                 raise ValueError("Worktrees need a Git repository")
-            handle.emit_session_event("session.worktree_set", {"enabled": enabled, "base": base})
+            data = {"enabled": enabled, "base": base}
+            if name:
+                if self.runtime.session_root(session).kind != "main":
+                    raise ValueError("A worktree name can only be chosen before the session has a working root")
+                self.service.check_session_name_free(self.runtime.workspace, name, root=self.registry)
+                data["name"] = name
+            handle.emit_session_event("session.worktree_set", data)
+            if name:
+                self._title(session, name)
         finally:
             handle._lock.release()
         return self.status(session)
+
+    def _title(self, session, name):
+        """Store the name as a user title (never replaced by auto-titling).
+
+        A draft has no session row until its first message, so this is best
+        effort here and repeated when the worktree is created on the first turn.
+        """
+        from .errors import SessionError
+        from .host_support.auto_title import set_user_title
+        try:
+            set_user_title(self.runtime.sessions, session, name)
+        except SessionError:
+            pass
+
+    def _base_branch(self, root, selected):
+        """Branch the worktree is (or will be) created from; "" when unknown."""
+        ref = root.base_ref if root.kind == "worktree" else selected.get("base", "")
+        if ref == "current":
+            ref = self._git(self.runtime.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip()
+        return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+
+    def environment_facts(self, session_id):
+        """Labelled facts for the model when the session works in a worktree; () otherwise."""
+        root = self.runtime.session_root(session_id)
+        if root.kind != "worktree":
+            return ()
+        return (
+            ("Worktree directory", str(root.path)),
+            ("Main checkout directory", str(self.runtime.workspace)),
+            ("Worktree branch", root.branch),
+            ("Base branch", self._base_branch(root, {})),
+            ("Base commit", root.base_sha),
+        )
 
     def _git(self, directory, *args, check=True):
         from .agents.session_worktrees import _git
@@ -178,13 +225,17 @@ class SessionWorktrees:
         is_git = (self.runtime.workspace / ".git").exists()
         choice = next((event for event in reversed(handle.events) if event.type == "session.worktree_set"), None)
         chosen = root.kind == "external" or self.locked(handle) or bool(choice is not None and not choice.data.get("choice_pending", False))
-        result = {**selected, "mode": self.mode(), "chosen": chosen,
+        result = {**{k: v for k, v in selected.items() if k != "name"}, "mode": self.mode(), "chosen": chosen,
                   "editable": not self.locked(handle), "git": is_git,
                   "disabled_reason": "" if is_git else "Worktrees need a Git repository",
                   "pending_promotion": bool(self.pending_request(handle)),
                   "setup": self._display_command(self.policy().setup), "setup_shell": self.policy().setup_shell, "submodules": self.policy().submodules,
                   "kind": root.kind, "worktree_id": root.worktree_id, "branch": root.branch, "base_ref": root.base_ref,
-                  "path_display": root.to_data(self.runtime.workspace)["path_display"], "branches": []}
+                  "path_display": root.to_data(self.runtime.workspace)["path_display"], "branches": [],
+                  "selected": bool(selected["enabled"]), "pending_name": "" if root.kind == "worktree" else selected.get("name", ""),
+                  "worktree_name": root.path.name if root.kind == "worktree" else "",
+                  "main_path_display": str(self.runtime.workspace),
+                  "base_branch": self._base_branch(root, selected)}
         if is_git:
             result["branches"] = self._git(self.runtime.workspace, "for-each-ref", "--count=200", "--format=%(refname:short)", "refs/heads").splitlines()[:200]
         if root.kind == "worktree":
@@ -261,12 +312,15 @@ class SessionWorktrees:
                 await task
                 raise
 
-    async def _create(self, handle, *, base):
+    async def _create(self, handle, *, base, name=""):
         policy = self.policy()
         dirty = await self._thread(handle.id, self._dirty)
         record = await self._thread(handle.id, self.service.create_session, self.runtime.workspace, handle.id,
-            self._name(handle), root=self.registry, base=base, max_worktrees=policy.max_worktrees)
+            self._name(handle), root=self.registry, base=base, max_worktrees=policy.max_worktrees,
+            **({"exact_name": name} if name else {}))
         published = False
+        if name:
+            self._title(handle.id, name)
         try:
             await self.setup(handle, record, reason="created")
             handle.cancel_token.raise_if_cancelled()
@@ -305,7 +359,8 @@ class SessionWorktrees:
                     await self.setup(handle, record, reason="recreated")
                 self.runtime.validate_session_root(handle.id)
         elif self.selection(handle)["enabled"] and not self.locked(handle):
-            root = await self._create(handle, base=self.selection(handle)["base"])
+            chosen = self.selection(handle)
+            root = await self._create(handle, base=chosen["base"], name=chosen.get("name", ""))
         disabled = any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events)
         if root.kind in {"main", "external"} and self.policy().checkpoints and not disabled:
             seq, _ = self._turn_data(handle, lease.turn_id)

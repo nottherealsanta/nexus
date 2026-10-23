@@ -210,6 +210,8 @@ _OPENCODE_AGENT_KINDS = frozenset(
 #: it must select the same adapter as ``gemini`` rather than fall through to the
 #: OpenAI-compatible default.
 _GEMINI_KINDS = frozenset({ADAPTER_GEMINI, "google"})
+#: Subagent worktree isolation is off for now: children share the session checkout.
+SUBAGENT_WORKTREES = False
 
 
 def _grants_from_events(events: Any) -> tuple[Grant, ...]:
@@ -1277,6 +1279,8 @@ class _ContextCoordinator:
                 session._turn_root_agents = getattr(getattr(assembler, "_env", None), "agents_text", "")
                 session._turn_root_agents_key = active_turn
         assembler._tier_name = tier_name
+        if self._runtime is not None and session is not None:
+            assembler._session_worktree = self._runtime._session_worktree_facts(session.id)
         assembler._effort_explicit = (
             getattr(session, "reasoning_effort_selection", None) is not None
             or getattr(agent_definition, "reasoning_effort", None) is not None
@@ -1649,6 +1653,8 @@ class _ManifestEnvironmentFactory:
             agent_definition=self._agent_definition,
             reasoning_effort=getattr(self, "_reasoning_effort", None),
         )
+        facts = getattr(runtime, "_session_worktree_facts", None)
+        assembler._session_worktree = facts(session_id) if callable(facts) else ()
         if self._agent_definition is not None:
             assembler._agent_effort_supported = getattr(
                 assembler, "_reasoning_effort", None
@@ -4640,8 +4646,15 @@ class Runtime:
     def _session_worktree_tools(self, session):
         return self._session_worktrees.tools(session)
 
-    def set_session_worktree(self, session, enabled, *, base="current"):
-        return self._session_worktrees.set(session, enabled, base=base)
+    def set_session_worktree(self, session, enabled, *, base="current", name=""):
+        return self._session_worktrees.set(session, enabled, base=base, name=name)
+
+    def _session_worktree_facts(self, session_id):
+        """Labelled worktree facts for the model's environment block; () when not in a worktree."""
+        try:
+            return self._session_worktrees.environment_facts(session_id)
+        except Exception:
+            return ()
 
     def session_worktree_status(self, session):
         return self._session_worktrees.status(session)
@@ -6665,7 +6678,9 @@ class Runtime:
             stderr=subprocess.DEVNULL,
             check=False,
         ).returncode == 0
-        if runtime_supports_workspace and git_checkout:
+        # Subagent worktrees are disabled for now (docs/decisions.md): children
+        # share the session checkout and the `subagent` tool hides `worktree`.
+        if SUBAGENT_WORKTREES and runtime_supports_workspace and git_checkout:
             from .agents.session_subagents import SessionSubagentService
 
             managed_worktree_service = SessionSubagentService(

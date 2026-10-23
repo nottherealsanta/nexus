@@ -231,10 +231,10 @@ class Client:
         )).session  # type: ignore[union-attr]
 
     async def set_session_worktree(
-        self, session: str, enabled: bool, *, base: str = "current"
+        self, session: str, enabled: bool, *, base: str = "current", name: str = ""
     ) -> p.SessionWorktreeResult:
         return await self._request(  # type: ignore[return-value]
-            p.SessionWorktreeSet(session=session, enabled=enabled, base=base)
+            p.SessionWorktreeSet(session=session, enabled=enabled, base=base, name=name)
         )
 
     async def promote_session(

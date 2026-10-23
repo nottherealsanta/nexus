@@ -113,7 +113,8 @@ def test_shared_parent_changed_after_spawn_is_not_overwritten(tmp_path):
 
 
 @pytest.mark.parametrize("sessions", [True, False])
-async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, sessions):
+async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, sessions, monkeypatch):
+    monkeypatch.setattr("nexus.runtime.SUBAGENT_WORKTREES", True)  # disabled by default
     from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
     from test_worktree_sessions_runtime import runtime, drain
     main = repository(tmp_path / "real-project")
@@ -145,12 +146,12 @@ async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, 
         await rt.aclose()
 
 
-async def test_real_runtime_explicit_false_shares_session_checkout(tmp_path):
+async def test_real_runtime_writer_child_shares_session_checkout_while_disabled(tmp_path):
     from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
     from test_worktree_sessions_runtime import runtime, drain
     main = repository(tmp_path / "shared-child-project")
     provider = ScriptedProvider(
-        tool_response(("spawn", "subagent", {"prompt": "write child file", "subagent_type": "task", "tools": ["write"], "worktree": False})),
+        tool_response(("spawn", "subagent", {"prompt": "write child file", "subagent_type": "task", "tools": ["write"]})),
         tool_response(("child-write", "write", {"path": "shared.txt", "content": "shared\n"})),
         text_response("child done"), text_response("root done"))
     rt = runtime(main, tmp_path, provider, sessions=False)

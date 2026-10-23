@@ -79,6 +79,7 @@ __all__ = [
     "canonical_message_text",
     "canonical_tool_text",
     "capture_environment",
+    "render_session_worktree",
     "current_user_index",
     "freeze_mcp_index",
     "freeze_skills_index",
@@ -542,6 +543,9 @@ class AssemblyContext:
     mcp_index: Any = None
     #: The frozen ``AGENTS.md`` body (project instructions). Empty renders nothing.
     agents_text: str = ""
+    #: Labelled (label, value) facts for a session working in a Nexus worktree;
+    #: empty for every other session. Rendered by the environment part.
+    session_worktree: tuple[tuple[str, str], ...] = ()
 
     def history(self) -> tuple[Message, ...]:
         """Droppable prefix: everything before the current user turn."""
@@ -587,6 +591,26 @@ class _TextPart:
         return PartOutput(name=self.name, priority=self.priority, kind="text", text=text)
 
 
+def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
+    """Labelled worktree block plus short guidance; ``""`` without facts.
+
+    Rendered every turn (the environment part is never dropped) so the agent
+    always knows where it works, which checkout is the main one, and who lands
+    the branch (the user, via ``/worktrees``).
+    """
+    if not facts:
+        return ""
+    values = dict(facts)
+    base = values.get("Base branch") or "its base branch"
+    lines = ["<session_worktree>", *(f"{label}: {value}" for label, value in facts), "",
+        f"You are working in an isolated Git worktree branch created from {base}. "
+        "Tools and shell run in the Worktree directory. Commit or save your work on the worktree branch. "
+        "Do NOT merge into the base branch and do not edit or run commands in the Main checkout directory yourself. "
+        "When the work is ready, tell the user to land it with /worktrees (the user previews and confirms the merge).",
+        "</session_worktree>"]
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class _EnvironmentPart:
     name: str = "environment"
@@ -594,6 +618,9 @@ class _EnvironmentPart:
 
     def render(self, ctx: AssemblyContext) -> PartOutput | None:
         text = ctx.environment.render()
+        block = render_session_worktree(ctx.session_worktree)
+        if block:
+            text = text + "\n" + block
         if not text.strip():
             return None
         return PartOutput(name=self.name, priority=self.priority, kind="text", text=text)

@@ -515,26 +515,39 @@ class ShellActions:
         # Ask mode is resolved before either a model turn or a shell command can
         # touch the draft checkout. Keep the exact composer payload until answered.
         if text.strip() and not text.startswith("/") and not self.manager.is_active(target):
+            probe = getattr(self.client, "session_worktree_choice", None)  # optional: no info means no question
             try:
-                choice = await self.client.session_worktree_choice(target)
-            except Exception:
-                self.composer_restore = text
-                raise
-            state = choice.state
-            if (state.get("mode") == "ask" and state.get("editable") and state.get("git")
-                    and not state.get("chosen")):
+                choice = await probe(target) if probe is not None else None
+            except Exception as exc:
+                if "does not exist" in str(exc):  # no session row yet: nothing to ask about
+                    choice = None
+                else:
+                    self.composer_restore = text
+                    raise
+            state = choice.state if choice is not None else {}
+            draft_git = bool(state.get("editable") and state.get("git"))
+            ask = draft_git and state.get("mode") == "ask" and not state.get("chosen")
+            # Always: no silent creation in the interactive TUI; the user names the worktree first.
+            always = (draft_git and state.get("mode") == "always" and state.get("kind", "main") != "worktree"
+                      and not state.get("worktree_name") and not state.get("pending_name"))
+            if ask or always:
                 if target != self.controller.session:
                     await self.switch(target)
-                self.workflows.pending_worktree_submission = {
+                pending = {
                     "text": text, "mode": mode, "session": target,
                     "attachments": list(self.attachments),
                     "attachment_labels": dict(self.attachment_labels),
                     "marker_attachments": dict(self.marker_attachments),
                 }
-                self.workflows.menu("Session worktree", [
+                if always:
+                    self.workflows.worktree_name_step(pending)
+                    return True
+                self.workflows.pending_worktree_submission = pending
+                from .worktree_pages import ASK_TITLE
+                self.workflows.menu(ASK_TITLE, [
                     ("Yes · use a worktree", {"kind": "worktree_answer", "enabled": True}),
                     ("No · use this checkout", {"kind": "worktree_answer", "enabled": False}),
-                ], ["Choose where this session will work. This choice applies to the session."], layout="modal")
+                ], ["A worktree is named by you; the name is also the session title and branch. This choice applies to the session."], layout="modal")
                 return True
         if text.startswith("!"):
             if self.manager.is_active(target):

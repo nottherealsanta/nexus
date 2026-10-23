@@ -463,6 +463,37 @@ def _checkout_for_session(parent_workspace: str | Path) -> Path:
         raise _base.WorktreeError("unsupported repository layout for session worktrees") from exc
 
 
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,59}")
+
+
+def validate_session_name(name: object) -> str:
+    """Return a user-chosen worktree name or raise ValueError the UI can show.
+
+    Letters, digits, ``-`` and ``_``; 1-60 characters; first character a letter
+    or digit. The name is the session title, the folder and the branch suffix.
+    """
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        raise ValueError(
+            "Worktree name must be 1-60 characters: letters, digits, '-' or '_', starting with a letter or digit"
+        )
+    return name
+
+
+def check_session_name_free(parent_workspace: str | Path, name: str, *, root: str | Path) -> None:
+    """Raise ValueError when branch ``nexus/session/<name>`` or the folder exists."""
+    validate_session_name(name)
+    parent = _checkout_for_session(parent_workspace)
+    branch = f"{_BRANCH_PREFIX}{name}"
+    probe = subprocess.run(_base._git_argv("show-ref", "--verify", "--quiet", f"refs/heads/{branch}"),
+        cwd=parent, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=_base._git_environment(), timeout=_GIT_TIMEOUT_S)
+    if probe.returncode == 0:
+        raise ValueError(f"Branch {branch} already exists; choose another worktree name")
+    folder = Path(root).expanduser() / "worktrees" / name
+    if folder.exists() or folder.is_symlink():
+        raise ValueError(f"Worktree folder {name!r} already exists; choose another worktree name")
+
+
 def _slug(name: str, token: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-._") or "session"
     clean = clean[:35]
@@ -470,7 +501,8 @@ def _slug(name: str, token: str) -> str:
 
 
 def create_session(parent_workspace: str | Path, session_id: str, name: str, *, root: str | Path,
-                   base: str = "current", max_worktrees: int = 16) -> SessionWorktreeRecord:
+                   base: str = "current", max_worktrees: int = 16,
+                   exact_name: str = "") -> SessionWorktreeRecord:
     record_id = session_record_id(session_id)
     if not isinstance(name, str) or not name or len(name) > 200:
         raise _base.WorktreeError("session name must be non-empty and bounded")
@@ -508,9 +540,11 @@ def create_session(parent_workspace: str | Path, session_id: str, name: str, *, 
                 raise _base.WorktreeError(f"cannot count authenticated session worktrees: {exc}") from exc
         if count >= max_worktrees:
             raise _base.WorktreeError(f"maximum session worktrees reached ({max_worktrees})")
-        for _ in range(32):
+        if exact_name:
+            validate_session_name(exact_name)
+        for _ in range(1 if exact_name else 32):
             token = __import__("secrets").token_hex(3)
-            slug = _slug(name, token)
+            slug = exact_name or _slug(name, token)
             branch, path = f"{_BRANCH_PREFIX}{slug}", worktrees / slug
             branch_probe = subprocess.run(_base._git_argv("show-ref", "--verify", "--quiet", f"refs/heads/{branch}"),
                 cwd=parent, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -518,6 +552,8 @@ def create_session(parent_workspace: str | Path, session_id: str, name: str, *, 
             if not path.exists() and not path.is_symlink() and branch_probe.returncode == 1:
                 break
         else:
+            if exact_name:
+                raise ValueError(f"Worktree name {exact_name!r} is taken (branch or folder exists); choose another")
             raise _base.WorktreeError("could not allocate a unique session worktree")
         now = time.time()
         record = SessionWorktreeRecord(

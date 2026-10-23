@@ -80,7 +80,7 @@ The runtime builds the manager turn's catalog from `Runtime.manager_port_factory
 | `find(scope, query, limit)` | Visible roots only (below); `recent` = live or active within 2 h; limit ≤ 50 |
 | `status(ids)` | 1–20 visible ids; any invisible id fails the call (one message, no probing) |
 | `result(id)` | Finished turn needed; id must be **managed** or occur as a whole token in the user's latest message; redacted, ≤ 16 KiB, clipping announced; records `manager.result_read` |
-| `launch(instruction, origin_message_id, agent=None, title=None)` | See below |
+| `launch(instruction, origin_message_id, agent=None, title=None, worktree=False)` | See below |
 | `wait(ids, until, max_wait_seconds)` | `until` any/all, ≤ 600 s; returns `completed`, `running`, `interrupted`, `waited_seconds`; records `manager.wait` |
 | `cancel(id, reason)` | Only a session this manager launched; records `manager.cancelled` |
 | `show(id, origin_message_id)` | Backend of `session_show`: a visible root of this workspace (no managed link needed); same current-turn real-user provenance as `send`; ≤ 3 per turn; no approval prompt. Records `manager.show` (below) and returns `requested` or `no_viewer`, never "shown". Grants no read and no cancel |
@@ -220,11 +220,30 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 | Titles | control-free, credential-redacted, ≤ 160 chars |
 | `session_status` / `session_wait` | 1–20 ids, de-duplicated |
 | `session_wait` | ≤ 600 s per call |
-| `session_launch` | instruction ≤ 16 KiB, no model argument |
+| `session_launch` | instruction ≤ 16 KiB, no model argument; `worktree` boolean (default false); `title` ≤ 160 chars, or a worktree name (see below) when `worktree` is true |
 | `session_result` | ≤ 16 KiB UTF-8 after redaction, wrapped as `<session_result …>` data with the closing tag defanged |
 | Launches | 3 per manager turn, 8 managed roots running at once (configurable) |
 | `session_send` | message ≤ 16 KiB, 3 per turn, 6 per 60 s |
 | `session_show` | 3 per turn; a request is actionable for 30 s |
+
+The manager prompt tells the model to always pass a short descriptive `title` (a few words, like a commit
+subject) to `session_launch`; with `worktree=true` the title must be the worktree name.
+
+### Launching into a named worktree
+
+`session_launch` takes an optional `worktree: boolean`. With `worktree=true`, `title` is required and is
+the worktree name: 1-60 characters of letters, digits, `-` or `_`, starting with a letter or digit (no
+spaces). The tool checks this before any side effect. The name is the launched session's title, its
+worktree folder and the branch `nexus/session/<name>`. `HostManagerPort` makes the selection while the
+session is still a draft: `ManagerHost.start_root(..., worktree_name=name)` opens the session, runs the
+host's `set_session_worktree(name=...)` (the same path as `SessionWorktreeSet`; it refuses a taken branch
+or folder and a non-Git workspace) and only then enqueues the instruction. The worktree itself is created
+by the first model turn. The project's Ask mode does not block this unattended launch. If the selection is
+refused, the tool returns an error with the redacted reason and the opened session's id; the instruction
+was never enqueued. With `worktree` false or omitted, `title` stays a free-form hint, as before.
+
+The result adds `worktree_name` and `worktree_branch` when a worktree was requested. The manager never
+merges the work: the user lands it with `/worktrees`.
 
 ## Debug MCP server (debug only)
 
@@ -257,7 +276,10 @@ approval here (the MCP client's tool approval is the human gate):
   reach the daemon's `max_live_managed`; `agent` is applied with `AgentSelect`; `title` is
   applied with `SessionRename` right after the enqueue, so it becomes a durable user title
   (differs from the manager, where it is only an auto-title hint); if the rename fails the
-  session still runs and the reply's `title` is empty. The new root is a
+  session still runs and the reply's `title` is empty. `worktree=true` (title required, same name rule
+  as above) sends `SessionWorktreeSet(enabled=True, name=title)` before `SessionEnqueue`; the host sets
+  the title, so no `SessionRename` follows, and a refusal (taken name, not a Git repo) starts nothing.
+  The id keeps its `dbg-` prefix; the name is the user-visible one. The new root is a
   normal root: default model, normal permissions.
 * `session_send`: 6 per minute, 16 KiB, visible roots that are live or active within 2 h.
 * `session_cancel`: only roots this server process launched (kept in memory, forgotten on restart).

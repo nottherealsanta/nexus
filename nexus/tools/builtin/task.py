@@ -143,14 +143,6 @@ _TASK_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "description": "Short label for the agent tree; not sent to the child.",
         },
-        "worktree": {
-            "type": "boolean",
-            "description": (
-                "Override the default checkout choice. Omit this to isolate "
-                "subagents that have file-mutating tools; pass false to share "
-                "the parent checkout, or true to isolate a read-only subagent."
-            ),
-        },
     },
     "required": ["prompt"],
     "additionalProperties": False,
@@ -323,8 +315,13 @@ def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
     worktree = args.get("worktree", False)
     if not isinstance(worktree, bool):
         raise _TaskToolError("'worktree' must be a boolean")
+    if worktree:
+        # Disabled for now (docs/decisions.md); the schema no longer offers it.
+        raise _TaskToolError(
+            "Subagent worktrees are disabled; subagents share the session checkout"
+        )
     if "worktree" in args:
-        request["worktree"] = worktree
+        request["worktree"] = False
     tools = args.get("tools")
     if tools is not None:
         if not isinstance(tools, (list, tuple)) or not all(

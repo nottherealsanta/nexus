@@ -44,6 +44,7 @@ class StubHost:
         self.keep_live = keep_live
         self.fail = False
         self.started: list[tuple] = []
+        self.worktree_names: list[tuple[str, str]] = []
         self.cancelled: list[tuple[str, str]] = []
         self.sent: list[tuple[str, str, dict]] = []
 
@@ -58,9 +59,11 @@ class StubHost:
             raise LaunchRefused("bad_agent", f"{name!r} is not a root role")
         return name
 
-    async def start_root(self, session_id, instruction, *, agent, origin, title_text):
+    async def start_root(self, session_id, instruction, *, agent, origin, title_text, worktree_name=""):
         if self.fail:
             raise RuntimeError("boom api_key=sk-secret1234567")
+        if worktree_name:
+            self.worktree_names.append((session_id, worktree_name))
         self.started.append((session_id, instruction, agent, origin, title_text))
         child = self.sessions.open(session_id)
         child.append_message(Message(role="user", content=[Text(text=instruction)]))

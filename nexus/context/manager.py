@@ -1211,6 +1211,7 @@ class ContextManager:
             memory_text=env.memory_text,
             agents_text=env.agents_text,
             environment=env.environment,
+            session_worktree=tuple(getattr(self, "_session_worktree", ())),
             tool_schemas=tuple(self._tool_schemas),
             messages=snapshot,
             current_user_index=current_user_index(snapshot),

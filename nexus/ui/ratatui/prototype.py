@@ -78,6 +78,12 @@ async def refresh_branch(shell) -> None:
     shell.branch = branch
     shell.worktree = worktree
     shell.breadcrumb = workspace + (" › " + branch if branch else "")
+    from .worktree_bar import session_worktree_label, session_worktree_state
+    state = await session_worktree_state(shell)
+    if str(shell.workspace or "") != workspace:
+        return
+    shell.branch, shell.worktree = session_worktree_label(state, branch, worktree)
+    shell.breadcrumb = workspace + (" › " + shell.branch if shell.branch else "")
 
 
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
@@ -1457,6 +1463,12 @@ async def dismiss(shell) -> bool:
         return False
     if await shell.workflows.speak_stop():
         return False
+    from .worktree_pages import ASK_TITLE
+    workflows = shell.workflows
+    if workflows.pending_worktree_submission and (
+            (workflows.form_target or {}).get("kind") == "worktree_name" or shell.panel_title == ASK_TITLE):
+        workflows.cancel_worktree_submission()  # Esc cancels the whole submission; the text returns to the composer
+        return True
     form = shell.workflows.form
     if form and not form["secret"] and form["status"] and not form.get("saved", False):
         shell.workflows.menu("Discard unsaved changes?", [("Keep editing", {"kind": "back"}),
@@ -1817,6 +1829,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     ):
                         process.stdin.close()
                         break
+                    shell._worktree_state_cache = None  # a turn may create the session worktree lazily
                     if action["text"].lstrip().startswith("!"):  # a shell command may have switched branch
                         before = shell.breadcrumb
                         await refresh_branch(shell)

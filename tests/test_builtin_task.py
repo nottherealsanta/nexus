@@ -114,9 +114,9 @@ def test_task_spec_shape_and_bundle():
         "tools",
         "model",
         "description",
-        "worktree",
         "resume",
     }
+    # Subagent worktrees are disabled for now, so the model is not offered them.
     assert "background" not in schema["properties"] and "wait" not in schema["properties"]
 
 
@@ -280,11 +280,15 @@ async def test_run_passes_the_request_and_context_seams(tmp_path):
     assert service.call_id == "task-call-7"
 
 
-@pytest.mark.parametrize(("value", "expected"), [(True, True), (False, False)])
-async def test_worktree_argument_is_coerced_as_a_boolean(tmp_path, value, expected):
+async def test_worktree_false_is_passed_and_true_is_refused_while_disabled(tmp_path):
     service = FakeService(outcome())
-    await task.run({"prompt": "x", "worktree": value}, make_ctx(tmp_path, subagents=service))
-    assert service.requests[-1]["worktree"] is expected
+    await task.run({"prompt": "x", "worktree": False}, make_ctx(tmp_path, subagents=service))
+    assert service.requests[-1]["worktree"] is False
+
+    result = await task.run({"prompt": "x", "worktree": True}, make_ctx(tmp_path, subagents=service))
+    assert result.is_error
+    assert "Subagent worktrees are disabled" in result.content[0].text
+    assert len(service.requests) == 1
 
 
 async def test_worktree_defaults_off_and_rejects_non_boolean(tmp_path):

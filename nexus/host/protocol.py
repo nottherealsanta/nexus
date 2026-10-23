@@ -433,6 +433,9 @@ class SessionWorktreeSet(msgspec.Struct, tag=True, frozen=True):
     session: str
     enabled: bool
     base: str = "current"
+    #: Optional user-chosen name (letters, digits, ``-``/``_``, 1-60). It becomes the
+    #: session title, the worktree folder and branch ``nexus/session/<name>``.
+    name: str = ""
 
 
 class SessionWorktreeChoice(msgspec.Struct, tag=True, frozen=True):

@@ -51,9 +51,11 @@ class FakePort:
     async def result(self, session_id):
         raise AssertionError("not used")
 
-    async def launch(self, instruction, origin_message_id, agent=None, title=None):
-        self.calls.append(("launch", instruction, origin_message_id, agent, title))
-        return SimpleNamespace(id="s-new", title=title or "", state="queued")
+    async def launch(self, instruction, origin_message_id, agent=None, title=None, worktree=False):
+        self.calls.append(("launch", instruction, origin_message_id, agent, title)
+                          + (("worktree",) if worktree else ()))
+        return SimpleNamespace(id="s-new", title=title or "", state="queued",
+                               worktree_name=title if worktree else "")
 
     async def wait(self, ids, until, max_wait_seconds):
         self.calls.append(("wait", ids, until, max_wait_seconds))
@@ -197,12 +199,42 @@ def test_each_turn_gets_a_fresh_engine(tmp_path):
 
 def test_launch_schema_has_no_model_and_bounds_every_input():
     launch = catalog()["session_launch"].spec.input_schema
-    assert set(launch["properties"]) == {"instruction", "origin_message_id", "agent", "title"}
+    assert set(launch["properties"]) == {"instruction", "origin_message_id", "agent", "title", "worktree"}
     assert launch["required"] == ["instruction", "origin_message_id"]
     assert launch["additionalProperties"] is False
     assert catalog()["session_wait"].spec.input_schema["properties"]["max_wait_seconds"]["maximum"] == MAX_WAIT_SECONDS == 600
     assert catalog()["session_wait"].spec.input_schema["properties"]["ids"]["maxItems"] == MAX_WAIT_IDS == 20
     assert catalog()["session_cancel"].spec.input_schema["properties"]["reason"]["maxLength"] == MAX_CANCEL_REASON_CHARS
+
+
+async def test_launch_worktree_schema_validation_and_result():
+    port = FakePort()
+    tools = catalog(port)
+    schema = tools["session_launch"].spec.input_schema
+    assert schema["properties"]["worktree"]["type"] == "boolean"
+    assert "worktree" not in schema["required"]
+    assert "worktree" in tools["session_launch"].spec.description
+    missing = await call(tools["session_launch"], instruction="x", origin_message_id="u1", worktree=True)
+    assert missing.is_error and "'title' is required" in text(missing)
+    for bad in ("two words", "-lead", "a/b", "x" * 61, "../up"):
+        refused = await call(tools["session_launch"], instruction="x", origin_message_id="u1",
+                             title=bad, worktree=True)
+        assert refused.is_error and "worktree name" in text(refused), bad
+    notbool = await call(tools["session_launch"], instruction="x", origin_message_id="u1",
+                         title="ok", worktree="yes")
+    assert notbool.is_error
+    assert port.calls == []  # nothing launched on any refusal
+    ok = await call(tools["session_launch"], instruction="x", origin_message_id="u1",
+                    title="fix-sync_2", worktree=True)
+    assert not ok.is_error
+    assert json.loads(text(ok)) == {
+        "id": "s-new", "title": "fix-sync_2", "state": "queued",
+        "worktree_name": "fix-sync_2", "worktree_branch": "nexus/session/fix-sync_2",
+    }
+    assert port.calls == [("launch", "x", "u1", None, "fix-sync_2", "worktree")]
+    plain = await call(tools["session_launch"], instruction="x", origin_message_id="u1",
+                       title="Free form title", worktree=False)
+    assert not plain.is_error and "worktree_name" not in json.loads(text(plain))
 
 
 async def test_launch_passes_provenance_and_refuses_a_model_override():

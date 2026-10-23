@@ -66,6 +66,7 @@ from ..tools.manager_port import (
     RECENT_WINDOW_SECONDS,
     SEND_RATE_WINDOW_SECONDS,
     SHOW_TTL_SECONDS,
+    WORKTREE_NAME_RE,
     CancelResult,
     SendResult,
     ShowResult,
@@ -262,6 +263,19 @@ def scan_manager_log(records: Collection[Any]) -> LogScan:
     return LogScan(tuple(messages), tuple(links), tuple(routed), tuple(shown))
 
 
+class _WorktreeSetupFailed(Exception):
+    """The worktree selection of a launch was refused; nothing was enqueued."""
+
+
+def _worktree_name(title: str | None) -> str:
+    """The validated worktree name for a ``worktree`` launch, or :class:`LaunchRefused`."""
+    if not isinstance(title, str) or not re.fullmatch(WORKTREE_NAME_RE, title):
+        raise LaunchRefused(
+            "error", "a worktree launch needs a title of 1-60 letters, digits, '-' or '_', "
+            "starting with a letter or digit")
+    return title
+
+
 # -- the host seam -----------------------------------------------------------------
 
 
@@ -283,8 +297,13 @@ class ManagerHost(Protocol):
         ...
 
     async def start_root(
-        self, session_id: str, instruction: str, *, agent: str | None, origin: dict[str, str], title_text: str
-    ) -> None: ...
+        self, session_id: str, instruction: str, *, agent: str | None, origin: dict[str, str], title_text: str,
+        worktree_name: str = "",
+    ) -> None:
+        """Open and enqueue a root. With ``worktree_name`` (passed only then) the session's
+        worktree is selected under that exact name before the enqueue; a failure raises
+        :class:`_WorktreeSetupFailed`."""
+        ...
 
     async def cancel_root(self, session_id: str, reason: str) -> bool: ...
 
@@ -349,12 +368,13 @@ class HostManagerPort:
         origin_message_id: str,
         agent: str | None = None,
         title: str | None = None,
+        worktree: bool = False,
     ) -> LaunchResult:
         host, handle = self._acting()
         async with self._launch_lock:
             turn = str(getattr(handle, "active_turn_id", None) or "")
             try:
-                return await self._launch(host, handle, turn, instruction, origin_message_id, agent, title)
+                return await self._launch(host, handle, turn, instruction, origin_message_id, agent, title, worktree)
             except LaunchRefused as exc:
                 self._emit("manager.launch_refused", {"reason": exc.reason, "turn": turn})
                 raise
@@ -368,6 +388,7 @@ class HostManagerPort:
         origin_message_id: str,
         agent: str | None,
         title: str | None,
+        worktree: bool = False,
     ) -> LaunchResult:
         if not turn:
             raise LaunchRefused("no_user_message", "a launch needs a user message in the current turn")
@@ -391,6 +412,10 @@ class HostManagerPort:
             )
         role = host.check_agent(agent) if agent else None
         hint = sanitize_text(title, limit=MAX_TITLE_CHARS) if title else ""
+        wt_name = ""
+        if worktree:
+            wt_name = _worktree_name(title)
+            hint = wt_name
         session_id = host.new_session_id()
         digest = hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:16]
         # The supervision edge first: a started root can never lack its link.
@@ -404,14 +429,23 @@ class HostManagerPort:
             raise LaunchRefused("error", f"could not record the launch: {_why(exc)}") from exc
         origin = {"kind": "manager", "manager": self._self_id, "origin_message_id": origin_message_id}
         try:
+            # The worktree selection is made while the session is still a draft, inside
+            # start_root and before the instruction is enqueued.
+            extra = {"worktree_name": wt_name} if wt_name else {}
             await host.start_root(
-                session_id, instruction, agent=role, origin=origin, title_text=hint or instruction
+                session_id, instruction, agent=role, origin=origin, title_text=hint or instruction,
+                **extra,
             )
         except asyncio.CancelledError:
             raise
+        except _WorktreeSetupFailed as exc:
+            raise LaunchRefused(
+                "error", f"could not create worktree {wt_name!r}; session {session_id} was opened "
+                f"but not started: {_why(exc.__cause__ or exc)}"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise LaunchRefused("error", f"could not start the session: {_why(exc)}") from exc
-        return LaunchResult(id=session_id, title=hint, state="queued")
+        return LaunchResult(id=session_id, title=hint, state="queued", worktree_name=wt_name)
 
     async def wait(
         self, ids: tuple[str, ...], until: Literal["any", "all"], max_wait_seconds: int
@@ -744,7 +778,8 @@ class FacadeManagerHost:
         return str(getattr(definition, "name", name) or name)
 
     async def start_root(
-        self, session_id: str, instruction: str, *, agent: str | None, origin: dict[str, str], title_text: str
+        self, session_id: str, instruction: str, *, agent: str | None, origin: dict[str, str], title_text: str,
+        worktree_name: str = "",
     ) -> None:
         facade = self._facade
         if agent:
@@ -754,6 +789,13 @@ class FacadeManagerHost:
             "id": session_id,
             "launched_by": {"manager": origin["manager"], "origin_message_id": origin["origin_message_id"]},
         })
+        if worktree_name:
+            try:
+                await facade._invoke_runtime_worktree(
+                    "set_session_worktree", session_id, True, base="current", name=worktree_name)
+                facade.titles.cancel(session_id)
+            except Exception as exc:  # noqa: BLE001
+                raise _WorktreeSetupFailed(str(exc)) from exc
         await facade.enqueue(
             session_id, instruction, mode="queue", origin=origin, title_text=title_text
         )

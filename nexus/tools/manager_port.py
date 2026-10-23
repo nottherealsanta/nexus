@@ -59,6 +59,10 @@ MAX_FIND_LIMIT = 50
 MAX_QUERY_CHARS = 256
 MAX_STATUS_IDS = 20
 MAX_TITLE_CHARS = 160
+#: A launch ``worktree`` name: it is the session title, the worktree folder and the
+#: ``nexus/session/<name>`` branch suffix (same rule as the host's session worktree names).
+WORKTREE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9_-]{0,59}"
+WORKTREE_BRANCH_PREFIX = "nexus/session/"
 #: One ``session_result`` payload, after redaction (UTF-8 bytes).
 MAX_RESULT_BYTES = 16 * 1024
 
@@ -154,6 +158,8 @@ class LaunchResult:
     title: str
     #: ``queued``: the instruction is admitted; the root starts when the host schedules it.
     state: str = "queued"
+    #: The worktree name (= folder = title) when launched with ``worktree``; ``""`` otherwise.
+    worktree_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,8 +218,13 @@ class ManagerPort(Protocol):
         origin_message_id: str,
         agent: str | None = None,
         title: str | None = None,
+        worktree: bool = False,
     ) -> LaunchResult:
-        """Start one root session. Needs a real user message in the current turn."""
+        """Start one root session. Needs a real user message in the current turn.
+
+        ``worktree=True`` needs ``title`` to be a valid worktree name (``WORKTREE_NAME_RE``);
+        the session runs in a worktree of exactly that name and carries it as its title.
+        """
         ...
 
     async def wait(

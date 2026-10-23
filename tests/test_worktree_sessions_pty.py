@@ -167,3 +167,47 @@ def test_native_ask_mode_prompts_before_first_turn_and_resumes_prompt(tmp_path: 
         assert _git(project, "worktree", "list", "--porcelain").count("worktree ") == 1
     finally:
         app.close()
+
+
+def test_native_ask_worktree_yes_asks_for_a_name_then_creates_it(tmp_path: Path, monkeypatch):
+    """Ask -> Yes opens "Name this worktree"; the name becomes the branch and the prompt resumes.
+
+    Needs the backend's ``set_session_worktree(..., name=)``; the TUI half is covered offline in
+    ``tests/test_ratatui_workflows.py``."""
+    project = tmp_path / "main"
+    project.mkdir()
+    _git(project, "init", "-b", "main")
+    _git(project, "config", "user.name", "Test")
+    _git(project, "config", "user.email", "test@example.test")
+    (project / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(project, "add", "seed.txt")
+    _git(project, "commit", "-m", "seed")
+    binary = terminal.ROOT / "rust/tui/target/debug/nexus-ratatui"
+    if not binary.exists():
+        pytest.skip("native binary is unavailable")
+    monkeypatch.setattr(terminal, "BINARY", Path(binary))
+    ask_child = CHILD.replace("WorktreesSection(sessions=True)", "WorktreesSection(sessions=False)")
+    ask_child = ask_child.replace(
+        "await peer.call(p.SessionStart(session='worktree-session', content='Prepare the session UI'))\n                await host.facade.wait_idle(timeout=15)",
+        "await asyncio.sleep(.3)",
+    )
+    monkeypatch.setattr(terminal, "CHILD", ask_child)
+    app = terminal.App(tmp_path)
+    try:
+        app.wait_for("Type a message")
+        row = next(i + 1 for i, line in enumerate(app.text().splitlines()) if "Type a message" in line)
+        app.key(f"\x1b[<0;12;{row}M\x1b[<0;12;{row}m".encode(), .2)
+        app.key(b"Please answer with ok\r", .4)
+        app.wait_for("Yes · use a worktree")
+        shown = app.redraw(.3)
+        assert "Create a worktree, or work in the main checkout?" in shown
+        app.key(b"\r", .5)  # first row: Yes
+        app.wait_for("Name this worktree")
+        app.key(b"bad name\x13", .5)
+        app.wait_for("Use letters, digits")
+        app.key(b"\x7f" * 8 + b"pty-name\x13", .5)
+        app.wait_for("Session root ready", timeout=25)
+        assert _git(project, "worktree", "list", "--porcelain").count("worktree ") == 2
+        assert "nexus/session/pty-name" in _git(project, "branch", "--list")
+    finally:
+        app.close()

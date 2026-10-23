@@ -1394,7 +1394,13 @@ below): row 1 holds the tabs, row 2 is a thin line, row 3 `~/path branch worktre
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
 the snapshot's `worktree` key, set by `prototype._worktree_name` when the workspace is a
-linked Git worktree), right the update notice and `[Sessions]`, separated by quiet `│`.
+linked Git worktree, or by `worktree_bar.session_worktree_label` from the host's
+`session_worktree_choice` state: a session whose root is its own worktree shows `⎇ <name>` and
+the session's branch; a draft with a worktree selected (mode Always, or `selected`) shows
+`⎇ <pending name>` or the placeholder `⎇ worktree · name on first message`; read keys are
+`kind`, `branch`, `worktree_name`, `pending_name`, `selected`, `mode`, `editable`, `git`, missing
+keys count as empty. The state is cached 3 s per session, bounded to 2 s, reread after a worktree
+answer and when a turn is submitted, and a failure leaves the workspace values), right the update notice and `[Sessions]`, separated by quiet `│`.
 There is no context counter (the composer row shows usage) and no `‹ i/n ›` session
 cycler. The notice drops before the title is squeezed. Draw and hit-testing share one
 layout (`tab_cells`); `[Sessions]` sends `/sessions` and the notice is clickable. The
@@ -2230,10 +2236,29 @@ run.
 ### Session worktree controls
 
 The session actions modal and `/worktree` open the three-mode picker: No worktree,
-Ask every time, and Always worktree. Ask resolves once before a Git session's first
-input, preserving the prompt and attachments. Manager sessions bypass this flow.
-The picker shows the current root, checkout and branch; started sessions retain
-their root when the project preference changes.
+Ask every time, and Always worktree. The same picker (same labels, same host call
+`session_worktree_choice(session, mode)`) is a "Worktree mode" row under "Session
+worktrees" on Settings -> Agents. The picker shows the current root, checkout and branch;
+started sessions retain their root when the project preference changes.
+
+First message of a Git session that is still a draft (`actions.submit`, `worktree_pages.py`;
+Manager sessions bypass all of this):
+
+- No worktree: unchanged, the message runs in the main checkout.
+- Ask: a modal titled "Create a worktree, or work in the main checkout?" (Yes / No rows).
+  No resumes the prompt unchanged; Yes opens the name step.
+- Always: goes straight to the name step (the interactive TUI no longer creates silently).
+- Name step: a "Name this worktree" text modal (the shared form editor; `Ctrl+S` creates,
+  because Enter inserts a newline in that editor). The line under the editor shows the hint
+  (letters, digits, `-` and `_`, up to 60; it is also the session title and the branch
+  `nexus/session/<name>`) and then any error. The name is validated locally with
+  `[A-Za-z0-9][A-Za-z0-9_-]{0,59}`; invalid names never reach the host. Submit calls
+  `set_session_worktree(session, True, name=name)`; a host refusal (for example the branch
+  already exists) is shown in the modal for edit and retry. `Esc` on either modal cancels the
+  whole submission and returns the text to the composer (attachments never left it). On
+  success the preserved prompt and attachments are submitted exactly as before.
+
+Saved-turn, `/worktrees` and removal notes follow.
 
 Saved turns have a commit/checkpoint row that opens a bounded diff. Checkpoints
 link by durable turn ID and saved record sequence, including after replay.
@@ -2241,4 +2266,4 @@ link by durable turn ID and saved record sequence, including after replay.
 Session integration and checkout removal preview their effect before confirmation;
 errors and refused states remain visible. Branches remain after checkout removal.
 
-Verified by `tests/test_worktree_sessions_pty.py`: the actual native picker and Ask resumption, an owned file write and commit, and opening its saved-turn diff. Workflow/projection tests also cover replay links, stale-session answers, attachment preservation and confirmation binding.
+Verified by `tests/test_worktree_sessions_pty.py`: the actual native picker and Ask resumption, Ask -> Yes -> name step (invalid name error, then branch `nexus/session/<name>`), an owned file write and commit, and opening its saved-turn diff. Workflow/projection tests also cover replay links, stale-session answers, attachment preservation and confirmation binding.

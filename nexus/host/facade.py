@@ -332,7 +332,7 @@ class HostFacade:
         rows = [_worktree_record(record) for record in records[:_MAX_WORKTREE_LIST]]
         return rows, len(records) > _MAX_WORKTREE_LIST
 
-    async def _invoke_runtime_worktree(self, name: str, *args, **kwargs) -> Any:
+    async def _invoke_runtime_worktree(self, name: str, /, *args, **kwargs) -> Any:
         """Invoke session worktree actions on their owning event loop.
 
         Mutators append session events and touch loop-affine buses/handles. Only
@@ -2070,8 +2070,11 @@ class HostFacade:
         if isinstance(command, p.SessionWorktreeSet):
             self._refuse_manager(command.session, "session worktree selection")
             state = await self._invoke_runtime_worktree(
-                "set_session_worktree", command.session, command.enabled, base=command.base
+                "set_session_worktree", command.session, command.enabled, base=command.base,
+                **({"name": command.name} if command.name else {}),
             )
+            if command.name and command.enabled:
+                self.titles.cancel(command.session)
             return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
         if isinstance(command, p.SessionPromote):
             self._refuse_manager(command.session, "session promotion")

@@ -58,6 +58,19 @@ Changing the preference after a session starts affects future sessions only.
 A selected worktree is created lazily on the first model turn; composer shell
 commands require that first prompt to prepare it before they can execute.
 
+**Named worktrees.** When a session goes into a worktree (Ask answered yes, or
+Always) the user types a name at the first message. `SessionWorktreeSet(name=...)`
+validates it (letters, digits, `-`, `_`; 1-60 characters; must start with a
+letter or digit; branch `nexus/session/<name>` and the worktree folder must not
+exist), records it in the `session.worktree_set` event (so replay and daemon
+restart keep it) and stores it as the session's user title, which auto-titling
+never overwrites. A draft has no session row until its first message, so the
+title is stored again when the worktree is created on the first turn. That turn
+creates the folder `<name>` and branch `nexus/session/<name>` with no random
+suffix. Without a name (noninteractive `nexus run` under Always) the old
+`<slug>-<token>` name is kept. A name is refused once the session has a root or
+has started, and ignored when `enabled` is false.
+
 ### Owned session worktrees
 
 `[worktrees] sessions = true` creates an isolated `nexus/session/...` branch on

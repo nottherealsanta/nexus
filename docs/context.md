@@ -39,7 +39,7 @@ Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
 | --- | --- | --- |
 | `identity` | 0 | `IDENTITY_PREAMBLE`, currently empty: the role comes from the agent prompt |
 | `soul` | 0 | `SOUL.md` plus the selected agent's prompt (`append_agent_prompt`) |
-| `environment` | 1 | workspace, platform, profile, Git branch and status (`capture_environment`; capped by `context.limits.environment`) |
+| `environment` | 1 | workspace, platform, profile, Git branch and status (`capture_environment`; capped by `context.limits.environment`). For a session whose root is an owned worktree it also carries a labelled `<session_worktree>` block (see below) |
 | `tools` | 0 | structured schemas on `ModelRequest.tools`; never in system text |
 | `agents_md` | 1 | selected session-root `AGENTS.md` (`context.limits.agents_md`) |
 | `skills_index` | 1 | sanitised `name: description` lines only; bodies load via the `skill` tool |
@@ -56,6 +56,17 @@ use `resolve_within` (escapes fail closed; oversized files are a named error,
 filenames and limits; a session root only changes the source of `AGENTS.md`.
 
 ## Header sections and literal inspection
+
+**Session worktree block.** Every turn of a session working in an owned worktree
+the environment part appends `<session_worktree>` with the labelled facts
+`Worktree directory` (where tools and shell run), `Main checkout directory`,
+`Worktree branch`, `Base branch` and `Base commit`, followed by short guidance:
+the agent works in an isolated worktree branch created from the base branch,
+commits there, does not merge into the base branch or touch the main checkout,
+and tells the user to land the work with `/worktrees` (the user previews and
+confirms the merge). Other sessions get neither block nor guidance. The facts come from
+`SessionWorktrees.environment_facts`, set on the frozen assembler by the runtime
+each turn and iteration; rendering is `render_session_worktree` in `context/parts.py`.
 
 The context header and `/context` picker expose System prompt, Environment,
 AGENTS.md, MEMORY.md, Skills, Tools and MCP, in that order. A populated

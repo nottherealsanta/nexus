@@ -41,6 +41,8 @@ glob rules keep their original keys. Grants remain local to the session log;
 this phase does not add a project-wide grant store or import other sessions'
 approvals. Project settings and permission rules are shared independently.
 
+Subagent worktrees are disabled for now ([agents.md](agents.md#worktrees)): every
+child shares the session checkout and `worktree: true` is refused. When re-enabled,
 `subagent.worktree` is independent of the session worktree mode. Omission chooses
 isolation for a child whose selected tools can mutate files; explicit `false`
 shares the session checkout and explicit `true` isolates it. Successful isolated
@@ -257,7 +259,7 @@ Provenance, ownership and caps in the host port are the guard.
 | `write` | yes | atomic, symlink-safe replace; parents created only with `create_parents` |
 | `apply_patch` | yes | multi-file `*** Begin Patch` format (add/update/delete/move) with `@@` anchors, hunks located by content; ≤ 1,000,000 chars, 1,000 operations; `_patch_parse` → `_patch_stage` → `_patch_commit` (validate all, stage, guarded commit with rollback) |
 | `shell` | yes | `action` run/status/wait/stop/log/cd, see below |
-| `subagent` | no | spawns a bounded child; root sessions only, never present in a child's catalog, extension or code-mode context ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`; always blocks and returns the child's report as the result, so independent calls are issued together in one batch to run concurrently ([agents.md](agents.md#foreground-only)); the description lists each tier's models and effort, each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)); a change to the tier models or efforts appends a short tail notice to history ([context.md](context.md#subagent-roster-notice-plan-06)) |
+| `subagent` | no | spawns a bounded child; root sessions only, never present in a child's catalog, extension or code-mode context ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `resume` (`worktree` is hidden while subagent worktrees are disabled, [agents.md](agents.md#worktrees)); always blocks and returns the child's report as the result, so independent calls are issued together in one batch to run concurrently ([agents.md](agents.md#foreground-only)); the description lists each tier's models and effort, each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)); a change to the tier models or efforts appends a short tail notice to history ([context.md](context.md#subagent-roster-notice-plan-06)) |
 | `question` | no | asks the user one question (≤ 3 options, free text if none), waits up to 15 min; fails fast when no operator is attached |
 | `webfetch` | no | public HTTP(S) → bounded Markdown wrapped in `<<< BEGIN UNTRUSTED WEB CONTENT >>>`; PDFs/binaries unsupported |
 | `websearch` | no | fixed local SearXNG or allow-listed HTTPS instances; ≤ 10 results, pages ≤ 2; results wrapped as untrusted; links never fetched |
@@ -542,7 +544,7 @@ events, or reprs; a command can still explicitly print its own environment.
 - Not done: the TUI jobs panel and log viewer (Rust/Ratatui), and job events for
   sub-agent sessions (their handles are not in the main manager); deleting a
   session does not yet delete its log directory. Proposed, not implemented:
-  [plans/SHELL_PLAN.md](../plans/SHELL_PLAN.md) (P4 UI).
+  [plans/SHELL_PLAN.md](../plans/done/SHELL_PLAN.md) (P4 UI).
 - Tests: `tests/test_builtin_shell*.py`, `tests/test_builtin_bash_*.py`,
   `tests/test_shell_*.py` (`test_shell_job_events.py`,
   `test_shell_completion_delivery.py`, `test_shell_persistent.py`,
