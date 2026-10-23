@@ -20,6 +20,7 @@ from .errors import OperationCancelled, SessionBusy
 from .events import Event
 from .model.message import Text
 from .resources import process_slot, resource_environment
+from .session.ids import is_valid_session_id
 from .session.root import SessionRoot
 from .util import redact_secrets
 
@@ -1028,7 +1029,10 @@ class SessionWorktrees:
                     if payload.get("kind") != "session":
                         continue
                     session = payload.get("session_id")
-                    if not isinstance(session, str) or not self.runtime.sessions.exists(session):
+                    # Saved child work uses `<parent>/sub/<n>` ids, which are not
+                    # root session ids; the session store would reject them.
+                    if (not isinstance(session, str) or not is_valid_session_id(session)
+                            or not self.runtime.sessions.exists(session)):
                         continue
                     handle = self.handle(session)
                     if self.pending_request(handle):

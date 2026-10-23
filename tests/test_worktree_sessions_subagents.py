@@ -163,3 +163,19 @@ async def test_real_runtime_explicit_false_shares_session_checkout(tmp_path):
         assert (main / "shared.txt").read_text() == "shared\n"
     finally:
         await rt.aclose()
+
+
+async def test_recovery_skips_saved_child_records_with_sub_ids(tmp_path):
+    from nexus.agents.worktrees import WorktreeService
+    from nexus.session.ids import validate_session_id
+
+    ctrl, _, service, root = owned(tmp_path)
+    child = service.create(root.path, "commit-session/sub/1", root=ctrl.registry)
+    # The real store rejects `/sub/` ids instead of answering "no such session".
+    ctrl.runtime.sessions = SimpleNamespace(exists=lambda s: validate_session_id(s) and False)
+    ctrl.runtime._worktree_service = WorktreeService()
+
+    await ctrl.recover()
+
+    assert child.path.is_dir()
+    assert ctrl._recovered
