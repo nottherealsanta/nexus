@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.7.0](https://github.com/nottherealsanta/nexus/compare/v0.6.1...v0.7.0) (2026-10-23)
+
+
+### Features
+
+* add explicit safe session worktree cleanup ([80a48fc](https://github.com/nottherealsanta/nexus/commit/80a48fcde3c0f8ef0674a9660a78d1f1e474f149))
+* add simple native session worktree modes and saved turn review ([67df53a](https://github.com/nottherealsanta/nexus/commit/67df53a2f42882b0631b7358958e8c7a9ca89b88))
+* **agents:** save isolated child work and return it to sessions ([a610fc4](https://github.com/nottherealsanta/nexus/commit/a610fc4066155678d25b43ad5f97480aba3a8b63))
+* **host:** share one daemon across projects ([e753e20](https://github.com/nottherealsanta/nexus/commit/e753e208eec29c63959a1584ac8a303646d96b95))
+* **manager:** compact idle manager context with machine memory and a state snapshot ([d4af491](https://github.com/nottherealsanta/nexus/commit/d4af4911e7e0d4765a48f33c6dfc1182285efc8b))
+* **manager:** launch sessions in worktrees by default ([b47196e](https://github.com/nottherealsanta/nexus/commit/b47196e2b88e5fd52c861d444ae33c35199288b4))
+* **session:** capture hidden checkpoints and expose turn diffs ([19dc207](https://github.com/nottherealsanta/nexus/commit/19dc20762d741fcee8ff40bab5bb3c7481e95a5a))
+* **session:** confirm local integration of saved session work ([abe3cad](https://github.com/nottherealsanta/nexus/commit/abe3cadc8f36e495db4ea8377c7e2a5d0d91eae0))
+* **session:** create owned worktrees and turn commits ([b10f6c6](https://github.com/nottherealsanta/nexus/commit/b10f6c6c51652a454bc848c42feed1306601d27c))
+* **session:** isolate per-session working roots ([9585b1f](https://github.com/nottherealsanta/nexus/commit/9585b1f9e8f2a90e8bad23c0975490d527783985))
+* **tui:** always show where the session runs in the top bar ([500e2a7](https://github.com/nottherealsanta/nexus/commit/500e2a711ffaa7a2f68b99887d6df84ab6f1d8f9))
+* **voice:** ship local dictation and speech as base dependencies ([647eb23](https://github.com/nottherealsanta/nexus/commit/647eb2345ff3efb40268a507e6f25d292d9c1c52))
+* **voice:** ship local dictation and speech as base dependencies ([65224df](https://github.com/nottherealsanta/nexus/commit/65224df976e1ebd731b0e61a25d0089cc02c8ab2))
+* **worktrees:** name session worktrees at the first message ([a3855ea](https://github.com/nottherealsanta/nexus/commit/a3855ea85a487a7979ef2128f78ac93f19cdec8d))
+
+
+### Bug fixes
+
+* **codex:** omit temperature and top_p for the Codex backend ([8913a96](https://github.com/nottherealsanta/nexus/commit/8913a96d43ad6545bb71aac73d0e57adb3873d50))
+* repair the 28 failing tests and cap the handoff suffix to the room left ([0a31c51](https://github.com/nottherealsanta/nexus/commit/0a31c515bd320bb2065be5c8cd210bd34add538d))
+* save unreported turn edits with existing worktree safeguards ([4afebb0](https://github.com/nottherealsanta/nexus/commit/4afebb0ab991d921c1bd73aed693320334e0e798))
+* skip saved subagent worktree records during session recovery ([60d70ba](https://github.com/nottherealsanta/nexus/commit/60d70ba52f5d6bf57a43da82fb7081b3eef19107))
+
 ## [0.6.1](https://github.com/nottherealsanta/nexus/compare/v0.6.0...v0.6.1) (2026-10-22)
 
 
