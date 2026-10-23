@@ -455,6 +455,13 @@ class SessionWorktreeStatus(msgspec.Struct, tag=True, frozen=True):
     session: str
 
 
+class SessionIntegrate(msgspec.Struct, tag=True, frozen=True):
+    """Preview or confirm a local integration into the session's base branch."""
+
+    session: str
+    confirm_token: str = ""
+
+
 class SessionTurnDiff(msgspec.Struct, tag=True, frozen=True):
     """Read a bounded diff of durable turn commits or a hidden checkpoint."""
 
@@ -1401,6 +1408,7 @@ Command = (
     | SessionDetach
     | SessionWorktreeStatus
     | SessionWorktreeTrust
+    | SessionIntegrate
     | SessionTurnDiff
     | SessionTurnRevert
     | AttachmentPrepare
@@ -2972,6 +2980,7 @@ __all__ = [
     "SessionDetach",
     "SessionWorktreeStatus",
     "SessionWorktreeTrust",
+    "SessionIntegrate",
     "SessionTurnDiff",
     "SessionTurnRevert",
     "SessionWorktreeResult",

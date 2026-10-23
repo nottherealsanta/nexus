@@ -4,7 +4,8 @@ Status: active proposal, revised 2026-10-23. Files 01–03 have already been pus
 and record their historical implementation. The backend checkpoint work in 04 is
 implemented in commit `19dc207`; its ledger records unfinished UI work and retention-based cleanup.
 File 05 implements independent child isolation and automatic return of saved work.
-Files 06–10 remain proposals until their implementation records say otherwise.
+File 06 adds confirmed local fast-forward integration; native controls remain in 08.
+Files 07–10 remain proposals until their implementation records say otherwise.
 This plan index does not declare unfinished work complete.
 
 The proposal is deliberately small: every changed turn is saved in Git; each
@@ -33,7 +34,7 @@ branches change only after the user requests integration.
 | [03 Session worktrees and turn commits](03-session-worktrees-and-turn-commits.md) | Worktree sessions and per-turn commits | Existing, pushed |
 | [04 Checkpoints](04-checkpoints-for-main-checkout.md) | Save changed turns in the current checkout | Backend implemented; TUI incomplete |
 | [05 Subagent worktrees](05-subagent-worktrees.md) | Independent child isolation and saved-work integration | Implemented, focused tests |
-| [06 Integration](06-merge-queue-and-landing.md) | Manual integration at user's request | Proposed |
+| [06 Integration](06-merge-queue-and-landing.md) | Confirmed local fast-forward at user's request | Backend implemented |
 | [07 Lifecycle](07-setup-cleanup-recovery.md) | Three session modes, create/reuse/list, safe removal | Proposed |
 | [08 TUI and host](08-tui-and-host-protocol.md) | Per-session choice, saved-turn labels, diffs, clear errors | Proposed |
 | [09 Config and safety](09-config-security.md) | Preserve config and basic Git boundaries | Proposed |

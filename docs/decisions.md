@@ -82,6 +82,11 @@ paths themselves. See [desktop.md](desktop.md).
 | **Registry is authoritative for capabilities; adapters own transport-only fields.** A provider rejection contradicting the registry degrades once and records `registry.mismatch`. | One source of truth that can be fixed upstream; turns still complete. | `model/registry.py` |
 | **Everything is bounded:** sizes, counts, pages, queues, timeouts. | Hostile or runaway input must not grow memory or stall the daemon. | throughout |
 
+Simplified session integration (worktree-sessions/06) uses an explicit host preview
+and a single-use confirmation, then a local fast-forward to the reviewed commit.
+Diverged targets require normal Git resolution first. No queue, watcher, push or
+automated merge strategy is introduced.
+
 ## Storage
 
 | Decision | Why | Where |

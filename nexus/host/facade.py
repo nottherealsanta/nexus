@@ -1780,7 +1780,7 @@ class HostFacade:
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
                             p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
-                            p.WorktreeDiscard, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert)
+                            p.WorktreeDiscard, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -1821,7 +1821,7 @@ class HostFacade:
                            p.SessionArchive, p.SessionUnarchive)
         target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionPromote,
                            p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust,
-                           p.SessionTurnDiff, p.SessionTurnRevert)
+                           p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
         if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
             namespace = getattr(command, "namespace", "main")
             if isinstance(command, p.SessionFork) and command.new_id == MANAGER_SESSION_ID:
@@ -2032,6 +2032,17 @@ class HostFacade:
             return p.GitStatusResult(**await workspace_git_status(
                 _session_workspace(self.runtime, command.session)
             ))
+        if isinstance(command, p.SessionIntegrate):
+            from ..session_integration import integration_preview, integrate_session
+            self._refuse_manager(command.session, "session integration")
+            controller = self.runtime._session_worktrees
+            state = await asyncio.to_thread(integration_preview, controller, command.session)
+            if command.confirm_token:
+                self._consume_confirmation(command.confirm_token, "session_integrate", command.session, state, {})
+                state = await asyncio.to_thread(integrate_session, controller, command.session, state)
+            elif state.get("ready"):
+                state = {**state, "token": self._confirmation_token("session_integrate", command.session, state, {})}
+            return p.SessionWorktreeResult(session=command.session, state=state)
         if isinstance(command, p.SessionTurnDiff):
             from ..worktree_turns import turn_diff
             self._refuse_manager(command.session, "turn diff")

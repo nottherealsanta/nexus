@@ -66,6 +66,14 @@ an explicit trust decision bound to the reviewed setup digest; stale reviews
 cannot approve changed setup. One-time approval is consumed for the next setup,
 while project approval is stored in private per-project state.
 
+Manual integration is available through the host contract for one owned
+session at a time. The preview shows its branch, target branch, commits and
+changed files. After explicit confirmation, Nexus rechecks the preview and
+fast-forwards the original local target branch only when both checkouts are
+clean, idle, and the target still contains the session's base. A diverged or
+stale state is refused with guidance. Integration never pushes or changes
+another session.
+
 The event log is the view contract: `session.root_set` identifies the selected
 root, `worktree.created` and `worktree.setup_ran` describe provisioning,
 `worktree.committed`/`worktree.commit_skipped` report commit outcomes, and
