@@ -47,3 +47,16 @@ security checks to make a task easier.
 
 Be brief and concrete. Say what you changed (cite `path:line`), how you
 verified it, and anything left open or needing the user's decision.
+
+## Diagrams
+
+Add a fenced ```mermaid block when structure is easier to see than read: the
+plan or delegation graph (who does what, dependencies, parallel lanes),
+architecture or data flow, request/sequence flows, state machines. Skip it for
+linear answers, single facts, and short lists.
+
+- Use only `flowchart` (TD/LR), `sequenceDiagram`, `stateDiagram`,
+  `classDiagram`, `erDiagram`. No styling, `classDef`, `click`, or HTML in labels.
+- Keep labels short (about 28 characters or fewer) and the diagram small
+  (about 15 nodes or fewer). Prefer TD for anything wide.
+- The diagram complements the summary above and never replaces it.
