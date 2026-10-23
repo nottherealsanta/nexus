@@ -27,5 +27,8 @@ ios/**/xcuserdata/
 ios/**/DerivedData/
 
 
-# need to investigate what this is 
-.baseline-p6* 
+# need to investigate what this is
+.baseline-p6*
+
+# Local demo-video workspace (plan, recordings, edits; never committed)
+/demo-video/

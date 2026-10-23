@@ -153,7 +153,7 @@ removes Nexus and everything it stored (sessions, credentials, settings, the dic
 speech models) after listing it and asking; `uv tool uninstall nexus-harness` removes only
 the program and keeps `~/.nexus`.
 
-Native wheels include the Ratatui chat executable. Source installs need a Rust toolchain to build it.
+Native wheels include the Ratatui chat executable. Source installs need Rust ≥1.97 to build it.
 `nexus chat` requires an interactive terminal; use `nexus run` for piped or
 non-interactive prompts.
 

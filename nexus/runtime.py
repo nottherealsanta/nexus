@@ -1749,9 +1749,9 @@ class _ManifestEnvironmentFactory:
         catalog = base_catalog
         roster_digest = None
         if runner is not None:
-            from .tools.builtin.task import build_task_tool
+            from .tools.builtin.task import build_task_tools
 
-            catalog = (*base_catalog, build_task_tool(runner))
+            catalog = (*base_catalog, *build_task_tools(runner))
             roster_digest = _roster_digest(runner)
         catalog = tuple(
             tool for tool in catalog
@@ -1845,13 +1845,13 @@ class _ManifestEnvironmentFactory:
         # Build a provisional manager (with a static Task) so the selection
         # includes Task when the profile allows it, then rebuild with the Task
         # tool bound to the runner.
-        from .tools.builtin.task import build_task_tool
+        from .tools.builtin.task import build_task_tools
 
         provisional = runtime._build_iteration_manager(
             config,
             runtime.manifest,
             restrict=restrict,
-            catalog=(*base_catalog, build_task_tool(None)),
+            catalog=(*base_catalog, *build_task_tools(None)),
             path_guard=self._path_guard,
         )
         parent_tools = list(provisional.authority_names)
@@ -3927,7 +3927,7 @@ class Runtime:
             selectable_tools = set(selection_manager.authority_names) | set(unavailable_tools)
             turn_runner = getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None)
             if turn_runner is not None:
-                selectable_tools.add("subagent")
+                selectable_tools.update(("subagent", "subagent_continue"))
             if agent is not None:
                 from .tools.bundles import BUNDLES
 
@@ -3991,10 +3991,10 @@ class Runtime:
             tool_definitions.update(getattr(manifest, "tools", {}))
             runner = getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None)
             if runner is not None:
-                from .tools.builtin.task import build_task_tool
+                from .tools.builtin.task import build_task_tools
 
-                task_tool = build_task_tool(runner)
-                tool_definitions[task_tool.name] = task_tool
+                for task_tool in build_task_tools(runner):
+                    tool_definitions[task_tool.name] = task_tool
 
             def tool_row(schema, *, enabled, config_enabled):
                 tool = tool_definitions.get(schema.name)
@@ -5163,11 +5163,11 @@ class Runtime:
         if manager is None:
             catalog = self._filter_web_catalog(config, (*ToolManager._builtin_catalog(), *self._session_worktree_tools(session.id)))
             if self._agents is not None:
-                from .tools.builtin.task import build_task_tool
+                from .tools.builtin.task import build_task_tools
 
                 catalog = (
                     tuple(tool for tool in catalog if tool.bundle != "meta")
-                    + (build_task_tool(None),)
+                    + build_task_tools(None)
                 )
             manager = ToolManager(
                 config,
@@ -5180,14 +5180,14 @@ class Runtime:
             and "subagent" not in manager.names
             and self._agents is not None
         ):
-            from .tools.builtin.task import build_task_tool
+            from .tools.builtin.task import build_task_tools
 
             original_names = manager.names
             manager = ToolManager(
                 config,
                 workspace=workspace,
-                tools=(*manager.tools, build_task_tool(None)),
-                restrict=(*original_names, "subagent"),
+                tools=(*manager.tools, *build_task_tools(None)),
+                restrict=(*original_names, "subagent", "subagent_continue"),
                 job_registry=self._job_registry,                path_guard=manager.path_guard,
             )
             self._track_tool_manager(manager)
@@ -5342,7 +5342,7 @@ class Runtime:
                 runtime_supports_workspace=self._supports_child_workspace(),
             )
             if static_runner is not None and "subagent" in manager.names:
-                from .tools.builtin.task import build_task_tool
+                from .tools.builtin.task import build_continue_tool, build_task_tool
 
                 roster_digest = _roster_digest(static_runner)
                 manager = ToolManager(
@@ -5350,7 +5350,9 @@ class Runtime:
                     workspace=workspace,
                     tools=(
                         *(
-                            build_task_tool(static_runner) if tool.name == "subagent" else tool
+                            build_task_tool(static_runner) if tool.name == "subagent"
+                            else build_continue_tool(static_runner) if tool.name == "subagent_continue"
+                            else tool
                             for tool in manager.tools
                         ),
                     ),
@@ -6424,7 +6426,7 @@ class Runtime:
             # ``Task`` is injected by the runtime per iteration, not a static
             # builtin; include it so a role may declare it without a false
             # ``unknown_tool`` diagnostic.
-            known_tools.add("subagent")
+            known_tools.update(("subagent", "subagent_continue"))
             manager = AgentManager.for_workspace(
                 self.workspace,
                 home=self._home,

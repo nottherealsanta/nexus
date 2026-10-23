@@ -14,6 +14,8 @@ mod live_wave;
 mod local_ui;
 mod markdown;
 mod mermaid;
+mod mermaid_image;
+mod mermaid_text;
 mod panic_log;
 mod picker;
 mod render;
@@ -394,6 +396,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // False until the host's first snapshot: the splash is drawn and input is held back.
     let mut loaded = false;
     'app: loop {
+        dirty |= cache.refresh_mermaid();
         // Coalesce a backlog (streamed tokens): only the newest snapshot is
         // parsed unless an older one carries a one-shot composer effect.
         let mut queued = Vec::new();
@@ -1728,7 +1731,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     continue;
                                 }
                                 settings_page::root::RootAct::Drill(index) => {
-                                    cache.settings_root.active = false;
+                                    let selected = s.nav.as_ref().map_or(-1, |nav| nav.selected);
+                                    cache.settings_root.begin_drill(selected, index);
                                     send(
                                         json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
                                     )?;
@@ -1764,7 +1768,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             && cache.page_state.edit.is_none()
                             && cache.page_state.popup.is_none()
                         {
-                            cache.settings_root.active = true;
+                            cache.settings_root.show_root();
                             dirty = true;
                             continue;
                         }
@@ -1810,7 +1814,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     .filter(|(_, item)| !item.2)
                                     .nth(n)
                                 {
-                                    cache.settings_root.active = false;
+                                    cache.settings_root.begin_drill(
+                                        s.nav.as_ref().map_or(-1, |nav| nav.selected),
+                                        index,
+                                    );
                                     send(
                                         json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
                                     )?;
@@ -1844,7 +1851,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         continue;
                                     }
                                     settings_page::Act::Nav => {
-                                        cache.settings_root.active = true;
+                                        cache.settings_root.show_root();
                                         dirty = true;
                                         continue;
                                     }
@@ -1866,7 +1873,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             if key.code == KeyCode::Left && s.form.is_none() {
-                                cache.settings_root.active = true;
+                                cache.settings_root.show_root();
                                 dirty = true;
                                 continue;
                             }
@@ -2945,7 +2952,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         mouse.row,
                                     ) {
                                         settings_page::root::RootAct::Drill(index) => {
-                                            cache.settings_root.active = false;
+                                            let selected =
+                                                s.nav.as_ref().map_or(-1, |nav| nav.selected);
+                                            cache.settings_root.begin_drill(selected, index);
                                             send(
                                                 json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
                                             )?;

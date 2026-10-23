@@ -386,7 +386,7 @@ the program and keeps `~/.nexus`.
 `feat/ratatui-prototype` adds a `setuptools-rust` binary build to the existing
 backend. Wheels contain the Python package/assets plus `nexus-ratatui` in the
 wheel's scripts area. The sdist contains Cargo.toml, Cargo.lock and Rust sources;
-source installs require Rust ≥1.88 and the Cargo dependencies. Native wheels are
+source installs require Rust ≥1.97 and the Cargo dependencies. Native wheels are
 platform-specific. Local macOS arm64 build/install is verified; a complete wheel
 matrix and Linux portability verification are still required before publishing
 this branch. Release-please still owns the Python version.
@@ -407,8 +407,8 @@ On pull requests the wheel matrix runs only when native inputs change (`rust/`,
 `pyproject.toml`, `MANIFEST.in`, `uv.lock`, `nexus/ui/ratatui/`, or the CI and
 wheel workflows), decided by the `changes` job in `ci.yml` (never on release-only PRs); pushes to `main` and
 releases always run it, and a skipped matrix does not fail `ci-ok`. The wheel test also imports the native surface and asserts `textual` stays out of
-`sys.modules`, and macOS runners pin Rust 1.88. Building
-from source (no matching wheel) needs a Rust toolchain of at least 1.88
+`sys.modules`, and macOS runners pin Rust 1.97. Building
+from source (no matching wheel) needs a Rust toolchain of at least 1.97
 (`rust-version` in `rust/tui/Cargo.toml`; install with rustup.rs). Without Rust,
 setuptools-rust says so; with an older compiler Cargo names the minimum. Packaging follows the [setuptools-rust wheel guidance](https://setuptools-rust.readthedocs.io/en/latest/building_wheels.html).
 
@@ -417,7 +417,7 @@ setuptools-rust says so; with an older compiler Cargo names the minimum. Packagi
 `rust/live` (the GPT Live audio/WebRTC helper, see `rust/live/README.md`) is a
 second `[[tool.setuptools-rust.bins]]` entry, `optional = true`, built with
 `--locked` from its own `Cargo.lock` and installed beside `nexus-ratatui`. It
-needs Rust >= 1.88 like the terminal client and no CMake or libopus: Opus is
+needs Rust >= 1.88 (the terminal client needs >= 1.97) and no CMake or libopus: Opus is
 `unsafe-libopus` (pure Rust). Its default `audio` feature uses `cpal`, which
 needs ALSA headers and `pkg-config` on Linux, and bindgen/libclang plus the macOS
 SDK for `coreaudio-sys` on macOS. A source install without them builds nothing for
@@ -444,5 +444,5 @@ applies without retagging.
 
 The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it.
 Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
-the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.97 on
+the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.88 on
 macOS arm64; a Rust 1.88 build has not been reproduced).

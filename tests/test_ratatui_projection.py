@@ -240,6 +240,26 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     assert [block["id"] for block in blocks if block["id"] in {"a1", "a2"}] == ["a2"]
 
 
+def test_continue_tool_card_links_its_child_like_a_subagent_card(tmp_path, monkeypatch):
+    from nexus.view.model import AgentView
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view = initial_state("s")
+    follow_up = ToolCallView(call_id="cont-1", name="subagent_continue", event_seq=2, status="running",
+                             input={"agent_id": "s/sub/1", "prompt": "now the tests"}, child_agent_ids=["a1"])
+    view.turns = [TurnView(id="t", index=0, phase="active", messages=[
+        MessageView(id="u", role="user", event_seq=1, blocks=[BlockView(text="go")])], tools=[follow_up])]
+    view.agents = {"a1": AgentView(id="a1", type="explore", description="Scan", status="spawned")}
+    shell = ShellActions(SimpleNamespace(view=view, session="s"))
+    shell.preferences.values["context_preview"] = False
+    blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
+    card = next(block for block in blocks if block["id"] == "cont-1")
+    assert card["kind"] == "task"
+    assert card["title"] == "Explore Subagent — now the tests"
+    assert card["operation"] == {"kind": "agent_page", "id": "a1"}
+    assert [block["id"] for block in blocks if block["id"] == "a1"] == []
+
+
 def _agent(**kwargs):
     from nexus.view.model import AgentView
     return AgentView(id="a1", type="explore", description="Scan", **kwargs)
@@ -1411,3 +1431,29 @@ def test_checkpoint_label_updates_cached_turn_and_uses_saved_record_sequence(tmp
     saved = next(block for block in after["blocks"] if block.get("operation", {}).get("kind") == "saved_turn_diff")
     assert saved["operation"]["seq"] == 42
     assert "aaaaaaaaaa" in saved["text"] and "1 files" in saved["text"]
+
+
+def test_refused_task_card_is_not_started_and_not_error_styled(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view = initial_state("s")
+    refused = ToolCallView(
+        call_id="task-r", name="Task", event_seq=2, status="completed", is_error=True,
+        input={"subagent_type": "explore", "description": "Scan", "resume": "p/sub/1"},
+        # Real sessions keep only the short display label in `error`; the reason is the result text.
+        error="Task task: refused",
+        result=[{"type": "text", "text": "[model: x]\nTask: cannot continue 'p/sub/1': pass only `resume` and `prompt`"}],
+        metrics={"status": "refused"})
+    running = ToolCallView(call_id="task-p", name="Task", event_seq=3, status="running",
+                           input={"subagent_type": "explore", "description": "Scan"})
+    view.turns = [TurnView(id="t", index=0, phase="active", messages=[
+        MessageView(id="u", role="user", event_seq=1, blocks=[BlockView(text="go")])], tools=[refused, running])]
+    shell = ShellActions(SimpleNamespace(view=view, session="s"))
+    shell.preferences.values["context_preview"] = False
+    blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
+    card = next(b for b in blocks if b["id"] == "task-r")
+    assert (card["model"], card["state"], card["status"]) == ("not started", "refused", "done")
+    assert card["detail"] == "Task: cannot continue 'p/sub/1': pass only `resume` and `prompt`"
+    assert not card["detail"].startswith("Error:")
+    pending = next(b for b in blocks if b["id"] == "task-p")
+    assert (pending["model"], pending["status"]) == ("model pending", "running")

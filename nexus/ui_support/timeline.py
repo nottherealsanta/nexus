@@ -80,11 +80,14 @@ def thought_title(text: str, limit: int = 96) -> str:
     return "Thinking"
 
 
+#: Tools whose call renders as a subagent card (a new run or a follow-up to a finished one).
+TASK_TOOL_NAMES = frozenset({"task", "subagent", "subagent_continue"})
+
 _TOOL_VERBS = {
     "read": "→ Read", "ls": "→ List", "glob": "✱ Glob", "grep": "✱ Grep",
     "edit": "← Edit", "multiedit": "← Edit", "write": "← Write", "apply_patch": "← Patch",
     "webfetch": "% Fetch", "websearch": "◈ Search", "skill": "◇ Skill",
-    "task": "◉ Task", "subagent": "◉ Task", "question": "? Question",
+    "task": "◉ Task", "subagent": "◉ Task", "subagent_continue": "◉ Task", "question": "? Question",
 }
 _RAW_OUTPUT_TOOLS = frozenset({"shell", "bash", "bashoutput", "glob", "grep", "ls"})
 
@@ -116,7 +119,7 @@ def group_tools(turn: TurnView) -> list[ToolGroup]:
     for _, kind, value in events:
         if kind == 0:
             finish()
-        elif value.name.casefold() in {"task", "subagent"}:
+        elif value.name.casefold() in TASK_TOOL_NAMES:
             finish()
             pending.append(value)
             finish()
@@ -188,7 +191,7 @@ def format_arguments(tool: ToolCallView) -> str:
         first, _, more = command.partition("\n")
         # Only the first command line; the full command stays in the expanded details.
         return _first_line(_text(first)) + ("…" if more.strip() and not first.endswith("…") else "")
-    if name == "task":
+    if name in {"task", "subagent_continue"}:
         return _first_line(_text(args.get("description") or args.get("task") or args.get("prompt") or ""))
     pairs = [
         f"{key}={_first_line(_text(value), 48)}"
@@ -514,7 +517,8 @@ def _task_phrase(tool: ToolCallView, agent: AgentView | None) -> str:
     prompt = tool.input.get("prompt") if isinstance(tool.input, Mapping) else None
     for candidate in (
         description,
-        agent.description if agent is not None else None,
+        # A follow-up card shows the new message, not the original task's label.
+        None if tool.name.casefold() == "subagent_continue" else (agent.description if agent is not None else None),
         prompt,
         _task_result(tool),
         agent.error if agent is not None else None,
@@ -604,6 +608,27 @@ def agent_state_label(agent: AgentView | None) -> str:
     return label
 
 
+def task_refusal(tool: ToolCallView, agent: AgentView | None) -> tuple[str, str] | None:
+    """``(status word, reason)`` for a Task call that errored before any child existed.
+
+    ``None`` while the call is running or a child exists. The status word is
+    ``metrics.status`` (``refused``) when present, else ``failed``. The reason is the
+    tool's error text without its leading ``[model: …]`` annotation line.
+    """
+    if agent is not None or not (tool.is_error or tool.status == "failed"):
+        return None
+    metrics = tool.metrics if isinstance(tool.metrics, Mapping) else {}
+    word = _first_line(_text(metrics.get("status") or "failed", 24)) or "failed"
+    # ``tool.error`` is often only the short display label ("Task task: refused"); the
+    # result text carries the real reason, so it wins and the label is the fallback.
+    text = _output(tool) or tool.error
+    lines = [row for row in str(text or "").splitlines() if row.strip()]
+    if lines and lines[0].lstrip().startswith("[model:"):
+        lines = lines[1:]
+    reason = " ".join(" ".join(lines).split())
+    return word, reason[:400]
+
+
 def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int, *, with_model: bool = True) -> tuple[str, bool]:
     marker = tool_status(tool)
     kind = (
@@ -612,7 +637,7 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
         else tool.input.get("subagent_type")
         if isinstance(tool.input, Mapping)
         else None
-    ) or "General"
+    ) or ("Continue" if tool.name.casefold() == "subagent_continue" else "General")
     kind = _text(str(kind), 32).title()
     # The card derives its state from the child, so a legacy acked `subagent` call keeps its
     # spinner for as long as the child's run is in flight.
@@ -620,7 +645,9 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     mark = spinner[spinner_index] if running else "·"
-    model = f" · {agent_model_label(agent)}" if with_model else ""
+    refusal = task_refusal(tool, agent)
+    label = "not started" if refusal else agent_model_label(agent)
+    model = f" · {label}" if with_model else ""
     state = agent_state(agent)
     note = f" · {agent_state_label(agent)}" if state in {"interrupted", "stopped"} or (state == "running" and agent.runs > 1) else ""
     return f"{mark} {kind} · {phrase}{model}{note}", running
@@ -853,6 +880,7 @@ __all__ = [
     "_agent_metrics",
     "agent_actual_model",
     "agent_model_label",
+    "task_refusal",
     "_has_message_content",
     "_latest_activity",
     "_literal",
@@ -861,6 +889,7 @@ __all__ = [
     "_setup_failure",
     "_stale_greeting",
     "_task_child_details",
+    "TASK_TOOL_NAMES",
     "_task_children",
     "_task_header",
     "_task_metrics",

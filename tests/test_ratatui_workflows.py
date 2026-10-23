@@ -850,6 +850,8 @@ async def test_ask_main_choice_is_unchanged_and_modal_is_reworded(shell):
     await shell.workflows.operate({"kind": "worktree_answer", "enabled": False})
     shell.client.set_session_worktree.assert_awaited_once_with("s", False)
     shell.client.enqueue.assert_awaited_once()
+    assert not shell.panel_title and shell.items == [] and shell.workflows.form is None
+    assert shell.workflows.stack == []
 
 
 @pytest.mark.asyncio

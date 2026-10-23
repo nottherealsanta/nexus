@@ -13,7 +13,7 @@ event timestamps, so replay produces the same blocks.
 from __future__ import annotations
 
 #: Tools whose rows are never part of an activity run.
-SUBAGENT_TOOLS = frozenset({"task", "subagent"})
+SUBAGENT_TOOLS = frozenset({"task", "subagent", "subagent_continue"})
 
 #: tool name -> (past verb, present verb, singular noun, plural noun)
 CATEGORIES = {

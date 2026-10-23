@@ -22,6 +22,8 @@ GROK_ROWS = 50
 # Text a live scene must show; missing ones are reported in the JSON, not asserted (the parent reviews them).
 GROK_MARKERS = {"dashboard": ["New Agent", "Waiting for response", "just now", "Worktree"], "mermaid": ["mermaid", "Start"],
                 "groups": ["failed", "Thinking"], "context": ["System prompt", "Tools", "prompt tail"]}
+# Text that means a scene fell back: the mermaid pie draws as a text bar list (mermaid_text.rs), so its source must not show as code.
+GROK_FORBIDDEN = {"mermaid": ['"cats" : 3']}
 
 
 def server_env(state, meta):
@@ -44,7 +46,8 @@ def dump_terminal(page, name, meta):
     markers = GROK_MARKERS.get(meta["scene"], [])
     report = {"name": name, **meta, "term_cols": page.evaluate("term.cols"), "term_rows": page.evaluate("term.rows"),
               "nonblank_lines": nonblank, "non_ascii_chars": sum(ord(c) > 127 for c in text),
-              "missing_markers": [m for m in markers if m.lower() not in text.lower()], "lines": lines}
+              "missing_markers": [m for m in markers if m.lower() not in text.lower()],
+              "fallback_markers": [m for m in GROK_FORBIDDEN.get(meta["scene"], []) if m in text], "lines": lines}
     (ARTIFACTS / f"{name}.json").write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n")
     (ARTIFACTS / f"{name}.txt").write_text("\n".join(lines).rstrip() + "\n")
     return report
@@ -174,8 +177,10 @@ def main():
                     if name in grok:
                         report = dump_terminal(page, name, grok[name])
                         flag = "BLANK" if report["nonblank_lines"] == 0 else "missing " + ",".join(report["missing_markers"]) if report["missing_markers"] else "ok"
-                        if report["nonblank_lines"] == 0:
+                        if report["nonblank_lines"] == 0 or report["fallback_markers"]:
                             failures.append(name)
+                        if report["fallback_markers"]:
+                            flag = "FELL BACK " + ",".join(report["fallback_markers"])
                         print(f"{name}: captured {report['term_cols']}x{report['term_rows']} nonblank={report['nonblank_lines']} {flag}")
                         continue
                     if state == "local_disclosure":

@@ -274,9 +274,36 @@ pub struct RootState {
     pub scroll: usize,
     /// Row hit rectangles of the last draw: `(rect, row index)`.
     pub hits: Vec<(Rect, usize)>,
+    /// Area that was selected when a drill was sent: the root stays up until the host's reply
+    /// selects another area, so the previous (stale) area page never flashes.
+    pub drill_from: Option<i64>,
 }
 
 impl RootState {
+    /// A drill to `target` was sent while the snapshot had `selected` area selected.
+    pub fn begin_drill(&mut self, selected: i64, target: usize) {
+        if usize::try_from(selected).is_ok_and(|at| at == target) {
+            self.show_page(); // the page already shown is the target; no reply to wait for
+        } else {
+            self.drill_from = Some(selected);
+        }
+    }
+    /// Show the drilled page now.
+    pub fn show_page(&mut self) {
+        self.active = false;
+        self.drill_from = None;
+    }
+    /// Return to the root list (cancels a pending drill).
+    pub fn show_root(&mut self) {
+        self.active = true;
+        self.drill_from = None;
+    }
+    /// Switch to the drilled page once a snapshot with a different selected area arrives.
+    pub fn settle_drill(&mut self, selected: i64) {
+        if self.drill_from.is_some_and(|from| from != selected) {
+            self.show_page();
+        }
+    }
     /// Track the modal opening and closing so every open starts at the root.
     pub fn track(&mut self, open: bool) {
         if open && !self.seen {
@@ -760,6 +787,37 @@ mod tests {
         key(&mut st, &rows, press(KeyCode::Esc));
         assert!(!st.searching && st.query.is_empty());
         assert_eq!(key(&mut st, &rows, press(KeyCode::Esc)), RootAct::Close);
+    }
+
+    #[test]
+    fn closing_and_reopening_starts_at_the_root_even_after_a_drill() {
+        let mut st = RootState::default();
+        st.track(true);
+        st.begin_drill(0, 5);
+        st.settle_drill(5);
+        assert!(!st.active);
+        st.track(false);
+        st.track(true);
+        assert!(st.active && st.drill_from.is_none());
+    }
+
+    #[test]
+    fn a_drill_keeps_the_root_until_the_reply_selects_another_area() {
+        let mut st = RootState::default();
+        st.track(true);
+        st.begin_drill(0, 5);
+        st.settle_drill(0); // stale snapshot: still the old area
+        assert!(st.active);
+        st.settle_drill(5);
+        assert!(!st.active && st.drill_from.is_none());
+        st.show_root();
+        st.begin_drill(5, 5); // already on the target page
+        assert!(!st.active);
+        st.show_root();
+        st.begin_drill(5, 2);
+        st.show_root(); // Esc before the reply cancels the pending drill
+        st.settle_drill(2);
+        assert!(st.active);
     }
 
     #[test]

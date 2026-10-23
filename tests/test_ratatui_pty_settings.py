@@ -6,7 +6,16 @@ import time
 import select
 
 import pytest
-from test_ratatui_pty_sessions import BINARY, Terminal
+from test_ratatui_pty_sessions import BINARY, Terminal as _Terminal
+
+
+class Terminal(_Terminal):
+    def action(self):
+        """The next user action; the bridge's passive `draft_state` composer report is not one."""
+        while (row := super().action()).get("type") == "draft_state":
+            pass
+        return row
+
 
 OP = {"kind": "sp_models", "area": "models"}
 PAGE = {
@@ -145,6 +154,43 @@ def test_a_host_rebuild_keeps_focus_and_a_closed_panel_never_shows_the_page():
         time.sleep(.3)
         t.redraw()
         assert "Highest tier" not in t.text(), "no page without its panel"
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_reopening_settings_after_a_drill_shows_the_root_never_a_stale_page():
+    """A pending drill keeps the root up; a close snapshot resets it so the next open starts at the root, not the old area."""
+    appearance = {"area": "appearance", "title": "Appearance", "intro": "", "footer": "", "scope": None,
+                  "blocks": [{"t": "row", "id": "zebra", "label": "Zebra stripes", "scope": "",
+                              "control": {"c": "toggle", "on": False, "locked": "", "operation": {"kind": "sp_appearance", "area": "appearance", "key": "zebra"}}}]}
+    nav = {**NAV, "selected": 1}
+    # Only the selected root row shows its description, so use the root's always-drawn footer tip.
+    root_text = "Saved in ~/.config/nexus/tui.json"
+    t = Terminal(40, 120)
+    try:
+        t.send(panel_title="Settings · Appearance", panel_layout="modal", nav=nav, settings_page=appearance, generation=1)
+        time.sleep(.4)
+        t.redraw()
+        assert root_text in t.text() and "Zebra stripes" not in t.text(), "first open starts at the root"
+        drill_to_models(t)  # the host has not replied: the snapshot still selects Appearance
+        t.redraw()
+        assert root_text in t.text() and "Zebra stripes" not in t.text(), "pending drill must not flash the stale page"
+        t.send(panel_title="Settings · Models", panel_layout="modal", nav=NAV, settings_page=PAGE, generation=1)
+        time.sleep(.4)
+        t.redraw()
+        assert "Highest tier" in t.text() and root_text not in t.text(), "the reply settles on the target page"
+        # Close, drawing the closed snapshot, then reopen with the stale Appearance snapshot.
+        t.send(panel_title="", settings_page=None, nav=None, generation=1)
+        time.sleep(.4)
+        t.redraw()
+        assert "Highest tier" not in t.text()
+        t.send(panel_title="Settings · Appearance", panel_layout="modal", nav=nav, settings_page=appearance, generation=1)
+        time.sleep(.4)
+        t.redraw()
+        screen = t.text()
+        assert root_text in screen, f"reopen shows the root:\n{screen}"
+        assert "Zebra stripes" not in screen and "Highest tier" not in screen, f"stale page shown:\n{screen}"
     finally:
         t.close()
 

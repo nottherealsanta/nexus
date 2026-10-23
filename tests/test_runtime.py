@@ -259,7 +259,7 @@ async def test_runtime_builds_native_tools_and_closes_owned_registry(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn is not None
-    assert len(turn.schemas) == 12
+    assert len(turn.schemas) == 13
     assert turn.gate is not None
 
     await runtime.aclose()

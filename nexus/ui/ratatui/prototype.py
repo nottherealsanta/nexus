@@ -30,6 +30,7 @@ from ...host_support.errors import error_text
 from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
 from ...ui_support.tool_signal import tool_signal
+from ...ui_support.timeline import TASK_TOOL_NAMES
 
 
 _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
@@ -604,7 +605,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
         operation = {"kind": "block_toggle", "id": tool.call_id + ":detail"}
         # `i` on the row opens the full labelled details (tool_details), which the relevant-only view omits.
         inspect = {"kind": "tool_details", "id": tool.call_id}
-        if tool.name.casefold() in {"task", "subagent"}:
+        if tool.name.casefold() in TASK_TOOL_NAMES:
             from ...ui_support.timeline import _task_children, _task_header
             child = next(iter(_task_children(tool, agents or {})), None)
             head, running = _task_header(tool, child, 0, with_model=False)
@@ -612,6 +613,10 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             phrase = " ".join(phrase.split())[:64]
             title = f"{name} Subagent — {phrase}"
             model, effort, tier = _agent_card_model(child)
+            from ...ui_support.timeline import task_refusal
+            refusal = task_refusal(tool, child)
+            if refusal:
+                model = "not started"
             tool_calls, tokens = _agent_card_metrics(child)
             args = getattr(tool, "input", None) or getattr(tool, "arguments", None) or {}
             agent_name = (
@@ -628,6 +633,9 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
             # Never the tool details: a click opens the subagent page, so only a failure shows inline.
             detail = f"Error: {child.error}" if child is not None and child.error else ""
+            if refusal:
+                # Muted, not red: the native card tints "failed"/"Error:" with the error colour.
+                detail = refusal[1]
             if child is not None and child.body.external:
                 from ...ui_support.external_worker import header_rows, task_note
                 provider = next((v for k, v in header_rows(child.body.external) if k == "Provider"), "")
@@ -640,7 +648,7 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
                      # `idle · run 2` / `stopped by system: …`; empty for a plain running or finished child.
-                     "state": agent_state_label(child) if state in {"interrupted", "stopped"} or (state == "running" and child.runs > 1) else "",
+                     "state": refusal[0] if refusal else agent_state_label(child) if state in {"interrupted", "stopped"} or (state == "running" and child.runs > 1) else "",
                      "model": model, "effort": effort, "tier": tier, "metrics": "",
                      "agent_name": agent_name, "task": phrase,
                      "tool_calls": tool_calls, "external_tool_calls": _agent_card_external_tools(child), "tokens": tokens, "started_ms": started_ms, "elapsed_ms": elapsed_ms,
