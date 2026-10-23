@@ -286,3 +286,15 @@ binary under a pseudo-terminal with a scripted host, sends keystrokes and mouse-
 sequences, and asserts on the emulated screen. Use it for anything where the host's snapshot and
 the client's operations must agree; hand-built snapshots (`test_ratatui_pty_*.py`) cannot catch
 that. Build `rust/tui` first (`cargo build`); the tests skip without the binary.
+
+
+### Session worktree acceptance
+
+`tests/test_worktree_sessions_acceptance.py` exercises one real-Git lifecycle:
+Ask selection, automatic editing-child isolation and return, saved-turn diff,
+confirmed local integration, checkout removal with the branch kept, and reuse
+without a new commit for an unchanged turn. `tests/test_worktree_checkpoints.py`
+checks shared-checkout preservation and writes without tool receipts. Native
+mode selection and saved-turn review run through the actual terminal in
+`tests/test_worktree_sessions_pty.py`; those tests require PTY and local Unix-socket
+access as well as the built native binary. No live provider is required.

@@ -1,14 +1,13 @@
 # 07. Basic worktree lifecycle
 
 Status: implemented for explicit cleanup and recovery of authenticated session worktrees.
-Session mode selection remains in the earlier runtime behavior and this phase does not
-introduce a separate setup framework.
+The three-mode native choice is implemented in 08. This phase does not introduce
+a separate setup framework.
 
-## Existing behavior and proposed behavior
+## Behavior
 
 Keep existing setup/copy behavior as compatibility behavior; this plan does not add
-a setup framework. The new proposal is limited to the session choice and basic
-worktree lifecycle below.
+a setup framework. The work covers the basic worktree lifecycle below.
 
 Offer three modes: No worktree, Ask every time, and Always worktree. Remember the
 project preference. Ask mode prompts once before the first turn of each new session and reuses that

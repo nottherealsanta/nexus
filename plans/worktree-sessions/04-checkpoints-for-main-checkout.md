@@ -1,11 +1,11 @@
 # 04. Save changed turns in the current checkout
 
 Status: backend checkpoint capture and host diff/restore contracts are implemented
-(commit `19dc207`, per the existing ledger). Native diff presentation remains incomplete. Ref cleanup is retention-based; eager
+(commit `19dc207`, per the existing ledger). Native saved-turn diff presentation is implemented in 08. Ref cleanup is retention-based; eager
 purge cleanup is not required. The existing restore API need not be extended or used
 by this proposal.
 
-## Proposed behavior
+## Behavior
 
 Every turn that changes files is saved in Git and can be reviewed by turn. A session
 in the main or an external checkout uses the existing hidden checkpoint mechanism;
@@ -33,7 +33,7 @@ sessions. The first baseline is captured eagerly to avoid missing shell edits.
 - [x] Host diff and preview/confirm restore contracts with refusal checks.
 - Checkpoint refs are not eagerly removed on session purge; bounded retention
   manages them. This is an existing limitation, not a new requirement.
-- [ ] Show per-turn diffs in the native TUI. This has not been verified.
+- [x] Show per-turn diffs in the native TUI. Phase 08 verified the owned-commit row in the terminal; checkpoint linkage and bounded diff capture have projection and real-Git coverage. Phase 09 covers writes without tool receipts.
 
 ## Acceptance
 
