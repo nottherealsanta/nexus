@@ -51,12 +51,48 @@ async def test_provider_secret_not_returned_in_snapshot(shell):
 
 @pytest.mark.asyncio
 async def test_failed_submit_keeps_draft_and_attachments(shell):
+    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
+        session="s", state={"mode": "ask", "chosen": True, "editable": False, "git": False}))
     shell.client.enqueue = AsyncMock(side_effect=ValueError("unavailable"))
     shell.attachments = [p.AttachmentPrepareResult(attachment_id="a", name="a.txt", kind="document", preview="a")]
     with pytest.raises(ValueError):
         await shell.submit("preserve me")
     assert shell.composer_restore == "preserve me"
     assert shell.attachments[0].attachment_id == "a"
+
+
+@pytest.mark.asyncio
+async def test_ask_worktree_prompt_resumes_text_and_original_attachment(shell):
+    attachment = p.AttachmentPrepareResult(attachment_id="a", name="a.txt", kind="document", preview="a")
+    shell.attachments = [attachment]
+    shell.client.session_worktree_choice = AsyncMock(side_effect=[
+        p.SessionWorktreeResult(session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}),
+        p.SessionWorktreeResult(session="s", state={"mode": "ask", "chosen": True, "editable": True, "git": True}),
+    ])
+    shell.client.set_session_worktree = AsyncMock()
+    shell.client.enqueue = AsyncMock()
+    await shell.submit("keep this prompt")
+    assert shell.panel_title == "Session worktree"
+    assert [item["label"] for item in shell.items] == ["Yes · use a worktree", "No · use this checkout"]
+    assert shell.client.enqueue.await_count == 0
+    await shell.workflows._operate({"kind": "worktree_answer", "enabled": False})
+    shell.client.set_session_worktree.assert_awaited_once_with("s", False)
+    shell.client.enqueue.assert_awaited_once()
+    assert shell.client.enqueue.await_args.args[:2] == ("s", "keep this prompt")
+    assert shell.client.enqueue.await_args.kwargs["attachments"] == ["a"]
+    assert shell.attachments == []
+    assert attachment.attachment_id == "a"
+
+
+@pytest.mark.asyncio
+async def test_worktree_mode_picker_has_three_modal_choices(shell):
+    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
+        session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}))
+    await shell.workflows.operate({"kind": "worktree_mode"})
+    assert shell.panel_title == "Session worktree"
+    assert shell.panel_layout == "modal"
+    assert [item["label"] for item in shell.items] == [
+        "No worktree", "✓ Ask every time", "Always worktree"]
 
 
 @pytest.mark.asyncio
@@ -748,3 +784,38 @@ def test_mcp_server_page_keeps_names_the_host_already_prefixed():
     assert _full_name(preview, "tracker", "mcp__tracker__get") == "mcp__tracker__get"
     assert _full_name(preview, "tracker", "get") == "mcp__tracker__get"
     assert _full_name(preview, "my-server", "x") == "mcp__my_server__x"
+
+
+async def test_modern_subagent_removal_uses_record_id_and_fresh_confirmation(shell):
+    shell.client.list_worktrees = AsyncMock(return_value=p.WorktreeListResult(worktrees=[{
+        "kind": "subagent", "child_id": "session-s-sub-1", "session": "s/sub/1", "lifecycle": "active"}]))
+    shell.client.inspect_worktree = AsyncMock(return_value=p.WorktreeInspectResult(child_id="session-s-sub-1", status="active", record={"branch": "child-branch"}))
+    shell.client.remove_worktree = AsyncMock(side_effect=[
+        p.SessionWorktreeResult(session="s", state={"state": "ready", "token": "secret-token", "branch": "child-branch"}),
+        p.SessionWorktreeResult(session="s", state={"state": "removed", "reason": "Branch kept"}),
+    ])
+    await shell.workflows.operate({"kind": "worktrees"})
+    action = shell.items[0]["operation"]
+    assert action["kind"] == "session_worktree_actions"
+    await shell.workflows.operate(action)
+    assert [item["label"] for item in shell.items] == ["Remove checkout…"]
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert "secret-token" not in repr(shell.panel_lines)
+    confirm = shell.items[1]["operation"]
+    await shell.workflows.operate(confirm)
+    assert shell.client.remove_worktree.await_args.args == ("session-s-sub-1",)
+    assert shell.client.remove_worktree.await_args.kwargs == {"confirmation_token": "secret-token"}
+    assert "Branch kept" in repr(shell.panel_lines)
+
+
+async def test_answer_from_another_session_cannot_send_pending_prompt(shell):
+    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
+        session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}))
+    shell.client.set_session_worktree = AsyncMock()
+    shell.client.enqueue = AsyncMock()
+    await shell.submit("original session only")
+    shell.controller.session = "different"
+    with pytest.raises(ValueError, match="Session changed"):
+        await shell.workflows.operate({"kind": "worktree_answer", "enabled": True})
+    shell.client.set_session_worktree.assert_not_awaited()
+    shell.client.enqueue.assert_not_awaited()

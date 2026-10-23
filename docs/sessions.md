@@ -45,6 +45,19 @@ root notice explains the working checkout and that worktree extension edits
 become live after land. Filesystem-rooted MCP servers continue seeing the project
 checkout; they are not cloned per root.
 
+### Session worktree choice
+
+The native session modal remembers a project preference: **No worktree**, **Ask
+every time**, or **Always worktree**. Ask prompts once before a new session's
+first input, and retains its answer for later turns. The preference lives in
+machine state (`worktree-mode.json` in the project's state directory), separate
+from repository settings. Without a remembered preference, `sessions = true`
+means Always and the default is Ask. Noninteractive callers keep the existing
+boolean selection API; unattended Ask sessions continue in the current checkout.
+Changing the preference after a session starts affects future sessions only.
+A selected worktree is created lazily on the first model turn; composer shell
+commands require that first prompt to prepare it before they can execute.
+
 ### Owned session worktrees
 
 `[worktrees] sessions = true` creates an isolated `nexus/session/...` branch on

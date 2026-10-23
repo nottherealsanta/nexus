@@ -67,7 +67,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionJobs` `SessionJobLog` `SessionJobStop` `SessionJobBackground` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionJobs` `SessionJobLog` `SessionJobStop` `SessionJobBackground` `SessionQueueMove` `SessionQueueRemove` `SessionQueueSetMode` `SessionCancel` `SessionSubscribe` `SessionState` `SessionActivity` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` `SessionWorktreeChoice` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
@@ -79,7 +79,7 @@ inward-only exceptions. Errors are
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsMcpAdd` `SettingsWrite` `SettingsReset` `SettingsDelete` `SkillsInstall` `SetupStatus` `SetupSave` |
 | Providers | `UsageRefreshSettings` `UsageRefreshSettingsSet` (result `UsageRefreshSettingsResult`) `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
-| Worktrees | `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
+| Worktrees | `SessionWorktreeChoice` `SessionWorktreeSet` `SessionPromote` `SessionDetach` `SessionWorktreeStatus` `SessionWorktreeTrust` `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` `WorktreeRemove` `SessionIntegrate` `SessionTurnDiff` |
 | Workspace | `FileSearch` (`query`, `limit`, `include_directories=false`; true adds visible `dir/` rows; `session=""` selects the main root) `GitDiff` `DirectoryList` `FilePreview` `GitStatus` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
@@ -98,7 +98,11 @@ inward-only exceptions. Errors are
 
 `SessionOpen.root` optionally links a newly created session to an absolute external linked-worktree path. It is applied only after the session is created; opening an existing session with a different root is refused. The runtime validates that the path belongs to the project's repository. An empty root keeps the session on the project root.
 
+`SessionWorktreeChoice(session, mode="")` reads the project mode (`none`, `ask`, or `always`); a nonempty mode remembers it and updates an editable draft. Its status includes `mode`, `chosen`, `editable`, and the current root. A boolean `SessionWorktreeSet` answers Ask for this session without changing the project mode.
+
 The session worktree commands share `SessionWorktreeResult(session, state)`. `SessionWorktreeStatus` reports the current selection, root/worktree state, Git availability and a bounded local-branch list; a non-Git project reports a disabled reason. `SessionWorktreeSet(session, enabled, base="current")` changes a draft's first-turn preference. `SessionPromote(session, reason="", continuation="")` moves a main or external session at a turn boundary; `SessionDetach(session)` returns an owned session to the main checkout. Setup trust choices use `SessionWorktreeTrust(session, decision, digest)`, where decision is `allow_once`, `allow_project`, or `skip`; `digest` must match the setup digest shown by status, so a stale review cannot authorize changed setup. The runtime validates draft/boundary state and owns worktree mutations; clients receive only sanitized status data. New-session UI can call these commands without reading settings or Git directly.
+
+`WorktreeRemove(child_id, confirm_token="")` previews removal of an authenticated modern checkout. Confirmation is single-use, expires after 120 seconds and binds the fresh checkout state. The owner must be idle and the checkout clean, including ignored files; removal preserves its branch and session record.
 
 `SessionIntegrate(session, confirm_token="")` uses the same result envelope. Its first call returns a bounded preview of the owned session branch, original target branch, commits and changed files, plus a short-lived confirmation token. The confirmed call rechecks the full preview and performs a local fast-forward to the reviewed session commit only when the target checkout is on its original branch, both checkouts are clean and idle, and no Git operation is active. It refuses divergence, stale state and ignored-file overwrites. It never pushes.
 

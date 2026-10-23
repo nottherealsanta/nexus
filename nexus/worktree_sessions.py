@@ -46,10 +46,58 @@ class SessionWorktrees:
     def handle(self, session):
         return self.runtime.sessions.open(session, create=False, recover=False)
 
+    def mode(self):
+        """Project-local UI preference; the legacy boolean remains compatible."""
+        home = getattr(self.runtime, "_home", None)
+        if home is None:
+            return "always" if self.policy().sessions else "ask"
+        path = project_state_dir(self.runtime.workspace, home) / "worktree-mode.json"
+        try:
+            if not path.is_symlink() and path.stat().st_size <= 128:
+                value = json.loads(path.read_text())
+                if value in {"none", "ask", "always"}:
+                    return value
+        except (OSError, ValueError, TypeError):
+            pass
+        return "always" if self.policy().sessions else "ask"
+
+    def choice(self, session, mode=""):
+        if not mode:
+            return self.status(session)
+        if mode not in {"none", "ask", "always"}:
+            raise ValueError("Worktree mode must be none, ask, or always")
+        handle = self.handle(session)
+        self._idle(handle)
+        handle._lock.acquire(shared=False, blocking=False)
+        try:
+            if self.runtime.sessions._has_pending_work(session):
+                raise SessionBusy("Worktree choice requires an idle session")
+            editable = not self.locked(handle)
+            if editable and mode == "always" and not (self.runtime.workspace / ".git").exists():
+                raise ValueError("Worktrees need a Git repository")
+            path = project_state_dir(self.runtime.workspace, self.runtime._home) / "worktree-mode.json"
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + "." + uuid.uuid4().hex)
+            try:
+                with temporary.open("x", encoding="utf-8") as stream:
+                    os.chmod(temporary, 0o600)
+                    stream.write(json.dumps(mode) + "\n")
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            if editable:
+                handle.emit_session_event("session.worktree_set", {
+                    "enabled": mode == "always", "base": self.policy().base,
+                    "choice_pending": mode == "ask",
+                })
+        finally:
+            handle._lock.release()
+        return self.status(session)
+
     def selection(self, handle):
         policy = self.policy()
         root = self.runtime.session_root(handle.id)
-        selected = {"enabled": bool(root.kind == "worktree" or (policy.sessions and root.kind == "main" and not self.locked(handle))), "base": policy.base}
+        selected = {"enabled": bool(root.kind == "worktree" or (self.mode() == "always" and root.kind == "main" and not self.locked(handle))), "base": policy.base}
         for event in handle.events:
             if event.type == "session.worktree_set":
                 selected = {"enabled": bool(event.data.get("enabled")), "base": event.data.get("base", "current")}
@@ -127,11 +175,14 @@ class SessionWorktrees:
         root = self.runtime.session_root(session)
         selected = self.selection(handle)
         is_git = (self.runtime.workspace / ".git").exists()
-        result = {**selected, "editable": not self.locked(handle), "git": is_git,
+        choice = next((event for event in reversed(handle.events) if event.type == "session.worktree_set"), None)
+        chosen = root.kind == "external" or self.locked(handle) or bool(choice is not None and not choice.data.get("choice_pending", False))
+        result = {**selected, "mode": self.mode(), "chosen": chosen,
+                  "editable": not self.locked(handle), "git": is_git,
                   "disabled_reason": "" if is_git else "Worktrees need a Git repository",
                   "pending_promotion": bool(self.pending_request(handle)),
                   "setup": self._display_command(self.policy().setup), "setup_shell": self.policy().setup_shell, "submodules": self.policy().submodules,
-                  "kind": root.kind, "branch": root.branch, "base_ref": root.base_ref,
+                  "kind": root.kind, "worktree_id": root.worktree_id, "branch": root.branch, "base_ref": root.base_ref,
                   "path_display": root.to_data(self.runtime.workspace)["path_display"], "branches": []}
         if is_git:
             result["branches"] = self._git(self.runtime.workspace, "for-each-ref", "--count=200", "--format=%(refname:short)", "refs/heads").splitlines()[:200]

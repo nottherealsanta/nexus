@@ -272,7 +272,7 @@ def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, An
             or any(not isinstance(path, str) or len(path) > 1024 or "\0" in path for path in files)):
             return _diagnostic(state, event, data)
         from .model import CheckpointView
-        checkpoint = CheckpointView(seq=seq, ref=ref, commit=commit, head=head, base_ref=base_ref,
+        checkpoint = CheckpointView(seq=seq, turn_id=event.turn or "", ref=ref, commit=commit, head=head, base_ref=base_ref,
             files=files, files_clipped=_bounded_count(data.get("files_clipped")), foreign=_bounded_count(data.get("foreign")),
             insertions=_bounded_count(data.get("insertions")), deletions=_bounded_count(data.get("deletions")),
             head_moved=bool(data.get("head_moved")))

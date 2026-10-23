@@ -102,7 +102,8 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/help`, `/hotkeys` | | | help; `/hotkeys` opens Settings → Keyboard (native TUI) |
 | `/notifications` | | | open the recent-notifications drawer (native TUI only; the history is client-side, also `Ctrl+X Shift+N` or a click on the top-bar `◔ N`) |
 | `/exit` | | `/quit` | leave |
-| `/worktrees` | | | review and manage child worktrees |
+| `/worktree` | | | native session modal: No worktree / Ask every time / Always worktree, with current root |
+| `/worktrees` | | | inspect modern session/child checkouts and confirm removal or session integration; retain legacy child review |
 | `/copy` | | | copy assembled context as JSON |
 | `/diff` | `[--staged] [ref]` | | workspace Git diff |
 | `/cost` | | | token usage and available cost estimate |

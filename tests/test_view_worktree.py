@@ -110,3 +110,14 @@ def test_main_default_worktree_view_is_empty() -> None:
     assert view["enabled"] is False
     assert view["state"] == "none"
     assert view["commits"] == []
+
+
+def test_checkpoint_replay_links_the_exact_turn():
+    events = [_event(1, "turn.started", {}, turn="t1"), _event(2, "checkpoint.captured", {
+        "seq": 42, "ref": "refs/nexus/checkpoints/s/0000000042", "commit": "a" * 40,
+        "head": "b" * 40, "base_ref": "c" * 40, "files": ["saved.txt"],
+    }, turn="t1")]
+    view = apply_many(initial_state("s"), events)
+    assert view.checkpoints[0].turn_id == "t1"
+    assert view.checkpoints[0].seq == 42
+    assert apply_many(initial_state("s"), events).to_dict() == view.to_dict()

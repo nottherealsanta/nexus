@@ -435,6 +435,13 @@ class SessionWorktreeSet(msgspec.Struct, tag=True, frozen=True):
     base: str = "current"
 
 
+class SessionWorktreeChoice(msgspec.Struct, tag=True, frozen=True):
+    """Read or remember none/ask/always mode and update an editable draft."""
+
+    session: str
+    mode: str = ""
+
+
 class SessionPromote(msgspec.Struct, tag=True, frozen=True):
     """Promote a main/external session into an owned worktree at a turn boundary."""
 
@@ -1412,6 +1419,7 @@ Command = (
     | SessionSearch
     | SessionOpen
     | SessionWorktreeSet
+    | SessionWorktreeChoice
     | SessionPromote
     | SessionDetach
     | SessionWorktreeStatus
@@ -2985,6 +2993,7 @@ __all__ = [
     "SessionOpen",
     "SessionOpenResult",
     "SessionWorktreeSet",
+    "SessionWorktreeChoice",
     "SessionPromote",
     "SessionDetach",
     "SessionWorktreeStatus",

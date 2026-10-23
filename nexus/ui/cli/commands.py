@@ -69,6 +69,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/notifications", "Show recent notifications (native TUI)"),
     CommandSpec("/exit", "Leave the chat", aliases=("/quit",)),
     CommandSpec("/worktrees", "Review and manage child worktrees"),
+    CommandSpec("/worktree", "Choose this project's session worktree mode"),
     CommandSpec("/copy", "Copy assembled context as JSON"),
     CommandSpec("/diff", "Show workspace Git diff", "[--staged] [ref]"),
     CommandSpec("/cost", "Show token usage and available cost estimate"),

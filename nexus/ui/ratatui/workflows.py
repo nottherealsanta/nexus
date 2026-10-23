@@ -14,6 +14,7 @@ from ...ui_support.text import escape_controls
 from .actions import labelled
 from .speak_pages import SpeakPages
 from .tier_pages import TierPages
+from .worktree_pages import WorktreePages
 from ...ui_support.tier_settings import TIERS_HELP, new_agent_template
 
 
@@ -21,7 +22,7 @@ def field(value, key, default=None):
     return value.get(key, default) if isinstance(value, dict) else getattr(value, key, default)
 
 
-class Workflows(TierPages, SpeakPages):
+class Workflows(TierPages, SpeakPages, WorktreePages):
     def __init__(self, shell):
         self.shell = shell
         self.form = None
@@ -29,6 +30,7 @@ class Workflows(TierPages, SpeakPages):
         self.login = None
         self.review = None
         self.review_files = []
+        self.pending_worktree_submission = None
         self.stack = []
         self.agent_page_id = None
         self.agent_context = {}
@@ -259,6 +261,8 @@ class Workflows(TierPages, SpeakPages):
             await self.refresh_page()
 
     async def _operate(self, operation):
+        if await self.worktree_operation(operation):
+            return
         kind = operation["kind"]
         if kind == "ownership_tree":
             from .ownership import tree_menu
@@ -680,7 +684,8 @@ class Workflows(TierPages, SpeakPages):
             session = await self.client.restore(operation["id"])
             await self.shell.switch(session)
         elif kind == "session_actions":
-            self.menu("Session actions", [("Ownership tree", {"kind": "ownership_tree", "id": operation["id"]}), ("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
+            self.menu("Session actions", [("Ownership tree", {"kind": "ownership_tree", "id": operation["id"]}),
+                ("Worktree mode…", {"kind": "worktree_mode", "id": operation["id"]}), ("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
                 ("Archive", {"kind": "session_archive", "id": operation["id"]}),
                 ("Move to trash…", {"kind": "confirm", "label": "Move session to trash?", "next": {"kind": "session_delete", "id": operation["id"]}})])
         elif kind == "worktrees":
@@ -690,6 +695,8 @@ class Workflows(TierPages, SpeakPages):
             self.stack.clear()
             note = ["Host worktree list has more entries."] if result.has_more else [f"{len(result.worktrees)} daemon-owned worktree(s)."]
             self.menu("Worktrees", [(f"{row.get('lifecycle') or row.get('status') or 'unknown'} · {row.get('child_id') or row.get('id')}",
+                {"kind": "session_worktree_actions", "id": row.get("session"), "child_id": row.get("child_id"), "record_kind": row.get("kind")}
+                if row.get("kind") in {"session", "subagent"} else
                 {"kind": "worktree_actions", "id": row.get("child_id") or row.get("id")}) for row in result.worktrees],
                 note + labelled(result))
         elif kind == "worktree_force_discard":

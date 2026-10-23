@@ -94,7 +94,7 @@ def test_native_prompt_writes_and_commits_only_in_owned_session_worktree(tmp_pat
             error_file = tmp_path / "startup-error"
             diagnostic = error_file.read_text() if error_file.exists() else app.text()
             raise AssertionError(f"Child status: {app.process.poll()}\n{diagnostic}") from exc
-        lines = app.redraw(.5).splitlines()
+        lines = app.text().splitlines()
         row = next(i + 1 for i, line in enumerate(lines) if "Type a message" in line)
         app.key(f"\x1b[<0;12;{row}M\x1b[<0;12;{row}m".encode(), .2)
         app.key(b"Create session-result.txt with the requested contents\r", .5)
@@ -118,6 +118,52 @@ def test_native_prompt_writes_and_commits_only_in_owned_session_worktree(tmp_pat
         assert _git(worktree, "branch", "--show-current").startswith("nexus/session/")
         assert "Nexus-Session:" in _git(worktree, "log", "-1", "--format=%B")
         assert "Nexus-Agent: root" in _git(worktree, "log", "-1", "--format=%B")
+        app.wait_for("Saved turn ·")
+        saved_row = next(i + 1 for i, line in enumerate(app.text().splitlines()) if "Saved turn ·" in line)
+        app.key(f"\x1b[<0;20;{saved_row}M\x1b[<0;20;{saved_row}m".encode(), .4)
+        app.wait_for("Saved turn · checkpoint")
         app.key(b"\x11", .5)
+    finally:
+        app.close()
+
+
+def test_native_ask_mode_prompts_before_first_turn_and_resumes_prompt(tmp_path: Path, monkeypatch):
+    project = tmp_path / "main"
+    project.mkdir()
+    _git(project, "init", "-b", "main")
+    _git(project, "config", "user.name", "Test")
+    _git(project, "config", "user.email", "test@example.test")
+    (project / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(project, "add", "seed.txt")
+    _git(project, "commit", "-m", "seed")
+    binary = terminal.ROOT / "rust/tui/target/debug/nexus-ratatui"
+    if not binary.exists():
+        pytest.skip("native binary is unavailable")
+    monkeypatch.setattr(terminal, "BINARY", Path(binary))
+    ask_child = CHILD.replace("WorktreesSection(sessions=True)", "WorktreesSection(sessions=False)")
+    ask_child = ask_child.replace(
+        "await peer.call(p.SessionStart(session='worktree-session', content='Prepare the session UI'))\n                await host.facade.wait_idle(timeout=15)",
+        "await asyncio.sleep(.3)",
+    )
+    monkeypatch.setattr(terminal, "CHILD", ask_child)
+    app = terminal.App(tmp_path)
+    try:
+        app.wait_for("Type a message")
+        lines = app.text().splitlines()
+        row = next(i + 1 for i, line in enumerate(lines) if "Type a message" in line)
+        app.key(f"\x1b[<0;12;{row}M\x1b[<0;12;{row}m".encode(), .2)
+        app.key(b"/worktree\r", .4)
+        app.wait_for("Always worktree")
+        chooser = app.redraw(.3)
+        assert "No worktree" in chooser and "Ask every time" in chooser
+        capture = Path("artifacts/worktree-ask-pty.txt")
+        capture.parent.mkdir(exist_ok=True)
+        capture.write_text(chooser, encoding="utf-8")
+        app.key(b"\x1b", .3)
+        app.key(b"Please answer with ok\r", .4)
+        app.wait_for("Yes · use a worktree")
+        app.key(b"\x1b[B\r", .5)
+        app.wait_for("Session root ready")
+        assert _git(project, "worktree", "list", "--porcelain").count("worktree ") == 1
     finally:
         app.close()

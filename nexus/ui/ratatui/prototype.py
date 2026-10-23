@@ -1229,7 +1229,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             number = ordinal
         cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         notices_before(turn.started_ts if turn.started_ts is not None else float("inf"))
-        turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
+        saved_flags = (tuple((item.seq, item.sha) for item in view.worktree.commits if item.sha in turn.commit_shas),
+                       tuple((item.seq, item.commit) for item in view.checkpoints if item.turn_id == turn.id))
+        turn_flags = (*flags, saved_flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies), number)
         cache_key = f"{getattr(controller, 'session', view.session_id)}\x00{turn.id}"
@@ -1239,6 +1241,17 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         else:
             turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents, literal, number),
                                                ([], [{"id": turn.id, "title": "Turn", "text": "This turn could not be rendered", "kind": "literal"}]))
+            saved_rows = []
+            for commit in view.worktree.commits:
+                if commit.sha in turn.commit_shas:
+                    saved_rows.append((commit.seq, f"Saved turn · {commit.sha[:10]} · {commit.insertions} added · {commit.deletions} removed"))
+            for checkpoint in view.checkpoints:
+                if checkpoint.turn_id == turn.id:
+                    saved_rows.append((checkpoint.seq, f"Checkpoint · {checkpoint.commit[:10]} · {len(checkpoint.files) + checkpoint.foreign} files · {checkpoint.insertions} added · {checkpoint.deletions} removed"))
+            turn_blocks = [*turn_blocks, *[{
+                "id": f"{turn.id}:saved:{seq}", "kind": "summary", "gap": 1, "text": label,
+                "operation": {"kind": "saved_turn_diff", "seq": seq},
+            } for seq, label in sorted(set(saved_rows))]]
             if blocks and turn_blocks and turn_blocks[0].get("gap", 0) < 1:
                 first = {**turn_blocks[0], "gap": 1}
                 first["rev"] = _revision(first)

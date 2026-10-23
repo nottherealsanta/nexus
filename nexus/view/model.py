@@ -119,6 +119,8 @@ def _dump(value: object) -> Any:
                 continue
             if item.name == "commit_shas" and not field_value:
                 continue
+            if item.name == "turn_id" and isinstance(value, CheckpointView) and not field_value:
+                continue
             if (
                 item.name in {"assistant_ts", "elapsed_ms"}
                 and isinstance(value, TurnView)
@@ -454,6 +456,7 @@ class CheckpointView(_View):
     """One bounded hidden checkpoint summary for a main-checkout turn."""
 
     seq: int = 0
+    turn_id: str = ""
     ref: str = ""
     commit: str = ""
     head: str = ""

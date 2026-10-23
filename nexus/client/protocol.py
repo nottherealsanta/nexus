@@ -254,6 +254,19 @@ class Client:
             p.SessionWorktreeStatus(session=session)
         )
 
+    async def session_worktree_choice(self, session: str, mode: str = "") -> p.SessionWorktreeResult:
+        """Read or remember the project worktree mode and draft selection."""
+        return await self._request(p.SessionWorktreeChoice(session=session, mode=mode))  # type: ignore[return-value]
+
+    async def session_turn_diff(self, session: str, seq: int) -> p.SessionWorktreeResult:
+        return await self._request(p.SessionTurnDiff(session=session, seq=seq))  # type: ignore[return-value]
+
+    async def integrate_session(self, session: str, *, confirmation_token: str = "") -> p.SessionWorktreeResult:
+        return await self._request(p.SessionIntegrate(session=session, confirm_token=confirmation_token))  # type: ignore[return-value]
+
+    async def remove_worktree(self, child_id: str, *, confirmation_token: str = "", project: str = "") -> p.SessionWorktreeResult:
+        return await self._request(p.WorktreeRemove(child_id=child_id, confirm_token=confirmation_token, project=project))  # type: ignore[return-value]
+
     async def approve_worktree_setup(
         self, session: str, decision: Literal["allow_once", "allow_project", "skip"], *, digest: str
     ) -> p.SessionWorktreeResult:

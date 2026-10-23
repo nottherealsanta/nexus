@@ -1819,7 +1819,7 @@ class HostFacade:
         target_commands = (p.SessionTree, p.SessionInspect, p.SessionFork,
                            p.SessionDelete, p.SessionExport,
                            p.SessionArchive, p.SessionUnarchive)
-        target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionPromote,
+        target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionWorktreeChoice, p.SessionPromote,
                            p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust,
                            p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
         if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
@@ -2062,6 +2062,11 @@ class HostFacade:
             else:
                 state = {**state, "token": self._confirmation_token("turn_revert", command.session, state, options)}
             return p.SessionWorktreeResult(session=command.session, state=state)
+        if isinstance(command, p.SessionWorktreeChoice):
+            self._refuse_manager(command.session, "session worktree choice")
+            state = await asyncio.to_thread(self.runtime._session_worktrees.choice,
+                command.session, command.mode)
+            return p.SessionWorktreeResult(session=command.session, state=state)
         if isinstance(command, p.SessionWorktreeSet):
             self._refuse_manager(command.session, "session worktree selection")
             state = await self._invoke_runtime_worktree(
@@ -2246,6 +2251,9 @@ class HostFacade:
         if isinstance(command, p.SessionShell):
             self._refuse_manager(command.session, "shell commands")
             handle = self._session(command.session)
+            controller = self.runtime._session_worktrees
+            if controller.selection(handle)["enabled"] and not controller.locked(handle):
+                raise ValueError("Send the first prompt to prepare the selected worktree before running shell commands")
             return p.SessionShellResult(
                 session=command.session, shell_id=self.shells.start(handle, command.command)
             )

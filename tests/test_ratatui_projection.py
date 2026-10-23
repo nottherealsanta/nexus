@@ -1394,3 +1394,20 @@ def test_wire_sends_restore_attachments_with_the_one_shot_restore():
     assert wire.encode(base)["restore_attachments"] == 2
     again = wire.encode({**base, "revision": 2})
     assert again is not None and again["restore_attachments"] == 2
+
+
+def test_checkpoint_label_updates_cached_turn_and_uses_saved_record_sequence(tmp_path, monkeypatch):
+    from nexus.view.model import CheckpointView
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view = initial_state("s")
+    view.turns = [_turn()]
+    controller = SimpleNamespace(view=view, session="s")
+    shell = ShellActions(controller)
+    before = project(controller, 1, shell=shell)
+    assert not any(block.get("operation", {}).get("kind") == "saved_turn_diff" for block in before["blocks"])
+    view.checkpoints = [CheckpointView(seq=42, turn_id="t", commit="a" * 40, foreign=1)]
+    after = project(controller, 2, shell=shell)
+    saved = next(block for block in after["blocks"] if block.get("operation", {}).get("kind") == "saved_turn_diff")
+    assert saved["operation"]["seq"] == 42
+    assert "aaaaaaaaaa" in saved["text"] and "1 files" in saved["text"]

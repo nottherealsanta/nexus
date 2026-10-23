@@ -512,6 +512,30 @@ class ShellActions:
             self.composer_restore = text
             self.flash("Open that session to send attachments", "warning")
             return True
+        # Ask mode is resolved before either a model turn or a shell command can
+        # touch the draft checkout. Keep the exact composer payload until answered.
+        if text.strip() and not text.startswith("/") and not self.manager.is_active(target):
+            try:
+                choice = await self.client.session_worktree_choice(target)
+            except Exception:
+                self.composer_restore = text
+                raise
+            state = choice.state
+            if (state.get("mode") == "ask" and state.get("editable") and state.get("git")
+                    and not state.get("chosen")):
+                if target != self.controller.session:
+                    await self.switch(target)
+                self.workflows.pending_worktree_submission = {
+                    "text": text, "mode": mode, "session": target,
+                    "attachments": list(self.attachments),
+                    "attachment_labels": dict(self.attachment_labels),
+                    "marker_attachments": dict(self.marker_attachments),
+                }
+                self.workflows.menu("Session worktree", [
+                    ("Yes · use a worktree", {"kind": "worktree_answer", "enabled": True}),
+                    ("No · use this checkout", {"kind": "worktree_answer", "enabled": False}),
+                ], ["Choose where this session will work. This choice applies to the session."], layout="modal")
+                return True
         if text.startswith("!"):
             if self.manager.is_active(target):
                 self.composer_restore = text
@@ -832,6 +856,10 @@ class ShellActions:
             self.show("Git diff", (result.patch or "No changes") + ("\n\n[diff truncated]" if result.truncated else ""))
         elif name == "/worktrees":
             await self.workflows.operate({"kind": "worktrees"})
+        elif name == "/worktree":
+            if args:
+                raise ValueError("/worktree takes no arguments")
+            await self.workflows.operate({"kind": "worktree_mode"})
         elif name == "/archived":
             await self.workflows.operate({"kind": "archived", "query": argument})
         elif name == "/settings":

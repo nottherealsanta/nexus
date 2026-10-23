@@ -2225,3 +2225,20 @@ Jobs list and log viewer) and `tests/test_ratatui_details_sidebar.py` (constants
 projection), `tests/test_ratatui_projection.py` (Jobs polling gate, projection without paths, bounded
 log, stop/background gating, session-change drops). Not done: a native screenshot and a live-daemon
 run.
+
+
+### Session worktree controls
+
+The session actions modal and `/worktree` open the three-mode picker: No worktree,
+Ask every time, and Always worktree. Ask resolves once before a Git session's first
+input, preserving the prompt and attachments. Manager sessions bypass this flow.
+The picker shows the current root, checkout and branch; started sessions retain
+their root when the project preference changes.
+
+Saved turns have a commit/checkpoint row that opens a bounded diff. Checkpoints
+link by durable turn ID and saved record sequence, including after replay.
+`/worktrees` keeps modern session/child cleanup separate from legacy child review.
+Session integration and checkout removal preview their effect before confirmation;
+errors and refused states remain visible. Branches remain after checkout removal.
+
+Verified by `tests/test_worktree_sessions_pty.py`: the actual native picker and Ask resumption, an owned file write and commit, and opening its saved-turn diff. Workflow/projection tests also cover replay links, stale-session answers, attachment preservation and confirmation binding.
