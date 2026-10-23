@@ -114,8 +114,8 @@ def test_task_spec_shape_and_bundle():
         "tools",
         "model",
         "description",
-        "resume",
     }
+    assert "resume" not in schema["properties"]
     # Subagent worktrees are disabled for now, so the model is not offered them.
     assert "background" not in schema["properties"] and "wait" not in schema["properties"]
 
@@ -152,8 +152,10 @@ async def test_resume_request_is_forwarded_without_a_default_type(tmp_path):
     service = FakeService(outcome())
     await task.run({"prompt": "and the tests?", "resume": "root/sub/1"}, make_ctx(tmp_path, subagents=service))
     assert service.requests[-1] == {"prompt": "and the tests?", "resume": "root/sub/1"}
-    bad = await task.run({"prompt": "x", "resume": ""}, make_ctx(tmp_path, subagents=service))
-    assert bad.is_error and len(service.requests) == 1
+    # A placeholder resume is ignored: the call starts a new subagent.
+    for filler in ("", "none", "new", "invalid"):
+        await task.run({"prompt": "x", "resume": filler}, make_ctx(tmp_path, subagents=service))
+        assert "resume" not in service.requests[-1]
 
 
 @pytest.mark.parametrize("filler", [",", "no", "none", "null"])
@@ -400,7 +402,6 @@ async def test_run_reports_a_child_failure_as_an_error(tmp_path):
         {"prompt": ""},
         {"prompt": "x", "tools": "Read"},
         {"prompt": "x", "tools": ["Read", ""]},
-        {"prompt": "x", "subagent_type": ""},
         {"prompt": "x", "model": 123},
     ],
 )
@@ -533,3 +534,108 @@ def test_broken_or_empty_role_index_keeps_the_base_description() -> None:
 
     service.role_index = boom
     assert task.make_task_spec(service).description == task.TASK_SPEC.description
+
+
+# -- placeholder optionals are absent ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tools", []),
+        ("model", ""),
+        ("model", "   "),
+        ("subagent_type", ""),
+        ("description", ""),
+        ("description", ". "),
+        ("description", " ,-- "),
+    ],
+)
+async def test_empty_or_placeholder_optionals_are_treated_as_absent(tmp_path, field, value):
+    service = FakeService(outcome())
+    result = await task.run({"prompt": "x", field: value}, make_ctx(tmp_path, subagents=service))
+    assert not result.is_error
+    if field == "subagent_type":  # absent means the service default, not an empty role
+        assert service.requests[-1]["subagent_type"] == service.default_type
+    else:
+        assert field not in service.requests[-1]
+
+
+async def test_empty_tools_never_means_no_tools(tmp_path):
+    service = FakeService(outcome())
+    await task.run({"prompt": "x", "tools": []}, make_ctx(tmp_path, subagents=service))
+    assert "tools" not in service.requests[-1]
+    # A real narrowing and a real description still pass through.
+    await task.run({"prompt": "x", "tools": ["read"], "description": "Scan"}, make_ctx(tmp_path, subagents=service))
+    assert service.requests[-1]["tools"] == ["read"] and service.requests[-1]["description"] == "Scan"
+
+
+async def test_the_observed_filled_in_call_starts_a_new_subagent(tmp_path):
+    """Regression: codex filled every optional field, including a guessed resume."""
+    service = FakeService(outcome())
+    args = {"subagent_type": "task", "resume": "none", "tools": [], "model": "", "description": ". ", "prompt": "do it"}
+    result = await task.run(args, make_ctx(tmp_path, subagents=service))
+    assert not result.is_error
+    assert service.requests[-1] == {"prompt": "do it", "subagent_type": "task"}
+    assert task.TASK_SPEC.resolve_permission_key(args) == "task:inherit"
+
+
+def test_the_new_subagent_schema_rejects_a_live_resume():
+    from nexus.tools.manager import ToolInputError, validate_tool_input
+
+    with pytest.raises(ToolInputError):
+        validate_tool_input(task.TASK_SPEC, {"prompt": "x", "resume": "root/sub/1"})
+    validate_tool_input(
+        task.TASK_SPEC,
+        {"prompt": "x", "tools": [], "model": "", "description": ". ", "subagent_type": ""},
+    )
+
+
+# -- subagent_continue ---------------------------------------------------------------------
+
+
+def test_continue_spec_shape_and_bundle():
+    spec = task.CONTINUE_SPEC
+    assert spec.name == "subagent_continue" == task.CONTINUE_TOOL_NAME
+    assert spec.bundle == task.TASK_SPEC.bundle == "task"
+    schema = spec.input_schema
+    assert set(schema["properties"]) == {"agent_id", "prompt"}
+    assert sorted(schema["required"]) == ["agent_id", "prompt"]
+    assert schema["additionalProperties"] is False
+    assert "subagent_continue" in task.TASK_SPEC.description
+
+
+async def test_continue_forwards_agent_id_as_resume_and_nothing_else(tmp_path):
+    service = FakeService(outcome())
+    result = await task.run_continue(
+        {"agent_id": " root/sub/1 ", "prompt": "and the tests?"}, make_ctx(tmp_path, subagents=service)
+    )
+    assert not result.is_error
+    assert service.requests[-1] == {"resume": "root/sub/1", "prompt": "and the tests?"}
+
+
+@pytest.mark.parametrize("args", [{}, {"agent_id": "root/sub/1"}, {"prompt": "x"}, {"agent_id": " ", "prompt": "x"}])
+async def test_continue_rejects_bad_arguments(tmp_path, args):
+    service = FakeService(outcome())
+    result = await task.run_continue(args, make_ctx(tmp_path, subagents=service))
+    assert result.is_error and service.requests == []
+
+
+def test_continue_permission_key_is_the_services_or_fails_closed():
+    assert task.CONTINUE_SPEC.resolve_permission_key({"agent_id": "root/sub/1", "prompt": "x"}) == "resume:unresolved"
+    seen: list[dict] = []
+
+    class Service(FakeService):
+        def permission_key(self, request):
+            seen.append(dict(request))
+            return "advisor:high"
+
+    spec = task.make_continue_spec(Service(outcome()))
+    assert spec.resolve_permission_key({"agent_id": "root/sub/1", "prompt": "x"}) == "advisor:high"
+    assert seen[-1] == {"resume": "root/sub/1", "prompt": "x"}
+
+
+def test_build_task_tools_registers_both_tools_with_the_same_bundle():
+    new, cont = task.build_task_tools(None)
+    assert (new.name, cont.name) == ("subagent", "subagent_continue")
+    assert new.spec.bundle == cont.spec.bundle

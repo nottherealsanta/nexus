@@ -229,7 +229,7 @@ FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
 READ_ONLY_ROLES: frozenset[str] = frozenset()
 #: Tools permitted to structurally read-only roles.
 READ_ONLY_TOOLS = frozenset(
-    {"read", "glob", "grep", "subagent", "question", "skill", "webfetch", "websearch"}
+    {"read", "glob", "grep", "subagent", "subagent_continue", "question", "skill", "webfetch", "websearch"}
 )
 AGENT_CONTEXTS = frozenset({"root", "subagent"})
 #: The manager session's role, tool catalog and prompt are packaged constants

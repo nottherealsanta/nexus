@@ -8,6 +8,11 @@ One tool with two composable modes:
   throwaway agent with exactly the listed tools; ``subagent_type`` defaults to
   ``task``.
 
+Follow-ups to a finished subagent are a separate tool, ``subagent_continue``
+(``agent_id`` + ``prompt`` only), so a model that fills every optional field of
+this tool can still start a new subagent. Empty or placeholder optionals here
+(``tools: []``, ``model: ""``, a punctuation-only ``description``) mean absent.
+
 The tool itself holds **no authority**: it reaches the injected
 :class:`~nexus.tools.spec.SubagentServiceView` (the runner) through
 :attr:`ToolContext.subagents`, never a ``Runtime`` and never an import of
@@ -49,9 +54,14 @@ from ..spec import (
 )
 
 __all__ = [
+    "CONTINUE_SPEC",
+    "CONTINUE_TOOL_NAME",
     "DEFAULT_SUBAGENT_TYPE",
     "TASK_SPEC",
+    "build_continue_tool",
     "build_task_tool",
+    "build_task_tools",
+    "make_continue_spec",
     "make_task_spec",
     "run",
 ]
@@ -65,25 +75,45 @@ _FALLBACK_MAX_RESULT_TOKENS = 25_000
 
 
 def _resume_of(data: Mapping[str, Any]) -> object:
-    """The call's effective ``resume`` value, or ``None`` when it is a filler.
+    """A stray ``resume`` on the new-subagent tool: a real handle, else ``None``.
 
-    Some models fill every optional parameter of a fresh call with a placeholder
-    (observed: ``resume=","`` next to ``subagent_type``/``tools``/``model``).
-    A real handle is a child session id (``<parent>/sub/<n>``) and a resume
-    refuses those other arguments, so a value that is not shaped like a handle
-    and sits beside them is a filler, never a resume.
+    ``resume`` left the tool's schema (follow-ups are ``subagent_continue``), so
+    live calls carrying it fail validation. This stays for old transcripts and
+    direct callers: a value shaped like a child session id (``<parent>/sub/<n>``)
+    still routes to the runner's resume path (which refuses it beside other
+    arguments); anything else (``"none"``, ``","``, ``"new"``) is a placeholder and is
+    ignored, so a fresh subagent starts.
     """
     resume = data.get("resume")
-    if resume is None:
-        return None
-    if (
-        isinstance(resume, str)
-        and "/sub/" not in resume
-        and resume
-        and any(data.get(k) for k in ("subagent_type", "tools", "model", "worktree"))
-    ):
-        return None
-    return resume
+    if isinstance(resume, str) and "/sub/" in resume:
+        return resume
+    return None
+
+
+def _meaningful(text: object) -> bool:
+    """Whether ``text`` carries any letter or digit (``". "`` and ``""`` do not)."""
+    return isinstance(text, str) and any(ch.isalnum() for ch in text)
+
+
+def _normalized(data: Mapping[str, Any]) -> dict[str, Any]:
+    """The call with empty and placeholder optionals removed (treated as absent).
+
+    Some models fill every optional parameter on every call. An empty ``tools``
+    list, a blank ``model``, a blank ``subagent_type`` and a ``description``
+    without a letter or digit are all "not given"; an empty ``tools`` list must
+    never mean "no tools".
+    """
+    out = dict(data)
+    tools = out.get("tools")
+    if isinstance(tools, (list, tuple)) and not tools:
+        del out["tools"]
+    for name in ("model", "subagent_type"):
+        value = out.get(name)
+        if isinstance(value, str) and not value.strip():
+            del out[name]
+    if "description" in out and isinstance(out["description"], str) and not _meaningful(out["description"]):
+        del out["description"]
+    return out
 
 
 class _TaskToolError(ToolError):
@@ -103,20 +133,9 @@ _TASK_SCHEMA: dict[str, Any] = {
         },
         "subagent_type": {
             "type": "string",
-            "minLength": 1,
             "description": (
                 "Name of an available agent listed in this tool's description. "
-                "Defaults to the configured default role. Omit it when resuming."
-            ),
-        },
-        "resume": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "The agent_id from an earlier subagent report whose footer said "
-                "'continuable: yes'. Sends `prompt` as a follow-up to that "
-                "subagent, which remembers its earlier work. Pass only `prompt` "
-                "with it: the subagent keeps its role, tools, model and workspace."
+                "Defaults to the configured default role."
             ),
         },
         "tools": {
@@ -124,7 +143,8 @@ _TASK_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "description": (
                 "Optional narrowing set of canonical lowercase tool names. Can only reduce the "
-                "role's set, never add a tool the parent lacks."
+                "role's set, never add a tool the parent lacks. Omit it (an empty list "
+                "also means omitted, not 'no tools')."
             ),
         },
         "model": {
@@ -140,7 +160,6 @@ _TASK_SCHEMA: dict[str, Any] = {
         },
         "description": {
             "type": "string",
-            "minLength": 1,
             "description": "Short label for the agent tree; not sent to the child.",
         },
     },
@@ -156,9 +175,10 @@ _TASK_DESCRIPTION = (
     "goal, relevant paths, constraints, and what to report. Subagents that edit "
     "files list them in their report. A subagent inherits only the parent's "
     "authority and cannot exceed it."
-    " To ask a finished subagent a follow-up, pass its `agent_id` as `resume` "
-    "and only `prompt`; it remembers its earlier work. Prefer a new subagent "
-    "for an unrelated task."
+    " Every field except `prompt` is optional: omit what you do not need. "
+    "To send a follow-up to a subagent that already finished (its report "
+    "footer says 'continuable: yes'), use the `subagent_continue` tool with its "
+    "`agent_id`; this tool always starts a new subagent."
     " Tiers are for subagents only. If a provider or model fails as a subagent, "
     "call the next model in line for that tier. Do not repeat a failed route; "
     "include the failure and any partial work in the next subagent's prompt."
@@ -211,6 +231,7 @@ def _static_permission_key(data: Mapping[str, Any]) -> str:
     The tier component is the requested model when it is a reserved tier name,
     otherwise ``"auto"`` for a concrete reference or ``"inherit"`` for none.
     """
+    data = _normalized(data)
     if _resume_of(data):
         # Without the service the continued child's role cannot be read, and the
         # default role must not stand in for it: fail closed to a key no role rule names.
@@ -245,7 +266,7 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
         # permission key is resolved so omitting ``subagent_type`` cannot route
         # around a rule for a non-general default role.
         def key(data: Mapping[str, Any]) -> str:
-            request = dict(data)
+            request = _normalized(data)
             if _resume_of(request) is None:
                 request.pop("resume", None)
             if not request.get("resume"):
@@ -288,6 +309,106 @@ def build_task_tool(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# subagent_continue: follow-ups to a finished subagent
+# ---------------------------------------------------------------------------
+
+#: Registered name of the follow-up tool (same bundle and authority as ``subagent``).
+CONTINUE_TOOL_NAME = "subagent_continue"
+
+_CONTINUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "agent_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "The agent_id from an earlier subagent report whose footer said "
+                "'continuable: yes'."
+            ),
+        },
+        "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "The follow-up message for that subagent. It remembers its earlier "
+                "work but not this conversation."
+            ),
+        },
+    },
+    "required": ["agent_id", "prompt"],
+    "additionalProperties": False,
+}
+
+_CONTINUE_DESCRIPTION = (
+    "Send a follow-up to a subagent that already finished, using the `agent_id` "
+    "from its report (only when the footer said 'continuable: yes'). The subagent "
+    "keeps its role, tools, model, workspace and memory of its earlier work, so "
+    "there is nothing else to set. The call blocks and returns its new report. "
+    "To start a different or unrelated subagent, use the `subagent` tool instead."
+)
+
+
+def make_continue_spec(service: SubagentServiceView | None = None) -> ToolSpec:
+    """Build the ``subagent_continue`` spec; it shares ``subagent``'s bundle and gate."""
+    if service is None:
+        def key(data: Mapping[str, Any]) -> str:
+            return _RESUME_UNRESOLVED_KEY
+    else:
+        def key(data: Mapping[str, Any]) -> str:
+            return service.permission_key(_continue_request(data))
+    return ToolSpec(
+        name=CONTINUE_TOOL_NAME,
+        description=_CONTINUE_DESCRIPTION,
+        input_schema=_CONTINUE_SCHEMA,
+        bundle="task",
+        mutates=False,
+        concurrency="parallel",
+        max_result_tokens=_FALLBACK_MAX_RESULT_TOKENS,
+        permission_key=key,
+    )
+
+
+CONTINUE_SPEC = make_continue_spec()
+
+
+def build_continue_tool(
+    service: SubagentServiceView | None = None,
+) -> RegisteredTool:
+    """A ready-to-register ``subagent_continue`` tool, bound to ``service`` when supplied."""
+    return RegisteredTool(spec=make_continue_spec(service), run=run_continue, origin="builtin")
+
+
+def build_task_tools(
+    service: SubagentServiceView | None = None,
+) -> tuple[RegisteredTool, RegisteredTool]:
+    """Both subagent tools (new and continue), bound to the same ``service``."""
+    return (build_task_tool(service), build_continue_tool(service))
+
+
+def _continue_request(args: Mapping[str, Any]) -> dict[str, Any]:
+    agent_id = args.get("agent_id")
+    prompt = args.get("prompt")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise _TaskToolError("'agent_id' must be a non-empty string")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise _TaskToolError("'prompt' must be a non-empty string")
+    return {"resume": agent_id.strip(), "prompt": prompt}
+
+
+async def run_continue(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
+    """Continue a finished subagent through the runner's existing resume path."""
+    if not isinstance(args, Mapping):
+        return ToolExecutionResult.text(
+            "subagent_continue: arguments must be an object", is_error=True
+        )
+    try:
+        request = _continue_request(args)
+    except _TaskToolError as exc:
+        return ToolExecutionResult.text(f"subagent_continue: {exc}", is_error=True)
+    return await _dispatch(request, ctx)
+
+
 def _service(ctx: ToolContext) -> SubagentServiceView | None:
     candidate = getattr(ctx, "subagents", None)
     if candidate is not None and callable(getattr(candidate, "spawn", None)):
@@ -296,6 +417,7 @@ def _service(ctx: ToolContext) -> SubagentServiceView | None:
 
 
 def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
+    args = _normalized(args)
     prompt = args.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise _TaskToolError("'prompt' must be a non-empty string")
@@ -412,7 +534,10 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         request = _build_request(args)
     except _TaskToolError as exc:
         return ToolExecutionResult.text(f"Task: {exc}", is_error=True)
+    return await _dispatch(request, ctx)
 
+
+async def _dispatch(request: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     service = _service(ctx)
     if service is not None:
         try:

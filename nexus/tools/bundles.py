@@ -127,7 +127,7 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
         ),
         "task": Bundle(
             name="task",
-            tools=("subagent", "question"),
+            tools=("subagent", "subagent_continue", "question"),
         ),
         "web": Bundle(
             name="web",
@@ -186,7 +186,7 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         "research": Profile(
             name="research",
             bundles=("fs", "task", "web", "ext", "mcp"),
-            include=("subagent", "question", "skill"),
+            include=("subagent", "subagent_continue", "question", "skill"),
             exclude=("write", "edit", "shell"),
             read_only=True,
         ),

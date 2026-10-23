@@ -68,6 +68,11 @@ not guarantee an operator approval when policy is permissive. This explicit
 approval is required because promotion changes the checkout used by future
 turns.
 
+There is no merge tool. Landing the branch is the shell command `nexus merge -m
+MESSAGE` ([cli.md](cli.md)); the permission engine forces an ask for any shell
+command containing it (`_is_nexus_merge` in `tools/permissions.py`), in every
+mode and despite allow rules or grants (deny rules still win).
+
 ## Files
 
 | File | Owns |
@@ -211,12 +216,18 @@ including dynamic MCP ones), `chat` (none), `ops` (shell, mcp). An unknown
 profile **fails closed** with an error. Permission `Bundle:shell` / `Bundle:fs`
 also cover their legacy twins (historical rules).
 
-`subagent` takes an optional `resume` (a finished child's `agent_id`, shown in its report
-footer) plus a new `prompt`; it is still one blocking call. Its permission key is
-`<recorded role>:<recorded tier>` read from the child's stored record, not the default
-role, and `resume:unresolved` when the id cannot be resolved (so `Task(task:*)` does not
-authorize resuming an `advisor`). `tools`, `model`, `worktree` and a differing
-`subagent_type` are refused with `resume`. See
+`subagent` always starts a new child; empty or placeholder optionals (`tools: []`, blank
+`model`/`subagent_type`, a `description` with no letter or digit) are treated as omitted, and
+an empty `tools` never means "no tools". Follow-ups are the separate `subagent_continue` tool
+(`agent_id` + `prompt`, nothing else), in the same `task` bundle, so profiles, role tool lists
+and permission rules for `subagent` cover it and children do not get it (root-only). It is
+still one blocking call. Its permission key is `<recorded role>:<recorded tier>` read from the
+child's stored record, not the default role, and `resume:unresolved` when the id cannot be
+resolved (so `subagent(task:*)` does not authorize continuing an `advisor`). The runner still
+refuses `tools`, `model`, `worktree` and a differing `subagent_type` on a resume. A Task call refused or failed before any child
+exists draws a muted card (state `refused`/`failed` from `metrics.status`, model "not started",
+the refusal reason from the result text, falling back to the short `error` label, without its `[model: …]` line) instead of "model pending"; "model pending"
+stays for a call still running. See
 [agents.md](agents.md#continuing-a-finished-subagent).
 
 ### Manager bundle and profile (reserved)
@@ -646,7 +657,7 @@ inheritance), so `except ToolError` also catches any `RuntimeError`.
 | `all` | Every enabled tool, including mutating ones (each still permission-gated) |
 | a list | Tool names and `mcp__server__*` globs; still limited to what the session has enabled |
 
-Never callable, whatever the setting: `code`, `subagent`, `question`, `skill`,
+Never callable, whatever the setting: `code`, `subagent`, `subagent_continue`, `question`, `skill`,
 `McpSearch`/`McpCall`, and the `meta` and `manager` bundles (`catalog.EXCLUDED`). They drive the
 loop, the user or the agent tree and stay visible as top-level rows.
 

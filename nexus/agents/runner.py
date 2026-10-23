@@ -141,7 +141,7 @@ AGENT_CLAMPED = "agent.clamped"
 #: Quota-aware routing decision for one child (docs/models.md); recorded only when
 #: a candidate was skipped or every candidate was blocked.
 AGENT_ROUTED = "agent.routed"
-#: A follow-up run of a finished child (``subagent(resume=...)``).
+#: A follow-up run of a finished child (``subagent_continue``).
 AGENT_RESUMED = "agent.resumed"
 #: The child-log record of how a child was configured (never relayed upward).
 AGENT_CONFIG = "agent.config"
@@ -224,7 +224,7 @@ WORKTREE_CHILD_TOOLS = frozenset(
 # the smaller reviewed tool surface above.
 AUTO_WORKTREE_CHILD_TOOLS = WORKTREE_CHILD_TOOLS | frozenset({"shell", "code"})
 #: Tools only the root session may hold; a child never gets them.
-ROOT_ONLY_TOOLS = frozenset({"subagent"})
+ROOT_ONLY_TOOLS = frozenset({"subagent", "subagent_continue"})
 #: The child session path segment: ``<parent>/sub/<n>``.
 CHILD_SESSION_SEGMENT = "sub"
 
@@ -491,7 +491,7 @@ class SubagentOutcome:
     agent_id: str = ""
     #: Which run of the child this report closes (1 = the spawn).
     run: int = 1
-    #: Whether ``subagent(resume=agent_id)`` would be accepted now; ``None`` unknown.
+    #: Whether ``subagent_continue(agent_id=...)`` would be accepted now; ``None`` unknown.
     continuable: bool | None = None
     #: Short reason shown when ``continuable`` is false.
     continuable_note: str = ""
@@ -644,7 +644,7 @@ class SubagentOutcome:
             lines.append(f"run: {self.run}")
             if self.continuable is not None:
                 lines.append(
-                    "continuable: yes"
+                    "continuable: yes (follow up with the subagent_continue tool and this agent_id)"
                     if self.continuable
                     else "continuable: no"
                     + (f" ({self.continuable_note})" if self.continuable_note else "")
@@ -2384,7 +2384,8 @@ class SubagentRunner:
         ):
             return refuse(
                 "a continued subagent keeps its recorded tools, model and workspace; "
-                "pass only agent_id and prompt"
+                "use the subagent_continue tool with only `agent_id` and `prompt`; to start a "
+                "new subagent, use the subagent tool"
             )
         lifecycle = self._lifecycle(agent_id)
         if lifecycle is None or not lifecycle.found:

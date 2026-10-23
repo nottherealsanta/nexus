@@ -14,7 +14,7 @@ from ...model.tokenizer import DEFAULT_TOKENIZER
 from ..names import canonical_tool_name, tool_rule_names
 from .stubs import HEADER, identifier, stub
 
-EXCLUDED = frozenset({'code', 'subagent',
+EXCLUDED = frozenset({'code', 'subagent', 'subagent_continue',
                       'question', 'skill',
                       'McpCall', 'McpSearch', 'mcp_call', 'mcp_search'})
 RESERVED = frozenset({'search_tools', 'describe_tool', 'store', 'load', 'llm',

@@ -1193,4 +1193,4 @@ def test_packaged_root_prompts_open_with_identity(role):
     assert body.startswith(identity)
     if role == "orchestrator":
         assert "You never write code yourself." in body
-    assert len(body) < 2400
+    assert len(body) < 3200  # orchestrator includes the short Diagrams section

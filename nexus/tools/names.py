@@ -63,13 +63,28 @@ def canonical_tool_name(name: str) -> str:
     return LEGACY_TOOL_NAMES.get(name, name)
 
 
+#: The follow-up tool shares the new-subagent tool's authority: every rule written
+#: for ``subagent`` (``subagent(advisor:*)``, ``subagent(*:high)``) also governs it.
+CONTINUE_TOOL_NAME = "subagent_continue"
+NEW_SUBAGENT_TOOL_NAME = "subagent"
+
+
+def permission_tool_names(name: str) -> tuple[str, ...]:
+    """Tool names a non-wildcard permission rule may name for a call to ``name``."""
+    if name == CONTINUE_TOOL_NAME:
+        return (CONTINUE_TOOL_NAME, NEW_SUBAGENT_TOOL_NAME)
+    return (name,)
+
+
 def tool_rule_names(name: str) -> tuple[str, ...]:
     """Every name a wildcard permission rule may have been written against.
 
     A stored ``deny = ["b*"]`` or ``"Ba*"`` was written for the historical
     ``bash``/``Bash`` spelling; after the rename it must keep matching the tool.
     """
-    return _SHELL_RULE_NAMES if name == "shell" else (name,)
+    if name == "shell":
+        return _SHELL_RULE_NAMES
+    return permission_tool_names(name)
 
 
 def translate_legacy_shell_input(
@@ -151,6 +166,9 @@ def canonical_permission_rule(raw: str) -> str:
 
 
 __all__ = [
+    "CONTINUE_TOOL_NAME",
+    "NEW_SUBAGENT_TOOL_NAME",
+    "permission_tool_names",
     "LEGACY_BASH_PERMISSION_ACTIONS",
     "LEGACY_SHELL_CALL_NAMES",
     "LEGACY_TOOL_NAMES",

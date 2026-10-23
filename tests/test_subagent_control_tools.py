@@ -21,8 +21,8 @@ from nexus.model.providers.scripted import ScriptedProvider, text_response, tool
 RETIRED = {"subagent_send", "subagent_stop", "subagent_list"}
 
 
-def test_subagent_is_the_only_root_only_tool():
-    assert ROOT_ONLY_TOOLS == {"subagent"}
+def test_only_the_two_subagent_tools_are_root_only():
+    assert ROOT_ONLY_TOOLS == {"subagent", "subagent_continue"}
 
 
 def test_the_runner_has_no_background_or_continuation_api(tmp_path):

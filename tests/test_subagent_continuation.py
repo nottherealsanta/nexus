@@ -1,4 +1,4 @@
-"""Continuing a finished subagent: ``subagent(resume=<agent_id>)``.
+"""Continuing a finished subagent: ``subagent_continue(agent_id=...)``.
 
 The runner is tested through its injected seams (a fake child runtime, a fake
 session facade that stores the ``agent.config`` record, and the recorded parent
@@ -606,7 +606,7 @@ async def test_runtime_reopens_the_stored_child_transcript(tmp_path):
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "survey the repo"})),
         text_response("first child report"),
-        tool_response(("t2", "subagent", {"prompt": "now the tests", "resume": "root/sub/1"})),
+        tool_response(("t2", "subagent_continue", {"agent_id": "root/sub/1", "prompt": "now the tests"})),
         text_response("second child report"),
         text_response("root done"),
     )
@@ -657,7 +657,7 @@ async def test_a_follow_up_only_appends_to_the_stored_transcript(tmp_path):
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "survey the repo"})),
         text_response("first child report"),
-        tool_response(("t2", "subagent", {"prompt": "now the tests", "resume": "root/sub/1"})),
+        tool_response(("t2", "subagent_continue", {"agent_id": "root/sub/1", "prompt": "now the tests"})),
         text_response("second child report"),
         text_response("root done"),
     )
@@ -710,7 +710,7 @@ async def test_a_refused_follow_up_leaves_the_child_continuable_and_the_log_unto
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "survey the repo"})),
         text_response("first child report"),
-        tool_response(("t2", "subagent", {"prompt": "now the tests", "resume": "root/sub/1"})),
+        tool_response(("t2", "subagent_continue", {"agent_id": "root/sub/1", "prompt": "now the tests"})),
         text_response("root done"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -750,7 +750,7 @@ async def test_a_provider_failure_during_preflight_is_also_an_unchanged_refusal(
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "survey the repo"})),
         text_response("first child report"),
-        tool_response(("t2", "subagent", {"prompt": "now the tests", "resume": "root/sub/1"})),
+        tool_response(("t2", "subagent_continue", {"agent_id": "root/sub/1", "prompt": "now the tests"})),
         text_response("root done"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -767,7 +767,7 @@ async def test_a_provider_failure_during_preflight_is_also_an_unchanged_refusal(
 
 async def test_runtime_refuses_a_foreign_or_unknown_resume_without_running_anything(tmp_path):
     provider = ScriptedProvider(
-        tool_response(("t1", "subagent", {"prompt": "again", "resume": "other/sub/1"})),
+        tool_response(("t1", "subagent_continue", {"agent_id": "other/sub/1", "prompt": "again"})),
         text_response("root done"),
     )
     runtime = make_runtime(tmp_path, provider)

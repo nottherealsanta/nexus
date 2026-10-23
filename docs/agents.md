@@ -318,7 +318,10 @@ independent) gathers `path:line` evidence, the full relevant findings go to
 recommendation is turned into one or more actionable `task` briefs (parallel
 when independent). Small `quick` steps may sit in between, and every handoff
 must carry all relevant findings rather than assuming they are shared. The
-orchestrator then verifies. The live
+orchestrator then verifies. When structure is clearer than prose (delegation
+graph, data flow, sequences, state machines) it also adds a small Mermaid
+diagram (supported subset only, short labels) next to the text summary; the
+native TUI renders it as box-drawing art. The live
 tool list and `subagent` roster still come from runtime.
 
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
@@ -353,10 +356,13 @@ An explicit `color` in the agent definition frontmatter always wins.
 
 ## Spawning (`subagent` tool)
 
-`subagent(prompt, subagent_type?, tools?, model?, description?, resume?)` runs a
+`subagent(prompt, subagent_type?, tools?, model?, description?)` runs a
 named role or an ad-hoc agent. The child does not see the parent conversation:
-the prompt is the whole assignment. `resume` sends a follow-up to a finished child
-instead (see [Continuing a finished subagent](#continuing-a-finished-subagent)).
+the prompt is the whole assignment. A follow-up to a finished child is a separate
+tool, `subagent_continue(agent_id, prompt)` (see
+[Continuing a finished subagent](#continuing-a-finished-subagent)). Empty or placeholder
+optionals on `subagent` count as omitted: `tools: []` (never "no tools"), a blank `model`
+or `subagent_type`, and a `description` with no letter or digit.
 
 An omitted, null, or blank `model` override uses the role's configured model (or
 its first tier, see below), falling back to the parent's model. Surrounding whitespace is trimmed from model
@@ -402,7 +408,7 @@ authority its parent lacks:
 
 The `subagent` tool always blocks: the call returns the child's report as its tool
 result, and the root's turn continues once the report is in. Its schema is `prompt`,
-`subagent_type`, `tools`, `model`, `description` and `resume` (`worktree` is hidden while
+`subagent_type`, `tools`, `model` and `description` (`worktree` is hidden while
 subagent worktrees are disabled, see [Worktrees](#worktrees)); there is no `background`
 or `wait` parameter. To run children concurrently the model issues **independent
 `subagent` calls together in one batch** (the tool is `concurrency="parallel"`) and the
@@ -426,10 +432,15 @@ ignored (see [config.md](config.md)).
 
 ### Continuing a finished subagent
 
-`subagent(resume="<agent_id>", prompt="…")` sends one more message to a child that already
+`subagent_continue(agent_id="<agent_id>", prompt="…")` sends one more message to a child that already
 reported, so it keeps its conversation, tool results and reasoning. The report footer of
 every native child names the handle: `agent_id: <parent>/sub/<n>`, `run: n` and
-`continuable: yes` or `continuable: no (<reason>)`. The call is still blocking and
+`continuable: yes (follow up with the subagent_continue tool and this agent_id)` or
+`continuable: no (<reason>)`. The tool's schema is exactly `agent_id` and `prompt`
+(`additionalProperties: false`); it lives in the `task` bundle beside `subagent`, so every
+profile, role `tools`/`bundles` list and permission rule that covers `subagent` covers it
+(rules such as `subagent(advisor:*)` and `subagent(*:high)` match it too), and it is
+root-only like `subagent` (`ROOT_ONLY_TOOLS`). It runs the runner's resume path unchanged. The call is still blocking and
 foreground: no slot, process or lease is held between runs; the child's durable SQLite
 session is reopened (`_run_child` only evicts the in-memory handle), the new prompt is
 appended to it and one more turn runs. **Nexus reuses the stored transcript. Whether a
@@ -445,11 +456,14 @@ unresolvable id (unknown, another session's, legacy) is keyed `resume:unresolved
 explicit `subagent_type` must equal the recorded role; `tools`, `model`, `worktree` and
 `context_read` are refused on a resume.
 
-*Filler `resume`.* Some models fill every optional parameter of a fresh call with a placeholder
-(seen: `resume=","` beside `subagent_type`, `tools` and `model`, which the runner then refused every
-time). The `subagent` tool treats a `resume` that is not shaped like a handle (`<parent>/sub/<n>`)
-and sits beside `subagent_type`/`tools`/`model`/`worktree` as omitted (`_resume_of` in
-`tools/builtin/task.py`), for the call, its permission key and the request.
+*Why a separate tool.* `resume` used to be an optional field of `subagent`. Models that fill
+every optional field (seen: `resume="none"`, `"new"`, a guessed handle, beside `tools: []`,
+`model: ""` and `description: ". "`) could never start a new subagent: each call was refused
+as a malformed resume, and retrying with other wording did not help. `subagent` no longer
+has `resume`, so a live call carrying it fails schema validation. Old transcripts and direct
+callers still work: `_resume_of` in `tools/builtin/task.py` routes a value shaped like a handle
+(`<parent>/sub/<n>`) to the runner's resume path (which refuses it beside other arguments) and
+ignores any other value as a placeholder, so a fresh subagent starts.
 
 *The stored record.* At spawn the child's own log gets one immutable `agent.config` event
 (written before its first message, never relayed to the parent log, the root or a UI, and

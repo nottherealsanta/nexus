@@ -1504,7 +1504,7 @@ async def test_precompact_modify_applies_typed_options(tmp_path):
         "compactor",
         "from nexus.hooks.model import HookDecision\n"
         "def _run(inv, ctx):\n"
-        "    return HookDecision.modify({'keep': 6}, reason='keep more')\n"
+        "    return HookDecision.modify({'keep': 5}, reason='keep more')\n"
         "HOOKS = [{'event': 'PreCompact', 'name': 'compactor', 'run': _run}]\n",
     )
     provider = ScriptedProvider(text_response("ok"))
@@ -1521,8 +1521,8 @@ async def test_precompact_modify_applies_typed_options(tmp_path):
     context = next(
         e.data["context"] for e in events if e.type == "context.assembled"
     )
-    # The typed modify was honored (keep=6) rather than the budget-derived suffix.
-    assert context["history_retained"] == 6
+    # The typed modify was honored (keep=5) rather than the budget-derived suffix.
+    assert context["history_retained"] == 5
     await runtime.aclose()
 
 
@@ -1548,7 +1548,7 @@ async def test_precompact_untyped_modify_is_disallowed(tmp_path):
     )
     # Disallowed modify: normal budget-driven compaction still happened.
     assert context["history_dropped"] > 0
-    assert context["history_retained"] != 6
+    assert context["history_retained"] != 5
     await runtime.aclose()
 
 
