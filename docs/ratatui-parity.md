@@ -1774,9 +1774,20 @@ and tool signals are implemented and have focused Python test coverage. These
 changes are additive and preserve the existing UI/projection contract; they do
 not imply completion of the Ratatui port or PTY verification.
 
-The Sessions page is a compact, centered, rounded-border card like a Settings page (at most
-72 columns wide, only as tall as its content, never full-screen) holding a list grouped by
-status (P-SES): **Needs you** (`input`), **Working**, **Idle** (`idle` and `done`, which
+The Sessions page is a flat, borderless panel (the composer's charcoal `panel` colour, at most
+`PANEL_WIDTH` = 120 columns, centred with a 2-column gutter when the terminal is 60+ columns
+wide and one blank row above and below when it is 20+ rows tall; content is inset 4 columns,
+2 under 60 and 1 under 30). Top to bottom: **Sessions** (bold) with a muted `esc` at the right,
+a plain `Search sessions` row, then the location header and `+ New Agent` / `Worktree Ctrl+w`
+actions, the pinned Manager, the list, the status line (rename / archive / notice / error) and
+a bottom shortcut row (`Enter open  n new  / search  r rename  d archive  g group  t tree
+Ctrl+w worktree`, plus `m manager` when the Manager is listed; keys muted, labels bright;
+only real shortcuts, pairs that do not fit are dropped whole). Blank spacer rows between
+those only show from 24 panel rows; below that they go, and under 10 rows the hints row,
+under 8 the actions row and under 6 the header row, so the list always keeps room (`esc` is a
+label, not a click target). The list is grouped by
+status (P-SES) with **purple** bold headings (the groups stay status groups: the payload
+carries no date grouping and changing it would change `g`/collapse behaviour): **Needs you** (`input`), **Working**, **Idle** (`idle` and `done`, which
 keeps its `●` "finished since viewed" glyph) and **Archived**; empty groups are omitted and
 each is a collapsible `▾ Needs you 1` heading. Rows inside a group stay newest user prompt
 first (`updated`). With `g` (group by project) the project is appended to the status
@@ -1791,20 +1802,21 @@ main`) with `waiting mm:ss` (counted from the request's `ts`, one redraw per sec
 `main.rs` `animating`), and the keys `Enter open  a allow once  d deny`. `a`/`d` send
 `session_permission` (`id`, `request_id`, `decision` = `allow_once`|`deny_once`), which
 the bridge accepts only for the `request_id` the row lists and answers through
-`PermissionResolve`, without opening the session. The page is one blank row below
-`+ New Agent`, then the search row. Header chips follow the group order:
+`PermissionResolve`, without opening the session. The search row sits above the header and
+actions. Header chips follow the group order:
 `◆ N needs you │ ⠋ N working │ ◇ N idle │ ● N archived` (counts only when the page is
 too narrow for labels). Typing with no composer: any printable key that is not a shortcut
 starts the filter (`/` is optional).
-Each session is exactly one row: `◇ Title … age` (status glyph, name, last-used time; the
-selected row shows `[×]` for archive instead of the age). Search, rename, archive, collapse,
+Each session is exactly one row: `◇ Title … age` (status glyph, name, last-used time; a cut
+title ends in `…`). Search, rename, archive, collapse,
 hover and click targets are unchanged. Status shows in the glyph
 (working = animated purple braille, needs input = warning `◆`, idle `◇`); the header
-chips (`⁙ 1 working │ ◇ 3 idle`) stay. The selected row's `element` background fills the
-whole four-row band (1-column inset, no rail, title not bold) and the age becomes a
-clickable quiet `[×]` that asks to archive (the existing confirmation and busy refusal);
-hover only tints the row. Below the `+ New Agent` actions row sits a `/ Search sessions`
-row with a rule under it. It activates with Up on the top-most row, a click, `/` or
+chips (`⁙ 1 working │ ◇ 3 idle`) stay. The selected row is a full-width (whole panel, not just
+the content inset) band in the palette `accent` (peach) with black bold text, glyph and time
+(its Needs you lines too); monochrome drops the colours and marks it with the focus bar
+instead. Archive stays the `d` / `Delete` keyboard command with its existing confirmation and
+busy refusal; hover only tints the row. The `Search sessions` row (muted, no rule under it)
+activates with Up on the top-most row, a click, `/` or
 `Ctrl+K`; typed text filters title, summary, project and branch (case-insensitive) and
 owns all keys, Down or Enter moves into the results, Esc clears and leaves. Nothing
 expands inline, and the dashboard has no preview pane: there is no `Response`
@@ -1824,8 +1836,10 @@ a hidden draft, and keys that are not list shortcuts are ignored. Enter opens th
 session, where the composer appears as usual.
 `+ New Agent` and `Worktree Ctrl+w` are the header actions ("Open Previous" was removed;
 `/resume` and `/archived` stay chat commands). Keep the
-user-facing title **Sessions** and `/sessions`. Render the dashboard as a centered,
-settings-like compact panel rather than stretching it full-screen; each session occupies
+user-facing title **Sessions** and `/sessions`. Render the dashboard as the flat centred
+panel described above (tests: `sessions::tests::panel_is_flat_wide_and_borderless_*`,
+`selected_row_is_a_full_width_peach_bar_*`, `small_terminals_never_panic_*`; not yet
+verified in a PTY capture); each session occupies
 one line with its existing status icon, title, and last-used time. The archive `SessionPreview` is unrelated.
 The permission prompt (P-PRM) sends structured fields beside `lines` (kept for older
 clients): `title` (`Allow <tool> <target>?`), `since` (`PermissionView.ts`, now set to the

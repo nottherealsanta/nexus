@@ -1,16 +1,18 @@
-//! Compact, centered Sessions page (a bordered, Settings-like card, at most `PAGE_WIDTH`
-//! wide and as tall as its content). Rows are grouped by last-updated time (Today,
-//! Yesterday, This week, Earlier), one line each: the status glyph, the name, and the
-//! last-used time. A `/ Search sessions` row sits
-//! above the first group. Nothing expands inline and there is no preview pane or composer.
-const PAGE_WIDTH: u16 = 72;
+//! Sessions page: a borderless, flat panel (the `panel` colour, at most `PANEL_WIDTH` wide,
+//! centred with a generous horizontal inset). `Sessions` (bold) and a muted `esc` head it, a
+//! plain `Search sessions` row sits below, then the header actions, the pinned Manager and the
+//! list grouped by status (purple headings), one line per session: the status glyph, the name
+//! and the last-used time. The selected row is a full-width `accent` band with black bold
+//! text. The bottom row lists the real shortcuts (labels bright, keys muted). Nothing expands
+//! inline and there is no preview pane or composer.
+const PANEL_WIDTH: u16 = 120;
 
 use crate::picker::{clock, pending, section, text, waited, Dashboard};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use serde_json::Value;
@@ -21,7 +23,9 @@ pub struct Colors {
     pub muted: Color,
     pub quiet: Color,
     pub accent: Color,
-    /// Selected row background (`element`).
+    /// Flat panel background; `Reset` leaves the painted screen background.
+    pub panel: Color,
+    /// Selected row band (`accent`), drawn with black bold text.
     pub selected: Color,
     /// Hovered row background (`element_hi`).
     pub hover: Color,
@@ -40,7 +44,8 @@ impl Default for Colors {
             muted: Color::Gray,
             quiet: Color::DarkGray,
             accent: Color::Cyan,
-            selected: Color::DarkGray,
+            panel: Color::Reset,
+            selected: Color::Rgb(250, 178, 131),
             hover: Color::DarkGray,
             border: Color::DarkGray,
             border_strong: Color::Gray,
@@ -100,20 +105,24 @@ fn mark_selected(line: &mut Line<'static>) {
     }
 }
 
-/// One band line: a one-column inset on both sides, `bg` filling between when given.
-fn band(spans: Vec<Span<'static>>, width: usize, bg: Option<Color>) -> Line<'static> {
-    let inner = width.saturating_sub(2);
+/// One band line: a `pad`-column inset on both sides, `bg` filling the whole width when given.
+/// The first inset column is its own span so `mark_selected` can replace it.
+fn band(spans: Vec<Span<'static>>, width: usize, pad: usize, bg: Option<Color>) -> Line<'static> {
+    let inner = width.saturating_sub(2 * pad);
     let used = spans_width(&spans);
-    let mut out = vec![Span::raw(" ")];
     let style = |s: Span<'static>| match bg {
         Some(bg) => Span::styled(s.content, s.style.bg(bg)),
         None => s,
     };
+    let mut out = vec![
+        style(Span::raw(" ")),
+        style(Span::raw(" ".repeat(pad.saturating_sub(1)))),
+    ];
     out.extend(spans.into_iter().map(style));
     if inner > used {
         out.push(style(Span::raw(" ".repeat(inner - used))));
     }
-    out.push(Span::raw(" "));
+    out.push(style(Span::raw(" ".repeat(pad))));
     Line::from(out)
 }
 
@@ -354,16 +363,36 @@ pub fn draw_at(
         return;
     }
     state.sync(dashboard);
-    // A compact centered page, like a Settings page: the screen shows around it.
-    let screen = area;
-    let page_width = screen.width.min(PAGE_WIDTH).max(12);
+    // A flat, borderless panel with a horizontal gutter (and a row above and below when tall).
+    let gutter = if area.width >= 60 { 2 } else { 0 };
+    let panel_w = area.width.saturating_sub(2 * gutter).min(PANEL_WIDTH);
+    let v_margin = u16::from(area.height >= 20);
+    let panel = Rect {
+        x: area.x + (area.width - panel_w) / 2,
+        y: area.y + v_margin,
+        width: panel_w,
+        height: area.height - 2 * v_margin,
+    };
+    if colors.panel != Color::Reset {
+        frame
+            .buffer_mut()
+            .set_style(panel, Style::default().bg(colors.panel));
+    }
+    // Content inset inside the panel; the selected band still spans the whole panel.
+    let pad: u16 = if panel_w >= 60 {
+        4
+    } else if panel_w >= 30 {
+        2
+    } else {
+        1
+    };
     let all = rows_of(dashboard);
     let shown = state.filtered(all);
     let quiet = Style::default().fg(colors.quiet);
     let muted = Style::default().fg(colors.muted);
-    // Inside the border; the header keeps two-column gutters, rows use `list_width`.
-    let list_width = usize::from(page_width.saturating_sub(2));
-    let width = list_width.saturating_sub(4);
+    let list_width = usize::from(panel_w);
+    let pad_cols = usize::from(pad);
+    let width = list_width.saturating_sub(2 * pad_cols);
 
     let chips = status_chips(&shown, colors, width / 2, spin);
     let chips_w = spans_width(&chips);
@@ -502,8 +531,13 @@ pub fn draw_at(
         let count = format!(" {}", members.len());
         lines.push((
             Line::from(vec![
-                Span::raw("  "),
-                Span::styled(label, muted),
+                Span::raw(" ".repeat(pad_cols)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(colors.purple)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(count, quiet),
             ]),
             None,
@@ -525,24 +559,37 @@ pub fn draw_at(
             } else {
                 None
             };
-            let (mut title, _close) = title_spans(
+            let (title, _close) = title_spans(
                 row,
                 list_width,
+                pad_cols,
                 is_selected,
                 renaming.as_deref(),
                 colors,
                 spin,
             );
-            // `title_spans` already leads with the status glyph: only indent it here.
-            title.insert(0, Span::raw("  "));
-            let mut line = band(title, list_width, bg);
+            // The selected band reads black on `accent`; monochrome keeps colours off and
+            // marks the row with the focus bar instead.
+            let band_text = is_selected && !colors.mono;
+            let paint = |spans: Vec<Span<'static>>| -> Vec<Span<'static>> {
+                if band_text {
+                    spans
+                        .into_iter()
+                        .map(|s| Span::styled(s.content, s.style.fg(Color::Rgb(0, 0, 0))))
+                        .collect()
+                } else {
+                    spans
+                }
+            };
+            let mut line = band(paint(title), list_width, pad_cols, bg);
             if colors.mono && is_selected {
                 mark_selected(&mut line);
             }
             lines.push((line, Some(*index), None));
             if let Some(request) = pending(row).filter(|_| section(row) == 0) {
                 // Needs you: the question with its wait, then the keys that answer it.
-                let inner = list_width.saturating_sub(2);
+                let inner = list_width.saturating_sub(2 * pad_cols);
+                let indent = 2;
                 let wait = format!(
                     "waiting {}",
                     clock(waited(
@@ -550,18 +597,19 @@ pub fn draw_at(
                         now
                     ))
                 );
-                let room = inner.saturating_sub(4 + 1 + wait.width() + 2);
+                let room = inner.saturating_sub(indent + 1 + wait.width());
                 let ask = fit(text(request, "summary"), room.max(1));
-                let gap = inner.saturating_sub(4 + ask.width() + wait.width() + 2);
+                let gap = inner.saturating_sub(indent + ask.width() + wait.width());
                 lines.push((
                     band(
-                        vec![
-                            Span::raw("    "),
+                        paint(vec![
+                            Span::raw(" ".repeat(indent)),
                             Span::styled(ask, Style::default().fg(colors.text)),
                             Span::raw(" ".repeat(gap.max(1))),
                             Span::styled(wait, quiet),
-                        ],
+                        ]),
                         list_width,
+                        pad_cols,
                         bg,
                     ),
                     Some(*index),
@@ -569,11 +617,12 @@ pub fn draw_at(
                 ));
                 lines.push((
                     band(
-                        vec![
-                            Span::raw("    "),
+                        paint(vec![
+                            Span::raw(" ".repeat(indent)),
                             Span::styled("Enter open  a allow once  d deny", quiet),
-                        ],
+                        ]),
                         list_width,
+                        pad_cols,
                         bg,
                     ),
                     Some(*index),
@@ -589,7 +638,10 @@ pub fn draw_at(
             "No session matches the filter"
         };
         lines.push((
-            Line::from(vec![Span::raw("  "), Span::styled(empty, muted)]),
+            Line::from(vec![
+                Span::raw(" ".repeat(pad_cols)),
+                Span::styled(empty, muted),
+            ]),
             None,
             None,
         ));
@@ -598,60 +650,103 @@ pub fn draw_at(
     // it is never mistaken for (or sorted among) an ordinary session.
     let (manager_lines, manager_voice) = manager_band(dashboard, colors, width, spin);
     let manager_h = manager_lines.len() as u16;
-    // Size the page to its content (header bands, list, footer, border), centered on screen
-    // with at least one blank row above and below when the screen is tall enough.
-    let chrome = 6 + manager_h + u16::from(footer.is_some()) + 2;
-    let margin = if screen.height > chrome + 2 { 1 } else { 0 };
-    let page_height = ((lines.len() + 1).min(usize::from(u16::MAX)) as u16)
-        .saturating_add(chrome)
-        .min(screen.height.saturating_sub(2 * margin))
-        .max(chrome.min(screen.height));
-    let page = Rect {
-        x: screen.x + (screen.width - page_width) / 2,
-        y: screen.y + (screen.height - page_height) / 2,
-        width: page_width,
-        height: page_height,
-    };
-    frame.render_widget(
-        Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(colors.border_strong)),
-        page,
-    );
-    let inner = Rect {
-        x: page.x + 1,
-        y: page.y + 1,
-        width: page.width.saturating_sub(2),
-        height: page.height.saturating_sub(2),
-    };
-    let area = Rect {
-        x: inner.x + 2,
-        width: inner.width.saturating_sub(4),
-        height: inner.height,
-        ..inner
-    };
-
-    // header, blank, New Agent, blank, search, rule, list.
-    let mut constraints = vec![
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ];
+    // Rows top to bottom: Sessions/esc, Search, the header and actions, the Manager, the list,
+    // the status line and the shortcut hints. Blank rows between them only when the panel is
+    // tall; short panels drop the actions, the header and the hints (in that order) so the
+    // list always keeps room.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Slot {
+        Blank,
+        Title,
+        Search,
+        Header,
+        Actions,
+        Manager,
+        List,
+        Footer,
+        Hints,
+    }
+    let roomy = panel.height >= 24;
+    let mut slots: Vec<(Slot, Constraint)> = Vec::new();
+    let mut push = |slot: Slot, constraint: Constraint| slots.push((slot, constraint));
+    let one = Constraint::Length(1);
+    if roomy {
+        push(Slot::Blank, one);
+    }
+    push(Slot::Title, one);
+    if roomy {
+        push(Slot::Blank, one);
+    }
+    push(Slot::Search, one);
+    if roomy {
+        push(Slot::Blank, one);
+    }
+    if panel.height >= 6 {
+        push(Slot::Header, one);
+    }
+    if panel.height >= 8 {
+        push(Slot::Actions, one);
+    }
+    if roomy {
+        push(Slot::Blank, one);
+    }
     if manager_h > 0 {
-        constraints.push(Constraint::Length(manager_h));
+        push(Slot::Manager, Constraint::Length(manager_h));
     }
-    constraints.push(Constraint::Min(1));
+    push(Slot::List, Constraint::Min(1));
     if footer.is_some() {
-        constraints.push(Constraint::Length(1));
+        push(Slot::Footer, one);
     }
-    let bands = Layout::default()
+    if panel.height >= 10 {
+        push(Slot::Hints, one);
+    }
+    if roomy {
+        push(Slot::Blank, one);
+    }
+    let content = Rect {
+        x: panel.x + pad,
+        width: panel.width.saturating_sub(2 * pad),
+        ..panel
+    };
+    let split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-    let list_band = 6 + usize::from(manager_h > 0);
+        .constraints(slots.iter().map(|(_, c)| *c))
+        .split(content);
+    let slot_rect = |slot: Slot| {
+        slots
+            .iter()
+            .position(|(s, _)| *s == slot)
+            .map_or(Rect::default(), |i| split[i])
+    };
+    let area = content;
+    let bands = [
+        slot_rect(Slot::Header),
+        Rect::default(),
+        slot_rect(Slot::Actions),
+        Rect::default(),
+        slot_rect(Slot::Search),
+        Rect::default(),
+        slot_rect(Slot::Manager),
+    ];
+    {
+        let title = slot_rect(Slot::Title);
+        let esc = "esc";
+        let head = "Sessions";
+        let gap = usize::from(title.width).saturating_sub(head.width() + esc.width());
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    head,
+                    Style::default()
+                        .fg(colors.text)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(esc, muted),
+            ])),
+            title,
+        );
+    }
     if manager_h > 0 {
         let band = bands[6];
         frame.render_widget(Paragraph::new(manager_lines), band);
@@ -671,7 +766,7 @@ pub fn draw_at(
     }
     frame.render_widget(Paragraph::new(Line::from(header)), bands[0]);
     frame.render_widget(Paragraph::new(Line::from(actions)), bands[2]);
-    if show_hint {
+    if show_hint && bands[0].height > 0 {
         let x = area.x + location.width() as u16 + 1;
         state.choose_hit = Rect {
             x,
@@ -680,7 +775,7 @@ pub fn draw_at(
             height: 1,
         };
     }
-    if show_new {
+    if show_new && bands[2].height > 0 {
         state.new_hit = Rect {
             x: area.x,
             y: bands[2].y,
@@ -688,7 +783,8 @@ pub fn draw_at(
             height: 1,
         };
     }
-    if right_w > 0 && (show_new && actions_w + right_w < width || !show_new) {
+    if right_w > 0 && bands[2].height > 0 && (show_new && actions_w + right_w < width || !show_new)
+    {
         let start = area.x + area.width - right_w as u16;
         if show_work {
             let work_x = start;
@@ -716,22 +812,16 @@ pub fn draw_at(
             Span::styled(format!("  ({} match) · Esc clears", shown.len()), quiet),
         ])
     } else {
-        Line::from(Span::styled("/ Search sessions", quiet))
+        Line::from(Span::styled("Search sessions", muted))
     };
     frame.render_widget(Paragraph::new(search), bands[4]);
     state.search_hit = bands[4];
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "─".repeat(usize::from(area.width)),
-            Style::default().fg(colors.border),
-        ))),
-        bands[5],
-    );
 
+    // The list bands span the whole panel so the selected row is a full-width bar.
     let list = Rect {
-        x: inner.x,
-        width: inner.width,
-        ..bands[list_band]
+        x: panel.x,
+        width: panel.width,
+        ..slot_rect(Slot::List)
     };
     let height = usize::from(list.height).max(1);
     let selected_line = lines
@@ -785,15 +875,65 @@ pub fn draw_at(
         list,
     );
     if let Some(line) = footer {
-        frame.render_widget(Paragraph::new(line), bands[list_band + 1]);
+        frame.render_widget(Paragraph::new(line), slot_rect(Slot::Footer));
     }
+    let hints = slot_rect(Slot::Hints);
+    if hints.height > 0 {
+        let mut items = vec![
+            ("Enter", "open"),
+            ("n", "new"),
+            ("/", "search"),
+            ("r", "rename"),
+            ("d", "archive"),
+            ("g", "group"),
+            ("t", "tree"),
+            ("Ctrl+w", "worktree"),
+        ];
+        if crate::picker::has_manager(dashboard) {
+            items.push(("m", "manager"));
+        }
+        frame.render_widget(
+            Paragraph::new(hint_line(&items, colors, usize::from(hints.width))),
+            hints,
+        );
+    }
+}
+
+/// `key label` pairs (key muted, label bright) separated by three spaces; pairs that do not
+/// fit are dropped from the end rather than cut.
+fn hint_line(items: &[(&str, &str)], colors: &Colors, width: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for (key, label) in items {
+        let sep = if spans.is_empty() { 0 } else { 3 };
+        let need = sep + key.width() + 1 + label.width();
+        if used + need > width {
+            break;
+        }
+        if sep > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.push(Span::styled(
+            (*key).to_owned(),
+            Style::default().fg(colors.muted),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            (*label).to_owned(),
+            Style::default().fg(colors.text),
+        ));
+        used += need;
+    }
+    Line::from(spans)
 }
 
 /// One-line session row: status, title, and last-used time. Archive actions remain available
 /// through the existing keyboard command and selected-row controls outside this compact row.
+#[allow(clippy::too_many_arguments)]
 fn title_spans(
     row: &Value,
     width: usize,
+    pad: usize,
     selected: bool,
     renaming: Option<&str>,
     colors: &Colors,
@@ -826,26 +966,26 @@ fn title_spans(
             }
         }
     };
-    // Inset (1+1), indent (2), glyph and space (2), a gap, and two trailing columns.
-    let inner = width.saturating_sub(2);
-    let room = inner.saturating_sub(2 + 2 + 1 + 2 + tail.width());
+    // Inset on both sides, glyph and space (2), a gap before the time.
+    let inner = width.saturating_sub(2 * pad);
+    let room = inner.saturating_sub(2 + 1 + tail.width());
     let title = fit(&title, room.max(1));
     let close = None;
+    let mut title_style = Style::default().fg(if section(row) == 3 {
+        colors.muted
+    } else {
+        colors.text
+    });
+    if selected {
+        title_style = title_style.add_modifier(Modifier::BOLD);
+    }
     let spans = vec![
         status_glyph(text(row, "status"), colors, spin),
         Span::raw(" "),
-        Span::styled(
-            title,
-            Style::default().fg(if section(row) == 3 {
-                colors.muted
-            } else {
-                colors.text
-            }),
-        ),
+        Span::styled(title, title_style),
         Span::raw(" "),
         Span::styled(tail, quiet),
     ];
-    let _ = (selected, quiet);
     (spans, close)
 }
 
@@ -903,7 +1043,7 @@ mod tests {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
         assert!(screen.contains("Alpha") && screen.contains("Beta"));
-        assert!(screen.contains("/ Search sessions"));
+        assert!(screen.contains("Search sessions"));
         assert!(
             !screen.contains("Python sample: frozen Task"),
             "rows are one line: no summary"
@@ -919,26 +1059,169 @@ mod tests {
         assert!(state.new_hit.width > 0 && state.worktree_hit.width > 0);
     }
 
+    fn buffer_of(
+        width: u16,
+        height: u16,
+        dashboard: &Value,
+        state: &mut Dashboard,
+        colors: &Colors,
+    ) -> ratatui::buffer::Buffer {
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, frame.area(), dashboard, state, colors, 0))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().to_owned())
+            .collect()
+    }
+
+    fn row_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
+        (0..buffer.area.height)
+            .find(|y| row_text(buffer, *y).contains(needle))
+            .unwrap_or_else(|| panic!("{needle}"))
+    }
+
+    /// Column of `needle` in the row, in cells (the test strings are single-width).
+    fn col_of(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> u16 {
+        let text = row_text(buffer, y);
+        let byte = text.find(needle).unwrap();
+        text[..byte].chars().count() as u16
+    }
+
+    fn themed() -> Colors {
+        Colors {
+            text: Color::Rgb(230, 230, 230),
+            muted: Color::Rgb(120, 120, 120),
+            panel: Color::Rgb(28, 28, 28),
+            selected: Color::Rgb(250, 178, 131),
+            purple: Color::Rgb(180, 120, 240),
+            ..Colors::default()
+        }
+    }
+
     #[test]
-    fn page_is_compact_and_centered() {
+    fn panel_is_flat_wide_and_borderless_with_a_title_and_hints() {
+        let colors = themed();
         let mut state = Dashboard::default();
-        let screen = render(140, 40, &sample(), &mut state);
+        let buffer = buffer_of(140, 40, &sample(), &mut state, &colors);
+        let screen: String = (0..40)
+            .map(|y| row_text(&buffer, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !screen.contains(['╭', '╮', '╰', '╯']),
+            "no rounded card border"
+        );
+        // A wide panel with a gutter, centred, flat charcoal.
         let list = state.list_area;
-        assert!(list.width <= PAGE_WIDTH, "not full width: {}", list.width);
-        let left = list.x;
-        let right = 140 - (list.x + list.width);
-        assert_eq!(left, right, "horizontally centered");
-        assert!(state.new_hit.x > 30 && state.search_hit.x > 30);
-        let lines: Vec<&str> = screen.lines().collect();
-        assert!(lines[0].trim().is_empty(), "not full-screen: top row empty");
+        assert_eq!(list.width, PANEL_WIDTH);
+        assert_eq!(list.x, 140 - (list.x + list.width), "centred");
+        assert_eq!(buffer[(list.x, 10)].bg, colors.panel);
+        assert_eq!(buffer[(list.x + list.width - 1, 10)].bg, colors.panel);
+        assert_ne!(buffer[(list.x - 1, 10)].bg, colors.panel, "panel edge");
+        // `Sessions` (bold) top-left, a muted `esc` top-right, inside the inset.
+        let title = row_of(&buffer, "Sessions");
+        let x = col_of(&buffer, title, "Sessions");
+        assert_eq!(x, list.x + 4, "generous inset");
+        assert!(buffer[(x, title)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
+        let esc = col_of(&buffer, title, "esc");
+        assert_eq!(esc + 3, list.x + list.width - 4);
+        assert_eq!(buffer[(esc, title)].fg, colors.muted);
+        // Plain Search below the title, a blank row between; no rule under it.
+        let search = row_of(&buffer, "Search sessions");
+        assert_eq!(search, title + 2);
+        assert!(!row_text(&buffer, search + 1).contains('─'));
+        // Bottom hints: keys muted, labels bright, real shortcuts only.
+        let hints = row_of(&buffer, "Enter open");
+        let line = row_text(&buffer, hints);
+        for label in ["n new", "/ search", "r rename", "d archive", "g group"] {
+            assert!(line.contains(label), "{label}: {line}");
+        }
+        assert!(!line.contains("pin") && !line.contains("delete"), "{line}");
+        let key = col_of(&buffer, hints, "Enter");
+        assert_eq!(buffer[(key, hints)].fg, colors.muted);
+        assert_eq!(buffer[(key + 6, hints)].fg, colors.text);
+    }
+
+    #[test]
+    fn selected_row_is_a_full_width_peach_bar_with_black_bold_text() {
+        let colors = themed();
+        let mut state = Dashboard::default();
+        let buffer = buffer_of(140, 40, &sample(), &mut state, &colors);
+        let list = state.list_area;
+        let alpha = row_of(&buffer, "Alpha");
+        for x in list.x..list.x + list.width {
+            assert_eq!(buffer[(x, alpha)].bg, colors.selected, "x {x}");
+        }
+        let title = col_of(&buffer, alpha, "Alpha");
+        let cell = &buffer[(title, alpha)];
+        assert_eq!(cell.fg, Color::Rgb(0, 0, 0));
+        assert!(cell.style().add_modifier.contains(Modifier::BOLD));
+        let age = col_of(&buffer, alpha, "2m");
+        assert_eq!(buffer[(age, alpha)].fg, Color::Rgb(0, 0, 0));
+        // Other rows stay on the panel, with the normal text colour and no bold.
+        let beta = row_of(&buffer, "Beta");
+        let bx = col_of(&buffer, beta, "Beta");
+        assert_eq!(buffer[(list.x + 10, beta)].bg, colors.panel);
+        assert_eq!(buffer[(bx, beta)].fg, colors.text);
+        assert!(!buffer[(bx, beta)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
+        // Group headings are purple.
+        let idle = row_of(&buffer, "Idle");
+        let hx = col_of(&buffer, idle, "Idle");
+        assert_eq!(buffer[(hx, idle)].fg, colors.purple);
+    }
+
+    #[test]
+    fn small_terminals_never_panic_and_keep_the_list_and_announce_cuts() {
+        let long = json!({
+            "selected": "a", "path": "~/repos/nexus", "branch": "main",
+            "rows": [{"id":"a","title":"A very long session title that cannot possibly fit here","status":"idle","age":"2m"}],
+        });
+        for (w, h) in [
+            (12, 4),
+            (20, 5),
+            (30, 7),
+            (40, 9),
+            (40, 12),
+            (50, 16),
+            (60, 20),
+        ] {
+            for dashboard in [&sample(), &mixed(), &long, &with_manager(ready_manager())] {
+                let mut state = Dashboard::default();
+                let _ = render(w, h, dashboard, &mut state);
+                assert!(state.list_area.width <= w);
+            }
+        }
+        let mut state = Dashboard::default();
+        let screen = render(40, 12, &long, &mut state);
         assert!(
-            lines[39].trim().is_empty(),
-            "not full-screen: bottom row empty"
+            screen.contains("Sessions") && screen.contains("esc"),
+            "{screen}"
         );
+        assert!(screen.contains("A very long"), "{screen}");
+        assert!(screen.contains('…'), "a cut title is announced: {screen}");
+        // Hints that do not fit are dropped whole, never cut mid-label.
+        assert!(screen.contains("Enter open"), "{screen}");
+        assert!(!screen.contains("worktree"), "{screen}");
+        // Very short: the list survives without the hints row.
+        let mut state = Dashboard::default();
+        let screen = render(40, 5, &sample(), &mut state);
         assert!(
-            screen.contains('╭') && screen.contains('╯'),
-            "bordered card"
+            screen.contains("Alpha") || screen.contains("Beta"),
+            "{screen}"
         );
+        assert!(state.list_area.height >= 1);
     }
 
     #[test]
@@ -1126,7 +1409,7 @@ mod tests {
         let screen = render(100, 40, &with_manager(ready_manager()), &mut state);
         let l = lines_of(&screen);
         let (search, manager, first_group) = (
-            at(&l, "/ Search sessions"),
+            at(&l, "Search sessions"),
             at(&l, "◇ Manager"),
             at(&l, "▾ Needs you"),
         );
@@ -1260,20 +1543,18 @@ mod tests {
     }
 
     #[test]
-    fn one_blank_row_separates_new_agent_from_the_rest() {
+    fn search_sits_above_the_actions_and_a_blank_row_separates_the_list() {
         let mut state = Dashboard::default();
         let screen = render_at(100, 40, &sample(), &mut state, 0.0);
         let l = lines_of(&screen);
-        let new = at(&l, "+ New Agent");
+        let (search, new) = (at(&l, "Search sessions"), at(&l, "+ New Agent"));
+        assert!(l[search + 1].trim().is_empty(), "{screen}");
         assert!(
-            l[new + 1]
-                .trim()
-                .trim_matches(|c| c == '│')
-                .trim()
-                .is_empty(),
+            search < new && l[new - 1].contains("~/repos/nexus"),
             "{screen}"
         );
-        assert!(l[new + 2].contains("/ Search sessions"), "{screen}");
+        assert!(l[new + 1].trim().is_empty(), "{screen}");
+        assert!(l[new + 2].contains("▾ Needs you"), "{screen}");
     }
 
     #[test]
