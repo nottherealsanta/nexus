@@ -156,6 +156,7 @@ _V2_NUMERIC = {
     "live.pause_seconds": int,
     "manager.max_launches_per_turn": int,
     "manager.max_live_managed": int,
+    "manager.idle_compaction_minutes": int,
 }
 _V2_BOOL = frozenset(
     {
@@ -176,6 +177,8 @@ _V2_BOOL = frozenset(
         "live.progress",
         "live.log_raw",
         "manager.enabled",
+        "manager.auto_compaction",
+        "manager.state_snapshot",
         "code_mode.enabled",
         "code_mode.context",
     }

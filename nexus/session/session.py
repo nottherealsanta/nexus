@@ -525,9 +525,14 @@ class Session:
         workspace_required: Callable[[Any], bool] | None = None,
         prepare_workspace: Callable[..., Any] | None = None,
         before_terminal: Callable[..., Any] | None = None,
+        manager_compaction: Callable[[], tuple[bool, float]] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
+        #: ``() -> (enabled, idle_seconds)`` for the Manager's lazy turn-admission
+        #: compaction (plan 10). Injected by the runtime from ``[manager]``; ``None``
+        #: means never compact. Only a ``manager`` session ever consults it.
+        self._manager_compaction = manager_compaction
         #: ``(session_id, job_id) -> may the job still be running``. Injected by
         #: the runtime (this layer imports nothing from ``tools``); ``None`` means
         #: nothing can prove a job dead, so no recovery event is ever written.
@@ -687,8 +692,11 @@ class Session:
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
         hooks: Callable[[], Any] | None = None,
+        manager_compaction: Callable[[], tuple[bool, float]] | None = None,
     ) -> Session:
         """Attach or replace the loop dependencies used by :meth:`send`."""
+        if manager_compaction is not None:
+            self._manager_compaction = manager_compaction
         if assemble is not None:
             self._assemble = assemble
         if provider_for is not None:
@@ -1162,6 +1170,14 @@ class Session:
     def handoff(self, **kwargs):
         from .handoff import handoff
         return handoff(self, **kwargs)
+
+    async def _compact_manager_at_admission(self) -> None:
+        """Lazy Manager compaction before a turn is admitted (plan 10); never raises."""
+        if self._manager_compaction is None or self.kind != "manager" or self._active is not None:
+            return
+        from .manager_compaction import compact_manager
+
+        compact_manager(self, self._manager_compaction)
 
     def append_summary(
         self,
@@ -2944,6 +2960,7 @@ class Session:
         # Re-check after the await: a delete can retire the handle while the
         # readiness seam yields, and a retired handle must never write.
         self._ensure_writable()
+        await self._compact_manager_at_admission()
         content, queued_items = self._resolve_turn_input(user_input)
         content, block_reason = await self._gate_queue_content(content, queued_items)
         if block_reason is not None:
@@ -3089,6 +3106,7 @@ class Session:
         if self._ensure_ready is not None:
             await self._ensure_ready()
         self._ensure_writable()
+        await self._compact_manager_at_admission()
         content, queued_items = self._resolve_turn_input(user_input)
         # ``UserPromptSubmit`` runs before anything is durable; capture the log
         # watermark so the blocked path can yield exactly the events it emitted.

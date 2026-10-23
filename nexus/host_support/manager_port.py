@@ -84,6 +84,7 @@ from ..tools.manager_port import (
     WaitResult,
 )
 from ..util import redact_secrets
+from .manager_state import build_manager_state
 
 __all__ = [
     "FacadeManagerHost",
@@ -99,6 +100,8 @@ log = logging.getLogger("nexus.manager")
 
 #: Newest records scanned for the terminal outcome and final assistant text.
 _TAIL_RECORDS = 400
+#: Outcome reads per ``state_snapshot`` call (only idle roots in the recent window need one).
+_STATE_OUTCOME_LOOKUPS = 30
 _TERMINAL = {"turn.completed": "completed", "turn.failed": "failed", "turn.cancelled": "cancelled"}
 #: One wait call, seconds. The tool layer enforces the same bound on its input.
 MAX_WAIT_SECONDS = 600
@@ -359,6 +362,31 @@ class HostManagerPort:
             "session": session_id, "bytes": result.total_bytes, "clipped": result.clipped,
         })
         return result
+
+    def state_snapshot(self) -> str:
+        """The per-request ``## Nexus State`` block (plan 10); read-only, never stored.
+
+        Built from the same ``_visible()`` set as the tools. Terminal outcomes are read
+        (``_tail``) only for idle roots inside the recent window, at most
+        ``_STATE_OUTCOME_LOOKUPS`` per call; beyond that a root counts as ``idle``.
+        """
+        lookups = 0
+
+        def outcome_of(item: SessionSummary) -> str | None:
+            nonlocal lookups
+            if lookups >= _STATE_OUTCOME_LOOKUPS:
+                return None
+            lookups += 1
+            try:
+                return self._tail(item.id)[0]
+            except Exception:  # noqa: BLE001 - an unreadable log is "no outcome"
+                return None
+
+        store = self._sessions.store
+        return build_manager_state(
+            self._visible().values(), outcome_of, now=self._clock(),
+            project=(self._sessions.directory.name, str(store.project_id)),
+        )
 
     # -- ManagerPort: acting side --------------------------------------------
 

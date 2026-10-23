@@ -195,6 +195,7 @@ MANAGER_EVENTS = (
     "manager.send_refused",
     "manager.show",
     "manager.show_refused",
+    "manager.memory_updated",
 )
 
 # Presence is a subscriber count, not identity (single user, many views).

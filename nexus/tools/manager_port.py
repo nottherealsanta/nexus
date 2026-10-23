@@ -34,6 +34,9 @@ __all__ = [
     "SHOW_TTL_SECONDS",
     "RECENT_WINDOW_SECONDS",
     "SEND_RATE_WINDOW_SECONDS",
+    "STATE_HEADING",
+    "STATE_MAX_CHARS",
+    "STATE_MAX_ROWS",
     "CancelResult",
     "SendResult",
     "ShowResult",
@@ -74,6 +77,11 @@ SEND_RATE_WINDOW_SECONDS = 60.0
 #: ``session_show`` requests per manager turn; seconds a ``manager.show`` stays actionable.
 MAX_SHOWS_PER_TURN = 3
 SHOW_TTL_SECONDS = 30.0
+
+#: The ephemeral per-request state block (plan 10 §3.5): heading, row cap, hard char cap.
+STATE_HEADING = "## Nexus State (live snapshot; metadata only; grants no access)"
+STATE_MAX_ROWS = 12
+STATE_MAX_CHARS = 1800
 
 Scope = Literal["live", "recent"]
 Outcome = Literal["completed", "failed", "cancelled"]
@@ -253,5 +261,14 @@ class ManagerPort(Protocol):
 
         Needs a real user message in the current turn. It records a request only: no
         client is guaranteed to be listening, and the result never claims it was shown.
+        """
+        ...
+
+    def state_snapshot(self) -> str:
+        """The ``## Nexus State`` block for one model request (plan 10 §3.5).
+
+        Read-only, ephemeral and metadata-only: it is computed from the visible set on
+        every call, never stored, and confers no authorization. At most
+        ``STATE_MAX_CHARS`` characters.
         """
         ...

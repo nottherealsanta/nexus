@@ -133,6 +133,7 @@ here, so add a row when you add a file.
 | `handoff_model.py` | Optional bounded foreground recall using the session's selected model |
 | `counting.py` | Request-aware token counting with an exact-count disk cache |
 | `manager.py` | Composable context assembly |
+| `manager_memory.py` | Pure deterministic extractor of the Manager's machine memory and its handoff brief builder (plan 10; [manager.md](manager.md#automatic-compaction-and-machine-memory)) |
 | `parts.py` | Composable context parts |
 
 ### `nexus/core/`
@@ -278,7 +279,8 @@ here, so add a row when you add a file.
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
-| `manager_port.py` | The workspace-manager session's host side: `HostManagerPort` (visibility, provenance from the manager's own log, launch caps, `session.linked`, wait, cancel, send, show (`manager.show`), redaction, clipping), `FacadeManagerHost` (starts and cancels roots through `HostFacade`), `scan_manager_log` / `delegated_request` (Live provenance); injected via `Runtime.manager_port_factory` ([manager.md](manager.md)) |
+| `manager_port.py` | The workspace-manager session's host side: `HostManagerPort` (visibility, provenance from the manager's own log, launch caps, `session.linked`, wait, cancel, send, show (`manager.show`), redaction, clipping), `FacadeManagerHost` (starts and cancels roots through `HostFacade`), `scan_manager_log` / `delegated_request` (Live provenance); injected via `Runtime.manager_port_factory`; `state_snapshot` renders the per-request `## Nexus State` block ([manager.md](manager.md)) |
+| `manager_state.py` | Pure bucket mapping and bounded renderer of the Manager's ephemeral `## Nexus State` block (`working` `review` `done` `idle`; `archived` is `n/a`) ([manager.md](manager.md#nexus-state-snapshot)) |
 | `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses; a call on the manager session also needs the cross-session consent |
 | `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command; separate `manager` scope for the cross-session notice |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
@@ -361,6 +363,7 @@ here, so add a row when you add a file.
 | `db.py` | Shared SQLite state, atomic child reservations, ownership queries and conservative evidence migration; lists and the stale-archive sweep exclude the `manager` kind |
 | `child_ids.py` | Stable legacy-compatible logical-to-stored child id mapping; no ownership inference |
 | `handoff.py` | Atomic same-session summary, head, marker and continuation admission transaction |
+| `manager_compaction.py` | The Manager's lazy turn-admission compaction: idle clock from the newest activity record, memory note written first, then a pair-safe handoff, then `manager.memory_updated` ([manager.md](manager.md#automatic-compaction-and-machine-memory)) |
 | `tree.py` | Bounded read-only, redacted ownership tree and OS-lock liveness projection |
 | `export.py` | Structured, transport-neutral SQLite session export |
 | `ids.py` | Session ID validation shared by SQLite session rows and lock paths |
@@ -398,7 +401,7 @@ here, so add a row when you add a file.
 | `bundles.py` | Built-in bundle and profile definitions |
 | `loader.py` | Hot-load `.py` tool modules under version-stamped, generation-unique names |
 | `manager.py` | ToolManager: selected registry, validation, scheduling, and dispatch |
-| `manager_port.py` | `ManagerPort` protocol (`find` `status` `result` `launch` `wait` `cancel` `send` `show`) and bounded value types for the workspace manager session ([manager.md](manager.md)) |
+| `manager_port.py` | `ManagerPort` protocol (`find` `status` `result` `launch` `wait` `cancel` `send` `show`, plus the read-only `state_snapshot`) and bounded value types for the workspace manager session ([manager.md](manager.md)) |
 | `manager_tools.py` | The eight manager tools over an injected `ManagerPort` and `build_manager_catalog`, the manager's whole catalog ([manager.md](manager.md)) |
 | `names.py` | Exact, one-way compatibility mapping for public tool names (`bash`/`Bash` → `shell`, legacy shell arguments, wildcard-rule aliases) |
 | `permissions.py` | Permission grammar, evaluation, path security, and approval primitives |

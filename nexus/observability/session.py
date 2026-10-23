@@ -40,6 +40,9 @@ _PROJECTIONS: dict[str, tuple[str, str, str]] = {
     "manager.send_refused": ("warning", "manager.send_refused", "A manager send was refused."),
     "manager.show": ("info", "manager.show", "The manager asked a client to show a session."),
     "manager.show_refused": ("warning", "manager.show_refused", "A manager show request was refused."),
+    "manager.memory_updated": (
+        "info", "manager.memory_updated", "The manager's machine memory was updated before a compaction."
+    ),
     "error": ("error", "error", "An operation failed."),
 }
 

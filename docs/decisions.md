@@ -1232,6 +1232,27 @@ the user's root sessions. What we decided, and why:
 - **Off by default, no real-provider soak.** The backend is tested offline only; native UI and a soak against real
   Copilot and GPT Live come before the default flips.
 
+## The manager compacts lazily at turn admission, with deterministic memory and a per-request state block (2026-10, plan 10)
+
+Details in [manager.md](manager.md#automatic-compaction-and-machine-memory).
+
+- **Lazy at admission, not a timer and not a tool.** An in-memory timer loses state on restart and wakes an idle
+  daemon; a model-callable compact tool lets a `<session_result>` erase context. The idle clock is the newest
+  activity record in the manager's own log (not presence, queued input or the audit record), so it survives
+  restarts. Default 55 minutes, configurable 5-1440.
+- **Memory first, then handoff.** The note goes to the `kv` table before anything is retired; a failed write aborts
+  and a failed handoff keeps the note. No second model (the pin forbids it), so extraction is deterministic and
+  reads only structured events and real user prompts, never assistant prose or titles. It is not `MEMORY.md`, which
+  stays human-owned.
+- **State is a snapshot, not memory.** What Nexus looks like *now* is rebuilt for every model request and never
+  persisted, so compaction and restarts cannot carry a stale state as truth; memory only says what happened.
+  The snapshot confers no authority (tools do not read it). Resolved v1 choices: refresh per request (D1);
+  `review` = awaiting permission/input only (D2); `archived` is `n/a` because archived roots are invisible (D3);
+  `done` reuses the 2 h recent window (D4); 12 rows / 1,800 chars (D5); the method is
+  `ManagerPort.state_snapshot()` (D6); GPT Live gets it only through the manager, under the existing consent
+  (D7, wording not re-checked). Changing system tail per request may cost Codex prompt-cache reuse: not
+  measured; `[manager] state_snapshot = false` is the switch.
+
 ## Status line: grey shimmer instead of the decode scramble
 
 Design overhaul step 6 scrambled a window of graphemes in the activity word with random glyphs and

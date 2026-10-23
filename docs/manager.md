@@ -21,7 +21,9 @@ tool and no hook runs in it.
 
 | Piece | File | Contract |
 | --- | --- | --- |
-| Config | `nexus/config/schema.py` (`ManagerSection`) | `[manager]` `enabled = false`, `max_launches_per_turn = 3`, `max_live_managed = 8` |
+| Config | `nexus/config/schema.py` (`ManagerSection`) | `[manager]` `enabled = false`, `max_launches_per_turn = 3`, `max_live_managed = 8`, `auto_compaction = true`, `idle_compaction_minutes = 55`, `state_snapshot = true` |
+| Compaction and memory | `nexus/session/manager_compaction.py`, `nexus/context/manager_memory.py` | Lazy idle compaction at turn admission; deterministic machine memory in `kv`; see [below](#automatic-compaction-and-machine-memory) |
+| State snapshot | `nexus/host_support/manager_state.py`, `HostManagerPort.state_snapshot` | Per-request ephemeral `## Nexus State` block; see [below](#nexus-state-snapshot) |
 | Port protocol | `nexus/tools/manager_port.py` | `ManagerPort`: `find`, `status`, `result`, `launch`, `wait`, `cancel`, `send`, `show`; frozen bounded value types; `LaunchRefused` carries a reason code |
 | Tools | `nexus/tools/manager_tools.py` | The eight `ManagerToolDef`s and `build_manager_catalog(port)`, the manager's whole catalog |
 | Host port | `nexus/host_support/manager_port.py` | `HostManagerPort`: visibility, provenance, caps, `session.linked`, wait, cancel, send, show (`manager.show`); `FacadeManagerHost` starts, cancels and messages roots through `HostFacade` and reads `focused_clients` |
@@ -207,10 +209,77 @@ Codex. Until then it still talks to Copilot.
 | `manager.send_refused` | manager | `reason` (`no_user_message`, `denied`, `cap`, `rate`, `not_sendable`, `error`), `target`, `turn` |
 | `manager.show` | manager | `target`, `origin_message_id`, `turn`, `clients`, `live`, `expires_at` |
 | `manager.show_refused` | manager | `reason` (`no_user_message`, `cap`, `error`), `target`, `turn` |
+| `manager.memory_updated` | manager | `chars`, `digest` (16 hex of SHA-256), `from_seq`, `through_seq` (the retired range), `reason: "idle_timeout"`. Written after the memory note and the handoff are durable |
 
 They carry ids, counts and reason codes only. The view reducer folds them as session metadata (no
 diagnostics) and labels a manager-launched root's first message with `origin.kind = "manager"`
 ([events-and-view.md](events-and-view.md)); `LogsRead` projects each with a fixed summary.
+
+## Automatic compaction and machine memory
+
+Plan: [`plans/planning/manager-automatic-compaction.md`](../plans/planning/manager-automatic-compaction.md).
+The manager is one log for the life of the workspace, so it compacts itself, lazily and durably, with no
+timer and no model-callable tool (a `<session_result>` could otherwise talk it into erasing its context).
+
+* **Trigger.** At turn admission (`Session.start_turn` / `send`, before the input is resolved and before
+  any request is stamped) `nexus/session/manager_compaction.py` compares now with the newest *activity*
+  record of the manager's own log: a message, a summary, or a `turn.*`, `manager.*` (except
+  `manager.memory_updated`), `session.linked` or `context.handoff` event. Presence, `input.*` and the audit
+  record do not count, or opening the manager screen and queueing the very message being admitted would reset
+  the clock. A gap of `[manager] idle_compaction_minutes` (default 55, 5-1440) with retirable context
+  triggers it. The clock is in SQLite, so a daemon restart needs no state; a busy session never compacts.
+  Config: `auto_compaction` (default true), `idle_compaction_minutes`; both off-switches leave the log
+  untouched.
+* **Order (fail-safe).** 1. `extract_manager_memory` folds the log into a note. 2. The note is written to the
+  `kv` table (`manager_machine_memory`, `main` namespace) **first**; if that fails nothing is retired.
+  3. An ordinary pair-safe same-session handoff (`reason = "idle_timeout"`, brief from `build_manager_brief`)
+  retires everything before the incoming turn; a refused handoff (for example an unresolved tool call) keeps
+  the note and the context and the next admission retries. 4. `manager.memory_updated` is recorded.
+  Any exception is logged and the turn runs on the uncompacted context.
+* **Memory** (`nexus/context/manager_memory.py`, deterministic, redacted, ≤ 4,000 chars) holds what the manager
+  did and was told: launched root ids with role, launch message id and time, and an outcome only as *last
+  observed* from `manager.wait` / `manager.result_read`; relay counts per target; refusal counts by reason;
+  up to 8 directives (sentences from real user prompts with always/never/prefer/must/… wording; Live
+  delegations are skipped because they carry model-written lines). Sources are structured events and real user
+  prompts only: assistant prose is never read and titles are never stored. It never holds a session's current
+  state, a count or an attention flag. When it must shrink it drops the oldest entries and says so. It lives
+  in the `kv` table and is **never** `<workspace>/MEMORY.md`, which the manager does not read or write.
+* **Injection.** The manager's system text is `MANAGER_PROMPT` (a system override bypasses the normal memory
+  part), so `_ManagerAssembler._stamp` appends, in this order: the `## Manager Memory (machine notes)` block
+  (changes only at compaction), the `Current user message id` line, then the `## Nexus State` block (changes
+  every request): stable prefix first. The handoff brief is the first context message and carries history
+  (`Earlier history: this session, seq 1..N`, the human's recent asks, past events phrased as past), plus
+  one fixed line saying current state is supplied fresh in the `## Nexus State` block.
+* Not verified against real Codex. No second model is ever called.
+
+## Nexus State snapshot
+
+Every manager model request ends with a compact, **ephemeral** `## Nexus State` block built by
+`ManagerPort.state_snapshot()` (`HostManagerPort`, rendered by `host_support/manager_state.py`) from the same
+visible roots the tools see, so it never names a session the tools would refuse. It is computed per request
+(not per turn, so a `session_wait` return gets fresh data), lives only in that request's system text and is
+never written to `kv`, the log, `manager.memory_updated`, a brief or a trace the product keeps; the extractor
+never reads it. `manager.state_snapshot = false` is the kill switch; a port without the method yields no block
+and a failing one yields `Nexus State: unavailable`, never a failed turn.
+
+| Bucket | Derived from |
+| --- | --- |
+| `working` | the root's `state == "running"` (running children only add `+Nc`) |
+| `review` | `awaiting_permission` or `awaiting_input` (a pending question or queued input): blocked on the human, the same meaning as `session_status.attention` |
+| `done` | idle, a terminal outcome (`completed`/`failed`/`cancelled` shown as the tag) and activity inside the 2 h recent window |
+| `idle` | idle with no outcome yet, or finished longer ago |
+| `archived` | not computable (archived roots are invisible): rendered `archived n/a`, never listed |
+
+The block has the project name and 8-char id, exact bucket counts, the attention count, at most 12 rows
+(`[bucket] id "title" · tag · age`; review first, then working, done, idle) and a hard 1,800-character cap; a
+review row is never dropped for a lower-priority one and the hidden remainder is counted
+("N more not listed … use sessions_find"). Titles are sanitized, quote-free, ≤ 60 chars and labelled
+untrusted. No message text, result or path appears. The block also tells the model it is true only at `as_of`
+for this request and that it should call `session_status` before asserting a state after a wait or a gap.
+Outcomes are read (`_tail`) only for idle roots in the recent window, at most 30 per request, so beyond that
+a finished root counts as `idle`. **It grants no authority**: result, cancel, launch, send and show keep their
+rules and do not read it. Not verified: cost of the changing tail on Codex prompt caching; whether
+`MANAGER_NOTICE_VERSION` consent wording must mention it (GPT Live goes through the manager).
 
 ## Bounds
 

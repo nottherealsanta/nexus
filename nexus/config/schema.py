@@ -1244,12 +1244,24 @@ class ManagerSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     enabled: bool = False
     max_launches_per_turn: int = 3
     max_live_managed: int = 8
+    #: Lazy compaction at turn admission after ``idle_compaction_minutes`` without
+    #: Manager activity (plan 10): deterministic machine memory, then a handoff.
+    auto_compaction: bool = True
+    idle_compaction_minutes: int = 55
+    #: The ephemeral per-request ``## Nexus State`` block (independent of compaction).
+    state_snapshot: bool = True
 
     def __post_init__(self) -> None:
         if type(self.max_launches_per_turn) is not int or not 1 <= self.max_launches_per_turn <= 20:
             raise ValueError("manager.max_launches_per_turn must be an integer from 1 to 20")
         if type(self.max_live_managed) is not int or not 1 <= self.max_live_managed <= 50:
             raise ValueError("manager.max_live_managed must be an integer from 1 to 50")
+        if type(self.auto_compaction) is not bool:
+            raise ValueError("manager.auto_compaction must be a boolean")
+        if type(self.state_snapshot) is not bool:
+            raise ValueError("manager.state_snapshot must be a boolean")
+        if type(self.idle_compaction_minutes) is not int or not 5 <= self.idle_compaction_minutes <= 1440:
+            raise ValueError("manager.idle_compaction_minutes must be an integer from 5 to 1440")
 
 
 class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

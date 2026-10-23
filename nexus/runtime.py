@@ -69,6 +69,7 @@ from .config.paths import (
     state_db_path,
 )
 from .context import ContextManager
+from .context.manager_memory import MEMORY_KEY
 from .context.manager import ContextFullError
 from .context.cache import TokenCountCache
 from .context.counting import RequestTokenCounter
@@ -140,6 +141,7 @@ from .tools.builtin.question import ANSWER_WINDOW_S
 from .session.context_authz import ContextDenied
 from .tools.bundles import MANAGER_PROFILE, MANAGER_TOOL_NAMES, get_profile
 from .tools.manager import ToolManager
+from .tools.manager_port import STATE_HEADING as MANAGER_STATE_HEADING
 from .tools.manager_tools import build_manager_catalog
 from .tools.permissions import (
     ApprovalBroker,
@@ -259,8 +261,10 @@ class _ManagerAssembler:
 
     session_aware = False
 
-    def __init__(self, inner: Any) -> None:
+    def __init__(self, inner: Any, *, state_snapshot: Callable[[Any], str] | None = None) -> None:
         object.__setattr__(self, "_inner", inner)
+        # ``session -> "## Nexus State" block`` (plan 10), or ``None`` when switched off.
+        object.__setattr__(self, "_state_snapshot", state_snapshot)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -278,8 +282,7 @@ class _ManagerAssembler:
             return finish()
         return self._stamp(built, session)
 
-    @staticmethod
-    def _stamp(request: Any, session: Any = None) -> Any:
+    def _stamp(self, request: Any, session: Any = None) -> Any:
         metadata = {
             key: value
             for key, value in dict(getattr(request, "metadata", None) or {}).items()
@@ -289,14 +292,47 @@ class _ManagerAssembler:
         changes: dict[str, Any] = {}
         message_id = _latest_user_message_id(session)
         system = getattr(request, "system", None)
-        if message_id and isinstance(system, str):
-            # The id the launch port validates; the model cannot guess it. Id only, no log text.
-            changes["system"] = (
-                f"{system}\n\nCurrent user message id (pass as origin_message_id): {message_id}"
-            )
+        if isinstance(system, str):
+            # Stable prefix first: the packaged prompt, then the machine memory (changes only
+            # at compaction), then what changes per request: the message id and the live state.
+            text = system
+            memory = _manager_memory_block(session)
+            if memory:
+                text += f"\n\n{memory}"
+            if message_id:
+                # The id the launch port validates; the model cannot guess it. Id only, no log text.
+                text += f"\n\nCurrent user message id (pass as origin_message_id): {message_id}"
+            snapshot = self._state_snapshot
+            if snapshot is not None:
+                try:
+                    block = snapshot(session)
+                except Exception:  # noqa: BLE001 - a snapshot failure never fails the turn
+                    block = f"{MANAGER_STATE_HEADING}\nNexus State: unavailable"
+                if block:
+                    text += f"\n\n{block}"
+            if text != system:
+                changes["system"] = text
         return msgspec.structs.replace(
             request, model=MANAGER_MODEL, provider=MANAGER_PROVIDER, metadata=metadata, **changes
         )
+
+
+def _manager_memory_block(session: Any) -> str:
+    """The ``## Manager Memory`` system block from the machine-memory note, or ``""``.
+
+    Read from the ``kv`` table (never ``<workspace>/MEMORY.md``). Best effort: an
+    unreadable store yields no block.
+    """
+    getter = getattr(getattr(session, "_store", None), "kv_get", None)
+    if not callable(getter):
+        return ""
+    try:
+        note = getter(MEMORY_KEY)
+    except Exception:  # noqa: BLE001 - memory is a hint, never a turn failure
+        return ""
+    if not isinstance(note, str) or not note.strip():
+        return ""
+    return "## Manager Memory (machine notes)\n" + note.strip()
 
 
 def _latest_user_message_id(session: Any) -> str:
@@ -1389,7 +1425,34 @@ class _ContextCoordinator:
         assembler._summarizer = None
         assembler.agent_definition = None
         assembler.agent_selection_source = "manager"
-        return _ManagerAssembler(assembler)
+        return _ManagerAssembler(assembler, state_snapshot=self._manager_state_provider())
+
+    def _manager_state_provider(self) -> Callable[[Any], str] | None:
+        """``session -> "## Nexus State" block`` for each request, or ``None`` when off.
+
+        Asks the port the manager tools use (``ManagerPort.state_snapshot``), so
+        nothing in ``tools/`` or here imports ``host/``. A port without the method
+        yields no block; a raising port is reported by the assembler as unavailable.
+        """
+        runtime = self._runtime
+        if runtime is None:
+            return None
+        section = runtime._manager_section()
+        if section is not None and not section.state_snapshot:
+            return None
+        factory = runtime.manager_port_factory
+        if factory is None:
+            return None
+        ports: dict[int, Any] = {}
+
+        def provide(session: Any) -> str:
+            port = ports.get(id(session))
+            if port is None:
+                port = ports[id(session)] = factory(session)
+            snapshot = getattr(port, "state_snapshot", None)
+            return str(snapshot()) if callable(snapshot) else ""
+
+        return provide
 
     def assemble(self, session: Any) -> Any:
         for_turn = getattr(self._context, "for_turn", None)
@@ -3424,6 +3487,7 @@ class Runtime:
                 hooks=self._session_hooks,
                 busy_check=self.session_has_active_jobs,
                 job_probe=self.shell_job_may_be_live,
+                manager_compaction=self._manager_compaction_policy,
             )
             self._owns_sessions = True
         else:
@@ -3447,6 +3511,7 @@ class Runtime:
                 hooks=self._session_hooks,
                 busy_check=self.session_has_active_jobs,
                 job_probe=self.shell_job_may_be_live,
+                manager_compaction=self._manager_compaction_policy,
             )
             self._owns_sessions = True
 
@@ -4214,7 +4279,10 @@ class Runtime:
         self, session_id: str, *, create: bool = True, recover: bool = True
     ) -> Session:
         """Open (and migrate, and recover) a session ready for ``send``."""
-        return self._sessions.open(session_id, create=create, recover=recover)
+        handle = self._sessions.open(session_id, create=create, recover=recover)
+        if getattr(handle, "_manager_compaction", False) is None:  # an injected SessionManager
+            handle.bind(manager_compaction=self._manager_compaction_policy)
+        return handle
 
     # -- per-session model selection ---------------------------------------
 
@@ -4899,6 +4967,21 @@ class Runtime:
         if self._environ is not None:
             kwargs["environ"] = self._environ
         return Config.load(self.workspace, **kwargs)
+
+    def _manager_section(self) -> Any:
+        """The effective ``[manager]`` section, or ``None`` when the config is unreadable."""
+        try:
+            return getattr(getattr(self._load_config(), "v2", None), "manager", None)
+        except Exception:  # noqa: BLE001 - a config problem never blocks a manager turn
+            return None
+
+    def _manager_compaction_policy(self) -> tuple[bool, float]:
+        """``(enabled, idle_seconds)`` for the Manager's lazy compaction (plan 10)."""
+        section = self._manager_section()
+        if section is None:
+            return False, 0.0
+        enabled = bool(section.enabled and section.auto_compaction)
+        return enabled, float(section.idle_compaction_minutes) * 60.0
 
     def _limits_from_config(self) -> TurnLimits:
         config = self._load_config()

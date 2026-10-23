@@ -212,6 +212,7 @@ class SessionManager:
         workspace_required: Callable[[Any], bool] | None = None,
         prepare_workspace: Callable[..., Any] | None = None,
         before_terminal: Callable[..., Any] | None = None,
+        manager_compaction: Callable[[], tuple[bool, float]] | None = None,
     ):
         if store is not None:
             self.store = store
@@ -266,6 +267,7 @@ class SessionManager:
         self._workspace_required = workspace_required
         self._prepare_workspace = prepare_workspace
         self._before_terminal = before_terminal
+        self._manager_compaction = manager_compaction
         #: One live :class:`Session` handle per id, so every caller that reaches
         #: the same session through this manager shares one bus, presence count,
         #: input queue, and active turn.
@@ -362,6 +364,7 @@ class SessionManager:
             workspace_required=self._workspace_required,
             prepare_workspace=self._prepare_workspace,
             before_terminal=self._before_terminal,
+            manager_compaction=self._manager_compaction,
         )
 
     def evict(self, session_id: str) -> Session | None:
