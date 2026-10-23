@@ -679,11 +679,16 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class ContextLimits(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    memory: int = 8000
-    agents_md: int = 8000
-    skills_index: int = 4000
-    environment: int = 2000
-    attachments: int = 20000
+    """Optional per-part token caps; ``None`` (default) leaves a part uncapped.
+
+    Only the overall input budget then bounds a system-prompt part.
+    """
+
+    memory: int | None = None
+    agents_md: int | None = None
+    skills_index: int | None = None
+    environment: int | None = None
+    attachments: int | None = None
 
 
 #: The context window assumed when neither ``context.max_tokens`` nor the

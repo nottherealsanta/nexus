@@ -235,6 +235,21 @@ def test_manager_reports_budget_and_respects_part_caps(tmp_path):
     assert "[truncated to fit context]" in request.system
 
 
+def test_default_limits_leave_large_parts_uncapped(tmp_path):
+    config = v2_config(max_tokens=20000, safety=0)
+    (tmp_path / "SOUL.md").write_text("S" * 10, encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_text("M" * 12000, encoding="utf-8")
+    manager = ContextManager(tmp_path, config=config, counter=char_counter())
+
+    request = manager.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
+
+    memory_alloc = next(p for p in manager.last_budget["parts"] if p["name"] == "memory")
+    assert memory_alloc["cap"] is None
+    assert memory_alloc["truncated"] is False
+    assert "M" * 12000 in request.system
+    assert "[truncated to fit context]" not in request.system
+
+
 def test_tools_are_budgeted_but_never_in_system_text(tmp_path):
     schema = ToolSchema(
         name="Read",

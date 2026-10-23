@@ -97,7 +97,7 @@ input_budget = min(context.max_tokens, model context window)
 An unknown (≤ 0) capability ceiling is ignored. Priority-0 parts are reserved
 first; if they alone exceed the budget the turn fails with `ContextOverflow`
 naming every oversized part and its tokens. Lower priorities are granted in
-ascending priority then assembly order under their configured caps; `history`
+ascending priority then assembly order under their configured caps (`context.limits.*`, unset by default, so a part is uncapped and only the remaining budget bounds it); `history`
 gets the remainder. The budget is advisory: it decides how much fits, it does not
 fail a turn because an estimate was a few percent off.
 

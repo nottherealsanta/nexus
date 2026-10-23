@@ -596,17 +596,32 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
 
     Rendered every turn (the environment part is never dropped) so the agent
     always knows where it works, which checkout is the main one, and who lands
-    the branch (the user, via ``/worktrees``).
+    the branch (the agent, with ``nexus merge``, after user approval).
     """
     if not facts:
         return ""
     values = dict(facts)
     base = values.get("Base branch") or "its base branch"
+    branch = values.get("Worktree branch") or "the worktree branch"
+    where = values.get("Worktree directory") or "the worktree directory"
+    main = values.get("Main checkout directory") or "the main checkout"
+    sha = (values.get("Base commit") or "")[:12]
     lines = ["<session_worktree>", *(f"{label}: {value}" for label, value in facts), "",
-        f"You are working in an isolated Git worktree branch created from {base}. "
-        "Tools and shell run in the Worktree directory. Commit or save your work on the worktree branch. "
-        "Do NOT merge into the base branch and do not edit or run commands in the Main checkout directory yourself. "
-        "When the work is ready, tell the user to land it with /worktrees (the user previews and confirms the merge).",
+        f"You are working in an isolated Git worktree: branch {branch} in {where}, based on {base}"
+        + (f" at {sha}" if sha else "") + ". Tools and shell run there. "
+        f"The user's main checkout is {main}: never edit files or run git write commands there.",
+        "",
+        "Finishing and merging. When the task is done:",
+        "1. Commit everything in this worktree (`git status` must be clean).",
+        "2. Run the project's checks and tests for what you changed.",
+        "3. Run `nexus merge -m \"<subject>\n\n<body summarising the change>\"`. "
+        f"This squashes the branch into one commit on {base}; the user is asked to approve it.",
+        f"4. If it reports that {base} has diverged, run `git merge {base}` here, resolve any conflicts, "
+        "re-run the checks, commit, then run `nexus merge` again. If it reports overlapping uncommitted "
+        "changes in the main checkout, stop and tell the user which files.",
+        "5. After a successful merge, report the landed commit. The work is done.",
+        "Merge only when the work is finished and verified, or when the user asks (for example with /merge). "
+        "Never merge partial work.",
         "</session_worktree>"]
     return "\n".join(lines)
 
