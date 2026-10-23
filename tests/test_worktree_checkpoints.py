@@ -136,6 +136,30 @@ def test_main_session_turn_hooks_capture_first_turn_diff(tmp_path):
     assert captured.data["head_moved"] is False
 
 
+def test_main_session_checkpoint_captures_unreceipted_external_write(tmp_path):
+    path = repo(tmp_path / "external-write")
+    controller = SessionWorktrees(FakeRuntime(path))
+    handle = FakeHandle()
+    asyncio.run(controller.prepare(handle, SimpleNamespace(turn_id="turn-a"), "prompt"))
+    (path / "tracked.txt").write_text("external MCP write\n")
+    before_head = git(path, "rev-parse", "HEAD")
+    before_index = digest(path / ".git" / "index")
+
+    asyncio.run(controller.finish(handle, SimpleNamespace(turn="turn-a")))
+
+    captured = next(event for event in handle.events if event.type == "checkpoint.captured")
+    assert captured.data["foreign"] == 1
+    assert captured.data["files"] == []
+    assert git(path, "show", captured.data["commit"] + ":tracked.txt") == "external MCP write"
+    assert git(path, "rev-parse", "HEAD") == before_head
+    assert digest(path / ".git" / "index") == before_index
+
+    asyncio.run(controller.prepare(handle, SimpleNamespace(turn_id="turn-b"), "followup"))
+    asyncio.run(controller.finish(handle, SimpleNamespace(turn="turn-b")))
+    skipped = [event for event in handle.events if event.type == "checkpoint.skipped"]
+    assert skipped[-1].data["reason"] == "no_changes"
+
+
 def test_checkpoint_attributes_successful_file_tool_paths_and_head_moves(tmp_path):
     path = repo(tmp_path / "head-moved")
     controller = SessionWorktrees(FakeRuntime(path))

@@ -7,7 +7,8 @@ File 05 implements independent child isolation and automatic return of saved wor
 File 06 adds confirmed local fast-forward integration; native controls remain in 08.
 File 07 adds explicit safe checkout removal and recreation.
 File 08 adds native mode selection and saved-turn review.
-Files 09–10 remain proposals until their implementation records say otherwise.
+File 09 closes unreported-write checkpoint capture and documents compatibility.
+File 10 remains a proposal until their implementation records say otherwise.
 This plan index does not declare unfinished work complete.
 
 The proposal is deliberately small: every changed turn is saved in Git; each
@@ -39,7 +40,7 @@ branches change only after the user requests integration.
 | [06 Integration](06-merge-queue-and-landing.md) | Confirmed local fast-forward at user's request | Backend implemented |
 | [07 Lifecycle](07-setup-cleanup-recovery.md) | Create/reuse/list, safe removal | Backend implemented |
 | [08 TUI and host](08-tui-and-host-protocol.md) | Per-session choice, saved-turn labels, diffs, clear errors | Implemented, native PTY verified |
-| [09 Config and safety](09-config-security.md) | Preserve config and basic Git boundaries | Proposed |
+| [09 Config and safety](09-config-security.md) | Preserve config and basic Git boundaries | Implemented, focused tests |
 | [10 Delivery](10-testing-and-rollout.md) | Focused acceptance and honest validation | Proposed |
 
 ## Boundaries

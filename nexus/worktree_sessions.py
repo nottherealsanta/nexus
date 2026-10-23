@@ -407,15 +407,7 @@ class SessionWorktrees:
                     self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "not_git", "detail": ""}, terminal.turn)
                 elif not any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events):
                     seq, _ = self._turn_data(handle, terminal.turn)
-                    changed_by_session = any(e.turn == terminal.turn and (
-                        e.type == "worktree.file_written" or
-                        (e.type == "context.notice" and e.data.get("kind") == "subagent_merged")
-                    ) for e in handle.events)
-                    shell_ran = any(e.type == "shell.started" and e.turn == terminal.turn for e in handle.events)
-                    if not changed_by_session and not shell_ran:
-                        result = {"kind": "skipped", "event": {"seq": seq, "reason": "no_changes", "detail": ""}}
-                    else:
-                        result = await self._thread(handle.id, self._checkpoint_capture, root.path, handle.id, seq, handle, terminal.turn)
+                    result = await self._thread(handle.id, self._checkpoint_capture, root.path, handle.id, seq, handle, terminal.turn)
                     if result.get("kind") == "captured":
                         self._emit(handle, "checkpoint.captured", result["event"], terminal.turn)
                         if result["event"].get("duration_ms", 0) > 5000:

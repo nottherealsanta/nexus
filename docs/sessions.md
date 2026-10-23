@@ -111,7 +111,11 @@ Main and external-root sessions capture a hidden `refs/nexus/checkpoints/<sessio
 commit when the checkout changed during a turn. A first-turn baseline makes that turn's
 diff meaningful. Capture uses a disposable Git index and `commit-tree`; it does not change
 the user's `HEAD`, index, branch or files. The durable `checkpoint.captured` event records
-the base, bounded file summary, foreign-change count and capture time. Diffs are review-only:
+the base, bounded file summary, foreign-change count and capture time. Capture runs at every
+eligible main/external turn boundary, including when writes have no Nexus receipt (for
+example, an MCP server edits the checkout). Only receipted file-tool writes, merged
+subagent files and changes in a turn that started a shell are attributed to the session;
+other changed files are counted as foreign. Diffs are review-only:
 there is no restore action for a shared checkout. `[worktrees] checkpoints` defaults to true;
 `checkpoint_keep` bounds retained session namespaces, and captures slower than five seconds
 disable checkpoints for that session. Git refs remain local by default; `git push --mirror`

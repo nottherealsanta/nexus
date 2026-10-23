@@ -46,7 +46,7 @@ for setup and usage.
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
 | External Antigravity worker | Nexus does **not** mediate agy's tools, settings, MCP servers or plugins; no `PathGuard`; inherits agy settings by default; `worker_inherits_agy_settings = false` refuses execution ([below](#external-antigravity-worker)) | `agents/antigravity_worker.py` |
-| Worktrees | authenticated records, service-root lock, no shell for children, integration applies frozen bytes only to a clean parent | `agents/worktrees*.py` |
+| Subagent worktrees | authenticated records and service-root lock; legacy explicit worktree children have no shell, while managed isolated children use the session-worktree profile and normal scoped shell permissions; clean shared-root integration applies only the child diff without changing `HEAD` or the real index | `agents/worktrees*.py`, `agents/session_worktrees.py` |
 | Session worktrees | authenticated owned branches and validated roots; setup trust is bound to the reviewed config digest; promotion verifies successful write receipts and hashes, copies only those bytes, and never changes the source checkout; manual integration rechecks a confirmed preview and fast-forwards only the clean original target to the reviewed session commit; no push | `agents/session_worktrees.py`, `worktree_sessions.py`, `session_integration.py` |
 | Settings agent | blocked from `credentials.json`, sessions, cache, daemon files, trash, `nexus.db` | `tools/permissions.py`, `host_support/settings_scope.py` |
 | GPT Live (experimental) | the ChatGPT OAuth bearer and account id exist only in `live/transport.py` (headers per request, scrubbed with `redact_secrets` plus the literal values from every error, raw dev log and result); `Live*` results carry the SDP answer and state only; the audio helper sees SDP, never a credential; the voice model's delegations are untrusted input that go through the normal permission engine; **approvals are resolved only on screen, never by audio**; the signaling and sideband hosts are fixed OpenAI hosts, not user URLs, and (like provider calls) bypass `net/outbound.py`; no raw audio is stored | `live/`, `host_support/live.py` |
@@ -315,8 +315,12 @@ mode fallback always `ask` (`mode = allow` does not cover it), `deny` absolute; 
 explicit `allow` rule or a grant skips the prompt.
 Linux execution of the sandbox is not verified.
 
-Isolated subagent results return only to their parent session. For a shared root,
-Git checks and applies the saved child diff to working files without changing HEAD
-or the real index; overlapping edits refuse integration and retain the child.
-Owned session branches accept local child merges; automatic conflict merges abort.
-The worktree parameter does not change the independent session preference.
+Isolated subagent results return only to their parent session. The `worktree`
+parameter is independent of the session preference and defaults to isolation
+when the selected tools may write. For a shared root, Git checks and applies the
+saved child diff to working files without changing HEAD or the real index;
+overlapping edits refuse integration and retain the child. Owned session branches
+accept local child merges; automatic conflict merges abort. Managed child shell
+access uses the ordinary scoped permission checks; the legacy explicit-worktree
+profile remains shell-free. Cleanup removes only the owned checkout and keeps its
+branch; explicit integration never pushes.
