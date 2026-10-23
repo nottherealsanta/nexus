@@ -229,7 +229,11 @@ fn agent_report(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     // Same name treatment as a subagent call's first line: capitalized, in the agent's colour
     // (error tint on failure), then the task two columns after it.
     let failed = b.status == "failed";
-    let name_color = if failed { p.error } else { color(&b.color, p.blue, p) };
+    let name_color = if failed {
+        p.error
+    } else {
+        color(&b.color, p.blue, p)
+    };
     let shown_name = capitalize(name);
     let used = LEAD.width() + shown_name.width();
     let mut head = vec![
@@ -251,7 +255,13 @@ fn agent_report(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     ));
     out.push((Line::from(head), op.clone()));
     let mut clipped = b.count;
-    for text in b.text.lines().map(str::trim).filter(|l| !l.is_empty()).take(2) {
+    for text in b
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(2)
+    {
         let shown = truncate(text, room);
         clipped += usize::from(shown != text);
         out.push((
@@ -820,7 +830,10 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
     );
     let mut rows = build_inner(b, width.saturating_sub(u16::from(padded)), p);
     if padded {
-        for (line, _) in &mut rows {
+        for (line, op) in &mut rows {
+            if let Some(image) = op.as_mut().and_then(|op| op.get_mut("inline_image")) {
+                image["indent"] = json!(image["indent"].as_u64().unwrap_or(4) + 1);
+            }
             line.spans.insert(0, Span::raw(" "));
         }
     }
@@ -867,6 +880,16 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             for row in markdown::lines(&b.text, p, total.saturating_sub(4)) {
                 if row.blank {
                     out.push((Line::default(), op.clone()));
+                    prose.push(None);
+                    continue;
+                }
+                if let Some((source, width, strip)) = row.image {
+                    let mut operation = crate::copy_button::mark(&b.id, row.fence, op).unwrap();
+                    operation["inline_image"] = json!({"source":source,"width":width,"row":strip,"indent":4 + row.prefix.iter().map(|s| s.content.width()).sum::<usize>()});
+                    out.push((
+                        Line::from(vec![Span::raw(" ".repeat(total))]),
+                        Some(operation),
+                    ));
                     prose.push(None);
                     continue;
                 }
@@ -1403,7 +1426,9 @@ mod tests {
         let sentence = "The spawn path and settings surface are laid against the edge of the pane and must wrap.";
         let markdown = Content {
             kind: "markdown".into(),
-            text: format!("{sentence}\n\n- {sentence}\n\n> {sentence}\n\n```\n{sentence}\n{sentence}\n```"),
+            text: format!(
+                "{sentence}\n\n- {sentence}\n\n> {sentence}\n\n```\n{sentence}\n{sentence}\n```"
+            ),
             ..Default::default()
         };
         let running = Content {
@@ -1411,8 +1436,18 @@ mod tests {
             status: "running".into(),
             running_label: "Working".into(),
             members: vec![
-                member("tool", "completed", "Glob", "pattern=nexus/**/events*.py path=/Users/santa/repos/nexus"),
-                member("tool", "running", "Bash", "rg -n \"router.resol|router_resolve|resolve_route\" nexus rust"),
+                member(
+                    "tool",
+                    "completed",
+                    "Glob",
+                    "pattern=nexus/**/events*.py path=/Users/santa/repos/nexus",
+                ),
+                member(
+                    "tool",
+                    "running",
+                    "Bash",
+                    "rg -n \"router.resol|router_resolve|resolve_route\" nexus rust",
+                ),
             ],
             ..Default::default()
         };
@@ -1429,9 +1464,18 @@ mod tests {
             status: "failed".into(),
             text: "Code code purpose=Locate usage, router, resolver and spawn paths".into(),
             signal: vec![
-                ("text".into(), "… 1. grep path=\"nexus\", pattern=\"def resolve_router_target\"".into()),
-                ("out".into(), "1  files = grep(path=\"nexus\", pattern=\"def resolve_router\")".into()),
-                ("error".into(), "ToolError (line 4): Not a directory: nexus/router/resolve.py/__init__".into()),
+                (
+                    "text".into(),
+                    "… 1. grep path=\"nexus\", pattern=\"def resolve_router_target\"".into(),
+                ),
+                (
+                    "out".into(),
+                    "1  files = grep(path=\"nexus\", pattern=\"def resolve_router\")".into(),
+                ),
+                (
+                    "error".into(),
+                    "ToolError (line 4): Not a directory: nexus/router/resolve.py/__init__".into(),
+                ),
             ],
             ..Default::default()
         };
@@ -1461,7 +1505,11 @@ mod tests {
             let rows = build(&blocks[0], width, &p);
             let joined: Vec<String> = rows.iter().map(|(l, _)| l.to_string()).collect();
             let words: Vec<&str> = sentence.split(' ').collect();
-            let flat = joined.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+            let flat = joined
+                .iter()
+                .map(|l| l.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
             assert!(flat.contains(&words[words.len() - 2..].join(" ")), "{flat}");
             for line in &joined {
                 for word in line.split_whitespace() {
@@ -1648,6 +1696,35 @@ mod tests {
             .flat_map(|(l, _)| &l.spans)
             .all(|s| s.style.fg != Some(p.warning)));
         assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.quiet));
+    }
+
+    #[test]
+    fn mermaid_image_rows_keep_copy_source_and_streaming_falls_back() {
+        crate::mermaid_image::tests::wait_raster("mindmap\n  root((Root))\n    Child", 33);
+        let source = "```mermaid\nmindmap\n  root((Root))\n    Child\n```";
+        let mut block = Content {
+            id: "chart".into(),
+            kind: "markdown".into(),
+            text: source.into(),
+            operation: Some(json!({"action":"copy"})),
+            ..Default::default()
+        };
+        let rows = build(&block, 40, &Palette::new(false));
+        let image = rows
+            .iter()
+            .find_map(|(_, op)| op.as_ref().filter(|op| op.get("inline_image").is_some()))
+            .unwrap();
+        assert_eq!(image["fence"], 0);
+        assert_eq!(
+            crate::copy_button::text(&[block.clone()], "chart", Some(0)).unwrap(),
+            "mindmap\n  root((Root))\n    Child"
+        );
+        assert!(rows.iter().all(|(line, _)| line.width() <= 40));
+        block.text = "```mermaid\nmindmap\n  root((Root))".into();
+        block.streaming = true;
+        assert!(build(&block, 40, &Palette::new(false))
+            .iter()
+            .all(|(_, op)| op.as_ref().and_then(|op| op.get("inline_image")).is_none()));
     }
 
     #[test]
@@ -2200,7 +2277,10 @@ mod tests {
             ..Default::default()
         };
         let text = plain(&build(&block, 80, &p)).join("\n");
-        assert!(text.contains("report · build-1 · explorer · run 2 · completed"), "{text}");
+        assert!(
+            text.contains("report · build-1 · explorer · run 2 · completed"),
+            "{text}"
+        );
         assert!(text.contains("subagent report"), "{text}");
         assert!(!text.contains('#'), "a report takes no turn number: {text}");
         block.status = "followup".into();
@@ -2225,24 +2305,52 @@ mod tests {
         };
         let rows = build(&block, 60, &p);
         let text = plain(&rows);
-        assert_eq!(rows.len(), 4, "heading, two preview rows, clip hint: {text:?}");
-        assert!(text[0].contains("Explorer  find the loader · completed"), "{text:?}");
+        assert_eq!(
+            rows.len(),
+            4,
+            "heading, two preview rows, clip hint: {text:?}"
+        );
+        assert!(
+            text[0].contains("Explorer  find the loader · completed"),
+            "{text:?}"
+        );
         assert!(text[1].contains("first line") && text[2].contains("second line"));
         assert!(text[3].contains("5 more lines"), "{text:?}");
         assert!(!text.join("\n").contains('#'), "no turn number");
-        assert!(rows.iter().all(|(_, o)| o.as_ref() == Some(&op)), "every row opens the report");
+        assert!(
+            rows.iter().all(|(_, o)| o.as_ref() == Some(&op)),
+            "every row opens the report"
+        );
         // `build` adds one outer pad column before the icon.
         assert!(text[0].starts_with("   ⮑ Explorer"), "{text:?}");
         let name_col = text[0][..text[0].find("Explorer").unwrap()].width();
         for row in &text[1..] {
             let content = row.trim_start();
-            assert_eq!(row.width() - content.width(), name_col, "aligned under the name: {text:?}");
+            assert_eq!(
+                row.width() - content.width(),
+                name_col,
+                "aligned under the name: {text:?}"
+            );
         }
-        let span = rows[0].0.spans.iter().find(|s| s.content == "Explorer").unwrap();
-        assert_eq!(span.style.fg, Some(p.blue), "unset colour falls back like a task row");
+        let span = rows[0]
+            .0
+            .spans
+            .iter()
+            .find(|s| s.content == "Explorer")
+            .unwrap();
+        assert_eq!(
+            span.style.fg,
+            Some(p.blue),
+            "unset colour falls back like a task row"
+        );
         block.color = "$nx-purple".into();
         let rows = build(&block, 60, &p);
-        let span = rows[0].0.spans.iter().find(|s| s.content == "Explorer").unwrap();
+        let span = rows[0]
+            .0
+            .spans
+            .iter()
+            .find(|s| s.content == "Explorer")
+            .unwrap();
         assert_eq!(span.style.fg, Some(p.purple), "agent colour");
         block.text = "   padded first\n\n      padded second".into();
         let text = plain(&build(&block, 60, &p));
@@ -2253,7 +2361,10 @@ mod tests {
         assert_eq!(build(&block, 60, &p).len(), 2, "nothing clipped, no hint");
         block.text = "x".repeat(200);
         let text = plain(&build(&block, 40, &p));
-        assert!(text[1].ends_with('…') && text[2].contains("clipped"), "{text:?}");
+        assert!(
+            text[1].ends_with('…') && text[2].contains("clipped"),
+            "{text:?}"
+        );
     }
 
     #[test]

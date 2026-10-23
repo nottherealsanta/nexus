@@ -143,7 +143,7 @@ cell layouts, Markdown and editor transitions use `cargo test --manifest-path
 rust/tui/Cargo.toml`. Python tests in `test_ratatui_*` exercise the actual scripted
 harness, replay, launch routing, preferences, failed submissions, Settings hash
 conflicts and credential-form handling. Source wheel builds require the dev
-`setuptools-rust` dependency and Rust ≥1.88.
+`setuptools-rust` dependency and Rust ≥1.97.
 
 The native terminal screenshot check is
 `PYTHONPATH=. python tests/playwright_ratatui_check.py` after a Cargo build.

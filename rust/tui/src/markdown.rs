@@ -3,6 +3,7 @@
 //! code, fences and quotes on the panel colour with a quote bar,
 //! hanging-indent lists and aligned tables. HTML is literal; URLs stay visible.
 use crate::mermaid;
+use crate::mermaid_text;
 use crate::render::Palette;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -70,6 +71,7 @@ pub struct Row {
     pub blank: bool,
     /// Index of the fenced code block this row draws (see [`fence_sources`]).
     pub fence: Option<usize>,
+    pub image: Option<(String, usize, usize)>,
 }
 
 struct Level {
@@ -150,6 +152,7 @@ impl<'a> Walker<'a> {
             spans,
             bg: self.bg(),
             blank: false,
+            image: None,
             fence: None,
         });
     }
@@ -213,6 +216,26 @@ impl<'a> Walker<'a> {
         if closed && language == "mermaid" && self.mermaid_art(body, index) {
             return;
         }
+        if closed && language == "mermaid" && self.mermaid_text(body, index) {
+            return;
+        }
+        if closed && language == "mermaid" {
+            let avail = self.width.saturating_sub(self.quote * 2 + self.indent());
+            if let Some(height) = crate::mermaid_image::rows(body, avail) {
+                for row in 0..height {
+                    let (prefix, _) = self.prefix();
+                    self.rows.push(Row {
+                        prefix,
+                        spans: vec![],
+                        bg: None,
+                        blank: false,
+                        fence: Some(index),
+                        image: Some((body.to_owned(), avail, row)),
+                    });
+                }
+                return;
+            }
+        }
         // ratatui-markdown without its `mermaid` feature renders a mermaid
         // fence as zero lines, swallowing the source. Render it as `text`
         // and relabel the header so the original language stays visible.
@@ -269,6 +292,7 @@ impl<'a> Walker<'a> {
                 spans,
                 bg,
                 blank: false,
+                image: None,
                 fence: Some(index),
             });
         }
@@ -284,6 +308,65 @@ impl<'a> Walker<'a> {
             spans,
             bg,
             blank: false,
+            image: None,
+            fence: Some(index),
+        });
+        true
+    }
+    /// Pie / Gantt / timeline as text rows: a half-block raster of their wide SVG
+    /// is unreadable (docs/ratatui-parity.md), so they never go through it.
+    fn mermaid_text(&mut self, body: &str, index: usize) -> bool {
+        let avail = self.width.saturating_sub(self.quote * 2 + self.indent());
+        let Some(rows) = mermaid_text::render(body, avail) else {
+            return false;
+        };
+        let bg = self.bg();
+        let p = self.p;
+        let styled = |tone: mermaid_text::Tone| {
+            let style = match tone {
+                mermaid_text::Tone::Title => {
+                    Style::default().fg(p.muted).add_modifier(Modifier::BOLD)
+                }
+                mermaid_text::Tone::Heading => {
+                    Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+                }
+                mermaid_text::Tone::Label => Style::default().fg(p.text),
+                mermaid_text::Tone::Bar => Style::default().fg(p.accent),
+                mermaid_text::Tone::Quiet => Style::default().fg(p.quiet),
+            };
+            match bg {
+                Some(bg) => style.bg(bg),
+                None => style,
+            }
+        };
+        for row in rows {
+            let (prefix, _) = self.prefix();
+            let spans = row
+                .into_iter()
+                .map(|(text, tone)| Span::styled(text, styled(tone)))
+                .collect();
+            self.rows.push(Row {
+                prefix,
+                spans,
+                bg,
+                blank: false,
+                image: None,
+                fence: Some(index),
+            });
+        }
+        let mut label = Style::default().fg(self.p.quiet);
+        if let Some(bg) = bg {
+            label = label.bg(bg);
+        }
+        self.cur.push(Span::styled("◇ mermaid", label));
+        let (prefix, _) = self.prefix();
+        let spans = std::mem::take(&mut self.cur);
+        self.rows.push(Row {
+            prefix,
+            spans,
+            bg,
+            blank: false,
+            image: None,
             fence: Some(index),
         });
         true
@@ -297,6 +380,7 @@ impl<'a> Walker<'a> {
             spans,
             bg: Some(self.p.panel),
             blank: false,
+            image: None,
             fence: Some(index),
         });
     }
@@ -854,7 +938,7 @@ mod tests {
     }
     #[test]
     fn terminal_only_fallbacks_keep_content() {
-        let text = render("![diagram](https://example.com/image.png)\n\n![](empty.png)\n\n<div>raw HTML</div>\n\n```mermaid\ngraph TD\n  A[Start] --> B[End]\n```\n\n```mermaid\npie\n\"a\" : 1\n```\n\n```unknown\nopaque source\n```").join("\n");
+        let text = render("![diagram](https://example.com/image.png)\n\n![](empty.png)\n\n<div>raw HTML</div>\n\n```mermaid\ngraph TD\n  A[Start] --> B[End]\n```\n\n```mermaid\npie\ninvalid ???\n```\n\n```unknown\nopaque source\n```").join("\n");
         for expected in [
             "[image: diagram (https://example.com/image.png)]",
             "[image:  (empty.png)]",
@@ -863,9 +947,8 @@ mod tests {
             "┌",
             "Start",
             "◇ mermaid",
-            // Unsupported diagram type: ordinary code block keeping its source.
-            "pie",
-            "\"a\" : 1",
+            // Invalid diagram: ordinary code block keeping its source.
+            "invalid ???",
             "unknown",
             "opaque source",
         ] {
@@ -939,6 +1022,34 @@ mod tests {
     fn as_code_block(rows: &[Row]) -> bool {
         rows.iter().all(|r| r.bg == Some(Palette::new(false).panel))
     }
+    const MINDMAP: &str = "mindmap\n  root((Root))\n    Child";
+
+    #[test]
+    fn mermaid_pie_gantt_timeline_render_as_legible_text_not_images() {
+        for (source, needles) in [
+            (
+                "pie title Pets\n\"Dogs\" : 386\n\"Cats\" : 85",
+                &["Pets", "Dogs", "386", "Cats", "82.0%"][..],
+            ),
+            (
+                "gantt\n dateFormat YYYY-MM-DD\n section Build\n Parse :a, 2024-01-01, 5d\n Render :b, after a, 6d",
+                &["Build", "Parse", "Render", "2024-01-06 → 2024-01-12"][..],
+            ),
+            (
+                "timeline\n 2024 : Shipped",
+                &["2024", "Shipped"][..],
+            ),
+        ] {
+            let rows = mermaid_rows(source, 80);
+            let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
+            for needle in needles {
+                assert!(text.contains(needle), "{needle} missing: {text}");
+            }
+            assert!(text.contains("◇ mermaid"), "{text}");
+            assert!(rows.iter().all(|r| r.image.is_none() && plain(r).width() <= 80));
+            assert!(rows.iter().all(|r| r.fence == Some(0)));
+        }
+    }
     const WIDE: &str = "graph TD\n  R[root] --> A[service_alpha]\n  R --> B[service_bravo]\n  R --> C[service_charlie]\n  R --> D[service_delta]\n  R --> E[service_echo]\n  R --> F[service_foxtrot]";
 
     #[test]
@@ -968,7 +1079,10 @@ mod tests {
     }
     #[test]
     fn mermaid_unsupported_unclosed_and_extra_tokens() {
-        assert!(as_code_block(&mermaid_rows("pie\n\"a\" : 1", 80)));
+        crate::mermaid_image::tests::wait_raster(MINDMAP, 80);
+        assert!(mermaid_rows(MINDMAP, 80)
+            .iter()
+            .any(|r| r.image.is_some()));
         let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
         assert!(as_code_block(&open));
         let themed = lines(
@@ -986,9 +1100,13 @@ mod tests {
     }
     #[test]
     fn mermaid_invalid_fallback_keeps_original_body() {
-        let rows = mermaid_rows("pie\n\"a\" : 1", 80);
+        crate::mermaid_image::tests::wait_raster(MINDMAP, 80);
+        let rows = mermaid_rows("pie\ninvalid ???", 80);
         let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("pie") && text.contains("\"a\" : 1"), "{text}");
+        assert!(
+            text.contains("pie") && text.contains("invalid ???"),
+            "{text}"
+        );
         assert!(
             text.contains("mermaid") && !text.contains("◇ mermaid"),
             "{text}"
@@ -1002,12 +1120,13 @@ mod tests {
         );
         // A later fence after drawn art still falls back with its own source.
         let both = lines(
-            "```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\npie\n\"a\" : 1\n```",
+            &format!("```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\n{MINDMAP}\n```"),
             &Palette::new(false),
             80,
         );
         let text = both.iter().map(plain).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("◇ mermaid") && text.contains("pie"), "{text}");
+        assert!(text.contains("◇ mermaid"), "{text}");
+        assert!(both.iter().any(|row| row.image.is_some()));
         assert_eq!(
             crate::markdown::fence_sources("```mermaid\npie\n\"a\" : 1\n```"),
             ["pie\n\"a\" : 1"]

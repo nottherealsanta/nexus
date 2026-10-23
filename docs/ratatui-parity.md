@@ -2286,7 +2286,8 @@ Manager sessions bypass all of this):
 
 - No worktree: unchanged, the message runs in the main checkout.
 - Ask: a modal titled "Create a worktree, or work in the main checkout?" (Yes / No rows).
-  No resumes the prompt unchanged; Yes opens the name step.
+  No closes the modal and resumes the prompt unchanged (`resume_worktree_submission` always
+  closes it); Yes opens the name step.
 - Always: goes straight to the name step (the interactive TUI no longer creates silently).
 - Name step: a "Name this worktree" text modal (the shared form editor; `Ctrl+S` creates,
   because Enter inserts a newline in that editor). The line under the editor shows the hint
@@ -2307,3 +2308,86 @@ Session integration and checkout removal preview their effect before confirmatio
 errors and refused states remain visible. Branches remain after checkout removal.
 
 Verified by `tests/test_worktree_sessions_pty.py`: the actual native picker and Ask resumption, Ask -> Yes -> name step (invalid name error, then branch `nexus/session/<name>`), an owned file write and commit, and opening its saved-turn diff. Workflow/projection tests also cover replay links, stale-session answers, attachment preservation and confirmation binding.
+
+## `/merge`
+
+`/merge [note]` is a prompt-sending slash command like `/review`. In a session whose root is its own
+worktree (host `session_worktree_choice` state `kind == "worktree"`, read fresh) it enqueues one normal user turn,
+so the transcript shows the full instruction the agent receives (base branch from state `base_branch`
+when the host reports it, else "its base branch"; the optional note is appended). In a main-checkout
+session it shows a notice and sends nothing. Same enqueue path as other prompts. Not verified: the host
+does not yet report `base_branch`.
+
+## Native Mermaid image fallback
+
+**Why pie/gantt/timeline are text.** A half-block cell raster has about one pixel
+per terminal column, but Ondine's SVGs are hundreds of pixels wide (a Gantt is
+~800px). Scaled to ~90–100 columns, its 12px labels shrink below a pixel and the
+picture is noise; supersampling cannot restore detail that the grid cannot hold,
+and the browser image is readable only because it keeps 800px. So closed `pie`,
+`gantt` and `timeline` fences are rebuilt from the source as text rows
+(`rust/tui/src/mermaid_text.rs`): a pie as a bar list with labels, values and
+shares; a Gantt as a task grid with section headings, a bar track on the shared
+date axis and `start → end` dates (just the duration when the row is narrow);
+a timeline as period │ event rows. Gantt supports `dateFormat YYYY-MM-DD`,
+`after <id>`, `Nd`/`Nw` durations and explicit end dates; anything else, or a
+row too narrow for the grid, shows the literal source. The remaining raster path
+(mindmap, sankey) is gated: `mermaid_image::rows` declines when the SVG would be
+drawn below 0.5× scale, again showing source instead of a garbled image. The
+cell raster is used whatever the detected graphics protocol; sending a full-size
+Kitty/iTerm2/Sixel image per diagram is not implemented, because the transcript
+paints per row and cannot clip or scroll one protocol image (the earlier
+one-row strips were each resampled independently).
+
+The native terminal client requires Rust ≥1.97. Unicode rendering remains first
+choice for supported flowchart, sequence, state, class and ER diagrams. Closed
+`mermaid` fences for mindmap and sankey (and the remaining pie, timeline and gantt
+sources that the text renderer declines, subject to the scale gate above) use the pinned native
+Ondine compiler and resvg. The SVG is rasterised directly to the half-block grid
+(`columns` × `2 × rows` pixels, 4× supersampled and box-filtered) and each cell is
+painted as `▀`/`▄` with fg/bg set from the two stacked pixels. This replaces the
+earlier per-row `ratatui-image` strips, which downscaled every row independently
+and produced stripes and lost detail. It is used regardless of the detected
+graphics protocol; attachment previews keep the detected protocol. Transparency is
+preserved (no opaque white card): pixels equal to the theme background are
+dropped so the diagram sits on the dark transcript canvas. There is no luma
+remapping of the raster.
+
+Ondine styles its SVG with CSS custom properties (`--ondine-*`, internal `--_*`
+aliases, `var()` fallbacks and `color-mix()`), which browsers resolve but usvg does
+not; unresolved, everything rendered black on white (black pie blobs, flat Gantt
+bands). `resolve_svg_theme` in `rust/tui/src/mermaid_image.rs` therefore expands
+every `var(...)` from a fixed dark palette (otherwise from its own fallback) and
+evaluates `color-mix(in srgb, ...)` over hex literals before the SVG reaches
+usvg, so no `var(` ever does. Only the palette's known names are substituted.
+No browser, Node, network, or subprocess is
+used at runtime; SVG external image resolution is disabled. Open/streaming fences,
+unsupported syntax, oversized source and compiler/raster failures retain literal
+source. Fence copy still uses the original source, not raster metadata.
+
+Generation runs on a single process-wide `mermaid` worker thread fed by a bounded
+queue (4 requests; a full queue drops the request and the UI retries on a later
+frame). The UI thread never compiles: until a result is ready the literal source
+stays shown, and completion bumps a generation counter that `main.rs` polls to
+invalidate transcript layouts. The worker can be occupied by a stuck compile or
+font scan, but it is never replaced and never blocks input; there is no
+cancellation or timeout. The system font database is loaded once (`OnceLock`) on
+that worker. Compiler panics are caught with a thread-local guard
+(`panic_log::catch_silent`) so the global panic hook does not restore the terminal
+or write a crash log for this optional renderer; panics on other threads keep the
+normal hook.
+
+Raster input is capped at 16 KiB and output at 200 columns × 48 rows (400 pixel
+rows), with eight cached success/failure results (arbitrary eviction when full;
+more than eight visible diagrams can regenerate). Width changes request a new
+raster under a new key; old widths age out of the cache. Each timeline row paints
+its own two-pixel strip of the single raster, so scrolling clips the diagram
+instead of resizing it. This is native-only; desktop/web rendering is unchanged.
+
+**Monochrome limitation.** Ondine's default theme is monochrome. Pie slices,
+gantt bars and sankey bands therefore differ in grey tone (the `--ondine-series-*`
+ramp), stroke and label rather than hue; only `--ondine-critical` is coloured. Tests assert contrast,
+transparency, no white panel and visible labels rather than colour. If real
+colour is needed, use a Mermaid engine that emits coloured SVG, or a semantic
+chart fallback drawn natively from parsed data (for example a Unicode bar chart
+for `pie`).

@@ -2,7 +2,7 @@
 name = "nexus-ratatui"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.97"
 
 [dependencies]
 ratatui = "0.29"
@@ -18,3 +18,7 @@ ratatui-image = "8"
 base64 = "0.22"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+# Native-only Mermaid fallback; pin the compiler, not its browser/WASM wrapper.
+ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "0b589ec34481856b4153526f10a0a35558a201a8", default-features = false, features = ["pie", "timeline", "gantt", "mindmap", "sankey"] }
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }

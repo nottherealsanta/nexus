@@ -399,6 +399,7 @@ impl QueueFlash {
 }
 #[derive(Default)]
 pub struct Cache {
+    mermaid_generation: u64,
     pub disclosure: crate::disclosure::Disclosure,
     pub settings_nav_focus: bool,
     dirty_from: Option<usize>,
@@ -1193,6 +1194,17 @@ impl Cache {
         self.parts.clear();
         self.details_chrome = None;
     }
+    /// Completed native diagrams replace source rows, so invalidate layout as
+    /// well as paint even when no host snapshot has changed.
+    pub fn refresh_mermaid(&mut self) -> bool {
+        let generation = crate::mermaid_image::generation();
+        if generation == self.mermaid_generation {
+            return false;
+        }
+        self.mermaid_generation = generation;
+        self.reset();
+        true
+    }
 }
 #[derive(Default, Clone, Copy)]
 pub struct Regions {
@@ -1859,7 +1871,12 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         tabs: center[1],
         sidebar,
         details: if drawer {
-            Rect::new(area.right() - drawer_width, area.y, drawer_width, area.height)
+            Rect::new(
+                area.right() - drawer_width,
+                area.y,
+                drawer_width,
+                area.height,
+            )
         } else {
             columns[1]
         },
@@ -2367,6 +2384,35 @@ pub fn draw(
             cache.sticky = Some((rect, cards[pin.card].0));
         }
     }
+    for row in offset..(offset + height).min(cache.lines.len()) {
+        let Some(image) = cache
+            .operations
+            .get(row)
+            .and_then(Option::as_ref)
+            .and_then(|op| op.get("inline_image"))
+        else {
+            continue;
+        };
+        let y = r.transcript.y + (row - offset) as u16;
+        if cache
+            .sticky
+            .as_ref()
+            .is_some_and(|(rect, _)| y < rect.bottom())
+        {
+            continue;
+        }
+        let indent = image["indent"].as_u64().unwrap_or(4) as u16;
+        if indent >= r.transcript.width {
+            continue;
+        }
+        crate::mermaid_image::render(
+            image["source"].as_str().unwrap_or(""),
+            image["width"].as_u64().unwrap_or(0) as usize,
+            image["row"].as_u64().unwrap_or(0) as usize,
+            Rect::new(r.transcript.x + indent, y, r.transcript.width - indent, 1),
+            frame.buffer_mut(),
+        );
+    }
     cache.jump_hit = None;
     let below = cache.lines.len().saturating_sub(offset + height);
     if follow || below == 0 || s.dashboard.is_some() || !s.panel_title.is_empty() {
@@ -2655,6 +2701,13 @@ pub fn draw(
         // One dimmed backdrop under every modal kind (panels, Settings, pickers, prompts).
         dim_backdrop(frame, &p);
     }
+    // Track every frame (not only while a panel is open) so a close resets the root list.
+    cache
+        .settings_root
+        .track(s.nav.is_some() && !s.panel_title.is_empty());
+    if let Some(nav) = &s.nav {
+        cache.settings_root.settle_drill(nav.selected);
+    }
     if s.panel_title.is_empty() || s.panel_format != "image" || s.preview_image.is_empty() {
         cache.forget_image();
     }
@@ -2670,7 +2723,6 @@ pub fn draw(
             s.panel_title.clone()
         };
         // Settings: one root list; drilled pages say `Settings › Area` in the frame title.
-        cache.settings_root.track(s.nav.is_some());
         let settings_root = s.nav.is_some() && cache.settings_root.active;
         let title = match &s.nav {
             Some(nav) if !settings_root => {
@@ -4433,7 +4485,11 @@ mod tests {
                         assert_eq!(buffer[(meter_area.x + 2, r.bottom_bar.y)].symbol(), "■");
                         assert_eq!(buffer[(meter_area.x + 3, r.bottom_bar.y)].symbol(), "─");
                         let time: String = (4..=8)
-                            .map(|i| buffer[(meter_area.x + i, r.bottom_bar.y)].symbol().to_string())
+                            .map(|i| {
+                                buffer[(meter_area.x + i, r.bottom_bar.y)]
+                                    .symbol()
+                                    .to_string()
+                            })
                             .collect();
                         assert_eq!(time, "00:07");
                     } else {
@@ -5921,6 +5977,48 @@ mod redesign_regressions {
 #[cfg(test)]
 mod local_cache_regressions {
     use super::*;
+    #[test]
+    fn mermaid_completion_refreshes_cached_source_layout() {
+        let mut cache = Cache::default();
+        cache.refresh_mermaid();
+        let source = "mindmap\n  root((layout completion regression))\n    Child";
+        let blocks = vec![crate::bridge::Content {
+            id: "async-chart".into(), kind: "markdown".into(),
+            rev: "1".into(), text: format!("```mermaid\n{source}\n```"),
+            ..Default::default()
+        }];
+        let palette = Palette::new(false);
+        cache.update_content(&[], &blocks, 80, &palette);
+        assert!(!cache.active_parts[0].as_ref().unwrap().operations.iter()
+            .any(|op| op.as_ref().is_some_and(|o| o.get("inline_image").is_some())));
+        crate::mermaid_image::tests::wait_raster(source, 73);
+        assert!(cache.refresh_mermaid());
+        cache.update_content(&[], &blocks, 80, &palette);
+        assert!(cache.active_parts[0].as_ref().unwrap().operations.iter()
+            .any(|op| op.as_ref().is_some_and(|o| o.get("inline_image").is_some())));
+        // End to end: every image row of the refreshed layout paints cells, and
+        // together they cover the diagram rather than leaving it blank.
+        let part = cache.active_parts[0].as_ref().unwrap();
+        let mut painted = 0;
+        let mut strips = 0;
+        for image in part.operations.iter().flatten().filter_map(|op| op.get("inline_image")) {
+            let area = Rect::new(0, 0, 40, 1);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            crate::mermaid_image::render(
+                image["source"].as_str().unwrap_or(""),
+                image["width"].as_u64().unwrap_or(0) as usize,
+                image["row"].as_u64().unwrap_or(0) as usize,
+                area,
+                &mut buffer,
+            );
+            strips += 1;
+            painted += (0..area.width)
+                .filter(|&x| buffer[(x, 0)].symbol() != " " || buffer[(x, 0)].bg != Color::Reset)
+                .count();
+        }
+        assert!(strips > 0 && painted > 0, "strips {strips} painted {painted}");
+    }
+
     use crate::bridge::Content;
     use serde_json::json;
     #[test]
@@ -6860,7 +6958,10 @@ mod image_preview_tests {
         });
         let mut bytes = Vec::new();
         image::DynamicImage::ImageRgba8(image)
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
             .unwrap();
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
