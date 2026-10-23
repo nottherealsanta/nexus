@@ -455,6 +455,24 @@ class SessionWorktreeStatus(msgspec.Struct, tag=True, frozen=True):
     session: str
 
 
+class SessionTurnDiff(msgspec.Struct, tag=True, frozen=True):
+    """Read a bounded diff of durable turn commits or a hidden checkpoint."""
+
+    session: str
+    seq: int
+    path: str = ""
+    max_bytes: int = 262144
+
+
+class SessionTurnRevert(msgspec.Struct, tag=True, frozen=True):
+    """Preview or confirm an isolated turn revert; shared roots cannot restore."""
+
+    session: str
+    seq: int
+    include_later: bool = False
+    confirm_token: str = ""
+
+
 class SessionWorktreeTrust(msgspec.Struct, tag=True, frozen=True):
     """Answer setup trust for the exact setup digest shown in status."""
 
@@ -1383,6 +1401,8 @@ Command = (
     | SessionDetach
     | SessionWorktreeStatus
     | SessionWorktreeTrust
+    | SessionTurnDiff
+    | SessionTurnRevert
     | AttachmentPrepare
     | AttachmentPreview
     | SessionStart
@@ -2952,6 +2972,8 @@ __all__ = [
     "SessionDetach",
     "SessionWorktreeStatus",
     "SessionWorktreeTrust",
+    "SessionTurnDiff",
+    "SessionTurnRevert",
     "SessionWorktreeResult",
     "SessionPreview",
     "SessionPreviewResult",

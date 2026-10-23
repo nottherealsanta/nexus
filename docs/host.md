@@ -673,3 +673,5 @@ expires them after five minutes (clients heartbeat every 15 seconds). These ephe
 claims are hints, not authority: multiple clients may focus different sessions. Manager
 `session_find` rows expose `focused_clients`; uncertain spoken targets must be clarified.
 GPT Live starts only on the singleton manager, never on a foreground root session.
+
+`SessionTurnDiff(session, seq, path, max_bytes)` returns a bounded saved-commit or checkpoint diff in `SessionWorktreeResult.state`. `SessionTurnRevert(session, seq, include_later, confirm_token)` previews an idle owned-worktree revert and issues a 120-second single-use token bound to HEAD and selected commits. Shared checkouts cannot restore; overlapping later turns require `include_later`. Merge commits are currently refused.

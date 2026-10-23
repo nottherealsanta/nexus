@@ -732,13 +732,15 @@ def _commit_stats(path: Path, *, max_file_bytes: int, extra_env: Mapping[str, st
 def commit_session(record_id: str, *, root: str | Path, message: str, session_name: str,
                    turn_seq: int, agent_id: str = "root", paths: list[str] | None = None,
                    max_files: int = _MAX_FILES, max_file_mb: int = 50, by: str = "harness",
-                   allow_pending: bool = False) -> dict[str, object]:
+                   allow_pending: bool = False, revert_of: int | None = None) -> dict[str, object]:
     if not isinstance(message, str) or not message.strip() or len(message) > 4000:
         raise _base.WorktreeError("commit message must be non-empty and at most 4000 characters")
     if isinstance(turn_seq, bool) or not isinstance(turn_seq, int) or turn_seq < 0:
         raise _base.WorktreeError("turn_seq must be a non-negative integer")
     if by not in {"harness", "agent", "subagent"}:
         raise _base.WorktreeError("invalid commit author kind")
+    if revert_of is not None and (type(revert_of) is not int or revert_of < 0):
+        raise _base.WorktreeError("revert_of must be a nonnegative integer")
     pathspec = _safe_paths(paths)
     if isinstance(max_files, bool) or not isinstance(max_files, int) or not 1 <= max_files <= 100_000:
         raise _base.WorktreeError("max_files must be between 1 and 100000")
@@ -794,6 +796,8 @@ def commit_session(record_id: str, *, root: str | Path, message: str, session_na
             safe_session = re.sub(r"[\r\n\x00-\x1f\x7f]+", " ", session_name)[:200]
             safe_agent = re.sub(r"[\r\n\x00-\x1f\x7f]+", "-", agent_id)[:128]
             trailers = [f"Nexus-Session: {safe_session} ({record.session_id})", f"Nexus-Turn-Seq: {turn_seq}", f"Nexus-Agent: {safe_agent}"]
+            if revert_of is not None:
+                trailers.append(f"Nexus-Revert-Of-Turn: {revert_of}")
             config = []
             identity_fallback = False
             if not _git(record.path, "config", "--get", "user.name", check=False):

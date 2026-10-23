@@ -67,7 +67,8 @@ here, so add a row when you add a file.
 | `events.py` | The public UI boundary: JSON-serializable events, no rendering or input |
 | `runtime.py` | `Runtime`: the composition root that owns every manager ([architecture.md](architecture.md#runtime-runtimepy)) |
 | `resources.py` | Fair process-wide process and provider resource admission |
-| `worktree_sessions.py` | Runtime-owned per-session worktree creation, per-turn commits, setup trust, promotion and detach |
+| `worktree_turns.py` | Bounded saved-turn diffs and confirmed isolated revert commits. |
+| `worktree_sessions.py` | Runtime-owned per-session worktrees, main-checkout checkpoints, per-turn commits, setup trust and promotion |
 | `util.py` | Small dependency-free helpers shared by the lower layers |
 
 ### `nexus/agents/`

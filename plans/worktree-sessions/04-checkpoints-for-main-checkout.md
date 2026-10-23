@@ -2,6 +2,28 @@
 
 Phase: **F4**. Depends on F2. Independent of F3.
 
+## Implementation ledger — 2026-10-23
+
+Backend checkpoint capture, event replay, configuration, bounded refs and focused real-Git
+coverage are implemented. Capture runs from the shared turn preparation/terminal callbacks for
+main and external roots; those callbacks run for ordinary sessions even when owned-worktree
+provisioning is not required. The native per-turn diff and restore controls are phase 08. Session
+purge ref cleanup is being integrated with the session lifecycle separately; until that lands,
+namespace retention bounds growth but deletion does not eagerly prune that session's refs.
+The first baseline is captured eagerly at turn preparation (including read-only turns) to avoid
+missing shell edits; the planned mutating-tool cheap pre-check remains an optimization.
+
+- [x] Private temporary index, baseline on first turn, hidden refs, size guard, unborn HEAD,
+  unchanged turn detection and bounded session/project ref retention.
+- [x] Durable capture/skip/start events with path attribution from file receipts and shell-job
+  turns, bounded reducer projection, capture duration, HEAD-moved metadata, slow-capture disable,
+  and no restore in shared checkouts.
+- [x] Real-Git tests for index/HEAD/worktree preservation, untracked files, first-turn callback,
+  no-op turns, unborn HEAD, limits, concurrent sessions, attribution and HEAD movement.
+- [x] Host `SessionTurnDiff` and preview/confirm `SessionTurnRevert`, with stale/dirty/shared/overlap refusals and real runtime + Git tests. Merge-commit restore is refused until a mainline policy is defined.
+- [ ] Eager ref removal on session purge (session lifecycle integration).
+- [ ] Native per-turn diff presentation (phase 08); not verified in a TUI.
+
 ## 1. Contract
 
 - Sessions whose root is the main checkout or an external worktree (file 02 §5) get a **hidden

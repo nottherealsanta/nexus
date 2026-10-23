@@ -450,6 +450,22 @@ class WorktreeView(_View):
     promotion_error: str = ""
 
 @dataclass
+class CheckpointView(_View):
+    """One bounded hidden checkpoint summary for a main-checkout turn."""
+
+    seq: int = 0
+    ref: str = ""
+    commit: str = ""
+    head: str = ""
+    base_ref: str = ""
+    files: list[str] = field(default_factory=list)
+    files_clipped: int = 0
+    foreign: int = 0
+    insertions: int = 0
+    deletions: int = 0
+    head_moved: bool = False
+
+@dataclass
 class QueuedInputView(_View):
     queued_id: str = ""
     mode: str = "queue"
@@ -681,6 +697,7 @@ class ConversationView(_View):
     opened: bool = False
     root: RootView = field(default_factory=RootView)
     worktree: WorktreeView = field(default_factory=WorktreeView)
+    checkpoints: list[CheckpointView] = field(default_factory=list)
     closed: bool = False
     turns: list[TurnView] = field(default_factory=list)
     permissions: list[PermissionView] = field(default_factory=list)

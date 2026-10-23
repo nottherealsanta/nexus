@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import stat
+import shutil
+import uuid
 import time
 from pathlib import Path
 
@@ -252,6 +254,19 @@ class SessionWorktrees:
                 self.runtime.validate_session_root(handle.id)
         elif self.selection(handle)["enabled"] and not self.locked(handle):
             root = await self._create(handle, base=self.selection(handle)["base"])
+        disabled = any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events)
+        if root.kind in {"main", "external"} and self.policy().checkpoints and not disabled:
+            seq, _ = self._turn_data(handle, lease.turn_id)
+            git_root = await self._thread(handle.id, self._git, root.path, "rev-parse", "--show-toplevel", check=False)
+            if not git_root.strip():
+                self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "not_git", "detail": ""}, lease.turn_id)
+            else:
+                baseline_ok = await self._thread(handle.id, self._checkpoint_baseline, root.path, handle.id, seq)
+                if baseline_ok:
+                    head = await self._thread(handle.id, self._git, root.path, "rev-parse", "--verify", "HEAD^{commit}", check=False)
+                    self._emit(handle, "checkpoint.started", {"seq": seq, "head": head.strip()}, lease.turn_id)
+                else:
+                    self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "git_error", "detail": "could not capture turn baseline"}, lease.turn_id)
         if root.kind == "worktree":
             info = await self._thread(handle.id, self.service.session_status, root.worktree_id, root=self.registry)
             seq, _ = self._turn_data(handle, lease.turn_id)
@@ -332,6 +347,23 @@ class SessionWorktrees:
                         if result.get("sha") not in known:
                             self._commit_event(handle, {**result, "kind": "committed", "by": "agent", "via": "shell"}, seq=seq, agent="root", turn_id=terminal.turn)
                 await self.commit(handle, terminal.turn)
+            elif root.kind in {"main", "external"} and self.policy().checkpoints:
+                if not any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events):
+                    seq, _ = self._turn_data(handle, terminal.turn)
+                    changed_by_session = any(e.type == "worktree.file_written" and e.turn == terminal.turn for e in handle.events)
+                    shell_ran = any(e.type == "shell.started" and e.turn == terminal.turn for e in handle.events)
+                    if not changed_by_session and not shell_ran:
+                        result = {"kind": "skipped", "event": {"seq": seq, "reason": "no_changes", "detail": ""}}
+                    else:
+                        result = await self._thread(handle.id, self._checkpoint_capture, root.path, handle.id, seq, handle, terminal.turn)
+                    if result.get("kind") == "captured":
+                        self._emit(handle, "checkpoint.captured", result["event"], terminal.turn)
+                        if result["event"].get("duration_ms", 0) > 5000:
+                            self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "disabled",
+                                "detail": "capture exceeded 5 seconds; disabled for this session"}, terminal.turn)
+                            self.notice(handle, "Checkpoints disabled for this session because capture exceeded 5 seconds")
+                    elif result.get("kind") == "skipped":
+                        self._emit(handle, "checkpoint.skipped", result["event"], terminal.turn)
             pending = self._promotions.pop(handle.id, None)
             if pending is not None:
                 await self._promote(handle, **pending)
@@ -340,6 +372,137 @@ class SessionWorktrees:
                 handle.emit_session_event("worktree.promotion_failed", {"request_id": pending.get("request_id"), "detail": redact_secrets(str(exc))[:500]})
             self._emit(handle, "worktree.commit_skipped", {"reason": "git_error", "detail": redact_secrets(str(exc))[:500]}, terminal.turn)
             self.notice(handle, "Worktree action failed: " + str(exc))
+
+    def _checkpoint_ref(self, session, seq, suffix=""):
+        safe = ''.join(c for c in session if c.isalnum() or c in '-_')[:190]
+        return f"refs/nexus/checkpoints/{safe}/{seq:010d}{suffix}"
+
+    def _checkpoint_snapshot(self, directory, session, seq, suffix, *, base_ref=""):
+        """Build a commit object from a private index; never touch the user's index/ref."""
+        from .agents.session_worktrees import _git
+        directory = Path(directory)
+        common = Path(_git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        index = Path(_git(directory, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+        temp = common / f"nexus-checkpoint-index-{uuid.uuid4().hex}"
+        ref = self._checkpoint_ref(session, seq, suffix)
+        env = {"GIT_INDEX_FILE": str(temp), "GIT_AUTHOR_NAME": "Nexus", "GIT_AUTHOR_EMAIL": "nexus@localhost",
+               "GIT_COMMITTER_NAME": "Nexus", "GIT_COMMITTER_EMAIL": "nexus@localhost"}
+        try:
+            if index.exists():
+                shutil.copyfile(index, temp)
+            else:
+                head = _git(directory, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
+                _git(directory, "read-tree", head if head else "--empty", extra_env={"GIT_INDEX_FILE": str(temp)})
+            status = _git(directory, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+            status_rows = [row for row in status.split("\0") if len(row) >= 4]
+            candidates = []
+            row_index = 0
+            while row_index < len(status_rows):
+                row = status_rows[row_index]
+                candidates.append(row[3:])
+                if "R" in row[:2] or "C" in row[:2]:
+                    row_index += 1
+                    if row_index < len(status_rows):
+                        candidates.append(status_rows[row_index][3:] if len(status_rows[row_index]) >= 4 else status_rows[row_index])
+                row_index += 1
+            if len(candidates) > self.policy().commit_max_files:
+                raise OverflowError("changed file count exceeds configured limit")
+            for relative in candidates:
+                path = directory / relative
+                if not path.is_symlink() and path.is_file() and path.stat().st_size > self.policy().commit_max_file_mb * 1024 * 1024:
+                    raise OverflowError("a changed file exceeds configured size limit")
+            _git(directory, "add", "-A", "--", ".", extra_env={"GIT_INDEX_FILE": str(temp)})
+            tree = _git(directory, "write-tree", extra_env={"GIT_INDEX_FILE": str(temp)})
+            if base_ref:
+                base_tree = _git(directory, "rev-parse", "--verify", base_ref + "^{tree}", check=False).strip()
+                if base_tree and base_tree == tree:
+                    return "", "", "", []
+            head = _git(directory, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
+            parents = ["-p", head] if head else []
+            commit = _git(directory, "commit-tree", tree, *parents, "-m", f"nexus checkpoint {session} {seq}", extra_env=env)
+            _git(directory, "update-ref", ref, commit, "")
+            return ref, commit, head, []
+        finally:
+            temp.unlink(missing_ok=True)
+            Path(str(temp) + ".lock").unlink(missing_ok=True)
+
+    def _checkpoint_baseline(self, directory, session, seq):
+        from .agents.session_worktrees import _git
+        existing = _git(directory, "for-each-ref", "--count=1", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").strip()
+        if existing:
+            return True
+        try:
+            self._checkpoint_snapshot(directory, session, seq, "-base")
+            return True
+        except Exception:
+            # Capture emits the actionable skip; baseline errors must not block a turn.
+            return False
+
+    def _checkpoint_capture(self, directory, session, seq, handle, turn_id=""):
+        from .agents.session_worktrees import _git
+        started = time.monotonic()
+        try:
+            refs = _git(directory, "for-each-ref", "--sort=-refname", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").splitlines()
+            prior = next((value for value in refs if not value.endswith("-base")),
+                         next((value for value in refs if value.endswith("-base")), self._checkpoint_ref(session, seq, "-base")))
+            if not _git(directory, "rev-parse", "--verify", prior + "^{commit}", check=False).strip():
+                return {"kind": "skipped", "event": {"seq": seq, "reason": "git_error", "detail": "turn baseline is unavailable"}}
+            ref, commit, head, _ = self._checkpoint_snapshot(directory, session, seq, "", base_ref=prior)
+            if not ref:
+                return {"kind": "skipped", "event": {"seq": seq, "reason": "no_changes", "detail": ""}}
+            refs = _git(directory, "for-each-ref", "--sort=-refname", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").splitlines()
+            raw = _git(directory, "diff", "--name-only", "-z", prior, commit).split("\0")
+            changed = [value for value in raw if value]
+            numstat = _git(directory, "diff", "--numstat", "-z", prior, commit).split("\0")
+            insertions = deletions = 0
+            for line in numstat:
+                fields = line.split("\t", 2)
+                if len(fields) == 3:
+                    if fields[0].isdigit(): insertions += int(fields[0])
+                    if fields[1].isdigit(): deletions += int(fields[1])
+            numbered = [value for value in refs if not value.endswith("-base")]
+            for stale in numbered[500:]:
+                _git(directory, "update-ref", "-d", stale)
+            self._prune_checkpoint_sessions(directory)
+            touched = {e.data.get("path") for e in handle.events if e.type == "worktree.file_written" and e.turn == turn_id}
+            shell_ran = any(e.type == "shell.started" and e.turn == turn_id for e in handle.events)
+            owned = [path for path in changed if shell_ran or path in touched]
+            start = next((e.data for e in reversed(handle.events) if e.type == "checkpoint.started" and e.turn == turn_id), {})
+            start_head = start.get("head", "") if isinstance(start, dict) else ""
+            head_moved = bool(start_head and head and start_head != head)
+            return {"kind": "captured", "event": {"seq": seq, "ref": ref, "commit": commit, "head": head,
+                "base_ref": prior, "files": owned[:200], "files_clipped": max(0, len(owned)-200),
+                "foreign": max(0, len(changed)-len(owned)), "insertions": insertions, "deletions": deletions,
+                "head_moved": head_moved, "head_start": start_head,
+                "duration_ms": int((time.monotonic()-started)*1000)}}
+        except OverflowError as exc:
+            return {"kind": "skipped", "event": {"seq": seq, "reason": "too_large", "detail": str(exc)[:500]}}
+        except Exception as exc:
+            return {"kind": "skipped", "event": {"seq": seq, "reason": "git_error", "detail": redact_secrets(str(exc))[:500]}}
+
+    def _prune_checkpoint_sessions(self, directory):
+        """Keep refs for the most recently checkpointed configured session count."""
+        from .agents.session_worktrees import _git
+        rows = _git(directory, "for-each-ref", "--format=%(refname) %(committerdate:unix)",
+                    "refs/nexus/checkpoints").splitlines()
+        activity = {}
+        for row in rows[:100_000]:
+            try:
+                ref, timestamp = row.rsplit(" ", 1)
+                session = ref.split("/", 4)[3]
+                activity[session] = max(activity.get(session, 0), int(timestamp))
+            except (ValueError, IndexError):
+                continue
+        keep = self.policy().checkpoint_keep
+        expired = {session for session, _ in sorted(activity.items(), key=lambda item: (item[1], item[0]))[:-keep]}
+        for row in rows[:100_000]:
+            ref = row.rsplit(" ", 1)[0]
+            try:
+                session = ref.split("/", 4)[3]
+            except IndexError:
+                continue
+            if session in expired:
+                _git(directory, "update-ref", "-d", ref)
 
     def _setup_digest(self):
         policy = self.policy()

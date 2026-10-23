@@ -1780,7 +1780,7 @@ class HostFacade:
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
                             p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
-                            p.WorktreeDiscard, p.SessionWorktreeStatus)
+                            p.WorktreeDiscard, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -1820,7 +1820,8 @@ class HostFacade:
                            p.SessionDelete, p.SessionExport,
                            p.SessionArchive, p.SessionUnarchive)
         target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionPromote,
-                           p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust)
+                           p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust,
+                           p.SessionTurnDiff, p.SessionTurnRevert)
         if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
             namespace = getattr(command, "namespace", "main")
             if isinstance(command, p.SessionFork) and command.new_id == MANAGER_SESSION_ID:
@@ -2031,6 +2032,25 @@ class HostFacade:
             return p.GitStatusResult(**await workspace_git_status(
                 _session_workspace(self.runtime, command.session)
             ))
+        if isinstance(command, p.SessionTurnDiff):
+            from ..worktree_turns import turn_diff
+            self._refuse_manager(command.session, "turn diff")
+            state = await asyncio.to_thread(turn_diff, self.runtime._session_worktrees,
+                command.session, command.seq, path=command.path, max_bytes=command.max_bytes)
+            return p.SessionWorktreeResult(session=command.session, state=state)
+        if isinstance(command, p.SessionTurnRevert):
+            from ..worktree_turns import revert_preview, revert_turn
+            self._refuse_manager(command.session, "turn restore")
+            controller = self.runtime._session_worktrees
+            state = await asyncio.to_thread(revert_preview, controller, command.session,
+                command.seq, command.include_later)
+            options = {"seq": command.seq, "include_later": command.include_later}
+            if command.confirm_token:
+                self._consume_confirmation(command.confirm_token, "turn_revert", command.session, state, options)
+                state = await asyncio.to_thread(revert_turn, controller, command.session, state)
+            else:
+                state = {**state, "token": self._confirmation_token("turn_revert", command.session, state, options)}
+            return p.SessionWorktreeResult(session=command.session, state=state)
         if isinstance(command, p.SessionWorktreeSet):
             self._refuse_manager(command.session, "session worktree selection")
             state = await self._invoke_runtime_worktree(

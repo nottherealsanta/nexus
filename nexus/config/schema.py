@@ -1068,6 +1068,8 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     max_worktrees: int = 16
     commit_max_files: int = 2000
     commit_max_file_mb: int = 50
+    checkpoints: bool = True
+    checkpoint_keep: int = 50
     setup: list[str] | str | None = None
     setup_shell: bool = False
     setup_timeout: int = 300
@@ -1081,6 +1083,8 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     def __post_init__(self) -> None:
         if type(self.sessions) is not bool:
             raise ValueError("worktrees.sessions must be true or false")
+        if type(self.checkpoints) is not bool:
+            raise ValueError("worktrees.checkpoints must be true or false")
         if type(self.setup_shell) is not bool:
             raise ValueError("worktrees.setup_shell must be true or false")
         if self.setup_on_fail not in {"fail", "warn"}:
@@ -1108,6 +1112,7 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         for name, value, minimum, maximum in (
             ("max_worktrees", self.max_worktrees, 1, 256),
             ("commit_max_files", self.commit_max_files, 1, 100_000),
+            ("checkpoint_keep", self.checkpoint_keep, 1, 500),
             ("commit_max_file_mb", self.commit_max_file_mb, 1, 2_048),
             ("setup_timeout", self.setup_timeout, 1, 1_800),
             ("copy_max_mb", self.copy_max_mb, 1, 2_048),

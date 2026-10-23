@@ -87,6 +87,7 @@ paths themselves. See [desktop.md](desktop.md).
 | Decision | Why | Where |
 | --- | --- | --- |
 | **Sessions are append-only records in one shared SQLite DB** (`~/.nexus/nexus.db`, WAL, `synchronous=FULL`, `BEGIN IMMEDIATE`); JSONL is an export format only. Replaced per-project JSONL directories. | Indexed listing, cross-project state, race-free `seq` across daemons, one transaction for delete/archive. Legacy directories are not imported. | [sessions.md](sessions.md) (`plans/STATE_PLAN.md`) |
+| **Main-checkout session diffs use hidden per-turn Git checkpoint refs and never restore files in a shared checkout.** A temporary index protects the user's index and branch; checkpoint refs may be published by mirror pushes. | Preserve reviewable turn history without changing shared user state. | [sessions.md](sessions.md#main-checkout-checkpoints), `worktree_sessions.py` (worktree-sessions plan 04) |
 | **Record bytes are unchanged msgspec JSON.** | Reducer, export, fork, replay untouched by the storage move. | `session/db.py` |
 | **Snapshots are derived caches validated against the log; compaction never deletes history.** | Fast resume without risking loss; "omission from the prompt does not delete history". | `session/snapshot.py`, [context.md](context.md) |
 | **Project extensions and settings live in `<workspace>/.agents/`; legacy `.nexus/` is a read-only lower-precedence fallback.** Machine state is under `~/.nexus/`. | A conventional, tool-neutral project dir; writes have one home. | [config.md](config.md) |

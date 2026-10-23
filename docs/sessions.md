@@ -74,6 +74,19 @@ folds these into the normal conversation timeline and current root metadata;
 clients render the event/view projection rather than inspect runtime-controller
 or service records. See [events-and-view.md](events-and-view.md).
 
+### Main-checkout checkpoints
+
+Main and external-root sessions capture a hidden `refs/nexus/checkpoints/<session>/<turn>`
+commit when the checkout changed during a turn. A first-turn baseline makes that turn's
+diff meaningful. Capture uses a disposable Git index and `commit-tree`; it does not change
+the user's `HEAD`, index, branch or files. The durable `checkpoint.captured` event records
+the base, bounded file summary, foreign-change count and capture time. Diffs are review-only:
+there is no restore action for a shared checkout. `[worktrees] checkpoints` defaults to true;
+`checkpoint_keep` bounds retained session namespaces, and captures slower than five seconds
+disable checkpoints for that session. Git refs remain local by default; `git push --mirror`
+can publish them, so review the ref list before using mirror pushes. Submodules are captured
+as gitlinks, not as snapshots of their contents. The terminal diff UI is planned in phase 08.
+
 
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup
 and presence events remain in memory and snapshots are not written. The first

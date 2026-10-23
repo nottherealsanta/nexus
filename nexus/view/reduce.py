@@ -256,6 +256,27 @@ def _bounded_count(value: object) -> int:
 def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     """Fold bounded worktree lifecycle and commit audit events."""
     current = state.worktree
+    if event.type == "checkpoint.started":
+        return state
+    if event.type == "checkpoint.skipped":
+        reason, detail = data.get("reason"), data.get("detail", "")
+        if reason not in {"not_git", "too_large", "git_error", "disabled", "no_changes"} or not isinstance(detail, str) or len(detail) > 500:
+            return _diagnostic(state, event, data)
+        return state
+    if event.type == "checkpoint.captured":
+        seq, ref, commit, head, base_ref = (data.get(key) for key in ("seq", "ref", "commit", "head", "base_ref"))
+        files = data.get("files", [])
+        if (not isinstance(seq, int) or isinstance(seq, bool) or seq < 0
+            or any(not isinstance(value, str) or len(value) > 256 or "\0" in value for value in (ref, commit, head, base_ref))
+            or not isinstance(files, list) or len(files) > 200
+            or any(not isinstance(path, str) or len(path) > 1024 or "\0" in path for path in files)):
+            return _diagnostic(state, event, data)
+        from .model import CheckpointView
+        checkpoint = CheckpointView(seq=seq, ref=ref, commit=commit, head=head, base_ref=base_ref,
+            files=files, files_clipped=_bounded_count(data.get("files_clipped")), foreign=_bounded_count(data.get("foreign")),
+            insertions=_bounded_count(data.get("insertions")), deletions=_bounded_count(data.get("deletions")),
+            head_moved=bool(data.get("head_moved")))
+        return replace(state, checkpoints=[*state.checkpoints, checkpoint][-200:])
     if event.type in {"worktree.setup_output", "worktree.file_written"}:
         # Setup output can contain project secrets, and write receipts are for
         # internal promotion provenance only; neither belongs in the view.

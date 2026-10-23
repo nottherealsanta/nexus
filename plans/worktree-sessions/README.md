@@ -3,7 +3,9 @@
 Status: **in progress**, agreed with the user in a planning conversation on 2026-10-22.
 Files 01 (shared daemon), 02 (per-session roots) and the backend in 03 (session worktrees
 and turn commits) are implemented; their ledgers record validation and remaining boundaries.
-Subsequent files remain plans until their ledgers say otherwise.
+File 04 now includes backend checkpoint capture and host diff/restore contracts; native controls
+and eager purge cleanup are tracked in files 08 and 07. Subsequent files remain plans until
+their ledgers say otherwise.
 `docs/` is the source of truth and the code wins over these files (see `AGENTS.md`). Each phase
 lands with its tests, its `docs/` updates and, where marked, a `docs/decisions.md` entry.
 
