@@ -43,6 +43,7 @@ from .names import (
     canonical_permission_rule,
     canonical_tool_name,
     permission_bundle_matches,
+    permission_tool_names,
     tool_rule_names,
 )
 from .shell_syntax import analyze_command
@@ -243,8 +244,9 @@ class Rule:
             if self.kind == "tool_exact":
                 return self.pattern == job_key
             return False
+        names = permission_tool_names(tool)
         if self.kind == "tool":
-            return self.tool == tool
+            return self.tool in names
         if self.kind == "wildcard":
             # A wildcard written for the historical ``bash``/``Bash`` spelling
             # keeps matching the renamed tool (deny rules must stay effective).
@@ -257,14 +259,14 @@ class Rule:
                 self.bundle, bundle
             )
         if self.kind == "tool_pattern":
-            if self.tool != tool or key is None or self.pattern is None:
+            if self.tool not in names or key is None or self.pattern is None:
                 return False
             if tool == "shell" and effect is not None and _is_run_call(input_data):
                 return _shell_glob_matches(self.pattern, key, effect)
             return _glob_matches(self.pattern, key)
         if self.kind == "tool_exact":
             return (
-                self.tool == tool
+                self.tool in names
                 and key is not None
                 and self.pattern is not None
                 and key == self.pattern
@@ -1212,6 +1214,15 @@ _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
 _MODE_FALLBACK_ASK_TOOLS = frozenset({"ContextQuery"})
+#: ``nexus merge`` lands the session worktree on its base branch. A shell command
+#: containing it always asks, in every mode and despite allow rules or grants
+#: (docs/decisions.md, "Agents merge their own session worktree"). Deny rules
+#: still win. The match is deliberately broad: a false positive only asks.
+_NEXUS_MERGE_COMMAND = re.compile(r"(?:^|[\s;&|(`'\"])nexus(?:\s+\S+){0,6}?\s+merge(?=$|[\s;&|)`'\"])")
+
+
+def _is_nexus_merge(tool: str, key: str | None) -> bool:
+    return tool == "shell" and isinstance(key, str) and _NEXUS_MERGE_COMMAND.search(key) is not None
 
 
 class PermissionEngine:
@@ -1402,7 +1413,7 @@ class PermissionEngine:
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
             )
 
-        if public_name in self._force_ask_tools:
+        if public_name in self._force_ask_tools or _is_nexus_merge(public_name, key):
             return self._ask_verdict(
                 call, spec, key, None, attended, suggestions
             )

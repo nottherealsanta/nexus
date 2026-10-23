@@ -156,6 +156,24 @@ def test_rule_matching(raw, tool, key, bundle, expected):
     assert parse_rule(raw).matches(tool, key, bundle) is expected
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("subagent", True),
+        ("subagent_continue", True),
+        ("subagent(advisor:*)", True),
+        ("subagent(*:high)", False),
+        ("subagent(advisor:medium)", True),
+        ("subagent_continue(advisor:medium)", True),
+        ("sub*", True),
+        ("Bundle:task", True),
+        ("read", False),
+    ],
+)
+def test_subagent_continue_shares_the_subagent_rules(raw, expected):
+    assert parse_rule(raw).matches("subagent_continue", "advisor:medium", "task") is expected
+
+
 def test_legacy_names_map_exactly_without_casefold_or_wildcard_rewriting():
     assert parse_rule("Task(explore:high)").matches("subagent", "explore:high", "task")
     assert parse_rule("Read(**/.env)").matches("read", "/ws/.env", "fs")

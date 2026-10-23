@@ -679,3 +679,20 @@ async def test_draft_state_is_per_session_and_cleared_by_emptying(tmp_path, monk
     shell.note_draft_state(False)  # the user deleted the text again
     await shell.switch("old")
     assert [row["id"] for row in shell.tabs] == ["old"]
+
+
+@pytest.mark.asyncio
+async def test_merge_command_sends_instruction_only_in_a_worktree_session(tmp_path, monkeypatch):
+    from nexus.ui.cli.commands import SPECS
+    assert "/merge" in {spec.name for spec in SPECS}
+    choice = AsyncMock(return_value=SimpleNamespace(state={"kind": "worktree", "worktree_name": "wt", "base_branch": "main"}))
+    shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock(), session_worktree_choice=choice)
+    assert await shell.submit("/merge ship it") is True
+    text = shell.client.enqueue.await_args.args[1]
+    assert shell.client.enqueue.await_args.args[0] == "s"
+    assert "into main" in text and 'nexus merge -m "<descriptive message>"' in text and text.endswith("Note from the user: ship it")
+    main = AsyncMock(return_value=SimpleNamespace(state={"kind": "main"}))
+    shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock(), session_worktree_choice=main)
+    await shell.submit("/merge")
+    shell.client.enqueue.assert_not_awaited()
+    assert "worktree session" in shell.notice

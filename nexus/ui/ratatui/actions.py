@@ -939,6 +939,13 @@ class ShellActions:
                 self.workflows.menu("Attachments", [(self.attachment_label(i) + " · " + item.name, {"kind": "attachment_preview", "id": item.attachment_id}) for i,item in enumerate(self.attachments)], labelled(self.attachments))
         elif name in {"/review", "/commit"}:
             await self.client.enqueue(session, "Review the current workspace changes for correctness and report findings with file references." if name == "/review" else "Review the current workspace changes, then create a commit for the completed work. Follow normal tool permissions.")
+        elif name == "/merge":
+            from .worktree_bar import merge_instruction, session_worktree_state
+            state = await session_worktree_state(self, force=True)
+            if (state.get("kind") if state else getattr(self, "worktree_kind", "")) != "worktree":
+                self.notice = "/merge works in a worktree session; this session runs in the main checkout"
+            else:  # a normal user turn: the expanded instruction is the visible user message
+                await self.client.enqueue(session, merge_instruction(state, argument))
         elif name == "/speak":
             if args not in ((), ("download",)):
                 self.notice = "Usage: /speak [download]"
