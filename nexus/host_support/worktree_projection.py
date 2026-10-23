@@ -32,6 +32,14 @@ def worktree_record(record: Any) -> dict[str, Any]:
         "digest": review_hex(getattr(record, "current_review_digest", None), 64) or None,
         "acknowledged": bool(getattr(record, "acknowledged_review_id", None)),
     })
+    if getattr(record, "kind", None) in {"session", "subagent"}:
+        session = getattr(record, "session_id", "")
+        values.update({
+            "kind": "subagent" if "/sub/" in session else "session",
+            "session": safe_text(session, 256),
+            "branch": safe_text(getattr(record, "branch", ""), 256),
+            "exists": bool(getattr(record, "exists", False)),
+        })
     return values
 
 

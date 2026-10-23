@@ -69,6 +69,7 @@ here, so add a row when you add a file.
 | `resources.py` | Fair process-wide process and provider resource admission |
 | `worktree_turns.py` | Bounded saved-turn diffs and confirmed isolated revert commits. |
 | `worktree_sessions.py` | Runtime-owned per-session worktrees, main-checkout checkpoints, per-turn commits, setup trust and promotion |
+| `worktree_cleanup.py` | Explicit authenticated clean-checkout removal, preserving branches and session records |
 | `session_integration.py` | Bounded preview and confirmed local fast-forward integration for one owned session worktree |
 | `util.py` | Small dependency-free helpers shared by the lower layers |
 

@@ -140,6 +140,21 @@ def test_create_session_refuses_when_worktree_limit_is_reached(tmp_path: Path) -
     assert service.list(root=root) == (existing,)
 
 
+def test_missing_active_checkout_does_not_consume_worktree_slot(tmp_path: Path) -> None:
+    parent = repository(tmp_path / "parent")
+    root = tmp_path / "daemon"
+    service = WorktreeService()
+    first = service.create_session(parent, "first", "blue-fox", root=root, max_worktrees=1)
+    first = service.activate_session(first.child_id, root=root)
+    git(parent, "worktree", "remove", "--force", str(first.path))
+
+    second = service.create_session(parent, "second", "red-bird", root=root, max_worktrees=1)
+
+    assert not first.path.exists()
+    assert second.path.is_dir()
+    assert service.get(first.child_id, root=root).lifecycle == "active"
+
+
 def test_session_record_timestamps_advance_on_activation_and_detach(tmp_path: Path) -> None:
     parent = repository(tmp_path / "parent")
     root = tmp_path / "daemon"

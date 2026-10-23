@@ -56,6 +56,16 @@ commits those bytes in the new worktree, and leaves the original checkout
 unchanged. Detach returns the session to the main checkout; it does not delete
 the owned branch.
 
+The worktree list includes these modern session records. Explicit removal is
+available for an idle owner session when the authenticated record still points
+to the exact registered checkout and branch. Cleanup refuses uncommitted,
+untracked, ignored, or in-progress Git state and invokes Git without `--force`.
+It removes only the checkout directory; the branch and active record remain so
+the session can recreate its checkout from that branch on a later turn. A path
+already missing is shown as already removed. Git errors that leave registration
+or filesystem state inconsistent require manual Git repair; Nexus does not run
+background cleanup or branch deletion.
+
 Owned worktrees commit at turn boundaries. Harness commits are bounded by
 `commit_max_files` and `commit_max_file_mb`; skipped commits leave changes in
 the worktree for a later retry. Harness and agent-tool commits use `commit-tree` with signing

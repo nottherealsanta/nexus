@@ -1780,7 +1780,7 @@ class HostFacade:
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
                             p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
-                            p.WorktreeDiscard, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
+                            p.WorktreeDiscard, p.WorktreeRemove, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -2090,6 +2090,18 @@ class HostFacade:
                 digest=command.digest,
             )
             return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.WorktreeRemove):
+            from ..worktree_cleanup import cleanup_preview, remove_worktree
+            child_id = _validate_worktree_child_id(command.child_id)
+            controller = self.runtime._session_worktrees
+            state = await asyncio.to_thread(cleanup_preview, controller, child_id)
+            owner = state.get("owner_session", "")
+            if command.confirm_token:
+                self._consume_confirmation(command.confirm_token, "worktree_remove", child_id, state, {})
+                state = await asyncio.to_thread(remove_worktree, controller, child_id, state)
+            elif state.get("state") == "ready":
+                state = {**state, "token": self._confirmation_token("worktree_remove", child_id, state, {})}
+            return p.SessionWorktreeResult(session=owner, state=state)
         if isinstance(command, p.WorktreeList):
             rows, has_more = await asyncio.to_thread(self.list_worktrees)
             return p.WorktreeListResult(worktrees=rows, has_more=has_more)

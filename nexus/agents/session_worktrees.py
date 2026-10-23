@@ -496,7 +496,13 @@ def create_session(parent_workspace: str | Path, session_id: str, name: str, *, 
                 payload = envelope.get("record", {})
                 if payload.get("kind") == "session":
                     existing = _read(entry, payload.get("child_id", ""), key)
-                    if existing.lifecycle not in {"removed", "landed"}:
+                    # A deliberately removed checkout leaves its active record
+                    # and branch so the owning session can recreate it later.
+                    # It no longer consumes a live-worktree slot. Pending
+                    # records still reserve a slot while creation is in flight.
+                    if existing.lifecycle not in {"removed", "landed"} and (
+                        existing.lifecycle == "pending" or existing.path.exists()
+                    ):
                         count += 1
             except Exception as exc:
                 raise _base.WorktreeError(f"cannot count authenticated session worktrees: {exc}") from exc

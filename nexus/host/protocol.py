@@ -1099,6 +1099,14 @@ class WorktreeList(msgspec.Struct, tag=True, frozen=True):
     project: str = ""
 
 
+class WorktreeRemove(msgspec.Struct, tag=True, frozen=True):
+    """Preview or confirm removal of a clean modern checkout, keeping its branch."""
+
+    child_id: str
+    confirm_token: str = ""
+    project: str = ""
+
+
 class WorktreeInspect(msgspec.Struct, tag=True, frozen=True):
     """Inspect one daemon-owned child worktree by its authenticated child id."""
 
@@ -1478,6 +1486,7 @@ Command = (
     | FilePreview
     | GitStatus
     | WorktreeList
+    | WorktreeRemove
     | WorktreeInspect
     | WorktreeReview
     | WorktreeAcknowledge
@@ -3057,6 +3066,7 @@ __all__ = [
     "WorktreeAcknowledge",
     "WorktreeAcknowledgeResult",
     "WorktreeDiscard",
+    "WorktreeRemove",
     "WorktreeInspect",
     "WorktreeInspectResult",
     "WorktreeIntegrate",

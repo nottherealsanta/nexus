@@ -6851,7 +6851,12 @@ class Runtime:
             if not root.exists():
                 continue
             try:
-                return self._worktree_service.inspect(child_id, root=root)
+                record = self._worktree_service.inspect(child_id, root=root)
+                if getattr(record, "kind", None) == "session":
+                    from .worktree_cleanup import modern_worktree_row
+
+                    return modern_worktree_row(record, root=root)
+                return record
             except WorktreeError as exc:
                 if "no owned worktree record" not in str(exc):
                     raise
@@ -6982,7 +6987,7 @@ class Runtime:
         )
 
     def list_worktrees(self) -> tuple[Any, ...]:
-        """List subagent records; session roots use SessionWorktreeStatus."""
+        """List owned subagent and modern session worktree records."""
         records = []
         for root in tuple(self._worktree_roots.values()):
             if not root.exists():
@@ -6991,6 +6996,13 @@ class Runtime:
                 self._worktree_service.inspect(record.child_id, root=root)
                 for record in self._worktree_service.list(root=root)
                 if getattr(record, "kind", None) != "session"
+            )
+            from .agents.session_worktrees import list_sessions
+            from .worktree_cleanup import modern_worktree_row
+
+            records.extend(
+                modern_worktree_row(record, root=root)
+                for record in list_sessions(root=root)
             )
         return tuple(records)
 
