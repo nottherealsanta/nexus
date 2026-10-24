@@ -1,5 +1,17 @@
 # Design decisions
 
+## Schema 10 resets the session database instead of migrating (2026-10-24)
+
+Nine forward-only migrations with Python backfills had become the riskiest code in
+startup, and old sessions were not worth keeping working at that price. Schema 10 is a
+reset version: an older database is backed up (online backup API, verified with
+`quick_check` and the record count) and replaced by an empty one. The backup happens
+first and the original is removed only after verification, so the worst case is an
+error at startup, never lost sessions. An open handle on the old file (an old daemon)
+is detected by asking SQLite for exclusive ownership and refuses the reset; the file
+lock alone would not see a process that skips it. The notice is a host command so every
+client gets it once. Backups are never pruned automatically. See [sessions.md](sessions.md).
+
 ## Session worktrees are named by the user at the first message (2026-10-23)
 
 When a session goes into a worktree the user types a name at the first message.

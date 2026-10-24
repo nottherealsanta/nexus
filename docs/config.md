@@ -209,6 +209,7 @@ reports. The section cannot be the main, plan, fast, fallback or title model.
 | Location | Holds |
 | --- | --- |
 | `~/.nexus/` (`$NEXUS_HOME`) | machine and user state root |
+| `~/.nexus/backups/nexus-v<N>-<UTC>.db` | one verified copy of the session database made when schema 10 replaced an older one; `0600`, dir `0700`, never deleted automatically ([sessions.md](sessions.md)) |
 | `~/.nexus/nexus.db` | shared SQLite state: every project's sessions ([sessions.md](sessions.md)); file `0600`, dir `0700` |
 | `~/.nexus/credentials.json` | provider secrets and OAuth refresh records; plaintext, owner-only `0600`, parent `0700` |
 | `~/.nexus/config.toml` | user config; Settings → Providers/Setup write `[providers.*]` and `[models].default` here |

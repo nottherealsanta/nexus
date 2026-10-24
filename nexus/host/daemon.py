@@ -114,7 +114,7 @@ MAX_SUBSCRIPTIONS_PER_CLIENT = 64
 #: ``SettingsMcpAdd`` belongs here too: its hot reload starts the new server's subprocess.
 SLOW_COMMANDS = tuple(
     getattr(p, name)
-    for name in ("Doctor", "UpdateStatus", "ModelsRefresh", "ModelsList", "SetupStatus", "SkillsInstall", "SettingsMcpAdd")
+    for name in ("Doctor", "UpdateStatus", "DatabaseNotice", "ModelsRefresh", "ModelsList", "SetupStatus", "SkillsInstall", "SettingsMcpAdd")
     if hasattr(p, name)
 )
 MAX_SLOW_COMMANDS_PER_CLIENT = 8
@@ -346,6 +346,8 @@ class _ClientConnection:
                                   projects=projects.loaded_rows())
         if isinstance(command, p.UpdateStatus):
             return await self.daemon.update_status(command.announce)
+        if isinstance(command, p.DatabaseNotice):
+            return await self.daemon.database_notice()
         if isinstance(command, p.ProjectList):
             return projects.rows(command.limit)
         if isinstance(command, p.Shutdown):
@@ -738,6 +740,16 @@ class Daemon:
             status["announce"] = await asyncio.to_thread(claim_announcement, status.get("available"), home=self._home)
         return p.UpdateStatusResult(**status)
 
+    async def database_notice(self):
+        """The home-level one-time reset notice; claimed so only one client sees it."""
+        from ..config.paths import state_db_path
+        from ..session.reset import claim_notice
+        try:
+            message = await asyncio.to_thread(claim_notice, state_db_path(self._home))
+        except Exception:  # noqa: BLE001 - an advisory notice must not break a surface
+            message = ""
+        return p.DatabaseNoticeResult(message=message)
+
     async def web_launch(self, host=None) -> str:
         """Mint a ticket bound to one project's cookie and URL namespace."""
         if self._closed:
@@ -1115,6 +1127,8 @@ class Daemon:
         try:
             if isinstance(command, p.UpdateStatus):
                 return await self.update_status(command.announce)
+            if isinstance(command, p.DatabaseNotice):
+                return await self.database_notice()
             if isinstance(command, p.Health):
                 rows = self.projects.loaded_rows()
                 return p.HealthResult(projects=rows,

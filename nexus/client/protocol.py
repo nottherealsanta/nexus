@@ -619,6 +619,7 @@ class Client:
         return await self._request(p.ContextInspect(session=session))  # type: ignore[return-value]
 
     async def update_status(self, *, announce: bool = False) -> Any: return await self._request(p.UpdateStatus(announce=announce))
+    async def database_notice(self) -> str: return str((await self._request(p.DatabaseNotice())).message)  # type: ignore[union-attr]
     async def doctor(self, *, explain_reload: bool = False) -> Any: return await self._request(p.Doctor(explain_reload=explain_reload))
 
     async def shutdown(self, reason: str = "") -> bool: return bool((await self._request(p.Shutdown(reason=reason))).stopping)  # type: ignore[union-attr]

@@ -1339,6 +1339,13 @@ class UpdateStatus(msgspec.Struct, tag=True, frozen=True):
     announce: bool = False
 
 
+class DatabaseNotice(msgspec.Struct, tag=True, frozen=True):
+    """The one-time "new session database, old one backed up" notice (docs/sessions.md)."""
+
+    #: Mark the notice shown so no later client sees it again.
+    claim: bool = True
+
+
 class Health(msgspec.Struct, tag=True, frozen=True):
     """Daemon-level liveness and scheduling counters."""
 
@@ -1523,6 +1530,7 @@ Command = (
     | ManagerState
     | Doctor
     | UpdateStatus
+    | DatabaseNotice
     | Health
     | MockList
     | MockStart
@@ -1661,6 +1669,7 @@ COMMANDS: tuple[type, ...] = (
     ManagerState,
     Doctor,
     UpdateStatus,
+    DatabaseNotice,
     Health,
     MockList,
     MockStart,
@@ -2517,6 +2526,11 @@ class LiveHelperEventResult(msgspec.Struct, tag=True, frozen=True):
     state: str = "idle"
 
 
+class DatabaseNoticeResult(msgspec.Struct, tag=True, frozen=True):
+    #: Empty when there is nothing to announce (no reset, or already shown).
+    message: str = ""
+
+
 class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
     enabled: bool = False
     current: str = ""
@@ -2692,6 +2706,7 @@ Result = (
     | ManagerOpenResult
     | ManagerStateResult
     | UpdateStatusResult
+    | DatabaseNoticeResult
     | HealthResult
     | MockListResult
     | MockStartResult
@@ -2806,6 +2821,7 @@ RESULTS: tuple[type, ...] = (
     ManagerOpenResult,
     ManagerStateResult,
     UpdateStatusResult,
+    DatabaseNoticeResult,
     HealthResult,
     MockListResult,
     MockStartResult,
@@ -2869,6 +2885,8 @@ __all__ = [
     "DaemonLogPage",
     "Doctor",
     "DoctorResult",
+    "DatabaseNotice",
+    "DatabaseNoticeResult",
     "UpdateStatus",
     "UpdateStatusResult",
     "ErrorResult",

@@ -84,7 +84,7 @@ inward-only exceptions. Errors are
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
 | Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LivePause` `LiveStop` `LiveHelperEvent` `LiveConsent` (`scope` `""` or `"manager"`) ([live.md](live.md#host-commands)) |
 | Manager (off by default, `[manager] enabled`) | `ManagerOpen` (idempotent open-or-create of the singleton manager session) `ManagerState` (read-only: id, pinned model, Codex sign-in, Live consents, managed roots, caps) ([manager.md](manager.md)) |
-| Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
+| Daemon | `Doctor` `Health` `UpdateStatus` `DatabaseNotice` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
 
 `DirectoryList`, `FilePreview` and `GitStatus` feed the native sidebar's Files and Git tabs

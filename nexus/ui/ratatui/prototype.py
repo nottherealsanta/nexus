@@ -1721,6 +1721,12 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                     key="update", body=f"Run {sanitize(str(update.command), 120)} in your terminal to update.")
                 except Exception:  # noqa: BLE001 - the notice is advisory
                     shell.update_notice = ""
+                try:  # one-time "new session database" notice; the host marks it shown
+                    database_notice = await shell.client.database_notice()
+                    if database_notice:
+                        shell.toast("New session database", "info", key="database-reset", body=sanitize(database_notice, 400))
+                except Exception:  # noqa: BLE001 - the notice is advisory
+                    pass
             async def context():
                 nonlocal preview_cursor
                 if controller.cursor == preview_cursor:

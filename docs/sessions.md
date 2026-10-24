@@ -223,7 +223,7 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 - `namespace = "main"` for user sessions, `"agents"` for subagent child sessions
   (their own real, replayable logs; logical id `<parent>/sub/<n>`, stored under a
   sanitised id with a hash suffix).
-- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 5); the record
+- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 10, a reset version, see below); the record
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
@@ -557,8 +557,38 @@ deterministic batches of at most 500 per transaction (idempotent, resumes after 
 crash). The legacy `session.named` event, if an old log contains it, is still
 folded by the reducer; new sessions never get one.
 
-Schema migration 9 is forward-only. Back up the state database before upgrade;
-old binaries cannot safely open the upgraded schema. Do not downgrade in place.
+Older schemas are not migrated. Schema **10** is a *reset version* (`session/reset.py`):
+a database with `0 < user_version < 10` is backed up and replaced by an empty one, so
+old sessions do not carry over. A missing/empty file is created at 10, a database at 10
+opens normally, and a newer one is still refused. Old binaries cannot open schema 10;
+do not downgrade in place.
+
+The reset runs once, inside `StateDatabase`, under a home-level `nexus.db.reset.lock`
+flock and before anything else uses the database:
+
+1. Take sole ownership of the old file (switch it to `journal_mode=DELETE` in
+   `locking_mode=EXCLUSIVE`). SQLite refuses while any other connection, process or
+   thread has it open, e.g. an old daemon, and the reset stops with "stop the old
+   daemon (`nexus daemon stop` with the old install) and retry". Nothing is changed.
+2. Write one self-contained file (online backup API, WAL folded in) to
+   `<nexus home>/backups/nexus-v<old>-<UTC YYYYMMDDTHHMMSSZ>.db` (dir `0700`, file
+   `0600`, never overwriting; a taken name gets a `-N` suffix), bounded by a 600 s timeout.
+3. Verify: `PRAGMA quick_check` is `ok` and the `records` row count matches the source.
+4. Only then delete `nexus.db`, `-wal` and `-shm`, and create the new database.
+5. Record `reset.backup_path`, `reset.old_version`, `reset.at` and
+   `reset.notice_shown` in the new `meta` table, in the same transaction that creates
+   the schema.
+
+Any error before step 4 (full disk, timeout, failed verification) deletes the partial
+backup, leaves the original untouched and raises `SessionError`, so the daemon refuses
+to start with the reason. A crash between steps 4 and 5 leaves a valid backup but no
+`meta` record (not verified in practice). Backups are never deleted automatically.
+
+`nexus doctor` prints the recorded backup (path, old schema, size). The first
+`nexus chat` (Ratatui toast) or `nexus run` (stderr) after a reset shows "Nexus started
+a new session database. Your old sessions are backed up at <path>." through the
+`DatabaseNotice` host command, which marks `reset.notice_shown` so it appears once.
+The web app does not show it.
 `SessionResolve(include_retired=True)` explicitly permits tombstone lookup and
 returns `retired: true`; default resolution refuses purged names. Retired results
 are metadata only and cannot be opened.

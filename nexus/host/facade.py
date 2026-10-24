@@ -64,6 +64,7 @@ from ..host_support.auto_title import AutoTitler, set_user_title
 from ..host_support.session_jobs import SessionJobControl
 from ..host_support.user_shell import UserShells
 from ..host_support.doctor import doctor_report
+from ..session.reset import claim_notice
 from ..host_support.update_check import claim_announcement, update_status
 from ..host_support.git_diff import git_diff
 from ..host_support.git_head import git_head
@@ -1233,6 +1234,14 @@ class HostFacade:
             return status
         except Exception:  # noqa: BLE001 - an advisory notice must not break a surface
             return {"enabled": False}
+
+    def database_notice(self, *, claim: bool = True) -> str:
+        """The pending "new session database" notice (``""`` if none); never raises."""
+        try:
+            path = getattr(getattr(self.runtime.sessions, "db", None), "path", None)
+            return claim_notice(Path(path)) if path else ""
+        except Exception:  # noqa: BLE001 - an advisory notice must not break a surface
+            return ""
 
     async def refresh_models(self) -> Any | None:
         """Force a catalogue acquisition; return the registry status."""
@@ -2726,6 +2735,10 @@ class HostFacade:
             # it runs off the event loop like ``Doctor``.
             return p.UpdateStatusResult(
                 **await asyncio.to_thread(self.update_status, announce=command.announce)
+            )
+        if isinstance(command, p.DatabaseNotice):
+            return p.DatabaseNoticeResult(
+                message=await asyncio.to_thread(self.database_notice, claim=command.claim)
             )
         if isinstance(command, p.Health):
             return p.HealthResult(**self.health())

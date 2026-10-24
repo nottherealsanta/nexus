@@ -1496,6 +1496,17 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
             f"database: quick_check={quick_check} schema={schema_text} "
             f"size={size_text}B wal={wal_text}B{path_text}\n"
         )
+        backup = database.get("reset_backup")
+        if isinstance(backup, dict):
+            def _safe(value: object, limit: int) -> str:
+                return "".join(c for c in str(value) if c.isprintable())[:limit]
+            old = backup.get("old_schema_version")
+            bsize = backup.get("size_bytes")
+            stdout.write(
+                f"  reset backup: path={_safe(backup.get('path', ''), 240)} "
+                f"old_schema={old if type(old) is int else '?'} "
+                f"size={str(bsize) + 'B' if type(bsize) is int and bsize >= 0 else '?'}\n"
+            )
         largest = database.get("largest_session_logs")
         rows = largest.get("sessions") if isinstance(largest, dict) else None
         if isinstance(rows, list) and rows:

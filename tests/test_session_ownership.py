@@ -1,62 +1,16 @@
 """Ownership migration, atomic promotion and lease-safe descendant recovery."""
 from __future__ import annotations
 
-import sqlite3
 
 from nexus.events import Event
 from nexus.model.message import Message, Text, ToolResult, ToolUse
 from nexus.runtime import _child_ownership, _child_session_id
-from nexus.session.db import SCHEMA_VERSION, SqliteSessionStore, StateDatabase, _SCHEMA_STEPS
+from nexus.session.db import SCHEMA_VERSION, SqliteSessionStore, StateDatabase
 from nexus.session.manager import SessionManager
 
 
 def message(text="go"):
     return Message(role="user", content=[Text(text=text)])
-
-
-def test_v5_migration_backfills_only_matching_spawn_evidence(tmp_path):
-    path = tmp_path / "old.db"
-    conn = sqlite3.connect(path)
-    for step in _SCHEMA_STEPS[:5]:
-        for sql in step:
-            conn.execute(sql)
-    conn.execute("PRAGMA user_version=5")
-    conn.commit()
-    conn.close()
-    # Seed through the old schema without invoking the v6 constructor.
-    import msgspec
-    from nexus.session.records import EventRecord
-
-    conn = sqlite3.connect(path)
-    conn.execute("INSERT INTO projects(id,root,created_at,last_opened) VALUES('p','/p',0,0)")
-    logical = "root/sub/1"
-    child_id = _child_session_id(logical)
-    for namespace, session in [("main", "root"), ("agents", child_id), ("agents", "unknown")]:
-        conn.execute(
-            "INSERT INTO sessions(project_id,namespace,id,created_at,last_seq,last_activity) VALUES('p',?,?,0,0,0)",
-            (namespace, session),
-        )
-    event = Event(type="agent.spawned", turn="turn", data={"agent": {
-        "id": logical, "session": logical, "root_turn_id": "turn", "parent_call_id": "call",
-    }})
-    conn.execute(
-        "INSERT INTO records VALUES('p','main','root',1,'event',0,?)",
-        (msgspec.json.encode(EventRecord(seq=1, ts=0, event=event)),),
-    )
-    conn.commit()
-    conn.close()
-    db = StateDatabase(path)
-    store = SqliteSessionStore(db, "p", "agents")
-    row = store.session_row(child_id)
-    assert db.schema_version() == SCHEMA_VERSION == 9
-    assert (row["owner_namespace"], row["owner_id"], row["owner_turn_id"], row["owner_call_id"]) == (
-        "main", "root", "turn", "call",
-    )
-    assert row["logical_session_id"] == logical
-    assert store.session_row("unknown")["owner_id"] == ""
-    assert len(store.owned_rows("main", "root")) == 1
-    assert SqliteSessionStore(db, "other", "main").owned_rows("main", "root") == []
-    assert StateDatabase(path).schema_version() == SCHEMA_VERSION
 
 
 def managers(tmp_path):
@@ -233,52 +187,6 @@ def test_resolver_never_rehashes_physical_child_and_detects_ambiguous_logical(tm
     store.create_from_records("duplicate", [], meta={"logical_session_id": logical})
     with pytest.raises(SessionError, match="Ambiguous"):
         store.resolve_child_id(logical)
-    db.close()
-
-
-def test_v5_nested_completed_and_request_evidence_conservative(tmp_path):
-    import msgspec
-    from nexus.session.records import EventRecord
-
-    path = tmp_path / "nested-old.db"
-    conn = sqlite3.connect(path)
-    for step in _SCHEMA_STEPS[:5]:
-        for sql in step:
-            conn.execute(sql)
-    conn.execute("PRAGMA user_version=5")
-    conn.execute("INSERT INTO projects VALUES('p','/p',0,0)")
-    logicals = ["root/sub/1", "nested/sub/1", "request/sub/1", "conflict/sub/1"]
-    physicals = [_child_session_id(value) for value in logicals]
-    for namespace, identity in [("main", "root"), ("main", "other"), *[("agents", value) for value in physicals]]:
-        conn.execute(
-            "INSERT INTO sessions(project_id,namespace,id,created_at,last_seq,last_activity) VALUES('p',?,?,0,0,0)",
-            (namespace, identity),
-        )
-    def add(namespace, identity, seq, event_type, data):
-        record = EventRecord(seq=seq, ts=0, event=Event(type=event_type, data=data))
-        conn.execute("INSERT INTO records VALUES('p',?,?,?,'event',0,?)",
-                     (namespace, identity, seq, msgspec.json.encode(record)))
-    direct = {"id": logicals[0], "session": logicals[0], "parent_session": "root"}
-    add("main", "root", 1, "agent.completed", {"agent": direct})
-    nested = {"id": logicals[1], "session": logicals[1], "parent_session": physicals[0], "parent_agent_id": logicals[0]}
-    add("agents", physicals[0], 7, "agent.spawned", {"agent": nested})
-    add("main", "root", 8, "agent.spawned", {"agent": nested})  # relayed seq not owner seq
-    request = {"id": logicals[2], "session": logicals[2], "parent_session": physicals[1], "parent_agent_id": logicals[1]}
-    add("agents", physicals[2], 1, "context.assembled", {"request": {"agent": request}})
-    conflicting = {"id": logicals[3], "session": logicals[3], "parent_session": "root"}
-    add("main", "root", 9, "agent.spawned", {"agent": conflicting})
-    add("main", "other", 1, "agent.completed", {"agent": {**conflicting, "parent_session": "other"}})
-    conn.commit(); conn.close()
-    db = StateDatabase(path)
-    store = SqliteSessionStore(db, "p", "agents")
-    assert store.session_row(physicals[0])["owner_id"] == "root"
-    nested_row = store.session_row(physicals[1])
-    assert nested_row["owner_id"] == physicals[0]
-    assert nested_row["owner_spawn_seq"] == 7 and nested_row["root_id"] == "root"
-    assert store.session_row(physicals[2])["owner_id"] == physicals[1]
-    assert store.session_row(physicals[2])["root_id"] == "root"
-    assert store.session_row(physicals[3])["kind"] == ""
-    assert store.unattached_count() == 1
     db.close()
 
 

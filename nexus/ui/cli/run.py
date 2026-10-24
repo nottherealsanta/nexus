@@ -54,6 +54,12 @@ async def run_once(
 
     if handshake:
         await client.handshake()
+    try:  # one-time "new session database" notice (docs/sessions.md); advisory only
+        notice = await client.database_notice()
+        if notice:
+            err.write(notice + "\n")
+    except Exception:  # noqa: BLE001
+        pass
     summary = await client.open_session(session)
     # Subscribe strictly after the session's current end, so a reused session
     # never replays a previous turn's terminal event (which would end this run

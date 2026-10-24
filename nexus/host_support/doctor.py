@@ -38,6 +38,7 @@ import msgspec
 
 from ..ext.quarantine import sanitize_text
 from ..session.ids import is_valid_session_id
+from ..session.reset import read_reset
 from ..util import redact_secrets
 from .git_head import git_head
 
@@ -172,7 +173,14 @@ def database_diagnostics(sessions: object) -> dict[str, Any] | None:
         ("largest_logs", str(path), getattr(sessions, "project_id", None)),
         lambda: _largest_session_logs(sessions),
     )
+    reset = read_reset(path)
     return {
+        "reset_backup": None if reset is None else {
+            "path": _clean(str(reset["backup_path"]))[:240],
+            "old_schema_version": reset["old_version"],
+            "size_bytes": reset["size_bytes"],
+            "at": _clean(str(reset["at"]))[:40],
+        },
         "largest_session_logs": largest,
         "path": _clean(str(path))[:240],
         "schema_user_version": schema_version,

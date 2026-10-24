@@ -5,7 +5,6 @@ Plan: plans/done/SESSION_TITLE_PLAN.md, Part 2.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +15,7 @@ from nexus.host_support.auto_title import AutoTitler
 from nexus.model.message import Message, Text
 from nexus.model.stream import MessageStop, TextDelta, Usage
 from nexus.session import title as title_mod
-from nexus.session.db import SCHEMA_VERSION, SqliteSessionStore, StateDatabase
+from nexus.session.db import SqliteSessionStore, StateDatabase
 from nexus.session.title import TITLE_MAX_CHARS, clean_title, generate_title, title_input
 
 
@@ -181,41 +180,6 @@ def test_blank_titles_are_refused(tmp_path):
     store.create("s1")
     store.append_message("s1", Message(role="user", content=[Text("hello there")]))
     assert store.set_auto_title("s1", "   ") is False
-
-
-def test_schema_upgrade_keeps_old_rows_and_leaves_their_title_alone(tmp_path):
-    path = tmp_path / "state.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE projects (id TEXT PRIMARY KEY, root TEXT NOT NULL,
-          created_at REAL NOT NULL, last_opened REAL NOT NULL);
-        CREATE TABLE sessions (project_id TEXT NOT NULL, namespace TEXT NOT NULL DEFAULT 'main',
-          id TEXT NOT NULL, created_at REAL NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,
-          last_activity REAL NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0,
-          title TEXT NOT NULL DEFAULT '', parent_id TEXT NOT NULL DEFAULT '',
-          fork_seq INTEGER NOT NULL DEFAULT 0, archived_at REAL, archive_reason TEXT,
-          trash_id TEXT UNIQUE, trashed_at REAL, trash_expires_at REAL, trash_reason TEXT,
-          PRIMARY KEY (project_id, namespace, id));
-        CREATE TABLE records (project_id TEXT NOT NULL, namespace TEXT NOT NULL,
-          session_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL, ts REAL NOT NULL,
-          body BLOB NOT NULL, PRIMARY KEY (project_id, namespace, session_id, seq)) WITHOUT ROWID;
-        CREATE TABLE snapshots (project_id TEXT, namespace TEXT, session_id TEXT,
-          seq INTEGER NOT NULL, body BLOB NOT NULL, PRIMARY KEY (project_id, namespace, session_id));
-        CREATE TABLE kv (project_id TEXT, namespace TEXT, key TEXT, value TEXT,
-          PRIMARY KEY (project_id, namespace, key));
-        INSERT INTO projects VALUES ('project', '/x', 1, 1);
-        INSERT INTO sessions(project_id, id, created_at, title) VALUES ('project', 'old', 1, 'Old title');
-        PRAGMA user_version=1;
-        """
-    )
-    conn.close()
-    db = StateDatabase(path)
-    assert db.schema_version() == SCHEMA_VERSION == 9
-    store = SqliteSessionStore(db, "project", "main", root=str(tmp_path), lock_dir=tmp_path)
-    row = store.session_row("old")
-    assert (row["title"], row["title_source"]) == ("Old title", "")
-    assert store.set_auto_title("old", "New") is False
 
 
 # -- trigger ---------------------------------------------------------------

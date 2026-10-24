@@ -49,6 +49,7 @@ from ..errors import RequestIdConflict, SessionError
 from ..events import Event
 from ..model.message import Message
 from . import export as export_mod
+from . import reset as reset_mod
 from . import snapshot as snapshot_mod
 from .child_ids import stored_child_id
 from .ids import validate_session_id
@@ -207,8 +208,9 @@ def _has_user_input(alias: str = "sessions") -> str:
 
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
-#: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 9
+#: Nexus and is refused rather than misread. 10 is a *reset version*: a database
+#: older than this is backed up and replaced, never migrated (``session/reset.py``).
+SCHEMA_VERSION = 10
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -338,6 +340,8 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
         "CREATE UNIQUE INDEX session_names_by_identity ON session_names(project_id,namespace,logical_id) WHERE retired_at IS NULL",
     ),
     ("ALTER TABLE child_allocations ADD COLUMN context_read INTEGER NOT NULL DEFAULT 0",),
+    # v10 (reset version): database-level metadata, e.g. the recorded reset backup.
+    ("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",),
 )
 
 #: Every ``kv``/session mutation this module performs is bounded by these; a
@@ -390,8 +394,17 @@ class StateDatabase:
         return conn
 
     def _migrate(self) -> None:
-        """Run forward-only DDL under ``BEGIN IMMEDIATE`` (idempotent, §4.1)."""
+        """Create the schema, or reset an old database, under ``BEGIN IMMEDIATE`` (§4.1)."""
         with self._migrate_lock:
+            reset_info = None
+            existing = reset_mod.peek_version(self._path)
+            if 0 < existing < SCHEMA_VERSION:
+                # Old sessions are not migrated: back up, verify, then start fresh.
+                with reset_mod.reset_lock(self._path):
+                    existing = reset_mod.peek_version(self._path)  # another process may have won
+                    if 0 < existing < SCHEMA_VERSION:
+                        reset_info = reset_mod.backup_and_remove(self._path, existing)
+                        _ensure_file_permissions(self._path)
             conn = self._raw_connect()
             try:
                 conn.execute("BEGIN IMMEDIATE")
@@ -405,13 +418,9 @@ class StateDatabase:
                     for step in range(version, SCHEMA_VERSION):
                         for statement in _SCHEMA_STEPS[step]:
                             conn.execute(statement)
-                    if version < 4 <= SCHEMA_VERSION:
-                        _backfill_message_snippets(conn)
-                    if version < 5 <= SCHEMA_VERSION:
-                        _backfill_last_user_at(conn)
-                    if version < 7 <= SCHEMA_VERSION:
-                        _backfill_ownership(conn)
                     if version < SCHEMA_VERSION:
+                        if reset_info is not None:
+                            reset_mod.record(conn, reset_info)
                         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     conn.execute("COMMIT")
                 except BaseException:

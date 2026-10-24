@@ -371,6 +371,7 @@ here, so add a row when you add a file.
 | `lock.py` | Cross-process session locking |
 | `context_authz.py` | Pure ancestry authorisation for context reads: owner-edge walk with `context_read = 1` on every hop, same project, depth cap, trash denies |
 | `context_port.py` | `ContextReadPort`: bounded, redacted, untrusted-marked reads (meta, messages, tool calls, search, report) over an authorised target |
+| `reset.py` | One-time schema-10 reset: exclusive-open check, verified online backup to `<home>/backups/`, old-database removal, `meta` reset record and the once-only notice |
 | `names.py` | Immutable session names: v2 vocabulary, CSPRNG allocation with retry then suffix, validation, backfill batches |
 | `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export; `kind_of`, `manager_summary`, and the manager session's archive/delete/fork refusal |
 | `records.py` | Versioned records persisted by the SQLite session store |
