@@ -1078,11 +1078,9 @@ mod tests {
         assert!(rows.iter().map(plain).collect::<String>().contains("开始"));
     }
     #[test]
-    fn mermaid_unsupported_unclosed_and_extra_tokens() {
+    fn mermaid_raster_unclosed_and_extra_tokens() {
         crate::mermaid_image::tests::wait_raster(MINDMAP, 80);
-        assert!(mermaid_rows(MINDMAP, 80)
-            .iter()
-            .any(|r| r.image.is_some()));
+        assert!(mermaid_rows(MINDMAP, 80).iter().any(|r| r.image.is_some()));
         let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
         assert!(as_code_block(&open));
         let themed = lines(
@@ -1118,7 +1116,7 @@ mod tests {
             open.contains("graph TD") && open.contains("A --> B"),
             "{open}"
         );
-        // A later fence after drawn art still falls back with its own source.
+        // A later raster fence after Unicode art keeps its own original source.
         let both = lines(
             &format!("```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\n{MINDMAP}\n```"),
             &Palette::new(false),
