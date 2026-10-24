@@ -92,6 +92,8 @@ def merge_instruction(state: dict, note: str = "") -> str:
             "squash the branch into one commit on top of the base, then land it with "
             "`git -C <main checkout> merge --ff-only <worktree branch>` in the shell. "
             f"If {base} has diverged, "
-            "merge it into this branch first, resolve conflicts, rerun checks, squash again, and retry.")
+            "merge it into this branch first, resolve conflicts, rerun checks, squash again, and retry. "
+            "Landing uses plain Git only: no Nexus CLI merge command exists or is required, "
+            "so a `nexus` binary without `merge` is not a blocker.")
     note = note.strip()
     return text + ("\n\nNote from the user: " + note if note else "")

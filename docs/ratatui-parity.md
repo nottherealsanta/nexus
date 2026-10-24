@@ -2329,17 +2329,32 @@ date axis and `start → end` dates (just the duration when the row is narrow);
 a timeline as period │ event rows. Gantt supports `dateFormat YYYY-MM-DD`,
 `after <id>`, `Nd`/`Nw` durations and explicit end dates; anything else, or a
 row too narrow for the grid, shows the literal source. The remaining raster path
-(mindmap, sankey) is gated: `mermaid_image::rows` declines when the SVG would be
-drawn below 0.5× scale, again showing source instead of a garbled image. The
-cell raster is used whatever the detected graphics protocol; sending a full-size
+is no longer limited to an allowlist of diagram types: any closed fence the Unicode
+and text renderers decline (mindmap, sankey, and e.g. quadrantChart, gitGraph,
+xychart-beta) is submitted to the bounded Ondine worker. The pinned compiler's
+`all` Cargo feature enables all 33 of its diagram families, not just the former
+five raster families. Eligibility is not a guarantee of rendering: syntax must
+be supported by that pinned Ondine version, compilation must succeed, and the
+result must pass the size and legibility gates.
+The raster is gated: `mermaid_image::rows` declines when the SVG would be
+drawn below 0.5× scale, again showing source instead of a garbled image.
+In particular, the screenshot fixtures for mindmap (Weekend/Rest/Errands/Fun),
+quadrantChart, gitGraph and xychart-beta compile and rasterize, but at 80 columns
+their scales are approximately 0.137, 0.160, 0.304 and 0.114 respectively: they
+retain source in production. The mindmap is not a readable half-block image at
+that width; enabling the compiler feature must not bypass the legibility gate.
+Tests assert compilation, bounded nonempty raster output and these gate
+rejections (separate strip-plumbing tests bypass the gate).
+The cell raster is used whatever the detected graphics protocol; sending a full-size
 Kitty/iTerm2/Sixel image per diagram is not implemented, because the transcript
 paints per row and cannot clip or scroll one protocol image (the earlier
 one-row strips were each resampled independently).
 
 The native terminal client requires Rust ≥1.97. Unicode rendering remains first
 choice for supported flowchart, sequence, state, class and ER diagrams. Closed
-`mermaid` fences for mindmap and sankey (and the remaining pie, timeline and gantt
-sources that the text renderer declines, subject to the scale gate above) use the pinned native
+`mermaid` fences that those renderers decline (mindmap, sankey, other types, and the
+pie, timeline and gantt sources the text renderer declines; subject to the scale gate
+above) use the pinned native
 Ondine compiler and resvg. The SVG is rasterised directly to the half-block grid
 (`columns` × `2 × rows` pixels, 4× supersampled and box-filtered) and each cell is
 painted as `▀`/`▄` with fg/bg set from the two stacked pixels. This replaces the
@@ -2374,7 +2389,7 @@ that worker. Compiler panics are caught with a thread-local guard
 or write a crash log for this optional renderer; panics on other threads keep the
 normal hook.
 
-Raster input is capped at 16 KiB and output at 200 columns × 48 rows (400 pixel
+Raster input is capped at 16 KiB and output at 200 columns × 48 rows (96 pixel
 rows), with eight cached success/failure results (arbitrary eviction when full;
 more than eight visible diagrams can regenerate). Width changes request a new
 raster under a new key; old widths age out of the cache. Each timeline row paints

@@ -5,12 +5,8 @@
 //! pixels), supersampled and box-filtered. Transparency is preserved, so the
 //! diagram composites over whatever the transcript draws instead of sitting on
 //! an opaque white card, and cells are painted directly (no per-row resizing).
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Color,
-};
 use image::RgbaImage;
+use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 use std::{
     collections::HashMap,
     sync::{
@@ -63,11 +59,10 @@ impl Worker {
             .name("mermaid".into())
             .spawn(move || {
                 for key in receiver {
-                    let image =
-                        crate::panic_log::catch_silent(|| compile(&key.0, key.1))
-                            .ok()
-                            .flatten()
-                            .map(|(image, scale)| (Arc::new(image), scale));
+                    let image = crate::panic_log::catch_silent(|| compile(&key.0, key.1))
+                        .ok()
+                        .flatten()
+                        .map(|(image, scale)| (Arc::new(image), scale));
                     let mut state = shared.lock().unwrap();
                     state.pending.remove(&key);
                     if state.ready.len() >= CACHE_LIMIT {
@@ -95,27 +90,16 @@ impl Worker {
     }
 }
 
-
 pub fn raster(source: &str, columns: usize) -> Raster {
     scaled(source, columns).map(|(image, _)| image)
 }
 
-/// Only types not handled by our Unicode renderer are eligible.
+/// Callers try the Unicode and text renderers first; every diagram type they
+/// decline may attempt the raster. Ondine errors and the legibility gate keep
+/// the literal source.
 fn scaled(source: &str, columns: usize) -> Scaled {
     let source = source.trim();
-    if source.len() > MAX_SOURCE || columns < 4 {
-        return None;
-    }
-    let kind = source
-        .lines()
-        .map(str::trim)
-        .find(|s| !s.is_empty() && !s.starts_with("%%"))?
-        .split_whitespace()
-        .next()?;
-    if !matches!(
-        kind,
-        "pie" | "timeline" | "gantt" | "mindmap" | "sankey-beta" | "sankey"
-    ) {
+    if source.len() > MAX_SOURCE || columns < 4 || source.is_empty() {
         return None;
     }
     static WORKER: OnceLock<Worker> = OnceLock::new();
@@ -163,10 +147,7 @@ fn compile(source: &str, columns: usize) -> Option<(RgbaImage, f32)> {
         let mut pixmap = resvg::tiny_skia::Pixmap::new(w * k, h * k)?;
         resvg::render(
             &tree,
-            resvg::tiny_skia::Transform::from_scale(
-                (w * k) as f32 / sw,
-                (h * k) as f32 / sh,
-            ),
+            resvg::tiny_skia::Transform::from_scale((w * k) as f32 / sw, (h * k) as f32 / sh),
             &mut pixmap.as_mut(),
         );
         Some((downsample(pixmap.data(), w, h, k), fit))
@@ -294,7 +275,11 @@ fn parse_hex(s: &str) -> Option<[f32; 3]> {
         6 => u32::from_str_radix(h, 16).ok()?,
         _ => return None,
     };
-    Some([(v >> 16 & 255) as f32, (v >> 8 & 255) as f32, (v & 255) as f32])
+    Some([
+        (v >> 16 & 255) as f32,
+        (v >> 8 & 255) as f32,
+        (v & 255) as f32,
+    ])
 }
 
 /// `color` or `color NN%` operand of `color-mix`.
@@ -406,8 +391,13 @@ fn legible_at(scale: f32, min: f32) -> bool {
 
 fn blend(px: &image::Rgba<u8>, under: (u8, u8, u8)) -> Color {
     let a = u32::from(px[3]);
-    let mix = |over: u8, below: u8| ((u32::from(over) * a + u32::from(below) * (255 - a)) / 255) as u8;
-    Color::Rgb(mix(px[0], under.0), mix(px[1], under.1), mix(px[2], under.2))
+    let mix =
+        |over: u8, below: u8| ((u32::from(over) * a + u32::from(below) * (255 - a)) / 255) as u8;
+    Color::Rgb(
+        mix(px[0], under.0),
+        mix(px[1], under.1),
+        mix(px[2], under.2),
+    )
 }
 
 /// Paints terminal row `row` of the diagram: pixel rows `2*row` (fg of `▀`) and
@@ -434,7 +424,9 @@ pub fn render(source: &str, width: usize, row: usize, area: Rect, buf: &mut Buff
         };
         match (top[3] >= 12, bottom[3] >= 12) {
             (true, true) => {
-                cell.set_symbol("▀").set_fg(blend(top, under)).set_bg(blend(bottom, under));
+                cell.set_symbol("▀")
+                    .set_fg(blend(top, under))
+                    .set_bg(blend(bottom, under));
             }
             (true, false) => {
                 cell.set_symbol("▀").set_fg(blend(top, under));
@@ -504,7 +496,13 @@ pub(crate) mod tests {
             cell.set_bg(Color::Rgb(CANVAS.0, CANVAS.1, CANVAS.2));
         }
         for row in 0..rows {
-            render(source, cols as usize, row, Rect::new(0, row as u16, cols, 1), &mut buffer);
+            render(
+                source,
+                cols as usize,
+                row,
+                Rect::new(0, row as u16, cols, 1),
+                &mut buffer,
+            );
         }
         buffer
     }
@@ -512,7 +510,11 @@ pub(crate) mod tests {
     #[test]
     fn raster_matches_the_half_block_grid() {
         let image = wait_raster(PIE, 40).unwrap();
-        assert!(image.width() <= 40 && image.width() >= 20, "{}", image.width());
+        assert!(
+            image.width() <= 40 && image.width() >= 20,
+            "{}",
+            image.width()
+        );
         assert_eq!(image.height() % 2, 0);
         assert!(image.height() <= MAX_ROWS * 2);
         assert_eq!(rows(PIE, 40), Some((image.height() / 2) as usize));
@@ -529,7 +531,9 @@ pub(crate) mod tests {
         wait_raster(PIE, 60);
         let buffer = paint(PIE, 60);
         let luma = |c: Color| match c {
-            Color::Rgb(r, g, b) => (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000,
+            Color::Rgb(r, g, b) => {
+                (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000
+            }
             _ => 0,
         };
         let canvas = luma(Color::Rgb(CANVAS.0, CANVAS.1, CANVAS.2));
@@ -558,7 +562,10 @@ pub(crate) mod tests {
             populated_rows += usize::from(any);
         }
         assert!(painted > 50, "painted {painted}");
-        assert!(bright > 10, "labels/strokes lack contrast: {bright} bright cells");
+        assert!(
+            bright > 10,
+            "labels/strokes lack contrast: {bright} bright cells"
+        );
         assert!(tones.len() >= 2, "flat single-tone ink {tones:?}");
         assert_eq!(white, 0, "white backdrop leaked");
         assert!(
@@ -575,7 +582,11 @@ pub(crate) mod tests {
         let canvas = Color::Rgb(CANVAS.0, CANVAS.1, CANVAS.2);
         let untouched = buffer.content.iter().filter(|c| c.symbol() == " ").count();
         assert!(untouched > 0, "the chart corners should stay empty");
-        assert!(buffer.content.iter().filter(|c| c.symbol() == " ").all(|c| c.bg == canvas));
+        assert!(buffer
+            .content
+            .iter()
+            .filter(|c| c.symbol() == " ")
+            .all(|c| c.bg == canvas));
     }
 
     #[test]
@@ -609,7 +620,10 @@ pub(crate) mod tests {
         }
         // Monochrome source: tonal range (ink vs. mid-grey bars), not hue.
         assert!(tones.len() >= 2, "gantt tones {tones:?}");
-        assert!(buffer.content.iter().all(|c| c.bg != Color::Rgb(255, 255, 255)));
+        assert!(buffer
+            .content
+            .iter()
+            .all(|c| c.bg != Color::Rgb(255, 255, 255)));
     }
 
     #[test]
@@ -626,7 +640,10 @@ pub(crate) mod tests {
         let out = resolve_svg_theme(svg);
         assert!(!out.contains("var("), "{out}");
         assert!(!out.contains("color-mix"), "{out}");
-        assert!(out.contains("color:#e4e4e7") && out.contains("stroke=\"#123456\""), "{out}");
+        assert!(
+            out.contains("color:#e4e4e7") && out.contains("stroke=\"#123456\""),
+            "{out}"
+        );
         assert!(out.contains("stroke-width=\"2\""), "{out}");
         assert_eq!(
             resolve_svg_theme("color-mix(in srgb,#ffffff 25%,#000000)"),
@@ -637,12 +654,21 @@ pub(crate) mod tests {
 
     #[test]
     fn real_ondine_output_has_no_unresolved_vars() {
-        for source in [PIE, "gantt\n dateFormat YYYY-MM-DD\n section A\n X :a, 2024-01-01, 2d"] {
+        for source in [
+            PIE,
+            "gantt\n dateFormat YYYY-MM-DD\n section A\n X :a, 2024-01-01, 2d",
+        ] {
             let svg = ondine::render(source, "", 0.0).unwrap().svg;
             let out = resolve_svg_theme(&svg);
-            assert!(!out.contains("var(") && !out.contains("color-mix("), "{out}");
+            assert!(
+                !out.contains("var(") && !out.contains("color-mix("),
+                "{out}"
+            );
             // Non-colour aliases must resolve to numbers, never the fg hex.
-            assert!(!out.contains("font-weight:#") && !out.contains("rx:#"), "{out}");
+            assert!(
+                !out.contains("font-weight:#") && !out.contains("rx:#"),
+                "{out}"
+            );
             assert!(!out.contains("--_tw:#") && !out.contains("--_r:#"), "{out}");
         }
         let gantt = ondine::render(
@@ -664,7 +690,9 @@ pub(crate) mod tests {
         let mut inked_rows = 0;
         let mut tones = std::collections::HashSet::new();
         for y in 0..image.height() {
-            let row: Vec<_> = (0..image.width()).map(|x| image.get_pixel(x, y).0).collect();
+            let row: Vec<_> = (0..image.width())
+                .map(|x| image.get_pixel(x, y).0)
+                .collect();
             let ink = row.iter().filter(|p| p[3] >= 12).count();
             if ink > 0 {
                 inked_rows += 1;
@@ -680,7 +708,11 @@ pub(crate) mod tests {
             );
             tones.extend(row.iter().filter(|p| p[3] >= 12).map(|p| p[0] / 32));
         }
-        assert!(inked_rows * 4 >= image.height() as usize, "{inked_rows}/{}", image.height());
+        assert!(
+            inked_rows * 4 >= image.height() as usize,
+            "{inked_rows}/{}",
+            image.height()
+        );
         assert!(tones.len() >= 3, "tones {tones:?}");
     }
 
@@ -699,9 +731,66 @@ pub(crate) mod tests {
         assert!(legible_at(1.0, MIN_SCALE) && legible_at(MIN_SCALE, MIN_SCALE));
     }
 
+    const SAMPLES: [(&str, &str); 4] = [
+        (
+            "mindmap",
+            "mindmap\n  root((Weekend))\n    Rest\n      Nap\n      Read\n    Errands\n      Groceries\n      Laundry\n    Fun\n      Walk\n      Movie",
+        ),
+        (
+            "quadrant",
+            "quadrantChart\n  title Household Task Priority\n  x-axis Low Urgency --> High Urgency\n  y-axis Low Impact --> High Impact\n  quadrant-1 Do first\n  quadrant-2 Schedule\n  quadrant-3 Skip\n  quadrant-4 Delegate\n  Laundry: [0.3, 0.6]\n  Taxes: [0.9, 0.9]\n  Dust: [0.2, 0.2]\n  Mail: [0.8, 0.3]",
+        ),
+        (
+            "git",
+            "gitGraph\n  commit\n  commit\n  branch feature\n  checkout feature\n  commit\n  checkout main\n  merge feature",
+        ),
+        (
+            "xychart",
+            "xychart-beta\n  title \"Sales\"\n  x-axis [jan, feb, mar, apr, may]\n  line [9, 7, 5, 3, 8]",
+        ),
+    ];
+
+    #[test]
+    fn screenshot_fixtures_compile_and_rasterize() {
+        for (name, source) in SAMPLES {
+            let svg = ondine::render(source, "", 0.0)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"))
+                .svg;
+            assert!(svg.contains("<svg"), "{name}: missing SVG");
+            let (image, scale) =
+                compile(source, 80).unwrap_or_else(|| panic!("{name}: failed to rasterize"));
+            assert!(scale.is_finite() && scale > 0.0, "{name}: {scale}");
+            assert!(image.width() <= 80 && image.height() <= MAX_ROWS * 2);
+            assert!(image.pixels().any(|p| p[3] >= 12), "{name}: blank raster");
+            // All four screenshot fixtures compile with `all`, but their
+            // labels shrink too far at 80 columns. In production they must
+            // remain readable source, not an impressive-looking blurred blob.
+            assert!(!legible_at(scale, MIN_SCALE), "{name}: {scale}");
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 80, MAX_ROWS as u16));
+            wait_raster(source, 80).expect("worker raster");
+            for row in 0..image.height() / 2 {
+                render(
+                    source,
+                    80,
+                    row as usize,
+                    Rect::new(0, row as u16, 80, 1),
+                    &mut buffer,
+                );
+            }
+            assert!(
+                buffer.content.iter().any(|cell| cell.symbol() != " "),
+                "{name}: empty painted strip"
+            );
+        }
+    }
+
     #[test]
     fn bounded_fallback() {
-        assert!(raster("graph TD\n A --> B", 80).is_none());
+        // Flowcharts are eligible now; a cold async request returning None
+        // says nothing about support. Check the completed result instead.
+        assert!(wait_raster("graph TD\n A --> B", 80).is_some());
+        assert!(raster("", 80).is_none());
+        assert!(raster("pie\n\"a\" : 1", 3).is_none());
         assert!(raster(&"x".repeat(MAX_SOURCE + 1), 80).is_none());
         let image = wait_raster("pie\n\"a\" : 1", 80).unwrap();
         assert!(image.width() <= MAX_COLUMNS && image.height() <= MAX_ROWS * 2);

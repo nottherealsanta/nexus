@@ -20,5 +20,5 @@ libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # Native-only Mermaid fallback; pin the compiler, not its browser/WASM wrapper.
-ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "0b589ec34481856b4153526f10a0a35558a201a8", default-features = false, features = ["pie", "timeline", "gantt", "mindmap", "sankey"] }
+ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "0b589ec34481856b4153526f10a0a35558a201a8", default-features = false, features = ["all"] }
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
