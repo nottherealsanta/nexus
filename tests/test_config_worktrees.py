@@ -17,6 +17,7 @@ def _home(tmp_path):
 def test_worktree_defaults_and_project_configuration_load(tmp_path):
     assert WorktreesSection() == ConfigV2().worktrees
     assert WorktreesSection().base == "current"
+    assert WorktreesSection().auto_remove_clean is False
     assert WorktreesSection().max_worktrees == 16
     assert WorktreesSection().commit_max_files == 2000
     assert WorktreesSection().commit_max_file_mb == 50
@@ -30,6 +31,7 @@ def test_worktree_defaults_and_project_configuration_load(tmp_path):
     assert loaded.v2.worktrees.base == "release/next"
     assert loaded.v2.worktrees.setup == ["uv", "sync"]
     assert loaded.v2.worktrees.submodules == "recursive"
+    assert loaded.v2.worktrees.auto_remove_clean is False
 
 
 @pytest.mark.parametrize("key", ["sessions", "checkpoints"])
@@ -41,6 +43,7 @@ def test_removed_worktree_keys_are_rejected(key):
 @pytest.mark.parametrize(
     "kwargs,field",
     [
+        ({"auto_remove_clean": 1}, "auto_remove_clean"),
         ({"max_worktrees": 0}, "max_worktrees"),
         ({"max_worktrees": True}, "max_worktrees"),
         ({"commit_max_files": 0}, "commit_max_files"),
@@ -70,6 +73,7 @@ def test_setup_shell_requires_string_and_enables_shell_form():
 @pytest.mark.parametrize(
     "values,field",
     [
+        ({"auto_remove_clean": "true"}, "auto_remove_clean"),
         ({"submodules": "all"}, "submodules"),
         ({"setup_on_fail": "continue"}, "setup_on_fail"),
         ({"setup_for_subagents": "inherit"}, "setup_for_subagents"),
@@ -97,3 +101,31 @@ def test_user_layer_can_set_worktree_limit(tmp_path):
         "config_version = 2\n[worktrees]\nmax_worktrees = 32\n", encoding="utf-8"
     )
     assert Config.load(tmp_path, home=home, environ={}).v2.worktrees.max_worktrees == 32
+
+
+@pytest.mark.parametrize("value", ["true", "false"])
+@pytest.mark.parametrize("path", ["nexus.toml", ".agents/nexus.toml", ".nexus/nexus.toml"])
+def test_project_layers_cannot_set_auto_remove_clean(tmp_path, path, value):
+    home = _home(tmp_path)
+    config = tmp_path / path
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        f"config_version = 2\n[worktrees]\nauto_remove_clean = {value}\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="worktrees.auto_remove_clean.*user-level"):
+        Config.load(tmp_path, home=home, environ={})
+
+
+def test_user_layer_can_enable_auto_remove_clean_with_project_worktree_settings(tmp_path):
+    home = _home(tmp_path)
+    config_dir = home / ".nexus"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        "config_version = 2\n[worktrees]\nauto_remove_clean = true\n", encoding="utf-8"
+    )
+    (tmp_path / "nexus.toml").write_text(
+        'config_version = 2\n[worktrees]\nbase = "main"\n', encoding="utf-8"
+    )
+    loaded = Config.load(tmp_path, home=home, environ={})
+    assert loaded.v2.worktrees.auto_remove_clean is True
+    assert loaded.v2.worktrees.base == "main"

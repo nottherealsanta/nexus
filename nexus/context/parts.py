@@ -646,7 +646,10 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
         "- Call worktree_list before creating, and continue an existing worktree when the work belongs there "
         "(worktree_move). A worktree belongs to the project: other sessions can be in it too.",
         "- One worktree per piece of work. After finishing, worktree_move to main, or create a new worktree for the "
-        "next, unrelated task."]
+        "next, unrelated task.",
+        "- When the last session leaves, merged clean checkouts are automatically removed (branch and record kept). "
+        "With user-level [worktrees] auto_remove_clean = true (default false), clean unmerged checkouts are removed too. "
+        "Dirty checkouts and worktrees with other sessions are always kept."]
     if in_worktree:
         lines += [
             "",

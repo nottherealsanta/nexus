@@ -7,8 +7,8 @@ busy, not who created it. Two paths exist:
 
 * explicit ``cleanup_preview`` / ``remove_worktree`` (the user's "Remove checkout…");
 * ``auto_cleanup``, run by the controller when the last session leaves a worktree
-  that is merged and clean. Unmerged or dirty checkouts are never removed
-  automatically.
+  that is merged and clean. With ``worktrees.auto_remove_clean``, clean unmerged
+  checkouts are also removed. Dirty checkouts are never removed automatically.
 
 The controller supplies which sessions are in a worktree through
 ``controller.occupants(record_id)`` (derived from each session's latest
@@ -194,14 +194,16 @@ def remove_worktree(controller: Any, record_id: str, state: dict[str, Any]) -> d
 
 def auto_cleanup(controller: Any, record_id: str, *, leaving: str = "",
                  remaining: Iterable[str] | None = None) -> dict[str, Any]:
-    """Remove the checkout of a merged, clean worktree once its last session left.
+    """Remove a clean worktree once its last session left, subject to policy.
 
     Called by the controller after a move away (``leaving`` already points at its
     new root; the caller holds that session's lock). ``remaining`` lists the
     other sessions still in the worktree, defaulting to the controller's index
     minus ``leaving``. Only the checkout goes: the record and branch are kept so
-    the worktree can be recreated. Never raises; ``state`` is ``removed`` or
-    ``kept`` with the reason (other sessions, unmerged, dirty, ...).
+    the worktree can be recreated. By default it must also be merged; opting into
+    ``worktrees.auto_remove_clean`` skips that requirement. Never raises;
+    ``state`` is ``removed`` or ``kept`` with the reason (other sessions,
+    unmerged, dirty, ...).
     """
     runtime, registry = _parts(controller)
     try:
@@ -222,12 +224,14 @@ def auto_cleanup(controller: Any, record_id: str, *, leaving: str = "",
                 return {**current, "state": "kept", "reason": "Checkout is already removed."}
             if current["state"] != "ready":
                 return {**current, "state": "kept"}
-            if not _sessions.merge_state(record)["merged"]:
+            auto_remove_clean = runtime._session_worktrees.policy().auto_remove_clean
+            if not auto_remove_clean and not _sessions.merge_state(record)["merged"]:
                 return {**current, "state": "kept", "reason": "Unmerged work; the checkout is kept."}
             _sessions._git(record.parent_workspace, "worktree", "remove", str(record.path), observational=False)
             if record.path.exists():
                 return {**current, "state": "kept", "reason": "Git reported success but the checkout path remains."}
-            return {**current, "state": "removed", "reason": "Merged and clean; checkout removed, branch and record kept."}
+            reason = "Clean" if auto_remove_clean else "Merged and clean"
+            return {**current, "state": "removed", "reason": f"{reason}; checkout removed, branch and record kept."}
     except Exception as exc:  # cleanup is best effort and must not fail a move
         return {"state": "kept", "reason": str(exc)[:500], "record_id": record_id}
 

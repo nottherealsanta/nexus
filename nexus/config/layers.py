@@ -431,10 +431,12 @@ def _reject_project_user_only_keys(doc: Mapping[str, Any], source: str) -> None:
     if "daemon" in doc:
         raise ConfigError(f"{source}: [daemon] may only be set in the user-level config")
     worktrees = doc.get("worktrees")
-    if isinstance(worktrees, Mapping) and "max_worktrees" in worktrees:
-        raise ConfigError(
-            f"{source}: worktrees.max_worktrees may only be set in the user-level "
-            f"config (~/.nexus/config.toml), never in a project file")
+    if isinstance(worktrees, Mapping):
+        for key in ("max_worktrees", "auto_remove_clean"):
+            if key in worktrees:
+                raise ConfigError(
+                    f"{source}: worktrees.{key} may only be set in the user-level "
+                    f"config (~/.nexus/config.toml), never in a project file")
     providers = doc.get("providers")
     if not isinstance(providers, Mapping):
         return

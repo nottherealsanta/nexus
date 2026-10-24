@@ -163,10 +163,15 @@ def test_turn_refs_are_bounded_and_deleted_with_the_session(project) -> None:
     assert sw.turn_ref_commit(parent, "keep", 0) == head
 
 
-def _cleanup_controller(parent, root, sessions):
+def _cleanup_controller(parent, root, sessions, *, auto_remove_clean=False):
     from types import SimpleNamespace
 
-    manager = SimpleNamespace(occupants=lambda _record_id: list(sessions))
+    from nexus.config.schema import WorktreesSection
+
+    manager = SimpleNamespace(
+        occupants=lambda _record_id: list(sessions),
+        policy=lambda: WorktreesSection(auto_remove_clean=auto_remove_clean),
+    )
     return SimpleNamespace(runtime=SimpleNamespace(workspace=parent, _session_worktrees=manager), registry=root)
 
 
@@ -181,7 +186,7 @@ def test_auto_cleanup_removes_only_merged_clean_checkout_and_keeps_record_and_br
     # Another session is still in it.
     assert auto_cleanup(controller, record.child_id, leaving="s1")["state"] == "kept"
     controller = _cleanup_controller(parent, root, [])
-    # Unmerged work is never removed.
+    # Unmerged work is kept by default.
     unmerged = auto_cleanup(controller, record.child_id, leaving="s1")
     assert unmerged["state"] == "kept" and "Unmerged" in unmerged["reason"] and record.path.is_dir()
 
@@ -196,6 +201,35 @@ def test_auto_cleanup_removes_only_merged_clean_checkout_and_keeps_record_and_br
     kept = service.get(record.child_id, root=root)
     assert kept.lifecycle == "active"
     assert service.recreate_worktree(record.child_id, root=root, parent_workspace=parent).path.is_dir()
+
+
+def test_auto_cleanup_opt_in_removes_clean_unmerged_checkout_but_keeps_branch_and_record(project) -> None:
+    from nexus.worktree_cleanup import auto_cleanup
+
+    parent, root, service, record = project
+    (record.path / "a.txt").write_text("a\n", encoding="utf-8")
+    commit(service, record, root, "s1", 1)
+    head = git(record.path, "rev-parse", "HEAD")
+    assert not sw.merge_state(record)["merged"]
+    sessions = ["s1", "s2"]
+    controller = _cleanup_controller(parent, root, sessions, auto_remove_clean=True)
+
+    result = auto_cleanup(controller, record.child_id, leaving="s1")
+    assert result["state"] == "kept" and "Other sessions" in result["reason"]
+    assert record.path.is_dir()
+    sessions.clear()
+    (record.path / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    assert auto_cleanup(controller, record.child_id, leaving="s1")["state"] == "kept"
+    assert record.path.is_dir()
+    (record.path / "dirty.txt").unlink()
+
+    assert auto_cleanup(controller, record.child_id, leaving="s1")["state"] == "removed"
+    assert not record.path.exists()
+    assert git(parent, "rev-parse", record.branch) == head
+    assert service.get(record.child_id, root=root) == record
+    recreated = service.recreate_worktree(record.child_id, root=root, parent_workspace=parent)
+    assert recreated.path.is_dir()
+    assert git(recreated.path, "rev-parse", "HEAD") == head
 
 
 def test_merge_state_unmerged_and_status_fields(project) -> None:

@@ -115,7 +115,10 @@ missing is shown as already removed. Git errors that leave registration or
 filesystem state inconsistent require manual Git repair. The only automatic
 cleanup is `worktree_cleanup.auto_cleanup`: when the last session leaves a
 worktree that is merged and clean, the checkout (never the record or branch) is
-removed; unmerged or dirty checkouts and worktrees other sessions are in are kept.
+removed. With `[worktrees] auto_remove_clean = true` (default `false`, user-level
+only in `~/.nexus/config.toml`; rejected in project configuration), clean
+unmerged checkouts are removed too; their branch and record remain available for
+recreation. Dirty checkouts and worktrees other sessions are in are always kept.
 Cleanup uses the controller's authenticated worktree registry when supplied;
 only bare runtime callers fall back to the runtime's registry root.
 

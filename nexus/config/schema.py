@@ -1069,6 +1069,7 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """``[worktrees]``: bounded worktree creation and setup policy (the agent decides when to use one)."""
 
     base: str = "current"
+    auto_remove_clean: bool = False
     max_worktrees: int = 16
     commit_max_files: int = 2000
     commit_max_file_mb: int = 50
@@ -1084,6 +1085,8 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     submodules: Literal["none", "top", "recursive"] = "none"
 
     def __post_init__(self) -> None:
+        if type(self.auto_remove_clean) is not bool:
+            raise ValueError("worktrees.auto_remove_clean must be true or false")
         if type(self.setup_shell) is not bool:
             raise ValueError("worktrees.setup_shell must be true or false")
         if self.setup_on_fail not in {"fail", "warn"}:

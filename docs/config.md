@@ -88,6 +88,16 @@ without a compatibility path: `[worktrees]` rejects unknown keys, so a config fi
 that still sets `sessions` or `checkpoints` fails to load until the key is deleted.
 New worktree branches are `nexus/wt/<name>`.
 
+By default, automatic cleanup when the last session leaves removes only merged,
+clean project worktree checkouts. Set `[worktrees] auto_remove_clean = true`
+(boolean, default `false`, **user-level only** in `~/.nexus/config.toml`) to remove
+clean checkouts even when their branch is unmerged. Project files may not set
+this key, even to `false`: a checked-in config must not change destructive cleanup
+policy. This removes only the checkout: the branch and Nexus record remain,
+so a session can recreate it later. Dirty checkouts (including untracked/ignored
+files or in-progress Git operations) and worktrees with another session still
+in them are always kept.
+
 `[permissions] mode` defaults to `allow` in the schema while `PermissionEngine`'s
 own constructor default is `ask`; `examples/nexus.toml` sets `ask`. Set the mode
 explicitly for any shared workspace.
