@@ -161,3 +161,38 @@ def test_origin_run_must_be_a_bounded_int():
     })
     [item] = fold([queued]).input_queue
     assert item.origin["kind"] == "root_followup" and "run" not in item.origin
+
+
+def test_continue_call_links_child_and_run_two_follows_its_followup_row():
+    meta1 = {**META, "parent_call_id": "c1"}
+    meta2 = {**META, "parent_call_id": "c2"}
+    T = "root-turn"
+
+    def child(seq, text, meta):
+        return _ev(seq, "text.delta", {"agent": meta, "text": text}, turn=T)
+
+    events = [
+        _ev(1, "turn.started", {}, turn=T),
+        _ev(2, "tool.requested", {"call_id": "c1", "tool": "subagent", "arguments": {}}, turn=T),
+        _ev(3, "agent.spawned", {"agent": meta1, **meta1}, turn=T),
+        child(4, "run one", meta1),
+        _ev(5, "agent.completed", {"agent": meta1, **meta1, "status": "completed", "ok": True, "continuable": True}, turn=T),
+        _ev(6, "tool.completed", {"call_id": "c1", "tool": "subagent", "ok": True}, turn=T),
+        _ev(7, "tool.requested", {"call_id": "c2", "tool": "subagent_continue", "arguments": {}}, turn=T),
+        _ev(8, "agent.resumed", {"agent": meta2, **meta2, "run": 2, "from": "root", "message": "again"}, turn=T),
+        child(9, "run two", meta2),
+        _ev(10, "agent.completed", {"agent": meta2, **meta2, "status": "completed", "ok": True, "continuable": True}, turn=T),
+    ]
+    state = fold(events)
+    tools = {t.call_id: t for turn in state.turns for t in turn.tools}
+    assert META["id"] in tools["c1"].child_agent_ids
+    assert tools["c2"].child_agent_ids == [META["id"]]
+    agent = state.agents[META["id"]]
+    assert agent.parent_call_id == "c1"
+    turns = agent.body.turns
+    assert [t.id for t in turns] == ["t1", "t1:run2"]
+    assert [m.role for m in turns[0].messages] == ["assistant"]
+    assert turns[0].messages[0].blocks[0].text == "run one"
+    assert [m.role for m in turns[1].messages] == ["user", "assistant"]
+    assert (turns[1].messages[0].origin or {}).get("kind") == "root_followup"
+    assert turns[1].messages[1].blocks[0].text == "run two"

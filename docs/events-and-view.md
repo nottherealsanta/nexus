@@ -201,7 +201,11 @@ Derived display state: running = `status == "spawned"`; idle = ended and
 The reducer handles `agent.resumed` by setting `status` back to `spawned`, clearing
 the last result and appending a new active turn to `AgentView.body` whose user row
 carries `origin = {"kind": "root_followup", "agent", "run"}`; the child's own relayed
-events then land in that turn. Agent events carry no root turn id, so they never open
+events then land in that turn (relayed events carry the parent's turn id, which
+`_without_agent` drops so they route to the child's latest turn: the task turn for
+run 1, `<task>:runN` after). The agent's `parent_call_id` stays the spawn call, and
+the resume also links the agent to the `subagent_continue` call named in the event's
+agent meta (`child_agent_ids`), so that card finds its child. Agent events carry no root turn id, so they never open
 a phantom root turn (tested). An `agent.resumed`/`agent.stopped` for an unknown agent
 is a diagnostic, as for `agent.completed`.
 

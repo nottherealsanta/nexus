@@ -448,7 +448,9 @@ def _without_agent(event: Event) -> Event:
         seq=event.seq,
         ts=event.ts,
         session=event.session,
-        turn=event.turn,
+        # Relayed child events carry the PARENT's turn id; the child's own
+        # conversation routes them to its latest turn (task turn, then ``:runN``).
+        turn=None,
         id=event.id,
     )
 
@@ -1971,7 +1973,10 @@ def _on_agent_resumed(state: ConversationView, event: Event, data: Mapping[str, 
     )
     agents = dict(state.agents)
     agents[agent_id] = agent
-    return replace(state, agents=agents, agent_order=list(state.agent_order))
+    state = replace(state, agents=agents, agent_order=list(state.agent_order))
+    # The continue call's card shows this child; the agent keeps its spawn
+    # ``parent_call_id`` so the original ``subagent`` card stays linked too.
+    return _link_agent_to_call(state, _as_str(meta.get("parent_call_id")) or "", agent_id)
 
 
 def _on_agent_stopped(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
