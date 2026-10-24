@@ -291,7 +291,7 @@ def tool_signal(tool: ToolCallView, workspace: str | None = None) -> SignalView:
     out = _result_text(tool, cuts)
     rows: list[SignalRow] = []
     omitted = 0
-    if name == "code":
+    if name in {"code", "code_start", "code_attach", "code_run", "code_reset"}:
         rows = [SignalRow(kind, text) for kind, text in code_signal_rows(tool)]
         return SignalView("Code program", tuple(rows[:2000]) + (
             (SignalRow("clip", "… additional details clipped"),) if len(rows) > 2000 else ()

@@ -221,8 +221,9 @@ async def test_empty_manifest_catalog_has_no_tools(tmp_path):
     # Web search/fetching and code mode are runtime-owned capabilities, not
     # extension-manifest builtins; no other tools are filled in from the default
     # builtin catalog (code mode's callable catalog is built only from the manager's tools).
-    assert manager.names == ("webfetch", "websearch", "code")
-    assert tuple(schema.name for schema in manager.schemas()) == ("webfetch", "websearch", "code")
+    kernel = ("code_start", "code_attach", "code_run", "code_reset")
+    assert manager.names == ("webfetch", "websearch", *kernel)
+    assert tuple(schema.name for schema in manager.schemas()) == ("webfetch", "websearch", *kernel)
     await runtime.aclose()
 
 
@@ -233,7 +234,7 @@ async def test_limited_manifest_catalog_exposes_only_its_tools(tmp_path):
         generation=1, config=config, tools={"OnlyOne": _registered("OnlyOne")}
     )
     manager = runtime._build_iteration_manager(config, manifest)
-    assert manager.names == ("OnlyOne", "webfetch", "websearch", "code")
+    assert manager.names == ("OnlyOne", "webfetch", "websearch", "code_start", "code_attach", "code_run", "code_reset")
     assert "Read" not in manager.names
     await runtime.aclose()
 

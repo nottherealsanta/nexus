@@ -17,7 +17,7 @@ from .submissions import submission_digest, validate_request_id
 def handoff(handle, *, summary=None, kept_from_seq=None, reason="manual",
             request_id="", continuation=None, _within_turn=False,
             _summary_fallback=False, _brief_limit=None, _scheduled=False,
-            _tokens_before=None, _kept_tokens=None):
+            _tokens_before=None, _kept_tokens=None, _kernel_manifest=""):
     from ..context.parts import canonical_message_text
     from ..model.tokenizer import DEFAULT_TOKENIZER
     from .session import _coerce_user_input, _encode_queued_content
@@ -79,6 +79,10 @@ def handoff(handle, *, summary=None, kept_from_seq=None, reason="manual",
         brief = safe_brief(summary) if summary is not None else deterministic
         if reason == "overflow" and summary is not None:
             brief = safe_brief(deterministic[:4000] + "\nModel recall (untrusted):\n" + brief[:1500])
+        if _kernel_manifest:
+            # Code-mode kernels of this session (plan code-mode-kernel §3.9): names, types and sizes only,
+            # bounded by the manifest itself, so the brief keeps them for the model after the cutover.
+            brief = safe_brief(brief + "\n" + _kernel_manifest)
         if _brief_limit is not None and len(brief) > _brief_limit:
             # Keep every section, shortened evenly. Only a budget too small for
             # that falls back to the first user intent. Full state stays

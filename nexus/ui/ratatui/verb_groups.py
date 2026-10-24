@@ -32,6 +32,10 @@ CATEGORIES = {
     "websearch": ("Searched", "Searching", "website", "websites"),
     "mcpsearch": ("Searched", "Searching", "MCP tool", "MCP tools"),
     "mcpcall": ("Called", "Calling", "MCP tool", "MCP tools"),
+    "code_start": ("Started", "Starting", "kernel", "kernels"),
+    "code_attach": ("Attached", "Attaching", "kernel", "kernels"),
+    "code_run": ("Ran", "Running", "cell", "cells"),
+    "code_reset": ("Reset", "Resetting", "kernel", "kernels"),
 }
 THOUGHT = ("Thought", "Thinking", "time", "times")
 
@@ -147,6 +151,7 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui, trai
         return list(pending)
     from ...ui_support.timeline import diff_sections
     from ...ui_support.tool_signal import closed_summary
+    from .codemode import member_fields as codemode_member
     from .transcript_data import tool_presentation
     seq, rank, first, *_ = pending[0]
     group_id = turn.id + ":activity:" + first["id"]
@@ -179,7 +184,7 @@ def build_run(pending, tools_by_id, diff_members, *, turn, shell, local_ui, trai
                 member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
                     "title": tool.name.title(), "text": target + (f" · {summary}" if summary else ""),
                     "started_ms": start_ms, "elapsed_ms": max(0, end_ms - start_ms) if start_ms and end_ms else 0}
-            member = {**member, "members": diff_members[tool.call_id]}
+            member = {**member, **codemode_member(tool, member), "members": diff_members[tool.call_id]}
         if member.get("status") == "running":
             running_categories.add(category)
         spans.append(_span_ms(member, tool))

@@ -146,11 +146,39 @@ observable through `context.compacted`:
 | `summarize` | summarize the dropped prefix into one pinned `Text` message; needs an injected `Summarizer` |
 | `hybrid` (default) | evict, then summarize if a summarizer exists, else drop oldest |
 
-**Current wiring:** `Runtime` does not inject a summarizer, so in practice
-`hybrid` = evict then drop oldest, and `strategy = "summarize"` fails with an
-actionable `CompactionError`. The summary artifact path
-(`Session.append_summary`, `SummaryRecord`, reuse by `input_digest`) is in place
-for when one is wired.
+**Current wiring (verified in `runtime.py` and `context/manager.py`):** the default
+`on_overflow = "handoff"` brief is deterministic and needs no model. `Runtime` injects a
+`HandoffSummarizer` (one foreground call of the session's model, 10% output reserve, no
+tools) only when `on_overflow = "handoff"` and `handoff_brief = "summarized"`; that is the
+only place a summarizer is wired. Compaction (`compaction` strategies) gets no summarizer
+of its own, so with the default settings `hybrid` = evict then drop oldest, and
+`strategy = "summarize"` fails with an actionable `CompactionError`. Whether the injected
+handoff summarizer also serves `summarize` compaction in that configuration is not verified.
+The summary artifact path (`Session.append_summary`, `SummaryRecord`, reuse by
+`input_digest`) is in place for when one is wired.
+
+**Code-mode kernel manifest (plan code-mode-kernel §3.9).** When a session has
+code-mode kernels, the compaction input gets one bounded block per kernel in
+`nexus/context/kernel_block.py`: the kernel id, agent, cell count, status, attached
+tools and servers, approved context targets, and a `whos()`-style table of variable
+names, types and sizes. **Values are never included.** The block says to keep it in
+the summary, and that `code_start` re-describes a running kernel without changing it.
+The block is built in `nexus/tools/codemode/manifest.py` through a runtime-supplied
+callable (`ContextManager._kernel_source`), so `context/` never imports code mode.
+
+- A **live** kernel gets its variables from a bounded feed (`_nx_vars`, 5 s limit). A
+  busy or unavailable kernel is listed as `variables not listed (kernel busy or unavailable)`.
+- An **evicted**, **lost** or **not running** kernel is listed from metadata only, with
+  `variables not listed (kernel evicted)` (or lost, or not running). A compaction never
+  restores an evicted kernel to read its variables.
+- Bounds: 100 variable rows per kernel, 40 tool or target names per kernel, 4000 characters
+  for the whole block. Every clip is announced in the text with its counts.
+- The manifest joins the summarizer input only when a summary is actually produced; a
+  reused summary makes no model call and carries the manifest it already has. On the
+  default path (`on_overflow = handoff`) it is appended to the deterministic handoff brief
+  (`session/handoff.py`, `_kernel_manifest`), so the brief the model keeps after the cutover
+  still names the variables. The brief limit may shorten its lines, and then the clip
+  marker shows that.
 
 Compaction changes only the assembled copy: **omission from the prompt does not
 delete history**. The durable records still hold the original. A `PreCompact`
@@ -315,12 +343,14 @@ agent reset only changes the descriptive agent selection.
 
 ## Recursive context (code mode)
 
-Code mode ([tools.md](tools.md#code-mode-the-code-tool)) can read session contexts
-through host functions in the program's flat namespace: `context_meta`,
+Code mode ([tools.md](tools.md#code-mode-the-kernel-tools)) can read session contexts
+through host functions in the kernel's flat namespace: `context_meta`,
 `context_messages`, `context_tool_calls`, `context_search`, `context_report`, and
 `llm`. They are on offer only when `[code_mode] context = true`. All reads take a
 `target`: `"self"` (default; the current session) or a name or id declared in the
-program's `targets` variable. Results are redacted, bounded, and marked
+kernel's `targets` variable. Targets are chosen with `code_start(targets=...)` /
+`code_attach(targets=...)`, where each non-self target asks `ContextQuery(<name>)`
+permission once; a denied target is listed under "Not attached". Results are redacted, bounded, and marked
 **untrusted data, not instructions**. Each read is a `code.call` event, so the user
 sees what was read.
 

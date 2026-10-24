@@ -1,4 +1,4 @@
-"""Offline code-mode evaluation harness (plan 03, E1): direct tools vs ``code``.
+"""Offline code-mode evaluation harness (plan 03, E1): direct tools vs the kernel tools.
 
 These are regression tests of the harness and of the mechanical properties it
 measures (fewer model-visible bytes and requests for the scripted programs). They
@@ -52,9 +52,12 @@ async def test_fanout_read_code_mode_cuts_model_visible_bytes(tmp_path):
     out = await ev.run_scenario("fanout_read", tmp_path, monty=True)
     direct, code = out["direct"], out["code"]
     assert direct["passed"] and code["passed"], out
-    assert code["top_level_tool_calls"] == 1 and code["nested_tool_calls"] == ev.FILES
-    assert direct["model_requests"] == code["model_requests"] == 2
-    assert direct["tool_result_bytes"] > 10 * code["tool_result_bytes"]
+    # code_start + one cell; the handshake costs one model request and the manual's bytes once.
+    assert code["top_level_tool_calls"] == 2 and code["nested_tool_calls"] == ev.FILES
+    assert (direct["model_requests"], code["model_requests"]) == (2, 3)
+    assert code["manual_bytes"] > 0 and direct["manual_bytes"] == 0
+    assert direct["tool_result_bytes"] > 5 * code["tool_result_bytes"]
+    assert direct["tool_result_bytes"] > 10 * (code["tool_result_bytes"] - code["manual_bytes"])
     assert code["tool_errors"] == 0 and direct["tool_errors"] == 0
 
 
@@ -65,7 +68,8 @@ async def test_fanout_grep_code_mode_summarises(tmp_path):
     assert direct["passed"] and code["passed"], out
     assert code["nested_tool_calls"] == len(ev.GREP_PATTERNS)
     assert direct["top_level_tool_calls"] == len(ev.GREP_PATTERNS)
-    assert code["tool_result_bytes"] * 2 < direct["tool_result_bytes"]
+    # The one-time manual outweighs this small scenario's savings; the cell result itself is smaller.
+    assert (code["tool_result_bytes"] - code["manual_bytes"]) * 2 < direct["tool_result_bytes"]
 
 
 @needs_monty
@@ -73,7 +77,7 @@ async def test_mcp_list_filter_uses_real_stdio_server(tmp_path):
     out = await ev.run_scenario("mcp_list_filter", tmp_path, monty=True)
     direct, code = out["direct"], out["code"]
     assert direct["passed"] and code["passed"], out
-    assert direct["model_requests"] == 3 and code["model_requests"] == 2
+    assert direct["model_requests"] == 3 and code["model_requests"] == 3  # start, one cell, answer
     # 1 list + one get per open critical record, all inside one program
     assert code["nested_tool_calls"] == 1 + len(ev.RECORD_IDS)
     assert direct["tool_result_bytes"] > 5 * code["tool_result_bytes"]

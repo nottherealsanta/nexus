@@ -2114,6 +2114,9 @@ pub fn draw(
         composer_height(frame.area(), draft, s),
         logs_open,
     );
+    if !cache.sidebar.is_open(s) {
+        r.sidebar = Rect::default();
+    }
     if s.dashboard.is_none() {
         draw_top_bar(frame, s, r.tabs, &p, spin);
     }

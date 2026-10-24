@@ -13,6 +13,7 @@ v2-configured home, and a v1 home still contributes to a v2 workspace.
 """
 from __future__ import annotations
 
+import logging
 import math
 import tomllib
 from collections.abc import Mapping
@@ -92,7 +93,12 @@ _V2_NUMERIC = {
     "code_mode.max_workers": int,
     "code_mode.max_tool_seconds": int,
     "code_mode.max_nested_calls": int,
-    "code_mode.inline_budget_tokens": int,
+    "code_mode.manual_budget_tokens": int,
+    "code_mode.max_output_chars": int,
+    "code_mode.max_live_kernels": int,
+    "code_mode.idle_evict_s": int,
+    "code_mode.max_snapshot_bytes": int,
+    "code_mode.max_cells": int,
     "code_mode.max_sub_calls": int,
     "code_mode.max_sub_input_tokens": int,
     "code_mode.max_total_sub_tokens": int,
@@ -382,6 +388,26 @@ def env_overlay_v2(environ: Mapping[str, str]) -> dict[str, Any]:
     return overlay
 
 
+_LOG = logging.getLogger("nexus.config")
+_WARNED: set[str] = set()
+
+
+def _drop_removed_keys(merged: dict[str, Any]) -> None:
+    """Remove settings that no longer exist so old files keep loading.
+
+    ``[code_mode] inline_budget_tokens`` went away with the inline catalog (kernel
+    plan §3.12): one log line per process, the value is ignored.
+    """
+    section = merged.get("code_mode")
+    if isinstance(section, dict) and "inline_budget_tokens" in section:
+        merged["code_mode"] = {k: v for k, v in section.items() if k != "inline_budget_tokens"}
+        if "inline_budget_tokens" not in _WARNED:
+            _WARNED.add("inline_budget_tokens")
+            _LOG.warning(
+                "code_mode.inline_budget_tokens is deprecated and ignored; "
+                "use code_mode.manual_budget_tokens")
+
+
 def build_v2(values: Mapping[str, Any]) -> ConfigV2:
     payload = dict(values)
     payload.setdefault("config_version", 2)
@@ -568,6 +594,7 @@ def load_effective(
             merged = deep_merge(merged, flags)
         if session:
             merged = deep_merge(merged, session)
+        _drop_removed_keys(merged)
         return Effective(2, merged, source)
 
     merged = {}

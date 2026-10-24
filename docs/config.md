@@ -312,7 +312,7 @@ user-level `worker_dangerously_skip_permissions` opt-in is set (then `auto` is s
 
 On by default. `pydantic-monty==1.1.0` is a base dependency, so no extra install is
 needed (`nexus[codemode]` remains as an alias). If the sandbox package is missing or
-the wrong version the `code` tool is simply not offered and `nexus doctor` says why.
+the wrong version the `code_start`, `code_attach`, `code_run` and `code_reset` tools are simply not offered and `nexus doctor` says why.
 Set `enabled = false` to turn it off. Defaults shown:
 
 ```toml
@@ -323,7 +323,12 @@ context = false
 max_workers = 2
 max_tool_seconds = 120
 max_nested_calls = 64
-inline_budget_tokens = 2500
+manual_budget_tokens = 6000
+max_output_chars = 8000
+max_live_kernels = 4
+idle_evict_s = 900
+max_snapshot_bytes = 8388608
+max_cells = 500
 pinned = []
 # sub_model = "..."  # model for llm(); unset = the session's own model
 max_sub_calls = 16
@@ -334,20 +339,29 @@ max_depth = 1
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Advertise the `code` tool (needs the Monty dependency; absent means the tool is not offered). |
-| `expose` | `"read_only"` | Callable tools: `"read_only"`, `"all"`, or a list of names / `mcp__server__*` globs. |
+| `enabled` | `true` | Advertise the four kernel tools (needs the Monty dependency; absent means they are not offered). |
+| `expose` | `"read_only"` | Ceiling for implicit attachment (servers, query, defaults): `"read_only"`, `"all"`, or a list of names / `mcp__server__*` globs. A tool named explicitly in `code_start(tools=...)` may be mutating. |
 | `context` | `false` | Bind the `context_*` functions and `llm()`. |
-| `max_workers` | `2` | Sandbox worker processes (1-16). |
-| `max_tool_seconds` | `120` | Upper bound for one program's `timeout_s` (1-3600). |
-| `max_nested_calls` | `64` | Tool calls one program may make (1-10000). |
-| `inline_budget_tokens` | `2500` | Estimated tokens of stubs inlined in the `code` description; the rest is found with `search_tools()` / `describe_tool()`. |
-| `pinned` | `[]` | Tool names whose stubs are listed first in the inline catalog. |
+| `max_workers` | `2` | Cells the kernel host runs at once (1-16). |
+| `max_tool_seconds` | `120` | Upper bound for one cell's `timeout_s` (1-3600). |
+| `max_nested_calls` | `64` | Tool calls one **cell** may make (1-10000; the host caps a cell's suspensions at 4096). |
+| `manual_budget_tokens` | `6000` | Estimated tokens of attached-tool stubs in the `code_start` manual (500-50000); the rest is listed by name and clipped with counts. |
+| `max_output_chars` | `8000` | Characters of one cell result (stdout plus `Out`) that enter context (1000-100000); a clip is announced. |
+| `max_live_kernels` | `4` | Kernels with a live worker at once (1-32); the least recently used is evicted. |
+| `idle_evict_s` | `900` | Idle seconds before a kernel's worker is released, state kept (60-86400). |
+| `max_snapshot_bytes` | `8388608` | Largest checkpoint and eviction snapshot (64 KiB-64 MiB in the file; the helper's snapshot frame budget clamps the effective value to 8 MiB). Over it, a cell writes no checkpoint and the previous one stays. |
+| `max_cells` | `500` | Cells per kernel before `code_reset` (10-10000). |
+| `pinned` | `[]` | Tool names a bare `code_start` attaches and lists first. |
 | `sub_model` | unset | Model used by `llm()`; unset uses the session's model. |
-| `max_sub_calls` | `16` | `llm()` calls per program (1-1000). |
+| `max_sub_calls` | `16` | `llm()` calls per cell (1-1000). |
 | `max_sub_input_tokens` | `32000` | Input tokens per `llm()` call. |
-| `max_total_sub_tokens` | `200000` | Input plus output tokens across a program's `llm()` calls. |
+| `max_total_sub_tokens` | `200000` | Input plus output tokens across a cell's `llm()` calls. |
 | `max_depth` | `1` | Nesting depth of sub-model calls (1-8). |
 
-The manager profile never gains `code`. Disabled sessions and installations
-without the exact optional dependency do not advertise it. Exposure intersects
+`inline_budget_tokens` was removed with the inline catalog: a config file that still sets it
+(or `NEXUS_CODE_MODE__INLINE_BUDGET_TOKENS`) loads, logs one deprecation line per process on
+`nexus.config`, and ignores the value; use `manual_budget_tokens`.
+
+The manager profile never gains the kernel tools. Disabled sessions and installations
+without the exact optional dependency do not advertise them. Exposure intersects
 the selected tool catalog and excludes loop-driving tools.

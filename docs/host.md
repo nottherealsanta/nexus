@@ -664,8 +664,10 @@ handler keeps its own refusal (reserved manager id first). `name` is on `Session
 Retired results are tombstones, not handles. `session.named` is durable on allocation/backfill with `name`,
 `names_version`, `logical_id`, and `namespace`.
 
-The public event catalogue also includes `code.started`, `code.call`,
-`code.store`, and `code.finished`. They correlate by outer `call_id`;
+The public event catalogue also includes `code.kernel_started`, `code.kernel_attached`,
+`code.cell_started`, `code.cell_finished`, `code.kernel_reset` and `code.call` (code-mode kernel,
+[tools.md](tools.md#code-mode-the-kernel-tools)), plus the retired `code.started`, `code.store`
+and `code.finished` that old sessions still carry. They correlate by outer `call_id`;
 `code.call` updates a nested call by `nested_id`, carrying labelled tool, kind,
 status, arguments, output/error and timing. `code.store` applies `set`/`delete`
 to bounded preview entries. Native bridges project these into labelled program,

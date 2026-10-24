@@ -1,0 +1,407 @@
+{
+  "agent_order": [],
+  "agents": [],
+  "closed": false,
+  "context": null,
+  "diagnostics": [],
+  "errors": [],
+  "extensions": {},
+  "hooks": [],
+  "input_queue": [],
+  "last_seq": 28,
+  "mcp": {},
+  "messages": [
+    {
+      "attempt": 0,
+      "blocks": [],
+      "done": true,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": null
+    }
+  ],
+  "model": {
+    "attempt": 0,
+    "iteration": 0,
+    "model": "claude-x",
+    "provider": "anthropic",
+    "streaming": false,
+    "tools": false
+  },
+  "opened": false,
+  "pending_permissions": [],
+  "permissions": [],
+  "phase": "idle",
+  "presence": {
+    "attended": false,
+    "viewers": 0
+  },
+  "registry": null,
+  "root": {
+    "base_ref": "",
+    "base_sha": "",
+    "branch": "",
+    "kind": "main",
+    "path_display": "",
+    "worktree_id": ""
+  },
+  "session_id": "s1",
+  "session_name": null,
+  "turns": [
+    {
+      "completed_ts": 14.0,
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t1",
+      "index": 0,
+      "iteration": 3,
+      "kind": "agent",
+      "limits": {},
+      "messages": [
+        {
+          "attempt": 0,
+          "blocks": [],
+          "done": true,
+          "iteration": 0,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": null
+        }
+      ],
+      "permission_ids": [],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 1.0,
+      "stop_reason": "end_turn",
+      "tools": [
+        {
+          "bundle": null,
+          "call_id": "s1",
+          "code": null,
+          "code_mode": {
+            "agent_path": "root",
+            "attached": {
+              "servers": [
+                "github"
+              ],
+              "targets": [
+                {
+                  "logical_id": "L-self",
+                  "name": null,
+                  "ref": "self"
+                }
+              ],
+              "tools": [
+                "read",
+                "grep",
+                "mcp__github__list_issues"
+              ]
+            },
+            "call_id": "s1",
+            "kernel_id": "k0123456789abcde",
+            "monty_version": "1.1.0",
+            "purpose": "triage issues",
+            "skipped": [
+              {
+                "reason": "refused by [code_mode] expose",
+                "tool": "server github: 1 of 2 tools"
+              }
+            ]
+          },
+          "duration_ms": 10,
+          "error": null,
+          "executed": true,
+          "finished_ts": 6.0,
+          "input": {
+            "purpose": "triage issues",
+            "servers": [
+              "github"
+            ]
+          },
+          "is_error": false,
+          "iteration": 0,
+          "name": "code_start",
+          "progress": [],
+          "requested_ts": 3.0,
+          "result": [
+            {
+              "text": "Kernel k0123456789abcde started for root: 3 tools attached.",
+              "type": "text"
+            }
+          ],
+          "started_ts": 4.0,
+          "status": "completed",
+          "target": null
+        },
+        {
+          "bundle": null,
+          "call_id": "k1",
+          "code": null,
+          "code_mode": {
+            "call_id": "k1",
+            "callable": [
+              "read",
+              "grep",
+              "mcp__github__list_issues"
+            ],
+            "calls": 1,
+            "clipped": false,
+            "denied": 0,
+            "diagnostic": null,
+            "errors": 0,
+            "kernel_id": "k0123456789abcde",
+            "limit": null,
+            "monty_version": "1.1.0",
+            "n": 1,
+            "ok": 1,
+            "out_summary": "42",
+            "purpose": "count issues",
+            "source": "issues = await mcp__github__list_issues(repo='x')\nlen(issues)",
+            "status": "ok",
+            "stdout_bytes": 0,
+            "sub_calls": 0,
+            "sub_tokens": 0,
+            "timeout_s": 60,
+            "wall_ms": 40
+          },
+          "duration_ms": 40,
+          "error": null,
+          "executed": true,
+          "finished_ts": 13.0,
+          "input": {
+            "cell": "issues = await mcp__github__list_issues(repo='x')\nlen(issues)",
+            "purpose": "count issues"
+          },
+          "is_error": false,
+          "iteration": 0,
+          "name": "code_run",
+          "nested_calls": [
+            {
+              "args": {
+                "repo": "x"
+              },
+              "bytes": 9,
+              "call_id": "k1",
+              "clipped": false,
+              "duration_ms": 18,
+              "index": 1,
+              "kind": "tool",
+              "nested_id": "k1.1",
+              "parent_call_id": "k1",
+              "permission": {
+                "decision": "allow",
+                "rule": null
+              },
+              "result": "42 issues",
+              "status": "ok",
+              "tool": "mcp__github__list_issues"
+            }
+          ],
+          "progress": [],
+          "requested_ts": 7.0,
+          "result": [
+            {
+              "text": "In [1]  \u2713 0.04 s \u00b7 1 call \u00b7 purpose: count issues\n\nOut [1]: 42\n\ncalls:\n  1 mcp__github__list_issues(repo='x') \u2713 9 B",
+              "type": "text"
+            }
+          ],
+          "started_ts": 8.0,
+          "status": "completed",
+          "target": null
+        }
+      ],
+      "updated_ts": 14.0,
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "completed_ts": 28.0,
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t2",
+      "index": 1,
+      "iteration": 2,
+      "kind": "agent",
+      "limits": {},
+      "messages": [],
+      "permission_ids": [],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 15.0,
+      "stop_reason": "end_turn",
+      "tools": [
+        {
+          "bundle": null,
+          "call_id": "k2",
+          "code": null,
+          "code_mode": {
+            "call_id": "k2",
+            "callable": [
+              "read",
+              "grep"
+            ],
+            "calls": 2,
+            "clipped": false,
+            "denied": 0,
+            "diagnostic": {
+              "kind": "ZeroDivisionError",
+              "line": 3,
+              "message": "division by zero"
+            },
+            "errors": 1,
+            "kernel_id": "k0123456789abcde",
+            "limit": null,
+            "monty_version": "1.1.0",
+            "n": 2,
+            "ok": 1,
+            "out_summary": "",
+            "purpose": "fan out then fail",
+            "source": "import asyncio\nrows = await asyncio.gather(read(path='a'), read(path='b'))\n1 / 0",
+            "status": "error",
+            "stdout_bytes": 0,
+            "sub_calls": 0,
+            "sub_tokens": 0,
+            "timeout_s": 60,
+            "wall_ms": 12
+          },
+          "duration_ms": 12,
+          "error": null,
+          "executed": true,
+          "finished_ts": 23.0,
+          "input": {
+            "cell": "import asyncio\nrows = await asyncio.gather(read(path='a'), read(path='b'))\n1 / 0",
+            "purpose": "fan out then fail"
+          },
+          "is_error": true,
+          "iteration": 0,
+          "name": "code_run",
+          "nested_calls": [
+            {
+              "args": {
+                "path": "a"
+              },
+              "bytes": 1,
+              "call_id": "k2",
+              "clipped": false,
+              "duration_ms": 5,
+              "index": 1,
+              "kind": "tool",
+              "nested_id": "k2.1",
+              "parent_call_id": "k2",
+              "permission": {
+                "decision": "allow",
+                "rule": null
+              },
+              "result": "A",
+              "status": "ok",
+              "tool": "read"
+            },
+            {
+              "args": {
+                "path": "b"
+              },
+              "call_id": "k2",
+              "duration_ms": 0,
+              "index": 2,
+              "kind": "tool",
+              "nested_id": "k2.2",
+              "parent_call_id": "k2",
+              "permission": {
+                "decision": "allow",
+                "rule": null
+              },
+              "status": "cancelled",
+              "tool": "read"
+            }
+          ],
+          "progress": [],
+          "requested_ts": 16.0,
+          "result": [
+            {
+              "text": "In [2]  \u2717 ZeroDivisionError 0.01 s \u00b7 2 calls\n\nZeroDivisionError at line 3: division by zero",
+              "type": "text"
+            }
+          ],
+          "started_ts": 17.0,
+          "status": "completed",
+          "target": null
+        },
+        {
+          "bundle": null,
+          "call_id": "r1",
+          "code": null,
+          "code_mode": {
+            "call_id": "r1",
+            "kernel_id": "k0123456789abcde",
+            "reason": "reset",
+            "stopped": false
+          },
+          "duration_ms": 10,
+          "error": null,
+          "executed": true,
+          "finished_ts": 27.0,
+          "input": {
+            "purpose": "start over"
+          },
+          "is_error": false,
+          "iteration": 0,
+          "name": "code_reset",
+          "progress": [],
+          "requested_ts": 24.0,
+          "result": [
+            {
+              "text": "Kernel k0123456789abcde reset: all variables are cleared, In [n] restarts at 1, 3 tools stay attached.",
+              "type": "text"
+            }
+          ],
+          "started_ts": 25.0,
+          "status": "completed",
+          "target": null
+        }
+      ],
+      "updated_ts": 28.0,
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0
+      }
+    }
+  ],
+  "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reasoning_tokens": 0
+  },
+  "worktree": {
+    "ahead": 0,
+    "base_ref": "",
+    "base_sha": "",
+    "behind": 0,
+    "branch": "",
+    "commits": [],
+    "dirty_main": {},
+    "enabled": false,
+    "identity_fallback": false,
+    "last_skip": null,
+    "provenance_clipped": false,
+    "setup_trusted": null,
+    "state": "none",
+    "uncommitted": {}
+  }
+}

@@ -131,6 +131,7 @@ here, so add a row when you add a file.
 | `compact.py` | Deterministic context compaction strategies |
 | `handoff.py` | Versioned redacted deterministic briefs and active model-context derivation |
 | `handoff_model.py` | Optional bounded foreground recall using the session's selected model |
+| `kernel_block.py` | Bounded code-mode kernel manifest (names, types and sizes, never values) added to compaction input and handoff briefs (plan code-mode-kernel §3.9) |
 | `counting.py` | Request-aware token counting with an exact-count disk cache |
 | `manager.py` | Composable context assembly |
 | `manager_memory.py` | Pure deterministic extractor of the Manager's machine memory and its handoff brief builder (plan 10; [manager.md](manager.md#automatic-compaction-and-machine-memory)) |
@@ -415,17 +416,22 @@ here, so add a row when you add a file.
 
 | File | Purpose |
 | --- | --- |
-| `__init__.py` | Optional code-mode package ([tools.md](tools.md#code-mode-the-code-tool)) |
-| `catalog.py` | Callable catalog from the frozen tool set, exposure filter, `render_catalog` within the inline budget, skipped names |
-| `context_ns.py` | Flat `context_*` and `llm` host functions over `ContextReadPort`, with per-program sub-call limits |
+| `__init__.py` | Optional code-mode package ([tools.md](tools.md#code-mode-the-kernel-tools)) |
+| `argcheck.py` | Host-side static check of a cell's tool calls against the attached tools' JSON Schemas (unknown or missing keywords, constants of the wrong type), before any host call |
+| `catalog.py` | Callable catalog from the frozen tool set, exposure filter, `EXCLUDED` (the four kernel tools never callable from a cell), `excluded_reason`, skipped names |
+| `cell.py` | Running one cell (kernel plan §3.5-3.7): size and type checks, per-cell callable set, the "not callable now" `NameError` mapping, `In [n]`/`Out [n]` rendering, `code.call` audit rows, nested-call list, image refs |
+| `context_ns.py` | Flat `context_*` and `llm` host functions over `ContextReadPort`, with per-kernel sub-call limits |
 | `ipc.py` | Bounded, framed JSON IPC between daemon and helper (finite numbers, 32-level nesting) |
-| `monty_adapter.py` | Isolated helper process; sole importer of `pydantic_monty` |
-| `kernel_host.py` | Planned (§[kernel plan](../plans/planning/code-mode-kernel.md)): long-lived helper host owning the async Monty pool and kernel IPC |
+| `kernel_host.py` | Long-lived scrubbed helper process owning the async Monty pool, kernel verbs (`open`, `feed`, `dump`, `load`, `close`), the kernel prelude (`ToolError`, `whos`) |
+| `kernels.py` | `CodeKernels` (runtime-owned host, registry and per-agent `KernelState`; checkpointing, the one restore path `prepare`, kernel metadata rebuilt from the session log), `select` (servers/tools/query to attachments with "not attached" reasons), kernel type-check stubs |
+| `manifest.py` | Per-session kernel blocks for compaction: live kernels get a bounded `whos` feed (time-limited); evicted, lost or not-running kernels are listed from metadata without restoring them (plan code-mode-kernel §3.9) |
+| `manual.py` | The `code_start` manual: six labelled sections, per-server grouped stubs within `manual_budget_tokens`, "Not attached", re-describe state |
+| `monty_adapter.py` | Helper-side Monty adapter (error classification, frame I/O, output limits) used by the kernel helper; one of the two modules that import `pydantic_monty` (with `kernel_host.py`) |
 | `registry.py` | Volatile code-mode kernel ownership, bounded admission, checkpoint and eviction registry |
-| `runner.py` | Daemon-side runner: helper lifecycle, admission, id-correlated callbacks, `killpg` |
-| `store.py` | Bounded JSON `store`/`load` committed on success, replayed from `code.store` |
+| `runner.py` | Shared code-mode limits, sizes and error types (`LIMITS`, `MAX_PROGRAM_BYTES`, `CodeToolError`) used by the kernel host and cells; the one-shot helper lifecycle is gone (kernel plan Phase 2) |
 | `stubs.py` | Python stubs from JSON Schema (`Literal`, `| None = None`) for type checking |
-| `tool.py` | The `code` `RegisteredTool`, result text, events |
+| `snapshots.py` | Signed kernel checkpoints (kernel plan §3.8): per-home HMAC key (`code-kernel.key`, 0600), `sign`, and `SnapshotStore` over the `code_kernel_snapshots` table (newest row per kernel, verify, delete by kernel or session) |
+| `tool.py` | The four kernel `RegisteredTool`s (`code_start`, `code_attach`, `code_run`, `code_reset`) and `availability()` |
 
 ### `nexus/tools/builtin/`
 
@@ -595,6 +601,7 @@ here, so add a row when you add a file.
 | `bridge.py` | Sessions dashboard projection and list polling |
 | `manager.py` | Native Manager entry: reads `ManagerState` for the pinned row, `ManagerOpen`, and the manager's Live route through the ordinary Live bridge, and `on_event`, which acts on a fresh `manager.show` for this client; host-side rules stay authoritative ([manager.md](manager.md)) |
 | `permission_prompt.py` | Structured permission prompt fields for the native client: `title`, `since`, `what`, `why` |
+| `codemode.py` | Kernel tool rows for the native client: verb-group member title/text for `code_start`/`code_attach`/`code_run`/`code_reset` and the Kernel rows of the Session tab (kernel plan section 3.11) |
 | `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls (thoughts are members but not counted); change tools group apart from other tools; compact labels above 5 members; `Working` and the newest-5 member window while running |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
@@ -675,9 +682,9 @@ loop over local state; splitting it further needs a state struct and is not done
 The manual `tests/ratatui_performance_check.py` script measures controlling-PTY
 streaming, input and CPU cost.
 
-- `nexus/tools/codemode/`: code-mode (on by default) catalog/stubs, JSON event store,
-  bounded IPC and daemon-side runner. `monty_adapter.py` is the isolated helper
-  and sole importer of `pydantic_monty`; `runner.ContextNamespaceProvider` defines
+- `nexus/tools/codemode/`: code-mode (on by default) kernel tools, manual, cells, catalog/stubs,
+  bounded IPC and daemon-side runner. `monty_adapter.py` and the helper entry of
+  `kernel_host.py` are the only importers of `pydantic_monty` (isolated processes); `runner.ContextNamespaceProvider` defines
   the context integration seam (`bind(session, targets) -> dict` of callables).
 
 - `rust/tui/src/mermaid_image.rs` — native Ondine SVG → resvg fallback for non-Unicode Mermaid types. Rasterises directly to the half-block grid (`columns` × `2·rows` pixels, 4× supersampled and box-filtered, aspect-preserving, upscaled to fill the width, ≤48 rows), keeps transparency, lightens near-black ink and drops solid white panels for the dark canvas, then paints `▀`/`▄` cells straight into the ratatui buffer one terminal row at a time (viewport clipping is per row; transparent halves leave the transcript background). Does not use ratatui-image or the detected image protocol. The raster cache is bounded to 8 entries.

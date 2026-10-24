@@ -120,10 +120,10 @@ async def test_helper_oversized_snapshot_is_capacity_and_worker_remains_live():
     host = KernelHost()
     handle = await host.open()
     try:
-        await host.feed(handle, 'payload = "x" * 1100000', functions={})
+        await host.feed(handle, 'payload = "x" * 9000000', functions={})
         with pytest.raises(KernelBusy):
             await host.dump(handle)
-        assert (await host.feed(handle, 'len(payload)', functions={}))['value'] == 1100000
+        assert (await host.feed(handle, 'len(payload)', functions={}))['value'] == 9000000
     finally:
         await host.shutdown()
 

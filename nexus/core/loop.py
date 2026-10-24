@@ -1454,7 +1454,7 @@ def _safe_tool_input(value: object, *, tool: str | None = None) -> dict[str, Any
 #: Identity fields of a ``code.*`` event: opaque, bounded, never secrets. The long-token
 #: redaction mangled ``call_id`` (``call-<uuid>-N`` is 40+ characters) and the program digest
 #: to ``***``, which made the reducer open a phantom ``code`` row that never finished.
-_CODE_EVENT_IDENTITY = ("call_id", "nested_id", "program_digest")
+_CODE_EVENT_IDENTITY = ("call_id", "nested_id", "program_digest", "parent_call_id", "kernel_id")
 
 
 def _safe_code_event(data: Mapping[str, Any]) -> dict[str, Any]:

@@ -1121,7 +1121,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     // The left sidebar owns the keys while it has focus; a key it does not
                     // want (typing, composer shortcuts) falls through to the composer.
-                    if s.sidebar.open
+                    if cache.sidebar.is_open(&s)
                         && drawn_regions.sidebar.width > 0
                         && s.panel_title.is_empty()
                         && s.prompt.is_none()
@@ -2333,6 +2333,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     // The left sidebar owns clicks, hover, the wheel and its divider drag over
                     // its column; everything else falls through to the conversation below.
                     if s.sidebar.available
+                        && cache.sidebar.is_open(&s)
                         && (drawn_regions.sidebar.width > 0 || cache.sidebar.dragging)
                         && s.panel_title.is_empty()
                         && s.prompt.is_none()

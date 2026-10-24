@@ -120,7 +120,7 @@ async def test_declared_tools_narrow_the_next_iteration(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[0])) == 14  # base catalog
+    assert len(names(provider.requests[0])) == 17  # base catalog
     assert names(provider.requests[1]) == ["read"]
     await runtime.aclose()
 
@@ -166,7 +166,7 @@ async def test_declaration_of_nothing_does_not_narrow(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[1])) == 14  # no skill declaration narrows
+    assert len(names(provider.requests[1])) == 17  # no skill declaration narrows
     await runtime.aclose()
 
 
@@ -218,7 +218,7 @@ async def test_activation_does_not_leak_to_another_session(tmp_path):
 
     await b.start_turn("go")
     await wait_until_idle(b)
-    assert len(recorded["b_tools"]) == 14  # B's catalog is unaffected by A
+    assert len(recorded["b_tools"]) == 17  # B's catalog is unaffected by A
 
     release.set()
     await wait_until_idle(a)
@@ -306,7 +306,7 @@ async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
     assert runtime._activations.get(session.id) is None
 
     await drain(session)
-    assert len(names(provider.requests[2])) == 14  # fresh turn restores base catalog
+    assert len(names(provider.requests[2])) == 17  # fresh turn restores base catalog
     await runtime.aclose()
 
 

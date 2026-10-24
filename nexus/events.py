@@ -86,7 +86,23 @@ MODEL_EVENTS = (
     "model.stopped",
     "model.retrying",
 )
-CODE_EVENTS = ("code.started", "code.call", "code.store", "code.finished")
+# ``code.started`` / ``code.store`` / ``code.finished`` belong to the removed one-shot
+# ``code`` tool: they are never emitted now but old sessions replay them unchanged.
+# The kernel events (plan code-mode-kernel §3.8) follow; the last three are the durability events.
+CODE_EVENTS = (
+    "code.started",
+    "code.call",
+    "code.store",
+    "code.finished",
+    "code.kernel_started",
+    "code.kernel_attached",
+    "code.cell_started",
+    "code.cell_finished",
+    "code.kernel_reset",
+    "code.kernel_checkpointed",
+    "code.kernel_restored",
+    "code.kernel_lost",
+)
 TOOL_EVENTS = (
     "tool.requested",
     "tool.started",

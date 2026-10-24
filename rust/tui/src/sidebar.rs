@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Clear, Paragraph},
     Frame,
 };
 use serde_json::{json, Value};
@@ -164,6 +164,8 @@ impl Out {
 
 #[derive(Default)]
 pub struct SidebarUi {
+    /// Keep an opened session's selector dismissed until the host acknowledges the close.
+    session_dismissed: bool,
     /// Keys go to the sidebar first (set by a click or a request to the open sidebar; Esc leaves).
     pub focus: bool,
     /// The divider is being dragged.
@@ -338,10 +340,23 @@ fn move_selection(sel: &mut usize, len: usize, code: KeyCode) -> bool {
 }
 
 impl SidebarUi {
+    pub fn is_open(&self, s: &Snapshot) -> bool {
+        s.sidebar.open && !self.session_dismissed
+    }
+
+    fn session_operation(&mut self, operation: Value) -> Out {
+        if operation.get("kind").and_then(Value::as_str) == Some("session_open") {
+            self.session_dismissed = true;
+            self.focus = false;
+            self.dragging = false;
+        }
+        Out::operation(operation)
+    }
+
     /// A new snapshot may ask the already-open sidebar for keyboard focus (the host bumps
     /// `sidebar.focus`). Opening it never takes focus: the composer keeps the keys until a click.
     pub fn take_host_focus(&mut self, prev: &Snapshot, next: &Snapshot) {
-        if next.sidebar.open && (!prev.sidebar.open || next.sidebar.focus != prev.sidebar.focus) {
+        if self.is_open(next) && (!prev.sidebar.open || next.sidebar.focus != prev.sidebar.focus) {
             self.focus = true;
         }
     }
@@ -349,6 +364,7 @@ impl SidebarUi {
     /// Called every loop: local state lives only while the host shows the sidebar.
     pub fn sync(&mut self, s: &Snapshot) {
         if !s.sidebar.open {
+            self.session_dismissed = false;
             if self.focus || self.dragging {
                 self.focus = false;
                 self.dragging = false;
@@ -413,7 +429,7 @@ impl SidebarUi {
                 };
                 if self.dash.owns(&key, draft_empty) {
                     return match self.dash.key(key, dashboard) {
-                        Some(operation) => Out::operation(operation),
+                        Some(operation) => self.session_operation(operation),
                         None => Out::eat(),
                     };
                 }
@@ -665,7 +681,7 @@ impl SidebarUi {
             "Git" => Out::eat(),
             _ => match s.sidebar.sessions.as_ref() {
                 Some(dashboard) => match self.dash.click(ev.column, ev.row, dashboard) {
-                    Some(operation) => Out::operation(operation),
+                    Some(operation) => self.session_operation(operation),
                     None => Out::eat(),
                 },
                 None => Out::eat(),
@@ -724,23 +740,15 @@ impl SidebarUi {
         self.list = Rect::default();
         self.line_items.clear();
         frame.render_widget(Clear, area);
-        let edge = if self.dragging || self.divider_hot {
-            p.accent
-        } else {
-            p.border_strong
-        };
         frame.render_widget(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .border_style(Style::default().fg(edge))
-                .style(Style::default().bg(p.panel)),
+            Block::default().style(Style::default().bg(p.composer)),
             area,
         );
         let inner = Rect {
-            x: area.x + 1,
-            y: area.y,
-            width: area.width.saturating_sub(2),
-            height: area.height,
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(2),
         };
         if inner.width < 8 || inner.height < 6 {
             return;
@@ -774,7 +782,7 @@ impl SidebarUi {
         }
         let rule_y = inner.y + 1 + rows;
         let body_y = rule_y + 1;
-        let footer_y = area.bottom().saturating_sub(1);
+        let footer_y = inner.bottom().saturating_sub(1);
         frame.render_widget(
             Paragraph::new(Line::styled(
                 "─".repeat(usize::from(inner.width)),
@@ -1191,22 +1199,7 @@ impl SidebarUi {
         let search_rect = Rect::new(body.x, body.y, body.width, 1);
         frame.render_widget(Paragraph::new(search), search_rect);
         dash.search_hit = search_rect;
-        let new_label = "+ New Agent";
-        let new_rect = Rect::new(
-            body.x,
-            body.y + 1,
-            (new_label.width() as u16).min(body.width),
-            1,
-        );
-        frame.render_widget(
-            Paragraph::new(Line::styled(
-                new_label,
-                Style::default().fg(p.purple).add_modifier(Modifier::BOLD),
-            )),
-            new_rect,
-        );
-        dash.new_hit = new_rect;
-
+        // Keep the former New Agent row as blank spacing, without an invisible action.
         let footer_rows = u16::from(footer.is_some());
         let list_top_y = body.y + 2;
         let list_bottom = body.bottom().saturating_sub(footer_rows);
@@ -1520,11 +1513,11 @@ mod tests {
         let s = open("Projects", 28);
         let mut ui = SidebarUi::default();
         let text = screen(&mut ui, &s, 28, 24);
-        let (cells, _) = tab_cells(26);
+        let (cells, _) = tab_cells(24);
         for cell in &cells {
             let rect = ui.tab_hits[cell.tab].0;
-            assert_eq!((rect.x, rect.width), (1 + cell.x, cell.width));
-            assert_eq!(usize::from(rect.y), 1 + usize::from(cell.row));
+            assert_eq!((rect.x, rect.width), (2 + cell.x, cell.width));
+            assert_eq!(usize::from(rect.y), 2 + usize::from(cell.row));
             let row: Vec<char> = text.lines().nth(usize::from(rect.y)).unwrap().chars().collect();
             let drawn: String = row[usize::from(rect.x)..usize::from(rect.right())].iter().collect();
             assert_eq!(drawn, format!(" {} ", TABS[cell.tab]));
@@ -1677,17 +1670,23 @@ mod tests {
         let first = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, row), &s, area, 200);
         assert!(first.consumed && first.operation.is_none());
         assert_eq!(ui.dash.selected_id, "b");
-        let new = ui.mouse(
+        assert!(!text.contains("+ New Agent"));
+        assert_eq!(ui.dash.new_hit, Rect::default());
+        let blank_y = ui.dash.search_hit.y + 1;
+        assert!(text.lines().nth(usize::from(blank_y)).unwrap().trim().is_empty());
+        assert_eq!(ui.dash.list_area.y, blank_y + 1);
+        let blank = ui.mouse(
             mouse(
                 MouseEventKind::Down(MouseButton::Left),
-                ui.dash.new_hit.x + 1,
-                ui.dash.new_hit.y,
+                ui.dash.search_hit.x + 1,
+                blank_y,
             ),
             &s,
             area,
             200,
         );
-        assert_eq!(new.operation, Some(json!({"kind":"session_new"})));
+        assert!(blank.operation.is_none());
+        assert_eq!(ui.dash.selected_id, "b");
     }
 
     fn projects_snapshot() -> Snapshot {
@@ -1884,6 +1883,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn selecting_a_session_dismisses_until_the_host_closes_it() {
+        for click in [false, true] {
+            let mut s = sessions_snapshot();
+            let mut cache = crate::render::Cache::default();
+            let (regions, lines) = paint_all(&s, 120, 32, &mut cache);
+            assert!(regions.sidebar.width > 0);
+            let out = if click {
+                let row = lines
+                    .iter()
+                    .position(|line| line.contains("Alpha"))
+                    .unwrap() as u16;
+                let event = mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    regions.sidebar.x + 5,
+                    row,
+                );
+                let first = cache.sidebar.mouse(event, &s, regions.sidebar, 120);
+                assert!(first.operation.is_none());
+                assert!(cache.sidebar.is_open(&s), "a single click only selects");
+                cache.sidebar.mouse(event, &s, regions.sidebar, 120)
+            } else {
+                cache.sidebar.focus = true;
+                cache.sidebar.key(key(KeyCode::Enter), &s, true)
+            };
+            assert_eq!(
+                out.operation,
+                Some(json!({"kind":"session_open","id":"a","workspace":"/w"}))
+            );
+            assert!(!cache.sidebar.is_open(&s));
+            assert!(!cache.sidebar.focus);
+            let (regions, _) = paint_all(&s, 120, 32, &mut cache);
+            assert_eq!(regions.sidebar, Rect::default());
+
+            cache.sidebar.sync(&s);
+            let mut stale = sessions_snapshot();
+            stale.sidebar.focus += 1;
+            cache.sidebar.take_host_focus(&s, &stale);
+            assert!(!cache.sidebar.focus);
+            assert!(
+                !cache.sidebar.is_open(&s),
+                "stale open snapshots must not reopen"
+            );
+            let (regions, _) = paint_all(&s, 120, 32, &mut cache);
+            assert_eq!(regions.sidebar, Rect::default());
+
+            s.sidebar.open = false;
+            cache.sidebar.sync(&s);
+            s.sidebar.open = true;
+            assert!(cache.sidebar.is_open(&s), "a later host open is allowed");
+            let (regions, _) = paint_all(&s, 120, 32, &mut cache);
+            assert!(regions.sidebar.width > 0);
+        }
+    }
+
     /// A whole frame through `render::draw`, as the event loop paints it.
     fn paint_all(
         s: &Snapshot,
@@ -1942,6 +1996,55 @@ mod tests {
                 assert_eq!(opened.details, closed.details);
             }
         }
+    }
+
+    #[test]
+    fn selector_background_is_grey_in_both_themes() {
+        for light in [false, true] {
+            let s = open("Sessions", 34);
+            let mut ui = SidebarUi::default();
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            let palette = Palette::new(light);
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    ui.draw(frame, area, &s, &palette, 0, false);
+                })
+                .unwrap();
+            let expected = if light {
+                ratatui::style::Color::Rgb(238, 238, 238)
+            } else {
+                ratatui::style::Color::Rgb(28, 28, 28)
+            };
+            // Blank padding and unselected content inherit the selector surface.
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(0, 0)].bg, expected);
+            assert_eq!(buffer[(2, 5)].bg, expected);
+        }
+    }
+
+    #[test]
+    fn selector_has_blank_padding_and_no_right_border() {
+        let s = open("Sessions", 34);
+        let mut ui = SidebarUi::default();
+        let mut terminal = Terminal::new(TestBackend::new(84, 28)).unwrap();
+        let area = Rect::new(2, 2, 80, 24);
+        terminal
+            .draw(|frame| ui.draw(frame, area, &s, &Palette::new(false), 0, false))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in area.y..area.bottom() {
+            for x in [area.x, area.x + 1, area.right() - 2, area.right() - 1] {
+                assert_eq!(buffer[(x, y)].symbol(), " ", "padding at {x},{y}");
+            }
+        }
+        for x in area.x..area.right() {
+            for y in [area.y, area.bottom() - 1] {
+                assert_eq!(buffer[(x, y)].symbol(), " ", "padding at {x},{y}");
+            }
+        }
+        assert_eq!(ui.tab_hits[0].0.x, area.x + 2);
+        assert_eq!(ui.tab_hits[0].0.y, area.y + 2);
     }
 
     #[test]

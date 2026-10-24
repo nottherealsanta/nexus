@@ -26,6 +26,10 @@ LEGACY_TOOL_NAMES = {
     "LS": "ls",
     "MultiEdit": "multiedit",
     "WriteTool": "WriteTool",
+    # The one-shot ``code`` tool became the kernel tools (kernel plan §3.13): a rule or
+    # an agent ``tools`` list naming ``code`` grants ``code_run`` (the permission key
+    # stays ``code``); the runtime registers the other three with it.
+    "code": "code_run",
 }
 UNIFIED_BASH_ALIASES = frozenset({"BashOutput", "KillShell"})
 

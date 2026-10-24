@@ -76,18 +76,19 @@ context-window position, so the two numbers are not expected to match.
 
 ## Nested tool calls from code mode
 
-The `code` tool's programs call tools through `ctx.invoke_tool`, implemented by
+A `code_run` cell calls tools through `ctx.invoke_tool`, implemented by
 `_NestedPipeline` in `core/loop.py` (it knows only protocols, so layering holds).
 It runs the same stages as a direct call, in order: the nested-call limit (counted
 per `parent_call_id`); `research` refusal of mutating targets; `PreToolUse` (the
 payload carries `parent_call_id`); prepare (schema validation, `PathGuard`);
 permission plan and asks (`permission.requested` / `.resolved` carry
-`parent_call_id` and `parent_program`, so approvals show which program asked);
+`parent_call_id` and `parent_program`, so approvals show which cell asked);
 dispatch; `PostToolUse`. Read-only calls overlap up to `tools.max_parallel`;
 mutating or `exclusive` calls run alone. The pipeline never raises except on
 cancellation: every failure returns a `NestedOutcome` with an error the program can
-catch. Reason: the model's context only sees the program's result, but policy must
-see every individual call. See [tools.md](tools.md#code-mode-the-code-tool).
+catch. The per-cell limit is counted per `parent_call_id` (the cell's call id). Reason: the
+model's context only sees the cell's result, but policy must see every individual call.
+See [tools.md](tools.md#code-mode-the-kernel-tools).
 
 ## Failure handling
 

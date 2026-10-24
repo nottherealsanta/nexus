@@ -303,7 +303,11 @@ def doctor_report(
         configured = None
     code_mode["enabled"] = bool(getattr(configured, "enabled", False))
     if code_mode["enabled"] and not code_mode.get("available"):
-        code_mode["note"] = "code_mode.enabled is set but the sandbox is unavailable: the code tool is not offered"
+        code_mode["note"] = "code_mode.enabled is set but the sandbox is unavailable: the code_* tools are not offered"
+    # Mentioned once: the one-shot ``code`` tool is gone (kernel plan §3.13).
+    code_mode["replaces"] = (
+        "the one-shot `code` tool was replaced by code_start, code_attach, code_run and code_reset; "
+        "a permission rule or agent tools list naming `code` now grants code_run")
     report["code_mode"] = code_mode
     report["agents_without_tiers"] = _agents_without_tiers(runtime)
     sessions = getattr(runtime, "sessions", None)

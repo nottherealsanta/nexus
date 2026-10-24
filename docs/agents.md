@@ -325,6 +325,21 @@ native TUI renders it as box-drawing art. The packaged `build` prompt carries
 the same diagram guidance. The live
 tool list and `subagent` roster still come from runtime.
 
+**Code-mode guidance (plan code-mode-kernel §3.10).** One paragraph is added by the
+environment context part (`nexus/context/parts.py`, `CODE_MODE_GUIDANCE`) whenever
+one of `code_start`, `code_attach`, `code_run` or `code_reset` is in the agent's tool
+schemas, so it appears for the `coding` profile (roots `build`, and any role that
+inherits the coding tools) and for nothing else. It says to prefer code mode for
+multi-step tool work, fan-out and filter-heavy work; to keep big intermediates in
+variables rather than in context and look at slices; and that `code_start`
+re-describes a running kernel after a compaction without changing it. The packaged
+role prompts do not carry it, because the condition is the tool set, not the role
+name.
+
+**Subagents get no kernel yet** (known gap; plan §3.10 says they should). The kernel is keyed
+by `(session, agent_path)` in the registry, but child runtimes do not register the kernel tools
+(see [tools.md](tools.md#code-mode-the-kernel-tools); not verified for every child profile).
+
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
 (legacy) < `<workspace>/.agents/agents/`. Lookups are case-insensitive;
 deleting an override resurfaces the lower one. Every skip, shadow, collision and

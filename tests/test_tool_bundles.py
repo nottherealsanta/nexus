@@ -58,15 +58,16 @@ def test_base_profile_advertises_only_implemented_canonical_tools():
         {
             "read", "apply_patch", "glob", "grep", "edit", "write", "shell",
             "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill",
-            # Declared by the profile; the runtime offers it only when [code_mode] is enabled and Monty is available.
-            "code",
+            # Declared by the profile; the runtime offers them only when [code_mode] is enabled and Monty is available.
+            "code_start", "code_attach", "code_run", "code_reset",
         }
     )
 
 
 def test_meta_tools_require_the_explicit_meta_profile():
-    # Only the plain coding profile can offer the code tool.
-    assert profile_tools("coding_meta") == (profile_tools("coding") - {"code"}) | frozenset(
+    # Only the plain coding profile can offer the code-mode kernel tools.
+    kernel = {"code_start", "code_attach", "code_run", "code_reset"}
+    assert profile_tools("coding_meta") == (profile_tools("coding") - kernel) | frozenset(
         {"ReloadExtensions", "ListExtensions", "WriteTool"}
     )
 

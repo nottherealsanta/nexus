@@ -19,6 +19,7 @@ from nexus.runtime import Runtime
 
 #: Tools only a subagent has; they grant nothing, so authority comparisons ignore them.
 CHILD_ONLY = frozenset({"escalate"})
+CODE = ("code_start", "code_attach", "code_run", "code_reset")
 
 
 def _config(name: str = "general", *, web: WebSection | None = None, background: bool = True) -> Config:
@@ -138,7 +139,7 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
 
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", *CODE,
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
@@ -196,11 +197,11 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
 
     expected = {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", *CODE,
     }
     # Only the root session holds `subagent` and `code` (registered per root
     # iteration, never in the manifest a child draws from); the child keeps the rest.
-    child = expected - {"subagent", "subagent_continue", "code"}
+    child = expected - {"subagent", "subagent_continue", *CODE}
     assert [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests] == [
         expected, child, expected,
     ]
@@ -337,7 +338,7 @@ async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
     # catalog; declarations by a role never create a catalog entry.
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", *CODE,
     }
     await runtime.aclose()
 
@@ -373,9 +374,9 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
 
     expected = {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", *CODE,
     }
-    child = expected - {"subagent", "subagent_continue", "code"}
+    child = expected - {"subagent", "subagent_continue", *CODE}
     assert len(provider.requests) == 4
     assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == child
     assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == child

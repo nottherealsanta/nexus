@@ -340,8 +340,19 @@ pressed queue chip is reversed. Spinner frames, status marks and queue controls 
 
 Stated so nobody builds on a false assumption.
 
-- **No summarizer is wired in `Runtime`:** `hybrid` compaction is evict-then-drop,
-  and `strategy = "summarize"` fails actionably ([context.md](context.md)).
+- **Compaction has no summarizer by default:** `Runtime` injects one only for the handoff
+  path with `handoff_brief = "summarized"`. With defaults, `hybrid` compaction is
+  evict-then-drop, and `strategy = "summarize"` fails actionably ([context.md](context.md)).
+- **Code mode (kernel) gaps, as of 2026-10-24** ([tools.md](tools.md#code-mode-the-kernel-tools)):
+  - Subagents get no kernel yet; kernel plan §3.10 says they should.
+  - `code_run` is `exclusive` while mutating tools are attached to **any** kernel in the
+    runtime (`kernels.states()`), not only the calling agent's kernel.
+  - Idle eviction writes no event, so the Session sidebar cannot show "evicted"; an evicted
+    kernel reads as active until its next cell.
+  - Linux execution and cross-version Monty snapshot compatibility are unverified
+    ([codemode-monty-compat.md](codemode-monty-compat.md)).
+  - The live-model trial (plan phase 6: start, run, inspect, attach, restart, restore) has not
+    been run; the kernel is covered by offline and PTY tests only.
 - **`[permissions] mode` defaults to `allow` in the schema** but `ask` in
   `PermissionEngine`'s constructor and in examples; set it explicitly.
 - **Root `README.md`** still says raw GitHub Copilot is omitted, that the web
@@ -1362,6 +1373,9 @@ free. Old logs that contain `session.named` still replay.
 
 ## Code mode: per-call helper process, not a daemon-owned pool
 
+*Superseded for the kernel tools by the long-lived `KernelHost` (kernel plan Phase 1); the
+reasoning about Monty's missing env and cwd controls still holds. Kept as history.*
+
 Plan 03 proposed a daemon-owned Monty pool. Monty 1.1.0's `AsyncMonty` has no
 environment or cwd controls, and mutating the daemon's own `os.environ`/cwd races
 with other work. Nexus instead runs a short-lived Python helper per `code` call
@@ -1623,3 +1637,53 @@ schema text did not help. Splitting the tool removes the field that caused the c
 model not to fill it. Empty or placeholder optionals on `subagent` now count as omitted (an empty `tools` must
 not mean "no tools"). The new tool sits in the same bundle and permission family (`subagent(...)` rules match
 it) and reuses the runner's resume path unchanged. See [agents.md](agents.md#continuing-a-finished-subagent).
+
+## Code mode: the `code` tool is removed; start handshake over an inline catalog
+
+The one-shot `code` tool put the whole callable catalog (about 2500 tokens of stubs) in its
+description on every request whether or not the model used it, could not choose which MCP
+servers it wanted, and kept only a small JSON `store` between programs. It is replaced by four
+tools (`code_start`, `code_attach`, `code_run`, `code_reset`) over a persistent Monty REPL
+session per `(session, agent)` (kernel plan §7: Monty REPL over IPython; separate tools;
+direct tools stay).
+
+- **The start request is the handshake; the manual is the reply.** The tool list stays small
+  and stable (better prompt caching), the catalog is paid for only when used, it sits in
+  context where the user can read exactly what the model was told, and the model chooses
+  servers, tools, a search or context targets. Cost: one extra model round trip and the
+  manual's bytes once per kernel (measured by `benchmark/codemode_eval.py`: about 3.4 KB for
+  the built-ins; the saving still wins when a cell replaces many calls, and loses on very
+  small scenarios). `code_start` on a running kernel re-describes it without touching state,
+  which is the recovery after compaction summarized the manual away. A cell without a started
+  kernel is `KernelNotStarted`, never an implicit start, so the manual is always in context.
+- **Variables replace the store.** `store`, `load`, `store_delete`, `store.py` and
+  `inline_budget_tokens` are gone (an old config with the key loads with a one-line notice).
+  Old sessions still replay: the reducer keeps `code.started`, `code.call`, `code.store` and
+  `code.finished` (golden `code_mode.*`).
+- **A rule or agent tools list naming `code` grants `code_run`** (`names.LEGACY_TOOL_NAMES`;
+  the permission key stays `code`), and naming any of the four grants all four, so existing
+  settings keep their meaning. `nexus doctor` mentions it once.
+- **No Monty static type check in the kernel; arguments are checked host-side.** Monty's
+  checker infers each variable's type from earlier cells, so `x = 1` then `x = 2` fails, and it
+  forgets earlier imports, both fatal for a REPL (probed on 1.1.0, recorded in
+  [codemode-monty-compat.md](codemode-monty-compat.md)). `argcheck.py` parses a cell with `ast`
+  and checks calls of attached tools against their JSON Schemas before any host call, reporting
+  only certain mistakes. This keeps the plan's "before any host call" guarantee, not its
+  mechanism.
+- **Restore, never replay; checkpoints are a signed cache (kernel plan §3.8, §7.3).** After a
+  restart the kernel comes back from a Monty snapshot, not by re-running its cells: cells call tools
+  with side effects. The session log stays the source of truth (the reducer never reads a snapshot,
+  replay equals live) and also carries what a restart needs (attachments, `In [n]`, `kernel_id`).
+  Snapshots are HMAC-signed because Monty does not authenticate them, and live in a
+  `CREATE TABLE IF NOT EXISTS` table rather than a schema step because bumping the reset
+  `SCHEMA_VERSION` would wipe databases for a cache. The helper frame limit rises to 16 MiB for
+  snapshot frames only, so the 8 MiB default fits; `max_snapshot_bytes` is clamped to 8 MiB. An
+  eviction restores the registry's exact in-memory snapshot (fresher than the last checkpoint, it
+  includes failed cells), and the checkpoint is the fallback after a process restart. Context
+  approvals are not restored from the log (an interactive grant must not be re-created by data).
+- **A timeout, cancel or lost worker resets the kernel empty** (attachments kept) and says so,
+  because the Phase 1 host discards the worker with the half-run cell; other errors never reset
+  it. Reason: a state that may contain half of a cell's effects is worse than an announced loss.
+  Since Phase 3, when a checkpoint exists the next call restores it instead (the lost cell is in
+  `missing_cells`); the empty reset remains when none exists.
+- **The kernel manifest names variables but never their values, and compaction never restores a kernel to list them (plan code-mode-kernel §3.9).** A summary or handoff brief is the only place the model keeps what a compacted prefix held, so the manifest (kernel id, attachments, targets, cells, and a `whos()`-style table of names, types and sizes) goes there. Values would bring secrets and bulk back into context, which the kernel exists to keep out. An evicted or lost kernel is listed from metadata with the reason its variables are absent, because restoring it just to compact would spend a worker and a snapshot on a summary. Reused summaries make no model call and keep the manifest they already have.

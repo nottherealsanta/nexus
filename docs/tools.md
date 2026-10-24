@@ -463,8 +463,8 @@ events, or reprs; a command can still explicitly print its own environment.
     command and cwd are deliberately left out (they are model- or user-written
     text that could forge structure). Never the full output.
   - **Code mode.** A `shell`/`bash` call with `background` (or legacy
-    `run_in_background`) inside a `code` program is refused with a `ToolError`
-    and never dispatched: the program ends with the call. The root role bodies
+    `run_in_background`) inside a code cell is refused with a `ToolError`
+    and never dispatched: the cell ends with the call (the removed `code` tool had the same rule). The root role bodies
     (`build`, `orchestrator`) describe the notification and its untrusted output.
   - **Children.** Child and manager sessions take no completions. Jobs a child
     left running when its run ends are stopped (quietly) and listed in its report
@@ -654,92 +654,191 @@ runner and arguments. Preparation keeps the proxy call alongside this target;
 permission batches use target calls so existing MCP wildcard rules and durable
 grants keep their meaning. Filesystem targets cannot bypass path preparation.
 
-### Code mode: the `code` tool
+### Code mode: the kernel tools
 
 On by default (pinned `pydantic-monty==1.1.0` is a base dependency; disable with
-`[code_mode] enabled = false`, see [config.md](config.md)). One tool,
-`code`, runs a short Python program in the Monty sandbox so the model can fan out
-and filter tool calls without putting intermediate results in context. The user
-still sees every nested call with full input and output. Package: `nexus/tools/codemode/`.
-Design history: `plans/planning/03-*.md`; Monty findings: [codemode-monty-compat.md](codemode-monty-compat.md).
+`[code_mode] enabled = false`, see [config.md](config.md)). Code mode is a **kernel the
+model opens, talks to and inspects**: four tools, `code_start`, `code_attach`, `code_run`
+and `code_reset`, replace the removed one-shot `code` tool. The model fans out and filters
+tool calls in persistent Python cells without putting intermediate results in context, and
+the user still sees every nested call with full input and output. Package:
+`nexus/tools/codemode/`. Design: `plans/planning/code-mode-kernel.md` (history:
+`plans/planning/03-*.md`); Monty findings: [codemode-monty-compat.md](codemode-monty-compat.md).
 
-**Input.** `program` (<= 16 KiB), `purpose` (<= 512 chars, shown to the user),
-optional `timeout_s` (<= `max_tool_seconds`), optional `targets` (<= 50 session
-names/ids, for context reads; see [context.md](context.md#recursive-context-code-mode)).
-Permission key `code`; the tool is `exclusive` when mutating tools are exposed.
+| Tool | Input | Does |
+| --- | --- | --- |
+| `code_start` | `servers?` (<= 32 MCP server names), `tools?` (<= 256 names or `mcp__server__*` globs), `query?` (<= 256 chars), `targets?` (<= 50 session names/ids, [context.md](context.md#recursive-context-code-mode)), `purpose` (<= 512) | Opens this agent's kernel and returns the **manual** (below). On a running kernel it only re-describes it: nothing changes. With no arguments it attaches the built-ins plus `[code_mode] pinned`. |
+| `code_attach` | the same | Adds tools or targets to the running kernel; the reply holds stubs for what is new only. |
+| `code_run` | `cell` (<= 16 KiB), `purpose`, `timeout_s?` (<= `max_tool_seconds`) | Runs one cell. Permission key `code`; `exclusive` while mutating tools are attached anywhere in the runtime. |
+| `code_reset` | `stop?` (default false), `purpose` | Clears all variables and restarts `In [n]` at 1, keeping attachments. With `stop` the kernel is freed and `code_run` needs `code_start` again. |
 
-**Registration.** `code` is not in the builtin catalog; the runtime registers it
-when it builds an iteration manager (`coding` profile, `code_mode.enabled`, Monty
-available). A root agent definition's tool selection (`Runtime._make_tool_turn`) is
-computed against that iteration manager, not the builtin catalog, so inheriting
-roles such as `build` keep `code` in the turn's initial manager and schemas.
+Descriptions are <= 600 characters each; `code_start` says code mode is preferred for
+multi-step or fan-out tool work. `code_run` without a started kernel is
+`KernelNotStarted: call code_start first`: the handshake is what puts the manual in context
+(and `code_start` again re-describes a kernel after compaction summarized the manual away).
+The tool list stays small and stable (better prompt caching); the manual is paid for only
+when used and sits in context where the user can read it
+([decisions.md](decisions.md#code-mode-the-code-tool-is-removed-start-handshake-over-an-inline-catalog)).
 
-**Sandbox names are flat.** Each exposed tool is a bare async function
-(`await read(path="README.md")`; MCP tools by their safe local name), plus
-`search_tools`, `describe_tool`, `store`, `load`, `store_delete`, and with
-`context = true` the `context_*` functions and `llm` and the `targets` variable.
-Names that are unsafe or collide are skipped and listed in the description. Reason:
-Monty 1.1.0 has no dotted-name lookup we could verify and flat names are shortest
-for the model. `ToolError` is an alias of `RuntimeError` (Monty 1.1.0 has no class
-inheritance), so `except ToolError` also catches any `RuntimeError`.
+**Registration.** None of the four is in the builtin catalog; the runtime registers them
+when it builds an iteration manager (`coding` profile, `code_mode.enabled`, Monty available;
+`tools/codemode/tool.py:register`). A root agent definition's tool selection
+(`Runtime._make_tool_turn`) is computed against that iteration manager, so inheriting roles
+such as `build` keep them in the turn's initial manager and schemas. Naming any of the four
+in `restrict` grants all four. **A permission rule or an agent `tools` list naming the old
+`code` tool grants `code_run`** (`names.LEGACY_TOOL_NAMES`; the permission key stays `code`);
+`nexus doctor` mentions the replacement once. Subagents get no kernel yet (as with the old
+tool, children are built without it).
 
-**Exposure** (`[code_mode] expose`):
+**Kernels** live in the runtime's `CodeKernels` (`kernels.py`), which outlives turns and
+per-iteration managers: one `KernelHost` helper process (scrubbed environment, credentials
+never enter the sandbox) with an async Monty pool, and a `KernelRegistry` keyed
+`(session_id, agent_path)` (root or the subagent id). At most `max_live_kernels` workers;
+a kernel idle for `idle_evict_s` is released with its state kept and restored on the next
+call (`maintain()` runs on each tool call; there is no background task). Closing a session
+closes its kernels and deletes their checkpoints. Not verified on Linux.
 
-| Value | Callable from a program |
+**Known gaps (kernel):** subagents get no kernel yet (plan §3.10 says they should);
+`code_run`'s `exclusive` flag is runtime-wide (any attached mutating tool on any kernel);
+idle eviction emits no event, so the sidebar cannot show "evicted"; Linux and cross-version
+Monty snapshot compatibility are unverified; the live-model trial (plan phase 6) has not been
+run ("not verified").
+
+**Durability** (kernel plan §3.8, `snapshots.py`; storage and signing in [sessions.md](sessions.md#code-mode-kernel-checkpoints-code_kernel_snapshots)).
+After every *successful* cell the kernel is dumped, signed and stored as its checkpoint
+(`code.kernel_checkpointed`); a failed cell takes none, and a dump over `max_snapshot_bytes`
+writes nothing, keeps the previous checkpoint and says so in the event. The first `code_run` or
+`code_start` on a kernel that is not live goes through one restore path (`CodeKernels.prepare`):
+`restart` (no worker after a daemon restart; the attachments, `In [n]` counter and `kernel_id` come
+back from the session log), `host_crash` (the helper or worker died) or `evicted` (LRU or idle).
+Restart and crash verify the HMAC, Monty version and kernel id, `load_session` into a fresh
+checkout, and start the cell result with `Kernel restored from after In [7]. In [8]–[9] ran after
+that snapshot; variables they set are gone.` (`missing_cells` is computed from the log; numbering
+continues; cells are **never re-run**). An eviction restores the exact in-process snapshot the
+registry took, so it needs no notice (`code.kernel_restored`, `reason: evicted`, no missing cells);
+the checkpoint is the fallback if the process died after the eviction. With no usable checkpoint the
+call returns `KernelLost (too_large|invalid|version|missing)` without running the cell, the kernel is
+reset empty with its attachments kept, and `code.kernel_lost` records why. A timeout or cancel
+discards the worker; with a checkpoint the next call restores it, without one the kernel resets
+empty as before. Context targets approved before a restart are a grant of the old process and are
+not read back from the log: `self` is re-approved, others are named in the notice and need
+`code_attach(targets=...)` again. Without a state database (injected-manager test paths) there are no
+checkpoints and a restart gives `KernelNotStarted`, as in Phase 2.
+
+**The manual** (`manual.py`, the `code_start` reply) is plain labelled text in six sections:
+1 how it works, 2 the language, 3 kernel helpers, 4 attached tools (typed stubs grouped under
+`Built-in tools`, `Pinned tools`, `Server <name>`, `Named tools`, `Search matches`, bounded by
+`manual_budget_tokens`: a stub that does not fit is listed by name with the clip announced
+with counts; those tools stay attached and callable, `describe_tool(name)` shows the stub),
+5 **Not attached** (every unknown server, session-disabled server, excluded, `expose`-refused,
+unsafe or colliding name with its reason, reusing `Catalog.skipped`) and 6 state (re-describe
+only: attachments, cell count, the `whos()` table).
+
+**Sandbox names are flat.** Each attached tool is a bare async function with keyword arguments
+(`await read(path="README.md")`; MCP tools by their safe local name). Kernel helpers:
+`search_tools(query, limit)` and `describe_tool(name)` (any tool of this turn; they do not
+attach), `whos()` (a text table of name, type and size, **never values**: Phase 0 found only
+top-level `locals()` works, so the cell runner rewrites a bare `whos()` to `whos(locals())`;
+call it at the top level of a cell), and `ToolError` (an alias of `RuntimeError`, so
+`except ToolError` also catches any `RuntimeError`). With `[code_mode] context = true`:
+`targets`, the `context_*` functions and `llm`, bound per cell from the targets approved at
+start/attach. `code_start(targets=...)` asks `ContextQuery(<name>)` permission up front; a
+denied or unavailable target is listed under "Not attached", never an error.
+
+**Exposure and authority** (`[code_mode] expose`; kernel plan §3.6). Attaching is a request,
+not a grant. `expose` is the **ceiling for implicit attachment** (server selection, `query`,
+the defaults); an explicitly named tool in `tools` may be mutating. Every cell rebuilds its
+callable set from the **current iteration's** catalog (session disables, agent `restrict`,
+skill allowlists, the `research` profile) intersected with the attachments, and every nested
+call goes through the full nested pipeline and permissions. A tool that is no longer
+available gives `NameError: name 'x' is not callable now (disabled for this session or not
+available this turn)`; one never attached says how to attach it.
+
+| `expose` value | Implicitly attachable |
 | --- | --- |
 | `read_only` (default) | Tools that do not mutate (`ToolSpec.mutates` false) |
 | `all` | Every enabled tool, including mutating ones (each still permission-gated) |
 | a list | Tool names and `mcp__server__*` globs; still limited to what the session has enabled |
 
-Never callable, whatever the setting: `code`, `subagent`, `subagent_continue`, `question`, `skill`,
-`McpSearch`/`McpCall`, and the `meta` and `manager` bundles (`catalog.EXCLUDED`). They drive the
-loop, the user or the agent tree and stay visible as top-level rows.
+Never callable from a cell, whatever the setting: the four kernel tools, `code`, `subagent`,
+`subagent_continue`, `question`, `skill`, `McpSearch`/`McpCall`, and the `meta` and `manager`
+bundles (`catalog.EXCLUDED`). The `research` profile refuses mutating nested calls. Direct
+tools stay available beside the kernel (no "only" mode).
 
-Direct tools stay available beside `code` (no "only" mode). A tool the session has
-disabled is not callable. The `research` profile refuses mutating nested calls.
-
-**Language.** Importable: `json`, `re`, `math`, `datetime`, `asyncio` (must be
-imported), `collections`, `itertools`, `functools`, `dataclasses`, `typing`, `copy`,
-`base64`, `random`, `time`. `os`, `sys`, `pathlib` are virtual and denied. Not
-available: `string`, `textwrap`, `hashlib`, `urllib`, `enum`, `decimal`,
-`statistics`, `operator`, `subprocess`; no `yield`, no `match`, no class inheritance.
-Programs are type-checked against generated stubs (from each tool's JSON Schema:
-`Literal` for enums, `X | None = None` for optional) before any host call.
-
-**Catalog.** `render_catalog` lists per-namespace counts, then pinned stubs
-(`[code_mode] pinned`) first, within `inline_budget_tokens` (2500); the rest are
-reached with `search_tools` / `describe_tool`.
+**Language.** Importable: `json`, `re`, `math`, `datetime`, `asyncio` (must be imported),
+`collections`, `itertools`, `functools`, `dataclasses`, `typing`, `copy`, `base64`, `random`,
+`time`. `os`, `sys`, `pathlib` are virtual and denied. Not available: `string`, `textwrap`,
+`hashlib`, `urllib`, `enum`, `decimal`, `statistics`, `operator`, `subprocess`; no `yield`, no
+`match`, no class inheritance. **Static checking is host-side, not Monty's:** Monty's type
+checker infers a variable's type from earlier cells (so `x = 1` then `x = 2` is rejected) and
+forgets earlier imports, which a REPL cannot live with, so the kernel runs unchecked and
+`argcheck.py` parses each cell with `ast` and checks every call of an attached tool against
+its JSON Schema *before any host call*: positional arguments, unknown or missing keywords,
+constants of the wrong type or outside an enum are a `TypeError` naming the lines and nothing
+is called. Only what is certain is judged (variables, `**kwargs`, names the cell rebinds are
+not). The tool's own input validation still runs on every call.
 
 **Nested pipeline.** Every nested call goes through `ctx.invoke_tool` into
 `_NestedPipeline` in `core/loop.py`; see [loop.md](loop.md#nested-tool-calls-from-code-mode).
-It is the ordinary pipeline, not a bypass: validation, `PathGuard`, hooks,
-permissions, timeouts, result caps. A denied path gets the same message a direct call
-gets, and the program can catch it.
+It is the ordinary pipeline, not a bypass: validation, `PathGuard`, hooks, permissions,
+timeouts, result caps. A denied path gets the same message a direct call gets, and the cell
+can catch it. Permission prompts carry `parent_call_id` (the cell's call id) and
+`parent_program` (the cell source).
 
-**Result format.** Per plan 03 section 3.10: status line, the program's output, a
-bounded appendix listing every nested call, and image refs `img-N` (images attach by
-reference only). Anything clipped is announced with sizes. Diagnostics name a kind:
+**Cell output** (`cell.py`, what enters context):
+
+```
+In [3]  ✓ 0.42 s · 3 calls · purpose: count open bugs per label
+stdout:
+  scanning 3 repos
+Out [3]: {'bug': 12, 'ui': 4}    (dict, 2 keys)
+calls:
+  1 github_list_issues(repo='a') ✓ 18 KB
+```
+
+`In [n]` numbers cells per kernel and is consumed even by a failed cell; it restarts at 1
+after `code_reset` and after a kernel is lost. The last-expression value is rendered
+host-side as a bounded Python repr with type and size (a multi-line string is shown verbatim
+under its header; `None` shows no `Out`); the value reaches the host as JSON, so a tuple or
+set shows as a list. Output is capped by `max_output_chars`, split between stdout and `Out`;
+a clip is announced with the full size and a hint (`try big[:5] or len(big)`). Failures show
+`In [n]  ✗ <Kind>`, the diagnostic and traceback, then the same call list. Diagnostic kinds:
 `SyntaxError`, `TypeError`, `NameError`, `ToolError`, `limit:memory|time|calls|output`,
-`timeout`, `cancelled`, `crashed`, or the inner exception class.
+`timeout`, `cancelled`, `crashed`, `KernelLost`, `KernelBusy`, or the inner exception class.
+`KernelNotStarted` is the answer to `code_run`/`code_attach` with no kernel. Image refs
+`img-N` attach by reference only. A call list longer than 50 rows is cut with a count.
 
-**Limits.** Source 16 KiB; `max_nested_calls` per program (default 64, counted per
-`parent_call_id`); memory 64 MiB; recursion depth 200; no sleep; per-call deadline
-`timeout_s`; runner admission is a semaphore of `max_workers` (default 2) and the
-call reports busy after 5 s. Host callbacks are id-correlated and may overlap;
-read-only nested calls overlap up to `tools.max_parallel`, mutating or `exclusive`
-ones run alone. `store`: key <= 128 chars, value <= 64 KiB, total <= 512 KiB, JSON
-only; writes commit **only when the program succeeds** and are replayed from
-`code.store` events. Earlier tool side effects are **not** rolled back when a later
-statement fails.
+**Errors never reset a kernel.** A failed cell is not transactional: rebinding and mutations
+made before the exception persist, and earlier tool side effects are not rolled back. The one
+exception is a **timeout, cancel or lost worker**: the host cannot keep a half-run cell, so
+the worker is discarded, the kernel is reset empty (`code.kernel_reset`, `reason: "lost"`,
+attachments kept) and the result says so; a cancel is noticed on the next `code_run`.
 
-**Events.** `code.started`, `code.call`, `code.store`, `code.finished`
-(`nexus/events.py:CODE_EVENTS`); fields follow plan 03 section 3.12 plus `skipped`,
-`bytes`, `clipped`, `permission`. They fold in `view/reduce.py`; replay equals live.
-`permission.requested`/`.resolved` for a nested call carry `parent_call_id` and
-`parent_program`. Surfaces: `tool_details._code_sections` renders the labelled
-sections ([ratatui-parity.md](ratatui-parity.md), [desktop.md](desktop.md)); the web
-client has only the generic tool fallback.
+**Limits.** Source 16 KiB; `max_nested_calls` **per cell** (default 64, counted per
+`parent_call_id` by the loop; the host allows `2 * max_nested_calls + 16` suspensions up to
+4096); `max_cells` per kernel; memory 64 MiB; recursion depth 200; no sleep; per-cell
+deadline `timeout_s`; feeds admit `max_workers` at a time (default 2) and report busy after
+5 s. Host callbacks are id-correlated and may overlap; read-only nested calls overlap up to
+`tools.max_parallel`, mutating or `exclusive` ones run alone.
 
-**Not done / not verified.** Live-model trials (E1); Linux execution; Ratatui and
-desktop visual review; structured results for bash/MCP depend on producers setting
-metrics (not yet); per-row collapse on desktop.
+**Events** (`nexus/events.py:CODE_EVENTS`): `code.kernel_started` (`kernel_id`, `agent_path`,
+`attached` {servers, tools, targets}, `skipped`, `monty_version`), `code.kernel_attached`,
+`code.cell_started` (`n`, `source`, `purpose`, `callable`), `code.call` (running, then final;
+`parent_call_id` is the cell's call id), `code.cell_finished` (`n`, `status`, `diagnostic`,
+`stdout_bytes`, `out_summary`, `calls`, `clipped`, totals) and `code.kernel_reset`
+(`stopped`, `reason`). Each lifecycle event carries its tool call's `call_id`, so it folds
+into that tool row (`view/reduce.py:_on_code`); replay equals live (golden
+`tests/fixtures/view/kernel_cells.*`). `code.started`, `code.store` and `code.finished` are
+**no longer emitted** but still reduce, so old sessions replay and render unchanged
+(`code_mode.*` golden). `permission.requested`/`.resolved` for a nested call carry
+`parent_call_id` and `parent_program`. Surfaces: `tool_details._code_sections` renders the
+labelled sections for `code` and the kernel tools ([ratatui-parity.md](ratatui-parity.md),
+[desktop.md](desktop.md)); the web client has only the generic tool fallback.
+
+**Removed with the `code` tool:** `store` / `load` / `store_delete` and `store.py` (kernel
+variables replace the store) and `[code_mode] inline_budget_tokens`.
+
+**Not done / not verified.** The compaction kernel manifest and the agent guidance paragraph (Phase 4); notebook
+rows, a Kernel sidebar section and a PTY check in the Ratatui client (Phase 5); subagent
+kernels; live-model trials; Linux execution; a nested-call cap above ~1000 per cell.
+

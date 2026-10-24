@@ -860,6 +860,8 @@ def _details_panel(controller, view, shell):
         rows = [("Kind", "Manager · pinned model, no role, shell or fork"),
                 *[(label, MANAGER_MODEL_REF if label == "Model" else value)
                   for label, value in rows if label not in {"Agent", "Effort"}]]
+    from .codemode import sidebar_rows
+    rows = [*rows, *sidebar_rows(view)]
     rows = [("ID", str(getattr(controller, "session", view.session_id))),
             ("Title", selected.get("title") or getattr(controller, "title", None) or "Untitled"), *rows,
             ("Provider", getattr(controller, "provider", None) or "unavailable"),

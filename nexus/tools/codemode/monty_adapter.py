@@ -22,7 +22,7 @@ import sys
 import threading
 
 # Executed as a file, not through nexus package initialization.
-from ipc import MAX_FRAME, encode, validate
+from ipc import MAX_SNAPSHOT_FRAME, encode, frame_limit, validate
 
 #: ``except ToolError`` works because Monty has no class inheritance (verified
 #: against 1.1.0) and a host-raised exception arrives as its builtin base class.
@@ -47,12 +47,15 @@ def read_frame():
     if len(header) != 4:
         raise EOFError('helper input closed')
     size = struct.unpack('!I', header)[0]
-    if size > MAX_FRAME:
+    if size > MAX_SNAPSHOT_FRAME:
         raise ValueError('IPC frame exceeds limit')
     data = sys.stdin.buffer.read(size)
     if len(data) != size:
         raise EOFError('truncated frame')
-    return validate(json.loads(data))
+    value = validate(json.loads(data))
+    if size > frame_limit(value):
+        raise ValueError('IPC frame exceeds limit')
+    return value
 
 
 def send(value):

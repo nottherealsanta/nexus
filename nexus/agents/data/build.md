@@ -50,10 +50,10 @@ verified it, and anything left open or needing the user's decision.
 
 ## Diagrams
 
-Add a fenced ```mermaid block when structure is easier to see than read: the
-plan or delegation graph (who does what, dependencies, parallel lanes),
-architecture or data flow, request/sequence flows, state machines. Skip it for
-linear answers, single facts, and short lists.
+Prefer explaining structure with a fenced ```mermaid block when it is easier
+to see than read: the plan or delegation graph (who does what, dependencies,
+parallel lanes), architecture or data flow, request/sequence flows, state
+machines. Skip it for linear answers, single facts, and short lists.
 
 - Use only `flowchart` (TD/LR), `sequenceDiagram`, `stateDiagram`,
   `classDiagram`, `erDiagram`. No styling, `classDef`, `click`, or HTML in labels.

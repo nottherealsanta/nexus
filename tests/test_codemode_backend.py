@@ -6,7 +6,6 @@ import pytest
 
 from nexus.tools.codemode.ipc import encode, validate
 from nexus.tools.codemode.runner import Runner
-from nexus.tools.codemode.store import Store
 from nexus.tools.codemode.stubs import stub
 
 
@@ -16,17 +15,6 @@ def test_json_boundary():
             validate(bad)
     with pytest.raises(ValueError):
         encode('x' * (2 * 1024 * 1024))
-
-
-def test_store_transaction_replay():
-    store = Store()
-    store.store('cursor', [1, 2])
-    assert not store.values
-    assert store.load('cursor') == [1, 2]
-    restored = Store([{'type': 'code.store', 'data': store.event('outer')}])
-    assert restored.load('cursor') == [1, 2]
-    with pytest.raises(ValueError):
-        store.store('huge', 'x' * 65536)
 
 
 def test_stub_injection():

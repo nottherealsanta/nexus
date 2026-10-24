@@ -12,7 +12,18 @@ import math
 import struct
 
 MAX_FRAME = 2 * 1024 * 1024
+#: Snapshot frames only (plan code-mode-kernel §3.8): a ``load`` request or a ``dump`` reply carries
+#: a base64 kernel snapshot of up to 8 MiB (about 10.7 MiB encoded). Every other frame keeps
+#: ``MAX_FRAME``; ``frame_limit`` decides by the frame's own shape, so a stray large frame is refused.
+MAX_SNAPSHOT_FRAME = 16 * 1024 * 1024
 MAX_DEPTH = 32
+
+
+def frame_limit(value):
+    """The size ceiling for one frame: larger only for snapshot ``load`` requests and ``dump`` replies."""
+    if type(value) is dict and (value.get('verb') == 'load' or value.get('snapshot') is True):
+        return MAX_SNAPSHOT_FRAME
+    return MAX_FRAME
 
 
 def validate(value, depth=0):
@@ -35,13 +46,16 @@ def validate(value, depth=0):
 
 def encode(value):
     data = json.dumps(validate(value), ensure_ascii=True, allow_nan=False).encode()
-    if len(data) > MAX_FRAME:
+    if len(data) > frame_limit(value):
         raise ValueError('IPC frame exceeds limit')
     return struct.pack('!I', len(data)) + data
 
 
 async def receive(reader):
     size = struct.unpack('!I', await reader.readexactly(4))[0]
-    if size > MAX_FRAME:
+    if size > MAX_SNAPSHOT_FRAME:
         raise ValueError('IPC frame exceeds limit')
-    return validate(json.loads(await reader.readexactly(size)))
+    value = validate(json.loads(await reader.readexactly(size)))
+    if size > frame_limit(value):
+        raise ValueError('IPC frame exceeds limit')
+    return value

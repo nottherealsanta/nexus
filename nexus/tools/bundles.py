@@ -104,7 +104,7 @@ class Profile:
 
 BUNDLES: Mapping[str, Bundle] = MappingProxyType(
     {
-        "code": Bundle(name="code", tools=("code",)),
+        "code": Bundle(name="code", tools=("code_start", "code_attach", "code_run", "code_reset")),
         "fs": Bundle(
             name="fs",
             tools=("read", "glob", "grep", "edit", "write"),

@@ -136,6 +136,11 @@ def tool_heading(tool: ToolCallView) -> str:
         target = tool.target or str(tool.input.get("tool", ""))
         label = target.removeprefix("mcp__").replace("__", " · ").replace("/", " · ")
         return "⚙ " + _text(label, 120) + " · via McpCall"
+    if name.startswith("code_"):
+        from .tool_details import kernel_heading
+        kernel = kernel_heading(tool)
+        if kernel is not None:
+            return kernel
     args = format_arguments(tool)
     if name in {"shell", "bash", "bashoutput", "killshell"}:
         return f"$ {args}" if args else "$"
@@ -224,6 +229,8 @@ def tool_summary(tool: ToolCallView) -> str:
         return _first_line(_text(tool.error))
     if tool.is_error:
         return "failed"
+    if tool.name.startswith("code_") and tool.name in {"code_start", "code_attach", "code_run", "code_reset"}:
+        return ""  # the heading already carries status, time, calls and purpose (kernel plan §3.11)
     if tool.progress:
         return _first_line(_text(tool.progress[-1]))
     if tool.name.casefold() == "read":
@@ -843,7 +850,8 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
     marker = tool_status(tool)
     indicator = f"{_SPINNER_FRAMES[spinner_index % len(_SPINNER_FRAMES)]} " if marker == "running" else ""
     summary = ""
-    if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep"}:
+    if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep"} and not (
+            tool.name.startswith("code_") and tool_summary(tool) == ""):
         summary = _text(tool.display.splitlines()[0], 88)
         if tool.name.casefold() == "write":
             content = tool.input.get("content") if isinstance(tool.input, Mapping) else None

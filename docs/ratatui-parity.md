@@ -2122,7 +2122,7 @@ verification remains outstanding; offline UI tests do not establish it.
 
 ## Code mode rows (plan 03 section 3.13)
 
-A `code` call is an ordinary tool row whose `signal` body is built by
+A `code` call (old sessions; the kernel tools below have their own rows) is an ordinary tool row whose `signal` body is built by
 `ui_support/tool_details.py:code_signal_rows` (no new Rust wire kind): the program with line numbers
 (`out` rows, so the number column is quiet), then one row per nested call, `✓` ok, `✗` error, `⊘`
 denied (with the matching rule), `…` running, `–` cancelled, each with compact arguments, duration,
@@ -2132,6 +2132,33 @@ labelled sections (`tool_detail_sections`, one `Nested call N` each with full ar
 clipping announced). Checks: `tests/test_ratatui_pty_codemode.py` (live mid-run then finished
 snapshot), `transcript::signal` unit test. Not verified: nested approval prompts highlighting the
 calling line.
+
+### Kernel rows (code-mode kernel plan section 3.11)
+
+`code_start`, `code_attach`, `code_run` and `code_reset` are ordinary tool rows too, with no new Rust
+kind. `ui_support/tool_details.py:kernel_parts` gives the row (`ui/ratatui/codemode.py:member_fields`
+puts it in the verb-group member; the group label counts each tool with its own noun, singular or plural: `Started 1 kernel`, `Ran 2 cells`, `Attached N kernels`, `Reset N kernels`; `verb_groups.py:_label`):
+
+- Lifecycle: `⧉ kernel started  github, linear (+14 tools) · purpose` (the parenthesis counts attached
+  tools that belong to no listed server), `⧉ kernel attached`, `⧉ kernel reset` / `⧉ kernel stopped`.
+  The body (`kernel_signal_rows`) lists kernel id, agent, servers, tools (12, rest announced), context
+  targets, every "not attached" tool with its reason, and the result text.
+- Cell, notebook form: title `In [n]`, then `✓ 0.04 s · 1 call · purpose` (`✗ ZeroDivisionError`,
+  `✗ limit X`, `… running`). Expanded body: numbered source (`out`, 60 lines then a `clip` row),
+  the diagnostic (`error`), `stdout` (12 lines), `Out [n]: value` (`kv`), then one row per nested call
+  with a `↳` preview of its result. Every cut is announced and says `i` has the full input and output
+  (`_cell_sections` and one `Nested call N` section each). The client has no Python highlighter, so
+  source is plain numbered text (not highlighted).
+- Restored: the header adds `↻ restored after In [8], 1 cell lost` and the body opens with the
+  missing cells. Lost: the header adds `kernel lost: reason` and the body has an `error` row with the
+  reason, the last cell and "variables are gone, attachments kept".
+- Details sidebar, Session tab: `Kernel`, `Attached`, `Cells`, `Snapshot` (`after In [n] · size`) and
+  `Liveness`, folded from the view by `ui_support/details.py:kernel_rows` (no host command). Idle
+  eviction writes no event, so an evicted kernel reads as active until the next cell restores it
+  (the restore row then says why). Not verified against a live daemon with a real eviction.
+
+Checks: `tests/test_ui_kernel_rows.py`, and the PTY tests in `tests/test_ratatui_pty_codemode.py`
+(notebook cell, started row, restore notice).
 
 Subagent headers start with a three-cell `←` Back target (glyph at column 1).
 Back uses the same dismiss action as Escape/Up: nested pages return to their

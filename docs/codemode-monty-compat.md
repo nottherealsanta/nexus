@@ -1,21 +1,21 @@
 # Code mode: Monty compatibility gate
 
 Status: **CM1 resolved by an isolated helper design; code mode is implemented
-(offline-tested) and off by default.** The "blocked" analysis below is kept as the
-reason for the design.
+(offline-tested) and on by default (`[code_mode] enabled = true`).** The "blocked" analysis
+below is kept as the reason for the design.
 
 ## Resolution
 
 Monty 1.1.0 `AsyncMonty` has no environment or cwd controls, so Nexus does not use a
-daemon-owned pool. Each `code` call starts a Python helper
-(`nexus/tools/codemode/monty_adapter.py`, the only importer of `pydantic_monty`) with
-an explicit minimal env, a private temporary cwd and a new process group. The helper
-owns a one-process Monty pool; `killpg` ends everything on finish, cancel or
-deadline. Rationale: [decisions.md](decisions.md). Verified on macOS arm64 against the
+daemon-owned pool. The original one-shot `code` tool started a Python helper per call
+(`nexus/tools/codemode/monty_adapter.py`) with an explicit minimal env, a private temporary
+cwd and a new process group. The kernel host (kernel plan Phase 1, `kernel_host.py`) keeps
+one such helper per runtime, with the same env rules, owning the Monty pool; `killpg` ends
+everything on finish, cancel or deadline. Rationale: [decisions.md](decisions.md). Verified on macOS arm64 against the
 installed extra: arithmetic, async host callbacks with keyword arguments, denied
 `subprocess`/`os`/`open`, whole-call deadlines, `CollectString(max_bytes=...)`,
 `type_check_stubs`, `external_lookup`, `min_processes=0`, the resource-limit keys,
-the importable module list (see [tools.md](tools.md#code-mode-the-code-tool)), and
+the importable module list (see [tools.md](tools.md#code-mode-the-kernel-tools)), and
 that `class` inheritance and `yield`/`match` are unsupported.
 
 **Not verified:** Linux execution (only wheel listings were checked), full adapter
@@ -185,3 +185,27 @@ Verified against the actual installed optional extra: arithmetic, asynchronous
 external callbacks with keyword arguments, denied subprocess/os/open operations,
 and whole-call deadlines. `CollectString(max_bytes=...)`, `type_check_stubs`,
 `external_lookup`, `min_processes=0`, and the proposed resource-limit keys work.
+
+## Kernel plan Phase 2: static type checking in a persistent session (2026-10-24)
+
+Probed on Monty 1.1.0 (macOS) with `checkout(type_check=True, type_check_stubs=...)`:
+
+- The checker is session-aware, so earlier cells' variables are known (`x = 1` then `x + 1` is
+  fine and `x + "a"` is a typing error).
+- It infers a **declared type from the first binding**: `x = 1` then `x = 2` is rejected with
+  `invalid-assignment` ("`Literal[2]` is not assignable to `Literal[1]`"). A REPL rebinds
+  freely, so the check cannot be used for variables.
+- **Imports are forgotten**: after `import json`, a later cell using `json.dumps` is an
+  `unresolved-reference` typing error although the runtime still has the module.
+- `skip_type_check=True` on a feed also skips *recording* its declarations (later cells then
+  see unresolved names), and a dump/load restores the session with the stubs it was checked out
+  with (changing the stubs through `load_session` has no effect).
+
+Decision: the kernel is opened with `type_check=False`; arguments of tool calls are checked
+against the tools' JSON Schemas by `tools/codemode/argcheck.py` before any host call (see
+[decisions.md](decisions.md#code-mode-the-code-tool-is-removed-start-handshake-over-an-inline-catalog)).
+Also observed: a name absent from `external_lookup` raises `NameError: name 'x' is not defined`
+(the cell runner rewrites it for known tools as `name 'x' is not callable now (reason)`), and a
+function-local `locals()` is the function's own namespace, so `whos()` is rewritten to
+`whos(locals())` at the top level of a cell. Kernel host `max_suspensions` ceiling raised from
+64 to 4096 so `max_nested_calls` per cell fits; Linux remains unverified.

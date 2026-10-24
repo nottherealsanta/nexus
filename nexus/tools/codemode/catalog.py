@@ -1,23 +1,27 @@
-"""Frozen, authority-intersected callable catalogs (plan 03 section 3.4, 3.11).
+"""Authority-intersected callable catalogs (plan 03 section 3.4, 3.11; kernel plan §3.6).
 
 ``build_catalog`` never raises: names that are unsafe identifiers, reserved, or
 collide after ``-`` to ``_`` normalisation are skipped and listed in
-``Catalog.skipped`` so the surface can show why a tool is not callable.
-``render_catalog`` produces the description tail within an inline token budget.
+``Catalog.skipped`` so the surface can show why a tool is not callable. The
+kernel tools build one catalog per iteration (``expose = "all"``, the superset a
+named tool may come from) and one capped by ``[code_mode] expose`` (the ceiling
+for implicit attachment). ``excluded_reason`` explains a name that is in neither.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from fnmatch import fnmatchcase
 
-from ...model.tokenizer import DEFAULT_TOKENIZER
-from ..names import canonical_tool_name, tool_rule_names
+from ..names import tool_rule_names
 from .stubs import HEADER, identifier, stub
 
-EXCLUDED = frozenset({'code', 'subagent', 'subagent_continue',
+#: The four kernel tools (plan §3.1) can never be called from a cell. ``code`` is the
+#: removed one-shot tool; a tool by that name is still never callable.
+CODE_TOOLS = ('code_start', 'code_attach', 'code_run', 'code_reset')
+EXCLUDED = frozenset({'code', *CODE_TOOLS, 'subagent', 'subagent_continue',
                       'question', 'skill',
                       'McpCall', 'McpSearch', 'mcp_call', 'mcp_search'})
-RESERVED = frozenset({'search_tools', 'describe_tool', 'store', 'load', 'llm',
+RESERVED = frozenset({'search_tools', 'describe_tool', 'whos', 'ToolError', 'llm',
                       'targets', 'context_meta', 'context_messages',
                       'context_tool_calls', 'context_search', 'context_report'})
 _EXCLUDED_BUNDLES = ('meta', 'manager')
@@ -92,34 +96,14 @@ def namespace(name):
     return BUILTIN_NAMESPACE
 
 
-def _tokens(text):
-    return DEFAULT_TOKENIZER.count_tokens(text, code=True)
+EXCLUDED_REASON = 'drives the loop, the user or the agent tree: call it directly, not from a cell'
 
 
-def render_catalog(catalog, *, budget_tokens, pinned=()):
-    """Namespace counts, stubs (pinned first) that fit the budget, then a pointer."""
-    if not catalog:
-        return 'No tools are callable.'
-    counts = {}
-    for name in catalog:
-        counts[namespace(name)] = counts.get(namespace(name), 0) + 1
-    lines = [f'{ns}: {n} tool{"s" if n != 1 else ""}' for ns, n in counts.items()]
-    pins = [canonical_tool_name(p).replace('-', '_') for p in pinned]
-    order = [n for n in dict.fromkeys(pins) if n in catalog]
-    order += [n for n in catalog if n not in set(order)]
-    used = _tokens('\n'.join(lines))
-    shown = []
-    for name in order:
-        line = stub(name, catalog[name].spec.input_schema)
-        cost = _tokens(line) + 1
-        if used + cost > max(0, budget_tokens):
-            continue  # a later, smaller stub may still fit; pinned order is kept
-        used += cost
-        shown.append(line)
-    out = '\n'.join(lines)
-    if shown:
-        out += '\n\n' + '\n'.join(shown)
-    more = len(catalog) - len(shown)
-    if more:
-        out += f'\n\n{more} more tool{"s" if more != 1 else ""}: use search_tools(query) / describe_tool(name)'
-    return out
+def excluded_reason(tool):
+    """Why ``tool`` (a registered tool) is never callable from a cell, else ``None``."""
+    spec = tool.spec
+    if spec.name in EXCLUDED:
+        return EXCLUDED_REASON
+    if spec.bundle in _EXCLUDED_BUNDLES:
+        return f'the {spec.bundle} bundle is never callable from a cell'
+    return None

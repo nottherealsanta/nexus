@@ -103,7 +103,7 @@ outside the workspace to verify relative MCP script resolution.
 `benchmark/codemode_eval.py` compares two **hand-scripted strategies** through the
 real `Runtime` (real tools, `PathGuard`, permissions, nested pipeline; a real stdio
 MCP subprocess for the MCP task) with a `ScriptedProvider`: *direct* tool calls
-versus one `code` program. No network, no provider, no credentials.
+versus the kernel tools (`code_start` then one `code_run` cell). No network, no provider, no credentials.
 
 ```sh
 .venv/bin/python benchmark/codemode_eval.py [--scenario NAME]... [--json]
@@ -112,10 +112,10 @@ versus one `code` program. No network, no provider, no credentials.
 
 | Scenario | Direct arm | Code arm |
 | --- | --- | --- |
-| `fanout_read` | 30 parallel `read` calls | one program gathers 30 reads, prints only the TODO lines |
-| `fanout_grep` | 12 parallel `grep` calls (8 narrow, 4 broad) | one program gathers them, prints a count and first hit each |
-| `mcp_list_filter` | `list_records` (200 summary rows, `benchmark/mcp_records.py`), then 4 `get_record` | one program lists, filters open and critical, fetches 4 |
-| `long_child_context` | none (a root has no tool that reads a child transcript) | child reads 24 files; the root queries it with `context_search/tool_calls/meta/report` |
+| `fanout_read` | 30 parallel `read` calls | one cell gathers 30 reads, prints only the TODO lines |
+| `fanout_grep` | 12 parallel `grep` calls (8 narrow, 4 broad) | one cell gathers them, prints a count and first hit each |
+| `mcp_list_filter` | `list_records` (200 summary rows, `benchmark/mcp_records.py`), then 4 `get_record` | one cell lists, filters open and critical, fetches 4 (`code_start(servers=["records"])`) |
+| `long_child_context` | none (a root has no tool that reads a child transcript) | child reads 24 files; the root attaches it as a target and queries it with `context_search/tool_calls/meta/report` |
 
 Output per arm: model requests, top-level and nested tool calls, bytes of tool
 results that enter the model's context (UTF-8, not tokens), bytes of tool-call
@@ -131,8 +131,10 @@ model's context and saves model round trips, with every nested call still visibl
 as `code.call` events. They do **not** show that a live model chooses code mode
 when it should, writes working programs, recovers from Monty's language limits, or
 gets better answers; the scripted "model" never errs. The code arm also pays a
-fixed cost of larger tool definitions (the `code` catalog), reported as
-`tool_definition_bytes` (direct arm: its own tool list, measured the same way).
+fixed costs: the four kernel tool definitions (`tool_definition_bytes`) and the `code_start`
+manual, paid once per kernel and reported as `manual_bytes` (a third model request for the
+handshake; the ratio line shows results with and without the manual: in `fanout_grep` the
+manual outweighs the saving, in `fanout_read` it does not) (direct arm: its own tool list, measured the same way).
 The long-child task proves the read path, bounding and permission flow, not that
 RLM-style recursion helps a model. Live trials (one per supported provider, and a
 live long-child trial) are not done and are the basis for default-exposure and

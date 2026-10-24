@@ -1269,7 +1269,12 @@ class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    """``[code_mode]`` (plan 03 section 5). Every numeric key is bounded."""
+    """``[code_mode]`` (plan 03 section 5; kernel plan §3.12). Every numeric key is bounded.
+
+    ``inline_budget_tokens`` was removed (the catalog is no longer inlined in a tool
+    description); an old file that still sets it loads with a one-line notice
+    (``config.layers.load_effective``) and the value is ignored.
+    """
 
     enabled: bool = True
     #: ``read_only`` | ``all`` | list of tool names / ``mcp__server__*`` globs.
@@ -1278,14 +1283,24 @@ class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     max_workers: int = 2
     max_tool_seconds: int = 120
     max_nested_calls: int = 64
-    #: Estimated tokens of tool stubs inlined in the ``code`` description.
-    inline_budget_tokens: int = 2500
+    #: Estimated tokens of the ``code_start`` manual's attached-tool stubs.
+    manual_budget_tokens: int = 6000
+    #: Characters of one cell result (stdout plus ``Out``) that enter context.
+    max_output_chars: int = 8000
+    #: Kernels with a live worker at once; the least recently used is evicted.
+    max_live_kernels: int = 4
+    #: Idle seconds before a kernel's worker is released (its state is kept).
+    idle_evict_s: int = 900
+    #: Largest kernel snapshot kept for eviction/restore.
+    max_snapshot_bytes: int = 8 * 1024 * 1024
+    #: Cells one kernel may run before ``code_reset``.
+    max_cells: int = 500
     sub_model: str | None = None
     max_sub_calls: int = 16
     max_sub_input_tokens: int = 32000
     max_total_sub_tokens: int = 200000
     max_depth: int = 1
-    #: Tool names rendered first in the inline catalog.
+    #: Tool names attached (and listed first) by a bare ``code_start``.
     pinned: list[str] = msgspec.field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -1297,15 +1312,18 @@ class CodeModeSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         if not all(isinstance(p, str) and p for p in self.pinned) or len(self.pinned) > 256:
             raise ValueError("code_mode.pinned must hold up to 256 non-empty tool names")
         bounds = {
-            "max_workers": 16, "max_tool_seconds": 3600, "max_nested_calls": 10_000,
-            "inline_budget_tokens": 100_000, "max_sub_calls": 1000,
-            "max_sub_input_tokens": 10_000_000, "max_total_sub_tokens": 100_000_000,
-            "max_depth": 8,
+            "max_workers": (1, 16), "max_tool_seconds": (1, 3600), "max_nested_calls": (1, 10_000),
+            "max_sub_calls": (1, 1000),
+            "max_sub_input_tokens": (1, 10_000_000), "max_total_sub_tokens": (1, 100_000_000),
+            "max_depth": (1, 8),
+            "manual_budget_tokens": (500, 50_000), "max_output_chars": (1000, 100_000),
+            "max_live_kernels": (1, 32), "idle_evict_s": (60, 86_400),
+            "max_snapshot_bytes": (64 * 1024, 64 * 1024 * 1024), "max_cells": (10, 10_000),
         }
-        for name, top in bounds.items():
+        for name, (low, top) in bounds.items():
             value = getattr(self, name)
-            if type(value) is not int or not 1 <= value <= top:
-                raise ValueError(f"code_mode.{name} must be an integer from 1 to {top}")
+            if type(value) is not int or not low <= value <= top:
+                raise ValueError(f"code_mode.{name} must be an integer from {low} to {top}")
         if self.sub_model is not None and not self.sub_model.strip():
             raise ValueError("code_mode.sub_model must be a non-empty model name or unset")
 

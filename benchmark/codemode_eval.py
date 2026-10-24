@@ -1,4 +1,4 @@
-"""Offline code-mode evaluation (plan 03, E1): direct tool calls vs the ``code`` tool.
+"""Offline code-mode evaluation (plan 03, E1): direct tool calls vs the kernel tools.
 
 Every scenario runs through the real ``Runtime`` (real tools, ``PathGuard``,
 permissions, and for MCP a real stdio subprocess) with a ``ScriptedProvider``.
@@ -104,13 +104,17 @@ def finished_nested_calls(events) -> list:
 
 def measure(session, provider: ScriptedProvider, events, expected, forbidden=()) -> dict:
     """Model-visible volume of a finished session, plus a content grade."""
-    results, call_bytes, top_calls = [], 0, 0
+    results, call_bytes, top_calls, manual_bytes = [], 0, 0, 0
+    names: dict[str, str] = {}
     for message in session.messages:
         for block in message.content:
             if isinstance(block, ToolResult):
                 results.append(_result_text(block))
+                if names.get(block.tool_use_id) == "code_start":
+                    manual_bytes += len(_result_text(block).encode())
             elif isinstance(block, ToolUse):
                 top_calls += 1
+                names[block.id] = block.name
                 call_bytes += len(json.dumps(block.input).encode())
     joined = "\n".join(results)
     nested = finished_nested_calls(events)
@@ -121,6 +125,8 @@ def measure(session, provider: ScriptedProvider, events, expected, forbidden=())
         "top_level_tool_calls": top_calls,
         "nested_tool_calls": len(nested),
         "tool_result_bytes": len(joined.encode()),
+        # The ``code_start`` manual: a fixed cost the kernel arm pays once per kernel.
+        "manual_bytes": manual_bytes,
         "tool_call_input_bytes": call_bytes,
         "tool_definition_bytes": tool_defs,
         "tool_errors": sum(1 for m in session.messages for b in m.content
@@ -208,14 +214,19 @@ MCP_PROGRAM = (
     "    print(r['id'], r['title'].strip(), '|', r['body'][:40])\n")
 
 
+def kernel_scripts(program, purpose, **start):
+    """The kernel arm: the ``code_start`` handshake, one ``code_run`` cell, the final text."""
+    return [tool_response(("s1", "code_start", {"purpose": purpose, **start})),
+            tool_response(("c1", "code_run", {"cell": program, "purpose": purpose})),
+            text_response("done")]
+
+
 def scenario_fanout_read(variant):
     if variant == "direct":
         scripts = [tool_response(*[(f"r{i}", "read", {"path": p}) for i, p in enumerate(_paths())]),
                    text_response("done")]
     else:
-        scripts = [tool_response(("c1", "code", {"program": FANOUT_READ_PROGRAM,
-                                                  "purpose": "read all modules, list TODOs"})),
-                   text_response("done")]
+        scripts = kernel_scripts(FANOUT_READ_PROGRAM, "read all modules, list TODOs")
     return scripts, "List every TODO in src/.", _todo_markers(), ()
 
 
@@ -225,9 +236,7 @@ def scenario_fanout_grep(variant):
                                    for i, p in enumerate(GREP_PATTERNS)]),
                    text_response("done")]
     else:
-        scripts = [tool_response(("c1", "code", {"program": FANOUT_GREP_PROGRAM,
-                                                  "purpose": "twelve greps, summarised"})),
-                   text_response("done")]
+        scripts = kernel_scripts(FANOUT_GREP_PROGRAM, "twelve greps, summarised")
     return scripts, "Count matches for twelve patterns.", _todo_markers(), ()
 
 
@@ -238,9 +247,7 @@ def scenario_mcp_list_filter(variant):
                    tool_response(*[(f"g{i}", "mcp__records__get_record", {"id": i}) for i in ids]),
                    text_response("done")]
     else:
-        scripts = [tool_response(("c1", "code", {"program": MCP_PROGRAM,
-                                                  "purpose": "list, filter, fetch"})),
-                   text_response("done")]
+        scripts = kernel_scripts(MCP_PROGRAM, "list, filter, fetch", servers=["records"])
     expected = [f"Issue {i}:" for i in ids]
     # Closed critical issues (17, 34) must not leak through the program's filter.
     # The direct arm legitimately sees them in the full list, so it has no check.
@@ -264,10 +271,10 @@ async def run_simple(name: str, variant: str, workspace: Path) -> dict:
 
 
 CHILD_PROGRAM = (
-    f"hits = await context_search(needle={NEEDLE!r}, target=targets[0])\n"
-    "calls = await context_tool_calls(target=targets[0], stop=1)\n"
-    "meta = await context_meta(target=targets[0])\n"
-    "report = await context_report(target=targets[0])\n"
+    f"hits = await context_search(needle={NEEDLE!r}, target=targets[-1])\n"
+    "calls = await context_tool_calls(target=targets[-1], stop=1)\n"
+    "meta = await context_meta(target=targets[-1])\n"
+    "report = await context_report(target=targets[-1])\n"
     "print(meta)\n"
     "print(str(hits)[:600])\n"
     "print(str(report)[:300])\n")
@@ -295,9 +302,9 @@ async def run_long_child(workspace: Path) -> dict:
     reads = tool_response(*[(f"d{i}", "read", {"path": f"data/d{i:02d}.txt"})
                             for i in range(CHILD_FILES)])
 
-    def program_step(request):
-        return list(tool_response(("k1", "code", {
-            "program": CHILD_PROGRAM, "purpose": "query child transcript", "targets": list(names)})))
+    def start_step(request):
+        return list(tool_response(("s1", "code_start", {
+            "purpose": "query child transcript", "targets": list(names)})))
 
     provider = ScriptedProvider(
         tool_response(("t1", "subagent", {"prompt": "scan data/ for the finding",
@@ -305,7 +312,8 @@ async def run_long_child(workspace: Path) -> dict:
         reads,
         text_response(f"CHILD-REPORT found {NEEDLE} in the middle file"),
         text_response("delegated"),
-        [program_step],
+        [start_step],
+        tool_response(("k1", "code_run", {"cell": CHILD_PROGRAM, "purpose": "query child transcript"})),
         text_response("done"))
     runtime = Runtime(workspace, config=make_config(code=True, context=True, mode="ask"),
                       providers={"scripted": provider}, home=workspace.parent / "nexus-home")
@@ -319,7 +327,7 @@ async def run_long_child(workspace: Path) -> dict:
         transcript = sum(len(_result_text(b).encode()) for m in child_request
                          for b in m.content if isinstance(b, ToolResult))
         child_records = len(child_request) + 1  # plus its final report
-        finished = [e for e in events if e.type == "code.finished"]
+        finished = [e for e in events if e.type == "code.cell_finished"]
         surfaced = ""
         for message in session.messages:
             for block in message.content:
@@ -369,6 +377,7 @@ async def run_scenario(name: str, base: Path, *, monty: bool | None = None) -> d
     if "skipped" not in c:
         out["ratio"] = {
             "tool_result_bytes": round(d["tool_result_bytes"] / max(1, c["tool_result_bytes"]), 1),
+            "cell_result_bytes": round(d["tool_result_bytes"] / max(1, c["tool_result_bytes"] - c["manual_bytes"]), 1),
             "model_requests": f"{d['model_requests']} vs {c['model_requests']}",
         }
     return out
@@ -390,7 +399,7 @@ async def run_all(names=None, base: Path | None = None) -> list[dict]:
 
 def render(results: list[dict]) -> str:
     cols = ("model_requests", "top_level_tool_calls", "nested_tool_calls", "tool_result_bytes",
-            "tool_call_input_bytes", "tool_definition_bytes")
+            "manual_bytes", "tool_call_input_bytes", "tool_definition_bytes")
     lines = []
     for r in results:
         lines.append(f"== {r['scenario']}")
@@ -409,7 +418,8 @@ def render(results: list[dict]) -> str:
                 lines.append("  " + f"{variant:7} " + " ".join(
                     f"{k}={m[k]}" for k in cols if k in m) + f" pass={m['passed']}")
         if "ratio" in r:
-            lines.append(f"  direct/code tool_result_bytes = {r['ratio']['tool_result_bytes']}x")
+            lines.append(f"  direct/code tool_result_bytes = {r['ratio']['tool_result_bytes']}x "
+                         f"({r['ratio']['cell_result_bytes']}x without the one-time manual)")
     lines.append("scripted strategies, mechanical measurements only; not evidence of live model quality")
     return "\n".join(lines)
 

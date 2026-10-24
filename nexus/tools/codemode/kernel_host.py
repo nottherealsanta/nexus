@@ -24,7 +24,7 @@ if __name__ == '__main__':
     # File execution deliberately avoids importing the Nexus package.
     from ipc import encode, receive, validate
     import monty_adapter
-    from monty_adapter import (OUTPUT_LIMIT, PRELUDE, classify, read_frame, send, to_json)
+    from monty_adapter import (OUTPUT_LIMIT, classify, read_frame, send, to_json)
 
     # This helper initializes ToolError in a separate cell, not in user source.
     # The adapter's one-shot process retains its own prelude offset unchanged.
@@ -35,9 +35,44 @@ else:
     from .runner import (CodeToolError, INPUT_NAME, LIMITS, MAX_ERROR_CHARS,
                          MAX_PROGRAM_BYTES, Runner)
 
-# One bounded frame, including base64/JSON overhead. No disk snapshot API.
-MAX_SNAPSHOT_BYTES = 1024 * 1024
-MAX_CALLS_PER_FEED = 100
+    #: Hard ceilings for ``limits``. ``max_suspensions`` is higher than the one-shot
+    #: runner's default so ``max_nested_calls`` per cell (plus gather overhead) fits.
+    CEILINGS = {**LIMITS, 'max_suspensions': 4096}
+
+# A snapshot travels as one base64 frame (``ipc.MAX_SNAPSHOT_FRAME``, 16 MiB, snapshot frames only):
+# 8 MiB of snapshot is about 10.7 MiB encoded. Checkpoints (plan code-mode-kernel §3.8) use this cap.
+MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+#: Host callbacks one feed may make. Callers still tighten this through the
+#: Monty suspension limit; a cell's per-cell cap (``max_nested_calls``) is
+#: enforced by the loop's nested pipeline (plan code-mode-kernel §3.5).
+MAX_CALLS_PER_FEED = 4096
+#: Static type checking is deliberately off in the kernel: Monty's checker infers each
+#: variable's type from earlier cells (``x = 1`` then ``x = 2`` is rejected) and forgets
+#: imports, which a REPL cannot live with. Arguments of tool calls are checked against
+#: the tools' schemas by ``argcheck.py`` before any call. ``whos`` is a
+#: kernel-side function over the *top-level* ``locals()``: ``locals()`` inside a
+#: function is that function's namespace, so the cell runner rewrites a bare
+#: ``whos()`` into ``whos(locals())`` (plan code-mode-kernel §3.7, Phase 0).
+KERNEL_PRELUDE = (
+    'ToolError = RuntimeError\n'
+    'def _nx_vars(_ns=None):\n'
+    '    out = []\n'
+    '    for k in (_ns or {}):\n'
+    "        if k in ('ToolError', 'whos', '_nx_vars', 'targets'):\n"
+    '            continue\n'
+    '        v = _ns[k]\n'
+    '        n = len(v) if isinstance(v, (list, dict, str, tuple, set, bytes)) else None\n'
+    '        out.append((k, type(v).__name__, n))\n'
+    '    return out\n'
+    'def whos(_ns=None):\n'
+    '    rows = _nx_vars(_ns)\n'
+    '    if not rows:\n'
+    "        return 'no variables'\n"
+    "    lines = ['name  type  size']\n"
+    '    for r in rows:\n'
+    "        lines.append(r[0] + '  ' + r[1] + '  ' + ('' if r[2] is None else str(r[2])))\n"
+    "    return '\\n'.join(lines)\n")
+HIDDEN_NAMES = frozenset({'ToolError', 'whos', '_nx_vars', 'targets'})
 
 
 class KernelBusy(RuntimeError):
@@ -94,7 +129,7 @@ class KernelHost:
         self.limits = {**LIMITS, **(limits or {})}
         # Callers may tighten but cannot relax the existing safety ceilings.
         if set(self.limits) != set(LIMITS) or any(
-                type(v) not in (int, float) or not 0 <= v <= LIMITS[k]
+                type(v) not in (int, float) or not 0 <= v <= CEILINGS[k]
                 for k, v in self.limits.items()):
             raise ValueError('limits may only tighten existing ceilings')
         self.generation = None
@@ -309,6 +344,10 @@ class KernelHost:
         except Exception:
             await self._break(proc)
 
+    def alive(self, generation) -> bool:
+        """Whether the helper process of ``generation`` is still running (a crash check)."""
+        return self._proc is not None and self.generation == generation
+
     async def open(self):
         async with self._open_lock:
             return await self._request('open', limits=self.limits, cap=self.max_kernels)
@@ -423,6 +462,7 @@ async def _helper():
             value = None
             error = None
             error_kind = None
+            reply_snapshot = False
 
             def on_print(stream, text):
                 state['size'] += len(json.dumps(text, ensure_ascii=True).encode())
@@ -465,7 +505,7 @@ async def _helper():
                     # releases the checkout too. This runs once per new worker,
                     # before either user feeds or a restored snapshot is loaded.
                     sessions[kernel] = (cm, session)
-                    await session.feed_run(PRELUDE)
+                    await session.feed_run(KERNEL_PRELUDE)
                     value = kernel
                 else:
                     session = sessions.get(kernel, (None, None))[1]
@@ -493,6 +533,7 @@ async def _helper():
                         if len(snapshot) > MAX_SNAPSHOT_BYTES:
                             raise KernelBusy('snapshot exceeds internal frame budget')
                         value = base64.b64encode(snapshot).decode('ascii')
+                        reply_snapshot = True
                     elif verb == 'load':
                         snapshot = base64.b64decode(frame['snapshot'], validate=True)
                         if len(snapshot) > MAX_SNAPSHOT_BYTES:
@@ -513,7 +554,7 @@ async def _helper():
                             if 'failed to load session:' in str(exc):
                                 raise SnapshotInvalid('invalid kernel snapshot') from exc
                             raise
-                        await session.feed_run(PRELUDE)
+                        await session.feed_run(KERNEL_PRELUDE)
                     elif verb == 'close':
                         await release(kernel)
                     else:
@@ -537,6 +578,8 @@ async def _helper():
             finally:
                 tasks.pop(request, None)
             reply = {'kind': 'reply', 'request': request, 'value': value, 'error': error, 'error_kind': error_kind}
+            if reply_snapshot and error is None:
+                reply['snapshot'] = True
             try:
                 encode(reply)
             except (ValueError, TypeError, OverflowError, RecursionError):

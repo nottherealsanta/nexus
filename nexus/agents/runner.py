@@ -222,7 +222,8 @@ WORKTREE_CHILD_TOOLS = frozenset(
 # Automatically isolated writer children retain the parent's approved code
 # execution tools inside their checkout. Explicit legacy worktree requests keep
 # the smaller reviewed tool surface above.
-AUTO_WORKTREE_CHILD_TOOLS = WORKTREE_CHILD_TOOLS | frozenset({"shell", "code"})
+AUTO_WORKTREE_CHILD_TOOLS = WORKTREE_CHILD_TOOLS | frozenset(
+    {"shell", "code_start", "code_attach", "code_run", "code_reset"})
 #: Tools only the root session may hold; a child never gets them.
 ROOT_ONLY_TOOLS = frozenset({"subagent", "subagent_continue"})
 #: The child session path segment: ``<parent>/sub/<n>``.

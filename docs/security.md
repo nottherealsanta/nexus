@@ -299,6 +299,28 @@ workers. No OS provider, filesystem mount, dependency installation or interprete
 snapshot is permitted. IPC is bounded, framed JSON with finite numbers and a
 32-level nesting limit, not pickle. Tool authority remains with nested dispatch.
 
+The kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`) keep these rules with
+one long-lived helper per runtime (`tools/codemode/kernel_host.py`, the same scrubbed
+environment and process-group kill) instead of one helper per call: a kernel's variables stay in
+the helper's worker, never in the daemon, and no provider credential is ever bound into it. A
+kernel's attachments are a request and never authority: every cell rebuilds its callable set from
+the current iteration's catalog and every nested call is permission-checked, including tools
+named explicitly in `code_start(tools=...)`. A timeout, cancel
+or lost worker discards that worker, so a half-run cell never leaves state behind.
+
+**Checkpoint HMAC (kernel plan §3.8).** After each successful cell the kernel's Monty `dump()` is
+stored in `~/.nexus/nexus.db` (`code_kernel_snapshots`). Monty states that snapshot bytes are not
+authenticated and must only be loaded unmodified, so each row is signed with HMAC-SHA256 under a
+per-home key (`code-kernel.key`, `0600`, created on first use) over `session_id`, `kernel_id`,
+`after_n`, `monty_version` and the bytes. Restore verifies the MAC in constant time, the Monty
+version and the kernel id **before** the bytes reach the helper; anything else is `KernelLost` and the
+row is deleted. The key protects against a database edited without the key (another local user
+tool, a mismatched copy), not against a process that can read both files. A checkpoint holds whatever
+the cells put in variables, including tool output (the same trust as tool results already stored in
+the database); it never holds provider credentials, which never enter the kernel. The helper's frame
+limit stays 2 MiB for every frame except snapshot `load` requests and `dump` replies (16 MiB), decided
+by the frame's own shape on both sides.
+
 ### Code-mode sandbox threats
 
 | Threat | Mitigation |

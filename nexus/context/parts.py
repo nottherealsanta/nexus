@@ -79,6 +79,7 @@ __all__ = [
     "canonical_message_text",
     "canonical_tool_text",
     "capture_environment",
+    "render_code_mode_guidance",
     "render_session_worktree",
     "current_user_index",
     "freeze_mcp_index",
@@ -546,6 +547,9 @@ class AssemblyContext:
     #: Labelled (label, value) facts for a session working in a Nexus worktree;
     #: empty for every other session. Rendered by the environment part.
     session_worktree: tuple[tuple[str, str], ...] = ()
+    #: Callable ``(session_id) -> blocks | awaitable of blocks`` giving the code-mode kernel
+    #: manifest for the compaction input (plan code-mode-kernel §3.9). ``None`` without code mode.
+    kernel_source: Any = None
 
     def history(self) -> tuple[Message, ...]:
         """Droppable prefix: everything before the current user turn."""
@@ -589,6 +593,25 @@ class _TextPart:
         if not text or not text.strip():
             return None
         return PartOutput(name=self.name, priority=self.priority, kind="text", text=text)
+
+
+#: The four code-mode tools. Their guidance is added only when one of them is available.
+CODE_MODE_TOOLS = ("code_start", "code_attach", "code_run", "code_reset")
+CODE_MODE_GUIDANCE = (
+    "Code mode (code_start, code_attach, code_run, code_reset) runs a persistent Python kernel that calls your "
+    "tools. Prefer it for multi-step tool work, fan-out (many similar calls, run together with asyncio.gather) and "
+    "filter-heavy work (read many results and keep only what matters). Keep big intermediate results in variables "
+    "rather than in the conversation, and look at slices (x[:5], len(x)) instead of printing whole values. After a "
+    "compaction, code_start re-describes a kernel that is still running (its variables are still there); it changes "
+    "nothing."
+)
+
+
+def render_code_mode_guidance(tool_names: Iterable[str]) -> str:
+    """The code-mode paragraph (plan code-mode-kernel §3.10), or ``""`` when no code tool is available."""
+    if not any(name in CODE_MODE_TOOLS for name in tool_names):
+        return ""
+    return "<code_mode>\n" + CODE_MODE_GUIDANCE + "\n</code_mode>"
 
 
 def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
@@ -663,6 +686,9 @@ class _EnvironmentPart:
         block = render_session_worktree(ctx.session_worktree)
         if block:
             text = text + "\n" + block
+        code_guidance = render_code_mode_guidance(schema.name for schema in ctx.tool_schemas)
+        if code_guidance:
+            text = text + "\n" + code_guidance
         if not text.strip():
             return None
         return PartOutput(name=self.name, priority=self.priority, kind="text", text=text)

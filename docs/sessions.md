@@ -366,6 +366,31 @@ and the latest summary context-head watermark are backfilled without rewriting
 record bodies. Collision-safe child allocation and full root metadata for
 nested children remain follow-up work; schema 6 alone is not full P2 completion.
 
+## Code-mode kernel checkpoints (`code_kernel_snapshots`)
+
+Machine state, not part of the record: one table in the shared `nexus.db`, created with
+`CREATE TABLE IF NOT EXISTS` by `tools/codemode/snapshots.py` (not a `_SCHEMA_STEPS` step: bumping the
+reset version `SCHEMA_VERSION` would back up and replace every user's database for a disposable
+cache). Columns: `session_id, kernel_id, after_n, monty_version, bytes, mac, created_at`, primary key
+`(session_id, kernel_id)`, so only the **newest checkpoint per kernel** is kept (an upsert after each
+successful cell). The table is never exported (JSONL, JSON, Markdown) and never replayed; the
+session log (`code.cell_*`, `code.kernel_*` events) stays the source of truth, and after a restart the
+kernel's attachments, `In [n]` counter and `kernel_id` are rebuilt from those events
+(`CodeKernels.reconstruct`).
+
+**Signing.** Monty documents its snapshots as unauthenticated, so every row carries an
+HMAC-SHA256 under a per-home 32-byte key (`<nexus home>/code-kernel.key`, created on first use with
+`O_EXCL`, mode `0600`, beside `nexus.db`). The MAC covers `session_id`, `kernel_id`, `after_n`,
+`monty_version` and the bytes, each length-prefixed, and is compared in constant time. A row that
+fails it, belongs to another kernel id, or was signed under another Monty version is refused
+(`KernelLost` with reason `invalid` or `version`); its bytes are never passed to Monty.
+
+**Retention.** A checkpoint is replaced by the next one, deleted by `code_reset` (with or without
+`stop`) and when the kernel is found lost, and deleted for the whole session when the session is
+closed (`Runtime.aclose_session`) or deleted/trashed (`Host.delete` -> `Runtime.release_code_session`).
+A daemon shutdown keeps them: that is what restore is for. Restoring a trashed session finds no
+checkpoint, so its kernel reports `KernelLost (missing)`.
+
 ## Snapshots
 
 A snapshot caches the current-state projection of a record prefix; it is used

@@ -1317,6 +1317,7 @@ class _ContextCoordinator:
         assembler._tier_name = tier_name
         if self._runtime is not None and session is not None:
             assembler._session_worktree = self._runtime._session_worktree_facts(session.id)
+            assembler._kernel_source = self._runtime._kernel_blocks_for
         assembler._effort_explicit = (
             getattr(session, "reasoning_effort_selection", None) is not None
             or getattr(agent_definition, "reasoning_effort", None) is not None
@@ -1718,6 +1719,7 @@ class _ManifestEnvironmentFactory:
         )
         facts = getattr(runtime, "_session_worktree_facts", None)
         assembler._session_worktree = facts(session_id) if callable(facts) else ()
+        assembler._kernel_source = getattr(runtime, "_kernel_blocks_for", None)
         if self._agent_definition is not None:
             assembler._agent_effort_supported = getattr(
                 assembler, "_reasoning_effort", None
@@ -4980,6 +4982,9 @@ class Runtime:
         if callable(precheck):
             precheck(session_id)
         await self.close_session_jobs(session_id)
+        code_kernels = getattr(self, "_code_kernels", None)
+        if code_kernels is not None and code_kernels.states(session_id):
+            await code_kernels.close_session(session_id)
         closer = getattr(self._sessions, "aclose_session", None)
         closed = False
         if callable(closer):
@@ -5625,39 +5630,78 @@ class Runtime:
         )
         code_config = getattr(getattr(config, "v2", None), "code_mode", None)
         if code_config is not None and code_config.enabled and manager.profile == "coding":
-            from .tools.codemode.catalog import build_catalog
-            from .tools.codemode.runner import Runner
+            from .tools.codemode.catalog import CODE_TOOLS
+            from .tools.codemode.kernels import CodeKernels
             from .tools.codemode.tool import availability, register
-            if availability()["available"] and (restrict is None or "code" in restrict):
-                runner = getattr(self, "_code_runner", None)
-                if runner is None:
-                    runner = self._code_runner = Runner(
-                        code_config.max_workers,
+            if availability()["available"] and (
+                restrict is None or any(name in restrict for name in ("code", *CODE_TOOLS))
+            ):
+                kernels = getattr(self, "_code_kernels", None)
+                if kernels is None:
+                    kernels = self._code_kernels = CodeKernels(
+                        code_config,
                         context_provider=self._code_context_provider(code_config),
+                        store=self._code_snapshot_store(),
+                        log_reader=self._code_log_reader,
                     )
                 # ``manager.tools`` is already this iteration's selection: the
                 # session's disabled tools/MCP servers were removed from the
                 # catalog before the manager was built, and ``restrict`` carries
                 # the skill/agent allowlist. The callable catalog is therefore
-                # per iteration and never includes a tool disabled for the
-                # session.
-                callable_catalog = build_catalog(manager.tools, code_config.expose)
-                options: dict[str, Any] = {}
-                accepted = inspect.signature(register).parameters
-                for name in ("inline_budget_tokens", "pinned"):
-                    if name in accepted:
-                        options[name] = getattr(code_config, name)
-                code_tool = register(runner, callable_catalog, code_config,
-                                     events=lambda sid: self._sessions.open(sid, create=False).events,
-                                     context_session=lambda sid: self._sessions.open(sid, create=False),
-                                     **options)
+                # rebuilt per iteration and never includes a tool disabled for the
+                # session; a kernel's attachments are requests, not grants.
+                code_tools = register(kernels, manager.tools, code_config)
+                # The four kernel tools are one capability: naming any of them (or
+                # the removed ``code`` tool, which maps to ``code_run``) grants all.
+                narrowed = None if restrict is None else (*restrict, *CODE_TOOLS)
                 manager = ToolManager(
-                    config, workspace=path_guard.workspace if path_guard is not None else self.workspace, tools=(*manager.tools, code_tool),
-                    restrict=restrict, job_registry=self._job_registry,
+                    config, workspace=path_guard.workspace if path_guard is not None else self.workspace, tools=(*manager.tools, *code_tools),
+                    restrict=narrowed, job_registry=self._job_registry,
                     path_guard=manager.path_guard,
                 )
         self._track_tool_manager(manager)
         return manager
+
+    def _code_snapshot_store(self) -> Any | None:
+        """The signed kernel-checkpoint store in the shared state database, or ``None``.
+
+        Plan code-mode-kernel §3.8. The MAC key sits beside the database (``<nexus home>/code-kernel.key``,
+        0600). Without a state database (injected-manager test paths) or key, code mode runs without
+        durability rather than failing.
+        """
+        db = self._state_db or getattr(getattr(self._sessions, "store", None), "db", None)
+        if db is None:
+            return None
+        try:
+            from .tools.codemode.snapshots import KEY_NAME, SnapshotStore, load_key
+
+            return SnapshotStore(db, load_key(Path(db.path).parent / KEY_NAME))
+        except Exception:  # noqa: BLE001 - durability is a cache; never block code mode on it
+            return None
+
+    def _code_log_reader(self, session_id: str) -> list[Any]:
+        """The session's ``code.*`` events, for rebuilding kernel metadata after a restart."""
+        session = self._sessions.open(session_id, create=False)
+        return [event for event in session.events if event.type.startswith("code.")]
+
+    def _kernel_blocks_for(self, session_id: str) -> Any:
+        """Code-mode kernel manifest blocks for a compaction input (plan code-mode-kernel §3.9).
+
+        An awaitable of ``KernelBlock`` tuples (the manager awaits it only when it builds a new
+        summary), or ``()`` when code mode never ran in this process.
+        """
+        kernels = getattr(self, "_code_kernels", None)
+        if kernels is None:
+            return ()
+        from .tools.codemode.manifest import kernel_blocks
+
+        return kernel_blocks(kernels, session_id)
+
+    def release_code_session(self, session_id: str) -> None:
+        """A session was deleted: drop its kernels and delete their checkpoints (plan code-mode-kernel §3.8)."""
+        kernels = getattr(self, "_code_kernels", None)
+        if kernels is not None:
+            kernels.release_session(session_id)
 
     def _code_context_provider(self, code_config: Any) -> Any | None:
         """The ``context`` namespace provider for code mode, or ``None`` (off).
@@ -8015,10 +8059,10 @@ class Runtime:
         self._closed = True
         self.agent_pool.clear()
         await self.voice.shutdown()
-        code_runner = getattr(self, "_code_runner", None)
-        if code_runner is not None:
+        code_kernels = getattr(self, "_code_kernels", None)
+        if code_kernels is not None and code_kernels.active:
             with contextlib.suppress(Exception):
-                await code_runner.close()
+                await code_kernels.aclose()
         if (live := getattr(self, "live", None)) is not None:
             await live.shutdown()
         for provider in self._owned_providers:

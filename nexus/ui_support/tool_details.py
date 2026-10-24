@@ -12,6 +12,7 @@ redacted and control-safe; anything clipped says so. The browser port lives in
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -302,8 +303,216 @@ def _nested_row(call: Mapping[str, Any]) -> DetailRow:
     return DetailRow(label, value)
 
 
+#: The removed one-shot ``code`` tool (old sessions replay as before) and the kernel tools.
+CODE_TOOL_NAMES = frozenset({"code", "code_start", "code_attach", "code_run", "code_reset"})
+#: The four kernel tools (kernel plan §3.11); ``code`` rows of old sessions are not among them.
+KERNEL_TOOL_NAMES = CODE_TOOL_NAMES - {"code"}
+_KERNEL_VERBS = {"code_start": "kernel started", "code_attach": "kernel attached", "code_reset": "kernel reset"}
+_CELL_MARK = re.compile(r"(?m)^(?:In \[\d+\]  |stdout:$|Out \[\d+\]:|calls:$)")
+
+
+def _servers_label(meta: Mapping[str, Any]) -> str:
+    """``github, linear (+14 tools)``: the attached servers and the tools that belong to none of them."""
+    attached = meta.get("attached")
+    if not isinstance(attached, Mapping):
+        return ""
+    servers = [str(s) for s in attached.get("servers") or []]
+    tools = [str(t) for t in attached.get("tools") or []]
+    loose = [t for t in tools if not any(t.startswith(f"mcp__{s}__") for s in servers)]
+    if not servers:
+        return f"{len(tools)} tool{'s' if len(tools) != 1 else ''}" if tools else ""
+    return ", ".join(servers[:6]) + (f" +{len(servers) - 6}" if len(servers) > 6 else "") + (
+        f" (+{len(loose)} tool{'s' if len(loose) != 1 else ''})" if loose else "")
+
+
+def kernel_parts(tool: ToolCallView) -> tuple[str, str] | None:
+    """``(title, rest)`` of a kernel tool's row, or ``None`` for any other tool.
+
+    ``⧉ kernel started`` / ``github, linear (+14 tools) · purpose``, or the notebook header
+    ``In [3]`` / ``✓ 0.04 s · 1 call · purpose``. A lost or restored kernel says so on the row.
+    """
+    if tool.name not in KERNEL_TOOL_NAMES:
+        return None
+    meta = tool.code_mode or {}
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    purpose = _clean(meta.get("purpose") or args.get("purpose") or "", 120).replace("\n", " ")
+    if tool.name != "code_run":
+        title = "⧉ " + _KERNEL_VERBS[tool.name]
+        if tool.name == "code_reset" and meta.get("stopped"):
+            title = "⧉ kernel stopped"
+        bits = [_servers_label(meta) if tool.name != "code_reset" else "", purpose]
+        return title, " · ".join(b for b in bits if b)
+    n = meta.get("n")
+    title = f"In [{n}]" if n is not None else "In […]"
+    status = tool_status(tool)
+    diagnostic = meta.get("diagnostic")
+    if meta.get("status") is None and status == "running":
+        mark = "… running"
+    elif meta.get("status") in (None, "ok") and status != "failed":
+        mark = "✓"
+    elif meta.get("limit"):
+        mark = f"✗ limit {meta['limit']}"
+    else:
+        mark = "✗ " + str(diagnostic.get("kind") if isinstance(diagnostic, Mapping) and diagnostic.get("kind")
+                          else meta.get("status") or "failed")
+    bits = [mark + (f" {meta['wall_ms'] / 1000:.2f} s" if isinstance(meta.get("wall_ms"), (int, float)) else "")]
+    calls = meta.get("calls", len(tool.nested_calls) if tool.nested_calls else None)
+    if calls is not None:
+        bits.append(f"{calls} call{'' if calls == 1 else 's'}")
+    if purpose:
+        bits.append(purpose)
+    restored = meta.get("restored")
+    if isinstance(restored, Mapping):
+        count = restored.get("missing_count", len(restored.get("missing_cells") or []))
+        bits.append(f"↻ restored after In [{restored.get('from_n')}]" + (f", {count} cell{'s' if count != 1 else ''} lost" if count else ""))
+    if isinstance(meta.get("lost"), Mapping):
+        bits.append("kernel lost: " + _clean(meta["lost"].get("reason"), 80).replace("\n", " "))
+    if meta.get("clipped"):
+        bits.append("output clipped")
+    return title, " · ".join(bits)
+
+
+def kernel_heading(tool: ToolCallView) -> str | None:
+    """The one-line heading of a kernel tool (``⧉ kernel started · …`` or ``In [n] ✓ …``)."""
+    parts = kernel_parts(tool)
+    return None if parts is None else f"{parts[0]} {parts[1]}".rstrip()
+
+
+def cell_result_parts(text: str) -> dict[str, str]:
+    """A cell result split at its labelled blocks: restore notice, header, diagnostic, stdout, Out, calls."""
+    parts = {"notice": "", "head": "", "extra": "", "stdout": "", "out": "", "calls": ""}
+    marks = [m.start() for m in _CELL_MARK.finditer(text)]
+    if not marks:
+        parts["extra"] = text.strip()
+        return parts
+    parts["notice"] = text[:marks[0]].strip()
+    for start, end in zip(marks, [*marks[1:], len(text)]):
+        chunk = text[start:end].strip()
+        if chunk.startswith("In ["):
+            head, _, rest = chunk.partition("\n")
+            parts["head"], parts["extra"] = head, rest.strip()
+        elif chunk.startswith("stdout:"):
+            parts["stdout"] = "\n".join(line[2:] if line.startswith("  ") else line for line in chunk.split("\n")[1:])
+        elif chunk.startswith("Out ["):
+            parts["out"] = chunk
+        elif chunk.startswith("calls:"):
+            parts["calls"] = chunk
+    return parts
+
+
+def _result_plain(tool: ToolCallView) -> str:
+    return "\n".join(str(b.get("text", "")) for b in tool.result if isinstance(b, Mapping))
+
+
+def _kernel_sections(tool: ToolCallView, meta: Mapping[str, Any]) -> list[DetailSection]:
+    """The lifecycle summary of ``code_start`` / ``code_attach`` / ``code_reset`` (kernel plan §3.11)."""
+    if tool.name not in _KERNEL_VERBS:
+        return []
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    rows = [_row("Event", _KERNEL_VERBS["code_reset"] if tool.name == "code_reset" and not meta.get("stopped")
+                 else "kernel stopped" if tool.name == "code_reset" else _KERNEL_VERBS[tool.name])]
+    for key, label in (("kernel_id", "Kernel"), ("agent_path", "Agent")):
+        if meta.get(key):
+            rows.append(_row(label, meta[key]))
+    if meta.get("purpose") or args.get("purpose"):
+        rows.append(_row("Purpose", meta.get("purpose") or args.get("purpose")))
+    attached = meta.get("attached")
+    if isinstance(attached, Mapping):
+        rows.append(_row("Attached", _servers_label(meta) or "nothing"))
+    if meta.get("reason"):
+        rows.append(_row("Reason", meta["reason"]))
+    if tool.name == "code_reset":
+        rows.append(_row("Variables", "cleared; In [n] restarts at 1" if not meta.get("stopped") else "gone; the kernel is stopped"))
+    return [DetailSection("Kernel", tuple(rows))]
+
+
+def _cell_sections(tool: ToolCallView, meta: Mapping[str, Any]) -> list[DetailSection]:
+    """Notebook form of a ``code_run`` cell: ``In [n]`` header, then ``stdout`` and ``Out [n]`` (kernel plan §3.11)."""
+    if tool.name != "code_run":
+        return []
+    n = meta.get("n")
+    parts = cell_result_parts(_result_plain(tool))
+    head = [_row("Status", tool_status(tool))]
+    for key, label in (("wall_ms", "Time (ms)"), ("calls", "Nested calls"), ("purpose", "Purpose")):
+        if meta.get(key) not in (None, ""):
+            head.append(_row(label, meta[key]))
+    sections = [DetailSection(f"In [{n}]" if n is not None else "In […]", tuple(head))]
+    if parts["notice"]:
+        sections.append(DetailSection("Kernel notice", (DetailRow("notice", _clean(parts["notice"]), True),)))
+    if parts["stdout"]:
+        sections.append(DetailSection("Stdout", (DetailRow("stdout", _clean(parts["stdout"]), True),)))
+    if parts["out"]:
+        label, _, body = parts["out"].partition(":")
+        sections.append(DetailSection(label.strip(), (DetailRow("value", _clean(body.strip()), True),)))
+    if meta.get("clipped"):
+        sections.append(DetailSection("Clipped", (_row("Output", "clipped to max_output_chars; the result text says what was cut"),)))
+    return sections
+
+
+def _durability_sections(meta: Mapping[str, Any]) -> list[DetailSection]:
+    """Checkpoint, restore and loss rows of a cell or start (kernel plan §3.8): labelled, never raw."""
+    sections: list[DetailSection] = []
+    checkpoint = meta.get("checkpoint")
+    if isinstance(checkpoint, Mapping):
+        status = str(checkpoint.get("status") or "written")
+        rows = [_row("Status", {"written": "written", "too_large": "not written (over max_snapshot_bytes)",
+                                "failed": "not written (error)"}.get(status, status)),
+                _row("After cell", f"In [{checkpoint.get('after_n')}]")]
+        for key, label in (("bytes", "Snapshot bytes"), ("max_snapshot_bytes", "Limit (bytes)"),
+                           ("sha256", "SHA-256"), ("error", "Error")):
+            if checkpoint.get(key) not in (None, ""):
+                rows.append(_row(label, checkpoint[key]))
+        if status != "written":
+            kept = checkpoint.get("kept_after_n")
+            rows.append(_row("Previous checkpoint", f"kept (after In [{kept}])" if kept is not None else "none"))
+        sections.append(DetailSection("Checkpoint", tuple(rows)))
+    restored = meta.get("restored")
+    if isinstance(restored, Mapping):
+        missing = [m for m in restored.get("missing_cells") or [] if isinstance(m, int)]
+        count = restored.get("missing_count", len(missing))
+        rows = [_row("Reason", restored.get("reason")), _row("Restored from after", f"In [{restored.get('from_n')}]"),
+                _row("Cells run after the snapshot", ", ".join(f"In [{m}]" for m in missing[:50])
+                     + (f" … {count - 50} more" if count > 50 else "") if count else "none")]
+        sections.append(DetailSection("Kernel restored", tuple(rows)))
+    lost = meta.get("lost")
+    if isinstance(lost, Mapping):
+        sections.append(DetailSection("Kernel lost", (
+            _row("Reason", lost.get("reason")), _row("Last cell", f"In [{lost.get('last_n')}]"),
+            _row("Result", "variables are gone; the kernel was reset empty, attachments kept"))))
+    return sections
+
+
+def _kernel_rows(meta: Mapping[str, Any]) -> tuple[list[DetailRow], list[DetailSection]]:
+    """Overview rows and sections from ``code.kernel_*`` / ``code.cell_*`` data (kernel plan §3.8)."""
+    rows: list[DetailRow] = []
+    sections: list[DetailSection] = []
+    for key, label in (("kernel_id", "Kernel"), ("agent_path", "Agent"), ("n", "Cell (In [n])")):
+        if meta.get(key) is not None:
+            rows.append(_row(label, meta[key]))
+    attached = meta.get("attached")
+    if isinstance(attached, Mapping):
+        tools = attached.get("tools") or []
+        if attached.get("servers"):
+            rows.append(_row("Servers", ", ".join(map(str, attached["servers"]))))
+        rows.append(_row("Attached tools", f"{len(tools)}: " + ", ".join(map(str, tools[:50]))
+                         + (f" … {len(tools) - 50} more" if len(tools) > 50 else "")))
+        targets = [t for t in attached.get("targets") or [] if isinstance(t, Mapping)]
+        if targets:
+            rows.append(_row("Context targets", ", ".join(str(t.get("name") or t.get("ref")) for t in targets)))
+    if meta.get("stopped") is not None:
+        rows.append(_row("Stopped", "yes" if meta["stopped"] else "no (variables cleared)"))
+    if meta.get("reason"):
+        rows.append(_row("Reason", meta["reason"]))
+    sections.extend(_durability_sections(meta))
+    skipped = [s for s in meta.get("skipped") or [] if isinstance(s, Mapping)]
+    if skipped:
+        sections.append(DetailSection(f"Not attached ({len(skipped)})", _bounded(
+            [_row(str(s.get("tool")), s.get("reason")) for s in skipped])))
+    return rows, sections
+
+
 def _code_sections(tool: ToolCallView) -> list[DetailSection]:
-    """Labelled sections of one ``code`` call: program, every nested call, result, store writes."""
+    """Labelled sections of one code call: program or cell, every nested call, result, store writes."""
     meta = tool.code_mode or {}
     args = tool.input if isinstance(tool.input, Mapping) else {}
     purpose = meta.get("purpose") or args.get("purpose") or ""
@@ -325,7 +534,16 @@ def _code_sections(tool: ToolCallView) -> list[DetailSection]:
         rows.append(_row("Callable", ", ".join(map(str, meta["callable"]))))
     if tool.call_id:
         rows.append(_row("Call ID", tool.call_id))
-    sections = [DetailSection(_clean(f"code · {purpose}" if purpose else "code", 300), tuple(rows))]
+    kernel_rows, kernel_sections = _kernel_rows(meta)
+    rows.extend(kernel_rows)
+    for key, label in (("stdout_bytes", "Stdout (bytes)"), ("out_summary", "Out"), ("clipped", "Output clipped")):
+        if meta.get(key) not in (None, "", False):
+            status_rows.append(_row(label, meta[key]))
+    title = tool.name if tool.name in CODE_TOOL_NAMES - {"code"} else "code"
+    sections = [DetailSection(_clean(f"{title} · {purpose}" if purpose else title, 300), tuple(rows))]
+    sections.extend(kernel_sections)
+    sections.extend(_kernel_sections(tool, meta))
+    sections.extend(_cell_sections(tool, meta))
     if status_rows:
         sections.append(DetailSection("Program status", tuple(status_rows)))
     targets = meta.get("targets") or []
@@ -333,7 +551,7 @@ def _code_sections(tool: ToolCallView) -> list[DetailSection]:
         sections.append(DetailSection("Targets", tuple(
             _row(str(t.get("name") or t.get("ref") or "?"), f"logical id {t.get('logical_id') or 'unknown'}")
             if isinstance(t, Mapping) else _row("target", t) for t in targets)))
-    program = args.get("program") or args.get("code") or tool.code
+    program = args.get("program") or args.get("cell") or args.get("code") or tool.code
     if program:
         sections.append(DetailSection("Code", (DetailRow("code", _numbered_program(str(program)), True),)))
     if tool.nested_calls:
@@ -370,16 +588,119 @@ def _code_sections(tool: ToolCallView) -> list[DetailSection]:
     return sections
 
 
+def _clip_lines(kind: str, text: str, limit: int, what: str) -> list[tuple[str, str]]:
+    lines = _clean(text, 20_000).split("\n")
+    rows = [(kind, line) for line in lines[:limit]]
+    if len(lines) > limit:
+        rows.append(("clip", f"… {len(lines) - limit} more {what} lines; open details (i) for all"))
+    return rows
+
+
+def kernel_signal_rows(tool: ToolCallView) -> list[tuple[str, str]]:
+    """Expanded body rows of a kernel tool: lifecycle facts, or the cell in notebook form.
+
+    A cell is the numbered source, ``stdout``, ``Out [n]`` and one row per nested call with its
+    result preview; every cut is announced and the full input and output stay in the details.
+    """
+    meta = tool.code_mode or {}
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    rows: list[tuple[str, str]] = []
+    if tool.name != "code_run":
+        for key, label in (("kernel_id", "kernel"), ("agent_path", "agent")):
+            if meta.get(key):
+                rows.append(("kv", f"{label}: {meta[key]}"))
+        attached = meta.get("attached")
+        if isinstance(attached, Mapping):
+            tools = [str(t) for t in attached.get("tools") or []]
+            if attached.get("servers"):
+                rows.append(("kv", "servers: " + ", ".join(map(str, attached["servers"]))))
+            rows.append(("kv", f"tools: {len(tools)}" + (": " + ", ".join(tools[:12]) if tools else "")))
+            if len(tools) > 12:
+                rows.append(("clip", f"… {len(tools) - 12} more tools; open details (i) for all"))
+            targets = [t for t in attached.get("targets") or [] if isinstance(t, Mapping)]
+            if targets:
+                rows.append(("kv", "context: " + ", ".join(str(t.get("name") or t.get("ref")) for t in targets)))
+        skipped = [s for s in meta.get("skipped") or [] if isinstance(s, Mapping)]
+        for item in skipped[:8]:
+            rows.append(("text", f"not attached: {item.get('tool')} ({_clean(item.get('reason'), 160)})"))
+        if len(skipped) > 8:
+            rows.append(("clip", f"… {len(skipped) - 8} more not attached; open details (i) for all"))
+        if meta.get("reason"):
+            rows.append(("kv", f"reason: {meta['reason']}"))
+        if tool.error:
+            rows.append(("error", _clean(tool.error, 2_000)))
+        text = _result_plain(tool)
+        if text:
+            rows += _clip_lines("text", text, 12, "result")
+        return rows
+    parts = cell_result_parts(_result_plain(tool))
+    restored = meta.get("restored")
+    if isinstance(restored, Mapping):
+        missing = [m for m in restored.get("missing_cells") or [] if isinstance(m, int)]
+        count = restored.get("missing_count", len(missing))
+        rows.append(("text", f"↻ kernel restored after In [{restored.get('from_n')}] ({restored.get('reason')})"
+                     + (f"; missing: {', '.join(f'In [{m}]' for m in missing[:20])}"
+                        + (f" … {count - 20} more" if count > 20 else "") if count else "; no cells missing")))
+    elif parts["notice"]:
+        rows += _clip_lines("text", parts["notice"], 4, "notice")
+    lost = meta.get("lost")
+    if isinstance(lost, Mapping):
+        rows.append(("error", f"kernel lost: {_clean(lost.get('reason'), 300)} (last cell In [{lost.get('last_n')}]); "
+                              "variables are gone, attachments kept"))
+    program = args.get("cell") or tool.code
+    if program:
+        lines = _numbered_program(str(program)).split("\n")
+        rows += [("out", line) for line in lines[:60]]
+        if len(lines) > 60:
+            rows.append(("clip", f"… {len(lines) - 60} more source lines; open details (i) for all"))
+    diag = meta.get("diagnostic")
+    if isinstance(diag, Mapping):
+        where = f" (line {diag['line']})" if diag.get("line") is not None else ""
+        rows.append(("error", f"{diag.get('kind', 'error')}{where}: {_clean(diag.get('message', ''), 400)}"))
+    elif parts["extra"] and tool_status(tool) == "failed":
+        rows += _clip_lines("error", parts["extra"], 6, "error")
+    if meta.get("limit"):
+        rows.append(("error", f"limit hit: {meta['limit']}"))
+    if tool.error and tool.error not in "\n".join(r[1] for r in rows):
+        rows.append(("error", _clean(tool.error, 2_000)))
+    if parts["stdout"]:
+        rows.append(("text", "stdout"))
+        rows += _clip_lines("out", parts["stdout"], 12, "stdout")
+    if parts["out"]:
+        lines = _clean(parts["out"], 20_000).split("\n")
+        rows.append(("kv", lines[0]) if ": " in lines[0] else ("text", lines[0]))
+        rows += [("out", line) for line in lines[1:12]]
+        if len(lines) > 12:
+            rows.append(("clip", f"… {len(lines) - 12} more Out lines; open details (i) for all"))
+    if meta.get("clipped") and "clipped" not in _result_plain(tool):
+        rows.append(("clip", "… output clipped to max_output_chars"))
+    shortened = False
+    for call in tool.nested_calls:
+        label, value = _nested_summary(call)
+        failed = _nested_status(call) in {"error", "denied"}
+        rows.append(("error" if failed else "text", f"{label}  {value}".rstrip()))
+        preview = _nested_result_text(call).strip()
+        if preview:
+            first = preview.split("\n", 1)[0]
+            shortened = shortened or "\n" in preview or len(first) > 160 or bool(call.get("clipped"))
+            rows.append(("out", "    ↳ " + _clean(first, 160).split("\n", 1)[0]))
+    if shortened:
+        rows.append(("clip", "… call inputs and outputs are shortened here; open details (i) for each call in full"))
+    return rows
+
+
 def code_signal_rows(tool: ToolCallView) -> list[tuple[str, str]]:
     """Compact ``(kind, text)`` rows for the expanded timeline body of a ``code`` call.
 
     Numbered program, one glyph row per nested call (live as ``running`` rows arrive), then
     the outcome. The full labelled sections stay behind the details view.
     """
+    if tool.name in KERNEL_TOOL_NAMES:
+        return kernel_signal_rows(tool)
     meta = tool.code_mode or {}
     args = tool.input if isinstance(tool.input, Mapping) else {}
     rows: list[tuple[str, str]] = []
-    program = args.get("program") or args.get("code") or tool.code
+    program = args.get("program") or args.get("cell") or args.get("code") or tool.code
     if program:
         lines = _numbered_program(str(program)).split("\n")
         rows += [("out", line) for line in lines[:60]]
@@ -409,7 +730,9 @@ def code_signal_rows(tool: ToolCallView) -> list[tuple[str, str]]:
 
 def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
     """Project one reducer tool call into sections; empty ones are omitted."""
-    if tool.name == "code" and (tool.code_mode or tool.nested_calls or "program" in (tool.input or {})):
+    if tool.name in CODE_TOOL_NAMES and (
+        tool.code_mode or tool.nested_calls or "program" in (tool.input or {}) or "cell" in (tool.input or {})
+    ):
         return _code_sections(tool)
     overview = [DetailRow("Status", tool_status(tool))]
     for label, value in (

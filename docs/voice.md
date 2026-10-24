@@ -106,6 +106,10 @@ summary, with the full traceback in the `nexus.voice` logger.
    delay the final transcript; clients ignore preview failures. On stop the
    in-flight preview is aborted and `VoiceCancel`led, and the final transcript of
    the whole recording (not the last preview) is what reaches the composer.
+   Native preview cancellation is best-effort: host cancellation errors do not
+   prevent microphone teardown or final transcription. Stream close is attempted
+   even if stream stop fails; capture cleanup errors still surface, with the
+   original stop error taking precedence over a secondary close error.
    Engine work is not interruptible, so a final may still wait for one running
    preview. Re-transcribing the whole recording each time is quadratic in its
    length; it stays bounded by `max_seconds` (≤ 120). Latency on real hardware is

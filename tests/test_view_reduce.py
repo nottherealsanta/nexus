@@ -28,7 +28,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "view"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VIEW_ROOT = REPO_ROOT / "nexus" / "view"
 
-GOLDEN_LOGS = ("text_stream", "multi_turn_tools", "subagent", "reconnect", "code_mode")
+GOLDEN_LOGS = ("text_stream", "multi_turn_tools", "subagent", "reconnect", "code_mode", "kernel_cells")
 
 
 # ---------------------------------------------------------------------------

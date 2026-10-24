@@ -879,6 +879,21 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
         )
     return _put(state, index, turn)
 
+#: Kernel lifecycle events annotate their tool row (``code_start``/``code_attach``/``code_reset``
+#: or the cell's start); they never close or fail a placeholder row.
+_CODE_KERNEL_NOTES = frozenset({
+    "code.kernel_started", "code.kernel_attached", "code.cell_started", "code.kernel_reset",
+    "code.kernel_checkpointed", "code.kernel_restored", "code.kernel_lost",
+})
+#: Durability events (kernel plan §3.8) are kept under their own key so their ``reason`` /
+#: ``n``-style fields never overwrite the cell's or reset's.
+_CODE_DURABILITY_KEYS = {
+    "code.kernel_checkpointed": "checkpoint",
+    "code.kernel_restored": "restored",
+    "code.kernel_lost": "lost",
+}
+
+
 def _on_code(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     if event.type == "code.store":
         values = dict(state.code_store)
@@ -915,15 +930,19 @@ def _on_code(state: ConversationView, event: Event, data: Mapping[str, Any]) -> 
                 rows[existing] = {**rows[existing], **dict(data)}
             turn = _update_tool(turn, call_id, nested_calls=rows)
         else:
-            changes: dict[str, Any] = {"code_mode": {**(tool.code_mode or {}), **dict(data)}}
-            if event.type == "code.finished":
-                # A finished program has no live calls: rows still "running" were cut off
+            key = _CODE_DURABILITY_KEYS.get(event.type)
+            changes: dict[str, Any] = {"code_mode": (
+                {**(tool.code_mode or {}), key: dict(data)} if key else {**(tool.code_mode or {}), **dict(data)}
+            )}
+            if event.type in {"code.finished", "code.cell_finished"}:
+                # A finished program or cell has no live calls: rows still "running" were cut off
                 # (cancel, limit, crash) and must not keep a spinner on replay.
                 changes["nested_calls"] = [
                     {**row, "status": "cancelled"} if row.get("status") == "running" else row
                     for row in tool.nested_calls
                 ]
-            if tool.started_ts is None and tool.status in {"requested", "running"}:
+            if (tool.started_ts is None and tool.status in {"requested", "running"}
+                    and event.type not in _CODE_KERNEL_NOTES):
                 # No tool.started ever named this id (older sessions persisted the id redacted
                 # as "***"): a placeholder row that no tool.completed will close.
                 changes["status"] = "completed" if data.get("status") == "ok" else "failed"
@@ -2211,6 +2230,14 @@ _HANDLERS: dict[str, Any] = {
     "code.call": _on_code,
     "code.store": _on_code,
     "code.finished": _on_code,
+    "code.kernel_started": _on_code,
+    "code.kernel_attached": _on_code,
+    "code.cell_started": _on_code,
+    "code.cell_finished": _on_code,
+    "code.kernel_reset": _on_code,
+    "code.kernel_checkpointed": _on_code,
+    "code.kernel_restored": _on_code,
+    "code.kernel_lost": _on_code,
     "tool.started": _on_tool_started,
     "tool.progress": _on_tool_progress,
     "tool.completed": _on_tool_completed,

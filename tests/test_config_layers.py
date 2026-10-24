@@ -798,18 +798,24 @@ def test_code_mode_defaults_and_env_coercion():
 
     section = CodeModeSection()
     assert (section.enabled, section.expose, section.context) == (True, "read_only", False)
-    assert (section.max_nested_calls, section.inline_budget_tokens, section.pinned) == (64, 2500, [])
+    assert (section.max_nested_calls, section.manual_budget_tokens, section.pinned) == (64, 6000, [])
+    assert (section.max_output_chars, section.max_live_kernels, section.idle_evict_s,
+            section.max_snapshot_bytes, section.max_cells) == (8000, 4, 900, 8 * 1024 * 1024, 500)
     assert (section.max_sub_calls, section.max_sub_input_tokens,
             section.max_total_sub_tokens, section.max_depth, section.sub_model) == (
         16, 32000, 200000, 1, None)
     overlay = env_overlay_v2({"NEXUS_CODE_MODE__MAX_NESTED_CALLS": "7",
-                              "NEXUS_CODE_MODE__INLINE_BUDGET_TOKENS": "900"})
-    assert overlay == {"code_mode": {"max_nested_calls": 7, "inline_budget_tokens": 900}}
+                              "NEXUS_CODE_MODE__MANUAL_BUDGET_TOKENS": "900"})
+    assert overlay == {"code_mode": {"max_nested_calls": 7, "manual_budget_tokens": 900}}
 
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"max_nested_calls": 0}, {"inline_budget_tokens": -1}, {"max_depth": 99},
+    [{"max_nested_calls": 0}, {"manual_budget_tokens": 499}, {"manual_budget_tokens": 50_001},
+     {"max_output_chars": 999}, {"max_output_chars": 100_001}, {"max_live_kernels": 0},
+     {"max_live_kernels": 33}, {"idle_evict_s": 59}, {"idle_evict_s": 86_401},
+     {"max_snapshot_bytes": 64 * 1024 - 1}, {"max_snapshot_bytes": 64 * 1024 * 1024 + 1},
+     {"max_cells": 9}, {"max_cells": 10_001}, {"max_cells": True}, {"max_depth": 99},
      {"max_workers": True}, {"expose": "some"}, {"expose": [""]}, {"pinned": [3]},
      {"sub_model": " "}],
 )
@@ -825,3 +831,22 @@ def test_code_mode_accepts_glob_list_and_pinned():
 
     section = CodeModeSection(expose=["read", "mcp__gh__*"], pinned=["read"])
     assert section.pinned == ["read"]
+
+
+def test_removed_inline_budget_key_loads_with_one_notice(tmp_path, caplog):
+    """An old file that still sets ``inline_budget_tokens`` loads; one line notes it (kernel plan §3.12)."""
+    import logging
+
+    from nexus.config import layers
+
+    home = tmp_path / "home"
+    (home / ".nexus").mkdir(parents=True)
+    (home / ".nexus" / "config.toml").write_text(
+        "config_version = 2\n[code_mode]\ninline_budget_tokens = 900\nmax_nested_calls = 7\n", encoding="utf-8")
+    layers._WARNED.discard("inline_budget_tokens")
+    with caplog.at_level(logging.WARNING, logger="nexus.config"):
+        config = Config.load(tmp_path, home=home, environ={})
+        Config.load(tmp_path, home=home, environ={})
+    assert config.v2.code_mode.max_nested_calls == 7
+    notices = [r for r in caplog.records if "inline_budget_tokens" in r.getMessage()]
+    assert len(notices) == 1 and "manual_budget_tokens" in notices[0].getMessage()

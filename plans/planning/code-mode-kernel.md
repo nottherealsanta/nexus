@@ -1,6 +1,6 @@
 # Plan: Code mode as a persistent kernel
 
-Status: planning (2026-10-24). Nothing here is implemented. Replaces the
+Status: implemented (2026-10-24), phases 0–5; live trial (phase 6) not verified. Replaces the
 one-shot `code` tool (plan 03, `nexus/tools/codemode/`, [docs/tools.md](../../docs/tools.md#code-mode-the-code-tool)).
 
 ## 1. Intent
@@ -469,8 +469,33 @@ Decided with the user (2026-10-24):
    the default ceiling for implicit/server/query-derived attachment.
 
 Open:
-- Should `whos()` / the manifest include short value previews (for example the
-  first 80 chars)? That is more useful, but it means variable contents can enter
-  context without the model asking. The default here is no.
-- Should `code_start` with no arguments attach only the built-ins (cheapest), or
-  also the `pinned` MCP tools? The default here is built-ins plus `pinned`.
+- **Resolved (default kept):** `whos()` and the manifest carry no value previews. Variable
+  contents would enter context without the model asking. See §8.
+- **Resolved (default kept):** a bare `code_start` attaches the built-ins plus `[code_mode]
+  pinned`. See §8.
+
+## 8. Implementation notes (2026-10-24)
+
+Phases 0–5 are implemented; phase 6 (the live-model trial) is not verified. Deviations from
+the text above:
+
+- **Wording of restored cells (§3.8).** The header reads `↻ restored after In [8], 1 cell
+  lost`, not "to rerun": cells are never re-run. The notice text stays as §3.8 gives it.
+- **Verb-group labels (TUI).** Each kernel tool counts with its own noun:
+  `Started N kernel(s)`, `Ran N cell(s)`, `Attached N kernel(s)`, `Reset N kernel(s)`
+  (`ui/ratatui/verb_groups.py`). The label stays past tense while running (the native client shows
+  `Working` separately).
+- **Type check replaced by `argcheck.py`.** Monty's static checker is not used in the
+  kernel (`type_check=False`). It infers each variable's type from its first binding, so a REPL
+  rebinding `x = 1` then `x = 2` fails, and it forgets earlier imports. `tools/codemode/argcheck.py`
+  parses each cell with `ast` and checks calls to attached tools against their JSON Schemas before
+  any host call. It reports only certain mistakes. Details: [codemode-monty-compat.md](../../docs/codemode-monty-compat.md).
+- **Subagents get no kernel yet (§3.10).** Known gap.
+- **`code_run` exclusivity is runtime-wide.** `exclusive` is set while any mutating tool is
+  attached to any kernel in the runtime, not only the calling agent's kernel. Known gap.
+- **Idle eviction emits no event.** The sidebar cannot show "evicted". Known gap.
+- **Unverified:** Linux execution, cross-version Monty snapshot compatibility, and the
+  live-model trial (phase 6).
+
+Docs: [tools.md](../../docs/tools.md), [context.md](../../docs/context.md),
+[sessions.md](../../docs/sessions.md), [decisions.md](../../docs/decisions.md) (known gaps).

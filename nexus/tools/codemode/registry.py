@@ -212,11 +212,19 @@ class KernelRegistry:
                     entry.lost = True
                 raise
 
-    async def start(self, session_id, agent_path):
+    async def start(self, session_id, agent_path, snapshot=None):
+        """Open the worker; with ``snapshot`` (checkpoint bytes the caller verified) restore into it.
+
+        A rejected snapshot (``SnapshotInvalid``) marks the entry lost; the caller closes it.
+        """
         key = self._key(session_id, agent_path)
         entry = self._pin(key, create=True)
         try:
             async with entry.lock:
+                if snapshot is not None and entry.handle is None and not entry.lost:
+                    if type(snapshot) is not bytes or len(snapshot) > self.max_snapshot_bytes:
+                        raise ValueError('snapshot exceeds the configured cap')
+                    entry.snapshot = snapshot
                 await self._ensure(entry)
         finally:
             self._unpin(entry)
@@ -239,6 +247,41 @@ class KernelRegistry:
                     raise
         finally:
             self._unpin(entry)
+
+    async def dump(self, session_id, agent_path):
+        """The kernel's current snapshot bytes (a checkpoint source; plan code-mode-kernel §3.8).
+
+        ``KernelBusy`` means the snapshot exceeds the frame budget; the kernel stays live.
+        """
+        entry = self._pin(self._key(session_id, agent_path))
+        try:
+            async with entry.lock:
+                await self._ensure(entry)
+                try:
+                    return await _finish(self.host.dump(entry.handle))
+                except (HostLost, KernelLost, asyncio.CancelledError, TimeoutError) as exc:
+                    await self._invalidate(exc, entry)
+                    raise
+        finally:
+            self._unpin(entry)
+
+    async def refresh(self, session_id, agent_path):
+        """Mark a live kernel lost when its helper process has died (found before the next feed)."""
+        entry = self._entries.get(self._key(session_id, agent_path))
+        alive = getattr(self.host, 'alive', None)
+        handle = None if entry is None else entry.handle
+        if handle is None or alive is None or entry.pins or alive(getattr(handle, 'generation', None)):
+            return
+        await self._invalidate(HostLost('sandbox helper exited', getattr(handle, 'generation', None)), entry)
+
+    def status(self, session_id, agent_path):
+        """``live`` | ``evicted`` | ``lost`` for a known kernel, else ``None``."""
+        entry = self._entries.get(self._key(session_id, agent_path))
+        if entry is None:
+            return None
+        if entry.lost:
+            return 'lost'
+        return 'live' if entry.handle is not None else 'evicted'
 
     async def evict_idle(self):
         async with self._guard:

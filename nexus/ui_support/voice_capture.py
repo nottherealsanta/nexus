@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import struct
@@ -124,9 +125,18 @@ class Recorder:
             return self._wav(b"")
         self._stopped = True
         if self._stream is not None:
+            stopped = False
             try:
-                self._stream.stop()
-                self._stream.close()
+                try:
+                    self._stream.stop()
+                    stopped = True
+                finally:
+                    if stopped:
+                        self._stream.close()
+                    else:
+                        # A close failure must not mask the original stop error.
+                        with contextlib.suppress(Exception):
+                            self._stream.close()
             finally:
                 self._stream = None
             if self.cues:

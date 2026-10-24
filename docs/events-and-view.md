@@ -92,34 +92,63 @@ child's unique `external.tool` rows, raised to `external.finished.tool_calls`
 when that is larger, so live and replayed sessions agree. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
 a web port is not planned (the web client is being deprecated).
 
-### Code mode (`code.*`, plan 03 section 3.12)
+### Code mode (`code.*`, plan 03 section 3.12; kernel plan §3.8)
 
-`code.started`, `code.call`, `code.store` and `code.finished` describe one `code` tool call
-(`call_id` is the outer call); nested calls are not message blocks and never enter the model
-context. The reducer folds them into the outer `ToolCallView` (`view/reduce.py:_on_code`):
+The kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`) emit
+`code.kernel_started`, `code.kernel_attached`, `code.cell_started`, `code.call`,
+`code.cell_finished`, `code.kernel_reset` and the durability events `code.kernel_checkpointed`,
+`code.kernel_restored` and `code.kernel_lost`. Every one carries `call_id`, the id of the
+tool call that caused it (for `code.call` and the cell events, the `code_run` call; `code.call`
+also has `parent_call_id`, the same id), plus `kernel_id`. The removed one-shot `code` tool
+wrote `code.started`, `code.call`, `code.store` and `code.finished` (`call_id` is the outer
+call); they are never emitted now but **still reduce unchanged** so old sessions replay and
+render as before (`code_mode.*` golden, `tests/test_codemode_replay.py`). Nested calls are not
+message blocks and never enter the model context. The reducer folds them into the outer
+`ToolCallView` (`view/reduce.py:_on_code`):
 
-- `code_mode`: `code.started` and `code.finished` data merged (purpose, digest, timeout_s,
-  exposure, callable, targets, limits, then status, limit, diagnostic, totals).
+- `code_mode`: the data of every non-call, non-store `code.*` event merged in arrival order.
+  A cell row ends with `n`, `source`, `purpose`, `status`, `limit`, `diagnostic`, `calls`,
+  `stdout_bytes`, `out_summary`, `clipped` and totals; a `code_start` row has `attached`
+  (`servers`, `tools`, `targets`), `skipped` and `agent_path`; a `code_reset` row has
+  `stopped` and `reason`.
+- Durability events (kernel plan §3.8) are folded under their own keys so they never overwrite a
+  cell's fields: `code_mode["checkpoint"]` (`code.kernel_checkpointed`: `kernel_id`, `after_n`,
+  `bytes`, `sha256`, `status` = `written | too_large | failed`, `max_snapshot_bytes`, and for a
+  non-written one `kept_after_n`, the checkpoint that stays, or `error`; never the snapshot bytes),
+  `code_mode["restored"]` (`code.kernel_restored`: `from_n`, `reason` = `restart | evicted |
+  host_crash`, `missing_cells` bounded to 200 with `missing_count`) and `code_mode["lost"]`
+  (`code.kernel_lost`: `reason` = `too_large | invalid | version | missing`, `last_n`). They are
+  emitted on the `code_run` / `code_start` call that caused them, `code.kernel_checkpointed` right
+  after that cell's `code.cell_finished`. The kernel's metadata after a restart is rebuilt by folding
+  these events in log order (`CodeKernels.reconstruct`), so the log alone is enough.
 - `nested_calls`: one dict per `nested_id`, in start order. `code.call` is emitted `running`
   and again final; the later event merges over the earlier one, so rows appear live and replay
-  equals live. When `code.finished` arrives, rows still `running` become `cancelled` (the
-  program was cut off by a cancel, limit or crash), so a replayed log never shows a spinner.
-  The loop must persist `call_id`, `nested_id` and `program_digest` of `code.*` events verbatim
-  (`_safe_code_event`): the long-token redaction once turned the 44-character call id into
-  `***`, so the events opened a phantom `code` row that never finished (an endless spinner and
-  a `Working` header that kept animating). Replaying such old logs, a `code.finished` closes a
-  row that no `tool.started` ever named.
-- `ConversationView.code_store`: the reduced store (`set` / `delete`, only on success). The outer
-  tool's `metrics["code.store"]` holds `entries` (whole store), `set` and `delete` of that call;
-  `tool.completed` keeps it when it replaces the result metrics.
+  equals live. When `code.finished` or `code.cell_finished` arrives, rows still `running` become
+  `cancelled` (the program or cell was cut off by a cancel, limit or crash), so a replayed log
+  never shows a spinner. The kernel lifecycle events (`code.kernel_*`, `code.cell_started`)
+  only annotate the row; they never close or fail a placeholder row.
+  The loop must persist `call_id`, `nested_id`, `parent_call_id`, `kernel_id` and
+  `program_digest` of `code.*` events verbatim (`_safe_code_event`): the long-token redaction
+  once turned the 44-character call id into `***`, so the events opened a phantom `code` row
+  that never finished (an endless spinner and a `Working` header that kept animating).
+  Replaying such old logs, a `code.finished` closes a row that no `tool.started` ever named.
+- `ConversationView.code_store`: the reduced store of the removed `store` (`set` / `delete`,
+  only on success), kept for old sessions. The outer tool's `metrics["code.store"]` holds
+  `entries` (whole store), `set` and `delete` of that call; `tool.completed` keeps it when it
+  replaces the result metrics.
 
-Rendering: `ui_support/tool_details.py` lays a code call out as sections `code · <purpose>`,
-`Program status`, `Targets`, `Code` (line-numbered program), `Call list`, one `Nested call N` per
-call (Tool, Kind, Status, Duration (ms), Permission, Matched rule, Bytes, Model / Input tokens /
-Output tokens for `llm`, `Arguments.*`, then the result through the tool's own renderer; clipped
-results are announced), `Result`, `Diagnostic`, `Store writes`, `Stored entries`.
-`code_signal_rows` gives the compact timeline body (numbered program, one glyph row per nested call
-`✓ ✗ ⊘ … –`, outcome). Golden log: `tests/fixtures/view/code_mode.*`.
+Rendering: `ui_support/tool_details.py` lays a code call (`code` or a kernel tool) out as
+sections `code · <purpose>` (with `Kernel`, `Agent`, `Cell (In [n])`, `Servers`, `Attached
+tools`, `Context targets`, `Stopped`, `Reason`), `Not attached (N)`, `Program status`
+(including `Stdout (bytes)`, `Out`, `Output clipped`), `Targets`, `Code` (line-numbered
+program or cell), `Call list`, one `Nested call N` per call (Tool, Kind, Status, Duration (ms),
+Permission, Matched rule, Bytes, Model / Input tokens / Output tokens for `llm`, `Arguments.*`,
+then the result through the tool's own renderer; clipped results are announced), `Result`,
+`Diagnostic`, `Store writes`, `Stored entries`. `code_signal_rows` gives the compact timeline
+body (numbered source, one glyph row per nested call `✓ ✗ ⊘ … –`, outcome). Goldens:
+`tests/fixtures/view/code_mode.*` (old) and `kernel_cells.*` (kernel); replay equals live for the
+durability events in `tests/test_codemode_replay.py`. Rows `Checkpoint`, `Kernel restored` and
+`Kernel lost` render with labelled values (status, cell, bytes, SHA-256, cells run after the snapshot).
 
 ## The reducer (`view/`)
 

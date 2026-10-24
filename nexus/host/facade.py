@@ -738,6 +738,9 @@ class HostFacade:
         record = self.runtime.sessions.delete(session_id, force=force, reason=reason)
         self.titles.cancel(session_id)
         self.presence.forget(session_id)
+        release = getattr(self.runtime, "release_code_session", None)
+        if callable(release):
+            release(session_id)  # kernels and their checkpoints go with a deleted session
         # The handle is gone, so the scheduler must not retain it. This is a
         # no-op if the session still has an active/queued turn (which delete
         # already refused), so forgetting can never strand live work.

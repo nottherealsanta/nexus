@@ -112,28 +112,31 @@ class Voice:
         recorder, self.recorder = self.recorder, None
         if not recorder:
             return
-        if self.task and self.task is not asyncio.current_task():
-            self.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.task
-        if self.preview_request:
-            await self.shell.client.voice_cancel(self.preview_request)
-        audio = await asyncio.to_thread(recorder.stop)
-        if discard:
-            await self.shell.client.voice_cancel(self.request)
-        else:
-            self.phase = "transcribing"
+        try:
             try:
+                if self.task and self.task is not asyncio.current_task():
+                    self.task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self.task
+                if self.preview_request:
+                    # Preview cancellation is best-effort, like preview inference.
+                    with contextlib.suppress(Exception):
+                        await self.shell.client.voice_cancel(self.preview_request)
+            finally:
+                audio = await asyncio.to_thread(recorder.stop)
+            if discard:
+                await self.shell.client.voice_cancel(self.request)
+            else:
+                self.phase = "transcribing"
                 result = await self.shell.client.voice_transcribe(audio, self.request, session=self.shell.controller.session)
                 if (self.generation == self.shell.generation and self.phase == "transcribing"
                         and not self.shell.panel_title and result.request_id == self.request):
                     self.shell.composer_insert = getattr(result, "text", "")
                     self.shell.composer_auto_send = self.auto_send if send is None else send
                     self.shell.composer_insert_kind = "voice"
-            finally:
-                self.phase = "idle"
-        self.phase = "idle"
-        self.preview = ""
+        finally:
+            self.phase = "idle"
+            self.preview = ""
 
     async def discard(self):
         self.phase = "idle"

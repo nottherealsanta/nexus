@@ -67,6 +67,7 @@ from ..model.request import ModelRequest, SamplingParams, ToolSchema
 from ..model.tokenizer import DEFAULT_TOKENIZER
 from ..util import new_id
 from .budget import BudgetInputs, PartRequest, allocate, fit_suffix_count, part_caps
+from .kernel_block import manifest_message, render_kernel_manifest
 from .cache import (
     TokenCountCache,
     boundaries_metadata,
@@ -325,6 +326,26 @@ def _is_async(obj: Any) -> bool:
     if target is None and callable(obj):
         target = obj
     return inspect.iscoroutinefunction(target)
+
+
+def _kernel_blocks(ctx: Any) -> Any:
+    """The session's kernel manifest blocks: a sequence, or an awaitable of one (plan §3.9)."""
+    source = getattr(ctx, "kernel_source", None)
+    session_id = getattr(getattr(ctx, "session", None), "id", None)
+    if not callable(source) or not session_id:
+        return ()
+    return source(session_id)
+
+
+def _with_kernel_manifest(messages: list[Message], blocks: Any) -> list[Message]:
+    """``messages`` plus the bounded kernel manifest as a final message, when there is one."""
+    message = manifest_message(tuple(blocks or ()))
+    return [*messages, message] if message is not None else messages
+
+
+def _manifest_text(blocks: Any) -> str:
+    """The rendered kernel manifest for a handoff brief, or ``""`` without kernels."""
+    return render_kernel_manifest(tuple(blocks or ()))
 
 
 def _is_async_summarizer(summarizer: Any) -> bool:
@@ -1212,6 +1233,7 @@ class ContextManager:
             agents_text=env.agents_text,
             environment=env.environment,
             session_worktree=tuple(getattr(self, "_session_worktree", ())),
+            kernel_source=getattr(self, "_kernel_source", None),
             tool_schemas=tuple(self._tool_schemas),
             messages=snapshot,
             current_user_index=current_user_index(snapshot),
@@ -1887,10 +1909,22 @@ class ContextManager:
     # -- summary persistence and reuse ------------------------------------
 
     def _perform_handoff(self, env, ctx, boundary, cut, tokens=(None, None)):
+        """Cut over to a handoff head; the code-mode kernel manifest joins the brief (plan §3.9)."""
+        blocks = _kernel_blocks(ctx)
+        if inspect.isawaitable(blocks):
+            return self._perform_handoff_async(blocks, env, ctx, boundary, cut, tokens)
+        return self._perform_handoff_with(env, ctx, boundary, cut, tokens, _manifest_text(blocks))
+
+    async def _perform_handoff_async(self, blocks, env, ctx, boundary, cut, tokens):
+        manifest = _manifest_text(await blocks)
+        result = self._perform_handoff_with(env, ctx, boundary, cut, tokens, manifest)
+        return await result if inspect.isawaitable(result) else result
+
+    def _perform_handoff_with(self, env, ctx, boundary, cut, tokens, manifest):
         config = env.config.v2.context
         def commit(summary=None, fallback=False):
             ctx.session.handoff(kept_from_seq=boundary, reason="overflow", _within_turn=True,
-                summary=summary, _summary_fallback=fallback,
+                summary=summary, _summary_fallback=fallback, _kernel_manifest=manifest,
                 _tokens_before=tokens[0], _kept_tokens=tokens[1],
                 _brief_limit=max(32, min(6000, int(BudgetInputs.from_config_and_caps(
                     env.config, env.capabilities).input_budget * 0.1))))
@@ -2211,6 +2245,37 @@ class ContextManager:
         else:
             input_messages = list(history[:dropped])
             prior_id = ""
+        # The kernel manifest (plan code-mode-kernel §3.9) is part of the input of a summary
+        # that is actually produced, so it is fetched only here: a reuse makes no model call.
+        blocks = _kernel_blocks(ctx)
+        if inspect.isawaitable(blocks):
+            return self._summarize_prefix_async(
+                blocks, env, ctx, history, dropped, suffix, strategy,
+                input_messages, prior_id, evicted, evicted_actions,
+            )
+        return self._summarize_prefix(
+            env, ctx, history, dropped, suffix, strategy,
+            _with_kernel_manifest(input_messages, blocks), prior_id, evicted, evicted_actions,
+        )
+
+    async def _summarize_prefix_async(
+        self, blocks: Any, env, ctx, history, dropped, suffix, strategy,
+        input_messages, prior_id, evicted, evicted_actions,
+    ) -> CompactionResult:
+        resolved = await blocks
+        produced = self._summarize_prefix(
+            env, ctx, history, dropped, suffix, strategy,
+            _with_kernel_manifest(input_messages, resolved), prior_id, evicted, evicted_actions,
+        )
+        if inspect.isawaitable(produced):
+            produced = await produced
+        return produced
+
+    def _summarize_prefix(
+        self, env, ctx, history, dropped, suffix, strategy,
+        input_messages, prior_id, evicted, evicted_actions,
+    ) -> CompactionResult | Any:
+        """Digest, reuse-by-digest, then summarize ``input_messages`` into one new artifact."""
         digest = self._summary_digest(input_messages, strategy, prior_id)
         existing = self._find_summary(ctx, digest, strategy)
         if existing is not None:

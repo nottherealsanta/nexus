@@ -136,6 +136,58 @@ def session_rows(view: Any, *, phase: str, agent: str, model: str, effort: str |
     return rows
 
 
+def _size(n: int) -> str:
+    return f"{n / 1024 / 1024:.1f} MB" if n >= 1024 * 1024 else f"{n / 1024:.0f} KB" if n >= 1024 else f"{n} B"
+
+
+def kernel_rows(view: Any) -> list[tuple[str, str]]:
+    """Label/value rows of the active agent's code-mode kernel, folded from the view (kernel plan §3.11).
+
+    Nothing here asks the registry: the rows are what the session log shows. Idle eviction
+    leaves no event, so an evicted kernel reads as active until the next cell restores it.
+    Empty when the agent never started a kernel.
+    """
+    kernel: dict[str, Any] | None = None
+    for turn in view.turns:
+        for tool in turn.tools:
+            meta = tool.code_mode or {}
+            if tool.name not in {"code_start", "code_attach", "code_run", "code_reset"} or not isinstance(meta, Mapping):
+                continue
+            if tool.name == "code_start" or (kernel and meta.get("kernel_id") not in (None, kernel["id"])):
+                kernel = {"id": meta.get("kernel_id"), "servers": [], "tools": [], "n": 0, "ckpt": None,
+                          "state": "active"}
+            if kernel is None:
+                kernel = {"id": meta.get("kernel_id"), "servers": [], "tools": [], "n": 0, "ckpt": None,
+                          "state": "active"}
+            attached = meta.get("attached")
+            if isinstance(attached, Mapping):
+                kernel["servers"] = list(dict.fromkeys([*kernel["servers"], *map(str, attached.get("servers") or [])]))
+                kernel["tools"] = list(dict.fromkeys([*kernel["tools"], *map(str, attached.get("tools") or [])]))
+            if tool.name == "code_reset":
+                kernel.update(n=0, ckpt=None, state="stopped" if meta.get("stopped") else "active (reset)")
+            elif tool.name == "code_run":
+                kernel["n"] = max(kernel["n"], _int(meta.get("n")))
+                kernel["state"] = f"active as of In [{meta.get('n')}]" if meta.get("n") is not None else "active"
+                if isinstance(meta.get("restored"), Mapping):
+                    kernel["state"] += f" (restored: {meta['restored'].get('reason')})"
+                if isinstance(meta.get("lost"), Mapping):
+                    kernel["state"] = f"lost: {meta['lost'].get('reason')}"
+                    kernel["ckpt"] = None
+            if isinstance(meta.get("checkpoint"), Mapping) and meta["checkpoint"].get("status", "written") == "written":
+                kernel["ckpt"] = meta["checkpoint"]
+    if kernel is None:
+        return []
+    rows = [("Kernel", sanitize(str(kernel["id"] or "unknown"), 40))]
+    loose = [t for t in kernel["tools"] if not any(t.startswith(f"mcp__{s}__") for s in kernel["servers"])]
+    rows.append(("Attached", sanitize(", ".join(kernel["servers"]) + (f" (+{len(loose)} tools)" if loose else "")
+                                      if kernel["servers"] else f"{len(kernel['tools'])} tools", 120)))
+    rows.append(("Cells", str(kernel["n"])))
+    ckpt = kernel["ckpt"]
+    rows.append(("Snapshot", f"after In [{ckpt.get('after_n')}] · {_size(_int(ckpt.get('bytes')))}" if ckpt else "none"))
+    rows.append(("Liveness", sanitize(kernel["state"], 120)))
+    return rows
+
+
 def mcp_rows(report: Mapping[str, Any] | None, *, error: str | None = None) -> list[tuple[str, str, str]]:
     """``(tone, text, note)`` rows of the MCP SERVERS block.
 
