@@ -55,6 +55,8 @@ def test_environment_block_teaches_the_git_landing_flow():
                    "git merge develop", "/merge", "git status"):
         assert needle in text, needle
     assert "nexus merge" not in text
+    assert "plain Git" in text and "No Nexus CLI merge command exists or is required" in text
+    assert "never a blocker" in text
 
 
 def _landing_manager(tmp_path: Path):

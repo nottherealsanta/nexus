@@ -624,6 +624,8 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
         "5. After a successful merge, report the landed commit. The work is done.",
         "Merge only when the work is finished and verified, or when the user asks (for example with /merge). "
         "Never merge partial work.",
+        "Landing uses plain Git in the shell. No Nexus CLI merge command exists or is required, so a `nexus` "
+        "binary without `merge` is never a blocker: run the git commands above.",
         "</session_worktree>"]
     return "\n".join(lines)
 

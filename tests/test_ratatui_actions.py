@@ -691,6 +691,8 @@ async def test_merge_command_sends_instruction_only_in_a_worktree_session(tmp_pa
     text = shell.client.enqueue.await_args.args[1]
     assert shell.client.enqueue.await_args.args[0] == "s"
     assert "into main" in text and 'merge --ff-only' in text and text.endswith("Note from the user: ship it")
+    assert "plain Git" in text and "no Nexus CLI merge command exists or is required" in text
+    assert "nexus merge" not in text
     main = AsyncMock(return_value=SimpleNamespace(state={"kind": "main"}))
     shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock(), session_worktree_choice=main)
     await shell.submit("/merge")

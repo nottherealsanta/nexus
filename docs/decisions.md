@@ -26,7 +26,9 @@ checkout (the agent stops and tells the user which). A first version,
 a bespoke merge command (a host command, `commit-tree` squash, session-branch
 `update-ref`), reimplemented those checks; it was removed. The rule "never edit
 files or run other git write commands in the main checkout" stays; the
-`--ff-only` merge is the single exception. The earlier session-name entry points
+`--ff-only` merge is the single exception. Both the environment block and the
+`/merge` instruction say outright that no Nexus CLI merge command exists or is
+required, so an installed `nexus` without `merge` is never a reason to stop. The earlier session-name entry points
 here for how a named worktree is landed.
 
 The user always approves: a shell command that runs a Git write subcommand

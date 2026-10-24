@@ -68,7 +68,8 @@ not guarantee an operator approval when policy is permissive. This explicit
 approval is required because promotion changes the checkout used by future
 turns.
 
-There is no merge tool or command. Landing the branch is plain Git in the shell
+There is no merge tool or command, and none is required (the agent guidance
+and `/merge` say so: a `nexus` CLI without `merge` is not a blocker). Landing the branch is plain Git in the shell
 (`git -C <main checkout> merge --ff-only <session branch>`, see
 [decisions.md](decisions.md#agents-land-their-own-session-worktree-with-git-2026-10-23));
 the permission engine forces an ask for any shell command that runs a Git write
