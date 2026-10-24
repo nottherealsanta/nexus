@@ -208,3 +208,23 @@ def test_merge_state_unmerged_and_status_fields(project) -> None:
     assert status["merged"] is False and status["unmerged_commits"] == 1
     git(parent, "merge", "--ff-only", record.branch)
     assert service.session_status(record.child_id, root=root)["merged"] is True
+
+
+def test_legacy_v3_record_is_ignored_not_fatal(project) -> None:
+    """An authenticated pre-v4 record left on disk must not stop startup (plan 3.1)."""
+    import hashlib
+    import hmac
+    import json
+    from nexus.agents import worktrees as base
+    parent, root, service, record = project
+    service_root, records = base._service_layout(root)
+    key = base._load_key(service_root, create=False)
+    payload = dict(sw._payload(record), version=3, child_id="session-legacy/sub/1",
+                   branch="nexus/session/child-1-abc123")
+    mac = hmac.new(key, base._canonical_json(payload), hashlib.sha256).hexdigest()
+    legacy = records / base._record_name("session-legacy/sub/1")
+    legacy.write_text(json.dumps({"record": payload, "mac": mac}), encoding="utf-8")
+    legacy.chmod(0o600)
+    assert service.list_worktrees(parent, root=root) == (record,)
+    assert sw.list_sessions(root=root) == (record,)
+    assert sw.recover_sessions(root=root, created_ids=set()) == (record,)

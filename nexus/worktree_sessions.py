@@ -1407,13 +1407,14 @@ class SessionWorktrees:
                 return
             if self.registry.exists():
                 from .agents import worktrees
+                from .agents.session_worktrees import _is_current
                 records = list((self.registry / "records").glob("*.json"))
                 if len(records) > 10000:
                     raise ValueError("Worktree recovery exceeds 10,000 records")
                 created = set()
                 for path in records:
                     payload = json.loads(worktrees._read_metadata_bytes(path)).get("record", {})
-                    if payload.get("kind") != "session":
+                    if not _is_current(payload):
                         continue
                     # The creating session logged worktree.created for the branch
                     # once the checkout was published. Subagent child ids

@@ -286,6 +286,15 @@ def status_counts(cwd: str | Path, *, max_entries: int = 10_000) -> dict[str, in
             process.stdout.close()
 
 
+def _is_current(payload: object) -> bool:
+    """A session record this version reads; older versions are ignored, not errors.
+
+    Records from before agent-managed worktrees (v3) are unsupported (plan 3.1),
+    but one left on disk must not stop the daemon or hide the current records.
+    """
+    return isinstance(payload, dict) and payload.get("kind") == "session" and payload.get("version") == _VERSION
+
+
 def _payload(record: SessionWorktreeRecord) -> dict[str, object]:
     return {
         "version": _VERSION, "kind": "session", "child_id": record.child_id,
@@ -598,7 +607,7 @@ def create_session(parent_workspace: str | Path, session_id: str, name: str, *, 
             try:
                 envelope = json.loads(_base._read_metadata_bytes(entry))
                 payload = envelope.get("record", {})
-                if payload.get("kind") == "session":
+                if _is_current(payload):
                     existing = _read(entry, payload.get("child_id", ""), key)
                     # A deliberately removed checkout leaves its active record
                     # and branch so any session can recreate it later.
@@ -732,7 +741,7 @@ def recover_sessions(*, root: str | Path, created_ids: set[str],
         try:
             envelope = json.loads(_base._read_metadata_bytes(path))
             payload = envelope["record"]
-            if payload.get("kind") != "session": continue
+            if not _is_current(payload): continue
             record_id = payload.get("child_id")
             if not isinstance(record_id, str): raise ValueError("missing record id")
         except Exception as exc:
@@ -810,7 +819,7 @@ def list_sessions(*, root: str | Path) -> tuple[SessionWorktreeRecord, ...]:
     for path in sorted(records.glob("*.json")):
         try:
             payload = json.loads(_base._read_metadata_bytes(path))["record"]
-            if payload.get("kind") == "session": results.append(get_session(payload["child_id"], root=service_root))
+            if _is_current(payload): results.append(get_session(payload["child_id"], root=service_root))
         except _base.WorktreeError:
             raise
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -842,7 +851,7 @@ def list_worktrees(parent_workspace: str | Path, *, root: str | Path,
         for path in sorted(records.glob("*.json")):
             try:
                 payload = json.loads(_base._read_metadata_bytes(path))["record"]
-                if payload.get("kind") != "session":
+                if not _is_current(payload):
                     continue
                 record = _read(path, payload["child_id"], key)
             except _base.WorktreeError:
