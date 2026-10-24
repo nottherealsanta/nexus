@@ -1185,6 +1185,14 @@ def test_builtin_build_prompt_names_no_optional_tools_or_roles() -> None:
     for retired in ("wait=", "`wait`", "subagent_status", "subagent_control"):
         assert retired not in body, retired
 
+
+def test_builtin_build_prompt_includes_mermaid_guidance() -> None:
+    body = (_default_seed_source() / "build.md").read_text()
+    assert "## Diagrams" in body
+    assert "fenced ```mermaid block" in body
+    assert "classDef" in body and "about 15 nodes or fewer" in body
+    assert "never replaces it" in body
+
 @pytest.mark.parametrize("role", ["build", "orchestrator"])
 def test_packaged_root_prompts_open_with_identity(role):
     """Root prompts open with the Nexus identity line and stay short."""

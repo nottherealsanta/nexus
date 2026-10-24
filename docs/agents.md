@@ -321,7 +321,8 @@ must carry all relevant findings rather than assuming they are shared. The
 orchestrator then verifies. When structure is clearer than prose (delegation
 graph, data flow, sequences, state machines) it also adds a small Mermaid
 diagram (supported subset only, short labels) next to the text summary; the
-native TUI renders it as box-drawing art. The live
+native TUI renders it as box-drawing art. The packaged `build` prompt carries
+the same diagram guidance. The live
 tool list and `subagent` roster still come from runtime.
 
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
