@@ -420,6 +420,8 @@ here, so add a row when you add a file.
 | `context_ns.py` | Flat `context_*` and `llm` host functions over `ContextReadPort`, with per-program sub-call limits |
 | `ipc.py` | Bounded, framed JSON IPC between daemon and helper (finite numbers, 32-level nesting) |
 | `monty_adapter.py` | Isolated helper process; sole importer of `pydantic_monty` |
+| `kernel_host.py` | Planned (§[kernel plan](../plans/planning/code-mode-kernel.md)): long-lived helper host owning the async Monty pool and kernel IPC |
+| `registry.py` | Volatile code-mode kernel ownership, bounded admission, checkpoint and eviction registry |
 | `runner.py` | Daemon-side runner: helper lifecycle, admission, id-correlated callbacks, `killpg` |
 | `store.py` | Bounded JSON `store`/`load` committed on success, replayed from `code.store` |
 | `stubs.py` | Python stubs from JSON Schema (`Literal`, `| None = None`) for type checking |

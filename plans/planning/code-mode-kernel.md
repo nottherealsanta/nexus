@@ -66,7 +66,9 @@ model ── code_attach(servers=["slack"]) ──▶         # more tools, same
 | `[code_mode]` config | `config/schema.py` `CodeModeSection` | New keys (§3.12); `expose` and `pinned` stay |
 | Registration per iteration manager | `runtime.py` (`_code_runner`, `register`) | Registers the four tools; kernels outlive turns (§3.4) |
 
-### Verified in a probe (Monty 1.1.0, macOS, 2026-10-24)
+### Phase 0 probe results (resolved; Monty 1.1.0, macOS, 2026-10-24)
+
+The live-session spike is recorded in [docs/codemode-monty-compat.md](../../docs/codemode-monty-compat.md#kernel-plan-phase-0-live-session-spike-2026-10-24). Its helper-scrubbing and fresh-pool/fresh-helper snapshot-restore gates passed on macOS with Monty 1.1.0. Linux execution and snapshot compatibility across patch versions remain unverified.
 
 `AsyncMonty()` → `pool.checkout()` → `AsyncMontySession`:
 
@@ -86,11 +88,34 @@ model ── code_attach(servers=["slack"]) ──▶         # more tools, same
 - The stub docs say snapshots are **not authenticated**: "Only load unmodified
   bytes from a trusted, compatible Monty producer."
 
-Not verified yet (Phase 0): the env the `monty` worker subprocess inherits;
-whether statements before an error in a failed cell keep their assignments;
-whether a cell can list its own globals (for `whos()`); `limits=` and type-check
-stubs on `checkout`; the cost of one live worker; and dump compatibility across
-Monty patch versions.
+Phase 0 results (full procedure, measurements, and caveats are in the linked
+compatibility record above):
+
+- Failed cells are **not transactional**: rebinding, new globals, and mutations
+  made before an exception persist; the session remains usable.
+- Top-level `locals()` returns the session namespace across cells. `globals()`,
+  `dir()`, `dir(before)`, and `vars()` raised `NameError`; do not assume those
+  CPython inspection helpers exist. Function-local behavior and bounded/safe
+  copying of arbitrary values were not established.
+- `checkout(limits=..., type_check=True, type_check_stubs=...)` worked for the
+  tested options; timeout and memory limits triggered, and a follow-up cell
+  worked. The tested stub enforced the declared argument type. These probes do
+  not establish total RSS bounds or exhaustive enforcement of all options.
+- One minimal helper plus worker measured roughly 41 MiB combined RSS, and
+  already-running pool creation/checkout were measured; these are not product
+  capacity or cold-start guarantees.
+- On the tested macOS build, the Monty child exposed no environment keys, even
+  when the helper had a synthetic marker (positive control) or minimal locale
+  variables. The scrubbed helper also launched a working worker. This is an OS
+  observation, not a portable guarantee; retain helper scrubbing as defense in
+  depth.
+- Dump/load succeeded in a new checkout, a fresh pool, and a separate helper.
+  Snapshots are version-specific; only Monty 1.1.0 was available, so
+  cross-patch compatibility remains unverified. Snapshots are trusted,
+  unauthenticated bytes.
+
+The probe did not establish Linux behavior. See the linked record for exact
+commands, tested values, and remaining compatibility limits.
 
 ## 3. Design
 
@@ -158,9 +183,9 @@ If the kernel host crashes, every live kernel is marked for restore (§3.8) and
 the host is respawned on the next feed. A crashed **worker**
 (`MontyCrashedError`) loses only that kernel.
 
-Phase 0 decides whether the helper is needed at all. If the `monty` worker
-subprocess provably gets an empty environment, the daemon could own the pool
-directly. The default is to keep the helper.
+Phase 0 observed no environment keys in the Monty worker on macOS 1.1.0,
+but this is not a portable guarantee and Linux remains unverified. Keep the
+scrubbed helper as the default defense-in-depth boundary.
 
 ### 3.4 Kernel identity and lifetime
 
@@ -211,9 +236,12 @@ gives `NameError: name 'x' is not callable now (disabled for this session)`.
 The adapter maps the name to that message. The permission engine runs on every
 nested call as it does today.
 
-`expose` keeps its meaning as the ceiling for which tools can ever be attached
-(`read_only` by default). The default flips to `all` only if live trials show
-it is needed; that is a separate decision.
+`expose` is the ceiling for implicit attachment through server selection or
+query results (`read_only` by default). A tool explicitly named in `tools` may
+be attached even if it is mutating; this selection is not a grant. Every call
+still uses the current-turn callable catalog and passes all current permission,
+authorization, and nested-call checks. Server- or query-derived attachment
+remains subject to `expose`.
 
 ### 3.7 Cell output: what enters context
 
@@ -235,9 +263,10 @@ calls:
   `Out`). A clip is announced with full sizes and a hint (`try issues[:5] or
   len(issues)`).
 - `whos()` is a kernel helper that returns a table of name, type and size/len,
-  with no values. If Monty cannot list globals (Phase 0), the harness keeps the
-  set of names assigned by each successful cell, taken from its AST, and asks the
-  kernel for type and size.
+  with no values. Phase 0 found top-level `locals()` returns the session
+  namespace, while `globals()` and `dir()` do not work. Use the tested top-level
+  `locals()` approach; bounded/safe extraction of arbitrary values remains an
+  implementation concern.
 - The nested-call appendix and image refs (`img-N`) work as today.
 
 ### 3.8 Durability: log first, snapshots as a signed cache
@@ -435,12 +464,11 @@ Decided with the user (2026-10-24):
 3. After a restart, restore from a snapshot; never re-run cells.
 4. Direct tools stay; code mode is optional but preferred.
 5. The `code` tool is removed.
+6. Explicitly named mutating tools may be attached; attachment remains subject
+   to every current-turn permission and authorization check. `read_only` remains
+   the default ceiling for implicit/server/query-derived attachment.
 
 Open:
-
-- Default `expose`: stay `read_only`, or allow attaching mutating MCP tools when
-  they are named explicitly in `code_start`? (Recommendation: named explicitly
-  means allowed, still permission-gated. Needs a yes.)
 - Should `whos()` / the manifest include short value previews (for example the
   first 80 chars)? That is more useful, but it means variable contents can enter
   context without the model asking. The default here is no.
