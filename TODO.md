@@ -6,3 +6,4 @@
 
 
 - Should be easy to change the project before starting new session ( add /projects ) - in a new session it should simple to change projects ( the path ) 
+- Auto delete worktree when done with it
