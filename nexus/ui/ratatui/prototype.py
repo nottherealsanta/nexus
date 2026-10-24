@@ -62,31 +62,41 @@ def _worktree_name(workspace) -> str:
         return ""
 
 
-async def refresh_branch(shell) -> None:
+async def refresh_branch(shell) -> bool:
     """Re-read the current workspace's branch from ``.git`` off the event loop.
 
-    Sets ``breadcrumb`` (``path › branch``), ``branch`` and ``worktree`` for whichever
-    workspace the active tab shows. A result is dropped when the tab moved on meanwhile.
+    Sets ``breadcrumb`` (``path › branch``), ``branch``, ``worktree`` and ``worktree_kind`` for
+    whichever workspace and session the active tab shows. Every field is computed locally and
+    applied together; the result is dropped when the workspace, session or switch generation
+    moved on during either await. Returns whether any field changed.
     """
     from ...host_support.git_head import git_head
-    workspace = str(shell.workspace or "")
-    if not workspace:
-        return
-    head, worktree = await asyncio.to_thread(lambda: (git_head(workspace), _worktree_name(workspace)))
-    if str(shell.workspace or "") != workspace:
-        return
-    branch = str(head.get("branch") or "")
-    shell.branch = branch
-    shell.worktree = worktree
-    shell.worktree_kind = "worktree" if worktree else ""
-    shell.breadcrumb = workspace + (" › " + branch if branch else "")
     from .worktree_bar import session_worktree_kind, session_worktree_label, session_worktree_state
-    state = await session_worktree_state(shell)
-    if str(shell.workspace or "") != workspace:
-        return
-    shell.branch, shell.worktree = session_worktree_label(state, branch, worktree)
-    shell.worktree_kind = session_worktree_kind(state, worktree)
-    shell.breadcrumb = workspace + (" › " + shell.branch if shell.branch else "")
+
+    def token():
+        return (str(shell.workspace or ""), getattr(getattr(shell, "controller", None), "session", ""),
+                getattr(shell, "generation", 0))
+
+    start = token()
+    workspace, session = start[0], start[1]
+    if not workspace:
+        return False
+    head, worktree = await asyncio.to_thread(lambda: (git_head(workspace), _worktree_name(workspace)))
+    if token() != start:
+        return False
+    branch = str(head.get("branch") or "")
+    state = await session_worktree_state(shell, workspace=workspace, session=session)
+    if token() != start:
+        return False
+    label_branch, label_worktree = session_worktree_label(state, branch, worktree)
+    fields = {"branch": label_branch, "worktree": label_worktree,
+              "worktree_kind": session_worktree_kind(state, worktree),
+              "breadcrumb": workspace + (" › " + label_branch if label_branch else "")}
+    if all(getattr(shell, name, None) == value for name, value in fields.items()):
+        return False
+    for name, value in fields.items():
+        setattr(shell, name, value)
+    return True
 
 
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
@@ -1659,7 +1669,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                      shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
                      shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
                      shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
-                     shell.breadcrumb, shell.worktree, shell.panel_title, shell.items, shell.panel_lines,
+                     shell.breadcrumb, shell.branch, shell.worktree, shell.worktree_kind, shell.panel_title, shell.items, shell.panel_lines,
                      shell.sidebar.fingerprint(), shell.jobs.projection()))
     async def poll():
         preview_cursor = -1
@@ -2056,6 +2066,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             shell.usage_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await shell.usage_task
+        with contextlib.suppress(Exception):
+            await shell.aclose_branch_task()
         if startup_task:
             startup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

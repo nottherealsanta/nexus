@@ -9,7 +9,7 @@ mode needs no variant) so the location is always stated; anything else (unknown 
 workspace's own values. ``session_worktree_kind`` gives the matching renderer style key
 (``worktree`` | ``pending`` | ``main`` | ``""``) so Rust never parses the label. Missing state keys count as empty/False, so this works
 before the host reports them. ``refresh_session_worktree`` reads the state off the hot path:
-cached for a few seconds per session, bounded by a timeout, failures leave the bar unchanged.
+cached for a few seconds per (workspace, session), bounded by a timeout, failures leave the bar unchanged.
 """
 from __future__ import annotations
 
@@ -61,19 +61,26 @@ def session_worktree_kind(state: dict, workspace_worktree: str = "") -> str:
     return "worktree" if workspace_worktree else ""
 
 
-async def session_worktree_state(shell, *, force: bool = False) -> dict:
-    session = getattr(getattr(shell, "controller", None), "session", "")
+async def session_worktree_state(shell, *, force: bool = False, workspace: str | None = None,
+                                 session: str | None = None) -> dict:
+    """The host's worktree facts for ``session`` in ``workspace`` (default: what the shell shows).
+
+    The cache is keyed by ``(workspace, session)``: session ids from different projects never collide.
+    """
+    if session is None:
+        session = getattr(getattr(shell, "controller", None), "session", "")
     if not session:
         return {}
+    key = (str(getattr(shell, "workspace", "") if workspace is None else workspace or ""), session)
     cached = getattr(shell, "_worktree_state_cache", None)
-    if not force and cached and cached[0] == session and time.monotonic() - cached[1] < _TTL:
+    if not force and cached and cached[0] == key and time.monotonic() - cached[1] < _TTL:
         return cached[2]
     try:
         async with asyncio.timeout(_WAIT):
             state = dict((await shell.client.session_worktree_choice(session)).state or {})
     except Exception:  # noqa: BLE001 - the bar is advisory; keep the workspace values
         state = {}
-    shell._worktree_state_cache = (session, time.monotonic(), state)
+    shell._worktree_state_cache = (key, time.monotonic(), state)
     return state
 
 

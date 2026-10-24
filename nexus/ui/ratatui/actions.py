@@ -141,6 +141,9 @@ class ShellActions:
         self.last_completion_cue = 0
         self.breadcrumb = ""
         self.worktree = ""  # linked-worktree name of the workspace ("" in a main checkout)
+        self.branch = ""
+        self.worktree_kind = ""
+        self.branch_task: asyncio.Task | None = None  # top-bar refresh started by the last switch
         self.model_names: dict[tuple[str, str], str] = {}  # (provider, id) -> catalogue display name
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
@@ -423,6 +426,31 @@ class ShellActions:
         if self.usage_task:
             self.usage_task.cancel()
         self.panel_lines = []
+        # The top bar must not show the previous project's branch while the new one is read.
+        if self.breadcrumb.partition(" › ")[0] != str(self.workspace or ""):
+            self.breadcrumb = str(self.workspace or "")
+            self.branch = self.worktree = self.worktree_kind = ""
+        if self.branch_task:
+            self.branch_task.cancel()
+        self.branch_task = asyncio.create_task(self._refresh_branch_later())
+
+    async def _refresh_branch_later(self) -> None:
+        from .prototype import refresh_branch
+        try:
+            if await refresh_branch(self) and self.on_update:
+                await self.on_update()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the bar is advisory; the poll retries
+            pass
+
+    async def aclose_branch_task(self) -> None:
+        """Cancel the top-bar refresh a switch started (shutdown)."""
+        task, self.branch_task = self.branch_task, None
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def _refresh_preview_later(self, session: str) -> None:
         try:

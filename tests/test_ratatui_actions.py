@@ -698,3 +698,98 @@ async def test_merge_command_sends_instruction_only_in_a_worktree_session(tmp_pa
     await shell.submit("/merge")
     shell.client.enqueue.assert_not_awaited()
     assert "worktree session" in shell.notice
+
+
+def _git_repo(root, branch):
+    (root / ".git").mkdir(parents=True)
+    (root / ".git" / "HEAD").write_text(f"ref: refs/heads/{branch}\n")
+    return str(root)
+
+
+@pytest.mark.asyncio
+async def test_switch_starts_cancellable_top_bar_refresh_and_notifies_on_change(tmp_path, monkeypatch):
+    import asyncio
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.workspace = _git_repo(tmp_path / "w", "topic")
+    shell.breadcrumb = shell.workspace + " › main"  # same workspace: labels stay until the read lands
+    shell.branch = "main"
+    shell.on_update = AsyncMock()
+    shell.controller.client = SimpleNamespace(session_worktree_choice=AsyncMock(return_value=SimpleNamespace(state={})))
+    await shell.switch("old")
+    assert shell.branch == "main"  # no flicker: switch itself never waits for the read
+    await shell.branch_task
+    assert shell.branch == "topic" and shell.breadcrumb.endswith("› topic")
+    shell.on_update.assert_awaited_once()
+    await shell.switch("old")  # nothing changed: no repaint
+    await shell.branch_task
+    shell.on_update.assert_awaited_once()
+    gate = asyncio.Event()
+
+    async def slow(*args):
+        await gate.wait()
+        return SimpleNamespace(state={})
+    shell.controller.client.session_worktree_choice = slow
+    shell._worktree_state_cache = None
+    await shell.switch("old")
+    stale = shell.branch_task
+    await asyncio.sleep(0.1)
+    await shell.switch("old")
+    assert shell.branch_task is not stale
+    await asyncio.sleep(0)
+    assert stale.cancelled()
+    await shell.aclose_branch_task()
+    assert shell.branch_task is None
+
+
+@pytest.mark.asyncio
+async def test_switch_to_another_project_resets_top_bar_immediately(tmp_path, monkeypatch):
+    shell = _tab_shell(tmp_path, monkeypatch)
+    shell.workspace = _git_repo(tmp_path / "b", "feature")
+    shell.breadcrumb = str(tmp_path / "a") + " › main"
+    shell.branch, shell.worktree, shell.worktree_kind = "main", "⎇ wt", "worktree"
+    shell.controller.client = SimpleNamespace(session_worktree_choice=AsyncMock(return_value=SimpleNamespace(state={})))
+    await shell.switch("old")
+    assert (shell.breadcrumb, shell.branch, shell.worktree, shell.worktree_kind) == (shell.workspace, "", "", "")
+    await shell.branch_task
+    assert shell.breadcrumb == f"{shell.workspace} › feature"
+
+
+@pytest.mark.asyncio
+async def test_refresh_branch_discards_result_when_session_or_generation_moved(tmp_path):
+    import asyncio
+    from nexus.ui.ratatui.prototype import refresh_branch
+    gate = asyncio.Event()
+
+    async def choice(session):
+        await gate.wait()
+        return SimpleNamespace(state={"kind": "worktree", "worktree_name": "late", "branch": "late"})
+    shell = SimpleNamespace(workspace=_git_repo(tmp_path / "w", "main"), breadcrumb="", branch="", worktree="",
+                            worktree_kind="", generation=1, controller=SimpleNamespace(session="s1"),
+                            client=SimpleNamespace(session_worktree_choice=choice))
+    task = asyncio.create_task(refresh_branch(shell))
+    await asyncio.sleep(0.1)
+    shell.controller.session = "s2"  # same workspace, other tab
+    gate.set()
+    assert await task is False
+    assert (shell.breadcrumb, shell.branch, shell.worktree, shell.worktree_kind) == ("", "", "", "")
+    gate.clear()
+    task = asyncio.create_task(refresh_branch(shell))
+    await asyncio.sleep(0.1)
+    shell.generation = 2
+    gate.set()
+    assert await task is False and not shell.branch
+
+
+@pytest.mark.asyncio
+async def test_worktree_state_cache_is_keyed_by_workspace_and_session():
+    from nexus.ui.ratatui.worktree_bar import session_worktree_state
+    choice = AsyncMock(side_effect=[SimpleNamespace(state={"kind": "main"}), SimpleNamespace(state={"kind": "worktree"})])
+    shell = SimpleNamespace(workspace="/a", controller=SimpleNamespace(session="s"),
+                            client=SimpleNamespace(session_worktree_choice=choice))
+    assert (await session_worktree_state(shell))["kind"] == "main"
+    assert (await session_worktree_state(shell))["kind"] == "main"  # cached
+    shell.workspace = "/b"  # the same session id in another project must not reuse it
+    assert (await session_worktree_state(shell))["kind"] == "worktree"
+    assert choice.await_count == 2
+    assert (await session_worktree_state(shell, workspace="/b", session="s"))["kind"] == "worktree"
+    assert choice.await_count == 2

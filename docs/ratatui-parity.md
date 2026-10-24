@@ -1425,8 +1425,15 @@ location is always stated (non-Git or unknown state shows nothing new). The snap
 styles it: worktree is bold `purple`, pending `purple`, main `muted`, anything else `quiet`; Rust
 never parses the label. Read keys are
 `kind`, `branch`, `worktree_name`, `pending_name`, `selected`, `mode`, `editable`, `git`, missing
-keys count as empty. The state is cached 3 s per session, bounded to 2 s, reread after a worktree
-answer and when a turn is submitted, and a failure leaves the workspace values), right the update notice and `[Sessions]`, separated by quiet `│`.
+keys count as empty. The state is cached 3 s per `(workspace, session)`, bounded to 2 s, reread after a worktree
+answer and when a turn is submitted, and a failure leaves the workspace values. Every tab or project
+switch (`ShellActions.switch`) starts a background, cancellable `refresh_branch` that never delays the
+switch; it is cancelled by the next switch and at shutdown, and it repaints only when a field changed.
+`refresh_branch` computes `breadcrumb`, `branch`, `worktree` and `worktree_kind` locally and applies
+them together, dropping the result if the workspace, session or switch generation moved on. A switch
+to another project immediately shows the bare workspace path with branch, worktree and kind cleared;
+within the same workspace the old labels stay until the read lands. The poll signature includes
+`branch` and `worktree_kind`), right the update notice and `[Sessions]`, separated by quiet `│`.
 There is no context counter (the composer row shows usage) and no `‹ i/n ›` session
 cycler. The notice drops before the title is squeezed. Draw and hit-testing share one
 layout (`tab_cells`); `[Sessions]` sends `/sessions` and the notice is clickable. The
