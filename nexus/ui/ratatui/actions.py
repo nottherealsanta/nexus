@@ -1000,12 +1000,15 @@ class ShellActions:
             self.verbose = not self.verbose
             self.notice = "Full tool output previews " + ("on" if self.verbose else "off")
         elif name == "/copy":
-            import json
-            from .desktop import copy_text
+            from ...ui_support.context import context_json
+            from .desktop import copy_text_anywhere
+            # Prefer a fresh preview; a running turn refuses one, so keep the last good one.
+            await self.refresh_preview()
             if self.preview is None:
                 raise ValueError("Context is unavailable")
-            await copy_text(json.dumps({field: getattr(self.preview, field) for field in self.preview.__struct_fields__}, ensure_ascii=False, default=str))
-            self.notice = "Copied context JSON"
+            where = await copy_text_anywhere(context_json(self.preview))
+            # OSC 52 gives no acknowledgement, so the terminal path can only claim a request.
+            self.notice = "Requested terminal copy of context JSON" if where == "terminal" else "Copied context JSON"
         elif name == "/mock":
             if argument in {"", "list"}:
                 self.show("Mock scenarios", await self.client.mock_list())

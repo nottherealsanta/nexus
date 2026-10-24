@@ -815,6 +815,14 @@ clipboard even over SSH) and through the daemon-side desktop clipboard
 that is released without dragging is still a click on the block. Any key clears the
 selection. Only the transcript can be selected; sidebars and dialogs cannot.
 
+`/copy` copies the assembled next-turn context as indented JSON (the same content
+as the web `/copy`). It refreshes the preview first, keeping the last good one
+while a turn runs (the host refuses a preview then). It tries the desktop
+clipboard (`pbcopy`/`wl-copy`/`xclip`; not over SSH) and otherwise writes OSC 52 to
+the controlling terminal (`desktop.copy_via_terminal`, up to 100 KB), noting
+"Requested terminal copy of context JSON" (OSC 52 cannot confirm the terminal
+accepted it, so success is not claimed); it errors only when neither path works.
+
 Hover-revealed Copy buttons (`copy_button.rs`): while the pointer is over a user
 card or a fenced code block, ` Copy ` appears over the blank right end of the
 block's first row (the card's top padding row, the fence's `╭─ lang` header);

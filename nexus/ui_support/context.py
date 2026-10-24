@@ -334,6 +334,22 @@ def context_details_renderable(
     return rendered
 
 
+def _plain_data(value: object) -> object:
+    fields = getattr(type(value), "__struct_fields__", None)  # protocol structs, without importing msgspec
+    if fields is not None:
+        return {name: _plain_data(getattr(value, name)) for name in fields}
+    if isinstance(value, Mapping):
+        return {str(key): _plain_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_plain_data(item) for item in value]
+    return value
+
+
+def context_json(result: object) -> str:
+    """Indented JSON of an inspected context, for explicit copy."""
+    return json.dumps(_plain_data(result), ensure_ascii=False, indent=2, default=str)
+
+
 def context_message_text(message: Mapping[str, object]) -> str:
     """Render projected provider blocks without hiding structured call data."""
     rendered = []

@@ -2,6 +2,9 @@
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock
 
+import json
+
+import msgspec
 import pytest
 
 from nexus.ui.ratatui.actions import ShellActions
@@ -260,7 +263,8 @@ async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
     rows = [SimpleNamespace(id="alpha-1"), SimpleNamespace(id="beta-2")]
     diff = SimpleNamespace(patch="", truncated=False)
     shell = _shell(tmp_path, monkeypatch, list_sessions=AsyncMock(return_value=rows),
-                   fork=AsyncMock(return_value=SimpleNamespace(id="f")), git_diff=AsyncMock(return_value=diff))
+                   fork=AsyncMock(return_value=SimpleNamespace(id="f")), git_diff=AsyncMock(return_value=diff),
+                   inspect_context=AsyncMock(side_effect=RuntimeError("busy while the session is active")))
     shell.switch = AsyncMock()
     await shell.command("/sessions", ("beta",))
     shell.switch.assert_awaited_once_with("beta-2")
@@ -281,6 +285,81 @@ async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
         await shell.command("/theme", ("purple",))
     with pytest.raises(ValueError, match="unavailable"):
         await shell.command("/copy", ())
+
+
+class _Preview(msgspec.Struct):
+    system: str
+    nested: dict
+
+
+@pytest.mark.asyncio
+async def test_copy_falls_back_to_terminal_clipboard_over_ssh(tmp_path, monkeypatch):
+    """/copy used to fail over SSH / without pbcopy even though OSC 52 works."""
+    from nexus.ui.ratatui import desktop
+    preview = _Preview(system="héllo", nested={"a": [1]})
+    shell = _shell(tmp_path, monkeypatch, inspect_context=AsyncMock(return_value=preview))
+    monkeypatch.setenv("SSH_CONNECTION", "1 2 3 4")
+    sent = []
+    monkeypatch.setattr(desktop, "copy_via_terminal", sent.append)
+    await shell.command("/copy", ())
+    assert shell.notice == "Requested terminal copy of context JSON"
+    assert json.loads(sent[0]) == {"system": "héllo", "nested": {"a": [1]}}
+
+
+@pytest.mark.asyncio
+async def test_copy_uses_desktop_clipboard_and_cached_preview_during_a_turn(tmp_path, monkeypatch):
+    from nexus.ui.ratatui import desktop
+    shell = _shell(tmp_path, monkeypatch, inspect_context=AsyncMock(side_effect=RuntimeError("refused while the session is active")))
+    shell.preview = _Preview(system="x", nested={})
+    copied = []
+
+    async def fake(text):
+        copied.append(text)
+    monkeypatch.setattr(desktop, "copy_text", fake)
+    await shell.command("/copy", ())
+    assert shell.notice == "Copied context JSON" and json.loads(copied[0])["system"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_copy_reports_when_no_clipboard_path_exists(tmp_path, monkeypatch):
+    from nexus.ui.ratatui import desktop
+    shell = _shell(tmp_path, monkeypatch, inspect_context=AsyncMock(return_value=_Preview(system="x", nested={})))
+    monkeypatch.setenv("SSH_TTY", "/dev/pts/1")
+    monkeypatch.setattr(desktop, "copy_via_terminal", Mock(side_effect=ValueError("No terminal available for clipboard copy")))
+    with pytest.raises(ValueError, match="SSH.*No terminal"):
+        await shell.command("/copy", ())
+
+
+@pytest.mark.asyncio
+async def test_copy_text_reports_missing_executable_and_timeout(monkeypatch):
+    import asyncio
+    from nexus.ui.ratatui import desktop
+    for name in ("SSH_TTY", "SSH_CONNECTION"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    monkeypatch.setattr(desktop.asyncio, "create_subprocess_exec", AsyncMock(side_effect=FileNotFoundError("pbcopy")))
+    with pytest.raises(ValueError, match="No local clipboard command"):
+        await desktop.copy_text("x")
+
+    process = Mock(returncode=None)
+    process.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+    process.wait = AsyncMock()
+    monkeypatch.setattr(desktop.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    with pytest.raises(ValueError, match="timed out"):
+        await desktop.copy_text("x")
+    process.kill.assert_called_once()
+
+
+def test_copy_via_terminal_writes_osc52(tmp_path, monkeypatch):
+    import base64
+    from nexus.ui.ratatui import desktop
+    real_open = open
+    target = tmp_path / "tty"
+    monkeypatch.setattr("builtins.open", lambda path, *a, **k: real_open(target if path == "/dev/tty" else path, *a, **k))
+    desktop.copy_via_terminal("héllo")
+    assert target.read_text() == "\x1b]52;c;" + base64.b64encode("héllo".encode()).decode() + "\x07"
+    with pytest.raises(ValueError, match="too large"):
+        desktop.copy_via_terminal("x" * (desktop.OSC52_LIMIT + 1))
 
 
 def test_every_shared_shortcut_is_bound_natively():
