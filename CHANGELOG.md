@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.8.0](https://github.com/nottherealsanta/nexus/compare/v0.7.0...v0.8.0) (2026-10-24)
+
+
+### Features
+
+* add mermaid guidance to build prompt ([c95c12d](https://github.com/nottherealsanta/nexus/commit/c95c12dd53556bb9b937d63a9387827af3575cfe))
+* add persistent code-mode kernel infrastructure ([18395bb](https://github.com/nottherealsanta/nexus/commit/18395bb6bf459ff52cd37a09982df3c6e1098bb8))
+* add plan for code mode as a persistent kernel ([f811410](https://github.com/nottherealsanta/nexus/commit/f811410eca8f944c2ac4b67f34b5a6471cad6b84))
+* automatically name session worktrees with random word pairs ([0251984](https://github.com/nottherealsanta/nexus/commit/02519845a4a515006e7819a9b1bc7c575e2df554))
+* implement agent-managed worktrees ([11c652b](https://github.com/nottherealsanta/nexus/commit/11c652bb0e02ee6a1ac4efa66c811f8cb971a501))
+* implement agent-managed worktrees plan ([e667c59](https://github.com/nottherealsanta/nexus/commit/e667c59ea504692d252493e010d915ffb713c657))
+* **manager:** implement automatic lazy compaction and machine memory isolation for Manager session ([9ed3fac](https://github.com/nottherealsanta/nexus/commit/9ed3fac6a3df4e7ff7709c139bc47c44b0f3b9fb))
+* **manager:** implement session launch autofocus and draft state handling ([9de32ce](https://github.com/nottherealsanta/nexus/commit/9de32cea2a7584a54e6c6ad61e24a70418710802))
+* **tools:** bundle optional task tools by category ([0a4eeb4](https://github.com/nottherealsanta/nexus/commit/0a4eeb4fea87231d9889b51f330060f0f5fcf409))
+* **tui:** render Mermaid diagrams in the terminal ([1cd3e51](https://github.com/nottherealsanta/nexus/commit/1cd3e5161cc8023363efa4f4437a7ef6467a99b5))
+* **tui:** restyle the sessions modal in the new design language ([13ee09d](https://github.com/nottherealsanta/nexus/commit/13ee09da5131bc2269273ee71eea10afc9d3d739))
+* **worktrees:** support squash merging sessions ([cb7b2a8](https://github.com/nottherealsanta/nexus/commit/cb7b2a8fdedef6eb49f44d9d8e22eebd1790a94b))
+
+
+### Bug fixes
+
+* clarify that no Nexus CLI merge command is required for landing sessions ([11a3b67](https://github.com/nottherealsanta/nexus/commit/11a3b67f925fd210802582440cbede8617633b57))
+* **context:** align context budgeting with configured limits ([6a4b2d9](https://github.com/nottherealsanta/nexus/commit/6a4b2d920a1173d9c08551a514938d8903464478))
+* enable all native Mermaid compiler families ([f2c62a2](https://github.com/nottherealsanta/nexus/commit/f2c62a27fe9331cdae492c6ffcd4ced64c3f62ca))
+* harden voice capture and persist code-mode kernels ([28811c6](https://github.com/nottherealsanta/nexus/commit/28811c6626842bbba51fdfb56a009e72d6f8454e))
+* ignore legacy session worktree records ([3faf67d](https://github.com/nottherealsanta/nexus/commit/3faf67ddea2b17e9afdc8f937832bd827cfb6421))
+* limit orchestrator to one subagent ([e972fd8](https://github.com/nottherealsanta/nexus/commit/e972fd8297fd491061334250cf2dcdbbf5a5c478))
+* **permissions:** require confirmation for nexus merge ([6b7e4e4](https://github.com/nottherealsanta/nexus/commit/6b7e4e4dfd38153f6e105b8a8b616e5ce39ae30f))
+* preserve Ratatui image previews across monochrome and redraws ([71f30cb](https://github.com/nottherealsanta/nexus/commit/71f30cb43f3ade088998e7f24882ccbf4e7185b7))
+* refresh Ratatui top bar on tab switch ([b96c511](https://github.com/nottherealsanta/nexus/commit/b96c511b5f4f00c91bba0801da7fb8e7c9660dd0))
+* restore native copy command clipboard support ([2b0af03](https://github.com/nottherealsanta/nexus/commit/2b0af0361808fe626cb830c32771193a90e17870))
+* **sessions:** drop the worktree root notice from the timeline ([b44ecd4](https://github.com/nottherealsanta/nexus/commit/b44ecd49b904b8b49746ce7c798c086d4ac4e220))
+* **todos:** add note for auto deletion of worktree after session completion ([e2052ac](https://github.com/nottherealsanta/nexus/commit/e2052ac58f547e1c11debdfaa4341feeea14cb95))
+* **tui:** handle subagent follow-ups and settings navigation ([38a02da](https://github.com/nottherealsanta/nexus/commit/38a02da6891fef59c141d381c97474d14656e692))
+
 ## [0.7.0](https://github.com/nottherealsanta/nexus/compare/v0.6.1...v0.7.0) (2026-10-23)
 
 
