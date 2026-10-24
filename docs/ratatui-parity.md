@@ -1,5 +1,12 @@
 # Ratatui implementation and parity ledger
 
+The project browser submits edited paths as `project_path`, navigates directories
+as `browse_project`, and opens a folder as `select_project`; all are handled by
+the Python sidebar controller. The parent row is named `..` to match native
+Left/Backspace navigation. A path-row click only starts editing; folder clicks
+and Enter activation each emit one action, with no second action on mouse release.
+Python protocol coverage and Rust hit-target tests guard these contracts.
+
 The worktree bar renders the root from the incoming conversation reduction, even
 before the controller's cached view catches up, so an agent move updates it without
 a tab switch. Native PTY action readers ignore passive `draft_state` composer

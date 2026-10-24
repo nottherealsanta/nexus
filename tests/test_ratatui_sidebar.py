@@ -59,6 +59,29 @@ def test_constants_mirror_the_rust_client():
     assert tuple(re.findall(r'"([^"]+)"', tabs)) == ("Projects", "Sessions")
 
 
+async def test_every_emitted_rust_sidebar_op_is_handled(shell):
+    # Inspect production code only: dashboard `kind` operations use a separate route.
+    source = RUST.read_text().split("#[cfg(test)]", 1)[0]
+    emitted = set(re.findall(r'"op"\s*:\s*"([^"]+)"', source))
+    emitted.update(re.findall(r'act\("([^"]+)"\)', source))
+    assert emitted == {"toggle", "close", "tab", "width", "dir", "file", "refresh",
+                       "browse_project", "project_path", "select_project"}
+    _fake_dashboard(shell)
+    sidebar = shell.sidebar
+    sidebar.refresh = AsyncMock()
+    sidebar.navigate = AsyncMock()
+    sidebar.preview = AsyncMock()
+    sidebar.browse_project = AsyncMock()
+    sidebar._project_path = "/repo"
+    shell.switch_project = AsyncMock()
+    for op in sorted(emitted):
+        await sidebar.handle({"type": "sidebar", "op": op, "path": "/repo",
+                              "tab": "Projects", "width": 34})
+    assert sidebar.browse_project.await_count == 2
+    shell.switch_project.assert_awaited_once_with("/repo", create=True)
+    assert not shell.toasts, "valid sidebar operations must not produce error toasts"
+
+
 def test_width_and_tab_are_bounded():
     assert view.clamp_width(5) == view.MIN_WIDTH
     assert view.clamp_width(500) == view.MAX_WIDTH
@@ -607,6 +630,7 @@ async def test_project_browser_browse_parent_and_open_only_directories(tmp_path,
     await sidebar.handle({"op": "project_path", "path": str(tmp_path)})
     assert sidebar.projects["browser_path"] == str(tmp_path)
     assert sidebar.projects["browser_rows"][0]["path"] == str(tmp_path.parent)
+    assert sidebar.projects["browser_rows"][0]["name"] == "..", "Rust parent navigation matches this label"
     await sidebar.handle({"op": "select_project", "path": str(tmp_path / "file")})
     shell.switch_project.assert_not_awaited()
     await sidebar.handle({"op": "select_project", "path": str(child)})

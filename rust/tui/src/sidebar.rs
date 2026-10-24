@@ -1787,6 +1787,36 @@ mod tests {
     }
 
     #[test]
+    fn project_click_and_keyboard_activation_emit_one_action_each() {
+        let mut s = open("Projects", 34);
+        s.sidebar.projects = json!({"browser_path":"/repo","browser_rows":[
+            {"name":"..","kind":"dir","path":"/"},
+            {"name":"src","kind":"dir","path":"/repo/src"}
+        ]});
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        for (index, op, path) in [(1, "select_project", "/repo"), (3, "browse_project", "/repo/src")] {
+            let clicked = click_at(&mut ui, &s, index);
+            let expected = json!({"type":"sidebar","op":op,"path":path});
+            assert_eq!(clicked.action, Some(expected.clone()));
+            assert!(clicked.operation.is_none(), "no duplicate dashboard operation");
+            let released = ui.mouse(
+                mouse(MouseEventKind::Up(MouseButton::Left), ui.list.x + 2, ui.list.y + index as u16),
+                &s, Rect::new(0, 0, 34, 24), 200,
+            );
+            assert!(released.action.is_none() && released.operation.is_none());
+            let activated = ui.key(key(KeyCode::Enter), &s, true);
+            assert_eq!(activated.action, Some(expected));
+            assert!(activated.operation.is_none());
+        }
+        let clicked = click_at(&mut ui, &s, 0);
+        assert!(clicked.action.is_none() && clicked.operation.is_none(), "path click only edits");
+        let submitted = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(submitted.action, Some(json!({"type":"sidebar","op":"project_path","path":"/repo"})));
+        assert!(submitted.operation.is_none());
+    }
+
+    #[test]
     fn files_navigate_through_listed_folders_only() {
         let mut s = open("Files", 34);
         s.sidebar.files = json!({"loaded":true,"path":"src","label":"repo/src","rows":[

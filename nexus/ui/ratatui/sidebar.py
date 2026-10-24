@@ -114,7 +114,7 @@ class SidebarController:
             self._project_path = result.path
             self.projects.update(browser_path=result.path, browser_loaded=True,
                                  browser_error="", browser_truncated=result.truncated,
-                                 browser_rows=[{"name": "../", "path": str(PurePath(result.path).parent), "kind": "dir"},
+                                 browser_rows=[{"name": "..", "path": str(PurePath(result.path).parent), "kind": "dir"},
                                                *result.entries])
         except Exception as exc:
             self.projects["browser_error"] = error_text(exc)
