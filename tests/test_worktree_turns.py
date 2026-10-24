@@ -57,7 +57,7 @@ def test_restore_refuses_shared_dirty_and_overlapping_turns(tmp_path):
     with pytest.raises(ValueError, match="uncommitted"):
         revert_preview(ctrl, "commit-session", 1, True)
     root.kind = "main"
-    with pytest.raises(ValueError, match="own worktree"):
+    with pytest.raises(ValueError, match="No saved turns in the main checkout"):
         revert_preview(ctrl, "commit-session", 1)
 
 
@@ -72,30 +72,38 @@ def test_restore_refuses_stale_preview(tmp_path):
         revert_turn(ctrl, "commit-session", state)
 
 
-async def test_real_runtime_checkpoint_first_edit_after_read_only_turn(tmp_path):
-    from test_worktree_sessions_runtime import runtime, drain
-    from test_worktree_sessions_commits import repository
-    from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
-    from nexus.host import HostFacade, protocol as p
+def test_main_checkout_has_no_saved_turns(tmp_path):
+    ctrl, root, _events = controller(tmp_path)
+    root.kind = "main"
+    with pytest.raises(ValueError, match="No saved turns in the main checkout"):
+        turn_diff(ctrl, "commit-session", 1)
 
-    project = repository(tmp_path / "runtime-project")
-    provider = ScriptedProvider(text_response("read only"),
-        tool_response(("w1", "write", {"path": "owned.txt", "content": "saved\n"})), text_response("done"))
-    rt = runtime(project, tmp_path, provider, sessions=False)
-    try:
-        handle = rt.session("checkpoints")
-        assert (await drain(handle, "read"))[-1].type == "turn.completed"
-        events = await drain(handle, "write")
-        assert events[-1].type == "turn.completed", events[-1]
-        checkpoint = next(e for e in handle.events if e.type == "checkpoint.captured")
-        facade = HostFacade(rt)
-        result = await facade.handle(p.SessionTurnDiff(session=handle.id, seq=checkpoint.data["seq"]))
-        assert isinstance(result, p.SessionWorktreeResult), result
-        assert result.state["source"] == "checkpoint"
-        assert "saved" in result.state["patch"]
-        assert checkpoint.data["files"] == ["owned.txt"]
-        refused = await facade.handle(p.SessionTurnRevert(session=handle.id, seq=checkpoint.data["seq"]))
-        assert isinstance(refused, p.ErrorResult)
-        assert "own worktree" in refused.message
-    finally:
-        await rt.aclose()
+
+def test_squashed_turn_diff_still_works_but_revert_is_refused(tmp_path):
+    ctrl, root, events = controller(tmp_path)
+    first = add_commit(ctrl, root, events, 1, "one\n")
+    base = git(root.path, "rev-parse", first["sha"] + "^")
+    git(root.path, "reset", "--soft", base)
+    git(root.path, "commit", "-qm", "squashed")
+    assert "one" in turn_diff(ctrl, "commit-session", 1)["patch"]
+    with pytest.raises(ValueError, match="Already squashed and merged"):
+        revert_preview(ctrl, "commit-session", 1)
+
+
+def test_revert_refused_when_another_session_changed_the_same_files_later(tmp_path):
+    ctrl, root, events = controller(tmp_path)
+    add_commit(ctrl, root, events, 1, "one\n")
+    (root.path / "tracked.txt").write_text("other session\n")
+    ctrl.service.commit_session(root.worktree_id, root=ctrl.registry, message="theirs", session_name="other",
+                                turn_seq=9, session_id="other-session", max_file_mb=50)
+    with pytest.raises(ValueError, match="other-session"):
+        revert_preview(ctrl, "commit-session", 1)
+
+
+def test_turn_spanning_two_worktrees_is_refused(tmp_path):
+    ctrl, root, events = controller(tmp_path)
+    add_commit(ctrl, root, events, 1, "one\n")
+    add_commit(ctrl, root, events, 1, "two\n")
+    events[-1] = Event(type="worktree.committed", data={**events[-1].data, "worktree_id": "wt-elsewhere"})
+    with pytest.raises(ValueError, match="moved between checkouts"):
+        turn_diff(ctrl, "commit-session", 1)

@@ -51,8 +51,6 @@ async def test_provider_secret_not_returned_in_snapshot(shell):
 
 @pytest.mark.asyncio
 async def test_failed_submit_keeps_draft_and_attachments(shell):
-    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
-        session="s", state={"mode": "ask", "chosen": True, "editable": False, "git": False}))
     shell.client.enqueue = AsyncMock(side_effect=ValueError("unavailable"))
     shell.attachments = [p.AttachmentPrepareResult(attachment_id="a", name="a.txt", kind="document", preview="a")]
     with pytest.raises(ValueError):
@@ -62,37 +60,16 @@ async def test_failed_submit_keeps_draft_and_attachments(shell):
 
 
 @pytest.mark.asyncio
-async def test_ask_worktree_prompt_resumes_text_and_original_attachment(shell):
+async def test_first_message_is_sent_without_any_worktree_question(shell):
     attachment = p.AttachmentPrepareResult(attachment_id="a", name="a.txt", kind="document", preview="a")
     shell.attachments = [attachment]
-    shell.client.session_worktree_choice = AsyncMock(side_effect=[
-        p.SessionWorktreeResult(session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}),
-        p.SessionWorktreeResult(session="s", state={"mode": "ask", "chosen": True, "editable": True, "git": True}),
-    ])
-    shell.client.set_session_worktree = AsyncMock()
     shell.client.enqueue = AsyncMock()
     await shell.submit("keep this prompt")
-    assert shell.panel_title == "Create a worktree, or work in the main checkout?"
-    assert [item["label"] for item in shell.items] == ["Yes · use a worktree", "No · use this checkout"]
-    assert shell.client.enqueue.await_count == 0
-    await shell.workflows._operate({"kind": "worktree_answer", "enabled": False})
-    shell.client.set_session_worktree.assert_awaited_once_with("s", False)
+    assert not shell.panel_title and shell.items == []
     shell.client.enqueue.assert_awaited_once()
     assert shell.client.enqueue.await_args.args[:2] == ("s", "keep this prompt")
     assert shell.client.enqueue.await_args.kwargs["attachments"] == ["a"]
     assert shell.attachments == []
-    assert attachment.attachment_id == "a"
-
-
-@pytest.mark.asyncio
-async def test_worktree_mode_picker_has_three_modal_choices(shell):
-    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
-        session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}))
-    await shell.workflows.operate({"kind": "worktree_mode"})
-    assert shell.panel_title == "Session worktree"
-    assert shell.panel_layout == "modal"
-    assert [item["label"] for item in shell.items] == [
-        "No worktree", "✓ Ask every time", "Always worktree"]
 
 
 @pytest.mark.asyncio
@@ -808,151 +785,55 @@ async def test_modern_subagent_removal_uses_record_id_and_fresh_confirmation(she
     assert "Branch kept" in repr(shell.panel_lines)
 
 
-async def test_answer_from_another_session_cannot_send_pending_prompt(shell):
-    shell.client.session_worktree_choice = AsyncMock(return_value=p.SessionWorktreeResult(
-        session="s", state={"mode": "ask", "chosen": False, "editable": True, "git": True}))
-    shell.client.set_session_worktree = AsyncMock()
-    shell.client.enqueue = AsyncMock()
-    await shell.submit("original session only")
-    shell.controller.session = "different"
-    with pytest.raises(ValueError, match="Session changed"):
-        await shell.workflows.operate({"kind": "worktree_answer", "enabled": True})
-    shell.client.set_session_worktree.assert_not_awaited()
-    shell.client.enqueue.assert_not_awaited()
-
-
-def _choice(**state):
-    base = {"mode": "ask", "chosen": False, "editable": True, "git": True}
-    return p.SessionWorktreeResult(session="s", state={**base, **state})
-
-
-def _wt_shell(shell, *states):
-    shell.client.session_worktree_choice = AsyncMock(side_effect=list(states) + [states[-1]] * 6)
-    shell.client.set_session_worktree = AsyncMock()
-    shell.client.enqueue = AsyncMock()
-    return shell
+def _worktree_list(**extra):
+    rows = [
+        {"kind": "main", "name": "main", "current": False, "dirty": False, "sessions": [{"id": "s", "title": "t", "active": False}]},
+        {"kind": "worktree", "name": "brave-otter", "branch": "nexus/wt/brave-otter", "base_ref": "main", "current": True,
+         "merged": False, "unmerged_commits": 2, "dirty": True, "present": True, "child_id": "wt-1",
+         "sessions": [{"id": "s", "title": "t", "active": True}]},
+        {"kind": "worktree", "name": "calm-heron", "branch": "nexus/wt/calm-heron", "base_ref": "main", "current": False,
+         "merged": True, "dirty": False, "present": False, "child_id": "wt-2", "sessions": []},
+    ]
+    return p.SessionWorktreeResult(session="s", state={"worktrees": rows, **extra})
 
 
 @pytest.mark.asyncio
-async def test_mode_none_submits_without_asking(shell):
-    _wt_shell(shell, _choice(mode="none"))
-    await shell.submit("hello")
-    shell.client.set_session_worktree.assert_not_awaited()
-    shell.client.enqueue.assert_awaited_once()
-    assert shell.workflows.form is None
+async def test_worktrees_page_lists_the_agents_view_and_moves_the_session(shell):
+    shell.client.list_session_worktrees = AsyncMock(return_value=_worktree_list(clipped=3))
+    shell.client.move_session_worktree = AsyncMock()
+    await shell.workflows.operate({"kind": "worktrees"})
+    assert shell.panel_title == "Worktrees"
+    labels = [item["label"] for item in shell.items]
+    assert labels == ["main · 1 session", "← brave-otter · 2 unmerged · dirty · 1 session (1 active)",
+                      "calm-heron · checkout removed · merged"]
+    assert any("3 more not shown" in line for line in shell.panel_lines)
+    shell.client.list_session_worktrees.assert_awaited_once_with("s")
+    await shell.workflows.operate(shell.items[2]["operation"])
+    assert [item["label"] for item in shell.items] == ["Move this session here", "Remove checkout…"]
+    await shell.workflows.operate(shell.items[0]["operation"])
+    shell.client.move_session_worktree.assert_awaited_once_with("s", "calm-heron", reason="Moved by the user")
 
 
 @pytest.mark.asyncio
-async def test_ask_main_choice_is_unchanged_and_modal_is_reworded(shell):
-    _wt_shell(shell, _choice(), _choice(chosen=True))
-    await shell.submit("hello")
-    assert shell.panel_title == "Create a worktree, or work in the main checkout?"
-    await shell.workflows.operate({"kind": "worktree_answer", "enabled": False})
-    shell.client.set_session_worktree.assert_awaited_once_with("s", False)
-    shell.client.enqueue.assert_awaited_once()
-    assert not shell.panel_title and shell.items == [] and shell.workflows.form is None
-    assert shell.workflows.stack == []
+async def test_worktrees_page_offers_integrate_and_main_move_for_the_current_worktree(shell):
+    shell.client.list_session_worktrees = AsyncMock(return_value=_worktree_list())
+    await shell.workflows.operate({"kind": "worktrees"})
+    await shell.workflows.operate(shell.items[1]["operation"])
+    assert [item["label"] for item in shell.items] == [
+        "Integrate into base branch…", "Move this session to the main checkout"]
+    assert shell.items[1]["operation"]["to"] == "main"
+    await shell.workflows.operate({"kind": "worktrees"})
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.items[0]["operation"]["to"] == "main"
 
 
 @pytest.mark.asyncio
-async def test_ask_yes_creates_unnamed_worktree_then_submits_prompt_and_attachments(shell):
-    attachment = p.AttachmentPrepareResult(attachment_id="a", name="a.txt", kind="document", preview="a")
-    shell.attachments = [attachment]
-    _wt_shell(shell, _choice(), _choice(chosen=True, kind="worktree", editable=False))
-    await shell.submit("build it")
-    assert shell.panel_title == "Create a worktree, or work in the main checkout?"
-    await shell.workflows.operate({"kind": "worktree_answer", "enabled": True})
-    shell.client.set_session_worktree.assert_awaited_once_with("s", True)
-    shell.client.enqueue.assert_awaited_once()
-    assert shell.client.enqueue.await_args.args[:2] == ("s", "build it")
-    assert shell.client.enqueue.await_args.kwargs["attachments"] == ["a"]
-    assert shell.workflows.form is None and not shell.panel_title
-    assert shell.workflows.pending_worktree_submission is None
-
-
-@pytest.mark.asyncio
-async def test_ask_yes_host_failure_restores_composer_and_sends_nothing(shell):
-    _wt_shell(shell, _choice())
-    shell.client.set_session_worktree.side_effect = ValueError("cannot create worktree")
-    await shell.submit("build it")
-    with pytest.raises(ValueError, match="cannot create worktree"):
-        await shell.workflows.operate({"kind": "worktree_answer", "enabled": True})
-    assert shell.composer_restore == "build it"
-    assert shell.workflows.pending_worktree_submission is None
-    assert not shell.panel_title and shell.workflows.form is None
-    shell.client.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_always_mode_sends_without_asking_or_naming(shell):
-    _wt_shell(shell, _choice(mode="always", kind="main"))
-    await shell.submit("go")
-    assert shell.workflows.form is None and not shell.panel_title
-    assert shell.workflows.pending_worktree_submission is None
-    shell.client.set_session_worktree.assert_not_awaited()
-    shell.client.enqueue.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_always_mode_with_existing_worktree_does_not_ask(shell):
-    _wt_shell(shell, _choice(mode="always", kind="worktree", editable=False, worktree_name="alpha"))
-    await shell.submit("go")
-    assert shell.workflows.form is None
-    shell.client.enqueue.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_escape_returns_text_to_composer(shell):
-    from nexus.ui.ratatui.prototype import dismiss
-    _wt_shell(shell, _choice())
-    await shell.submit("keep me")
-    assert await dismiss(shell)
-    assert shell.composer_restore == "keep me"
-    assert not shell.panel_title and shell.workflows.form is None
-    assert shell.workflows.pending_worktree_submission is None
-    shell.client.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_top_bar_shows_session_worktree_pending_name_and_placeholder(shell, tmp_path):
-    from nexus.ui.ratatui.prototype import refresh_branch
-    shell.workspace = str(tmp_path)
-    (tmp_path / ".git").mkdir()
-    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    _wt_shell(shell, _choice(mode="always", kind="main"))
-    await refresh_branch(shell)
-    assert shell.worktree == "⎇ new worktree" and shell.branch == "main"
-    shell._worktree_state_cache = None
-    _wt_shell(shell, _choice(mode="always", kind="main", pending_name="feat"))
-    await refresh_branch(shell)
-    assert shell.worktree == "⎇ feat"
-    shell._worktree_state_cache = None
-    _wt_shell(shell, _choice(kind="worktree", editable=False, worktree_name="feat", branch="nexus/session/feat"))
-    await refresh_branch(shell)
-    assert shell.worktree == "⎇ feat" and shell.branch == "nexus/session/feat"
-    assert shell.breadcrumb.endswith("› nexus/session/feat")
-    shell._worktree_state_cache = None
-    _wt_shell(shell, _choice(mode="none"))
-    await refresh_branch(shell)
-    assert shell.worktree == "" and shell.branch == "main"
-    shell._worktree_state_cache = None
-    shell.client.session_worktree_choice = AsyncMock(side_effect=RuntimeError("down"))
-    await refresh_branch(shell)
-    assert shell.branch == "main" and shell.worktree == ""
-
-
-@pytest.mark.asyncio
-async def test_settings_page_lists_three_worktree_modes_and_sets_them(shell):
+async def test_settings_agents_page_has_no_worktree_mode_row(shell):
     from nexus.ui.ratatui.settings_pages import agents
     shell.client.default_agent = AsyncMock(return_value="build")
     shell.client.list_agents = AsyncMock(return_value=[])
-    shell.client.session_worktree_choice = AsyncMock(return_value=_choice(mode="always"))
     shell.client.settings_inventory = AsyncMock(return_value=SimpleNamespace(items=[], root_display="~/.nexus"))
     page = await agents.build(shell.workflows)
-    row = next(b for b in page["blocks"] if b.get("id") == "worktree-mode")
-    assert row["control"]["options"] == [["No worktree", "none"], ["Ask every time", "ask"], ["Always worktree", "always"]]
-    assert row["control"]["value"] == "Always worktree"
-    await agents.handle(shell.workflows, {"key": "worktree_mode", "value": "none"})
-    assert shell.client.session_worktree_choice.await_args.args == ("s", "none")
+    assert not any(b.get("id") == "worktree-mode" for b in page["blocks"])
     with pytest.raises(ValueError):
-        await agents.handle(shell.workflows, {"key": "worktree_mode", "value": "bogus"})
+        await agents.handle(shell.workflows, {"key": "worktree_mode", "value": "none"})

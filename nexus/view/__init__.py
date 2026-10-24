@@ -38,7 +38,9 @@ from .model import (
     ToolCallView,
     TurnView,
     UsageTotals,
+    RootMoveView,
     WorktreeCommitView,
+    WorktreeHistoryView,
     WorktreeView,
     jsonable,
 )
@@ -50,7 +52,7 @@ __all__ = [
     "LiveDelegationView", "LiveTurnView", "McpView", "MessageView",
     "PermissionView", "PresenceView", "QueuedInputView", "RegistryView",
     "RetryView", "SkillView", "ToolCallView", "TurnView", "UsageTotals",
-    "WorktreeCommitView", "WorktreeView",
+    "RootMoveView", "WorktreeCommitView", "WorktreeHistoryView", "WorktreeView",
     "accumulate", "apply", "apply_many", "finalize_text", "finalize_thinking",
     "fold", "fold_into", "initial_state", "jsonable",
 ]

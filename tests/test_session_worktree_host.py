@@ -27,9 +27,13 @@ class _Runtime:
         self.calls.append(call)
         self.call_threads.append(threading.get_ident())
 
-    def set_session_worktree(self, session, enabled, *, base):
-        self._record_thread(("set", session, enabled, base))
-        return {"enabled": enabled, "base": base}
+    def list_session_worktrees(self, session):
+        self._record_thread(("list", session))
+        return {"current": "main", "worktrees": [{"kind": "main", "name": "main", "current": True}]}
+
+    def move_session_worktree(self, session, to, reason):
+        self._record_thread(("move", session, to, reason))
+        return {"root": "main" if to == "main" else "worktree", "moved": True}
 
     async def promote_session(self, session, *, reason, continuation):
         self._record_thread(("promote", session, reason, continuation))
@@ -52,12 +56,15 @@ async def test_session_worktree_commands_dispatch_to_runtime(tmp_path):
     runtime = _Runtime(tmp_path)
     facade = HostFacade(runtime)
 
-    changed = await facade.handle(
-        p.SessionWorktreeSet(session="friendly-session", enabled=True, base="main")
+    listed = await facade.handle(p.SessionWorktreeList(session="friendly-session"))
+    assert listed == p.SessionWorktreeResult(
+        session="canonical-session",
+        state={"current": "main", "worktrees": [{"kind": "main", "name": "main", "current": True}]},
     )
-    assert changed == p.SessionWorktreeResult(
-        session="canonical-session", state={"enabled": True, "base": "main"}
+    moved = await facade.handle(
+        p.SessionWorktreeMove(session="friendly-session", to="brave-otter", reason="continue the auth work")
     )
+    assert moved.state == {"root": "worktree", "moved": True}
     promoted = await facade.handle(
         p.SessionPromote(session="friendly-session", reason="isolate", continuation="continue")
     )
@@ -72,7 +79,8 @@ async def test_session_worktree_commands_dispatch_to_runtime(tmp_path):
     assert trust.state == {"setup_trust": "allow_project"}
 
     assert runtime.calls == [
-        ("set", "canonical-session", True, "main"),
+        ("list", "canonical-session"),
+        ("move", "canonical-session", "brave-otter", "continue the auth work"),
         ("promote", "canonical-session", "isolate", "continue"),
         ("detach", "canonical-session"),
         ("status", "canonical-session"),
@@ -82,7 +90,7 @@ async def test_session_worktree_commands_dispatch_to_runtime(tmp_path):
     assert all(
         thread_id == loop_thread
         for call, thread_id in zip(runtime.calls, runtime.call_threads, strict=True)
-        if call[0] != "status"
+        if call[0] not in {"status", "list"}  # read-only projections run on a worker thread
     )
 
 
@@ -99,14 +107,16 @@ async def test_client_worktree_methods_emit_typed_protocol_commands():
     transport = _Transport()
     client = Client(transport)
 
-    await client.set_session_worktree("s", True, base="main")
+    await client.list_session_worktrees("s")
+    await client.move_session_worktree("s", "main", reason="done")
     await client.promote_session("s", reason="reason", continuation="next")
     await client.detach_session_worktree("s")
     await client.session_worktree_status("s")
     await client.approve_worktree_setup("s", "allow_once", digest="b" * 64)
 
     assert transport.commands == [
-        p.SessionWorktreeSet(session="s", enabled=True, base="main"),
+        p.SessionWorktreeList(session="s"),
+        p.SessionWorktreeMove(session="s", to="main", reason="done"),
         p.SessionPromote(session="s", reason="reason", continuation="next"),
         p.SessionDetach(session="s"),
         p.SessionWorktreeStatus(session="s"),

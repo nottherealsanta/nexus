@@ -282,9 +282,11 @@ class DaemonManagerPort:
                 except ManagerPortError as exc:
                     raise LaunchRefused("bad_agent", f"{agent!r} is not a usable root role: {exc}") from exc
             if worktree:
-                # Selected while the session is still a draft, so before the first enqueue.
+                # Created while the session is still an idle draft, so before the first enqueue.
+                # The named create needs the host's SessionPromote to carry ``name``.
                 try:
-                    await self._call("set_session_worktree", session_id, True, base="current", name=title)
+                    await self._call("promote_session", session_id,
+                                     reason="worktree requested by the launching tool", name=title)
                 except ManagerPortError as exc:
                     raise LaunchRefused(
                         "error", f"could not create worktree {title!r}; session {session_id} was "

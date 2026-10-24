@@ -1,8 +1,9 @@
-"""Integration for owned session worktrees (worktree-sessions/06).
+"""Integration for project worktrees (worktree-sessions/06).
 
 Integration is local and explicit. The ``/worktrees`` flow previews one idle
-session, binds confirmation to its current Git state, then fast-forwards its
-original target branch if still safe. It refuses a diverged target and allows
+session in a worktree (any session of the project may be the one, since a
+worktree is shared), binds confirmation to its current Git state, then
+fast-forwards its original target branch if still safe. It refuses a diverged target and allows
 a dirty target checkout only when no dirty path overlaps a landed file. Agents land
 their own branch with plain Git instead (docs/decisions.md).
 """
@@ -75,8 +76,8 @@ def _snapshot(controller, session, *, service_locked: bool = False) -> dict:
     handle = controller.runtime.sessions.open(session, create=False, recover=False)
     controller._idle(handle)
     root = controller.runtime.session_root(session)
-    if root.kind != "worktree" or root.worktree_id != "session-" + session:
-        raise ValueError("Integration is available only for a session in its own worktree")
+    if root.kind != "worktree":
+        raise ValueError("Integration is available only for a session in a Nexus worktree")
     if not service_locked:
         controller.runtime.validate_session_root(session)
     manager = controller.runtime._session_worktrees
@@ -87,6 +88,9 @@ def _snapshot(controller, session, *, service_locked: bool = False) -> dict:
         _service._verify(record, manager.registry, allow_pending=False)
     else:
         record = manager.service.get(root.worktree_id, root=manager.registry)
+    project = getattr(controller.runtime, "workspace", None)
+    if project is not None and record.parent_workspace.resolve() != Path(project).resolve():
+        raise ValueError("Worktree belongs to a different project")
     if record.lifecycle != "active":
         raise ValueError("Session worktree is not active")
 

@@ -1,6 +1,10 @@
 # Plan: The agent manages its own worktrees
 
-Status: planning (2026-10-24). Nothing here is implemented. Builds on the
+Status: implementation is present across all three phases; verification is incomplete
+(2026-10-24). Runtime, tools, prompt, permission, storage, host and UI behavior described below
+have landed, as have the corresponding documentation updates. The full suite is not green: its
+first run had 39 failures; a later backend-targeted run had 6 failures (details in §6). Several
+focused storage/UI runs passed, but that does not establish full-suite completion. Builds on the
 implemented worktree-sessions ledger (`plans/worktree-sessions/`, 02, 03, 06, 08).
 
 ## 1. Intent
@@ -452,7 +456,15 @@ moves are handled in `packages/core/src/session/move.ts` and `session/inbox.ts`.
 
 ## 4. Phases
 
-1. **Remove the modes; agent create and in-turn move.**
+Implementation checklist (checked means implementation is present, not that every test passed):
+
+- [x] Phase 1 — remove modes; agent create/list and in-turn move/history behavior.
+- [x] Phase 2 — move/create between worktrees, timeline/UI and merged-cleanup behavior.
+- [x] Phase 3 — project-shared worktrees, session index, scoped commits and cross-session moves.
+- [x] Matching docs listed in §5 have landed in the worktree.
+- [ ] Verification: full-suite and backend-targeted failures remain; see §6.
+
+1. **Remove the modes; agent create and in-turn move.** (implementation present)
    - Remove the modes, the ask modal, `/worktree`, the settings row and
      `[worktrees].sessions` (3.1).
    - Render `<session_worktree>` in main roots with the guidance and facts.
@@ -466,13 +478,13 @@ moves are handled in `packages/core/src/session/move.ts` and `session/inbox.ts`.
    - Pin worktree turn commits with hidden refs (3.5.1).
    - Add the merge exemption (3.3, Permissions).
    - Fix the top-bar refresh.
-2. **Moving between worktrees in one session.**
+2. **Moving between worktrees in one session.** (implementation present)
    - Add `worktree_move` (to main, and to own worktrees), and `worktree_create`
      from a worktree.
    - Keep several worktrees in `WorktreeView`, and add the timeline rows.
    - Automatic cleanup of merged, clean checkouts.
    - Update `/worktrees`.
-3. **Shared worktrees** (3.4).
+3. **Shared worktrees** (3.4; implementation present).
    - Make worktree records project-level.
    - Add the session-in-worktree index.
    - Commit only the session's own paths, retrying on a lost compare-and-swap.
@@ -483,19 +495,15 @@ moves are handled in `packages/core/src/session/move.ts` and `session/inbox.ts`.
 
 ## 5. Docs to update with the code
 
-- `docs/sessions.md` and `docs/tools.md`: the tools and the lifecycle; the modes
-  are removed.
-- `docs/context.md`: `<session_worktree>` in main roots, and the in-band move
-  notice.
-- `docs/config.md`: `[worktrees].sessions`, `[worktrees].checkpoints` and
-  `worktree-mode.json` removed;
-  the `nexus/wt/` branch prefix.
-- `docs/host.md`: the protocol bump and the removed or added commands.
-- `docs/security.md`: the merge exemption from the forced ask on Git writes.
-- `docs/agents.md`: forks stay in the parent's worktree.
-- `docs/cli.md`: `/worktree` removed; `/worktrees` updated.
-- `docs/ratatui-parity.md`: the modal is gone; the bar refreshes on root change.
-- `docs/decisions.md`:
+- [x] `docs/sessions.md` and `docs/tools.md`: tools and lifecycle; modes removed.
+- [x] `docs/context.md`: `<session_worktree>` in main roots and in-band move notice.
+- [x] `docs/config.md`: removed keys/mode file and `nexus/wt/` branch prefix.
+- [x] `docs/host.md`: protocol and command changes.
+- [x] `docs/security.md`: merge exemption from forced ask on Git writes.
+- [x] `docs/agents.md`: forks stay in the parent's worktree.
+- [x] `docs/cli.md`: `/worktree` removed; `/worktrees` updated.
+- [x] `docs/ratatui-parity.md`: removed modal and top-bar root refresh.
+- [x] `docs/decisions.md`:
   - "the agent manages its worktrees, with no modes" (supersedes the
     ask-by-default choice);
   - in-turn moves;
@@ -504,9 +512,35 @@ moves are handled in `packages/core/src/session/move.ts` and `session/inbox.ts`.
   - the merge needs no approval;
   - main-checkout checkpoints removed (supersedes `docs/decisions.md:162`);
   - the narrowed cleanup rule.
-- `plans/worktree-sessions/README.md`: point to this plan.
+- [x] `plans/worktree-sessions/README.md`: points to this plan.
 
-## 6. Tests
+These entries are marked for documentation being present in this worktree, not as
+independent verification of every documented behavior.
+
+## 6. Verification
+
+The repository artifacts record these aggregate runs and focused follow-ups:
+
+- `artifacts/candid-tests.log`: full suite, 8,470 passed, 361 skipped, 39 failed,
+  6 deselected. Failures include worktree/runtime/UI/storage cases; this is not a
+  passing full-suite result. `test_host_daemon_projects` and
+  `test_live_packaging` were confirmed pre-existing baseline failures.
+- `artifacts/backend-targeted4.log`: backend-targeted worktree run, 120 passed,
+  6 failed. Remaining failures: `test_phase3_exit.py`, all three
+  `test_phase6_integration.py` worktree-child tests,
+  `test_worktree_sessions_runtime.py::test_full_agent_flow_list_create_edit_merge_and_move_to_main`
+  (expected `e2e.txt` absent), and
+  `test_worktree_setup.py::test_setup_trust_rejects_a_stale_review_digest`
+  (test expects an unredacted command, implementation returns a redacted one).
+- Subsequent focused results reported for storage (63 passed), UI (114 passed),
+  Rust (60 passed), and PTY (14 passed) supersede corresponding initial logged
+  failures for those focused cases only. They do not prove the full suite passes.
+
+The initial full-suite list also included `test_host_daemon_projects` and
+`test_live_packaging`, both confirmed pre-existing baseline failures. No claim is
+made that every original failure was fixed or independently rerun.
+
+## 7. Tests
 
 **No modes**
 - A new Git session starts in the main checkout with no prompt.
@@ -590,7 +624,7 @@ alone.
 **Scripted provider end-to-end.** The agent lists, creates, edits, commits,
 merges with Git, and moves to main, all within one turn.
 
-## 7. Decisions and open questions
+## 8. Decisions and open questions
 
 **Decided (2026-10-24):**
 - No worktree modes and no up-front question. The agent decides.
@@ -607,4 +641,30 @@ merges with Git, and moves to main, all within one turn.
 - Branches are `nexus/wt/<name>`.
 - This is a breaking change: no backwards compatibility, no shims, no migration,
   and no support for older sessions (3.1).
+
+**Remaining questions / verification work (latest full-suite run):**
+- Latest full suite (`/tmp/full3.log`): 8,505 passed, 361 skipped, 4 failed,
+  6 deselected in 814.12s. The plan remains not complete only because the overall
+  suite has known unrelated failures; plan-related worktree-focused verification
+  is green.
+- The four failures are unrelated or stale test expectations:
+  - `test_host_daemon_projects` has an environment-capture failure.
+  - `test_hot_extension_e2e.py::test_config_system_files_and_skills_are_hot_next_iteration`
+    and `test_manifest_loop_integration.py::test_reload_refreshes_config_soul_memory_skills_next_iteration`
+    assert exact tool lists that omit the present `subagent_continue` tool.
+  - `test_live_packaging` has a Rust pin mismatch.
+- Focused worktree/session verification passed, including
+  `test_worktree_sessions_runtime`, setup, project worktrees, cleanup host,
+  tools, `host_facade`, and the Ratatui worktree bar. `test_phase3_exit` passed.
+  Phase-6 worktree-child tests passed after their obsolete expectations were
+  updated to the shared-root fork semantics specified in §3.4.
+- `ruff check nexus tests` and `git diff --check` passed. Rust TUI tests passed:
+  690 + 60 passed, 3 ignored.
+- The historical `artifacts/backend-current.log` and
+  `artifacts/backend-targeted4.log` results have been superseded by fixes and
+  focused reruns; do not use their failure counts as current status. The earlier
+  scripted-flow concern about a compound shell command is also resolved; there
+  is no remaining plan-related worktree verification issue reported here.
+- Run the full suite again after the unrelated failures are addressed before
+  claiming overall verification complete.
 

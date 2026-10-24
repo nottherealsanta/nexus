@@ -157,12 +157,14 @@ class WorktreeService:
         exact_name: str = "",
         random_words: bool = False,
     ):
-        """Create a pending authenticated root-session worktree (plan 03).
+        """Create a pending authenticated project worktree.
 
-        ``exact_name`` (user-chosen) becomes the folder and ``nexus/session/<name>``
+        ``session_id`` is recorded as ``created_by`` for display; it is not an
+        owner and any session of the project may use the worktree.
+        ``exact_name`` (user-chosen) becomes the folder and ``nexus/wt/<name>``
         with no random suffix; empty keeps the generated ``<slug>-<token>``.
-        ``random_words`` (opt-in, root sessions only) uses ``<adjective>-<animal>``
-        instead; subagents keep the slug default.
+        ``random_words`` uses ``<adjective>-<animal>`` instead. A subagent child
+        id (``.../sub/...``) keeps its private ``nexus/session/`` checkout.
         """
         from .session_worktrees import create_session
 
@@ -190,7 +192,7 @@ class WorktreeService:
             path = records / _record_name(child_id)
             envelope = json.loads(_read_metadata_bytes(path))
             payload = envelope.get("record", {})
-            return payload.get("version") == 3 and payload.get("kind") == "session"
+            return payload.get("version") == 4 and payload.get("kind") == "session"
         except (OSError, ValueError, TypeError, WorktreeError):
             return False
 
@@ -224,6 +226,27 @@ class WorktreeService:
         from .session_worktrees import recreate_session
 
         return recreate_session(record_id, root=root)
+
+    def list_worktrees(self, parent_workspace: str | Path, *, root: str | Path, include_inactive: bool = False):
+        """Verified project worktrees (shared by every session of the project)."""
+        from .session_worktrees import list_worktrees
+
+        return list_worktrees(parent_workspace, root=root, include_inactive=include_inactive)
+
+    def get_worktree(self, record_id: str, *, root: str | Path, parent_workspace: str | Path):
+        from .session_worktrees import get_worktree
+
+        return get_worktree(record_id, root=root, parent_workspace=parent_workspace)
+
+    def find_worktree(self, parent_workspace: str | Path, name: str, *, root: str | Path):
+        from .session_worktrees import find_worktree
+
+        return find_worktree(parent_workspace, name, root=root)
+
+    def recreate_worktree(self, record_id: str, *, root: str | Path, parent_workspace: str | Path):
+        from .session_worktrees import recreate_worktree
+
+        return recreate_worktree(record_id, root=root, parent_workspace=parent_workspace)
 
     def session_status(self, record_id: str, *, root: str | Path):
         from .session_worktrees import session_status
@@ -1244,9 +1267,9 @@ def _list(
             try:
                 envelope = json.loads(_read_metadata_bytes(path))
                 payload = envelope["record"]
-                if payload.get("version") == 3 and payload.get("kind") == "session":
+                if payload.get("kind") == "session":
                     # The session-aware WorktreeService.list() validates these
-                    # through the dedicated v3 reader after this legacy pass.
+                    # through the dedicated v4 reader after this legacy pass.
                     continue
                 child_id = payload["child_id"]
             except (OSError, ValueError, KeyError, TypeError, WorktreeError) as exc:

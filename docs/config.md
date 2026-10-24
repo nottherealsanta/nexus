@@ -71,7 +71,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
 | `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_idle_seconds` 3600 (idle time before a session is auto-archived; 0 disables, ≤ 315360000), `auto_archive_days` 2 (legacy: no longer a threshold; 0 still disables auto-archive, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
-| `[worktrees]` | `sessions` false (new sessions can opt into one owned worktree), `checkpoints` true (hidden per-turn Git refs for main/external roots), `checkpoint_keep` 50 (bounded retention setting), `base` `current` (main checkout branch), `max_worktrees` 16 (user config only; 1–256), `commit_max_files` 2000, `commit_max_file_mb` 50; `setup` unset (argv list, at most 64 items and 8192 total characters), `setup_shell` false (string setup through shell), `setup_timeout` 300 seconds (max 1800), `setup_on_fail` `fail` or `warn`, `setup_for_subagents` `copy_only`, `copy` and `share_dirs` empty, `copy_max_mb` 20, `submodules` `none` / `top` / `recursive`. Numeric values are bounded and reject booleans; project config cannot set `max_worktrees`. Setup commands are repository code and use the project trust prompt described in [security.md](security.md). |
+| `[worktrees]` | `checkpoint_keep` 50 (bounded retention setting), `base` `current` (main checkout branch), `max_worktrees` 16 (user config only; 1–256), `commit_max_files` 2000, `commit_max_file_mb` 50; `setup` unset (argv list, at most 64 items and 8192 total characters), `setup_shell` false (string setup through shell), `setup_timeout` 300 seconds (max 1800), `setup_on_fail` `fail` or `warn`, `setup_for_subagents` `copy_only`, `copy` and `share_dirs` empty, `copy_max_mb` 20, `submodules` `none` / `top` / `recursive`. Numeric values are bounded and reject booleans; project config cannot set `max_worktrees`. Setup commands are repository code and use the project trust prompt described in [security.md](security.md). |
 
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
@@ -80,12 +80,13 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[manager]` | `enabled` **false**, `max_launches_per_turn` 3 (1-20), `max_live_managed` 8 (1-50), `auto_compaction` **true**, `idle_compaction_minutes` 55 (5-1440), `state_snapshot` **true**. Gates `ManagerOpen` and every operation on the workspace manager session; the caps bound its `session_launch`; `auto_compaction`/`idle_compaction_minutes` set the lazy idle compaction (memory note, then handoff) and `state_snapshot` the per-request `## Nexus State` block, independently ([manager.md](manager.md#automatic-compaction-and-machine-memory)). Env: `NEXUS_MANAGER__ENABLED`, `NEXUS_MANAGER__MAX_LAUNCHES_PER_TURN`, `NEXUS_MANAGER__MAX_LIVE_MANAGED`, `NEXUS_MANAGER__AUTO_COMPACTION`, `NEXUS_MANAGER__IDLE_COMPACTION_MINUTES`, `NEXUS_MANAGER__STATE_SNAPSHOT`. The model is not configurable: it is pinned to `codex/gpt-6-luna` |
 | `[updates]` | `check` true |
 
-The native session worktree preference has three machine-local values: `none`,
-`ask` and `always` (stored in project state as `worktree-mode.json`). Without
-that preference, the legacy `[worktrees] sessions = true` setting means
-`always`; false defaults to `ask`. Unattended Ask sessions continue in their
-current checkout because they cannot answer the prompt. Noninteractive callers
-retain the legacy boolean selection API. See [sessions.md](sessions.md#session-worktree-choice).
+There are no worktree modes. Every session starts in the main checkout and the
+agent decides when to create, list, move between and leave worktrees
+([plan](../plans/planning/agent-managed-worktrees.md)). `[worktrees] sessions`,
+`[worktrees] checkpoints` and the machine-local `worktree-mode.json` were removed
+without a compatibility path: `[worktrees]` rejects unknown keys, so a config file
+that still sets `sessions` or `checkpoints` fails to load until the key is deleted.
+New worktree branches are `nexus/wt/<name>`.
 
 `[permissions] mode` defaults to `allow` in the schema while `PermissionEngine`'s
 own constructor default is `ask`; `examples/nexus.toml` sets `ask`. Set the mode

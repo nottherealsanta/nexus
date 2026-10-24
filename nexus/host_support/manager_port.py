@@ -303,8 +303,8 @@ class ManagerHost(Protocol):
         self, session_id: str, instruction: str, *, agent: str | None, origin: dict[str, str], title_text: str,
         worktree_name: str = "",
     ) -> None:
-        """Open and enqueue a root. With ``worktree_name`` (passed only then) the session's
-        worktree is selected under that exact name before the enqueue; a failure raises
+        """Open and enqueue a root. With ``worktree_name`` (passed only then) a worktree
+        under that exact name is created and entered before the enqueue; a failure raises
         :class:`_WorktreeSetupFailed`."""
         ...
 
@@ -457,7 +457,7 @@ class HostManagerPort:
             raise LaunchRefused("error", f"could not record the launch: {_why(exc)}") from exc
         origin = {"kind": "manager", "manager": self._self_id, "origin_message_id": origin_message_id}
         try:
-            # The worktree selection is made while the session is still a draft, inside
+            # The worktree is created while the session is still an idle draft, inside
             # start_root and before the instruction is enqueued.
             extra = {"worktree_name": wt_name} if wt_name else {}
             await host.start_root(
@@ -819,8 +819,11 @@ class FacadeManagerHost:
         })
         if worktree_name:
             try:
+                # A launched session is idle and still a draft: create the named worktree
+                # now (the agent could create its own later; the launcher chose this name).
                 await facade._invoke_runtime_worktree(
-                    "set_session_worktree", session_id, True, base="current", name=worktree_name)
+                    "promote_session", session_id, reason="worktree requested by the launching manager",
+                    name=worktree_name)
                 facade.titles.cancel(session_id)
             except Exception as exc:  # noqa: BLE001
                 raise _WorktreeSetupFailed(str(exc)) from exc

@@ -215,12 +215,18 @@ Session worktree preparation runs after the accepted prompt is durable and befor
 freezing its context and tools. The session retains its exclusive lease while Git
 and setup run asynchronously under a process slot. A provisioning failure records
 a labelled failed turn; cancellation records a cancelled turn and cleans up the
-pending allocation. A failed creation keeps the worktree selection editable.
+pending allocation. Only an existing worktree root needs this turn-start
+preparation (recreating a removed checkout); a new session starts in the main
+checkout and a worktree is created or entered by the agent mid-turn (below) or by
+the user while idle. A failed creation leaves the root unchanged.
 
 Before the terminal event is persisted, Runtime records observed shell commits and
 commits remaining changes on the authenticated session branch. Commit errors are
 warnings and cannot replace the turn's outcome. The callback is drained during task
 cancellation so a terminal event cannot race an unfinished Git operation. A successful
-`worktree_promote` result requests a generic loop handoff only after that result is
-durable; the loop completes without another model call, leaving Stop available
-while promotion/setup runs at the boundary.
+`worktree_create` / `worktree_move` result only queues the move. The loop calls
+`session.step_boundary(lease)` after the step's tool results are durable and
+before the next iteration's steering, assembly and compaction; the session applies
+the queued move there (setup runs under a process slot, Stop stays available) and,
+if the root changed, hands back a rebuilt assembler/dispatcher/gate/environment
+factory that the loop swaps in. The turn, its iteration count and limits carry on.

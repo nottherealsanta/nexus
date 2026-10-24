@@ -186,7 +186,6 @@
     "base_sha": "",
     "branch": "",
     "state": "none",
-    "locked": true,
     "identity_fallback": false,
     "provenance_clipped": false,
     "setup_trusted": null,

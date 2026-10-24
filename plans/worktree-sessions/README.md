@@ -4,6 +4,15 @@ Status: implemented in sequence, revised 2026-10-23. Files 01–03 retain their
 historical implementation records. The simplified 04–10 work is implemented;
 10 records final acceptance results. Each phase is committed and pushed separately.
 
+**Superseded in part (2026-10-24):** the worktree modes (No worktree / Ask every time /
+Always worktree), the first-message question, the main-checkout checkpoints (04) and the
+per-session ownership of a worktree are being replaced by
+[agent-managed worktrees](../planning/agent-managed-worktrees.md): every session starts in the
+main checkout and the agent creates, lists, moves between and merges worktrees itself. That
+plan is in progress (the UI/host/config/view track is written, the runtime track is separate);
+the descriptions below record what files 01–10 built and are not the current behaviour where
+they mention modes or checkpoints.
+
 The design is deliberately small: every changed turn is saved in Git; each
 session chooses No worktree, Ask every time, or Always worktree; every subagent
 that may edit defaults to its own worktree, with an independent per-call override. The user can inspect saved turns. User

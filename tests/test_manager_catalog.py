@@ -229,7 +229,7 @@ async def test_launch_worktree_schema_validation_and_result():
     assert not ok.is_error
     assert json.loads(text(ok)) == {
         "id": "s-new", "title": "fix-sync_2", "state": "queued",
-        "worktree_name": "fix-sync_2", "worktree_branch": "nexus/session/fix-sync_2",
+        "worktree_name": "fix-sync_2", "worktree_branch": "nexus/wt/fix-sync_2",
     }
     assert port.calls == [("launch", "x", "u1", None, "fix-sync_2", "worktree")]
     plain = await call(tools["session_launch"], instruction="x", origin_message_id="u1",

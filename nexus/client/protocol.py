@@ -230,11 +230,14 @@ class Client:
             p.SessionOpen(session=session, create=create, recover=recover, root=root)
         )).session  # type: ignore[union-attr]
 
-    async def set_session_worktree(
-        self, session: str, enabled: bool, *, base: str = "current", name: str = ""
-    ) -> p.SessionWorktreeResult:
+    async def list_session_worktrees(self, session: str) -> p.SessionWorktreeResult:
+        """The project's Nexus worktrees and main checkout as seen from ``session`` (read-only)."""
+        return await self._request(p.SessionWorktreeList(session=session))  # type: ignore[return-value]
+
+    async def move_session_worktree(self, session: str, to: str, *, reason: str = "") -> p.SessionWorktreeResult:
+        """Move an idle session to ``"main"`` or an existing worktree by name."""
         return await self._request(  # type: ignore[return-value]
-            p.SessionWorktreeSet(session=session, enabled=enabled, base=base, name=name)
+            p.SessionWorktreeMove(session=session, to=to, reason=reason)
         )
 
     async def promote_session(
@@ -253,10 +256,6 @@ class Client:
         return await self._request(  # type: ignore[return-value]
             p.SessionWorktreeStatus(session=session)
         )
-
-    async def session_worktree_choice(self, session: str, mode: str = "") -> p.SessionWorktreeResult:
-        """Read or remember the project worktree mode and draft selection."""
-        return await self._request(p.SessionWorktreeChoice(session=session, mode=mode))  # type: ignore[return-value]
 
     async def session_turn_diff(self, session: str, seq: int) -> p.SessionWorktreeResult:
         return await self._request(p.SessionTurnDiff(session=session, seq=seq))  # type: ignore[return-value]

@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from nexus.agents.worktrees import WorktreeError, WorktreeService
-from nexus.agents.session_worktrees import session_record_id
 
 
 def git(path: Path, *args: str) -> str:
@@ -43,9 +42,10 @@ def test_create_session_pending_activation_and_dispatch(tmp_path: Path) -> None:
     pending = service.create_session(parent, "session-1", "calm-otter", root=root, base="release")
 
     assert pending.lifecycle == "pending"
-    assert pending.child_id == session_record_id("session-1")
+    assert pending.child_id == "wt-" + pending.path.name
+    assert pending.branch == "nexus/wt/" + pending.path.name
     assert pending.kind == "session"
-    assert pending.session_id == "session-1"
+    assert pending.created_by == pending.session_id == "session-1"  # display only, not an owner
     assert pending.base_ref == "release"
     assert pending.path.is_dir()
     assert git(pending.path, "branch", "--show-current") == pending.branch

@@ -11,8 +11,9 @@ async def prepared(tmp_path):
     git(main, "add", ".gitignore")
     git(main, "commit", "-qm", "ignore project extensions")
     provider = ScriptedProvider(tool_response(("write", "write", {"path": "saved.txt", "content": "saved\n"})), text_response("done"))
-    rt = runtime(main, tmp_path, provider, sessions=True)
+    rt = runtime(main, tmp_path, provider)
     handle = rt.session("integrate-me")
+    await rt.promote_session(handle.id, reason="isolate the work")
     events = await drain(handle, "write")
     assert events[-1].type == "turn.completed", events[-1]
     return rt, HostFacade(rt), handle.id, main

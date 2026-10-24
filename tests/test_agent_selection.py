@@ -138,7 +138,7 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
 
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
@@ -196,11 +196,11 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
 
     expected = {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
     }
     # Only the root session holds `subagent` and `code` (registered per root
     # iteration, never in the manifest a child draws from); the child keeps the rest.
-    child = expected - {"subagent", "code"}
+    child = expected - {"subagent", "subagent_continue", "code"}
     assert [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests] == [
         expected, child, expected,
     ]
@@ -236,9 +236,9 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     runtime.agents.refresh()
     [event async for event in runtime.session("research-tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "question", "webfetch", "websearch", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill"}
     catalogs = [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests]
-    assert catalogs == [expected, expected - {"subagent"}, expected]
+    assert catalogs == [expected, expected - {"subagent", "subagent_continue"}, expected]
     assert all(not ({"write", "edit", "shell", "bash", "apply_patch"} & names) for names in catalogs)
     await runtime.aclose()
 
@@ -286,14 +286,14 @@ async def test_child_catalog_inherits_parent_authority_minus_subagent(tmp_path):
     runtime = Runtime(tmp_path, config=_config("plan", background=False), providers={"scripted": provider})
     [event async for event in runtime.session("tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "edit", "write", "subagent", "question", "skill"}
+    expected = {"read", "glob", "grep", "edit", "write", "subagent", "subagent_continue", "question", "skill"}
     catalogs = [
         ({tool.name for tool in request.tools} - CHILD_ONLY)
         for request in provider.requests
     ]
     # The model is requested again after a tool result. The child inherits the
     # root catalog minus the root-only `subagent`, with no dropped-tool noise.
-    assert catalogs == [expected, expected - {"subagent"}, expected]
+    assert catalogs == [expected, expected - {"subagent", "subagent_continue"}, expected]
     spawned = next(e for e in runtime.session("tree").events if e.type == "agent.spawned")
     assert "subagent" not in spawned.data["tools"]
     assert "subagent" not in spawned.data["dropped_tools"]
@@ -337,7 +337,7 @@ async def test_explore_declaration_cannot_widen_parent_tool_authority(tmp_path):
     # catalog; declarations by a role never create a catalog entry.
     assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
     }
     await runtime.aclose()
 
@@ -373,9 +373,9 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
 
     expected = {
         "read", "glob", "grep", "edit", "write", "shell", "apply_patch",
-        "subagent", "question", "webfetch", "websearch", "skill", "code",
+        "subagent", "subagent_continue", "question", "webfetch", "websearch", "skill", "code",
     }
-    child = expected - {"subagent", "code"}
+    child = expected - {"subagent", "subagent_continue", "code"}
     assert len(provider.requests) == 4
     assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == child
     assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == child

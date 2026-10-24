@@ -234,19 +234,39 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
     from nexus.runtime import Runtime
     from nexus.session.records import MessageRecord
 
-    config = Config(
-        model="scripted/m",
-        version=2,
-        v2=ConfigV2(
-            model=ModelSection(
-                default="scripted/m", params=ModelParams(max_output_tokens=256)
+    def make_config(max_tokens: int) -> Config:
+        return Config(
+            model="scripted/m",
+            version=2,
+            v2=ConfigV2(
+                model=ModelSection(
+                    default="scripted/m", params=ModelParams(max_output_tokens=256)
+                ),
+                context=ContextSection(
+                    max_tokens=max_tokens, safety_margin_tokens=0, compaction="hybrid"
+                ),
+                session=SessionSection(snapshot_every=20),
             ),
-            context=ContextSection(
-                max_tokens=6000, safety_margin_tokens=0, compaction="hybrid"
-            ),
-            session=SessionSection(snapshot_every=20),
-        ),
+        )
+
+    # The fixed request overhead (system prompt, tools) changes as the harness
+    # evolves, so size the budget from a one-turn probe: it leaves room for
+    # roughly a third of the 200-message history, which must then be constrained.
+    probe = Runtime(
+        workspace.parent / f"{workspace.name}-probe",
+        config=make_config(1_000_000),
+        providers={"scripted": ScriptedProvider(text_response("ok"))},
     )
+    try:
+        probe_events = [event async for event in probe.session("probe").send("turn 0 " + "x" * 60)]
+        fixed_tokens = next(
+            event.data["context"]["used_tokens"]
+            for event in probe_events
+            if event.type == "context.assembled"
+        )
+    finally:
+        await probe.aclose()
+    config = make_config(fixed_tokens + 256 + 2000)
     provider = ScriptedProvider(*[text_response("ok") for _ in range(200)])
     runtime = Runtime(workspace, config=config, providers={"scripted": provider})
     try:

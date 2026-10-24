@@ -58,6 +58,19 @@ class SessionRoot:
         if self.kind == "worktree" and not self.worktree_id:
             raise ValueError("worktree session root requires worktree_id")
 
+    @property
+    def checkout_key(self) -> str:
+        """Stable identity of the checkout this root points at.
+
+        A worktree is a project resource shared by many sessions, so which
+        sessions are "in" a checkout is derived by grouping each session's latest
+        ``session.root_set`` on this key (``main``, ``wt:<worktree_id>`` or the
+        external path); there is no owner field.
+        """
+        if self.kind == "worktree":
+            return "wt:" + self.worktree_id
+        return "main" if self.kind == "main" else "ext:" + str(self.path)
+
     @classmethod
     def main(cls, project_root: Path, project_key: str | None = None) -> SessionRoot:
         """Return the canonical project root."""

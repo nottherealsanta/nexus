@@ -473,7 +473,6 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
                 Seg::Worktree => match s.worktree_kind.as_str() {
                     "worktree" => background.fg(p.purple).add_modifier(Modifier::BOLD),
-                    "pending" => background.fg(p.purple),
                     "main" => background.fg(p.muted),
                     _ => background.fg(p.quiet),
                 },

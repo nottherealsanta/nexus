@@ -1066,14 +1066,12 @@ class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    """``[worktrees]``: session isolation and bounded worktree setup policy."""
+    """``[worktrees]``: bounded worktree creation and setup policy (the agent decides when to use one)."""
 
-    sessions: bool = False
     base: str = "current"
     max_worktrees: int = 16
     commit_max_files: int = 2000
     commit_max_file_mb: int = 50
-    checkpoints: bool = True
     checkpoint_keep: int = 50
     setup: list[str] | str | None = None
     setup_shell: bool = False
@@ -1086,10 +1084,6 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     submodules: Literal["none", "top", "recursive"] = "none"
 
     def __post_init__(self) -> None:
-        if type(self.sessions) is not bool:
-            raise ValueError("worktrees.sessions must be true or false")
-        if type(self.checkpoints) is not bool:
-            raise ValueError("worktrees.checkpoints must be true or false")
         if type(self.setup_shell) is not bool:
             raise ValueError("worktrees.setup_shell must be true or false")
         if self.setup_on_fail not in {"fail", "warn"}:

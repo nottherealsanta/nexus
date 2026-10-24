@@ -1,5 +1,11 @@
 # Ratatui implementation and parity ledger
 
+The worktree bar renders the root from the incoming conversation reduction, even
+before the controller's cached view catches up, so an agent move updates it without
+a tab switch. Native PTY action readers ignore passive `draft_state` composer
+reports when waiting for a user operation; those reports remain part of the bridge
+protocol for draft persistence.
+
 PTY key tests returning from a read-only agent page wait for the root frame to
 render before submitting the draft. Snapshot updates and terminal input use
 separate channels; a fixed sleep cannot establish their processing order.
@@ -1423,22 +1429,24 @@ below): row 1 holds the tabs, row 2 is a thin line, row 3 `~/path branch worktre
 or session number/ID; subagent pages keep their own title and breadcrumb).
 The title is bold, path text colour, branch and worktree quiet (the worktree name comes from
 the snapshot's `worktree` key, set by `prototype._worktree_name` when the workspace is a
-linked Git worktree, or by `worktree_bar.session_worktree_label` from the host's
-`session_worktree_choice` state: a session whose root is its own worktree shows `⎇ <name>` and
-the session's branch; a draft with a worktree selected (mode Always, or `selected`) shows
-`⎇ <pending name>` or the placeholder `⎇ new worktree`; a session in the
-main checkout of a Git workspace (`kind` `main`, not a pending draft) shows `main checkout`, so the
+linked Git worktree, or by `worktree_bar.session_worktree_label` from the session's own root
+(`ConversationView.root`, i.e. its latest `session.root_set`; no host call): a session whose root is a
+worktree shows `⎇ <name>` and the worktree's branch; a session in the
+main checkout of a Git workspace (`kind` `main`) shows `main checkout`, so the
 location is always stated (non-Git or unknown state shows nothing new). The snapshot's
-`worktree_kind` (`worktree` | `pending` | `main` | empty, from `worktree_bar.session_worktree_kind`)
-styles it: worktree is bold `purple`, pending `purple`, main `muted`, anything else `quiet`; Rust
+`worktree_kind` (`worktree` | `main` | empty, from `worktree_bar.session_worktree_kind`)
+styles it: worktree is bold `purple`, main `muted`, anything else `quiet`; Rust
 never parses the label. Read keys are
-`kind`, `branch`, `worktree_name`, `pending_name`, `selected`, `mode`, `editable`, `git`, missing
-keys count as empty. The state is cached 3 s per `(workspace, session)`, bounded to 2 s, reread after a worktree
-answer and when a turn is submitted, and a failure leaves the workspace values. Every tab or project
+`kind`, `branch`, `worktree_name`, `git` (whether the last branch read found a repository), missing
+keys count as empty. The bar refreshes when the view reports a new root: `update()` calls
+`worktree_bar.sync_bar_with_root`, which compares `ConversationView.root` with the root last drawn and
+redraws the bar fields when an agent move changed it, so an in-turn `worktree_create`/`worktree_move`
+shows `⎇ <name>` (or `main checkout`) without a tab switch or `!` command. Every tab or project
 switch (`ShellActions.switch`) starts a background, cancellable `refresh_branch` that never delays the
 switch; it is cancelled by the next switch and at shutdown, and it repaints only when a field changed.
-`refresh_branch` computes `breadcrumb`, `branch`, `worktree` and `worktree_kind` locally and applies
-them together, dropping the result if the workspace, session or switch generation moved on. A switch
+`refresh_branch` reads the workspace's Git branch off the loop, remembers it on the shell and applies
+`breadcrumb`, `branch`, `worktree` and `worktree_kind` together with the root (`worktree_bar.apply_bar`),
+dropping the result if the workspace, session or switch generation moved on. A switch
 to another project immediately shows the bare workspace path with branch, worktree and kind cleared;
 within the same workspace the old labels stay until the read lands. The poll signature includes
 `branch` and `worktree_kind`), right the update notice and `[Sessions]`, separated by quiet `│`.
@@ -2290,45 +2298,49 @@ run.
 
 ### Session worktree controls
 
-The session actions modal and `/worktree` open the three-mode picker: No worktree,
-Ask every time, and Always worktree. The same picker (same labels, same host call
-`session_worktree_choice(session, mode)`) is a "Worktree mode" row under "Session
-worktrees" on Settings -> Agents. The picker shows the current root, checkout and branch;
-started sessions retain their root when the project preference changes.
+There are no worktree modes: the "Worktree mode…" row in the session actions modal, the
+`/worktree` command, the "Session worktrees" row on Settings -> Agents and the first-message
+modal ("Create a worktree, or work in the main checkout?", with its `worktree_answer`
+operation, draft state and `Esc` handling) were removed. Every session starts in the main
+checkout and the first message is sent at once; the agent creates and moves between
+worktrees with its own tools. The top bar follows each move (see "Top bar" above).
 
-First message of a Git session that is still a draft (`actions.submit`, `worktree_pages.py`;
-Manager sessions bypass all of this):
+Worktree history in the transcript: each create or move is one durable, reason-labelled row
+built from `session.root_set` (`ConversationView.worktree.moves`, placed by time among the
+turns like other notices; `worktree_bar.root_move_text`), for example
+`⎇ Created worktree brave-otter · from main @ 1a2b3c4 · reason: "refactor auth"` or
+`⎇ Moved to the main checkout · reason: "left unmerged"`. `WorktreeView.history` keeps the
+bounded list of checkouts the session has been in (name, branch, base, merged/unmerged/removed,
+turn range), rebuilt identically on replay.
 
-- No worktree: unchanged, the message runs in the main checkout.
-- Ask: a modal titled "Create a worktree, or work in the main checkout?" (Yes / No rows).
-  No closes the modal and resumes the prompt unchanged (`resume_worktree_submission` always
-  closes it). Yes calls `set_session_worktree(session, True)` with no name, then resumes the
-  preserved prompt and attachments exactly as before; the host picks a random
-  `<adjective>-<animal>` folder and branch when the worktree is created on the first turn, and
-  the name is not the session title. If the host call fails the modal closes, the text returns to
-  the composer and the error is shown. `Esc` cancels the whole submission and returns the text to
-  the composer (attachments never left it).
-- Always: no modal and no name; the message is sent and the host creates the randomly named
-  worktree on the first turn. The top bar shows `⎇ new worktree` until then.
+`/worktrees` (`worktree_pages.WorktreePages.worktrees_page`) lists the project's worktrees from the
+`SessionWorktreeList` host command (the agent's `worktree_list`): `← ` marks this session's row, with
+merged/`N unmerged`, `dirty`, `checkout removed` and the sessions in each. A row opens "Move this
+session here" (`SessionWorktreeMove`; idle only, reason "Moved by the user"), "Integrate into base
+branch…" (the current worktree) and "Remove checkout…" (another worktree), plus "Move this session to
+the main checkout" from the current one. Subagent child checkouts are appended below with their
+existing review flow. If the list command fails the page falls back to the daemon's child-worktree
+list.
 
-Saved-turn, `/worktrees` and removal notes follow.
-
-Saved turns have a commit/checkpoint row that opens a bounded diff. Checkpoints
-link by durable turn ID and saved record sequence, including after replay.
-`/worktrees` keeps modern session/child cleanup separate from legacy child review.
-Session integration and checkout removal preview their effect before confirmation;
+Saved turns exist only in worktrees (a commit row that opens a bounded diff, linked by durable
+turn ID and saved record sequence, including after replay); the main checkout saves no turns and
+shows no row. Session integration and checkout removal preview their effect before confirmation;
 errors and refused states remain visible. Branches remain after checkout removal.
 
-Verified by `tests/test_worktree_sessions_pty.py`: the actual native picker and Ask resumption, Ask -> Yes -> name step (invalid name error, then branch `nexus/session/<name>`), an owned file write and commit, and opening its saved-turn diff. Workflow/projection tests also cover replay links, stale-session answers, attachment preservation and confirmation binding.
+Verified (written, not yet run in this change; see the plan status): `tests/test_ratatui_worktree_bar.py`
+(bar follows the view root, row text), `tests/test_ratatui_workflows.py` (no first-message question,
+`/worktrees` list and move, no Settings row), `tests/test_ratatui_projection.py` (rows and saved-turn
+label), `tests/test_view_worktree.py` (history, moves and replay) and `tests/test_worktree_sessions_pty.py`
+(native PTY: a mid-turn `worktree_create`, the bar and the transcript row).
 
 ## `/merge`
 
 `/merge [note]` is a prompt-sending slash command like `/review`. In a session whose root is its own
-worktree (host `session_worktree_choice` state `kind == "worktree"`, read fresh) it enqueues one normal user turn,
-so the transcript shows the full instruction the agent receives (base branch from state `base_branch`
-when the host reports it, else "its base branch"; the optional note is appended). In a main-checkout
-session it shows a notice and sends nothing. Same enqueue path as other prompts. Not verified: the host
-does not yet report `base_branch`.
+worktree (`ConversationView.root.kind == "worktree"`) it enqueues one normal user turn,
+so the transcript shows the full instruction the agent receives (base branch from `root.base_ref`,
+else "its base branch"; the optional note is appended). In a main-checkout
+session it shows a notice and sends nothing. Same enqueue path as other prompts. It is only a manual
+nudge: the agent is told to merge as soon as its work is done.
 
 ## Native Mermaid image fallback
 

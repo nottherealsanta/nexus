@@ -690,7 +690,7 @@ async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     assert "SOUL-A" in provider.requests[0].system
     assert "SOUL-B" in provider.requests[1].system
     assert "reader: read things" in provider.requests[1].system
-    assert len(provider.requests[0].tools) == 15
+    assert len(provider.requests[0].tools) == 16
     next_tools = set(names(provider.requests[1]))
     assert next_tools == {
         "read", "glob", "grep", "subagent",

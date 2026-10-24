@@ -24,6 +24,8 @@ from ...ui_support.context import context_usage, context_measure, price_tier_thr
 from ...ui_support.completion import root_agents
 from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
+from .worktree_bar import root_move_text
+from ...view import RootMoveView
 from .verb_groups import CHANGE_TOOLS, activity_entries, format_time
 from .turn_status import running_agents, turn_status
 from ...host_support.errors import error_text
@@ -66,37 +68,28 @@ async def refresh_branch(shell) -> bool:
     """Re-read the current workspace's branch from ``.git`` off the event loop.
 
     Sets ``breadcrumb`` (``path › branch``), ``branch``, ``worktree`` and ``worktree_kind`` for
-    whichever workspace and session the active tab shows. Every field is computed locally and
-    applied together; the result is dropped when the workspace, session or switch generation
-    moved on during either await. Returns whether any field changed.
+    whichever workspace and session the active tab shows. The Git facts are remembered on the shell
+    and combined with the session's root (``ConversationView.root``) by ``worktree_bar.apply_bar``,
+    which also redraws the bar when an agent move changes the root. The result is dropped when the
+    workspace, session or switch generation moved on during the await. Returns whether any field changed.
     """
     from ...host_support.git_head import git_head
-    from .worktree_bar import session_worktree_kind, session_worktree_label, session_worktree_state
+    from .worktree_bar import apply_bar
 
     def token():
         return (str(shell.workspace or ""), getattr(getattr(shell, "controller", None), "session", ""),
                 getattr(shell, "generation", 0))
 
     start = token()
-    workspace, session = start[0], start[1]
+    workspace = start[0]
     if not workspace:
         return False
     head, worktree = await asyncio.to_thread(lambda: (git_head(workspace), _worktree_name(workspace)))
     if token() != start:
         return False
-    branch = str(head.get("branch") or "")
-    state = await session_worktree_state(shell, workspace=workspace, session=session)
-    if token() != start:
-        return False
-    label_branch, label_worktree = session_worktree_label(state, branch, worktree)
-    fields = {"branch": label_branch, "worktree": label_worktree,
-              "worktree_kind": session_worktree_kind(state, worktree),
-              "breadcrumb": workspace + (" › " + label_branch if label_branch else "")}
-    if all(getattr(shell, name, None) == value for name, value in fields.items()):
-        return False
-    for name, value in fields.items():
-        setattr(shell, name, value)
-    return True
+    shell._git_branch, shell._git_worktree = str(head.get("branch") or ""), worktree
+    shell._bar_root = getattr(getattr(getattr(shell, "controller", None), "view", None), "root", None)
+    return apply_bar(shell)
 
 
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
@@ -1236,16 +1229,24 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
 
     # `context.notice` events the reducer keeps as diagnostics (e.g. paused subagent-report
     # delivery) draw as labelled rows placed by time among the turns, never hidden.
+    # Worktree creates and moves (`view.worktree.moves`) are durable, reason-labelled rows in the same
+    # time-ordered list.
     notices = [] if on_agent_page else sorted(
-        ((d.ts if d.ts is not None else 0.0, d) for d in view.diagnostics if d.type == "context.notice"
-         and isinstance(d.data, dict) and d.data.get("message")), key=lambda item: item[0])
+        [(d.ts if d.ts is not None else 0.0, d.seq, d) for d in view.diagnostics if d.type == "context.notice"
+         and isinstance(d.data, dict) and d.data.get("message")]
+        + [(m.ts if m.ts is not None else 0.0, m.seq, m) for m in view.worktree.moves],
+        key=lambda item: item[:2])
 
     def notices_before(moment):
         while notices and notices[0][0] <= moment:
-            _, diagnostic = notices.pop(0)
-            title = {"subagent_wake_paused": "Subagent reports paused"}.get(str(diagnostic.data.get("kind")), "Notice")
-            blocks.append({"id": f"notice:{diagnostic.seq}", "kind": "literal", "title": title,
-                           "text": escape_controls(str(diagnostic.data.get("message"))[:600]), "gap": 1})
+            _, _, item = notices.pop(0)
+            if isinstance(item, RootMoveView):
+                blocks.append({"id": f"root-move:{item.seq}", "kind": "literal", "title": "Worktree",
+                               "text": escape_controls(root_move_text(item)), "gap": 1})
+                continue
+            title = {"subagent_wake_paused": "Subagent reports paused"}.get(str(item.data.get("kind")), "Notice")
+            blocks.append({"id": f"notice:{item.seq}", "kind": "literal", "title": title,
+                           "text": escape_controls(str(item.data.get("message"))[:600]), "gap": 1})
 
     ordinal = 0  # user-initiated turns so far (shell turns and turns without a prompt don't count)
     for turn in () if on_agent_page else view.turns:
@@ -1255,8 +1256,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             number = ordinal
         cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         notices_before(turn.started_ts if turn.started_ts is not None else float("inf"))
-        saved_flags = (tuple((item.seq, item.sha) for item in view.worktree.commits if item.sha in turn.commit_shas),
-                       tuple((item.seq, item.commit) for item in view.checkpoints if item.turn_id == turn.id))
+        saved_flags = tuple((item.seq, item.sha) for item in view.worktree.commits if item.sha in turn.commit_shas)
         turn_flags = (*flags, saved_flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies), number)
@@ -1271,9 +1271,6 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             for commit in view.worktree.commits:
                 if commit.sha in turn.commit_shas:
                     saved_rows.append((commit.seq, f"Saved turn · {commit.sha[:10]} · {commit.insertions} added · {commit.deletions} removed"))
-            for checkpoint in view.checkpoints:
-                if checkpoint.turn_id == turn.id:
-                    saved_rows.append((checkpoint.seq, f"Checkpoint · {checkpoint.commit[:10]} · {len(checkpoint.files) + checkpoint.foreign} files · {checkpoint.insertions} added · {checkpoint.deletions} removed"))
             turn_blocks = [*turn_blocks, *[{
                 "id": f"{turn.id}:saved:{seq}", "kind": "summary", "gap": 1, "text": label,
                 "operation": {"kind": "saved_turn_diff", "seq": seq},
@@ -1484,11 +1481,6 @@ async def dismiss(shell) -> bool:
         return False
     if await shell.workflows.speak_stop():
         return False
-    from .worktree_pages import ASK_TITLE
-    workflows = shell.workflows
-    if workflows.pending_worktree_submission and shell.panel_title == ASK_TITLE:
-        workflows.cancel_worktree_submission()  # Esc cancels the whole submission; the text returns to the composer
-        return True
     form = shell.workflows.form
     if form and not form["secret"] and form["status"] and not form.get("saved", False):
         shell.workflows.menu("Discard unsaved changes?", [("Keep editing", {"kind": "back"}),
@@ -1577,6 +1569,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             shell.notice = ""
             controller.ingest(event)
             shell.mark_current_seen()
+        from .worktree_bar import sync_bar_with_root
+        sync_bar_with_root(shell, controller.view)  # an agent move (session.root_set) redraws the bar now
         revision += 1
         async with write_lock:
             # The literal `lines` projection is a test seam; the native typed blocks already
@@ -1858,7 +1852,6 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     ):
                         process.stdin.close()
                         break
-                    shell._worktree_state_cache = None  # a turn may create the session worktree lazily
                     if action["text"].lstrip().startswith("!"):  # a shell command may have switched branch
                         before = shell.breadcrumb
                         await refresh_branch(shell)

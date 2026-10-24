@@ -39,7 +39,7 @@ Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
 | --- | --- | --- |
 | `identity` | 0 | `IDENTITY_PREAMBLE`, currently empty: the role comes from the agent prompt |
 | `soul` | 0 | `SOUL.md` plus the selected agent's prompt (`append_agent_prompt`) |
-| `environment` | 1 | workspace, platform, profile, Git branch and status (`capture_environment`; capped by `context.limits.environment`). For a session whose root is an owned worktree it also carries a labelled `<session_worktree>` block (see below) |
+| `environment` | 1 | workspace, platform, profile, Git branch and status (`capture_environment`; capped by `context.limits.environment`). In every Git session it also carries a labelled `<session_worktree>` block (see below) |
 | `tools` | 0 | structured schemas on `ModelRequest.tools`; never in system text |
 | `agents_md` | 1 | selected session-root `AGENTS.md` (`context.limits.agents_md`) |
 | `skills_index` | 1 | sanitised `name: description` lines only; bodies load via the `skill` tool |
@@ -57,16 +57,48 @@ filenames and limits; a session root only changes the source of `AGENTS.md`.
 
 ## Header sections and literal inspection
 
-**Session worktree block.** Every turn of a session working in an owned worktree
-the environment part appends `<session_worktree>` with the labelled facts
-`Worktree directory` (where tools and shell run), `Main checkout directory`,
-`Worktree branch`, `Base branch` and `Base commit`, followed by short guidance:
-the agent works in an isolated worktree branch created from the base branch,
-commits there, does not merge into the base branch or touch the main checkout,
-and tells the user to land the work with `/worktrees` (the user previews and
-confirms the merge). Other sessions get neither block nor guidance. The facts come from
-`SessionWorktrees.environment_facts`, set on the frozen assembler by the runtime
-each turn and iteration; rendering is `render_session_worktree` in `context/parts.py`.
+**Session worktree block.** Every turn of every session in a Git workspace, in the
+main checkout too, the environment part appends `<session_worktree>`; a non-Git
+workspace gets no block (and no worktree tools). It is guidance only: Nexus
+enforces none of it, and the user's instructions win.
+
+*Facts* (labelled, re-rendered every iteration, so they follow the root after a
+move and survive compaction): `Current root`, `Main checkout directory`,
+`Main checkout branch`, `Main checkout changes` (clean or dirty), `Other sessions
+in the main checkout` (titles, `(active)` when running), `Last move` (action,
+target, reason, from the latest `worktree.moved`) and, in a worktree,
+`Worktree name`, `Worktree directory`, `Worktree branch`, `Base branch`,
+`Base commit`, `Worktree state` (merged / unmerged with a commit count / no
+commits yet), `Worktree changes` and `Other sessions in this worktree`. They come
+from `SessionWorktrees.environment_facts`, set on the frozen assembler by the
+runtime each turn and iteration.
+
+*Guidance*: create a worktree (`worktree_create`) before changing code across
+files, refactors, dependency or build changes, experiments, multi-turn work, or
+when another active session edits the main checkout; stay in the main checkout for
+questions, reading, review, planning, running tests, and small edits the user
+asked for (nothing is saved per turn there, so create a worktree to review or undo
+turn by turn); decide before the first edit; call `worktree_list` first and
+continue an existing worktree when the work belongs there; one worktree per piece
+of work. In a worktree it adds the merge steps (commit, squash onto the base,
+`git -C <main> merge --ff-only <branch>`, rebase and retry when the base
+diverged, stop and tell the user if it still fails), "merge when done, without
+being asked", "or leave it and `worktree_move` to main, saying the branch is kept
+unmerged", and, when another session is in the worktree, "do not squash, do not
+revert or rewrite its work". Rendering is `render_session_worktree` in
+`context/parts.py`.
+
+*In-band move notice.* When a move is applied mid-turn, Runtime appends a durable
+user-role notice message (`MessageMeta.notice = "worktree_move"`, plus a
+`context.notice` event with `kind = "worktree_move"`) at the step boundary, e.g.
+"Working directory is now ⎇ brave-otter (`<path>`, branch `nexus/wt/brave-otter`,
+base `main @ 1a2b3c`)…". Like the subagent-roster notice it sits at the tail,
+never rewrites the cached prefix and is not a user prompt. Compaction may drop an
+old notice, but the facts above always state where the session is and the last
+move. The tool set can change between steps (`worktree_commit` appears only in a
+worktree) and the assembler is rebuilt for the new root, so the system prompt and
+tool schemas of the remaining steps are re-sent uncached once; history before the
+move stays a stable prefix.
 
 The context header and `/context` picker expose System prompt, Environment,
 AGENTS.md, MEMORY.md, Skills, Tools and MCP, in that order. A populated

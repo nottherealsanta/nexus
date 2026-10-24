@@ -39,7 +39,7 @@ from ..session.manager import SessionSummary
 
 #: Bumped when a command/result shape changes incompatibly, so a transport can
 #: refuse a peer built from a different protocol revision instead of misreading.
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 
 # ---------------------------------------------------------------------------
@@ -427,22 +427,21 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     root: str = ""
 
 
-class SessionWorktreeSet(msgspec.Struct, tag=True, frozen=True):
-    """Set a draft session's worktree preference before its first prompt."""
+class SessionWorktreeList(msgspec.Struct, tag=True, frozen=True):
+    """List the project's Nexus worktrees (and the main checkout) from one session's view.
+
+    The same bounded rows the model sees from ``worktree_list``; read-only.
+    """
 
     session: str
-    enabled: bool
-    base: str = "current"
-    #: Optional user-chosen name (letters, digits, ``-``/``_``, 1-60). It becomes the
-    #: session title, the worktree folder and branch ``nexus/session/<name>``.
-    name: str = ""
 
 
-class SessionWorktreeChoice(msgspec.Struct, tag=True, frozen=True):
-    """Read or remember none/ask/always mode and update an editable draft."""
+class SessionWorktreeMove(msgspec.Struct, tag=True, frozen=True):
+    """Move an idle session to ``main`` or an existing Nexus worktree by name (user override)."""
 
     session: str
-    mode: str = ""
+    to: str
+    reason: str = ""
 
 
 class SessionPromote(msgspec.Struct, tag=True, frozen=True):
@@ -1428,8 +1427,8 @@ Command = (
     | SessionPreview
     | SessionSearch
     | SessionOpen
-    | SessionWorktreeSet
-    | SessionWorktreeChoice
+    | SessionWorktreeList
+    | SessionWorktreeMove
     | SessionPromote
     | SessionDetach
     | SessionWorktreeStatus
@@ -3013,8 +3012,8 @@ __all__ = [
     "SessionLogPage",
     "SessionOpen",
     "SessionOpenResult",
-    "SessionWorktreeSet",
-    "SessionWorktreeChoice",
+    "SessionWorktreeList",
+    "SessionWorktreeMove",
     "SessionPromote",
     "SessionDetach",
     "SessionWorktreeStatus",

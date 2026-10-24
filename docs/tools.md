@@ -51,32 +51,61 @@ the retained branch. The root session's turn-save behavior remains unchanged.
 
 ## Session worktree tools
 
-The Runtime adds dynamic `worktree_status` and, by session root, one matching
-mutation: `worktree_commit` for a Nexus-owned worktree or `worktree_promote` for
-a main/external root. Tool implementations live in
-`tools/builtin/worktree.py` and receive only bound callbacks; they cannot reach
-Git managers or Runtime directly. Status is read-only. Commit arguments are
-bounded to a 4,000-character message and 500 optional paths; the callback
-checks each path against the active session root. Promotion accepts a bounded
-reason and optional continuation and queues that continuation only after the
-root move succeeds.
+Every root session of a Git project starts in the main checkout and manages its
+own worktrees; there are no worktree modes and no question before the first turn.
+The Runtime adds four dynamic tools (none in a non-Git workspace; subagents never
+get them):
 
-`worktree_promote` must be registered with the session permission engine's
-forced-confirmation set (`require_confirmation_for({"worktree_promote"})`). Its
-mutating/exclusive declaration controls dispatch scheduling, but alone does
-not guarantee an operator approval when policy is permissive. This explicit
-approval is required because promotion changes the checkout used by future
-turns.
+| Tool | Does |
+| --- | --- |
+| `worktree_list {}` | Read-only. The main checkout plus every Nexus worktree of the project (name, branch, base, checkout present or removed, dirty, merged or unmerged with the commit count, the sessions in it with their titles and whether they are active, last activity, `← you are here`). Bounded to `worktrees.max_worktrees` rows with the clipping announced; extra Git worktrees Nexus did not create are listed separately as read-only info. Returns labelled fields, not JSON. |
+| `worktree_create {reason, name?, base?}` | Creates `nexus/wt/<name>` (random word pair without `name`) and moves the session into it. From the main checkout the files this session wrote are carried over (proven by write receipts) and committed; from a worktree it branches from the updated base and leaves the old one as `worktree_move` does. Refused at the worktree limit, with the error naming merged worktrees that could be reused. |
+| `worktree_move {to, reason}` | `to` is `"main"` or a worktree name from `worktree_list`, whoever created it and whoever else is in it (nothing is transferred, no other session moves). A removed checkout is recreated from its kept branch. Leaving a worktree needs its changes committed; unmerged commits are allowed and reported (`kept unmerged`); the branch is never deleted. |
+| `worktree_commit {message, paths?}` | Only while the session is in a worktree. Unchanged: bounded to a 4,000-character message and 500 optional paths, each checked against the active root. |
 
-There is no merge tool or command, and none is required (the agent guidance
-and `/merge` say so: a `nexus` CLI without `merge` is not a blocker). Landing the branch is plain Git in the shell
-(`git -C <main checkout> merge --ff-only <session branch>`, see
-[decisions.md](decisions.md#agents-land-their-own-session-worktree-with-git-2026-10-23));
-the permission engine forces an ask for any shell command that runs a Git write
+`worktree_create` and `worktree_move` validate and return at once; the move is
+**queued and applied at the next step boundary** of the running turn: after every
+tool call of the model step finished and before the next model request
+(`SessionWorktrees.step_boundary`, called from `core/loop.py`). The turn, its
+step count and limits carry on. At the boundary Runtime closes the old root's part
+of the turn (shell commits recorded, a harness `worktree.committed`, merge
+detection), creates or recovers the target, emits `session.root_set` (with
+`reason`, `request_id`, `action` and the `worktree_id`) and `worktree.created` /
+`worktree.moved` / `worktree.promoted`, then rebuilds the per-root state — path
+guard, tool set, shell cwd, cached root and the assembler — and opens the new
+root's part with `worktree.turn_started`. Sibling tool calls of the same step still
+run in the old directory (the tool descriptions say so). Compaction and queued
+steers run at the top of the next iteration, so none lands between the request and
+the move. If anything before `session.root_set` fails the root is unchanged and a
+`worktree.move_failed` event plus a model-visible notice report it. If the turn
+ends first, the queued move is dropped with `worktree.move_failed`. The
+user-facing host actions (`move_session_worktree`, `promote_session`,
+`detach_session_worktree`) keep their idle-only rule and apply immediately.
+
+Host-facing Runtime API: `list_session_worktrees(session)` (the same rows the
+model sees), `move_session_worktree(session, to, reason)` (idle; `"main"` or a
+name), `promote_session(session, reason=, continuation=, name=, base=)` (idle
+create; `name` also becomes the session title) and
+`detach_session_worktree(session)` (idle move to main).
+
+**Permissions.** `worktree_list`, `worktree_create` and `worktree_move` never ask
+(they only create or switch checkouts in Nexus-owned space and both can be
+undone); the engine allows them by name in every mode, explicit deny rules still
+win. Path permissions follow the root (`PathGuard.for_worktree`).
+
+**Merging has no tool or command** and none is required (the agent guidance and
+`/merge` say so: a `nexus` CLI without `merge` is not a blocker). Landing the
+branch is plain Git in the shell: commit, squash, then
+`git -C <main checkout> merge --ff-only <worktree branch>` (see
+[decisions.md](decisions.md#agents-land-their-own-session-worktree-with-git-2026-10-23)).
+The permission engine forces an ask for any shell command that runs a Git write
 subcommand with `-C`, `--git-dir`, `--work-tree` or after a `cd`
 (`_is_git_write_elsewhere` in `tools/permissions.py`), in every mode and despite
-allow rules or grants (deny rules still win). Plain `git merge main` and
-read-only `git -C ... status` are not forced.
+allow rules or grants (deny rules still win), with **one narrow exemption**: the
+parsed landing (`is_worktree_landing`, [security.md](security.md)) never asks.
+Plain `git merge main` and read-only `git -C ... status` are not forced. Merge
+detection (`worktree.merged`, deduped per landed head) runs at every step boundary
+and at turn end.
 
 ## Files
 

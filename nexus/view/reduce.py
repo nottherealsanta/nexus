@@ -35,8 +35,10 @@ from .model import (
     QueuedInputView,
     RegistryView,
     RetryView,
+    RootMoveView,
     RootView,
     WorktreeCommitView,
+    WorktreeHistoryView,
     SkillView,
     ToolCallView,
     TurnView,
@@ -256,27 +258,6 @@ def _bounded_count(value: object) -> int:
 def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     """Fold bounded worktree lifecycle and commit audit events."""
     current = state.worktree
-    if event.type == "checkpoint.started":
-        return state
-    if event.type == "checkpoint.skipped":
-        reason, detail = data.get("reason"), data.get("detail", "")
-        if reason not in {"not_git", "too_large", "git_error", "disabled", "no_changes"} or not isinstance(detail, str) or len(detail) > 500:
-            return _diagnostic(state, event, data)
-        return state
-    if event.type == "checkpoint.captured":
-        seq, ref, commit, head, base_ref = (data.get(key) for key in ("seq", "ref", "commit", "head", "base_ref"))
-        files = data.get("files", [])
-        if (not isinstance(seq, int) or isinstance(seq, bool) or seq < 0
-            or any(not isinstance(value, str) or len(value) > 256 or "\0" in value for value in (ref, commit, head, base_ref))
-            or not isinstance(files, list) or len(files) > 200
-            or any(not isinstance(path, str) or len(path) > 1024 or "\0" in path for path in files)):
-            return _diagnostic(state, event, data)
-        from .model import CheckpointView
-        checkpoint = CheckpointView(seq=seq, turn_id=event.turn or "", ref=ref, commit=commit, head=head, base_ref=base_ref,
-            files=files, files_clipped=_bounded_count(data.get("files_clipped")), foreign=_bounded_count(data.get("foreign")),
-            insertions=_bounded_count(data.get("insertions")), deletions=_bounded_count(data.get("deletions")),
-            head_moved=bool(data.get("head_moved")))
-        return replace(state, checkpoints=[*state.checkpoints, checkpoint][-200:])
     if event.type in {"worktree.setup_output", "worktree.file_written"}:
         # Setup output can contain project secrets, and write receipts are for
         # internal promotion provenance only; neither belongs in the view.
@@ -304,27 +285,34 @@ def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, An
         return state
     if event.type == "worktree.promoted":
         return replace(state, worktree=replace(current, enabled=True, state="active", promotion_error=""))
-    if event.type == "session.worktree_set":
-        enabled = data.get("enabled")
-        base_ref = data.get("base_ref", "")
-        if not isinstance(enabled, bool) or not isinstance(base_ref, str) or len(base_ref) > 200 or "\x00" in base_ref:
-            return _diagnostic(state, event, data)
-        return replace(state, worktree=replace(current, enabled=enabled, base_ref=base_ref))
     if event.type == "worktree.created":
         branch = data.get("branch", "")
         base_ref = data.get("base_ref", "")
         base_sha = data.get("base_sha", "")
-        if any(not isinstance(value, str) or len(value) > 200 or "\x00" in value for value in (branch, base_ref, base_sha)):
+        worktree_id = data.get("worktree_id", "")
+        reason = data.get("reason", "")
+        if any(not isinstance(value, str) or len(value) > 500 or "\x00" in value
+               for value in (branch, base_ref, base_sha, worktree_id, reason)):
             return _diagnostic(state, event, data)
         dirty_main_raw = data.get("dirty_main")
         dirty_main = {
             key: _bounded_count(dirty_main_raw.get(key))
             for key in ("modified", "untracked")
         } if isinstance(dirty_main_raw, Mapping) else {}
+        # The checkout becomes current at the paired ``session.root_set``; remember the creation
+        # (and its reason) so that row reads "Created", not "Moved".
         return replace(state, worktree=replace(
-            current, enabled=True, branch=branch, base_ref=base_ref,
-            base_sha=base_sha, state="active", dirty_main=dirty_main, locked=True,
+            current, enabled=True, branch=branch, base_ref=base_ref, base_sha=base_sha, state="active",
+            dirty_main=dirty_main,
+            pending_created={"branch": branch, "worktree_id": worktree_id, "reason": reason},
         ))
+    if event.type == "worktree.removed":
+        worktree_id = data.get("worktree_id", "")
+        if not isinstance(worktree_id, str) or not worktree_id or len(worktree_id) > 500 or "\x00" in worktree_id:
+            return _diagnostic(state, event, data)
+        history = [replace(entry, state="removed") if entry.worktree_id == worktree_id and entry.state != "active" else entry
+                   for entry in current.history]
+        return replace(state, worktree=replace(current, history=history))
     if event.type == "worktree.setup_ran":
         reason = data.get("reason", "created")
         if not isinstance(reason, str) or len(reason) > 80 or "\x00" in reason:
@@ -341,8 +329,11 @@ def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, An
         if any(not isinstance(v, str) or len(v) > 200 or "\x00" in v for v in (target_branch, sha, landed)):
             return _diagnostic(state, event, data)
         # The timeline row ("Merged into <branch> @ <sha>") is the paired context.notice;
-        # this event is the durable machine record and changes no view field.
-        return state
+        # this event is the durable machine record. It marks the checkout merged until a later commit.
+        target = data.get("worktree_id") or state.root.worktree_id
+        history = [replace(entry, merged=True, state="active" if entry.state == "active" else "merged")
+                   if entry.worktree_id == target else entry for entry in current.history]
+        return replace(state, worktree=replace(current, history=history))
     if event.type == "worktree.detached":
         return replace(state, worktree=replace(current, state="detached"))
     if event.type != "worktree.committed":
@@ -376,7 +367,69 @@ def _worktree_event(state: ConversationView, event: Event, data: Mapping[str, An
         turn = turns[turn_index]
         if sha not in turn.commit_shas:
             turns[turn_index] = replace(turn, commit_shas=[*turn.commit_shas, sha])
-    return replace(state, turns=turns, worktree=replace(current, commits=commits, last_skip=None))
+    # A new commit on a merged branch makes it unmerged again.
+    history = [replace(entry, merged=False, state="active" if entry.state == "active" else "unmerged")
+               if entry.worktree_id == state.root.worktree_id and entry.merged else entry
+               for entry in current.history]
+    return replace(state, turns=turns, worktree=replace(current, commits=commits, history=history, last_skip=None))
+
+_MAX_WORKTREE_HISTORY = 50
+_MAX_ROOT_MOVES = 100
+
+
+def _touch_history(state: ConversationView, worktree_id: str, turn_id: str) -> ConversationView:
+    """Extend the turn range of the history entry for ``worktree_id`` to ``turn_id``."""
+    history = [replace(entry, first_turn=entry.first_turn or turn_id, last_turn=turn_id)
+               if entry.worktree_id == worktree_id else entry for entry in state.worktree.history]
+    return replace(state, worktree=replace(state.worktree, history=history))
+
+
+def _on_root_set(state: ConversationView, event: Event, root: RootView) -> ConversationView:
+    """Apply a root change: update the current worktree, the bounded history and the timeline row."""
+    current, previous = state.worktree, state.root
+    same = (previous.kind, previous.worktree_id, previous.path_display) == (root.kind, root.worktree_id, root.path_display)
+    history = list(current.history)
+    # Leaving a worktree closes its entry: merged or unmerged, never deleted (the branch is kept).
+    if previous.kind == "worktree" and previous.worktree_id and not same:
+        history = [replace(entry, state="merged" if entry.merged else "unmerged")
+                   if entry.worktree_id == previous.worktree_id and entry.state == "active" else entry
+                   for entry in history]
+    pending = current.pending_created
+    created = False
+    if root.kind == "worktree":
+        created = bool(pending) and (
+            (pending.get("worktree_id") and pending["worktree_id"] == root.worktree_id)
+            or (pending.get("branch") and pending["branch"] == root.branch))
+        name = root.path_display.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1][:80]
+        index = next((i for i, entry in enumerate(history) if entry.worktree_id == root.worktree_id), -1)
+        turn = event.turn or ""
+        if index >= 0:
+            history[index] = replace(history[index], state="active", created=history[index].created or created,
+                                     branch=root.branch or history[index].branch, last_turn=turn or history[index].last_turn)
+        else:
+            history.append(WorktreeHistoryView(
+                worktree_id=root.worktree_id, name=name, branch=root.branch, base_ref=root.base_ref,
+                base_sha=root.base_sha, state="active", created=created, first_turn=turn, last_turn=turn))
+        history = history[-_MAX_WORKTREE_HISTORY:]
+    reason = root.reason or (pending.get("reason", "") if created else "")
+    moves = list(current.moves)
+    # The session's initial main root is not a move; every later change is a labelled row.
+    if not same and (root.kind == "worktree" or current.history or current.moves or previous.kind != "main"):
+        name = root.path_display.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1][:80] if root.kind == "worktree" else ""
+        moves.append(RootMoveView(
+            seq=event.seq, ts=event.ts, action="created" if created else "moved", kind=root.kind, name=name,
+            branch=root.branch, base_ref=root.base_ref, base_sha=root.base_sha, worktree_id=root.worktree_id,
+            reason=reason))
+        moves = moves[-_MAX_ROOT_MOVES:]
+    in_worktree = root.kind == "worktree"
+    worktree = replace(
+        current, history=history, moves=moves, pending_created={} if root.kind == "worktree" else pending,
+        enabled=in_worktree, branch=root.branch if in_worktree else "",
+        base_ref=root.base_ref if in_worktree else "", base_sha=root.base_sha if in_worktree else "",
+        state="active" if in_worktree else ("none" if current.state in {"active", "detached"} else current.state),
+    )
+    return replace(state, root=replace(root, reason=reason), worktree=worktree)
+
 
 def _agent_meta(data: Mapping[str, Any]) -> dict[str, Any] | None:
     agent = data.get("agent")
@@ -495,8 +548,8 @@ def _recompute_phase(state: ConversationView) -> ConversationView:
 def _on_turn_started(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     turn_id = event.turn or f"turn@{event.seq}"
     limits = dict(data.get("limits")) if isinstance(data.get("limits"), Mapping) else {}
-    if not data.get("preparation"):
-        state = replace(state, worktree=replace(state.worktree, locked=True))
+    if state.root.kind == "worktree" and state.root.worktree_id:
+        state = _touch_history(state, state.root.worktree_id, turn_id)
     index = _turn_index(state, turn_id)
     if index >= 0:
         # A queued ``input.consumed`` can precede ``turn.started``; keep its message.
@@ -2304,14 +2357,16 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         worktree_id = root_text("worktree_id", 200)
         if kind == "worktree" and not worktree_id:
             return _diagnostic(state, event, data)
-        return replace(state, root=RootView(
+        root = RootView(
             kind=kind,
             path_display=path_display,
             branch=root_text("branch", 200),
             base_ref=root_text("base_ref", 200),
             base_sha=root_text("base_sha", 128),
             worktree_id=worktree_id,
-        ))
+            reason=root_text("reason", 500),
+        )
+        return _on_root_set(state, event, root)
     if event_type == "session.opened":
         return replace(
             state,

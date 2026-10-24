@@ -12,10 +12,13 @@ async def prepared(tmp_path):
     git(main, "commit", "-qm", "ignore local state")
     provider = ScriptedProvider(tool_response(("write", "write", {"path": "saved.txt", "content": "saved\n"})),
         text_response("done"), text_response("again"))
-    rt = runtime(main, tmp_path, provider, sessions=True)
+    rt = runtime(main, tmp_path, provider)
     handle = rt.session("clean-me")
+    facade = HostFacade(rt)
+    selected = await facade.handle(p.SessionPromote(session=handle.id, reason="isolate saved changes"))
+    assert isinstance(selected, p.SessionWorktreeResult), selected
     assert (await drain(handle, "write"))[-1].type == "turn.completed"
-    return rt, HostFacade(rt), handle, rt.session_root(handle.id)
+    return rt, facade, handle, rt.session_root(handle.id)
 
 
 async def test_host_remove_keeps_branch_and_next_turn_recreates_checkout(tmp_path):

@@ -135,7 +135,7 @@ pub struct Snapshot {
     /// Linked-worktree name of the workspace ("" in a main checkout).
     #[serde(default)]
     pub worktree: String,
-    /// Style key of the location text: "worktree", "pending", "main" or "" (unstyled).
+    /// Style key of the location text: "worktree", "main" or "" (unstyled).
     #[serde(default)]
     pub worktree_kind: String,
     pub details_panel: DetailsPanel,

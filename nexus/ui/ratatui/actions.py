@@ -430,6 +430,7 @@ class ShellActions:
         if self.breadcrumb.partition(" › ")[0] != str(self.workspace or ""):
             self.breadcrumb = str(self.workspace or "")
             self.branch = self.worktree = self.worktree_kind = ""
+            self._git_branch = self._git_worktree = ""
         if self.branch_task:
             self.branch_task.cancel()
         self.branch_task = asyncio.create_task(self._refresh_branch_later())
@@ -568,38 +569,6 @@ class ShellActions:
             self.composer_restore = text
             self.flash("Open that session to send attachments", "warning")
             return True
-        # Ask mode is resolved before either a model turn or a shell command can
-        # touch the draft checkout. Keep the exact composer payload until answered.
-        if text.strip() and not text.startswith("/") and not self.manager.is_active(target):
-            probe = getattr(self.client, "session_worktree_choice", None)  # optional: no info means no question
-            try:
-                choice = await probe(target) if probe is not None else None
-            except Exception as exc:
-                if "does not exist" in str(exc):  # no session row yet: nothing to ask about
-                    choice = None
-                else:
-                    self.composer_restore = text
-                    raise
-            state = choice.state if choice is not None else {}
-            draft_git = bool(state.get("editable") and state.get("git"))
-            ask = draft_git and state.get("mode") == "ask" and not state.get("chosen")
-            # Always needs no question: the host creates the randomly named worktree on the first turn.
-            if ask:
-                if target != self.controller.session:
-                    await self.switch(target)
-                pending = {
-                    "text": text, "mode": mode, "session": target,
-                    "attachments": list(self.attachments),
-                    "attachment_labels": dict(self.attachment_labels),
-                    "marker_attachments": dict(self.marker_attachments),
-                }
-                self.workflows.pending_worktree_submission = pending
-                from .worktree_pages import ASK_TITLE
-                self.workflows.menu(ASK_TITLE, [
-                    ("Yes · use a worktree", {"kind": "worktree_answer", "enabled": True}),
-                    ("No · use this checkout", {"kind": "worktree_answer", "enabled": False}),
-                ], ["A worktree gets a random name such as brave-otter. This choice applies to the session."], layout="modal")
-                return True
         if text.startswith("!"):
             if self.manager.is_active(target):
                 self.composer_restore = text
@@ -920,10 +889,6 @@ class ShellActions:
             self.show("Git diff", (result.patch or "No changes") + ("\n\n[diff truncated]" if result.truncated else ""))
         elif name == "/worktrees":
             await self.workflows.operate({"kind": "worktrees"})
-        elif name == "/worktree":
-            if args:
-                raise ValueError("/worktree takes no arguments")
-            await self.workflows.operate({"kind": "worktree_mode"})
         elif name == "/archived":
             await self.workflows.operate({"kind": "archived", "query": argument})
         elif name == "/settings":
@@ -964,9 +929,9 @@ class ShellActions:
             await self.client.enqueue(session, "Review the current workspace changes for correctness and report findings with file references." if name == "/review" else "Review the current workspace changes, then create a commit for the completed work. Follow normal tool permissions.")
         elif name == "/merge":
             from .worktree_bar import merge_instruction, session_worktree_state
-            state = await session_worktree_state(self, force=True)
+            state = session_worktree_state(self)
             if (state.get("kind") if state else getattr(self, "worktree_kind", "")) != "worktree":
-                self.notice = "/merge works in a worktree session; this session runs in the main checkout"
+                self.notice = "/merge works in a worktree; this session is in the main checkout (the agent can create or move to one)"
             else:  # a normal user turn: the expanded instruction is the visible user message
                 await self.client.enqueue(session, merge_instruction(state, argument))
         elif name == "/speak":

@@ -43,7 +43,7 @@ async def test_root_worktree_tools_are_not_in_child_authority_and_reject_sibling
             model=ModelSection(default="scripted/m"),
             permissions=PermissionsSection(mode="allow"),
             agents=AgentsSection(enabled=True, max_depth=1),
-            worktrees=WorktreesSection(sessions=True),
+            worktrees=WorktreesSection(),
         ),
     )
     provider = ScriptedProvider(text_response("done"), text_response("done"))
@@ -65,19 +65,21 @@ async def test_root_worktree_tools_are_not_in_child_authority_and_reject_sibling
     monkeypatch.setattr(Runtime, "_make_subagent_runner", capture_runner)
     try:
         parent = runtime.session("parent")
-        await _turn(parent, "initialize owned worktree")
+        await runtime.promote_session(parent.id, reason="isolate the parent")
+        await _turn(parent, "work in the owned worktree")
         parent_root = runtime.session_root(parent.id)
         assert parent_root.kind == "worktree"
         root_tools = {tool.name for tool in provider.requests[0].tools}
-        assert {"worktree_status", "worktree_commit"} <= root_tools
+        assert {"worktree_list", "worktree_create", "worktree_move", "worktree_commit"} <= root_tools
         assert captured_runners
         assert all(
-            not {"worktree_status", "worktree_commit", "worktree_promote"} & runner.parent_tools
+            not {"worktree_list", "worktree_create", "worktree_move", "worktree_commit"} & runner.parent_tools
             for runner in captured_runners
         )
 
         sibling = runtime.session("sibling")
-        await _turn(sibling, "initialize a separate worktree")
+        await runtime.promote_session(sibling.id, reason="isolate the sibling")
+        await _turn(sibling, "work in a separate worktree")
         sibling_root = runtime.session_root(sibling.id)
         assert sibling_root.kind == "worktree"
         assert sibling_root.path != parent_root.path

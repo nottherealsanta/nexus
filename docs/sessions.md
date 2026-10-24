@@ -82,28 +82,50 @@ creates the folder `<name>` and branch `nexus/session/<name>` with no random
 suffix. Without a name the automatic `<adjective>-<animal>` name above is used. A name is refused once the session has a root or
 has started, and ignored when `enabled` is false.
 
-### Owned session worktrees
+### Project worktrees (storage and Git)
 
-`[worktrees] sessions = true` creates an isolated `nexus/session/...` branch on
-the first turn of an eligible Git session. The selection can be changed only
-while the session is an idle draft. Once a turn starts, it is locked; a main or
-external session can later use the explicit promotion action to move into an
-owned worktree. Promotion carries only verified successful file-tool writes,
-commits those bytes in the new worktree, and leaves the original checkout
-unchanged. Detach returns the session to the main checkout; it does not delete
-the owned branch.
+A worktree belongs to the **project**, not to a session. Its authenticated v4
+record (`agents/session_worktrees.py`) holds the name, `nexus/wt/<name>` branch,
+base, path and `created_by` (the creating session, kept for display and for
+recovering a half-created checkout; it is not an owner). The record id is
+`wt-<name>`. Any session of the project may get, enter, commit in and leave a
+worktree; nothing validates an owning session, only that the record belongs to the
+project (`get_worktree(..., parent_workspace=)`) and is active. Which sessions
+are in a worktree is derived from each session's latest `session.root_set`
+(`SessionRoot.checkout_key` groups them); the runtime controller keeps that index.
+A fork stays in its parent's root.
 
-The worktree list includes these modern session records. Explicit removal is
-available for an idle owner session when the authenticated record still points
-to the exact registered checkout and branch. Cleanup refuses uncommitted,
-untracked, ignored, or in-progress Git state and invokes Git without `--force`.
-It removes only the checkout directory; the branch and active record remain so
-the session can recreate its checkout from that branch on a later turn. A path
-already missing is shown as already removed. Git errors that leave registration
-or filesystem state inconsistent require manual Git repair; Nexus does not run
-background cleanup or branch deletion.
+Project API (`WorktreeService` / `session_worktrees`): `list_worktrees` (verified
+records of this project, bounded by `worktrees.max_worktrees` at creation; broken
+records are skipped, `get_worktree` explains why), `get_worktree`, `find_worktree`
+(by the name `worktree_list` shows), `recreate_worktree` (rebuild a removed
+checkout from its kept branch) and `merge_state` (branch tip already in the base
+branch, so a squash plus `--ff-only` counts as merged, and the number of unmerged
+commits; also in `session_status`). `create_session(session_id, ...)` remains the
+internal creator and only records `created_by`. A subagent child checkout (disabled)
+keeps its private `session-<child>` record and `nexus/session/` branch.
 
-Owned worktrees commit at turn boundaries. Harness commits are bounded by
+The worktree list includes these records. Explicit removal ("Remove checkout…") is
+available when every session currently in the worktree is idle and the
+authenticated record still points to the exact registered checkout and branch.
+Cleanup refuses uncommitted, untracked, ignored, or in-progress Git state and
+invokes Git without `--force`. It removes only the checkout directory; the branch
+and record remain so any session can recreate the checkout. A path already
+missing is shown as already removed. Git errors that leave registration or
+filesystem state inconsistent require manual Git repair. The only automatic
+cleanup is `worktree_cleanup.auto_cleanup`: when the last session leaves a
+worktree that is merged and clean, the checkout (never the record or branch) is
+removed; unmerged or dirty checkouts and worktrees other sessions are in are kept.
+Cleanup uses the controller's authenticated worktree registry when supplied;
+only bare runtime callers fall back to the runtime's registry root.
+
+Worktrees commit at turn boundaries (the main checkout saves nothing). A commit
+holds only the paths the committing session changed in that turn (`paths=`), so
+another session's half-finished edits in a shared worktree are never swept in;
+`paths=[]` commits nothing. The branch update is a compare-and-swap `update-ref`;
+when it is lost to another session's or a shell commit, the commit is rebuilt on
+the new head and retried up to four times, then skipped with a `git_error`. The
+`Nexus-Session` trailer names the committing session. Harness commits are bounded by
 `commit_max_files` and `commit_max_file_mb`; skipped commits leave changes in
 the worktree for a later retry. Harness and agent-tool commits use `commit-tree` with signing
 disabled, bypassing project hooks; explicit agent shell commits use
@@ -137,22 +159,27 @@ folds these into the normal conversation timeline and current root metadata;
 clients render the event/view projection rather than inspect runtime-controller
 or service records. See [events-and-view.md](events-and-view.md).
 
-### Main-checkout checkpoints
+### Per-turn history: worktrees only
 
-Main and external-root sessions capture a hidden `refs/nexus/checkpoints/<session>/<turn>`
-commit when the checkout changed during a turn. A first-turn baseline makes that turn's
-diff meaningful. Capture uses a disposable Git index and `commit-tree`; it does not change
-the user's `HEAD`, index, branch or files. The durable `checkpoint.captured` event records
-the base, bounded file summary, foreign-change count and capture time. Capture runs at every
-eligible main/external turn boundary, including when writes have no Nexus receipt (for
-example, an MCP server edits the checkout). Only receipted file-tool writes, merged
-subagent files and changes in a turn that started a shell are attributed to the session;
-other changed files are counted as foreign. Diffs are review-only:
-there is no restore action for a shared checkout. `[worktrees] checkpoints` defaults to true;
-`checkpoint_keep` bounds retained session namespaces, and captures slower than five seconds
-disable checkpoints for that session. Git refs remain local by default; `git push --mirror`
-can publish them, so review the ref list before using mirror pushes. Submodules are captured
-as gitlinks, not as snapshots of their contents. The terminal diff UI is planned in phase 08.
+Only a worktree saves turns: each turn is a `worktree.committed` commit on the
+worktree branch, and its last commit is also pinned under a hidden ref
+`refs/nexus/turns/<session>/<turn>` (`pin_turn`; session ids with unsafe characters
+are sanitized and hashed). The refs keep a turn's diff alive after the agent squashes
+and merges the branch and after the checkout is removed. They are bounded to the
+newest 200 per session and removed with the session (`delete_turn_refs(parent,
+session)`, to be called when a session is deleted). The main checkout saves nothing
+and has no turn diff or revert: "No saved turns in the main checkout; work in a
+worktree to get them." Git refs remain local by default; `git push --mirror` can
+publish them, so review the ref list before using mirror pushes.
+
+Turn diff reads the session's `worktree.committed` events from the shared object
+database, so it works from any root. A turn whose commits span two worktrees is
+refused ("This turn moved between checkouts; view each part separately."). Turn
+revert needs an idle clean worktree and is refused when the turn's commits are no
+longer reachable from the branch ("Already squashed and merged"; the diff stays
+viewable) or when a later commit from another session on the branch touches the
+same files (the refusal names that session). See the decisions page for the
+supersession of main-checkout checkpoints.
 
 
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup

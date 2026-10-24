@@ -102,8 +102,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/help`, `/hotkeys` | | | help; `/hotkeys` opens Settings → Keyboard (native TUI) |
 | `/notifications` | | | open the recent-notifications drawer (native TUI only; the history is client-side, also `Ctrl+X Shift+N` or a click on the top-bar `◔ N`) |
 | `/exit` | | `/quit` | leave |
-| `/worktree` | | | native session modal: No worktree / Ask every time / Always worktree, with current root |
-| `/worktrees` | | | inspect modern session/child checkouts and confirm removal or session integration; retain legacy child review |
+| `/worktrees` | | | the project's worktrees as the agent's `worktree_list` sees them (`←` marks this session; merged/unmerged, dirty, sessions in each); per row: "Move this session here" (idle only, `SessionWorktreeMove`), "Integrate into base branch…", "Remove checkout…"; subagent child checkouts keep their review flow. `/worktree` (the mode picker) was removed: the agent decides when to use a worktree |
 | `/copy` | | | copy assembled context as JSON |
 | `/diff` | `[--staged] [ref]` | | workspace Git diff |
 | `/cost` | | | token usage and available cost estimate |
@@ -115,7 +114,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/reload` | | | native only: rebuild TUI, restart workspace daemon, reopen same session |
 | `/reload-extensions` | | | reload extensions and MCP in place |
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
-| `/merge [note]` | | | worktree sessions only: sends the agent a visible user turn asking it to commit, pass checks, squash and land with `git -C <main> merge --ff-only <branch>` in the shell (which always asks permission); elsewhere shows a notice and sends nothing |
+| `/merge [note]` | | | a manual nudge for when the agent stopped short, in a worktree only: sends the agent a visible user turn asking it to commit, pass checks, squash and land with `git -C <main> merge --ff-only <branch>` in the shell; in the main checkout shows a notice and sends nothing |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
 | `/live` | `[stop\|pause\|resume\|mute\|new\|status\|revoke]` | | spoken GPT Live call on this session, again to hang up (`Ctrl+X D`); `pause` toggles pause (`Ctrl+X P`, bounded by `[live].pause_seconds`, [live.md](live.md#pause-vs-stop)); first use asks for consent ([live.md](live.md#client-flow-ratatui-m4)) |

@@ -26,64 +26,93 @@ def _ctx(root: Path) -> ToolContext:
 async def test_dynamic_tools_are_bound_and_root_specific(tmp_path: Path) -> None:
     seen = []
 
-    async def status(args, ctx):
-        seen.append(("status", args, ctx.session_id))
-        return {"branch": "topic", "commits": ["abc", "def"], "ahead": 2}
+    async def listing(args, ctx):
+        seen.append(("list", args, ctx.session_id))
+        return {
+            "current": "main", "max_worktrees": 16, "present": 1, "clipped": 0,
+            "main": {"current": True, "branch": "main", "path": "/p", "dirty": 0, "sessions": []},
+            "worktrees": [{"name": "brave-otter", "branch": "nexus/wt/brave-otter", "base_branch": "main",
+                           "base_commit": "1a2b3c4d", "present": True, "dirty": 0, "merged": False,
+                           "has_work": True, "unmerged_commits": 3,
+                           "sessions": [{"title": "refactor", "active": True}], "current": False}],
+            "external": [],
+        }
 
     def commit(args, ctx):
         seen.append(("commit", args["paths"], ctx.turn_id))
         return "committed"
 
-    def promote(args, ctx):
-        seen.append(("promote", args["reason"], ctx.session_id))
-        return "queued promotion"
+    def create(args, ctx):
+        seen.append(("create", args["reason"], args.get("name")))
+        return "queued create"
 
-    owned = build_worktree_tools(status, commit, promote, owned=True)
-    outside = build_worktree_tools(status, commit, promote, owned=False)
-    assert [item.spec.name for item in owned] == ["worktree_status", "worktree_commit"]
-    assert [item.spec.name for item in outside] == ["worktree_status", "worktree_promote"]
-    assert owned[1].spec.mutates and owned[1].spec.concurrency == "exclusive"
-    assert outside[1].spec.mutates and outside[1].spec.concurrency == "exclusive"
-    assert not owned[0].spec.mutates
+    def move(args, ctx):
+        seen.append(("move", args["to"], args["reason"]))
+        return "queued move"
 
-    status_result = await owned[0].run({}, _ctx(tmp_path))
-    assert "branch: topic" in status_result.content[0].text
-    assert "commits: abc" in status_result.content[0].text
-    assert "ahead: 2" in status_result.content[0].text
-    assert (await owned[1].run({"message": "fix", "paths": ["src/a.py"]}, _ctx(tmp_path))).content[0].text == "committed"
-    assert (await outside[1].run({"reason": "need isolation"}, _ctx(tmp_path))).content[0].text == "queued promotion"
+    inside = build_worktree_tools(listing, commit, create, move, in_worktree=True)
+    outside = build_worktree_tools(listing, commit, create, move, in_worktree=False)
+    assert [item.spec.name for item in inside] == ["worktree_list", "worktree_create", "worktree_move", "worktree_commit"]
+    assert [item.spec.name for item in outside] == ["worktree_list", "worktree_create", "worktree_move"]
+    by_name = {item.spec.name: item for item in inside}
+    assert not by_name["worktree_list"].spec.mutates
+    for name in ("worktree_create", "worktree_move", "worktree_commit"):
+        assert by_name[name].spec.mutates and by_name[name].spec.concurrency == "exclusive"
+    for name in ("worktree_create", "worktree_move"):
+        assert "after this step" in by_name[name].spec.description
+
+    text = (await by_name["worktree_list"].run({}, _ctx(tmp_path))).content[0].text
+    assert "- main  ← you are here" in text
+    assert "- brave-otter" in text and "unmerged (3 commits not in the base)" in text
+    assert "refactor (active)" in text and "{" not in text
+    assert (await by_name["worktree_commit"].run({"message": "fix", "paths": ["src/a.py"]}, _ctx(tmp_path))).content[0].text == "committed"
+    assert (await by_name["worktree_create"].run({"reason": "refactor", "name": "x1"}, _ctx(tmp_path))).content[0].text == "queued create"
+    assert (await by_name["worktree_move"].run({"to": "main", "reason": "done"}, _ctx(tmp_path))).content[0].text == "queued move"
     assert seen == [
-        ("status", {}, "s1"), ("commit", ["src/a.py"], "t1"),
-        ("promote", "need isolation", "s1"),
+        ("list", {}, "s1"), ("commit", ["src/a.py"], "t1"),
+        ("create", "refactor", "x1"), ("move", "main", "done"),
     ]
-    commit_key = owned[1].spec.resolve_permission_key({"message": "x"})
+    commit_key = by_name["worktree_commit"].spec.resolve_permission_key({"message": "x"})
     assert commit_key == "worktree_commit"
     assert parse_rule(f"worktree_commit({commit_key})")
     allowed = PermissionEngine(mode="ask", allow=(f"worktree_commit({commit_key})",))
-    assert allowed.evaluate(ToolCall(id="c", name="worktree_commit", input={"message": "x"}), owned[1].spec).outcome is Outcome.ALLOW
-    promotion_spec = outside[1].spec
-    forced = PermissionEngine(mode="allow", allow=("worktree_promote",))
-    forced.require_confirmation_for(("worktree_promote",))
-    assert forced.evaluate(ToolCall(id="p", name="worktree_promote", input={"reason": "move"}), promotion_spec).outcome is Outcome.ASK
+    assert allowed.evaluate(ToolCall(id="c", name="worktree_commit", input={"message": "x"}), by_name["worktree_commit"].spec).outcome is Outcome.ALLOW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ask", "allow", "deny"])
+async def test_list_create_and_move_never_ask(tmp_path: Path, mode: str) -> None:
+    tools = {item.spec.name: item for item in build_worktree_tools(
+        lambda *_: {}, None, lambda *_: "ok", lambda *_: "ok", in_worktree=False)}
+    engine = PermissionEngine(mode=mode)
+    for name, args in (("worktree_list", {}), ("worktree_create", {"reason": "r"}), ("worktree_move", {"to": "main", "reason": "r"})):
+        verdict = engine.evaluate(ToolCall(id=name, name=name, input=args), tools[name].spec)
+        assert verdict.outcome is Outcome.ALLOW, (mode, name, verdict)
+    # an explicit deny rule still wins
+    denied = PermissionEngine(mode="allow", deny=("worktree_move",))
+    assert denied.evaluate(ToolCall(id="d", name="worktree_move", input={"to": "main", "reason": "r"}),
+                           tools["worktree_move"].spec).outcome is Outcome.DENY
 
 
 @pytest.mark.asyncio
 async def test_worktree_tool_bounds_arguments_and_requires_bound_callbacks(tmp_path: Path) -> None:
     calls = []
-    tools = build_worktree_tools(lambda *_: "ok", lambda args, _ctx: calls.append(args) or "ok", None, owned=True)
-    commit = tools[1]
-    invalid = await commit.run({"message": "\x00"}, _ctx(tmp_path))
-    assert invalid.is_error
-    invalid_paths = await commit.run({"message": "ok", "paths": ["a"] * 501}, _ctx(tmp_path))
-    assert invalid_paths.is_error
+    tools = {item.spec.name: item for item in build_worktree_tools(
+        lambda *_: "ok", lambda args, _ctx: calls.append(args) or "ok",
+        lambda args, _ctx: calls.append(args) or "ok", lambda args, _ctx: calls.append(args) or "ok", in_worktree=True)}
+    assert (await tools["worktree_commit"].run({"message": "\x00"}, _ctx(tmp_path))).is_error
+    assert (await tools["worktree_commit"].run({"message": "ok", "paths": ["a"] * 501}, _ctx(tmp_path))).is_error
+    assert (await tools["worktree_create"].run({"reason": " "}, _ctx(tmp_path))).is_error
+    assert (await tools["worktree_create"].run({"reason": "r", "name": "n" * 61}, _ctx(tmp_path))).is_error
+    assert (await tools["worktree_move"].run({"to": "", "reason": "r"}, _ctx(tmp_path))).is_error
     assert calls == []
 
-    promote = build_worktree_tools(lambda *_: "ok", None, None, owned=False)[1]
-    unavailable = await promote.run({"reason": "move"}, _ctx(tmp_path))
-    assert unavailable.is_error
+    unbound = {item.spec.name: item for item in build_worktree_tools(lambda *_: "ok", None, None, None, in_worktree=False)}
+    assert (await unbound["worktree_create"].run({"reason": "move"}, _ctx(tmp_path))).is_error
+    assert (await unbound["worktree_move"].run({"to": "main", "reason": "move"}, _ctx(tmp_path))).is_error
 
 
-def test_worktree_tools_do_not_import_runtime_and_promote_is_documented_for_forced_ask() -> None:
+def test_worktree_tools_do_not_import_runtime() -> None:
     source = Path(__file__).resolve().parents[1] / "nexus" / "tools" / "builtin" / "worktree.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     assert all(
@@ -91,7 +120,6 @@ def test_worktree_tools_do_not_import_runtime_and_promote_is_documented_for_forc
         and not (isinstance(node, ast.ImportFrom) and node.module == "nexus.runtime")
         for node in ast.walk(tree)
     )
-    assert "explicit confirmation" in source.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

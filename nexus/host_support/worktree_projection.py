@@ -33,12 +33,18 @@ def worktree_record(record: Any) -> dict[str, Any]:
         "acknowledged": bool(getattr(record, "acknowledged_review_id", None)),
     })
     if getattr(record, "kind", None) in {"session", "subagent"}:
-        session = getattr(record, "session_id", "")
+        # A session worktree is a project resource: the creator is shown for
+        # context only and never gates anything.
+        created_by = getattr(record, "created_by", "") or getattr(record, "session_id", "")
         values.update({
-            "kind": "subagent" if "/sub/" in session else "session",
-            "session": safe_text(session, 256),
+            "kind": "subagent" if "/sub/" in created_by else "session",
+            "session": safe_text(created_by, 256),
+            "created_by": safe_text(created_by, 256),
+            "name": safe_text(getattr(record, "name", ""), 128),
             "branch": safe_text(getattr(record, "branch", ""), 256),
             "exists": bool(getattr(record, "exists", False)),
+            "merged": bool(getattr(record, "merged", False)),
+            "unmerged_commits": min(max(int(getattr(record, "unmerged_commits", 0) or 0), 0), 100_000),
         })
     return values
 

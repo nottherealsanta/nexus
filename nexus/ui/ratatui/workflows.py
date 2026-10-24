@@ -30,7 +30,6 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
         self.login = None
         self.review = None
         self.review_files = []
-        self.pending_worktree_submission = None
         self.stack = []
         self.agent_page_id = None
         self.agent_context = {}
@@ -685,15 +684,20 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
             await self.shell.switch(session)
         elif kind == "session_actions":
             self.menu("Session actions", [("Ownership tree", {"kind": "ownership_tree", "id": operation["id"]}),
-                ("Worktree mode…", {"kind": "worktree_mode", "id": operation["id"]}), ("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
+                ("Open", {"kind": "session_open", **{key: operation[key] for key in ('id', 'workspace')}}),
                 ("Archive", {"kind": "session_archive", "id": operation["id"]}),
                 ("Move to trash…", {"kind": "confirm", "label": "Move session to trash?", "next": {"kind": "session_delete", "id": operation["id"]}})])
         elif kind == "worktrees":
-            result = await self.client.list_worktrees()
             self.review = None
             self.shell.panel_title = ""  # the list is a root page; never stack stale confirmations behind it
             self.stack.clear()
-            note = ["Host worktree list has more entries."] if result.has_more else [f"{len(result.worktrees)} daemon-owned worktree(s)."]
+            try:
+                await self.worktrees_page()
+                return
+            except Exception as exc:  # noqa: BLE001 - fall back to the daemon's child-worktree list
+                self.shell.flash(f"Session worktree list unavailable: {exc}", "warning")
+            result = await self.client.list_worktrees()
+            note =["Host worktree list has more entries."] if result.has_more else [f"{len(result.worktrees)} daemon-owned worktree(s)."]
             self.menu("Worktrees", [(f"{row.get('lifecycle') or row.get('status') or 'unknown'} · {row.get('child_id') or row.get('id')}",
                 {"kind": "session_worktree_actions", "id": row.get("session"), "child_id": row.get("child_id"), "record_kind": row.get("kind")}
                 if row.get("kind") in {"session", "subagent"} else

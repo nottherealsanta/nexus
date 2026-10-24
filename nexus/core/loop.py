@@ -2931,6 +2931,26 @@ async def run_turn(
             lease.state = state
             _release_manifest()
 
+            # Step boundary: every tool call of the step finished and nothing of
+            # the next request has started, so compaction and queued steers (both
+            # run at the top of the next iteration) can never land between a
+            # worktree move request and the move. The session applies a queued
+            # move here and, when the working root changed, hands back the
+            # rebuilt per-root environment (path guard, tool set, shell cwd,
+            # assembler) for the remaining steps. The turn, its step count and
+            # its limits carry on unchanged.
+            boundary = getattr(session, "step_boundary", None)
+            if callable(boundary):
+                rebound = await _maybe_await(boundary(lease))
+                if rebound is not None:
+                    assemble = rebound.assemble
+                    tools = rebound.dispatcher
+                    gate = rebound.gate
+                    manifest_ref = rebound.manifest_ref
+                    environment_for = rebound.environment_for
+                    hooks = rebound.hooks
+                    active_gate = gate
+
     except OperationCancelled as exc:
         terminal = state.cancel(redact_url_userinfo(str(exc)) or "cancelled")
     except ProviderError as exc:

@@ -43,7 +43,6 @@ SHUTDOWN_CANCEL_REASON = "supervisor closing"
 #: (``kind: "managed"``, ``child``, ``origin_message_id``, ``instruction_digest``).
 SESSION_EVENTS = ("session.named", "session.opened", "session.closed", "session.forked", "session.linked", "session.root_set")
 WORKTREE_EVENTS = (
-    "session.worktree_set",
     "worktree.created",
     "worktree.setup_ran",
     "worktree.setup_output",
@@ -59,9 +58,7 @@ WORKTREE_EVENTS = (
     "worktree.commit_skipped",
     "worktree.detached",
     "worktree.merged",
-    "checkpoint.captured",
-    "checkpoint.skipped",
-    "checkpoint.started",
+    "worktree.removed",
 )
 TURN_EVENTS = (
     "turn.started",

@@ -21,16 +21,16 @@ async def test_session_worktree_child_commit_diff_integrate_remove_and_reuse(tmp
         tool_response(("child-write", "write", {"path": "child.txt", "content": "child saved\n"})),
         text_response("child done"), text_response("root done"), text_response("again"),
     )
-    rt = runtime(main, tmp_path, provider, sessions=False)
+    rt = runtime(main, tmp_path, provider)
     facade = HostFacade(rt)
     try:
         handle = rt.session("acceptance")
-        pending = await facade.handle(p.SessionWorktreeChoice(session=handle.id, mode="ask"))
-        assert isinstance(pending, p.SessionWorktreeResult), pending
-        assert pending.state["chosen"] is False
-        selected = await facade.handle(p.SessionWorktreeSet(session=handle.id, enabled=True))
+        assert rt.session_root(handle.id).kind == "main"  # every session starts in the main checkout
+        listed = await facade.handle(p.SessionWorktreeList(session=handle.id))
+        assert isinstance(listed, p.SessionWorktreeResult), listed
+        # No modes and no question: the user (or the agent) creates the worktree when the work needs one.
+        selected = await facade.handle(p.SessionPromote(session=handle.id, reason="isolate the child's work"))
         assert isinstance(selected, p.SessionWorktreeResult), selected
-        assert selected.state["enabled"] is True
 
         events = await drain(handle, "delegate")
         assert events[-1].type == "turn.completed", events[-1]

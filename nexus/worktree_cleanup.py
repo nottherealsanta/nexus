@@ -1,27 +1,46 @@
-"""Explicit cleanup for clean, authenticated session worktrees (plan 07).
+"""Cleanup for clean, authenticated project worktrees (plan 07, agent-managed 3.6).
 
-Removal drops only the linked checkout. The authenticated session record and
-branch remain available to the normal session-worktree recreation path.
+Removal drops only the linked checkout. The project record and branch remain,
+so any session can recreate the checkout from its branch. A worktree belongs
+to the project: removal checks that none of the sessions currently in it is
+busy, not who created it. Two paths exist:
+
+* explicit ``cleanup_preview`` / ``remove_worktree`` (the user's "Remove checkout…");
+* ``auto_cleanup``, run by the controller when the last session leaves a worktree
+  that is merged and clean. Unmerged or dirty checkouts are never removed
+  automatically.
+
+The controller supplies which sessions are in a worktree through
+``controller.occupants(record_id)`` (derived from each session's latest
+``session.root_set``); without it a worktree is treated as empty.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Iterable
 
 from .agents import session_worktrees as _sessions
 from .agents import worktrees as _base
 
+_MAX_SESSIONS = 50
+
 
 def _parts(controller: Any):
     runtime = getattr(controller, "runtime", controller)
-    registry = Path(getattr(controller, "registry", runtime._worktree_root))
+    registry = getattr(controller, "registry", None)
+    if registry is None:
+        registry = runtime._worktree_root
+    registry = Path(registry)
     return runtime, registry
 
 
-def _owner_session(record: _sessions.SessionWorktreeRecord) -> str:
-    owner, marker, _child = record.session_id.partition("/sub/")
-    return owner if marker and owner else record.session_id
+def _occupants(runtime: Any, record_id: str) -> list[str]:
+    """Sessions whose current root is this worktree (controller-owned index)."""
+    index = getattr(getattr(runtime, "_session_worktrees", None), "occupants", None)
+    if not callable(index):
+        return []
+    return sorted({str(item) for item in index(record_id)})[:_MAX_SESSIONS]
 
 
 def _ignored_paths(path: Path) -> int:
@@ -43,16 +62,21 @@ def _operation_markers(path: Path) -> list[str]:
     return markers
 
 
+def _check_idle(runtime: Any, sessions: Iterable[str]) -> None:
+    controller = runtime._session_worktrees
+    for session in sessions:
+        controller._idle(runtime.sessions.open(session, create=False, recover=False))
+
+
 def _snapshot(runtime: Any, registry: Path, record_id: str) -> dict[str, Any]:
     """Read a previewable state while the registry lock protects the record."""
     from .util import redact_secrets
 
     try:
-        # Explain active or queued parent work before offering a confirmation.
-        # The same check is repeated while holding the actual owner lock at removal.
+        # Explain active or queued work in any session in the checkout before
+        # offering a confirmation. Repeated while holding the locks at removal.
         record = runtime._worktree_service.get(record_id, root=registry)
-        owner = _owner_session(record)
-        runtime._session_worktrees._idle(runtime.sessions.open(owner, create=False, recover=False))
+        _check_idle(runtime, _occupants(runtime, record.child_id))
     except Exception as exc:
         raise _base.WorktreeError(redact_secrets(str(exc))[:500]) from exc
     service_root, _records = _base._service_layout(registry)
@@ -60,7 +84,6 @@ def _snapshot(runtime: Any, registry: Path, record_id: str) -> dict[str, Any]:
         _service, _key, record = _sessions._read_record(service_root, record_id)
         if record.parent_workspace.resolve() != Path(runtime.workspace).resolve():
             raise _base.WorktreeError("session worktree belongs to a different project")
-        owner = _owner_session(record)
         if record.lifecycle != "active":
             raise _base.WorktreeError("only an active Nexus session worktree can be removed")
         return _snapshot_locked(runtime, service_root, record)
@@ -74,7 +97,7 @@ def cleanup_preview(controller: Any, record_id: str) -> dict[str, Any]:
     except Exception as exc:  # previews are user-visible and fail closed
         return {
             "state": "refused", "reason": str(exc)[:500], "record_id": record_id,
-            "owner_session": "", "path_display": "", "branch": "", "head": "",
+            "owner_session": "", "sessions": [], "path_display": "", "branch": "", "head": "",
             "status": {},
         }
 
@@ -82,26 +105,32 @@ def cleanup_preview(controller: Any, record_id: str) -> dict[str, Any]:
 def _remove(runtime: Any, registry: Path, record_id: str, preview: dict[str, Any]) -> dict[str, Any]:
     from .errors import SessionBusy
 
-    owner = str(preview.get("owner_session", ""))
-    handle = runtime.sessions.open(owner, create=False, recover=False)
-    # Session lock first, then the registry lock. This serializes cleanup against
-    # turns and root changes; the record is re-read only after both are held.
-    handle._lock.acquire(shared=False, blocking=False)
+    sessions = [str(item) for item in preview.get("sessions", [])]
+    handles = [runtime.sessions.open(session, create=False, recover=False) for session in sessions]
+    held = []
     try:
+        # Session locks first (sorted, so concurrent removals cannot deadlock),
+        # then the registry lock. This serializes cleanup against turns and root
+        # changes of every session in the checkout; the record is re-read only
+        # after all are held.
+        for handle in handles:
+            handle._lock.acquire(shared=False, blocking=False)
+            held.append(handle)
         controller = runtime._session_worktrees
-        controller._idle(handle)
-        if runtime.sessions._has_pending_work(owner):
-            raise SessionBusy("Worktree cleanup requires an idle session without pending drafts")
+        for handle in handles:
+            controller._idle(handle)
+            if runtime.sessions._has_pending_work(handle.id):
+                raise SessionBusy("Worktree cleanup requires idle sessions without pending drafts")
         service_root, _records = _base._service_layout(registry)
         with _base._locked(service_root):
             _service, _key, record = _sessions._read_record(service_root, record_id)
             if record.parent_workspace.resolve() != Path(runtime.workspace).resolve():
                 raise _base.WorktreeError("session worktree belongs to a different project")
-            if _owner_session(record) != owner:
-                raise _base.WorktreeError("session owner changed after preview")
             if record.lifecycle != "active":
                 raise _base.WorktreeError("only an active Nexus session worktree can be removed")
-            current = _snapshot_locked(runtime, service_root, record)
+            if _occupants(runtime, record.child_id) != sessions:
+                raise _base.WorktreeError("sessions in the checkout changed after preview; request a fresh preview")
+            current = _snapshot_locked(runtime, service_root, record, sessions=sessions)
             if current != preview:
                 raise _base.WorktreeError("checkout state changed after preview; request a fresh preview")
             if current["state"] == "already_removed":
@@ -113,21 +142,25 @@ def _remove(runtime: Any, registry: Path, record_id: str, preview: dict[str, Any
             if record.path.exists():
                 raise _base.WorktreeError("Git reported success but the checkout path remains")
             # Leave the active authenticated record and branch intact. The normal
-            # recreate_session path can reattach this session from its branch.
-            return {**current, "state": "removed", "reason": "Checkout removed; branch and session record kept."}
+            # recreate path can reattach any session from its branch.
+            return {**current, "state": "removed", "reason": "Checkout removed; branch and worktree record kept."}
     finally:
-        handle._lock.release()
+        for handle in reversed(held):
+            handle._lock.release()
 
 
-def _snapshot_locked(runtime: Any, service_root: Path, record: _sessions.SessionWorktreeRecord) -> dict[str, Any]:
+def _snapshot_locked(runtime: Any, service_root: Path, record: _sessions.SessionWorktreeRecord,
+                     *, sessions: list[str] | None = None) -> dict[str, Any]:
     """Build the preview snapshot using an already-held registry lock."""
     # _verify performs the exact recorded path, common repository, ref and
     # registration checks without acquiring another registry lock.
     _sessions._verify(record, service_root)
-    owner = _owner_session(record)
+    if sessions is None:
+        sessions = _occupants(runtime, record.child_id)
     if not record.path.exists():
         return {"state": "already_removed", "reason": "The registered checkout path is already missing.",
-                "record_id": record.child_id, "owner_session": owner, "path_display": str(record.path),
+                "record_id": record.child_id, "owner_session": "", "sessions": sessions,
+                "path_display": str(record.path),
                 "branch": record.branch, "head": "", "status": {"missing": True}}
     head = _sessions._git(record.path, "rev-parse", "--verify", "HEAD^{commit}")
     branch = _sessions._git(record.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
@@ -140,8 +173,9 @@ def _snapshot_locked(runtime: Any, service_root: Path, record: _sessions.Session
         status[key] for key in ("modified", "added", "deleted", "untracked", "conflicted", "clipped", "ignored")
     )
     return {"state": "refused" if dirty else "ready",
-            "reason": "The checkout has uncommitted or untracked files; preserve or resolve them first." if dirty else "Clean Nexus-owned checkout; its branch will be kept.",
-            "record_id": record.child_id, "owner_session": owner, "path_display": str(record.path),
+            "reason": "The checkout has uncommitted or untracked files; preserve or resolve them first." if dirty else "Clean Nexus checkout; its branch will be kept.",
+            "record_id": record.child_id, "owner_session": "", "sessions": sessions,
+            "path_display": str(record.path),
             "branch": record.branch, "head": head, "status": status}
 
 
@@ -158,8 +192,48 @@ def remove_worktree(controller: Any, record_id: str, state: dict[str, Any]) -> d
         return {"state": "refused", "reason": str(exc)[:500], "record_id": record_id}
 
 
+def auto_cleanup(controller: Any, record_id: str, *, leaving: str = "",
+                 remaining: Iterable[str] | None = None) -> dict[str, Any]:
+    """Remove the checkout of a merged, clean worktree once its last session left.
+
+    Called by the controller after a move away (``leaving`` already points at its
+    new root; the caller holds that session's lock). ``remaining`` lists the
+    other sessions still in the worktree, defaulting to the controller's index
+    minus ``leaving``. Only the checkout goes: the record and branch are kept so
+    the worktree can be recreated. Never raises; ``state`` is ``removed`` or
+    ``kept`` with the reason (other sessions, unmerged, dirty, ...).
+    """
+    runtime, registry = _parts(controller)
+    try:
+        others = sorted(set(remaining) if remaining is not None else set(_occupants(runtime, record_id)))
+        others = [item for item in others if item != leaving]
+        if others:
+            return {"state": "kept", "reason": "Other sessions are still in this worktree.",
+                    "record_id": record_id, "sessions": others[:_MAX_SESSIONS]}
+        service_root, _records = _base._service_layout(registry)
+        with _base._locked(service_root):
+            _service, _key, record = _sessions._read_record(service_root, record_id)
+            if record.parent_workspace.resolve() != Path(runtime.workspace).resolve():
+                return {"state": "kept", "reason": "Worktree belongs to a different project.", "record_id": record_id}
+            if record.lifecycle != "active" or record.child_id.startswith("session-"):
+                return {"state": "kept", "reason": "Only an active project worktree is cleaned up.", "record_id": record_id}
+            current = _snapshot_locked(runtime, service_root, record, sessions=[])
+            if current["state"] == "already_removed":
+                return {**current, "state": "kept", "reason": "Checkout is already removed."}
+            if current["state"] != "ready":
+                return {**current, "state": "kept"}
+            if not _sessions.merge_state(record)["merged"]:
+                return {**current, "state": "kept", "reason": "Unmerged work; the checkout is kept."}
+            _sessions._git(record.parent_workspace, "worktree", "remove", str(record.path), observational=False)
+            if record.path.exists():
+                return {**current, "state": "kept", "reason": "Git reported success but the checkout path remains."}
+            return {**current, "state": "removed", "reason": "Merged and clean; checkout removed, branch and record kept."}
+    except Exception as exc:  # cleanup is best effort and must not fail a move
+        return {"state": "kept", "reason": str(exc)[:500], "record_id": record_id}
+
+
 def modern_worktree_row(record: _sessions.SessionWorktreeRecord, *, root: Path) -> SimpleNamespace:
-    """Project a v3 record for modern worktree listings without changing legacy rows."""
+    """Project a record for modern worktree listings without changing legacy rows."""
     from .agents.session_worktrees import session_status
 
     status = session_status(record.child_id, root=root)
@@ -169,7 +243,9 @@ def modern_worktree_row(record: _sessions.SessionWorktreeRecord, *, root: Path) 
     ))
     return SimpleNamespace(
         child_id=record.child_id, kind="session", session_id=record.session_id,
+        created_by=record.created_by, name=record.name,
         branch=record.branch, lifecycle=record.lifecycle,
         exists=record.path.is_dir(), dirty=dirty, head=status.get("head", ""),
+        merged=bool(status.get("merged", False)), unmerged_commits=int(status.get("unmerged_commits", 0)),
         status=status,
     )

@@ -2054,6 +2054,11 @@ class ToolTurn:
     #: The turn's lifecycle-hook runner (pinned manifest's hooks). ``None`` keeps
     #: hook integration off entirely.
     hooks: Any | None = None
+    #: Awaitable callable the session runs at every step boundary (after a model
+    #: step's tool calls, before the next request): detects merges and applies a
+    #: queued worktree move. Returns whether the root changed, in which case the
+    #: session rebuilds this bundle for the new root. ``None`` = no boundary work.
+    step_boundary: Any | None = None
 
 
 #: MCP lifecycle events that change the manifest's tool set or server index.
@@ -4623,11 +4628,12 @@ class Runtime:
         if root.kind != "main":
             self._validate_linked_root(root.path)
             if root.kind == "worktree":
-                record = self._worktree_service.get(root.worktree_id, root=self._worktree_root)
-                if getattr(record, "kind", None) == "session" and record.session_id != session:
-                    raise ValueError("Fork needs its first turn to create its own worktree before tools or shell commands can run")
+                # A worktree belongs to the project: any of its sessions may work
+                # in it, so the record must belong to this project, not to a session.
+                record = self._worktree_service.get_worktree(
+                    root.worktree_id, root=self._worktree_root, parent_workspace=self.workspace)
                 if record.lifecycle != "active" or Path(record.path).resolve() != root.path:
-                    raise ValueError("Session worktree is not active; detach to the main checkout")
+                    raise ValueError("Session worktree is not active; move to the main checkout")
         return root
 
     def session_path_guard(self, session: str, *, config=None):
@@ -4655,25 +4661,30 @@ class Runtime:
                     "context.notice", {"kind": "session_root_cwd",
                     "message": "Session opened; the launch directory could not be saved as shell cwd. Use shell cd to select it."})
 
-    def set_session_root(self, session: str, path, *, kind="external", **metadata):
+    def set_session_root(self, session: str, path, *, kind="external", held=False, event_extra=None, **metadata):
         """Persist a root change under the session lock at a turn boundary.
 
         External roots must already be linked worktrees of the same project.
-        Worktree creation/recreation and promotion are supplied by later phases.
+        ``held`` is for the owner of the session lock (the running turn applying
+        a queued move at a step boundary, or an idle host action that already
+        holds the lock): it skips the idle checks and the lock, and the event
+        joins the running turn. ``event_extra`` (reason, request_id, action) is
+        merged into the durable ``session.root_set`` data.
         """
         from .errors import SessionBusy
         from .session.root import SessionRoot
         handle = self.sessions.open(session, create=False, recover=False)
-        if handle.active or handle.queued_ids or self.session_has_active_jobs(session):
-            raise SessionBusy("Session root can only change at a turn boundary with no jobs or queued inputs")
-        running_shells = set()
-        for event in handle.events:
-            if event.type == "shell.started":
-                running_shells.add(event.data.get("shell_id"))
-            elif event.type == "shell.completed":
-                running_shells.discard(event.data.get("shell_id"))
-        if running_shells:
-            raise SessionBusy("Session root cannot change while a composer shell command is running")
+        if not held:
+            if handle.active or handle.queued_ids or self.session_has_active_jobs(session):
+                raise SessionBusy("Session root can only change at a turn boundary with no jobs or queued inputs")
+            running_shells = set()
+            for event in handle.events:
+                if event.type == "shell.started":
+                    running_shells.add(event.data.get("shell_id"))
+                elif event.type == "shell.completed":
+                    running_shells.discard(event.data.get("shell_id"))
+            if running_shells:
+                raise SessionBusy("Session root cannot change while a composer shell command is running")
         target = Path(path).resolve()
         if kind == "main":
             if target != self.workspace:
@@ -4684,17 +4695,25 @@ class Runtime:
             from .host_support.git_head import git_head
             metadata.setdefault("branch", git_head(target).get("branch", ""))
             root = SessionRoot(kind=kind, path=target, project_key=project_key(self.workspace), **metadata)
-        handle._lock.acquire(shared=False, blocking=False)
+        if not held:
+            handle._lock.acquire(shared=False, blocking=False)
         try:
-            if self.sessions._has_pending_work(session):
+            if not held and self.sessions._has_pending_work(session):
                 raise SessionBusy("Session root requires a turn boundary without queued inputs or pending work")
-            data = root.to_data(self.workspace)
-            handle.emit_session_event("session.root_set", data)
+            data = {**root.to_data(self.workspace), **(event_extra or {})}
+            def emit(kind, payload):
+                if held:  # joins the running turn's stream when there is one
+                    self._session_worktrees._event(handle, kind, payload)
+                else:
+                    handle.emit_session_event(kind, payload)
+            emit("session.root_set", data)
+            self._session_worktrees._occupancy_cache = (0.0, {})
+            handle._turn_root_agents_key = None
             from .tools.builtin._shell_logs import write_session_cwd
             try:
                 write_session_cwd(self.workspace, session, str(root.path), home=self._home)
             except OSError:
-                handle.emit_session_event("context.notice", {"kind": "session_root_cwd",
+                emit("context.notice", {"kind": "session_root_cwd",
                     "message": "Working root selected; shell cwd could not be reset. Use shell cd '.' before running commands."})
             row = handle._store.session_row(session)
             revision = (row.get("created_at"), row.get("last_seq", 0)) if row else (None, 0)
@@ -4703,21 +4722,43 @@ class Runtime:
             while len(self._session_roots) > 512:
                 self._session_roots.popitem(last=False)
         finally:
-            handle._lock.release()
+            if not held:
+                handle._lock.release()
         return root
 
     def _session_worktree_tools(self, session):
         return self._session_worktrees.tools(session)
 
-    def set_session_worktree(self, session, enabled, *, base="current", name=""):
-        return self._session_worktrees.set(session, enabled, base=base, name=name)
+    def _worktree_merge_policy(self):
+        """What the permission engine trusts for the agent's own ``git -C <main> merge --ff-only``."""
+        if not (self.workspace / ".git").exists():
+            return None
+        from .tools.permissions import WorktreeMergePolicy
+        controller = self._session_worktrees
+        mains = {os.path.normpath(str(self.workspace)), os.path.normpath(str(self.workspace.resolve()))}
+        return WorktreeMergePolicy(frozenset(mains), controller.is_project_branch, controller.is_base_branch)
 
     def _session_worktree_facts(self, session_id):
-        """Labelled worktree facts for the model's environment block; () when not in a worktree."""
+        """Labelled facts for the model's ``<session_worktree>`` block; () outside a Git project."""
         try:
             return self._session_worktrees.environment_facts(session_id)
         except Exception:
             return ()
+
+    def list_session_worktrees(self, session):
+        """The project's Nexus worktrees and main checkout as seen from ``session`` (read-only, bounded).
+
+        The same rows the model gets from ``worktree_list``: per worktree name, branch, base,
+        dirty, merged/unmerged, the sessions in it and the current marker.
+        """
+        return self._session_worktrees.list(session)
+
+    async def move_session_worktree(self, session, to, reason=""):
+        """Move an idle session to ``"main"`` or an existing worktree by name (user override).
+
+        The agent's own moves go through ``worktree_move`` and apply mid-turn at a step boundary.
+        """
+        return await self._session_worktrees.move_session(session, to, reason=reason)
 
     def session_worktree_status(self, session):
         return self._session_worktrees.status(session)
@@ -4753,11 +4794,18 @@ class Runtime:
             gate.cancel_pending()
             handle._active_tools = previous
 
-    async def promote_session(self, session, *, reason="", continuation=""):
-        return await self._session_worktrees.promote(session, reason=reason, continuation=continuation)
+    async def promote_session(self, session, *, reason="", continuation="", name="", base=""):
+        """Create a worktree for an idle session and move into it (user override / launch).
 
-    def detach_session_worktree(self, session):
-        return self._session_worktrees.detach(session)
+        ``name`` is an exact worktree name (also the session title); ``continuation`` is
+        queued after the move.
+        """
+        return await self._session_worktrees.promote(
+            session, reason=reason, continuation=continuation, name=name, base=base)
+
+    async def detach_session_worktree(self, session):
+        """Move an idle session back to the main checkout (the branch is kept)."""
+        return await self._session_worktrees.detach(session)
 
     def session_has_active_jobs(self, session_id: str) -> bool:
         """Whether ``session_id`` still owns a running shell job (this runtime only).
@@ -5301,8 +5349,7 @@ class Runtime:
             engine.require_confirmation_for(
                 spec.name for spec in manager.specs if getattr(spec, "mutates", False)
             )
-        if "worktree_promote" in manager.names:
-            engine.require_confirmation_for((*getattr(engine, "_force_ask_tools", ()), "worktree_promote"))
+        engine.allow_worktree_merge(self._worktree_merge_policy())
         if root.kind != "main":
             engine.path_guard = manager.path_guard
         grants = self._session_root_grants(session, root, manager)
@@ -5437,6 +5484,7 @@ class Runtime:
             manifest_ref=manifest_ref,
             environment_for=environment_for,
             hooks=hooks_service,
+            step_boundary=lambda: self._session_worktrees.step_boundary(session),
         )
 
     def _make_manager_tool_turn(
@@ -6740,7 +6788,7 @@ class Runtime:
         """
         if self._agents is None:
             return None
-        root_worktree_tools = {"worktree_status", "worktree_commit", "worktree_promote"}
+        root_worktree_tools = {"worktree_list", "worktree_create", "worktree_move", "worktree_commit"}
         parent_tools = tuple(name for name in parent_tools if name not in root_worktree_tools)
         if catalog is not None:
             catalog = tuple(tool for tool in catalog if tool.name not in root_worktree_tools)

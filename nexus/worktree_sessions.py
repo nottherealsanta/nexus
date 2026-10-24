@@ -1,7 +1,14 @@
-"""Runtime-owned session worktrees and turn boundaries (worktree-sessions/03).
+"""Runtime-owned session worktrees: agent-managed create/move/merge (agent-managed-worktrees plan).
 
-The controller keeps project policy separate from checkout authority. Git writes
-are delegated to the authenticated service; main/external checkouts are read only.
+Every session starts in the main checkout. The agent (or the user, while the
+session is idle) lists, creates and moves between the project's worktrees; a
+worktree belongs to the project, and any number of sessions can be in one. The
+controller keeps project policy separate from checkout authority. Git writes are
+delegated to the authenticated service; main/external checkouts are read only.
+
+A move requested from a tool is queued and applied at the next step boundary
+(after every tool call of the model step finished, before the next model
+request), so the turn keeps going: see :meth:`SessionWorktrees.step_boundary`.
 """
 from __future__ import annotations
 
@@ -9,28 +16,46 @@ import asyncio
 import hashlib
 import json
 import os
-import stat
 import shutil
-import uuid
+import stat
 import time
+import uuid
 from pathlib import Path
 
 from .config.paths import project_state_dir
 from .errors import OperationCancelled, SessionBusy
 from .events import Event
-from .model.message import Text
+from .model.message import Message, MessageMeta, Text
 from .resources import process_slot, resource_environment
 from .session.ids import is_valid_session_id
 from .session.root import SessionRoot
 from .util import redact_secrets
 
+_DIRTY_KEYS = ("modified", "added", "deleted", "untracked", "conflicted", "clipped")
+_MAX_OCCUPANCY_SESSIONS = 100
+_NOTICE_KIND = "worktree_move"
+
+
+def _is_dirty(counts) -> bool:
+    return any(counts.get(key) for key in _DIRTY_KEYS)
+
+
+def _dirty_total(counts) -> int:
+    return sum(counts.get(key, 0) for key in _DIRTY_KEYS if key != "clipped")
+
 
 class SessionWorktrees:
     def __init__(self, runtime):
         self.runtime = runtime
-        self._promotions: dict[str, dict] = {}
+        #: Moves requested by tools and not yet applied (one per session).
+        self._moves: dict[str, dict] = {}
+        #: Worktree names to store as the user title once a draft's first turn creates its row.
+        self._titles: dict[str, str] = {}
         self._trust_once: set[tuple[str, str]] = set()
         self._skip_once: set[tuple[str, str]] = set()
+        self._occupancy_cache: tuple[float, dict] = (0.0, {})
+
+    # -- plumbing -----------------------------------------------------------
 
     @property
     def service(self):
@@ -40,97 +65,16 @@ class SessionWorktrees:
     def registry(self):
         return self.runtime._worktree_root
 
+    @property
+    def is_git(self) -> bool:
+        return (self.runtime.workspace / ".git").exists()
+
     def policy(self):
         from .config.schema import WorktreesSection
         return getattr(self.runtime._load_config().v2, "worktrees", None) or WorktreesSection()
 
     def handle(self, session):
         return self.runtime.sessions.open(session, create=False, recover=False)
-
-    def mode(self):
-        """Project-local UI preference; the legacy boolean remains compatible."""
-        home = getattr(self.runtime, "_home", None)
-        if home is None:
-            return "always" if self.policy().sessions else "ask"
-        path = project_state_dir(self.runtime.workspace, home) / "worktree-mode.json"
-        try:
-            if not path.is_symlink() and path.stat().st_size <= 128:
-                value = json.loads(path.read_text())
-                if value in {"none", "ask", "always"}:
-                    return value
-        except (OSError, ValueError, TypeError):
-            pass
-        return "always" if self.policy().sessions else "ask"
-
-    def choice(self, session, mode=""):
-        if not mode:
-            return self.status(session)
-        if mode not in {"none", "ask", "always"}:
-            raise ValueError("Worktree mode must be none, ask, or always")
-        handle = self.handle(session)
-        self._idle(handle)
-        handle._lock.acquire(shared=False, blocking=False)
-        try:
-            if self.runtime.sessions._has_pending_work(session):
-                raise SessionBusy("Worktree choice requires an idle session")
-            editable = not self.locked(handle)
-            if editable and mode == "always" and not (self.runtime.workspace / ".git").exists():
-                raise ValueError("Worktrees need a Git repository")
-            path = project_state_dir(self.runtime.workspace, self.runtime._home) / "worktree-mode.json"
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            temporary = path.with_name(path.name + "." + uuid.uuid4().hex)
-            try:
-                with temporary.open("x", encoding="utf-8") as stream:
-                    os.chmod(temporary, 0o600)
-                    stream.write(json.dumps(mode) + "\n")
-                os.replace(temporary, path)
-            finally:
-                temporary.unlink(missing_ok=True)
-            if editable:
-                kept = self.selection(handle).get("name", "") if mode == "always" else ""
-                handle.emit_session_event("session.worktree_set", {
-                    "enabled": mode == "always", "base": self.policy().base,
-                    "choice_pending": mode == "ask", **({"name": kept} if kept else {}),
-                })
-        finally:
-            handle._lock.release()
-        return self.status(session)
-
-    def selection(self, handle):
-        policy = self.policy()
-        root = self.runtime.session_root(handle.id)
-        selected = {"enabled": bool(root.kind == "worktree" or (self.mode() == "always" and root.kind == "main" and not self.locked(handle))), "base": policy.base, "name": ""}
-        for event in handle.events:
-            if event.type == "session.worktree_set":
-                name = event.data.get("name", "")
-                selected = {"enabled": bool(event.data.get("enabled")), "base": event.data.get("base", "current"),
-                            "name": name if isinstance(name, str) else ""}
-            elif event.type == "worktree.created":
-                selected["enabled"] = True
-            elif event.type == "worktree.detached":
-                selected["enabled"] = False
-        return selected
-
-    @staticmethod
-    def locked(handle):
-        return any(e.type == "worktree.created" or
-                   (e.type == "turn.started" and not e.data.get("preparation")) for e in handle.events)
-
-    @staticmethod
-    def pending_request(handle):
-        pending = None
-        for event in handle.events:
-            if event.type == "worktree.promotion_requested":
-                pending = {"reason": event.data.get("reason", ""), "continuation": event.data.get("continuation", ""), "request_id": event.data.get("request_id", event.id)}
-            elif event.type in {"worktree.promoted", "worktree.promotion_failed"}:
-                pending = None
-        return pending
-
-    def required(self, handle):
-        if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
-            return False
-        root = self.runtime.session_root(handle.id)
-        return bool(self.pending_request(handle)) or root.kind == "worktree" or (self.selection(handle)["enabled"] and not self.locked(handle))
 
     def _idle(self, handle):
         if handle.active or handle.queued_ids or self.runtime.session_has_active_jobs(handle.id):
@@ -144,71 +88,9 @@ class SessionWorktrees:
         if running:
             raise SessionBusy("Worktree actions require composer shell commands to finish")
 
-    def set(self, session, enabled, *, base="current", name=""):
-        handle = self.handle(session)
-        if not isinstance(name, str):
-            raise ValueError("Worktree name must be a string")
-        name = name if enabled else ""
-        self._idle(handle)
-        if type(enabled) is not bool or not isinstance(base, str) or not base or len(base) > 256 or any(ord(c) < 32 for c in base):
-            raise ValueError("Worktree selection requires enabled and a bounded base branch")
-        handle._lock.acquire(shared=False, blocking=False)
-        try:
-            if self.runtime.sessions._has_pending_work(session):
-                raise SessionBusy("Worktree selection requires an idle draft")
-            if self.locked(handle):
-                raise ValueError("Worktree selection is locked after the first turn; use Move to worktree or Detach")
-            if enabled and not (self.runtime.workspace / ".git").exists():
-                raise ValueError("Worktrees need a Git repository")
-            data = {"enabled": enabled, "base": base}
-            if name:
-                if self.runtime.session_root(session).kind != "main":
-                    raise ValueError("A worktree name can only be chosen before the session has a working root")
-                self.service.check_session_name_free(self.runtime.workspace, name, root=self.registry)
-                data["name"] = name
-            handle.emit_session_event("session.worktree_set", data)
-            if name:
-                self._title(session, name)
-        finally:
-            handle._lock.release()
-        return self.status(session)
-
-    def _title(self, session, name):
-        """Store the name as a user title (never replaced by auto-titling).
-
-        A draft has no session row until its first message, so this is best
-        effort here and repeated when the worktree is created on the first turn.
-        """
-        from .errors import SessionError
-        from .host_support.auto_title import set_user_title
-        try:
-            set_user_title(self.runtime.sessions, session, name)
-        except SessionError:
-            pass
-
-    def _base_branch(self, root, selected):
-        """Branch the worktree is (or will be) created from; "" when unknown."""
-        ref = root.base_ref if root.kind == "worktree" else selected.get("base", "")
-        if ref == "current":
-            ref = self._git(self.runtime.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip()
-        return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
-
-    def environment_facts(self, session_id):
-        """Labelled facts for the model when the session works in a worktree; () otherwise."""
-        root = self.runtime.session_root(session_id)
-        if root.kind != "worktree":
-            return ()
-        return (
-            ("Worktree directory", str(root.path)),
-            ("Main checkout directory", str(self.runtime.workspace)),
-            ("Worktree branch", root.branch),
-            ("Base branch", self._base_branch(root, {})),
-            ("Base commit", root.base_sha),
-        )
-
-    def _git(self, directory, *args, check=True):
+    def _git(self, directory, *args, check=True, observational=True):
         from .agents.session_worktrees import _git
-        return _git(Path(directory), *args, check=check)
+        return _git(Path(directory), *args, check=check, observational=observational)
 
     @staticmethod
     def _display_command(command):
@@ -218,24 +100,352 @@ class SessionWorktrees:
             return [redact_secrets(value) for value in command]
         return command
 
-    def status(self, session):
-        handle = self.handle(session)
+    async def _thread(self, session, callback, *args, **kwargs):
+        # Shield process-backed work from task cancellation until its worker exits.
+        async with process_slot(session):
+            task = asyncio.create_task(asyncio.to_thread(callback, *args, **kwargs))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await task
+                raise
+
+    @staticmethod
+    def _emit(handle, kind, data, turn_id):
+        event = Event(type=kind, data=data, session=handle.id, turn=turn_id)
+        record = handle.append_event(event)
+        handle._observe_event(record.event)
+        handle._publish(record.event)
+        fanout = getattr(handle, "_attached_fanout", None)
+        if fanout is not None:
+            fanout.put_nowait(record.event)
+
+    def _event(self, handle, kind, data):
+        """Durable event: part of the running turn when there is one, else turn-less."""
+        turn = handle.active_turn_id
+        if turn:
+            self._emit(handle, kind, data, turn)
+        else:
+            handle.emit_session_event(kind, data)
+
+    def notice(self, handle, text):
+        self._event(handle, "context.notice", {"kind": "worktree", "message": redact_secrets(text)[:2000]})
+
+    @staticmethod
+    def _name(handle):
+        row = handle._store.session_row(handle.id) or {}
+        return str(row.get("name") or row.get("friendly_name") or handle.id)[:200]
+
+    def _title(self, session, name):
+        """Store the name as a user title (never replaced by auto-titling).
+
+        A draft has no session row until its first message, so this is best
+        effort here.
+        """
+        from .errors import SessionError
+        from .host_support.auto_title import set_user_title
+        try:
+            set_user_title(self.runtime.sessions, session, name)
+        except SessionError:
+            pass
+
+    def _turn_data(self, handle, turn_id):
+        prompt = ""
+        seq = 0
+        for record in handle.read(force=True).records:
+            message = getattr(record, "message", None)
+            if message is not None and message.role == "user" and getattr(message.meta, "turn_id", None) == turn_id:
+                prompt = " ".join(block.text for block in message.content if isinstance(block, Text))
+                seq = record.seq
+                break
+        return seq, prompt
+
+    # -- project records and who is where ----------------------------------
+
+    def project_records(self):
+        """Verified, active worktree records of this project (any creator)."""
+        if not self.is_git or not self.registry.exists():
+            return ()
+        try:
+            records = self.service.list_worktrees(self.runtime.workspace, root=self.registry)
+        except Exception:
+            return ()
+        return tuple(record for record in records if record.lifecycle == "active")
+
+    def _find_record(self, to):
+        try:
+            record = self.service.find_worktree(self.runtime.workspace, to, root=self.registry)
+        except Exception:
+            record = None
+        if record is None or record.lifecycle != "active":
+            names = ", ".join(r.name for r in self.project_records()) or "none yet"
+            raise ValueError(f'No Nexus worktree named {to!r} in this project. Use "main" or one of: {names}. '
+                             "Call worktree_list to see them.")
+        return record
+
+    def _present_count(self):
+        return sum(1 for record in self.project_records() if Path(record.path).is_dir())
+
+    def _limit_message(self):
+        policy = self.policy()
+        merged = []
+        for record in self.project_records():
+            if not Path(record.path).is_dir():
+                continue
+            try:
+                from .agents.session_worktrees import merge_state
+                if merge_state(record)["merged"]:
+                    merged.append(record.name)
+            except Exception:
+                continue
+        text = f"The project already has {policy.max_worktrees} worktree checkouts (the limit)."
+        if merged:
+            text += (" Merged worktrees whose checkouts can be cleaned up: " + ", ".join(merged[:16]) +
+                     ". Move into one of them to reuse it, or ask the user to remove checkouts from /worktrees.")
+        else:
+            text += " None is merged yet. Continue in an existing worktree (worktree_move) or ask the user to remove one."
+        return text
+
+    def is_project_branch(self, branch) -> bool:
+        """Whether ``branch`` is the branch of a Nexus worktree of this project (merge exemption)."""
+        return isinstance(branch, str) and any(record.branch == branch for record in self.project_records())
+
+    def is_base_branch(self, name) -> bool:
+        """Whether ``name`` is a base branch of this project (main's current branch or a worktree base)."""
+        if not isinstance(name, str) or not name:
+            return False
+        if name == self._git(self.runtime.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip():
+            return True
+        return any(record.base_ref.removeprefix("refs/heads/") == name for record in self.project_records())
+
+    def occupancy(self, *, fresh=False) -> dict[str, list[dict]]:
+        """Sessions per checkout, from each session's latest ``session.root_set``.
+
+        Keys are ``"main"`` or a worktree record id. Rebuilt from the session
+        logs (cached for a couple of seconds), so it survives restarts. Bounded
+        to the most recent sessions of the project.
+        """
+        stamp, cached = self._occupancy_cache
+        if not fresh and time.monotonic() - stamp < 2.0:
+            return cached
+        index: dict[str, list[dict]] = {}
+        try:
+            summaries = self.runtime.sessions.list()[:_MAX_OCCUPANCY_SESSIONS]
+        except Exception:
+            summaries = []
+        for summary in summaries:
+            try:
+                root = self.runtime.session_root(summary.id)
+            except Exception:
+                continue
+            key = "main" if root.kind == "main" else root.worktree_id if root.kind == "worktree" else ""
+            if not key:
+                continue
+            index.setdefault(key, []).append({
+                "id": summary.id, "title": redact_secrets(summary.title or summary.name or summary.id)[:80],
+                "active": summary.state != "idle", "last_activity": summary.last_activity,
+            })
+        # A draft has no session row yet but already has a root: count the live handles too.
+        seen = {summary.id for summary in summaries}
+        for sid in tuple(getattr(self.runtime.sessions, "live_sessions", ())):
+            if sid in seen or "/" in sid:
+                continue
+            try:
+                live = self.runtime.sessions.open(sid, create=False, recover=False)
+                if getattr(live, "kind", "root") != "root":
+                    continue
+                root = self.runtime.session_root(sid)
+            except Exception:
+                continue
+            key = "main" if root.kind == "main" else root.worktree_id if root.kind == "worktree" else ""
+            if key:
+                index.setdefault(key, []).append({"id": sid, "title": sid[:80], "active": bool(live.active),
+                                                  "last_activity": 0.0})
+        self._occupancy_cache = (time.monotonic(), index)
+        return index
+
+    def occupants(self, record_id):
+        """Ids of the sessions whose current root is worktree ``record_id`` (or ``"main"``)."""
+        return [item["id"] for item in self.occupancy(fresh=True).get(record_id, [])]
+
+    def _others_in(self, session, key):
+        return [item for item in self.occupancy().get(key, []) if item["id"] != session]
+
+    @staticmethod
+    def _sessions_text(items):
+        if not items:
+            return "none"
+        shown = [f"{item['title']}{' (active)' if item['active'] else ''}" for item in items[:5]]
+        more = f", +{len(items) - 5} more" if len(items) > 5 else ""
+        return ", ".join(shown) + more
+
+    # -- git facts ----------------------------------------------------------
+
+    def _merge_state(self, record):
+        from .agents.session_worktrees import merge_state
+        try:
+            return merge_state(record)
+        except Exception:
+            return {"merged": False, "unmerged_commits": 0, "has_work": False, "head": "", "base_head": ""}
+
+    def _base_branch(self, root):
+        """Branch a worktree session was based on ("" when it was a bare commit)."""
+        ref = root.base_ref if root.kind == "worktree" else ""
+        ref = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+        if ref == "HEAD" or (len(ref) in {40, 64} and all(c in "0123456789abcdefABCDEF" for c in ref)):
+            return ""
+        return ref
+
+    def _main_branch(self):
+        return self._git(self.runtime.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip()
+
+    def _row(self, record, occupancy, current_id):
+        present = Path(record.path).is_dir()
+        state = self._merge_state(record)
+        dirty = 0
+        if present:
+            from .agents.session_worktrees import status_counts
+            try:
+                counts = status_counts(record.path)
+                dirty = _dirty_total(counts) + (1 if counts.get("clipped") else 0)
+            except Exception:
+                dirty = 0
+        sessions = occupancy.get(record.child_id, [])
+        base = record.base_ref.removeprefix("refs/heads/")
+        if len(base) in {40, 64}:
+            base = base[:12]
+        return {
+            "id": record.child_id, "child_id": record.child_id, "name": record.name, "kind": "worktree",
+            "branch": record.branch, "base_ref": record.base_ref,
+            "base_branch": base, "base_commit": record.base_commit, "present": present, "dirty": dirty,
+            "merged": bool(state["merged"] and state["has_work"]), "has_work": bool(state["has_work"]),
+            "unmerged_commits": int(state["unmerged_commits"]),
+            "sessions": sessions[:20], "created_by": record.created_by,
+            "last_activity": max([record.updated_at, *(item["last_activity"] for item in sessions)]),
+            "current": record.child_id == current_id,
+        }
+
+    def list(self, session, occupancy=None):
+        """Every Nexus worktree of this project plus the main checkout, as seen from ``session``.
+
+        Bounded to ``worktrees.max_worktrees`` rows (``clipped`` counts the rest). Extra
+        Git worktrees Nexus did not create are listed read-only under ``external``.
+        ``occupancy`` lets a caller on the event loop pass the session index so a
+        worker thread only runs Git.
+        """
+        from .agents.session_worktrees import status_counts
         root = self.runtime.session_root(session)
-        selected = self.selection(handle)
-        is_git = (self.runtime.workspace / ".git").exists()
-        choice = next((event for event in reversed(handle.events) if event.type == "session.worktree_set"), None)
-        chosen = root.kind == "external" or self.locked(handle) or bool(choice is not None and not choice.data.get("choice_pending", False))
-        result = {**{k: v for k, v in selected.items() if k != "name"}, "mode": self.mode(), "chosen": chosen,
-                  "editable": not self.locked(handle), "git": is_git,
-                  "disabled_reason": "" if is_git else "Worktrees need a Git repository",
-                  "pending_promotion": bool(self.pending_request(handle)),
-                  "setup": self._display_command(self.policy().setup), "setup_shell": self.policy().setup_shell, "submodules": self.policy().submodules,
-                  "kind": root.kind, "worktree_id": root.worktree_id, "branch": root.branch, "base_ref": root.base_ref,
-                  "path_display": root.to_data(self.runtime.workspace)["path_display"], "branches": [],
-                  "selected": bool(selected["enabled"]), "pending_name": "" if root.kind == "worktree" else selected.get("name", ""),
-                  "worktree_name": root.path.name if root.kind == "worktree" else "",
-                  "main_path_display": str(self.runtime.workspace),
-                  "base_branch": self._base_branch(root, selected)}
+        policy = self.policy()
+        occupancy = occupancy if occupancy is not None else self.occupancy(fresh=True)
+        records = sorted(self.project_records(), key=lambda r: -r.updated_at)
+        shown = records[:policy.max_worktrees]
+        current_id = root.worktree_id if root.kind == "worktree" else ""
+        rows = [self._row(record, occupancy, current_id) for record in shown]
+        main_dirty = 0
+        try:
+            counts = status_counts(self.runtime.workspace)
+            main_dirty = _dirty_total(counts) + (1 if counts.get("clipped") else 0)
+        except Exception:
+            pass
+        main = {
+            "id": "main", "child_id": "", "name": "main", "kind": "main", "branch": self._main_branch(),
+            "base_ref": "", "path": str(self.runtime.workspace), "dirty": main_dirty, "present": True,
+            "merged": False, "unmerged_commits": 0,
+            "sessions": occupancy.get("main", [])[:20], "current": root.kind == "main",
+        }
+        known = {Path(r.path).resolve() for r in records} | {self.runtime.workspace.resolve()}
+        external = []
+        try:
+            current = {}
+            for line in self._git(self.runtime.workspace, "worktree", "list", "--porcelain").splitlines() + [""]:
+                if not line:
+                    path = current.get("worktree")
+                    if path and Path(path).resolve() not in known:
+                        external.append({"path": path, "name": Path(path).name,
+                                         "path_display": os.path.relpath(path, self.runtime.workspace.parent),
+                                         "branch": current.get("branch", "").removeprefix("refs/heads/")})
+                    current = {}
+                elif " " in line:
+                    key, value = line.split(" ", 1)
+                    current[key] = value
+        except Exception:
+            external = []
+        return {
+            "session": session, "current": "main" if root.kind == "main" else (root.path.name if root.kind == "worktree" else "external"),
+            "main": main, "worktrees": [main, *rows], "clipped": max(0, len(records) - len(shown)),
+            "external": external[:16], "max_worktrees": policy.max_worktrees,
+            "present": self._present_count(),
+        }
+
+    def environment_facts(self, session_id):
+        """Labelled facts for the model's ``<session_worktree>`` block (every Git session)."""
+        if not self.is_git:
+            return ()
+        handle = self.handle(session_id)
+        if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
+            return ()
+        root = self.runtime.session_root(session_id)
+        if root.kind == "external":
+            return ()
+        from .agents.session_worktrees import status_counts
+        main_dirty = _dirty_total(status_counts(self.runtime.workspace))
+        occupancy = self.occupancy()
+        key = "main" if root.kind == "main" else root.worktree_id
+        facts = [
+            ("Current root", "main checkout" if root.kind == "main" else f"worktree {root.path.name}"),
+            ("Main checkout directory", str(self.runtime.workspace)),
+            ("Main checkout branch", self._main_branch() or "(detached)"),
+            ("Main checkout changes", f"dirty ({main_dirty} changed files)" if main_dirty else "clean"),
+            ("Other sessions in the main checkout", self._sessions_text([i for i in occupancy.get("main", []) if i["id"] != session_id])),
+        ]
+        if root.kind == "worktree":
+            facts += [
+                ("Worktree name", root.path.name),
+                ("Worktree directory", str(root.path)),
+                ("Worktree branch", root.branch),
+                ("Base branch", self._base_branch(root) or root.base_ref),
+                ("Base commit", root.base_sha),
+            ]
+            try:
+                record = self.service.get_worktree(root.worktree_id, root=self.registry, parent_workspace=self.runtime.workspace)
+                state = self._merge_state(record)
+                if state["merged"] and state["has_work"]:
+                    text = "merged into " + (self._base_branch(root) or "its base")
+                elif state["has_work"]:
+                    text = f"unmerged ({state['unmerged_commits']} commits not in {self._base_branch(root) or 'its base'})"
+                else:
+                    text = "no commits of its own yet"
+                dirty = _dirty_total(status_counts(root.path))
+                facts += [("Worktree state", text),
+                          ("Worktree changes", f"dirty ({dirty} changed files)" if dirty else "clean")]
+            except Exception:
+                facts.append(("Worktree state", "unavailable"))
+            facts.append(("Other sessions in this worktree", self._sessions_text(
+                [i for i in occupancy.get(key, []) if i["id"] != session_id])))
+        last = next((e for e in reversed(handle.events) if e.type == "worktree.moved"), None)
+        if last is not None:
+            data = last.data
+            line = f"{data.get('action', 'move')} to {data.get('to_name', '?')} from {data.get('from_name', '?')}"
+            if data.get("reason"):
+                line += f": {redact_secrets(str(data['reason']))[:200]}"
+            facts.append(("Last move", line))
+        return tuple(facts)
+
+    def status(self, session):
+        """Projection for the host: current root, Git state, setup trust."""
+        root = self.runtime.session_root(session)
+        is_git = self.is_git
+        policy = self.policy()
+        result = {
+            "git": is_git, "disabled_reason": "" if is_git else "Worktrees need a Git repository",
+            "pending_move": session in self._moves,
+            "setup": self._display_command(policy.setup), "setup_shell": policy.setup_shell, "submodules": policy.submodules,
+            "kind": root.kind, "worktree_id": root.worktree_id, "branch": root.branch, "base_ref": root.base_ref,
+            "path_display": root.to_data(self.runtime.workspace)["path_display"], "branches": [],
+            "worktree_name": root.path.name if root.kind == "worktree" else "",
+            "main_path_display": str(self.runtime.workspace),
+            "base_branch": self._base_branch(root) or self._main_branch(),
+        }
         if is_git:
             result["branches"] = self._git(self.runtime.workspace, "for-each-ref", "--count=200", "--format=%(refname:short)", "refs/heads").splitlines()[:200]
         if root.kind == "worktree":
@@ -250,41 +460,37 @@ class SessionWorktrees:
                 result.update(target_tip=tip, ahead=int(ahead), behind=int(behind), queue_position=None, pending_base_moved=[])
             except Exception as exc:
                 result.update(state="unavailable", warning=redact_secrets(str(exc))[:500])
-        if is_git and root.kind != "worktree":
+        elif is_git:
             try:
-                self.runtime.validate_session_root(session)
-                branch = self._git(root.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip()
-                head = self._git(root.path, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
                 from .agents.session_worktrees import status_counts
-                uncommitted = status_counts(root.path)
-                base = selected["base"]
-                if base == "current":
-                    base = self._git(self.runtime.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).strip() or "HEAD"
-                base_ref = base if base.startswith("refs/") or base == "HEAD" else "refs/heads/" + base
-                tip = self._git(self.runtime.workspace, "rev-parse", "--verify", base_ref + "^{commit}", check=False).strip()
-                result.update(branch=branch, head=head, base_ref=base_ref, target_tip=tip,
-                    uncommitted=uncommitted, commits=[], ahead=0, behind=0, queue_position=None, pending_base_moved=[])
+                self.runtime.validate_session_root(session)
+                branch = self._main_branch()
+                head = self._git(root.path, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
+                result.update(branch=branch, head=head, uncommitted=status_counts(root.path), commits=[])
                 if head:
-                    fields = self._git(root.path, "log", "-5", "--format=%H%x00%<(200,trunc)%s%x00").split("\0")
+                    fields = self._git(root.path, "log", "-5", "--format=%H%x00%s%x00").split("\0")
                     result["commits"] = [{"sha": fields[i].strip(), "subject": redact_secrets(fields[i+1])[:200]} for i in range(0, len(fields)-1, 2)]
-                if tip and head:
-                    behind, ahead = self._git(root.path, "rev-list", "--left-right", "--count", tip + "..." + head).split()
-                    result.update(ahead=int(ahead), behind=int(behind))
             except Exception as exc:
                 result.update(state="unavailable", warning=redact_secrets(str(exc))[:500])
         result["setup_digest"] = self._setup_digest()
         return result
 
-    async def _publish_root(self, handle, record, *, created=True, dirty=None):
+    # -- publishing a root --------------------------------------------------
+
+    async def _publish_root(self, handle, record, *, created=True, dirty=None, extra=None):
+        extra = dict(extra or {})
         root = SessionRoot(kind="worktree", path=Path(record.path), project_key=self.runtime.session_root(handle.id).project_key,
                            branch=record.branch, base_ref=record.base_ref, base_sha=record.base_commit, worktree_id=record.child_id)
+        display = root.to_data(self.runtime.workspace)
         if created:
-            handle.emit_session_event("worktree.created", {"branch": record.branch, "base_ref": record.base_ref,
+            self._event(handle, "worktree.created", {"branch": record.branch, "base_ref": record.base_ref,
                 "base_sha": record.base_commit, "dirty_main": dirty or {"modified": 0, "untracked": 0},
-                "path_display": root.to_data(self.runtime.workspace)["path_display"]})
-        handle.emit_session_event("session.root_set", root.to_data(self.runtime.workspace))
-        await self._thread(handle.id, self.service.activate_session, record.child_id, root=self.registry)
+                "path_display": display["path_display"], "worktree_id": record.child_id, "name": record.name, **extra})
+        self._event(handle, "session.root_set", {**display, **extra})
+        if created:
+            await self._thread(handle.id, self.service.activate_session, record.child_id, root=self.registry)
         self.runtime._session_roots.pop(handle.id, None)
+        self._occupancy_cache = (0.0, {})
         handle._turn_root_agents_key = None
         from .tools.builtin._shell_logs import write_session_cwd
         try:
@@ -293,123 +499,118 @@ class SessionWorktrees:
             self.notice(handle, "Working root selected; shell cwd could not be saved")
         return root
 
-    @staticmethod
-    def notice(handle, text):
-        handle.emit_session_event("context.notice", {"kind": "worktree", "message": redact_secrets(text)[:2000]})
-
     def _dirty(self):
         from .agents.session_worktrees import status_counts
         return status_counts(self.runtime.workspace)
 
-    async def _thread(self, session, callback, *args, **kwargs):
-        # Shield process-backed work from task cancellation until its worker exits.
-        async with process_slot(session):
-            task = asyncio.create_task(asyncio.to_thread(callback, *args, **kwargs))
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                await task
-                raise
+    # -- turn boundaries ----------------------------------------------------
 
-    async def _create(self, handle, *, base, name=""):
-        policy = self.policy()
-        dirty = await self._thread(handle.id, self._dirty)
-        record = await self._thread(handle.id, self.service.create_session, self.runtime.workspace, handle.id,
-            self._name(handle), root=self.registry, base=base, max_worktrees=policy.max_worktrees,
-            **({"exact_name": name} if name else {"random_words": True}))
-        published = False
-        if name:
-            self._title(handle.id, name)
-        try:
-            await self.setup(handle, record, reason="created")
-            handle.cancel_token.raise_if_cancelled()
-            await self._publish_root(handle, record, dirty=dirty)
-            published = True
-        finally:
-            if not published and not any(e.type == "worktree.created" and e.data.get("branch") == record.branch for e in handle.events):
-                await self._thread(handle.id, self.service.abort_session, record.child_id, root=self.registry)
-        changes = sum(dirty.get(key, 0) for key in ("modified", "added", "deleted", "untracked", "conflicted"))
-        if changes or dirty.get("clipped"):
-            count = str(changes) + ("+" if dirty.get("clipped") else "")
-            self.notice(handle, f"{count} uncommitted changes in the main checkout are not included; based on {record.base_ref} @ {record.base_commit[:7]}")
-        return self.runtime.session_root(handle.id)
+    def required(self, handle):
+        """Whether the turn's tools must be built after ``prepare`` (the root may need recreating)."""
+        if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
+            return False
+        return self.runtime.session_root(handle.id).kind == "worktree"
 
     async def prepare(self, handle, lease, content):
         if getattr(handle, "_kind", None) == "manager":
             return
-        pending = self.pending_request(handle)
-        if pending is not None:
-            if self.runtime.session_root(handle.id).kind == "worktree":
-                self._complete_promotion(handle, pending)
-            else:
-                await self._promote(handle, **pending)
+        title = self._titles.pop(handle.id, "")
+        if title:
+            self._title(handle.id, title)
         root = self.runtime.session_root(handle.id)
-        if root.kind == "worktree":
-            record = await self._thread(handle.id, self.service.get, root.worktree_id, root=self.registry)
-            if getattr(record, "session_id", None) != handle.id:
-                # A fork copies durable root metadata, but never borrows write
-                # authority to its parent's owned branch.
-                root = await self._create(handle, base=record.branch)
-                self.notice(handle, "Fork isolated from the parent branch's current committed tip; uncommitted parent changes are not included")
-            else:
-                missing = not root.path.is_dir()
-                record = await self._thread(handle.id, self.service.recreate_session, root.worktree_id, root=self.registry)
-                if missing:
-                    await self.setup(handle, record, reason="recreated")
-                self.runtime.validate_session_root(handle.id)
-        elif self.selection(handle)["enabled"] and not self.locked(handle):
-            chosen = self.selection(handle)
-            root = await self._create(handle, base=chosen["base"], name=chosen.get("name", ""))
-        disabled = any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events)
-        if root.kind in {"main", "external"} and self.policy().checkpoints and not disabled:
-            seq, _ = self._turn_data(handle, lease.turn_id)
-            git_root = await self._thread(handle.id, self._git, root.path, "rev-parse", "--show-toplevel", check=False)
-            if not git_root.strip():
-                # Report at the terminal boundary so non-Git turns retain their
-                # normal turn.started-first stream ordering.
-                handle._checkpoint_not_git = True
-            else:
-                baseline_ok = await self._thread(handle.id, self._checkpoint_baseline, root.path, handle.id, seq)
-                if baseline_ok:
-                    head = await self._thread(handle.id, self._git, root.path, "rev-parse", "--verify", "HEAD^{commit}", check=False)
-                    self._emit(handle, "checkpoint.started", {"seq": seq, "head": head.strip()}, lease.turn_id)
-                else:
-                    self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "git_error", "detail": "could not capture turn baseline"}, lease.turn_id)
-        if root.kind == "worktree":
-            info = await self._thread(handle.id, self.service.session_status, root.worktree_id, root=self.registry)
-            seq, _ = self._turn_data(handle, lease.turn_id)
-            self._emit(handle, "worktree.turn_started", {"head": info.get("head", ""), "seq": seq, "worktree_id": root.worktree_id}, lease.turn_id)
+        if root.kind != "worktree":
+            return
+        # The checkout may have been removed (merged and cleaned up, or by hand):
+        # recreate it from its kept branch.
+        record = await self._thread(handle.id, self.service.get_worktree, root.worktree_id,
+                                    root=self.registry, parent_workspace=self.runtime.workspace)
+        if not root.path.is_dir():
+            record = await self._thread(handle.id, self.service.recreate_worktree, root.worktree_id,
+                                        root=self.registry, parent_workspace=self.runtime.workspace)
+            await self.setup(handle, record, reason="recreated")
+        self.runtime.validate_session_root(handle.id)
+        await self._turn_started(handle, root, lease.turn_id)
 
-    @staticmethod
-    def _name(handle):
-        row = handle._store.session_row(handle.id) or {}
-        return str(row.get("name") or row.get("friendly_name") or handle.id)[:200]
+    async def _turn_started(self, handle, root, turn_id):
+        info = await self._thread(handle.id, self.service.session_status, root.worktree_id, root=self.registry)
+        seq, _ = self._turn_data(handle, turn_id)
+        self._emit(handle, "worktree.turn_started", {"head": info.get("head", ""), "seq": seq, "worktree_id": root.worktree_id}, turn_id)
 
-    def _turn_data(self, handle, turn_id):
-        prompt = ""
-        seq = 0
-        for record in handle.read(force=True).records:
-            message = getattr(record, "message", None)
-            if message is not None and message.role == "user" and getattr(message.meta, "turn_id", None) == turn_id:
-                prompt = " ".join(block.text for block in message.content if isinstance(block, Text))
-                seq = record.seq
-                break
-        return seq, prompt
+    async def finish(self, handle, terminal):
+        try:
+            root = self.runtime.session_root(handle.id)
+            if root.kind == "worktree":
+                await self._close_part(handle, terminal.turn, root)
+            pending = self._moves.pop(handle.id, None)
+            if pending is not None:
+                self._event(handle, "worktree.move_failed", {"request_id": pending.get("request_id"), "to": pending.get("to") or pending["action"],
+                    "detail": "The turn ended before the move was applied"})
+        except Exception as exc:
+            self._emit(handle, "worktree.commit_skipped", {"reason": "git_error", "detail": redact_secrets(str(exc))[:500]}, terminal.turn)
+            self.notice(handle, "Worktree action failed: " + str(exc))
+
+    async def _close_part(self, handle, turn_id, root):
+        """Close this turn's part in worktree ``root``: shell commits, harness commit, merge detection."""
+        seq, _ = self._turn_data(handle, turn_id)
+        since = next((e.data.get("head", "") for e in reversed(handle.events)
+                      if e.type == "worktree.turn_started" and e.turn == turn_id and e.data.get("worktree_id", root.worktree_id) == root.worktree_id), "")
+        if since:
+            commits = await self._thread(handle.id, self.service.session_commits, root.worktree_id, root=self.registry, since=since)
+            known = {e.data.get("sha") for e in handle.events if e.type == "worktree.committed"}
+            for result in commits:
+                if result.get("sha") not in known:
+                    self._commit_event(handle, {**result, "kind": "committed", "by": "agent", "via": "shell"}, seq=seq, agent="root", turn_id=turn_id)
+        paths = self._turn_paths(handle, turn_id, root)
+        await self.commit(handle, turn_id, paths=paths)
+        await self._detect_landing(handle, root, turn_id)
+
+    async def _detect_landing(self, handle, root, turn_id):
+        landing = await self._thread(handle.id, self._landing, handle, root)
+        if landing is not None:
+            self._emit(handle, "worktree.merged", landing, turn_id)
+            self.notice(handle, f"Merged into {landing['target_branch']} @ {landing['sha'][:12]}: {landing['subject']}")
+
+    def _turn_paths(self, handle, turn_id, root):
+        """Paths the harness commit may include: ``None`` = everything (this session is alone here).
+
+        With other sessions in the worktree only the files this session wrote in
+        the turn are committed, so another session's half-finished edits are
+        never swept into the commit.
+        """
+        try:
+            others = self._others_in(handle.id, root.worktree_id)
+        except Exception:
+            others = [{}]
+        if not others:
+            return None
+        display = root.to_data(self.runtime.workspace)["path_display"]
+        touched = []
+        for event in handle.events:
+            if event.turn != turn_id:
+                continue
+            if (event.type == "worktree.file_written" and event.data.get("owner_session") == handle.id
+                    and event.data.get("root_display") == display):
+                touched.append(event.data.get("path"))
+            elif event.type == "context.notice" and event.data.get("kind") == "subagent_merged":
+                touched.extend(event.data.get("files", []))
+        return [path for path in dict.fromkeys(touched) if isinstance(path, str) and path]
+
+    # -- commits ------------------------------------------------------------
 
     async def commit(self, handle, turn_id, *, message=None, paths=None, agent="root", by="harness"):
         root = self.runtime.session_root(handle.id)
-        if root.kind != "worktree" or root.worktree_id != "session-" + handle.id:
-            raise ValueError("Only this session's Nexus-owned branch can be committed")
+        if root.kind != "worktree":
+            raise ValueError("Only a Nexus worktree can be committed; create one with worktree_create")
         if self.runtime.session_has_active_jobs(handle.id):
             payload = {"reason": "git_error", "detail": "Background shell jobs are running; finish them before committing"}
-            handle.emit_session_event("worktree.commit_skipped", payload)
+            self._event(handle, "worktree.commit_skipped", payload)
             return {"kind": "skipped", **payload}
         seq, prompt = self._turn_data(handle, turn_id)
         policy = self.policy()
         result = await self._thread(handle.id, self.service.commit_session, root.worktree_id, root=self.registry,
             message=message if message is not None else "nexus: " + (prompt.splitlines()[0] if prompt else "session changes")[:72],
             session_name=self._name(handle), turn_seq=seq, agent_id=agent, paths=paths,
-            max_files=policy.commit_max_files, max_file_mb=policy.commit_max_file_mb, by=by)
+            max_files=policy.commit_max_files, max_file_mb=policy.commit_max_file_mb, by=by, session_id=handle.id)
         self._commit_event(handle, result, seq=seq, agent=agent, turn_id=turn_id)
         return result
 
@@ -425,77 +626,32 @@ class SessionWorktrees:
             if result.get("index_refresh_failed"):
                 self.notice(handle, "Commit saved, but Git index refresh failed. Review the worktree status before staging more changes.")
             if result.get("identity_fallback") and not any(e.type == "worktree.identity_fallback" for e in handle.events):
-                handle.emit_session_event("worktree.identity_fallback", {})
+                self._event(handle, "worktree.identity_fallback", {})
                 self.notice(handle, "Git identity is unset; session commits use Nexus <nexus@localhost>")
         elif kind == "skipped":
             self._emit(handle, "worktree.commit_skipped", payload, turn_id)
             self.notice(handle, "Worktree commit skipped: " + str(payload.get("detail", payload.get("reason", "Git error"))))
 
-    @staticmethod
-    def _emit(handle, kind, data, turn_id):
-        event = Event(type=kind, data=data, session=handle.id, turn=turn_id)
-        record = handle.append_event(event)
-        handle._observe_event(record.event)
-        handle._publish(record.event)
-        fanout = getattr(handle, "_attached_fanout", None)
-        if fanout is not None:
-            fanout.put_nowait(record.event)
-
-    async def finish(self, handle, terminal):
-        pending = None
-        try:
-            root = self.runtime.session_root(handle.id)
-            if root.kind == "worktree":
-                seq, _ = self._turn_data(handle, terminal.turn)
-                since = next((e.data.get("head", "") for e in reversed(handle.events) if e.type == "worktree.turn_started" and e.turn == terminal.turn), "")
-                if since:
-                    commits = await self._thread(handle.id, self.service.session_commits, root.worktree_id, root=self.registry, since=since)
-                    known = {e.data.get("sha") for e in handle.events if e.type == "worktree.committed"}
-                    for result in commits:
-                        if result.get("sha") not in known:
-                            self._commit_event(handle, {**result, "kind": "committed", "by": "agent", "via": "shell"}, seq=seq, agent="root", turn_id=terminal.turn)
-                await self.commit(handle, terminal.turn)
-                landing = await self._thread(handle.id, self._landing, handle, root)
-                if landing is not None:
-                    self._emit(handle, "worktree.merged", landing, terminal.turn)
-                    self.notice(handle, f"Merged into {landing['target_branch']} @ {landing['sha'][:12]}: {landing['subject']}")
-            elif root.kind in {"main", "external"} and self.policy().checkpoints:
-                already_not_git = any(e.type == "checkpoint.skipped" and e.data.get("reason") == "not_git" for e in handle.events)
-                if getattr(handle, "_checkpoint_not_git", False) and not already_not_git:
-                    seq, _ = self._turn_data(handle, terminal.turn)
-                    self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "not_git", "detail": ""}, terminal.turn)
-                elif not any(e.type == "checkpoint.skipped" and e.data.get("reason") in {"disabled", "not_git"} for e in handle.events):
-                    seq, _ = self._turn_data(handle, terminal.turn)
-                    result = await self._thread(handle.id, self._checkpoint_capture, root.path, handle.id, seq, handle, terminal.turn)
-                    if result.get("kind") == "captured":
-                        self._emit(handle, "checkpoint.captured", result["event"], terminal.turn)
-                        if result["event"].get("duration_ms", 0) > 5000:
-                            self._emit(handle, "checkpoint.skipped", {"seq": seq, "reason": "disabled",
-                                "detail": "capture exceeded 5 seconds; disabled for this session"}, terminal.turn)
-                            self.notice(handle, "Checkpoints disabled for this session because capture exceeded 5 seconds")
-                    elif result.get("kind") == "skipped":
-                        self._emit(handle, "checkpoint.skipped", result["event"], terminal.turn)
-            pending = self._promotions.pop(handle.id, None)
-            if pending is not None:
-                await self._promote(handle, **pending)
-        except Exception as exc:
-            if pending is not None:
-                handle.emit_session_event("worktree.promotion_failed", {"request_id": pending.get("request_id"), "detail": redact_secrets(str(exc))[:500]})
-            self._emit(handle, "worktree.commit_skipped", {"reason": "git_error", "detail": redact_secrets(str(exc))[:500]}, terminal.turn)
-            self.notice(handle, "Worktree action failed: " + str(exc))
-
-    def _checkpoint_ref(self, session, seq, suffix=""):
-        safe = ''.join(c for c in session if c.isalnum() or c in '-_')[:190]
-        return f"refs/nexus/checkpoints/{safe}/{seq:010d}{suffix}"
+    def unpin_session_turns(self, session):
+        """Delete the hidden turn refs of a deleted session (call from session deletion)."""
+        from .agents.session_worktrees import delete_turn_refs
+        return delete_turn_refs(self.runtime.workspace, session)
 
     def _checkpoint_snapshot(self, directory, session, seq, suffix, *, base_ref=""):
-        """Build a commit object from a private index; never touch the user's index/ref."""
+        """Commit object of a checkout's current files, built from a private index.
+
+        Only the (disabled) subagent-worktree path uses it, to give a child a
+        baseline that includes the parent's uncommitted edits. The main-checkout
+        turn checkpoints it once served are gone (plan 3.5.1); it never touches
+        the user's index or branch.
+        """
         from .agents.session_worktrees import _git
         directory = Path(directory)
         common = Path(_git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir"))
         index = Path(_git(directory, "rev-parse", "--path-format=absolute", "--git-path", "index"))
         temp = common / f"nexus-checkpoint-index-{uuid.uuid4().hex}"
-        ref = self._checkpoint_ref(session, seq, suffix)
+        safe = ''.join(c for c in session if c.isalnum() or c in '-_')[:190]
+        ref = f"refs/nexus/checkpoints/{safe}/{seq:010d}{suffix}"
         env = {"GIT_INDEX_FILE": str(temp), "GIT_AUTHOR_NAME": "Nexus", "GIT_AUTHOR_EMAIL": "nexus@localhost",
                "GIT_COMMITTER_NAME": "Nexus", "GIT_COMMITTER_EMAIL": "nexus@localhost"}
         try:
@@ -504,23 +660,14 @@ class SessionWorktrees:
             else:
                 head = _git(directory, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
                 _git(directory, "read-tree", head if head else "--empty", extra_env={"GIT_INDEX_FILE": str(temp)})
+            policy = self.policy()
             status = _git(directory, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-            status_rows = [row for row in status.split("\0") if len(row) >= 4]
-            candidates = []
-            row_index = 0
-            while row_index < len(status_rows):
-                row = status_rows[row_index]
-                candidates.append(row[3:])
-                if "R" in row[:2] or "C" in row[:2]:
-                    row_index += 1
-                    if row_index < len(status_rows):
-                        candidates.append(status_rows[row_index][3:] if len(status_rows[row_index]) >= 4 else status_rows[row_index])
-                row_index += 1
-            if len(candidates) > self.policy().commit_max_files:
+            candidates = [row[3:] for row in status.split("\0") if len(row) >= 4]
+            if len(candidates) > policy.commit_max_files:
                 raise OverflowError("changed file count exceeds configured limit")
             for relative in candidates:
                 path = directory / relative
-                if not path.is_symlink() and path.is_file() and path.stat().st_size > self.policy().commit_max_file_mb * 1024 * 1024:
+                if not path.is_symlink() and path.is_file() and path.stat().st_size > policy.commit_max_file_mb * 1024 * 1024:
                     raise OverflowError("a changed file exceeds configured size limit")
             _git(directory, "add", "-A", "--", ".", extra_env={"GIT_INDEX_FILE": str(temp)})
             tree = _git(directory, "write-tree", extra_env={"GIT_INDEX_FILE": str(temp)})
@@ -530,93 +677,14 @@ class SessionWorktrees:
                     return "", "", "", []
             head = _git(directory, "rev-parse", "--verify", "HEAD^{commit}", check=False).strip()
             parents = ["-p", head] if head else []
-            commit = _git(directory, "commit-tree", tree, *parents, "-m", f"nexus checkpoint {session} {seq}", extra_env=env)
+            commit = _git(directory, "commit-tree", tree, *parents, "-m", f"nexus snapshot {session} {seq}", extra_env=env)
             _git(directory, "update-ref", ref, commit, "")
             return ref, commit, head, []
         finally:
             temp.unlink(missing_ok=True)
             Path(str(temp) + ".lock").unlink(missing_ok=True)
 
-    def _checkpoint_baseline(self, directory, session, seq):
-        from .agents.session_worktrees import _git
-        existing = _git(directory, "for-each-ref", "--count=1", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").strip()
-        if existing:
-            return True
-        try:
-            self._checkpoint_snapshot(directory, session, seq, "-base")
-            return True
-        except Exception:
-            # Capture emits the actionable skip; baseline errors must not block a turn.
-            return False
-
-    def _checkpoint_capture(self, directory, session, seq, handle, turn_id=""):
-        from .agents.session_worktrees import _git
-        started = time.monotonic()
-        try:
-            refs = _git(directory, "for-each-ref", "--sort=-refname", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").splitlines()
-            prior = next((value for value in refs if not value.endswith("-base")),
-                         next((value for value in refs if value.endswith("-base")), self._checkpoint_ref(session, seq, "-base")))
-            if not _git(directory, "rev-parse", "--verify", prior + "^{commit}", check=False).strip():
-                return {"kind": "skipped", "event": {"seq": seq, "reason": "git_error", "detail": "turn baseline is unavailable"}}
-            ref, commit, head, _ = self._checkpoint_snapshot(directory, session, seq, "", base_ref=prior)
-            if not ref:
-                return {"kind": "skipped", "event": {"seq": seq, "reason": "no_changes", "detail": ""}}
-            refs = _git(directory, "for-each-ref", "--sort=-refname", "--format=%(refname)", f"refs/nexus/checkpoints/{session}").splitlines()
-            raw = _git(directory, "diff", "--name-only", "-z", prior, commit).split("\0")
-            changed = [value for value in raw if value]
-            numstat = _git(directory, "diff", "--numstat", "-z", prior, commit).split("\0")
-            insertions = deletions = 0
-            for line in numstat:
-                fields = line.split("\t", 2)
-                if len(fields) == 3:
-                    if fields[0].isdigit(): insertions += int(fields[0])
-                    if fields[1].isdigit(): deletions += int(fields[1])
-            numbered = [value for value in refs if not value.endswith("-base")]
-            for stale in numbered[500:]:
-                _git(directory, "update-ref", "-d", stale)
-            self._prune_checkpoint_sessions(directory)
-            touched = {e.data.get("path") for e in handle.events if e.type == "worktree.file_written" and e.turn == turn_id}
-            touched.update(path for event in handle.events
-                if event.type == "context.notice" and event.turn == turn_id and event.data.get("kind") == "subagent_merged"
-                for path in event.data.get("files", []))
-            shell_ran = any(e.type == "shell.started" and e.turn == turn_id for e in handle.events)
-            owned = [path for path in changed if shell_ran or path in touched]
-            start = next((e.data for e in reversed(handle.events) if e.type == "checkpoint.started" and e.turn == turn_id), {})
-            start_head = start.get("head", "") if isinstance(start, dict) else ""
-            head_moved = bool(start_head and head and start_head != head)
-            return {"kind": "captured", "event": {"seq": seq, "ref": ref, "commit": commit, "head": head,
-                "base_ref": prior, "files": owned[:200], "files_clipped": max(0, len(owned)-200),
-                "foreign": max(0, len(changed)-len(owned)), "insertions": insertions, "deletions": deletions,
-                "head_moved": head_moved, "head_start": start_head,
-                "duration_ms": int((time.monotonic()-started)*1000)}}
-        except OverflowError as exc:
-            return {"kind": "skipped", "event": {"seq": seq, "reason": "too_large", "detail": str(exc)[:500]}}
-        except Exception as exc:
-            return {"kind": "skipped", "event": {"seq": seq, "reason": "git_error", "detail": redact_secrets(str(exc))[:500]}}
-
-    def _prune_checkpoint_sessions(self, directory):
-        """Keep refs for the most recently checkpointed configured session count."""
-        from .agents.session_worktrees import _git
-        rows = _git(directory, "for-each-ref", "--format=%(refname) %(committerdate:unix)",
-                    "refs/nexus/checkpoints").splitlines()
-        activity = {}
-        for row in rows[:100_000]:
-            try:
-                ref, timestamp = row.rsplit(" ", 1)
-                session = ref.split("/", 4)[3]
-                activity[session] = max(activity.get(session, 0), int(timestamp))
-            except (ValueError, IndexError):
-                continue
-        keep = self.policy().checkpoint_keep
-        expired = {session for session, _ in sorted(activity.items(), key=lambda item: (item[1], item[0]))[:-keep]}
-        for row in rows[:100_000]:
-            ref = row.rsplit(" ", 1)[0]
-            try:
-                session = ref.split("/", 4)[3]
-            except IndexError:
-                continue
-            if session in expired:
-                _git(directory, "update-ref", "-d", ref)
+    # -- setup (copy / submodules / command) --------------------------------
 
     def _setup_digest(self):
         policy = self.policy()
@@ -676,7 +744,7 @@ class SessionWorktrees:
             self._skip_once.add((session, digest))
         else:
             raise ValueError("Setup decision must be allow_once, allow_project or skip")
-        handle.emit_session_event("worktree.setup_trust", {"digest": digest, "decision": decision})
+        self._event(handle, "worktree.setup_trust", {"digest": digest, "decision": decision})
         return self.status(session)
 
     def _project_setup(self):
@@ -762,7 +830,7 @@ class SessionWorktrees:
             trusted = approved and self._trusted(handle.id, digest)
         if (command or policy.submodules != "none") and not trusted:
             self.notice(handle, "Worktree setup skipped pending approval. Review the setup command and use the worktree setup trust action before retrying.")
-            handle.emit_session_event("worktree.setup_ran", {"command": self._display_command(command), "exit": None, "reason": reason,
+            self._event(handle, "worktree.setup_ran", {"command": self._display_command(command), "exit": None, "reason": reason,
                 "skipped": "approval_required", "digest": digest, "copied": copied[:50], "shared": shared[:50], "output_tail": ""})
             return
         output = bytearray()
@@ -817,7 +885,7 @@ class SessionWorktrees:
                     if stopper:
                         stopper.cancel()
                     await reader
-        handle.emit_session_event("worktree.setup_ran", {"command": self._display_command(command), "exit": code,
+        self._event(handle, "worktree.setup_ran", {"command": self._display_command(command), "exit": code,
             "duration_ms": int((time.monotonic()-started)*1000), "copied": copied[:50], "copied_clipped": max(0,len(copied)-50),
             "shared": shared[:50], "submodules": policy.submodules, "reason": reason,
             "output_tail": redact_secrets(output.decode(errors="replace"))[-8192:]})
@@ -826,10 +894,10 @@ class SessionWorktrees:
                 raise ValueError(f"Worktree setup failed (exit {code}); {output.decode(errors='replace')[-500:]}")
             self.notice(handle, f"Worktree setup failed (exit {code}); continuing per setup_on_fail=warn")
 
+    # -- file provenance (what this session wrote) ---------------------------
+
     def record_write(self, session, turn_id, call_id, path, data, before=None):
         root = self.runtime.session_root(session)
-        if root.kind == "worktree":
-            return
         path = Path(path)
         try:
             relative = path.relative_to(root.path).as_posix()
@@ -838,7 +906,9 @@ class SessionWorktrees:
         self._plain_path(root.path, relative)
         handle = self.handle(session)
         # One receipt per successful atomic write; only successful tool results
-        # authorize promotion. Bytes never enter the log, only their digest.
+        # authorize carrying files over, and in a shared worktree they bound the
+        # harness commit to this session's own paths. Bytes never enter the log,
+        # only their digest.
         receipts = [e for e in handle.events if e.type == "worktree.file_written" and e.turn == turn_id]
         if len(receipts) >= 500:
             if not any(e.type == "worktree.provenance_clipped" and e.turn == turn_id for e in handle.events):
@@ -846,7 +916,8 @@ class SessionWorktrees:
             return
         self._emit(handle, "worktree.file_written", {"path": relative, "sha256": hashlib.sha256(data).hexdigest() if data is not None else None,
             "deleted": data is None, "call_id": call_id, "owner_session": session, "before_oids": before,
-            "after_oids": self._blob_oids(data), "root_display": root.to_data(self.runtime.workspace)["path_display"]}, turn_id)
+            "after_oids": self._blob_oids(data), "root_display": root.to_data(self.runtime.workspace)["path_display"],
+            "worktree_id": root.worktree_id}, turn_id)
 
     @staticmethod
     def _blob_oids(data):
@@ -858,20 +929,8 @@ class SessionWorktrees:
             value.update(data)
         return {key: value.hexdigest() for key, value in hashes.items()}
 
-    def _owned_changes(self, handle, root):
-        successful = {(e.turn, e.data.get("tool_use_id")) for e in handle.events if e.type == "tool.result" and not e.data.get("is_error")}
-        receipts = {}
-        for event in handle.events:
-            if event.type in {"checkpoint.created", "worktree.promoted"}:
-                receipts.clear()
-            elif event.type == "worktree.provenance_clipped" and event.data.get("owner_session") == handle.id:
-                raise ValueError("Can't separate session changes: file provenance exceeded 500 writes")
-            elif (event.type == "worktree.file_written" and (event.turn, event.data.get("call_id")) in successful
-                    and event.data.get("owner_session") == handle.id):
-                receipts.setdefault(event.data["path"], []).append(event.data)
-        if len(receipts) > 500:
-            raise ValueError("Promotion is bounded to 500 files")
-        status = self._git(root.path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    def _dirty_paths(self, directory):
+        status = self._git(directory, "status", "--porcelain=v1", "-z", "--untracked-files=all")
         dirty = set()
         rows = iter(status.split("\0"))
         for row in rows:
@@ -880,6 +939,23 @@ class SessionWorktrees:
             dirty.add(row[3:])
             if row[0] in {"R", "C"} or row[1] in {"R", "C"}:
                 dirty.add(next(rows, ""))
+        return dirty
+
+    def _owned_changes(self, handle, root):
+        display = root.to_data(self.runtime.workspace)["path_display"]
+        successful = {(e.turn, e.data.get("tool_use_id")) for e in handle.events if e.type == "tool.result" and not e.data.get("is_error")}
+        receipts = {}
+        for event in handle.events:
+            if event.type == "worktree.promoted":
+                receipts.clear()
+            elif event.type == "worktree.provenance_clipped" and event.data.get("owner_session") == handle.id:
+                raise ValueError("Can't separate session changes: file provenance exceeded 500 writes")
+            elif (event.type == "worktree.file_written" and (event.turn, event.data.get("call_id")) in successful
+                    and event.data.get("owner_session") == handle.id and event.data.get("root_display") == display):
+                receipts.setdefault(event.data["path"], []).append(event.data)
+        if len(receipts) > 500:
+            raise ValueError("Carrying changes over is bounded to 500 files")
+        dirty = self._dirty_paths(root.path)
         owned = {}
         total = 0
         for relative in sorted(dirty & receipts.keys()):
@@ -894,8 +970,6 @@ class SessionWorktrees:
                 if write.get("before_oids") != previous:
                     raise ValueError(f"Can't separate this session's changes in {relative}; another writer changed it between edits")
                 previous = write.get("after_oids")
-            if receipt.get("root_display") != root.to_data(self.runtime.workspace)["path_display"]:
-                raise ValueError(f"Can't separate this session's changes in {relative}; root changed")
             source = self._plain_path(root.path, relative)
             data = None
             if source.exists():
@@ -905,142 +979,345 @@ class SessionWorktrees:
                     data = stream.read(self.policy().commit_max_file_mb * 1024 * 1024 + 1)
                 total += len(data)
                 if total > 128 * 1024 * 1024:
-                    raise ValueError("Promotion exceeds 128 MiB; commit or move large files yourself")
+                    raise ValueError("Carrying changes over exceeds 128 MiB; commit or move large files yourself")
             digest = hashlib.sha256(data).hexdigest() if data is not None else None
             if digest != receipt.get("sha256"):
                 raise ValueError(f"Can't separate this session's changes in {relative}; commit or move them yourself")
             owned[relative] = data
         return owned, sorted(dirty - owned.keys())[:500]
 
-    async def promote(self, session, *, reason="", continuation=""):
-        if not isinstance(reason, str) or len(reason) > 500 or not isinstance(continuation, str) or len(continuation) > 16000:
-            raise ValueError("Promotion reason/continuation exceeds its limit")
+    # -- moves: request, validate, apply ------------------------------------
+
+    @staticmethod
+    def _check_text(value, label, limit):
+        if not isinstance(value, str) or len(value) > limit or "\x00" in value:
+            raise ValueError(f"{label} must be a string of at most {limit} characters")
+        return value.strip()
+
+    async def _leave_check(self, handle, root, *, in_turn, turn_id=""):
+        """Refuse to leave a worktree with changes nobody will commit."""
+        if root.kind != "worktree" or not root.path.is_dir():
+            return
+        dirty = await self._thread(handle.id, self._dirty_paths, root.path)
+        if not dirty:
+            return
+        if in_turn:
+            paths = self._turn_paths(handle, turn_id, root)
+            if paths is None:
+                return  # the harness commits everything at the step boundary
+            dirty = dirty - set(paths)
+            if not dirty:
+                return
+        shown = ", ".join(sorted(dirty)[:5]) + (f" and {len(dirty) - 5} more" if len(dirty) > 5 else "")
+        raise ValueError(f"Worktree {root.path.name} has uncommitted changes ({shown}). "
+                         "Commit them with worktree_commit (or git), then retry the move.")
+
+    async def _validate(self, handle, request, *, in_turn, turn_id=""):
+        if not self.is_git:
+            raise ValueError("Worktrees need a Git repository")
+        request["reason"] = self._check_text(request.get("reason", ""), "reason", 500)
+        if not request["reason"]:
+            raise ValueError("A reason is required")
+        if self.runtime.session_has_active_jobs(handle.id):
+            raise SessionBusy("A background shell or job of this session is still running; stop or finish it before moving")
+        root = self.runtime.session_root(handle.id)
+        if root.kind == "external":
+            raise ValueError("This session works in an external checkout; it can't move between Nexus worktrees")
+        if request["action"] == "create":
+            name = self._check_text(request.get("name", ""), "name", 60)
+            base = self._check_text(request.get("base", ""), "base", 200)
+            if base and (base.startswith("-") or any(ord(c) < 32 for c in base)):
+                raise ValueError("base must be a local branch name")
+            request["name"], request["base"] = name, base
+            if name:
+                await self._thread(handle.id, self.service.check_session_name_free, self.runtime.workspace, name, root=self.registry)
+            if await self._thread(handle.id, self._present_count) >= self.policy().max_worktrees:
+                raise ValueError(self._limit_message())
+        else:
+            to = self._check_text(request.get("to", ""), "to", 200)
+            request["to"] = to
+            if to == "main":
+                if root.kind == "main":
+                    raise ValueError("The session is already in the main checkout")
+            else:
+                record = await self._thread(handle.id, self._find_record, to)
+                if root.kind == "worktree" and record.child_id == root.worktree_id:
+                    raise ValueError(f"The session is already in worktree {record.name}")
+        await self._leave_check(handle, root, in_turn=in_turn, turn_id=turn_id)
+
+    async def request_move(self, ctx, *, action, reason, to="", name="", base=""):
+        """Tool entry: validate, queue, return at once. Applied at the next step boundary."""
+        handle = self.handle(ctx.session_id)
+        if not handle.active or handle.active_turn_id != ctx.turn_id:
+            raise ValueError("Worktree moves can only be requested during a turn")
+        if handle.id in self._moves:
+            raise ValueError("A worktree move is already queued for this step; wait for it to apply before requesting another")
+        request = {"action": action, "reason": reason, "to": to, "name": name, "base": base}
+        await self._validate(handle, request, in_turn=True, turn_id=ctx.turn_id)
+        request.update(request_id=ctx.call_id, turn=ctx.turn_id)
+        self._moves[handle.id] = request
+        self._emit(handle, "worktree.move_requested", {"request_id": ctx.call_id, "action": action, "to": request["to"],
+            "name": request["name"], "base": request["base"], "reason": redact_secrets(request["reason"])}, ctx.turn_id)
+        target = "a new worktree" if action == "create" else ("the main checkout" if request["to"] == "main" else f"worktree {request['to']}")
+        return (f"move: queued\ntarget: {target}\nreason: {request['reason']}\n"
+                "The move happens after this step. Do not run tools that depend on the new directory in the same step; "
+                "other tool calls of this step still run in the old directory.")
+
+    async def move_session(self, session, to, *, reason="", action="move", name="", base="", continuation="", retitle=False):
+        """Idle-only entry (user override from the host): validate and apply now."""
         handle = self.handle(session)
         self._idle(handle)
         handle._lock.acquire(shared=False, blocking=False)
         try:
             if self.runtime.sessions._has_pending_work(session):
-                raise SessionBusy("Promotion requires a turn boundary without pending work")
-            from uuid import uuid4
-            if self.runtime.session_root(session).kind == "worktree":
-                raise ValueError("Session already runs in an owned worktree")
-            pending = {"reason": reason, "continuation": continuation, "request_id": str(uuid4())}
-            handle.emit_session_event("worktree.promotion_requested", pending)
+                raise SessionBusy("Moving a session requires a turn boundary without pending work")
+            request = {"action": action, "reason": reason or "requested by the user", "to": to, "name": name, "base": base,
+                       "request_id": "", "continuation": continuation[:16000] if isinstance(continuation, str) else "",
+                       "retitle": retitle}
+            await self._validate(handle, request, in_turn=False)
             try:
-                return await self._promote(handle, **pending)
+                await self._apply(handle, request, in_turn=False, held=True)
             except BaseException as exc:
-                handle.emit_session_event("worktree.promotion_failed", {"request_id": pending["request_id"], "detail": redact_secrets(str(exc))[:500]})
+                self._event(handle, "worktree.move_failed", {"to": request["to"] or action, "detail": redact_secrets(str(exc))[:500]})
                 raise
         finally:
             handle._lock.release()
+        return self.status(session)
 
-    async def _promote(self, handle, *, reason="", continuation="", request_id=""):
-        if not isinstance(reason, str) or len(reason) > 500 or not isinstance(continuation, str) or len(continuation) > 16000:
-            raise ValueError("Promotion reason/continuation exceeds its limit")
-        if handle.active:
-            handle.cancel_token.raise_if_cancelled()
-        root = self.runtime.validate_session_root(handle.id)
-        if root.kind == "worktree":
-            raise ValueError("Session already runs in an owned worktree")
-        if self.runtime.session_has_active_jobs(handle.id):
-            raise SessionBusy("Finish background jobs before moving to a worktree")
-        owned, excluded = await self._thread(handle.id, self._owned_changes, handle, root)
-        base_sha = await self._thread(handle.id, self._git, self.runtime.workspace, "rev-parse", "--verify", "HEAD^{commit}")
-        # The service validates the base; internal base_sha is an immutable commit,
-        # while the eventual land target remains the main checkout's branch.
+    async def promote(self, session, *, reason="", continuation="", name="", base=""):
+        """Create a worktree for an idle session and move into it (UI / launch override)."""
+        return await self.move_session(session, "", reason=reason or "requested by the user", action="create",
+                                       name=name, base=base, continuation=continuation, retitle=bool(name))
+
+    async def detach(self, session):
+        return await self.move_session(session, "main", reason="requested by the user")
+
+    async def step_boundary(self, handle):
+        """Safe point between model steps: detect merges, then apply a queued move.
+
+        Runs after every tool call of the step finished and before the next
+        model request, so compaction and queued steers never land between the
+        request and the move. Returns whether the session's root changed (the
+        caller then rebuilds the turn's per-root state).
+        """
+        if getattr(handle, "kind", None) in ("manager", "child") or getattr(handle, "_kind", None) in ("manager", "child"):
+            return False
+        root = self.runtime.session_root(handle.id)
+        turn_id = handle.active_turn_id
+        pending = self._moves.pop(handle.id, None)
+        try:
+            if root.kind == "worktree":
+                await self._detect_landing(handle, root, turn_id)
+            if pending is None:
+                return False
+            await self._apply(handle, pending, in_turn=True)
+        except (OperationCancelled, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            if pending is not None:
+                detail = redact_secrets(str(exc))[:500]
+                self._emit(handle, "worktree.move_failed", {"request_id": pending.get("request_id"),
+                    "to": pending.get("to") or pending["action"], "detail": detail}, turn_id)
+                self._model_notice(handle, f"The requested worktree move failed and the working directory is unchanged: {detail}", turn_id)
+        return self.runtime.session_root(handle.id) != root
+
+    def _model_notice(self, handle, text, turn_id):
+        """Durable in-band notice the model reads (kept in history; facts are re-rendered every step)."""
+        handle.append_message(Message(role="user", content=[Text(text)],
+                                      meta=MessageMeta(turn_id=turn_id or None, notice=_NOTICE_KIND)))
+        self._event(handle, "context.notice", {"kind": _NOTICE_KIND, "message": redact_secrets(text)[:2000]})
+
+    async def _apply(self, handle, request, *, in_turn, held=False):
+        action = request["action"]
+        reason = request.get("reason", "")
+        request_id = request.get("request_id", "")
+        turn_id = handle.active_turn_id if in_turn else ""
         policy = self.policy()
+        workspace = self.runtime.workspace
+        if in_turn:
+            handle.cancel_token.raise_if_cancelled()
+        if self.runtime.session_has_active_jobs(handle.id):
+            raise SessionBusy("Finish background shells and jobs before moving")
+        source = self.runtime.session_root(handle.id)
+        source_ok = True
+        try:
+            self.runtime.validate_session_root(handle.id)
+        except Exception:
+            if in_turn:
+                raise
+            source_ok = False  # a vanished root recovers while idle
+        source_record = None
+        left_state = {"merged": False, "unmerged_commits": 0, "has_work": False}
+        left_name = source.path.name if source.kind == "worktree" else "main"
+        if source.kind == "worktree" and source_ok:
+            source_record = await self._thread(handle.id, self.service.get_worktree, source.worktree_id,
+                                               root=self.registry, parent_workspace=workspace)
+            if in_turn:
+                await self._close_part(handle, turn_id, source)
+            await self._leave_check(handle, source, in_turn=False)
+            left_state = await self._thread(handle.id, self._merge_state, source_record)
+
+        extra = {"reason": redact_secrets(reason)[:500], "request_id": request_id, "action": action}
         record = None
-        if request_id and self.registry.exists():
-            from .agents.worktrees import WorktreeError
+        created = False
+        owned: dict = {}
+        excluded: list = []
+        dirty = {"modified": 0, "untracked": 0}
+        if action == "move" and request["to"] == "main":
+            target_root = None
+        elif action == "move":
+            record = await self._thread(handle.id, self._find_record, request["to"])
+            if not Path(record.path).is_dir():
+                if await self._thread(handle.id, self._present_count) >= policy.max_worktrees:
+                    raise ValueError(self._limit_message())
+                record = await self._thread(handle.id, self.service.recreate_worktree, record.child_id,
+                                            root=self.registry, parent_workspace=workspace)
+                await self.setup(handle, record, reason="recreated", honor_cancel=in_turn)
+            target_root = True
+        else:
+            created = True
+            target_root = True
+            base = request.get("base", "")
+            if not base:
+                base = (self._base_branch(source) or "current") if source.kind == "worktree" else "current"
+            carry = source.kind == "main" and base in {"current", self._main_branch()} and source_ok
+            base_sha = await self._thread(handle.id, self._git, workspace, "rev-parse", "--verify", "HEAD^{commit}") if carry else ""
+            if carry:
+                dirty = await self._thread(handle.id, self._dirty)
+                owned, excluded = await self._thread(handle.id, self._owned_changes, handle, source)
+            name = request.get("name", "")
             try:
-                candidate = await self._thread(handle.id, self.service.get, "session-" + handle.id, root=self.registry)
-                if candidate.lifecycle == "pending" and candidate.session_id == handle.id:
-                    record = candidate
-            except WorktreeError as exc:
-                if "no owned" not in str(exc) and "service root" not in str(exc):
-                    raise
-        if record is None:
-            record = await self._thread(handle.id, self.service.create_session, self.runtime.workspace, handle.id, self._name(handle),
-                root=self.registry, base="current", max_worktrees=policy.max_worktrees, random_words=True)
+                record = await self._thread(handle.id, self.service.create_session, workspace, handle.id, self._name(handle),
+                    root=self.registry, base=base, max_worktrees=policy.max_worktrees,
+                    **({"exact_name": name} if name else {"random_words": True}))
+            except Exception as exc:
+                if "maximum session worktrees" in str(exc):
+                    raise ValueError(self._limit_message()) from exc
+                raise
         published = False
         try:
-            if record.base_commit != base_sha:
-                raise ValueError("Main checkout HEAD moved while preparing promotion; retry")
-            await self.setup(handle, record, reason="created", honor_cancel=handle.active)
-            if handle.active:
-                handle.cancel_token.raise_if_cancelled()
-            # Revalidate source hashes immediately before copying. No source file
-            # is restored, reset, staged or committed by promotion.
-            current, _ = await self._thread(handle.id, self._owned_changes, handle, root)
-            if current != owned:
-                raise ValueError("Session files changed while promotion was being prepared")
-            for relative, data in owned.items():
-                target = self._plain_path(Path(record.path), relative)
-                if data is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(data)
-            if owned:
-                seq, _ = self._turn_data(handle, handle.active_turn_id or "")
-                result = await self._thread(handle.id, self.service.commit_session, record.child_id, root=self.registry,
-                    message="nexus: carry over changes from the main checkout", session_name=self._name(handle),
-                    turn_seq=seq, agent_id="root", paths=list(owned), max_files=policy.commit_max_files,
-                    max_file_mb=policy.commit_max_file_mb, by="harness", allow_pending=True)
-                already_committed = result.get("kind") == "unchanged" and self._git(record.path, "log", "-1", "--format=%s") == "nexus: carry over changes from the main checkout"
-                if result.get("kind") != "committed" and not already_committed:
-                    raise ValueError("Could not commit carried session changes: " + str(result.get("detail", result.get("kind"))))
-                if already_committed:
-                    previous = await self._thread(handle.id, self.service.session_commits, record.child_id, root=self.registry, since=record.base_commit)
-                    if previous:
-                        restored = previous[0]
-                        trailer = next((line.removeprefix("Nexus-Turn-Seq: ").strip() for line in restored.get("body", "").splitlines() if line.startswith("Nexus-Turn-Seq: ")), "")
-                        seq = int(trailer) if trailer.isdigit() else seq
-                        result = {**restored, "kind": "committed", "by": "harness", "recovered": True}
-                self._commit_event(handle, result, seq=seq, agent="root", turn_id=handle.active_turn_id)
-            await self._publish_root(handle, record)
+            if created:
+                if carry and record.base_commit != base_sha:
+                    raise ValueError("Main checkout HEAD moved while preparing the worktree; retry")
+                await self.setup(handle, record, reason="created", honor_cancel=in_turn)
+                if in_turn:
+                    handle.cancel_token.raise_if_cancelled()
+                if carry:
+                    # Revalidate source hashes immediately before copying. No source
+                    # file is restored, reset, staged or committed in the main checkout.
+                    current, _ = await self._thread(handle.id, self._owned_changes, handle, source)
+                    if current != owned:
+                        raise ValueError("Session files changed while the worktree was being prepared")
+                    await self._carry_over(handle, record, owned, turn_id)
+            if target_root is None:
+                root = self.runtime.set_session_root(handle.id, workspace, kind="main", held=True, event_extra=extra)
+            else:
+                root = await self._publish_root(handle, record, created=created, dirty=dirty, extra=extra)
             published = True
-            if continuation:
-                handle.enqueue(continuation, origin={"kind": "promote", "request_id": request_id})
-            handle.emit_session_event("worktree.promoted", {"reason": redact_secrets(reason), "request_id": request_id, "files": list(owned), "excluded": excluded,
-                "source_display": root.to_data(self.runtime.workspace)["path_display"]})
-            self.notice(handle, f"Moved to {record.branch}. These files remain modified in the original checkout: {', '.join(owned) or '(none)'}. Revert them when ready. Excluded other changes: {', '.join(excluded) or '(none)'}")
-            return self.status(handle.id)
         finally:
-            if not published and not any(e.type == "worktree.created" and e.data.get("branch") == record.branch for e in handle.events):
+            if created and not published:
                 await self._thread(handle.id, self.service.abort_session, record.child_id, root=self.registry)
 
-    def _complete_promotion(self, handle, pending):
-        request_id = pending.get("request_id", "")
-        continuation = pending.get("continuation", "")
-        queued = any(e.type == "input.queued" and e.data.get("origin", {}).get("request_id") == request_id for e in handle.events)
-        if continuation and not queued:
-            handle.enqueue(continuation, origin={"kind": "promote", "request_id": request_id})
-        handle.emit_session_event("worktree.promoted", {"request_id": request_id, "reason": pending.get("reason", ""), "recovered": True})
+        to_name = "main" if root.kind == "main" else root.path.name
+        self._occupancy_cache = (0.0, {})
+        self._event(handle, "worktree.moved", {
+            "action": action, "reason": redact_secrets(reason)[:500], "request_id": request_id,
+            "from_kind": source.kind, "from_worktree_id": source.worktree_id, "from_name": left_name,
+            "to_kind": root.kind, "to_worktree_id": root.worktree_id, "to_name": to_name,
+            "branch": root.branch, "base_ref": root.base_ref, "base_sha": root.base_sha,
+            "kept_unmerged": bool(source.kind == "worktree" and left_state["has_work"] and not left_state["merged"]),
+            "unmerged_commits": left_state["unmerged_commits"] if source.kind == "worktree" else 0})
+        if created and source.kind == "main":
+            self._event(handle, "worktree.promoted", {"reason": redact_secrets(reason), "request_id": request_id, "files": list(owned),
+                "excluded": excluded, "source_display": source.to_data(workspace)["path_display"]})
+        if request.get("retitle") and request.get("name"):
+            # A draft has no session row yet: the title is repeated on its first turn.
+            self._titles[handle.id] = request["name"]
+            self._title(handle.id, request["name"])
+        if request.get("continuation"):
+            handle.enqueue(request["continuation"], origin={"kind": "promote", "request_id": request_id})
+        try:
+            if in_turn:
+                self._model_notice(handle, self._move_text(root, action, left_name, source, left_state, reason, owned, excluded), turn_id)
+                if root.kind == "worktree":
+                    await self._turn_started(handle, root, turn_id)
+            elif owned or excluded:
+                self.notice(handle, f"Moved to {root.branch}. Files carried over remain modified in the main checkout: {', '.join(owned) or '(none)'}. "
+                                    f"Excluded other changes: {', '.join(excluded) or '(none)'}")
+            if source_record is not None and source_record.child_id != root.worktree_id:
+                await self._cleanup_left(handle, source_record)
+        except Exception as exc:
+            # The move stands (root_set is durable); the next tool call re-validates the root.
+            self.notice(handle, "Worktree move applied, but follow-up failed: " + redact_secrets(str(exc))[:300])
+        return root
 
-    async def request_promote(self, args, ctx):
-        handle = self.handle(ctx.session_id)
-        if handle.id in self._promotions:
-            raise ValueError("A promotion is already pending")
-        if self.runtime.session_root(handle.id).kind == "worktree":
-            raise ValueError("Session already runs in an owned worktree")
-        pending = {"reason": args["reason"], "continuation": args.get("continuation", ""), "request_id": ctx.call_id}
-        self._emit(handle, "worktree.promotion_requested", pending, ctx.turn_id)
-        self._promotions[handle.id] = pending
-        # The sink marks a generic loop handoff only after the tool result
-        # is durable. This leaves Stop available during promotion setup.
-        handle._deferred_turn_end = (ctx.call_id, "Moving session to a worktree")
-        return {"state": "promotion_pending", "reason": pending["reason"], "continuation_queued": bool(pending["continuation"])}
+    async def _carry_over(self, handle, record, owned, turn_id):
+        for relative, data in owned.items():
+            target = self._plain_path(Path(record.path), relative)
+            if data is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+        if not owned:
+            return
+        policy = self.policy()
+        seq, _ = self._turn_data(handle, turn_id or "")
+        result = await self._thread(handle.id, self.service.commit_session, record.child_id, root=self.registry,
+            message="nexus: carry over changes from the main checkout", session_name=self._name(handle),
+            turn_seq=seq, agent_id="root", paths=list(owned), max_files=policy.commit_max_files,
+            max_file_mb=policy.commit_max_file_mb, by="harness", allow_pending=True, session_id=handle.id)
+        if result.get("kind") not in {"committed", "unchanged"}:
+            raise ValueError("Could not commit carried session changes: " + str(result.get("detail", result.get("kind"))))
+        if result.get("kind") == "committed":
+            self._commit_event(handle, result, seq=seq, agent="root", turn_id=turn_id)
+
+    def _move_text(self, root, action, left_name, source, left_state, reason, owned, excluded):
+        sha = (root.base_sha or "")[:7]
+        if root.kind == "main":
+            text = f"Working directory is now the main checkout (`{root.path}`)."
+            if source.kind == "worktree":
+                if left_state["has_work"] and not left_state["merged"]:
+                    text += (f" You left worktree {left_name}; its branch `{source.branch}` is kept unmerged "
+                             f"({left_state['unmerged_commits']} commits not in the base).")
+                elif left_state["merged"]:
+                    text += f" You left worktree {left_name}; its work is merged."
+                else:
+                    text += f" You left worktree {left_name}; it has no commits of its own."
+        else:
+            base = self._base_branch(root) or root.base_ref
+            text = (f"Working directory is now ⎇ {root.path.name} (`{root.path}`, branch `{root.branch}`, "
+                    f"base `{base} @ {sha}`).")
+            if action == "create":
+                text += f" Created from {left_name}."
+                if owned:
+                    text += f" Carried over from the main checkout: {', '.join(list(owned)[:10])}. They remain modified there."
+            if source.kind == "worktree" and left_state["has_work"] and not left_state["merged"]:
+                text += f" Worktree {left_name} stays unmerged (branch `{source.branch}`)."
+        if reason:
+            text += f" Reason: {redact_secrets(reason)[:300]}"
+        return text + " Tool calls and shell commands now run there."
+
+    async def _cleanup_left(self, handle, record):
+        """Remove the checkout of a merged, clean worktree once its last session left."""
+        from .worktree_cleanup import auto_cleanup
+        result = await self._thread(handle.id, auto_cleanup, self, record.child_id, leaving=handle.id)
+        if result.get("state") == "removed":
+            self._event(handle, "worktree.removed", {"worktree_id": record.child_id, "branch": record.branch,
+                "name": record.name, "reason": "merged and clean; last session left"})
+
+    # -- merge detection -----------------------------------------------------
 
     def _landing(self, handle, root):
-        """Payload for ``worktree.merged`` when the agent landed the session branch with Git; else ``None``.
+        """Payload for ``worktree.merged`` when the agent landed the worktree branch with Git; else ``None``.
 
-        The agent runs ``git -C <main checkout> merge --ff-only <session branch>``;
-        the host notices instead of being told (checked at turn end). A landing means
-        the session head has commits beyond the recorded base commit and is now an
-        ancestor of (or equal to) the target branch head. ``head`` (the landed session
-        head) dedupes: one event per landed head, so a later move of the target does
-        not repeat it. Best effort: any Git failure returns ``None``.
+        The agent runs ``git -C <main checkout> merge --ff-only <worktree branch>``;
+        the host notices instead of being told (checked at every step boundary and
+        at turn end). A landing means the worktree head has commits beyond the
+        recorded base commit and is now an ancestor of (or equal to) the target
+        branch head. ``head`` (the landed head) dedupes: one event per landed head
+        per session, so a later move of the target does not repeat it. Best effort:
+        any Git failure returns ``None``.
         """
         from .agents.session_worktrees import _git
         from .agents.worktrees import WorktreeError
@@ -1061,7 +1338,7 @@ class SessionWorktrees:
             base = record.base_commit
             if not base or head == base:
                 return None
-            landed = [e for e in handle.events if e.type == "worktree.merged"]
+            landed = [e for e in handle.events if e.type == "worktree.merged" and e.data.get("session_branch") == record.branch]
             if any(e.data.get("head") == head for e in landed):
                 return None
             target = Path(record.parent_workspace)
@@ -1077,30 +1354,27 @@ class SessionWorktrees:
             return None
         return {"target_branch": target_branch, "session_branch": record.branch, "sha": target_head, "before": before,
                 "subject": subject, "commits": len(rows), "files": [redact_secrets(name)[:1024] for name in names[:200]],
-                "clipped": len(names) > 200 or len(rows) > 100, "head": head}
+                "clipped": len(names) > 200 or len(rows) > 100, "head": head, "worktree_id": record.child_id}
 
-    def detach(self, session):
-        handle = self.handle(session)
-        self._idle(handle)
-        root = self.runtime.session_root(session)
-        if root.kind != "worktree":
-            raise ValueError("Session has no Nexus-owned worktree to detach")
-        self.runtime.set_session_root(session, self.runtime.workspace, kind="main")
-        handle.emit_session_event("worktree.detached", {"branch": root.branch, "worktree_id": root.worktree_id})
-        self.service.detach_session(root.worktree_id, root=self.registry)
-        return self.status(session)
+    # -- model tools ----------------------------------------------------------
 
     def tools(self, session):
-        if not (self.runtime.workspace / ".git").exists():
+        if not self.is_git:
+            return ()
+        handle = self.handle(session)
+        if getattr(handle, "kind", None) == "manager" or getattr(handle, "_kind", None) == "manager":
             return ()
         from .tools.builtin.worktree import build_worktree_tools
-        owned = self.runtime.session_root(session).kind == "worktree"
+        in_worktree = self.runtime.session_root(session).kind == "worktree"
+
         def check(ctx):
             if ctx.session_id != session:
                 raise ValueError("Session worktree tools cannot act for another session")
-        async def status(args, ctx):
+
+        async def listing(args, ctx):
             check(ctx)
-            return await self._thread(session, self.status, session)
+            return await self._thread(session, self.list, session, self.occupancy(fresh=True))
+
         async def commit(args, ctx):
             check(ctx)
             guard = self.runtime.session_path_guard(session)
@@ -1109,10 +1383,19 @@ class SessionWorktrees:
                 paths = [str(guard.resolve(path, for_write=True).absolute.relative_to(ctx.workspace)) for path in paths]
             return await self.commit(self.handle(session), ctx.turn_id, message=args["message"], paths=paths,
                                      agent=ctx.agent_id, by="agent")
-        async def promote(args, ctx):
+
+        async def create(args, ctx):
             check(ctx)
-            return await self.request_promote(args, ctx)
-        return build_worktree_tools(status, commit, promote, owned=owned)
+            return await self.request_move(ctx, action="create", reason=args["reason"],
+                                           name=args.get("name", ""), base=args.get("base", ""))
+
+        async def move(args, ctx):
+            check(ctx)
+            return await self.request_move(ctx, action="move", reason=args["reason"], to=args["to"])
+
+        return build_worktree_tools(listing, commit, create, move, in_worktree=in_worktree)
+
+    # -- recovery ---------------------------------------------------------------
 
     async def recover(self):
         if getattr(self, "_recovered", False):
@@ -1128,44 +1411,43 @@ class SessionWorktrees:
                 if len(records) > 10000:
                     raise ValueError("Worktree recovery exceeds 10,000 records")
                 created = set()
-                pending_ids = set()
                 for path in records:
                     payload = json.loads(worktrees._read_metadata_bytes(path)).get("record", {})
                     if payload.get("kind") != "session":
                         continue
-                    session = payload.get("session_id")
-                    # Saved child work uses `<parent>/sub/<n>` ids, which are not
-                    # root session ids; the session store would reject them.
+                    # The creating session logged worktree.created for the branch
+                    # once the checkout was published. Subagent child ids
+                    # (`<parent>/sub/<n>`) are not root session ids.
+                    session = payload.get("created_by", payload.get("session_id"))
                     if (not isinstance(session, str) or not is_valid_session_id(session)
                             or not self.runtime.sessions.exists(session)):
                         continue
                     handle = self.handle(session)
-                    if self.pending_request(handle):
-                        pending_ids.add(session)
                     if any(e.type == "worktree.created" and e.data.get("branch") == payload.get("branch") for e in handle.events):
                         created.add(session)
-                recovered = await self._thread("", self.service.recover_sessions, root=self.registry, created_ids=created, pending_ids=pending_ids)
+                recovered = await self._thread("", self.service.recover_sessions, root=self.registry, created_ids=created, pending_ids=set())
                 for record in recovered:
-                    if record.session_id in created and record.lifecycle == "active":
-                        handle = self.handle(record.session_id)
-                        root = self.runtime.session_root(record.session_id)
-                        if root.kind != "worktree" and not any(e.type == "worktree.detached" for e in handle.events):
-                            created_at = max((i for i, e in enumerate(handle.events) if e.type == "worktree.created" and e.data.get("branch") == record.branch), default=-1)
-                            root_at = max((i for i, e in enumerate(handle.events) if e.type == "session.root_set"), default=-1)
-                            if root_at > created_at:
-                                handle.emit_session_event("worktree.detached", {"branch": record.branch, "worktree_id": record.child_id, "recovered": True})
-                                await self._thread(handle.id, self.service.detach_session, record.child_id, root=self.registry)
-                                continue
-                            await self._publish_root(handle, record, created=False)
-                        if record.path.is_dir():
-                            boundaries = [e for e in handle.events if e.type == "worktree.turn_started"]
-                            terminals = {e.turn for e in handle.events if e.type in {"turn.completed", "turn.failed", "turn.cancelled"}}
-                            if boundaries and boundaries[-1].turn not in terminals:
-                                boundary = boundaries[-1]
-                                commits = await self._thread(handle.id, self.service.session_commits, record.child_id, root=self.registry, since=boundary.data["head"])
-                                known = {e.data.get("sha") for e in handle.events if e.type == "worktree.committed"}
-                                for commit in commits:
-                                    if commit.get("sha") not in known:
-                                        self._commit_event(handle, {**commit, "kind": "committed", "by": "agent", "via": "shell", "recovered": True},
-                                            seq=boundary.data.get("seq", 0), agent="root", turn_id=boundary.turn)
+                    session = record.created_by
+                    if session not in created or record.lifecycle != "active":
+                        continue
+                    handle = self.handle(session)
+                    root = self.runtime.session_root(session)
+                    if root.kind != "worktree":
+                        created_at = max((i for i, e in enumerate(handle.events) if e.type == "worktree.created" and e.data.get("branch") == record.branch), default=-1)
+                        root_at = max((i for i, e in enumerate(handle.events) if e.type == "session.root_set"), default=-1)
+                        if root_at > created_at:
+                            continue  # the session moved on after creating it
+                        await self._publish_root(handle, record, created=False)
+                        root = self.runtime.session_root(session)
+                    if root.worktree_id == record.child_id and record.path.is_dir():
+                        boundaries = [e for e in handle.events if e.type == "worktree.turn_started"]
+                        terminals = {e.turn for e in handle.events if e.type in {"turn.completed", "turn.failed", "turn.cancelled"}}
+                        if boundaries and boundaries[-1].turn not in terminals:
+                            boundary = boundaries[-1]
+                            commits = await self._thread(handle.id, self.service.session_commits, record.child_id, root=self.registry, since=boundary.data["head"])
+                            known = {e.data.get("sha") for e in handle.events if e.type == "worktree.committed"}
+                            for commit in commits:
+                                if commit.get("sha") not in known:
+                                    self._commit_event(handle, {**commit, "kind": "committed", "by": "agent", "via": "shell", "recovered": True},
+                                        seq=boundary.data.get("seq", 0), agent="root", turn_id=boundary.turn)
             self._recovered = True

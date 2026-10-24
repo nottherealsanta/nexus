@@ -31,7 +31,9 @@ __all__ = [
     "RegistryView",
     "RetryView",
     "RootView",
+    "RootMoveView",
     "WorktreeCommitView",
+    "WorktreeHistoryView",
     "WorktreeView",
     "SkillView",
     "ToolCallView",
@@ -119,7 +121,11 @@ def _dump(value: object) -> Any:
                 continue
             if item.name == "commit_shas" and not field_value:
                 continue
-            if item.name == "turn_id" and isinstance(value, CheckpointView) and not field_value:
+            # Worktree history fields stay absent until a session has moved between checkouts.
+            if (
+                (item.name == "reason" and isinstance(value, RootView))
+                or (item.name in {"history", "moves", "pending_created"} and isinstance(value, WorktreeView))
+            ) and not field_value:
                 continue
             if (
                 item.name in {"assistant_ts", "elapsed_ms"}
@@ -415,6 +421,8 @@ class RootView(_View):
     base_ref: str = ""
     base_sha: str = ""
     worktree_id: str = ""
+    #: The agent's (or user's) stated reason for the latest move, from ``session.root_set``.
+    reason: str = ""
 
 @dataclass
 class WorktreeCommitView(_View):
@@ -431,15 +439,54 @@ class WorktreeCommitView(_View):
     deletions: int = 0
 
 @dataclass
+class WorktreeHistoryView(_View):
+    """One checkout this session has been in, keyed by ``worktree_id``."""
+
+    worktree_id: str = ""
+    name: str = ""
+    branch: str = ""
+    base_ref: str = ""
+    base_sha: str = ""
+    #: ``active`` (the session is in it now) | ``merged`` | ``unmerged`` | ``removed``.
+    state: str = "active"
+    #: Whether the branch is merged into its target (a later commit clears it).
+    merged: bool = False
+    #: Whether this session created it, as opposed to moving into an existing one.
+    created: bool = False
+    first_turn: str = ""
+    last_turn: str = ""
+
+@dataclass
+class RootMoveView(_View):
+    """One durable, reason-labelled timeline row for a create or move."""
+
+    seq: int = 0
+    ts: float | None = None
+    #: ``created`` (new worktree) | ``moved`` (into an existing worktree or back to the main checkout).
+    action: str = "moved"
+    kind: str = "main"
+    name: str = ""
+    branch: str = ""
+    base_ref: str = ""
+    base_sha: str = ""
+    worktree_id: str = ""
+    reason: str = ""
+
+@dataclass
 class WorktreeView(_View):
-    """Replayable worktree selection, lifecycle and recent commit history."""
+    """Replayable current worktree, bounded history of past ones, and recent commits."""
 
     enabled: bool = False
     base_ref: str = ""
     base_sha: str = ""
     branch: str = ""
-    state: str = "none"  # none|pending|promotion_pending|active|detached|landed|removed
-    locked: bool = False
+    state: str = "none"  # none|promotion_pending|promotion_failed|active|detached
+    #: Past and current worktrees of this session, oldest first (newest 50).
+    history: list[WorktreeHistoryView] = field(default_factory=list)
+    #: Create/move rows for the timeline, oldest first (newest 100).
+    moves: list[RootMoveView] = field(default_factory=list)
+    #: ``worktree.created`` seen but not yet followed by its ``session.root_set``.
+    pending_created: dict[str, str] = field(default_factory=dict)
     identity_fallback: bool = False
     provenance_clipped: bool = False
     setup_trusted: bool | None = None
@@ -450,23 +497,6 @@ class WorktreeView(_View):
     commits: list[WorktreeCommitView] = field(default_factory=list)
     last_skip: dict[str, str] | None = None
     promotion_error: str = ""
-
-@dataclass
-class CheckpointView(_View):
-    """One bounded hidden checkpoint summary for a main-checkout turn."""
-
-    seq: int = 0
-    turn_id: str = ""
-    ref: str = ""
-    commit: str = ""
-    head: str = ""
-    base_ref: str = ""
-    files: list[str] = field(default_factory=list)
-    files_clipped: int = 0
-    foreign: int = 0
-    insertions: int = 0
-    deletions: int = 0
-    head_moved: bool = False
 
 @dataclass
 class QueuedInputView(_View):
@@ -700,7 +730,6 @@ class ConversationView(_View):
     opened: bool = False
     root: RootView = field(default_factory=RootView)
     worktree: WorktreeView = field(default_factory=WorktreeView)
-    checkpoints: list[CheckpointView] = field(default_factory=list)
     closed: bool = False
     turns: list[TurnView] = field(default_factory=list)
     permissions: list[PermissionView] = field(default_factory=list)

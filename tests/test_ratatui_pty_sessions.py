@@ -68,7 +68,9 @@ class Terminal:
             self.pending.extend(os.read(self.process.stdout.fileno(), 65536))
         line, _, rest = self.pending.partition(b"\n")
         self.pending[:] = rest
-        return json.loads(line)
+        row = json.loads(line)
+        # Composer persistence reports are passive, not user actions.
+        return self.action() if row.get("type") == "draft_state" else row
 
     def redraw(self):
         """A resize repaints every cell, so what we then read is the whole screen."""

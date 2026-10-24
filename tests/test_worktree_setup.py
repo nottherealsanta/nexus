@@ -14,6 +14,7 @@ from nexus.config import Config
 from nexus.config.schema import ConfigV2, ModelSection, PermissionsSection, WorktreesSection
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.tools.permissions import Decision
+from nexus.util import redact_secrets
 
 
 pytest_plugins = ("tests.test_worktree_sessions_runtime",)
@@ -24,14 +25,23 @@ def _setup_runtime(project: Path, tmp_path: Path, *, provider=None, **policy):
         project,
         tmp_path,
         provider or ScriptedProvider(text_response("done"), text_response("done")),
-        sessions=True,
         **policy,
     )
 
 
+async def _enter(runtime, handle):
+    """Create the worktree (and run its setup) the way the user override does, while idle."""
+    await runtime.promote_session(handle.id, reason="setup test")
+
+
+async def _enter_and_drain(runtime, handle, prompt: str = "prepare"):
+    await _enter(runtime, handle)
+    return await _drain_turn(handle, prompt)
+
+
 async def _run(runtime, session: str, prompt: str = "prepare"):
     handle = runtime.session(session)
-    events = await _drain_turn(handle, prompt)
+    events = await _enter_and_drain(runtime, handle, prompt)
     return handle, events
 
 
@@ -53,7 +63,7 @@ async def test_allow_once_authorizes_one_setup_only(project, tmp_path):
     try:
         first = runtime.session("once-first")
         runtime.approve_worktree_setup(first.id, "allow_once")
-        first_events = await _drain_turn(first, "first")
+        first_events = await _enter_and_drain(runtime, first, "first")
         assert first_events[-1].type == "turn.completed", first_events[-1]
         first_setup = next(event for event in first.events if event.type == "worktree.setup_ran")
         assert first_setup.data["exit"] == 0
@@ -77,12 +87,12 @@ async def test_setup_allow_once_for_one_session_cannot_be_consumed_by_another(pr
         digest = runtime.session_worktree_status(session_a.id)["setup_digest"]
         runtime.approve_worktree_setup(session_a.id, "allow_once", digest=digest)
 
-        events_b = await _drain_turn(session_b, "session B first")
+        events_b = await _enter_and_drain(runtime, session_b, "session B first")
         assert events_b[-1].type == "turn.completed", events_b[-1]
         setup_b = next(event for event in session_b.events if event.type == "worktree.setup_ran")
         assert setup_b.data["skipped"] == "approval_required"
 
-        events_a = await _drain_turn(session_a, "session A second")
+        events_a = await _enter_and_drain(runtime, session_a, "session A second")
         assert events_a[-1].type == "turn.completed", events_a[-1]
         setup_a = next(event for event in session_a.events if event.type == "worktree.setup_ran")
         assert setup_a.data["exit"] == 0
@@ -105,17 +115,22 @@ async def test_attended_setup_uses_permission_request_for_trust(
     try:
         handle = runtime.session(f"permission-{decision.value}").mark_attended()
         setup_digest = runtime.session_worktree_status(handle.id)["setup_digest"]
-        events = []
-        approved_prompt = False
-        async for event in handle.send("run worktree setup", attended=True):
-            events.append(event)
-            if event.type == "permission.requested":
-                assert event.data["tool"] == "worktree_setup"
-                assert event.data["key"] == setup_digest
-                assert handle.resolve_permission(event.data["id"], decision)
-                approved_prompt = True
+        import asyncio
 
+        creating = asyncio.create_task(_enter(runtime, handle))
+        approved_prompt = False
+        async with asyncio.timeout(20):
+            while not creating.done():
+                requested = [e for e in handle.events if e.type == "permission.requested"]
+                if requested and not approved_prompt:
+                    assert requested[-1].data["tool"] == "worktree_setup"
+                    assert requested[-1].data["key"] == setup_digest
+                    assert handle.resolve_permission(requested[-1].data["id"], decision)
+                    approved_prompt = True
+                await asyncio.sleep(0.01)
+        await creating
         assert approved_prompt
+        events = await _drain_turn(handle, "after setup")
         assert events[-1].type == "turn.completed", events[-1]
         setup = next(event for event in handle.events if event.type == "worktree.setup_ran")
         if runs_setup:
@@ -159,7 +174,6 @@ async def test_project_approval_persists_for_matching_digest_only(project, tmp_p
                 model=ModelSection(default="scripted/m"),
                 permissions=PermissionsSection(mode="allow"),
                 worktrees=WorktreesSection(
-                    sessions=True,
                     setup=[sys.executable, "-c", "print('changed-command')"],
                 ),
             ),
@@ -178,7 +192,8 @@ async def test_setup_trust_rejects_a_stale_review_digest(project, tmp_path):
         handle = runtime.session("stale-review")
         preview = runtime.session_worktree_status(handle.id)
         reviewed_digest = preview["setup_digest"]
-        assert preview["setup"] == [sys.executable, "-c", "print('reviewed')"]
+        # The preview is display-safe: secrets (even in an interpreter path) are redacted.
+        assert preview["setup"] == [redact_secrets(value) for value in (sys.executable, "-c", "print('reviewed')")]
         assert preview["setup_shell"] is False
         assert preview["submodules"] == "none"
         runtime._config = Config(
@@ -188,7 +203,6 @@ async def test_setup_trust_rejects_a_stale_review_digest(project, tmp_path):
                 model=ModelSection(default="scripted/m"),
                 permissions=PermissionsSection(mode="allow"),
                 worktrees=WorktreesSection(
-                    sessions=True,
                     setup=[sys.executable, "-c", "print('new unreviewed command')"],
                 ),
             ),
@@ -213,7 +227,7 @@ async def test_setup_receives_worktree_cwd_environment_and_streams_output(projec
     try:
         handle = runtime.session("setup-env")
         runtime.approve_worktree_setup(handle.id, "allow_once")
-        events = await _drain_turn(handle, "prepare")
+        events = await _enter_and_drain(runtime, handle, "prepare")
         assert events[-1].type == "turn.completed", events[-1]
         root = runtime.session_root(handle.id)
         assert root.kind == "worktree"
@@ -269,17 +283,17 @@ async def test_copy_setup_rejects_symlinks_and_enforces_total_size(project, tmp_
         error = "copy_max_mb"
     runtime = _setup_runtime(project, tmp_path, **policy)
     try:
-        handle, events = await _run(runtime, f"copy-{case}")
-        assert events[-1].type == "turn.failed", events[-1]
-        assert error in events[-1].data["error"]
+        handle = runtime.session(f"copy-{case}")
+        with pytest.raises(ValueError, match=error):
+            await _enter(runtime, handle)
         assert runtime.session_root(handle.id).kind == "main"
         assert not any(event.type == "worktree.created" for event in handle.events)
     finally:
         await runtime.aclose()
 
 
-@pytest.mark.parametrize(("on_fail", "terminal"), [("fail", "turn.failed"), ("warn", "turn.completed")])
-async def test_setup_failure_policy_is_fail_or_warn(project, tmp_path, on_fail, terminal):
+@pytest.mark.parametrize("on_fail", ["fail", "warn"])
+async def test_setup_failure_policy_is_fail_or_warn(project, tmp_path, on_fail):
     runtime = _setup_runtime(
         project,
         tmp_path,
@@ -289,13 +303,15 @@ async def test_setup_failure_policy_is_fail_or_warn(project, tmp_path, on_fail, 
     try:
         handle = runtime.session(f"setup-{on_fail}")
         runtime.approve_worktree_setup(handle.id, "allow_once")
-        events = await _drain_turn(handle, "setup failure policy")
-        assert events[-1].type == terminal, events[-1]
-        assert any(event.type == "worktree.setup_ran" and event.data["exit"] == 9 for event in handle.events)
-        if on_fail == "warn":
-            assert any(event.type == "context.notice" and "setup failed" in event.data["message"] for event in handle.events)
+        if on_fail == "fail":
+            with pytest.raises(ValueError, match="setup failed"):
+                await _enter(runtime, handle)
+            assert runtime.session_root(handle.id).kind == "main"
         else:
-            assert "setup failed" in events[-1].data["error"]
+            await _enter(runtime, handle)
+            assert runtime.session_root(handle.id).kind == "worktree"
+            assert any(event.type == "context.notice" and "setup failed" in event.data["message"] for event in handle.events)
+        assert any(event.type == "worktree.setup_ran" and event.data["exit"] == 9 for event in handle.events)
     finally:
         await runtime.aclose()
 

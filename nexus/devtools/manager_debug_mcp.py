@@ -74,7 +74,7 @@ _DESCRIPTIONS = {
         "MUTATES: start a new root session with the given instruction. It runs on the workspace "
         "default model with normal root permissions; its id starts with 'dbg-'. At most 3 per "
         "minute; the daemon's live-launch cap applies. worktree=true with a name as title runs it in "
-        "its own worktree branch nexus/session/<name>; the name is also the session title."
+        "its own worktree branch nexus/wt/<name>; the name is also the session title."
     ),
     "session_wait": (
         "Wait up to 600 seconds for any (default) or all of the given sessions to finish. "

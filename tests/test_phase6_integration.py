@@ -337,15 +337,16 @@ async def test_normal_child_retains_parent_bash_authority(tmp_path):
 
 
 async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
+    monkeypatch.setattr("nexus.runtime.SUBAGENT_WORKTREES", True)
     parent = clean_git_repo(tmp_path / "repository")
     provider = ScriptedProvider(
         tool_response(
             (
                 "spawn",
                 "subagent",
-                {"prompt": "work in this isolated checkout", "worktree": True},
+                {"prompt": "work in this isolated checkout"},
             )
         ),
         tool_response(
@@ -375,17 +376,10 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
     )
     session = runtime.session("worktree-root").mark_attended(True)
     await session.start_turn("go")
-    await wait_for(
-        lambda: any(event.type == "permission.requested" for event in session.events)
-    )
-    permission = next(
-        event.data for event in session.events if event.type == "permission.requested"
-    )
-    assert permission["key"].endswith(":worktree")
-    assert permission["default_rule"] != "subagent"
-    session.resolve_permission(permission["id"], "allow_once")
     await session.wait_idle()
     events = list(session.events)
+    # Session-managed isolation is automatic for a writer child: no per-spawn approval.
+    assert not any(event.type == "permission.requested" for event in events)
 
     spawned = next(event.data for event in events if event.type == "agent.spawned")
     worktree = spawned["worktree"]
@@ -403,21 +397,19 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
     assert (checkout / "child-output.txt").read_text(encoding="utf-8") == "from child"
     assert not (parent / "parent-write.txt").exists()
     assert (parent / "tracked.txt").read_text(encoding="utf-8") == "parent base\n"
-    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
+    # The completed child's work is integrated into the session checkout; nothing else leaks.
+    assert (parent / "child-output.txt").read_text(encoding="utf-8") == "from child"
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == "?? child-output.txt"
     child_id = next(iter(fold(events).agents.values())).id
     child_session_records = child_records(runtime, child_id)
     assert str(checkout) in str(child_session_records)
     assert child_session_records
     assert not (checkout / ".agents" / "sessions").exists()
-    from nexus.agents.worktrees import WorktreeService
-
-    daemon = parent.parent / f".nexus-worktrees-{parent.name}"
-    record = WorktreeService().inspect("worktree-root/sub/1", root=daemon)
-    assert record.path == checkout
+    assert checkout.is_relative_to(runtime._worktree_root)
     await runtime.aclose()
 
 
-async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path):
+async def test_fork_child_catalog_honors_user_tool_permissions(tmp_path):
     parent = clean_git_repo(tmp_path / "repository")
     extension_dir = parent / ".agents" / "tools"
     extension_dir.mkdir(parents=True)
@@ -434,7 +426,7 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
     )
     provider = ScriptedProvider(
         tool_response(
-            ("spawn", "subagent", {"prompt": "try unreviewed tools", "worktree": True})
+            ("spawn", "subagent", {"prompt": "try unreviewed tools"})
         ),
         tool_response(
             (
@@ -450,31 +442,20 @@ async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path
     )
     runtime = Runtime(
         parent,
-        config=make_config(mode="allow", allow=["Task(*)"]),
+        config=make_config(mode="deny", allow=["Task(*)"]),
         providers={"scripted": provider},
     )
     session = runtime.session("catalog-worktree").mark_attended(True)
 
     await session.start_turn("go")
-    await wait_for(
-        lambda: any(event.type == "permission.requested" for event in session.events)
-    )
-    permission = next(
-        event.data for event in session.events if event.type == "permission.requested"
-    )
-    assert permission["key"].endswith(":worktree")
-    session.resolve_permission(permission["id"], "allow_once")
     await session.wait_idle()
     events = list(session.events)
 
     spawns = [event.data for event in events if event.type == "agent.spawned"]
     spawn = next(data for data in spawns if data["depth"] == 1)
     advertised = set(spawn["tools"])
-    assert "shell" not in advertised
-    assert "bash" not in advertised
-    assert "bash_output" not in advertised
-    assert "kill_shell" not in advertised
-    assert "CustomWriter" not in advertised
+    assert "shell" in advertised
+    assert "CustomWriter" in advertised
     assert "subagent" not in advertised
     assert len(spawns) == 1  # the forged nested spawn never created a child
     assert not (parent / "parent-shell-write.txt").exists()
@@ -527,14 +508,14 @@ async def test_worktree_child_clips_parent_relative_write_root(tmp_path):
     await runtime.aclose()
 
 
-async def test_worktree_child_cancellation_retains_checkout_changes(tmp_path):
+async def test_fork_child_cancellation_retains_shared_root_changes(tmp_path):
     parent = clean_git_repo(tmp_path / "repository")
     provider = ScriptedProvider(
         tool_response(
             (
                 "spawn",
                 "subagent",
-                {"prompt": "write then wait", "worktree": True},
+                {"prompt": "write then wait"},
             )
         ),
         tool_response(
@@ -547,40 +528,31 @@ async def test_worktree_child_cancellation_retains_checkout_changes(tmp_path):
         [Wait()],
     )
     runtime = Runtime(parent, config=make_config(), providers={"scripted": provider})
-    session = runtime.session("worktree-cancel").mark_attended(True)
+    session = runtime.session("fork-cancel").mark_attended(True)
     await session.start_turn("go")
-    await wait_for(lambda: bool(session.pending_permissions))
-    permission_id = session.pending_permissions[0]
-    assert session.resolve_permission(permission_id, "allow_once") is True
 
     async def wait_for_retained_write():
         deadline = asyncio.get_running_loop().time() + 10
         while asyncio.get_running_loop().time() < deadline:
-            spawned = next(
-                (event.data for event in session.events if event.type == "agent.spawned"),
-                None,
-            )
-            if spawned is not None:
-                checkout = Path(spawned["worktree"]["path"])
-                if (checkout / "retained.txt").exists():
-                    return checkout
+            if (parent / "retained.txt").exists():
+                return
             await asyncio.sleep(0.01)
-        raise TimeoutError("child did not write into its worktree")
+        raise TimeoutError("child did not write into the shared root")
 
-    checkout = await asyncio.wait_for(wait_for_retained_write(), timeout=12)
+    await asyncio.wait_for(wait_for_retained_write(), timeout=12)
     session.cancel("stop child")
     await asyncio.wait_for(session.wait_idle(), timeout=12)
 
-    assert (checkout / "retained.txt").read_text(encoding="utf-8") == "retain on cancel"
-    assert git(checkout, "status", "--porcelain", "--untracked-files=all")
-    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
+    assert (parent / "retained.txt").read_text(encoding="utf-8") == "retain on cancel"
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == "?? retained.txt"
     await runtime.aclose()
 
 
 @pytest.mark.parametrize("repository_kind", ["dirty", "non_git"])
 async def test_runtime_worktree_spawn_refuses_dirty_or_non_git_parent(
-    tmp_path, repository_kind
+    tmp_path, repository_kind, monkeypatch
 ):
+    monkeypatch.setattr("nexus.runtime.SUBAGENT_WORKTREES", True)
     if repository_kind == "dirty":
         parent = clean_git_repo(tmp_path / "repository")
         (parent / "tracked.txt").write_text("preserve dirty data\n", encoding="utf-8")

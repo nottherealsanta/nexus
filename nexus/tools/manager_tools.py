@@ -370,7 +370,7 @@ MANAGER_LAUNCH_TOOL = ManagerToolDef(
                                      "where it is the worktree name: letters, digits, '-' or '_', "
                                      "1-60 characters, starting with a letter or digit."},
             "worktree": {"type": "boolean", "default": False,
-                         "description": "Run in its own worktree and branch nexus/session/<title>. Manager prompt: pass true by default; false only when the user asks for the main checkout or the workspace is not a Git repository."},
+                         "description": "Run in its own worktree and branch nexus/wt/<title>. Manager prompt: pass true by default; false only when the user asks for the main checkout or the workspace is not a Git repository."},
         },
         "required": ["instruction", "origin_message_id"],
         "additionalProperties": False,

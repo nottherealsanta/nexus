@@ -27,7 +27,9 @@ import asyncio
 import fnmatch
 import functools
 import json
+import os
 import re
+import shlex
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -1210,6 +1212,10 @@ _NEVER_ASK_TOOLS = frozenset({"question"})
 #: every mode (a blocked child must always be able to say so). An explicit
 #: ``deny`` rule is evaluated earlier and still wins.
 _ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
+#: Worktree tools only create or switch checkouts in Nexus-owned space and both
+#: can be undone, so they never ask (docs/security.md). An explicit ``deny`` rule
+#: still wins.
+_WORKTREE_TOOLS = frozenset({"worktree_list", "worktree_create", "worktree_move"})
 #: Families whose mode fallback is ``ask`` even under ``mode = "allow"``: reading
 #: another session's context is the sensitive path. Deny rules, grants and
 #: explicit allow rules still come first; ``mode = "deny"`` still denies.
@@ -1219,9 +1225,10 @@ _MODE_FALLBACK_ASK_TOOLS = frozenset({"ContextQuery"})
 #: subcommand against another repository location (``git -C PATH``, ``--git-dir``,
 #: ``--work-tree``) or after a ``cd`` always asks, in every mode and despite allow
 #: rules or grants (docs/decisions.md, "Agents land their own session worktree
-#: with Git"). Deny rules still win. The engine does not know the main checkout
-#: path, so the rule is conservative: a false positive only asks. A plain
-#: ``git merge main`` or ``git status`` run in the session root is not forced.
+#: with Git"). Deny rules still win. The one exemption is the narrowly parsed
+#: landing below (:class:`WorktreeMergePolicy`); anything else keeps the ask. The
+#: rule is conservative: a false positive only asks. A plain ``git merge main`` or
+#: ``git status`` run in the session root is not forced.
 _GIT_WRITE_SUBCOMMANDS = (
     "merge|commit|reset|checkout|switch|restore|rebase|pull|push|cherry-pick|revert|stash|clean|am|apply|"
     "add|rm|mv|branch|tag|update-ref|symbolic-ref|fetch|gc|worktree|submodule|config|init|clone|read-tree|"
@@ -1239,6 +1246,67 @@ _GIT_AFTER_CD = re.compile(
     r"\bcd\s+(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)\s*(?:&&|;|\|\||\n)[^\n]*?" + _GIT_WRITE
 )
 _GIT_REDIRECT_OPTION = re.compile(r"(?:^|\s)(?:-C|--git-dir|--work-tree)(?:\s|=)")
+
+
+@dataclass(frozen=True)
+class WorktreeMergePolicy:
+    """What the landing exemption trusts: this project's main checkout and branches.
+
+    ``mains`` are the normalised absolute paths of the project's main checkout;
+    ``is_branch`` says whether a name is a Nexus worktree branch of this project
+    and ``is_base`` whether it is a base branch the agent may check out first.
+    """
+
+    mains: frozenset[str]
+    is_branch: Callable[[str], bool]
+    is_base: Callable[[str], bool]
+
+
+_LANDING_PUNCTUATION = frozenset("();<>|&")
+
+
+def is_worktree_landing(command: object, policy: WorktreeMergePolicy | None) -> bool:
+    """Whether ``command`` is exactly the merge the agent was told to run.
+
+    Parsed with a shell lexer, not matched on text. Accepted forms, as one simple
+    command each:
+
+    * ``git -C <main> merge --ff-only <worktree branch of this project>``;
+    * ``git -C <main> checkout|switch <base branch>``.
+
+    Any other flag, extra word, ``cd``, chained command, redirect, pipe,
+    substitution, quote trick or unknown path or branch is not a landing, so the
+    forced ask applies. ``--ff-only`` can only move the base branch forward to a
+    commit that already contains it, so nothing on the base is lost.
+    """
+    if policy is None or not isinstance(command, str) or not command.strip() or len(command) > 1024:
+        return False
+    if any(char in command for char in "\n\r\x00$`\\"):
+        return False
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if any(token and all(char in _LANDING_PUNCTUATION for char in token) for token in tokens):
+        return False
+    if len(tokens) < 5 or tokens[0] != "git" or tokens[1] != "-C":
+        return False
+    directory = tokens[2]
+    if not directory or os.path.normpath(directory) not in policy.mains:
+        return False
+    try:
+        if len(tokens) == 6 and tokens[3] == "merge" and tokens[4] == "--ff-only":
+            branch = tokens[5]
+            return not branch.startswith("-") and bool(policy.is_branch(branch))
+        if len(tokens) == 5 and tokens[3] in {"checkout", "switch"}:
+            base = tokens[4]
+            return not base.startswith("-") and bool(policy.is_base(base))
+    except Exception:  # noqa: BLE001 - a lookup failure keeps the ask
+        return False
+    return False
 
 
 def _is_git_write_elsewhere(tool: str, key: str | None) -> bool:
@@ -1280,6 +1348,7 @@ class PermissionEngine:
         self._allow = tuple(parse_rule(rule) for rule in allow)
         self._ask = tuple(parse_rule(rule) for rule in ask)
         self._force_ask_tools: frozenset[str] = frozenset()
+        self._worktree_merge: WorktreeMergePolicy | None = None
         self._deny = tuple(parse_rule(rule) for rule in deny)
         if path_guard is not None:
             self.path_guard = path_guard
@@ -1323,6 +1392,10 @@ class PermissionEngine:
         self._force_ask_tools = frozenset(
             canonical_tool_name(name) for name in tools if isinstance(name, str)
         )
+
+    def allow_worktree_merge(self, policy: WorktreeMergePolicy | None) -> None:
+        """Exempt the narrowly parsed worktree landing from the forced Git-write ask."""
+        self._worktree_merge = policy
 
     # -- evaluation --------------------------------------------------------
 
@@ -1435,6 +1508,21 @@ class PermissionEngine:
         if denied is not None:
             return self._verdict(
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
+            )
+
+        if public_name == "shell" and is_worktree_landing(key, self._worktree_merge):
+            # The landing the agent was told to run: allowed in every mode (deny
+            # rules were checked above) because --ff-only only moves the base
+            # branch forward to a commit that already contains it.
+            return self._verdict(
+                call, spec, key, Outcome.ALLOW, None, "worktree_merge",
+                "Landing a Nexus worktree branch with git merge --ff-only", suggestions,
+            )
+
+        if public_name in _WORKTREE_TOOLS:
+            return self._verdict(
+                call, spec, key, Outcome.ALLOW, None, "worktree",
+                "Worktree tools only create or switch Nexus-owned checkouts", suggestions,
             )
 
         if public_name in self._force_ask_tools or _is_git_write_elsewhere(public_name, key):

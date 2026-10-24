@@ -63,9 +63,9 @@ MAX_QUERY_CHARS = 256
 MAX_STATUS_IDS = 20
 MAX_TITLE_CHARS = 160
 #: A launch ``worktree`` name: it is the session title, the worktree folder and the
-#: ``nexus/session/<name>`` branch suffix (same rule as the host's session worktree names).
+#: ``nexus/wt/<name>`` branch suffix (same rule as the host's session worktree names).
 WORKTREE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9_-]{0,59}"
-WORKTREE_BRANCH_PREFIX = "nexus/session/"
+WORKTREE_BRANCH_PREFIX = "nexus/wt/"
 #: One ``session_result`` payload, after redaction (UTF-8 bytes).
 MAX_RESULT_BYTES = 16 * 1024
 

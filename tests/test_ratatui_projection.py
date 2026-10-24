@@ -1416,8 +1416,8 @@ def test_wire_sends_restore_attachments_with_the_one_shot_restore():
     assert again is not None and again["restore_attachments"] == 2
 
 
-def test_checkpoint_label_updates_cached_turn_and_uses_saved_record_sequence(tmp_path, monkeypatch):
-    from nexus.view.model import CheckpointView
+def test_saved_turn_label_updates_cached_turn_and_uses_saved_record_sequence(tmp_path, monkeypatch):
+    from nexus.view.model import WorktreeCommitView
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     view = initial_state("s")
@@ -1426,11 +1426,31 @@ def test_checkpoint_label_updates_cached_turn_and_uses_saved_record_sequence(tmp
     shell = ShellActions(controller)
     before = project(controller, 1, shell=shell)
     assert not any(block.get("operation", {}).get("kind") == "saved_turn_diff" for block in before["blocks"])
-    view.checkpoints = [CheckpointView(seq=42, turn_id="t", commit="a" * 40, foreign=1)]
+    view.turns[0].commit_shas = ["a" * 40]
+    view.worktree.commits = [WorktreeCommitView(sha="a" * 40, seq=42, insertions=3, deletions=1)]
     after = project(controller, 2, shell=shell)
     saved = next(block for block in after["blocks"] if block.get("operation", {}).get("kind") == "saved_turn_diff")
     assert saved["operation"]["seq"] == 42
-    assert "aaaaaaaaaa" in saved["text"] and "1 files" in saved["text"]
+    assert "aaaaaaaaaa" in saved["text"] and "3 added" in saved["text"] and "Checkpoint" not in saved["text"]
+
+
+def test_worktree_create_and_move_rows_show_the_stated_reason(tmp_path, monkeypatch):
+    from nexus.view.model import RootMoveView
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("NEXUS_ASCII", raising=False)
+    view = initial_state("s")
+    view.turns = [_turn()]
+    view.worktree.moves = [
+        RootMoveView(seq=5, ts=0.0, action="created", kind="worktree", name="brave-otter", branch="nexus/wt/brave-otter",
+                     base_ref="main", base_sha="1a2b3c4d5e", reason="refactor auth"),
+        RootMoveView(seq=9, ts=0.0, action="moved", kind="main", reason="left unmerged"),
+    ]
+    controller = SimpleNamespace(view=view, session="s")
+    snapshot = project(controller, 1, shell=ShellActions(controller))
+    rows = {block["id"]: block["text"] for block in snapshot["blocks"] if str(block.get("id", "")).startswith("root-move:")}
+    assert rows["root-move:5"] == '⎇ Created worktree brave-otter · from main @ 1a2b3c4 · reason: "refactor auth"'
+    assert rows["root-move:9"] == '⎇ Moved to the main checkout · reason: "left unmerged"'
 
 
 def test_refused_task_card_is_not_started_and_not_error_styled(tmp_path, monkeypatch):

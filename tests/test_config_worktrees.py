@@ -16,22 +16,26 @@ def _home(tmp_path):
 
 def test_worktree_defaults_and_project_configuration_load(tmp_path):
     assert WorktreesSection() == ConfigV2().worktrees
-    assert WorktreesSection().sessions is False
     assert WorktreesSection().base == "current"
     assert WorktreesSection().max_worktrees == 16
     assert WorktreesSection().commit_max_files == 2000
     assert WorktreesSection().commit_max_file_mb == 50
 
     (tmp_path / "nexus.toml").write_text(
-        'config_version = 2\n[worktrees]\nsessions = true\nbase = "release/next"\n'
+        'config_version = 2\n[worktrees]\nbase = "release/next"\n'
         'setup = ["uv", "sync"]\nsubmodules = "recursive"\n',
         encoding="utf-8",
     )
     loaded = Config.load(tmp_path, home=_home(tmp_path), environ={})
-    assert loaded.v2.worktrees.sessions is True
     assert loaded.v2.worktrees.base == "release/next"
     assert loaded.v2.worktrees.setup == ["uv", "sync"]
     assert loaded.v2.worktrees.submodules == "recursive"
+
+
+@pytest.mark.parametrize("key", ["sessions", "checkpoints"])
+def test_removed_worktree_keys_are_rejected(key):
+    with pytest.raises(ConfigError):
+        build_v2({"worktrees": {key: True}})
 
 
 @pytest.mark.parametrize(

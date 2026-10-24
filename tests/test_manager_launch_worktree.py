@@ -31,7 +31,7 @@ def _setup(project, tmp_path):  # noqa: F811
     return runtime, facade, port
 
 
-async def test_worktree_launch_creates_the_named_branch_on_the_first_turn(project, tmp_path):  # noqa: F811
+async def test_worktree_launch_creates_the_named_branch_before_the_first_turn(project, tmp_path):  # noqa: F811
     runtime, facade, port = _setup(project, tmp_path)
     try:
         launched = await port.launch("do it", "m1", title="isolated-fix", worktree=True)
@@ -40,8 +40,8 @@ async def test_worktree_launch_creates_the_named_branch_on_the_first_turn(projec
         assert waited.completed == (launched.id,)
         root = runtime.session_root(launched.id)
         assert root.kind == "worktree" and root.path.name == "isolated-fix"
-        assert root.branch == "nexus/session/isolated-fix"
-        assert git(project, "branch", "--list", "nexus/session/isolated-fix")
+        assert root.branch == "nexus/wt/isolated-fix"
+        assert git(project, "branch", "--list", "nexus/wt/isolated-fix")
         assert runtime.sessions.summary(launched.id).title == "isolated-fix"
     finally:
         await facade.wait_idle(timeout=10)
@@ -51,7 +51,7 @@ async def test_worktree_launch_creates_the_named_branch_on_the_first_turn(projec
 async def test_worktree_launch_with_a_taken_name_starts_nothing(project, tmp_path):  # noqa: F811
     runtime, facade, port = _setup(project, tmp_path)
     try:
-        git(project, "branch", "nexus/session/taken")
+        git(project, "branch", "nexus/wt/taken")
         with pytest.raises(LaunchRefused) as raised:
             await port.launch("do it", "m1", title="taken", worktree=True)
         assert "already exists" in str(raised.value) and "mgr-" in str(raised.value)

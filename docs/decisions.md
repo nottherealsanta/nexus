@@ -12,7 +12,36 @@ is detected by asking SQLite for exclusive ownership and refuses the reset; the 
 lock alone would not see a process that skips it. The notice is a host command so every
 client gets it once. Backups are never pruned automatically. See [sessions.md](sessions.md).
 
-## Session worktrees are named by the user at the first message (2026-10-23)
+## The agent manages its own worktrees; there are no modes (2026-10-24)
+
+Plan: [agent-managed-worktrees](../plans/planning/agent-managed-worktrees.md). This part is
+the UI, host and config side; the runtime, tools, prompt and storage decisions are recorded
+with their own changes. Status: the UI/host/config/view track is written but not yet run or
+integrated with the runtime track.
+
+- **No worktree modes and no question.** `none` / `ask` / `always`, the first-message
+  "Create a worktree, or work in the main checkout?" modal, `/worktree`, the Settings ->
+  Agents "Worktree mode" row, the draft "worktree selected" state, `[worktrees].sessions`,
+  `[worktrees].checkpoints` and `worktree-mode.json` are removed with no compatibility path.
+  A session starts in the main checkout and the first message is sent at once. Supersedes the
+  ask-by-default choice and the first-message naming below.
+- **Breaking host protocol (7).** `SessionWorktreeChoice` and `SessionWorktreeSet` are gone;
+  `SessionWorktreeList` and `SessionWorktreeMove` are added. The user's idle commands
+  `SessionPromote` and `SessionDetach` stay. A protocol-6 peer is refused.
+- **The user can still override the agent**, idle-only, from `/worktrees` ("Move this session
+  here", integrate, remove) without typing a sentence.
+- **The top bar follows the view.** It is drawn from `ConversationView.root` (the latest
+  `session.root_set`), not a host query, and redraws when the root changes, including an
+  in-turn agent move.
+- **Several worktrees in one history.** `WorktreeView` keeps the current worktree plus a bounded
+  list of past ones (`merged` / `unmerged` / `removed`), and every create or move is a durable
+  timeline row labelled with the stated `reason`. The old `checkpoint.*` and
+  `session.worktree_set` events and their reducer code are deleted; old logs only produce
+  diagnostics. The main checkout saves no turns, so turn diff/revert are offered only in
+  worktrees.
+- **Web** only loses its mode UI (it had none left to remove); it gains nothing (to be deprecated).
+
+## Session worktrees are named by the user at the first message (2026-10-23) — superseded 2026-10-24
 
 When a session goes into a worktree the user types a name at the first message.
 That one name is the session title, the worktree folder and the branch
@@ -142,7 +171,9 @@ paths themselves. See [desktop.md](desktop.md).
 | Decision | Why | Where |
 | --- | --- | --- |
 | **One daemon per Nexus home/install owns project runtimes; every surface is a pure client** with no in-process fallback. | One place for locks, turns and approvals; surfaces can crash or disconnect without losing work. | [host.md](host.md) |
-| **Owned session roots use authenticated v3 worktree records and commits use isolated-index `commit-tree` with compare-and-swap `update-ref`.** | Pending records make creation/recovery explicit; only the owned branch advances, unrelated staged files and the project checkout stay untouched, and Git hooks/signing cannot run during Nexus-created commits. | `agents/session_worktrees.py`, [agents.md](agents.md#worktrees) |
+| **Session worktrees are project-level: one authenticated v4 record per worktree (`wt-<name>`, branch `nexus/wt/<name>`), shared by any number of sessions, with no owner, transfer or lock (2026-10-24).** Supersedes the per-session v3 record. `created_by` is display-only; validation checks project and lifecycle, never an owning session. Forks stay in the parent's root. No compatibility with v3 records or `nexus/session/` worktree branches. | Work that outlives one session (and several sessions in one checkout) needs a project resource. Membership is derived from each session's latest `session.root_set`, so it survives restart. `agents/session_worktrees.py`, [sessions.md](sessions.md#project-worktrees-storage-and-git) |
+| **Commits use isolated-index `commit-tree` with compare-and-swap `update-ref`, take only the committing session's paths, and rebuild-and-retry a lost swap (≤ 4 attempts).** Hooks/signing cannot run during Nexus-created commits. | Pending records make creation/recovery explicit; only the worktree branch advances, other sessions' half-finished edits, unrelated staged files and the project checkout stay untouched. | `agents/session_worktrees.py`, [agents.md](agents.md#worktrees) |
+| **Merged, clean checkouts are removed automatically when the last session leaves; the record and branch are always kept (2026-10-24).** Narrows "no automatic cleanup": unmerged, dirty or occupied checkouts are never removed automatically, and there is still no branch deletion or model-facing delete tool. | Stale checkouts pile up otherwise, and a kept branch plus record lets any session recreate it. `worktree_cleanup.auto_cleanup` | `worktree_cleanup.py`, [sessions.md](sessions.md#project-worktrees-storage-and-git) |
 | **Root-session worktrees get an automatic random `<adjective>-<animal>` name; the TUI no longer asks for one (user decision, 2026-10-24).** Supersedes the mandatory naming step. The name is a folder/branch label only, never the session title or `title_source=user`. Explicit `exact_name` is unchanged; subagents keep `<slug>-<token>`. | Naming before the first message was friction. Allocation stays under the service lock: 32 word pairs, then 8 pairs with a 6-hex suffix, then the existing error. Only the root-session callers (`_create`, including forks, and `_promote`) opt in with `random_words`. | `agents/session_worktrees.py`, `worktree_sessions.py`, [sessions.md](sessions.md) |
 | **`core/loop.py` knows only protocols.** | Testable with fakes; every manager replaceable; layering enforced by tests. | [loop.md](loop.md), `tests/test_layering.py` |
 | **Events are the spine; views are pure reductions.** Every drawable state is an event, persisted before fan-out, with a monotonic per-session `seq`. | Replay reproduces live state; reconnect is "fold to `seq`, follow from `seq+1`"; SSE `Last-Event-ID` maps onto `seq`. | [events-and-view.md](events-and-view.md) |
@@ -171,7 +202,7 @@ automated merge strategy is introduced.
 | Decision | Why | Where |
 | --- | --- | --- |
 | **Sessions are append-only records in one shared SQLite DB** (`~/.nexus/nexus.db`, WAL, `synchronous=FULL`, `BEGIN IMMEDIATE`); JSONL is an export format only. Replaced per-project JSONL directories. | Indexed listing, cross-project state, race-free `seq` across daemons, one transaction for delete/archive. Legacy directories are not imported. | [sessions.md](sessions.md) (`plans/STATE_PLAN.md`) |
-| **Main-checkout session diffs use hidden per-turn Git checkpoint refs and never restore files in a shared checkout.** A temporary index protects the user's index and branch; checkpoint refs may be published by mirror pushes. | Preserve reviewable turn history without changing shared user state. | [sessions.md](sessions.md#main-checkout-checkpoints), `worktree_sessions.py` (worktree-sessions plan 04) |
+| **Per-turn history exists only in worktrees; main-checkout checkpoints are removed (2026-10-24).** Supersedes the hidden `refs/nexus/checkpoints` decision. Each worktree turn commit is also pinned under `refs/nexus/turns/<session>/<turn>` (newest 200 per session, deleted with the session) so its diff survives a squash and merge; revert of a squashed or cross-session-overlapped turn is refused, and a turn spanning two worktrees is not diffed. | Work worth undoing turn by turn belongs in a worktree; the main checkout is shared user state. Refs may be published by mirror pushes. | [sessions.md](sessions.md#per-turn-history-worktrees-only), `worktree_turns.py`, `agents/session_worktrees.py` (agent-managed-worktrees 3.5.1) |
 | **Record bytes are unchanged msgspec JSON.** | Reducer, export, fork, replay untouched by the storage move. | `session/db.py` |
 | **Snapshots are derived caches validated against the log; compaction never deletes history.** | Fast resume without risking loss; "omission from the prompt does not delete history". | `session/snapshot.py`, [context.md](context.md) |
 | **Project extensions and settings live in `<workspace>/.agents/`; legacy `.nexus/` is a read-only lower-precedence fallback.** Machine state is under `~/.nexus/`. | A conventional, tool-neutral project dir; writes have one home. | [config.md](config.md) |

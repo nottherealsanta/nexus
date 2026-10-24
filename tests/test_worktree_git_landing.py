@@ -49,14 +49,34 @@ def test_plain_and_read_only_git_is_not_forced(command):
 
 def test_environment_block_teaches_the_git_landing_flow():
     text = render_session_worktree((
-        ("Worktree directory", "/w/login"), ("Main checkout directory", "/repo"),
-        ("Worktree branch", "nexus/session/login"), ("Base branch", "develop"), ("Base commit", "c" * 40)))
-    for needle in ("git -C /repo merge --ff-only nexus/session/login", "git merge-base HEAD develop",
+        ("Current root", "worktree login"), ("Worktree directory", "/w/login"), ("Main checkout directory", "/repo"),
+        ("Worktree branch", "nexus/wt/login"), ("Base branch", "develop"), ("Base commit", "c" * 40),
+        ("Other sessions in this worktree", "none")))
+    for needle in ("git -C /repo merge --ff-only nexus/wt/login", "git merge-base HEAD develop",
                    "git merge develop", "/merge", "git status"):
         assert needle in text, needle
     assert "nexus merge" not in text
     assert "plain Git" in text and "No Nexus CLI merge command exists or is required" in text
     assert "never a blocker" in text
+    assert "It never asks for approval" in text and "The user is asked to approve" not in text
+    assert "Do NOT squash" not in text
+
+
+def test_environment_block_in_main_has_guidance_and_no_merge_steps():
+    text = render_session_worktree((("Current root", "main checkout"), ("Main checkout directory", "/repo")))
+    assert "worktree_create" in text and "worktree_list" in text and "worktree_move" in text
+    assert "Create a worktree" in text and "Stay in the main checkout" in text
+    assert "--ff-only" not in text
+    assert render_session_worktree(()) == ""
+
+
+def test_shared_worktree_guidance_forbids_squashing():
+    text = render_session_worktree((
+        ("Current root", "worktree login"), ("Main checkout directory", "/repo"),
+        ("Worktree branch", "nexus/wt/login"), ("Base branch", "main"), ("Base commit", "c" * 40),
+        ("Other sessions in this worktree", "fix flaky test (active)")))
+    assert "do NOT squash" in text and "git reset --soft" not in text
+    assert "do not revert or rewrite" in text
 
 
 def _landing_manager(tmp_path: Path):

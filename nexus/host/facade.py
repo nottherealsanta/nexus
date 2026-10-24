@@ -342,7 +342,7 @@ class HostFacade:
         method = getattr(self.runtime, name, None)
         if not callable(method):
             raise ValueError("Session worktree operations are unavailable")
-        if name == "session_worktree_status":
+        if name in {"session_worktree_status", "list_session_worktrees"}:
             result = await asyncio.to_thread(method, *args, **kwargs)
         else:
             result = method(*args, **kwargs)
@@ -1789,7 +1789,7 @@ class HostFacade:
         try:
             git_commands = (p.GitStatus, p.GitDiff, p.WorktreeList, p.WorktreeInspect,
                             p.WorktreeReview, p.WorktreeAcknowledge, p.WorktreeIntegrate,
-                            p.WorktreeDiscard, p.WorktreeRemove, p.SessionWorktreeStatus, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
+                            p.WorktreeDiscard, p.WorktreeRemove, p.SessionWorktreeStatus, p.SessionWorktreeList, p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
             if isinstance(command, git_commands):
                 from ..resources import process_slot
                 async with process_slot():
@@ -1828,7 +1828,7 @@ class HostFacade:
         target_commands = (p.SessionTree, p.SessionInspect, p.SessionFork,
                            p.SessionDelete, p.SessionExport,
                            p.SessionArchive, p.SessionUnarchive)
-        target_commands = (*target_commands, p.SessionWorktreeSet, p.SessionWorktreeChoice, p.SessionPromote,
+        target_commands = (*target_commands, p.SessionWorktreeList, p.SessionWorktreeMove, p.SessionPromote,
                            p.SessionDetach, p.SessionWorktreeStatus, p.SessionWorktreeTrust,
                            p.SessionTurnDiff, p.SessionTurnRevert, p.SessionIntegrate)
         if isinstance(command, target_commands) and hasattr(self.runtime.sessions, "resolve"):
@@ -2071,19 +2071,15 @@ class HostFacade:
             else:
                 state = {**state, "token": self._confirmation_token("turn_revert", command.session, state, options)}
             return p.SessionWorktreeResult(session=command.session, state=state)
-        if isinstance(command, p.SessionWorktreeChoice):
-            self._refuse_manager(command.session, "session worktree choice")
-            state = await asyncio.to_thread(self.runtime._session_worktrees.choice,
-                command.session, command.mode)
-            return p.SessionWorktreeResult(session=command.session, state=state)
-        if isinstance(command, p.SessionWorktreeSet):
-            self._refuse_manager(command.session, "session worktree selection")
+        if isinstance(command, p.SessionWorktreeList):
+            self._refuse_manager(command.session, "session worktree list")
+            state = await self._invoke_runtime_worktree("list_session_worktrees", command.session)
+            return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
+        if isinstance(command, p.SessionWorktreeMove):
+            self._refuse_manager(command.session, "session worktree move")
             state = await self._invoke_runtime_worktree(
-                "set_session_worktree", command.session, command.enabled, base=command.base,
-                **({"name": command.name} if command.name else {}),
+                "move_session_worktree", command.session, command.to, command.reason,
             )
-            if command.name and command.enabled:
-                self.titles.cancel(command.session)
             return p.SessionWorktreeResult(session=command.session, state=_worktree_state_dict(state))
         if isinstance(command, p.SessionPromote):
             self._refuse_manager(command.session, "session promotion")
@@ -2263,9 +2259,6 @@ class HostFacade:
         if isinstance(command, p.SessionShell):
             self._refuse_manager(command.session, "shell commands")
             handle = self._session(command.session)
-            controller = self.runtime._session_worktrees
-            if controller.selection(handle)["enabled"] and not controller.locked(handle):
-                raise ValueError("Send the first prompt to prepare the selected worktree before running shell commands")
             return p.SessionShellResult(
                 session=command.session, shell_id=self.shells.start(handle, command.command)
             )

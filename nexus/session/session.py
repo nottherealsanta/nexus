@@ -2757,6 +2757,35 @@ class Session:
         self._turn_handoff_ready = False
         return requested
 
+    async def step_boundary(self, lease: TurnLease) -> Any:
+        """Run the turn's step-boundary work; return a rebuilt environment when the root changed.
+
+        Called by the loop after the tool results of a model step are persisted
+        and before the next request. The turn's tool bundle (``ToolTurn``) owns
+        the work (merge detection and applying a queued worktree move). When it
+        reports a new working root, the per-root state is rebuilt exactly as at
+        turn start (path guard, tool set, shell cwd, assembler) without a new
+        turn: the lease, step count and limits are kept. A rebuild failure
+        propagates and fails the turn (fails closed rather than keep tools bound
+        to the old root).
+        """
+        callback = getattr(self._active_tools, "step_boundary", None)
+        if not callable(callback) or not await callback():
+            return None
+        from types import SimpleNamespace
+
+        assembler = self._assemble_for_turn()
+        bundle = self._tool_turn_for(assembler, lease, self.attended)
+        self._active_tools = bundle
+        return SimpleNamespace(
+            assemble=assembler,
+            dispatcher=getattr(bundle, "dispatcher", None),
+            gate=getattr(bundle, "gate", None),
+            manifest_ref=getattr(bundle, "manifest_ref", None),
+            environment_for=getattr(bundle, "environment_for", None),
+            hooks=getattr(bundle, "hooks", None),
+        )
+
     def _launch_turn(
         self,
         lease: TurnLease,
@@ -2790,7 +2819,7 @@ class Session:
                         }
             except BaseException as exc:
                 # The accepted prompt is durable even if provisioning fails. No model
-                # call occurs; the failed draft can change its worktree selection.
+                # call occurs (for example the worktree checkout could not be recreated).
                 try:
                     await sink.emit(Event(type="turn.started", session=self.id, turn=lease.turn_id, data={"preparation": True}))
                     from ..util import redact_secrets

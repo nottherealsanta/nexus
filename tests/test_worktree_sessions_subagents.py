@@ -114,6 +114,7 @@ def test_shared_parent_changed_after_spawn_is_not_overwritten(tmp_path):
 
 @pytest.mark.parametrize("sessions", [True, False])
 async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, sessions, monkeypatch):
+    # ``sessions``: whether the root session works in a worktree (moved there before the turn).
     monkeypatch.setattr("nexus.runtime.SUBAGENT_WORKTREES", True)  # disabled by default
     from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
     from test_worktree_sessions_runtime import runtime, drain
@@ -122,9 +123,11 @@ async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, 
         tool_response(("spawn", "subagent", {"prompt": "write child file", "subagent_type": "task", "tools": ["write"]})),
         tool_response(("child-write", "write", {"path": "child.txt", "content": "child saved\n"})),
         text_response("child done"), text_response("root done"))
-    rt = runtime(main, tmp_path, provider, sessions=sessions)
+    rt = runtime(main, tmp_path, provider)
     try:
         handle = rt.session("auto-child")
+        if sessions:
+            await rt.promote_session(handle.id, reason="isolate the root")
         events = await drain(handle, "delegate")
         assert events[-1].type == "turn.completed", events[-1]
         spawned = next(e for e in handle.events if e.type == "agent.spawned")
@@ -138,10 +141,7 @@ async def test_real_runtime_auto_writer_isolated_saved_and_integrated(tmp_path, 
         assert completed.data["worktree"]["merge"]["state"] == "merged", str([(e.type, e.data) for e in child_events if e.type.startswith("tool.") or e.type == "turn.failed"])
         assert (rt.session_root(handle.id).path / "child.txt").read_text() == "child saved\n"
         assert (main / "child.txt").exists() is (not sessions)
-        if not sessions:
-            saved_rows = [e for e in handle.events if e.type == "checkpoint.captured"]
-            assert saved_rows, [(e.type, e.data) for e in handle.events if e.type.startswith("checkpoint.") or e.type == "worktree.commit_skipped"]
-            assert saved_rows[0].data["files"] == ["child.txt"]
+        assert not any(e.type.startswith("checkpoint.") for e in handle.events)
     finally:
         await rt.aclose()
 
@@ -154,7 +154,7 @@ async def test_real_runtime_writer_child_shares_session_checkout_while_disabled(
         tool_response(("spawn", "subagent", {"prompt": "write child file", "subagent_type": "task", "tools": ["write"]})),
         tool_response(("child-write", "write", {"path": "shared.txt", "content": "shared\n"})),
         text_response("child done"), text_response("root done"))
-    rt = runtime(main, tmp_path, provider, sessions=False)
+    rt = runtime(main, tmp_path, provider)
     try:
         handle = rt.session("shared-child")
         events = await drain(handle, "delegate")

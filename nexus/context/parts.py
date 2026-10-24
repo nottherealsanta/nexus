@@ -592,41 +592,64 @@ class _TextPart:
 
 
 def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
-    """Labelled worktree block plus short guidance; ``""`` without facts.
+    """Labelled worktree facts plus short guidance; ``""`` without facts (not a Git project).
 
-    Rendered every turn (the environment part is never dropped) so the agent
-    always knows where it works, which checkout is the main one, and who lands
-    the branch (the agent, with plain Git: squash, then ``git -C <main> merge
-    --ff-only``, after user approval).
+    Rendered every turn in every Git session, in the main checkout too (the
+    environment part is never dropped), so the agent always knows where it
+    works, what worktrees can do for it, and how it lands one: with plain Git
+    (squash, then ``git -C <main> merge --ff-only``), which never asks. The text
+    is guidance only; Nexus enforces none of it.
     """
     if not facts:
         return ""
     values = dict(facts)
+    in_worktree = "Worktree branch" in values
     base = values.get("Base branch") or "its base branch"
     branch = values.get("Worktree branch") or "the worktree branch"
-    where = values.get("Worktree directory") or "the worktree directory"
     main = values.get("Main checkout directory") or "the main checkout"
-    sha = (values.get("Base commit") or "")[:12]
+    shared = values.get("Other sessions in this worktree", "none") not in {"", "none"}
     lines = ["<session_worktree>", *(f"{label}: {value}" for label, value in facts), "",
-        f"You are working in an isolated Git worktree: branch {branch} in {where}, based on {base}"
-        + (f" at {sha}" if sha else "") + ". Tools and shell run there. "
-        f"The user's main checkout is {main}: never edit files or run other git write commands there (the `--ff-only` merge in step 3 is the one exception).",
-        "",
-        "Finishing and merging. When the task is done:",
-        "1. Commit everything in this worktree (`git status` must be clean) and run the project's checks and tests.",
-        f"2. Squash onto {base} here: `git reset --soft $(git merge-base HEAD {base}) && "
-        "git commit -m \"<subject>\" -m \"<body summarising the change>\"`.",
-        f"3. Land it by fast-forwarding the main checkout: `git -C {main} merge --ff-only {branch}`. "
-        "The user is asked to approve this command.",
-        f"4. If `--ff-only` refuses because {base} has diverged, run `git merge {base}` here, resolve any "
-        "conflicts, re-run the checks, commit, squash again (step 2) and retry. If git refuses because "
-        "uncommitted changes in the main checkout would be overwritten, stop and tell the user which files.",
-        "5. After a successful merge, report the landed commit. The work is done.",
-        "Merge only when the work is finished and verified, or when the user asks (for example with /merge). "
-        "Never merge partial work.",
-        "Landing uses plain Git in the shell. No Nexus CLI merge command exists or is required, so a `nexus` "
-        "binary without `merge` is never a blocker: run the git commands above.",
-        "</session_worktree>"]
+        "Worktrees (guidance; the user's instructions win, and nothing here is enforced). "
+        "Tools: worktree_list, worktree_create, worktree_move" + (", worktree_commit" if in_worktree else "") + ". "
+        "A create or move happens after the current step: do not run tools that depend on the new directory in "
+        "the same step. Your changed files are carried over from the main checkout.",
+        "- Create a worktree (worktree_create) when you are about to change code across files, do a refactor or a "
+        "dependency/build change, run anything experimental, or the change will take several turns. Prefer one when "
+        "another active session is editing the main checkout.",
+        "- Stay in the main checkout for questions, reading, review, planning, running tests or commands, and small "
+        "edits the user asked to make directly. Nothing is saved per turn there, so if you might want to review or "
+        "undo your changes turn by turn, create a worktree.",
+        "- Decide before your first edit; creating or moving later works too (even mid-turn) but early is cleaner.",
+        "- Call worktree_list before creating, and continue an existing worktree when the work belongs there "
+        "(worktree_move). A worktree belongs to the project: other sessions can be in it too.",
+        "- One worktree per piece of work. After finishing, worktree_move to main, or create a new worktree for the "
+        "next, unrelated task."]
+    if in_worktree:
+        lines += [
+            "",
+            f"You are in worktree branch {branch}, based on {base}. Tools and shell run there. The main checkout is {main}: "
+            "never edit files or run other git write commands there (the `--ff-only` merge in step 3 is the one exception).",
+            "Merge when done: when the piece of work is complete (the request is met and the relevant tests pass), "
+            "commit, squash and merge it into the base branch right away; don't wait to be asked. It never asks for approval.",
+            "1. Commit everything in this worktree (`git status` must be clean) and run the project's checks and tests.",
+            (f"2. Squash onto {base} here: `git reset --soft $(git merge-base HEAD {base}) && "
+             "git commit -m \"<subject>\" -m \"<body summarising the change>\"`." if not shared else
+             "2. Another session is in this worktree: do NOT squash (it rewrites the branch under them). Skip to step 3."),
+            f"3. Land it by fast-forwarding the main checkout: `git -C {main} merge --ff-only {branch}`. "
+            + (f"If {base} is not the main checkout's branch, first run `git -C {main} checkout {base}`." if base != "its base branch" else ""),
+            f"4. If `--ff-only` refuses because {base} has diverged, run `git merge {base}` here (or rebase), resolve any "
+            "conflicts, re-run the checks, commit, (squash again) and retry. If it still fails, stop and tell the user. "
+            "If git refuses because uncommitted changes in the main checkout would be overwritten, stop and tell the user which files.",
+            "5. After a successful merge, report the landed commit.",
+            "Or leave it as it is: if the user wants to hold the work or it is not ready, don't merge. worktree_move to "
+            "main and say that the branch is kept unmerged. Never merge partial work.",
+            "The user can also nudge you to merge with /merge. Landing uses plain Git in the shell. No Nexus CLI merge "
+            "command exists or is required, so a `nexus` binary without `merge` is never a blocker: run the git commands above.",
+        ]
+        if shared:
+            lines.append("Another session is in this worktree: coordinate through the files and commits; do not revert or "
+                         "rewrite its work.")
+    lines.append("</session_worktree>")
     return "\n".join(lines)
 
 

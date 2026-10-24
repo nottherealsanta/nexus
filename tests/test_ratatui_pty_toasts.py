@@ -53,7 +53,9 @@ def test_toast_shows_runs_its_action_and_closes_by_click_or_chord():
             pending.extend(os.read(process.stdout.fileno(), 65536))
         line, _, rest = pending.partition(b"\n")
         pending[:] = rest
-        return json.loads(line)
+        row = json.loads(line)
+        # Composer persistence reports are passive, not user actions.
+        return read_action() if row.get("type") == "draft_state" else row
 
     def send(revision, **fields):
         process.stdin.write((json.dumps({"schema": 1, "revision": revision, "status": "idle", **fields}) + "\n").encode())
