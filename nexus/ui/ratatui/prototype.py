@@ -1476,8 +1476,7 @@ async def dismiss(shell) -> bool:
         return False
     from .worktree_pages import ASK_TITLE
     workflows = shell.workflows
-    if workflows.pending_worktree_submission and (
-            (workflows.form_target or {}).get("kind") == "worktree_name" or shell.panel_title == ASK_TITLE):
+    if workflows.pending_worktree_submission and shell.panel_title == ASK_TITLE:
         workflows.cancel_worktree_submission()  # Esc cancels the whole submission; the text returns to the composer
         return True
     form = shell.workflows.form

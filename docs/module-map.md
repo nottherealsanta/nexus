@@ -617,7 +617,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
 | `preferences.py` | Native shell preferences |
 | `ownership.py` | Shared read-only ownership tree, facts, transcript and request projection for native clients |
-| `worktree_pages.py` | Native three-mode session choice, saved-turn diff, integration and cleanup pages |
+| `worktree_pages.py` | Native three-mode session choice (Ask Yes/No resumes the prompt; no naming step), saved-turn diff, integration and cleanup pages |
 | `worktree_bar.py` | Top-bar worktree label for the session on screen (`⎇ name`, pending placeholder, session branch) |
 | `workflows.py` | Settings, provider, context, session and worktree workflows |
 | `speak_pages.py` | `/speak` consent, download progress and speaking in the native client |

@@ -555,10 +555,8 @@ class ShellActions:
             state = choice.state if choice is not None else {}
             draft_git = bool(state.get("editable") and state.get("git"))
             ask = draft_git and state.get("mode") == "ask" and not state.get("chosen")
-            # Always: no silent creation in the interactive TUI; the user names the worktree first.
-            always = (draft_git and state.get("mode") == "always" and state.get("kind", "main") != "worktree"
-                      and not state.get("worktree_name") and not state.get("pending_name"))
-            if ask or always:
+            # Always needs no question: the host creates the randomly named worktree on the first turn.
+            if ask:
                 if target != self.controller.session:
                     await self.switch(target)
                 pending = {
@@ -567,15 +565,12 @@ class ShellActions:
                     "attachment_labels": dict(self.attachment_labels),
                     "marker_attachments": dict(self.marker_attachments),
                 }
-                if always:
-                    self.workflows.worktree_name_step(pending)
-                    return True
                 self.workflows.pending_worktree_submission = pending
                 from .worktree_pages import ASK_TITLE
                 self.workflows.menu(ASK_TITLE, [
                     ("Yes · use a worktree", {"kind": "worktree_answer", "enabled": True}),
                     ("No · use this checkout", {"kind": "worktree_answer", "enabled": False}),
-                ], ["A worktree is named by you; the name is also the session title and branch. This choice applies to the session."], layout="modal")
+                ], ["A worktree gets a random name such as brave-otter. This choice applies to the session."], layout="modal")
                 return True
         if text.startswith("!"):
             if self.manager.is_active(target):

@@ -30,7 +30,10 @@ def test_main_checkout_text_is_plain_in_ascii_mode(monkeypatch):
 
 def test_pending_draft_keeps_placeholder_and_name():
     draft = {"kind": "main", "editable": True, "selected": True}
-    assert session_worktree_label(draft, "main", "") == ("main", "⎇ " + PLACEHOLDER)
+    assert PLACEHOLDER == "new worktree"
+    assert session_worktree_label(draft, "main", "") == ("main", "⎇ new worktree")
+    always = {"kind": "main", "editable": True, "mode": "always"}
+    assert session_worktree_label(always, "main", "") == ("main", "⎇ new worktree")
     assert session_worktree_kind(draft) == "pending"
     named = {**draft, "pending_name": "calm-otter"}
     assert session_worktree_label(named, "main", "")[1] == "⎇ calm-otter"

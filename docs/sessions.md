@@ -58,8 +58,20 @@ Changing the preference after a session starts affects future sessions only.
 A selected worktree is created lazily on the first model turn; composer shell
 commands require that first prompt to prepare it before they can execute.
 
-**Named worktrees.** When a session goes into a worktree (Ask answered yes, or
-Always) the user types a name at the first message. `SessionWorktreeSet(name=...)`
+**Automatic worktree names.** A root session that goes into a worktree without a
+chosen name (Ask answered yes, Always, a fork, or a promotion) gets a random
+`<adjective>-<animal>` folder and branch `nexus/session/<adjective>-<animal>`,
+drawn with `secrets.choice` from the session-name `ADJECTIVES`/`ANIMALS` lists
+(`session/names.py`). Allocation runs under the worktree service lock: up to 32
+pairs are checked against the branch and folder, then up to 8 pairs with a
+`-<6 hex>` suffix, then the usual allocation error. The name is a path label
+only: it is never the session title and never sets `title_source=user`, so
+auto-titling is unaffected. Subagent worktrees keep the `<slug>-<token>` scheme.
+The interactive TUI no longer asks for a name: Ask keeps its Yes/No question and
+Always creates the worktree on the first message.
+
+**Named worktrees.** A client may still choose an exact name through the API.
+`SessionWorktreeSet(name=...)`
 validates it (letters, digits, `-`, `_`; 1-60 characters; must start with a
 letter or digit; branch `nexus/session/<name>` and the worktree folder must not
 exist), records it in the `session.worktree_set` event (so replay and daemon
@@ -67,8 +79,7 @@ restart keep it) and stores it as the session's user title, which auto-titling
 never overwrites. A draft has no session row until its first message, so the
 title is stored again when the worktree is created on the first turn. That turn
 creates the folder `<name>` and branch `nexus/session/<name>` with no random
-suffix. Without a name (noninteractive `nexus run` under Always) the old
-`<slug>-<token>` name is kept. A name is refused once the session has a root or
+suffix. Without a name the automatic `<adjective>-<animal>` name above is used. A name is refused once the session has a root or
 has started, and ignored when `enabled` is false.
 
 ### Owned session worktrees

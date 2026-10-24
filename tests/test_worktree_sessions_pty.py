@@ -169,11 +169,10 @@ def test_native_ask_mode_prompts_before_first_turn_and_resumes_prompt(tmp_path: 
         app.close()
 
 
-def test_native_ask_worktree_yes_asks_for_a_name_then_creates_it(tmp_path: Path, monkeypatch):
-    """Ask -> Yes opens "Name this worktree"; the name becomes the branch and the prompt resumes.
+def test_native_ask_worktree_yes_creates_a_random_named_worktree(tmp_path: Path, monkeypatch):
+    """Ask -> Yes asks for no name: the worktree gets a random ``<adjective>-<animal>`` branch and the prompt resumes.
 
-    Needs the backend's ``set_session_worktree(..., name=)``; the TUI half is covered offline in
-    ``tests/test_ratatui_workflows.py``."""
+    The TUI half is also covered offline in ``tests/test_ratatui_workflows.py``."""
     project = tmp_path / "main"
     project.mkdir()
     _git(project, "init", "-b", "main")
@@ -202,12 +201,13 @@ def test_native_ask_worktree_yes_asks_for_a_name_then_creates_it(tmp_path: Path,
         shown = app.redraw(.3)
         assert "Create a worktree, or work in the main checkout?" in shown
         app.key(b"\r", .5)  # first row: Yes
-        app.wait_for("Name this worktree")
-        app.key(b"bad name\x13", .5)
-        app.wait_for("Use letters, digits")
-        app.key(b"\x7f" * 8 + b"pty-name\x13", .5)
         app.wait_for("Session root ready", timeout=25)
+        assert "Name this worktree" not in app.text()
         assert _git(project, "worktree", "list", "--porcelain").count("worktree ") == 2
-        assert "nexus/session/pty-name" in _git(project, "branch", "--list")
+        from nexus.session.names import ADJECTIVES, ANIMALS
+        branches = [line.strip(" *+") for line in _git(project, "branch", "--list", "nexus/session/*").splitlines()]
+        assert len(branches) == 1
+        adjective, _, animal = branches[0].removeprefix("nexus/session/").partition("-")
+        assert adjective in ADJECTIVES and animal in ANIMALS
     finally:
         app.close()

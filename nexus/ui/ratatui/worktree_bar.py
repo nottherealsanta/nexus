@@ -3,7 +3,7 @@
 Contract: ``session_worktree_label(state, git_branch, workspace_worktree)`` maps the host's
 ``session_worktree_choice`` state to the top bar's ``(branch, worktree)`` texts. A session whose
 root is its own worktree shows ``⎇ <name>`` and the session's branch; a draft with a worktree
-selected shows ``⎇ <pending name>`` or a placeholder until the first message names it; a session in the
+selected shows ``⎇ <pending name>`` or a ``new worktree`` placeholder until the first message creates it; a session in the
 main checkout of a Git workspace (``kind == "main"``) shows ``main checkout`` (plain text, so ASCII
 mode needs no variant) so the location is always stated; anything else (unknown state, non-Git workspace) keeps the
 workspace's own values. ``session_worktree_kind`` gives the matching renderer style key
@@ -18,7 +18,7 @@ import os
 import time
 
 
-PLACEHOLDER = "worktree · name on first message"
+PLACEHOLDER = "new worktree"
 _TTL = 3.0
 _WAIT = 2.0
 

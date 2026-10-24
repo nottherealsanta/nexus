@@ -155,17 +155,20 @@ class WorktreeService:
         base: str = "current",
         max_worktrees: int = 16,
         exact_name: str = "",
+        random_words: bool = False,
     ):
         """Create a pending authenticated root-session worktree (plan 03).
 
         ``exact_name`` (user-chosen) becomes the folder and ``nexus/session/<name>``
         with no random suffix; empty keeps the generated ``<slug>-<token>``.
+        ``random_words`` (opt-in, root sessions only) uses ``<adjective>-<animal>``
+        instead; subagents keep the slug default.
         """
         from .session_worktrees import create_session
 
         return create_session(
             parent_workspace, session_id, name, root=root, base=base,
-            max_worktrees=max_worktrees, exact_name=exact_name,
+            max_worktrees=max_worktrees, exact_name=exact_name, random_words=random_words,
         )
 
     @staticmethod

@@ -500,9 +500,32 @@ def _slug(name: str, token: str) -> str:
     return f"{clean}-{token}"
 
 
+_WORD_PAIR_TRIES = 32
+_WORD_SUFFIX_TRIES = 8
+
+
+def _candidate_slugs(name: str, exact_name: str, random_words: bool):
+    """Yield folder/branch suffixes to try, in order, for a new session worktree."""
+    import secrets
+
+    if exact_name:
+        yield exact_name
+    elif random_words:
+        # Lazy import: the names module pulls in the session error hierarchy.
+        from ..session.names import ADJECTIVES, ANIMALS
+
+        for _ in range(_WORD_PAIR_TRIES):
+            yield f"{secrets.choice(ADJECTIVES)}-{secrets.choice(ANIMALS)}"
+        for _ in range(_WORD_SUFFIX_TRIES):
+            yield f"{secrets.choice(ADJECTIVES)}-{secrets.choice(ANIMALS)}-{secrets.token_hex(3)}"
+    else:
+        for _ in range(32):
+            yield _slug(name, secrets.token_hex(3))
+
+
 def create_session(parent_workspace: str | Path, session_id: str, name: str, *, root: str | Path,
                    base: str = "current", max_worktrees: int = 16,
-                   exact_name: str = "") -> SessionWorktreeRecord:
+                   exact_name: str = "", random_words: bool = False) -> SessionWorktreeRecord:
     record_id = session_record_id(session_id)
     if not isinstance(name, str) or not name or len(name) > 200:
         raise _base.WorktreeError("session name must be non-empty and bounded")
@@ -542,9 +565,7 @@ def create_session(parent_workspace: str | Path, session_id: str, name: str, *, 
             raise _base.WorktreeError(f"maximum session worktrees reached ({max_worktrees})")
         if exact_name:
             validate_session_name(exact_name)
-        for _ in range(1 if exact_name else 32):
-            token = __import__("secrets").token_hex(3)
-            slug = exact_name or _slug(name, token)
+        for slug in _candidate_slugs(name, exact_name, random_words):
             branch, path = f"{_BRANCH_PREFIX}{slug}", worktrees / slug
             branch_probe = subprocess.run(_base._git_argv("show-ref", "--verify", "--quiet", f"refs/heads/{branch}"),
                 cwd=parent, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

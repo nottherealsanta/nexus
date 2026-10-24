@@ -831,10 +831,7 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
             return
         self.form["revision"] = revision
         target = self.form_target
-        if target["kind"] == "worktree_name":
-            self.form["body"] = body
-            await self.submit_worktree_name(body)
-        elif target["kind"] == "settings_read":
+        if target["kind"] == "settings_read":
             self.form["body"] = body
             self.form["saved"] = False
             try:

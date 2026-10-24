@@ -1418,7 +1418,7 @@ the snapshot's `worktree` key, set by `prototype._worktree_name` when the worksp
 linked Git worktree, or by `worktree_bar.session_worktree_label` from the host's
 `session_worktree_choice` state: a session whose root is its own worktree shows `⎇ <name>` and
 the session's branch; a draft with a worktree selected (mode Always, or `selected`) shows
-`⎇ <pending name>` or the placeholder `⎇ worktree · name on first message`; a session in the
+`⎇ <pending name>` or the placeholder `⎇ new worktree`; a session in the
 main checkout of a Git workspace (`kind` `main`, not a pending draft) shows `main checkout`, so the
 location is always stated (non-Git or unknown state shows nothing new). The snapshot's
 `worktree_kind` (`worktree` | `pending` | `main` | empty, from `worktree_bar.session_worktree_kind`)
@@ -2287,17 +2287,14 @@ Manager sessions bypass all of this):
 - No worktree: unchanged, the message runs in the main checkout.
 - Ask: a modal titled "Create a worktree, or work in the main checkout?" (Yes / No rows).
   No closes the modal and resumes the prompt unchanged (`resume_worktree_submission` always
-  closes it); Yes opens the name step.
-- Always: goes straight to the name step (the interactive TUI no longer creates silently).
-- Name step: a "Name this worktree" text modal (the shared form editor; `Ctrl+S` creates,
-  because Enter inserts a newline in that editor). The line under the editor shows the hint
-  (letters, digits, `-` and `_`, up to 60; it is also the session title and the branch
-  `nexus/session/<name>`) and then any error. The name is validated locally with
-  `[A-Za-z0-9][A-Za-z0-9_-]{0,59}`; invalid names never reach the host. Submit calls
-  `set_session_worktree(session, True, name=name)`; a host refusal (for example the branch
-  already exists) is shown in the modal for edit and retry. `Esc` on either modal cancels the
-  whole submission and returns the text to the composer (attachments never left it). On
-  success the preserved prompt and attachments are submitted exactly as before.
+  closes it). Yes calls `set_session_worktree(session, True)` with no name, then resumes the
+  preserved prompt and attachments exactly as before; the host picks a random
+  `<adjective>-<animal>` folder and branch when the worktree is created on the first turn, and
+  the name is not the session title. If the host call fails the modal closes, the text returns to
+  the composer and the error is shown. `Esc` cancels the whole submission and returns the text to
+  the composer (attachments never left it).
+- Always: no modal and no name; the message is sent and the host creates the randomly named
+  worktree on the first turn. The top bar shows `⎇ new worktree` until then.
 
 Saved-turn, `/worktrees` and removal notes follow.
 

@@ -52,8 +52,9 @@ allowed) are unchanged. The `/merge` chat command asks the agent to do the above
 
 ## Subagent worktrees are disabled for now (2026-10-23)
 
-Session worktrees are being reworked (a named worktree chosen at the first
-message, with the main and worktree directories in the agent's environment).
+Session worktrees are being reworked (a worktree with an automatic random
+`<adjective>-<animal>` name at the first message, with the main and worktree
+directories in the agent's environment).
 Until that settles, subagents do not get their own worktrees: every child
 shares the session checkout, the `subagent` schema hides `worktree`, and an
 explicit `worktree: true` is refused. The runtime switch is
@@ -128,6 +129,7 @@ paths themselves. See [desktop.md](desktop.md).
 | --- | --- | --- |
 | **One daemon per Nexus home/install owns project runtimes; every surface is a pure client** with no in-process fallback. | One place for locks, turns and approvals; surfaces can crash or disconnect without losing work. | [host.md](host.md) |
 | **Owned session roots use authenticated v3 worktree records and commits use isolated-index `commit-tree` with compare-and-swap `update-ref`.** | Pending records make creation/recovery explicit; only the owned branch advances, unrelated staged files and the project checkout stay untouched, and Git hooks/signing cannot run during Nexus-created commits. | `agents/session_worktrees.py`, [agents.md](agents.md#worktrees) |
+| **Root-session worktrees get an automatic random `<adjective>-<animal>` name; the TUI no longer asks for one (user decision, 2026-10-24).** Supersedes the mandatory naming step. The name is a folder/branch label only, never the session title or `title_source=user`. Explicit `exact_name` is unchanged; subagents keep `<slug>-<token>`. | Naming before the first message was friction. Allocation stays under the service lock: 32 word pairs, then 8 pairs with a 6-hex suffix, then the existing error. Only the root-session callers (`_create`, including forks, and `_promote`) opt in with `random_words`. | `agents/session_worktrees.py`, `worktree_sessions.py`, [sessions.md](sessions.md) |
 | **`core/loop.py` knows only protocols.** | Testable with fakes; every manager replaceable; layering enforced by tests. | [loop.md](loop.md), `tests/test_layering.py` |
 | **Events are the spine; views are pure reductions.** Every drawable state is an event, persisted before fan-out, with a monotonic per-session `seq`. | Replay reproduces live state; reconnect is "fold to `seq`, follow from `seq+1`"; SSE `Last-Event-ID` maps onto `seq`. | [events-and-view.md](events-and-view.md) |
 | **`view/` sits below `model/`** and imports only `events`. | Daemon, CLI, browser and replay share one reducer. | `view/` |

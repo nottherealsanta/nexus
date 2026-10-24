@@ -316,7 +316,7 @@ class SessionWorktrees:
         dirty = await self._thread(handle.id, self._dirty)
         record = await self._thread(handle.id, self.service.create_session, self.runtime.workspace, handle.id,
             self._name(handle), root=self.registry, base=base, max_worktrees=policy.max_worktrees,
-            **({"exact_name": name} if name else {}))
+            **({"exact_name": name} if name else {"random_words": True}))
         published = False
         if name:
             self._title(handle.id, name)
@@ -961,7 +961,7 @@ class SessionWorktrees:
                     raise
         if record is None:
             record = await self._thread(handle.id, self.service.create_session, self.runtime.workspace, handle.id, self._name(handle),
-                root=self.registry, base="current", max_worktrees=policy.max_worktrees)
+                root=self.registry, base="current", max_worktrees=policy.max_worktrees, random_words=True)
         published = False
         try:
             if record.base_commit != base_sha:
