@@ -428,11 +428,13 @@ result, and the root's turn continues once the report is in. Its schema is `prom
 subagent worktrees are disabled, see [Worktrees](#worktrees)); there is no `background`
 or `wait` parameter. To run children concurrently the model issues **independent
 `subagent` calls together in one batch** (the tool is `concurrency="parallel"`) and the
-turn waits for every report. Nothing is delivered later: there are no report wakes, no
-report replay and no live idle children (a follow-up is a new blocking call that reopens
-the child's stored transcript). To change direction or retry, the root
-starts a new subagent whose prompt carries what it needs, or continues a finished one. The model is taught this in the
-`subagent` description and in the `build` and `orchestrator` role bodies
+turn waits for every report. The orchestrator role is instructed to use at most one
+subagent instance for a request, rather than parallelizing delegation. Nothing is
+delivered later: there are no report wakes, no report replay and no live idle children
+(a follow-up reopens the child's stored transcript). To change direction or retry,
+continue the same finished child with `subagent_continue`; start a new subagent only
+for unrelated work. The model is taught this in the `subagent` description and in the
+`build` and `orchestrator` role bodies
 (`nexus/agents/data/`).
 
 `SubagentRunner.spawn` is `_prepare` (validate, route, reserve budget, create the
