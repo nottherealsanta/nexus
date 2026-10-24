@@ -590,3 +590,26 @@ def test_the_snapshot_block_is_json_safe(shell):
     block = shell.sidebar.snapshot()
     assert json.loads(json.dumps(block)) == block
     assert set(block) >= {"available", "open", "tab", "width", "focus", "sessions", "projects", "files", "git"}
+
+
+async def test_project_browser_browse_parent_and_open_only_directories(tmp_path, shell):
+    from nexus.ui.ratatui.sidebar import SidebarController
+
+    child = tmp_path / "child"
+    child.mkdir()
+    shell.switch_project = AsyncMock()
+    shell.client.list_project_directory = AsyncMock(return_value=SimpleNamespace(
+        path=str(tmp_path), entries=[{"name": "child", "path": str(child), "kind": "dir"},
+                                   {"name": "file", "path": str(tmp_path / "file"), "kind": "file"}],
+        truncated=False))
+    sidebar = SidebarController(shell)
+    sidebar.enabled = True
+    await sidebar.handle({"op": "project_path", "path": str(tmp_path)})
+    assert sidebar.projects["browser_path"] == str(tmp_path)
+    assert sidebar.projects["browser_rows"][0]["path"] == str(tmp_path.parent)
+    await sidebar.handle({"op": "select_project", "path": str(tmp_path / "file")})
+    shell.switch_project.assert_not_awaited()
+    await sidebar.handle({"op": "select_project", "path": str(child)})
+    shell.switch_project.assert_awaited_once_with(str(child), create=True)
+    await sidebar.handle({"op": "browse_project", "path": str(tmp_path.parent)})
+    assert shell.client.list_project_directory.call_args.args == (str(tmp_path.parent),)

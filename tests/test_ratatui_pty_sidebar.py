@@ -21,7 +21,9 @@ PROJECTS = {"loaded": True, "truncated": False, "error": "", "rows": [
 
 def sidebar(**fields):
     return {"available": True, "open": True, "tab": "Projects", "width": 34, "focus": 0, "sessions": None,
-            "projects": PROJECTS, "files": {}, "git": {}, **fields}
+            "projects": {**PROJECTS, "browser_path": "/nexus",
+                         "browser_rows": [{"name": "src", "kind": "dir", "path": "/nexus/src"},
+                                          {"name": "readme.txt", "kind": "file", "path": "/nexus/readme.txt"}]}, "files": {}, "git": {}, **fields}
 
 
 def mouse(t, code, column, row, release=False):
@@ -39,7 +41,7 @@ def opened(columns, **fields):
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_the_selector_draws_both_tabs_and_groups_worktrees_over_the_conversation():
+def test_the_selector_draws_path_and_directory_entries_over_the_conversation():
     t = opened(140)
     try:
         text = t.text()
@@ -47,7 +49,8 @@ def test_the_selector_draws_both_tabs_and_groups_worktrees_over_the_conversation
             assert label in text, f"{label} tab missing:\n{text}"
         # Files and Git live in the details drawer now, not the left sidebar.
         assert "Files" not in text and "Git" not in text, text
-        assert "nexus" in text and "main" in text and "feature-x" in text
+        assert "/nexus" in text and "src /" in text and "readme.txt" in text
+        assert "Open this folder" in text
         assert "Fix token refresh" in text, "the conversation is still there"
         # The selector is a centered overlay beneath the top bar (not a docked column): the
         # session title in the top bar is painted before its tabs.
@@ -60,16 +63,16 @@ def test_the_selector_draws_both_tabs_and_groups_worktrees_over_the_conversation
 def test_both_selector_tabs_are_drawn_and_clickable_whatever_the_stored_width():
     # The selector is centered at a fixed size (rust/tui/src/sidebar.rs `selector_area`), so the
     # stored sidebar width no longer changes where the tab labels are. At 140 columns it spans
-    # columns 26..115 and its tab row is screen row 4: Projects at 27..35, Sessions at 38..47.
+    # columns 26..115 and its tab row is screen row 5: Projects at 27..35, Sessions at 38..47.
     t = opened(140, width=24)
     try:
         text = t.text()
         assert all(label in text for label in ("Projects", "Sessions")), text
-        mouse(t, 0, 40, 4)
-        mouse(t, 0, 40, 4, release=True)
+        mouse(t, 0, 40, 5)
+        mouse(t, 0, 40, 5, release=True)
         assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Sessions"}
-        mouse(t, 0, 30, 4)
-        mouse(t, 0, 30, 4, release=True)
+        mouse(t, 0, 30, 5)
+        mouse(t, 0, 30, 5, release=True)
         assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Projects"}
     finally:
         t.close()
@@ -81,8 +84,8 @@ def test_ctrl_b_toggles_the_sidebar_and_a_click_on_a_tab_asks_for_it():
     try:
         t.key(b"\x02")  # Ctrl+B
         assert t.action() == {"type": "sidebar", "op": "toggle"}
-        mouse(t, 0, 40, 4)  # the Sessions label in the selector's tab row
-        mouse(t, 0, 40, 4, release=True)
+        mouse(t, 0, 40, 5)  # the Sessions label in the selector's tab row
+        mouse(t, 0, 40, 5, release=True)
         assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Sessions"}
         t.key(b"\x11")
         assert t.action()["type"] == "quit"
@@ -117,5 +120,19 @@ def test_the_selector_still_fits_a_narrow_terminal_as_an_overlay():
         text = t.text()
         assert "Projects" in text and "Sessions" in text, text
         assert "Fix token refresh" in text
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_project_path_editing_and_bracketed_paste_use_sidebar_protocol():
+    t = opened(140, projects={"loaded": True, "browser_path": "/repo", "browser_rows": []})
+    try:
+        # Focus the selector, then edit its path rather than the composer.
+        mouse(t, 0, 30, 5)
+        mouse(t, 0, 30, 5, release=True)
+        assert t.action() == {"type": "sidebar", "op": "tab", "tab": "Projects"}
+        t.key(b"/\x1b[H\x1b[3~\x1b[200~/tmp/\x1b[201~\r")
+        assert t.action() == {"type": "sidebar", "op": "project_path", "path": "/tmp/repo"}
     finally:
         t.close()

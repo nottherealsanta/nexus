@@ -2027,6 +2027,15 @@ class HostFacade:
                 _session_workspace(self.runtime, command.session), staged=command.staged, ref=command.ref
             )
             return p.GitDiffResult(patch=patch, truncated=truncated)
+        if isinstance(command, p.ProjectDirectoryList):
+            from ..host_support.project_identity import resolve_project
+            identity = await asyncio.to_thread(resolve_project, command.path)
+            root = identity.launch_root
+            path, entries, truncated = await asyncio.to_thread(
+                list_directory, self.runtime, limit=command.limit, project_root=root,
+            )
+            return p.DirectoryListResult(path, entries, truncated)
+
         if isinstance(command, p.DirectoryList):
             path, entries, truncated = await asyncio.to_thread(
                 list_directory, self.runtime, command.path, command.limit,

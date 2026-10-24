@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from pathlib import PurePath
 
 from ...host_support.errors import error_text
 from ...ui_support import sidebar as view
@@ -38,6 +39,7 @@ class SidebarController:
         self._reset()
 
     def _reset(self):
+        self._project_path = ""
         self.projects = {"rows": [], "truncated": False, "error": "", "loaded": False}
         self.files = {"path": "", "label": "", "rows": [], "truncated": False, "error": "", "loaded": False}
         self.git = {"available": False, "message": "", "branch": "", "summary": "", "rows": [],
@@ -105,6 +107,18 @@ class SidebarController:
         elif self.enabled:
             self.shell.workflows.close_dashboard(force=True)
 
+    async def browse_project(self, path: str) -> None:
+        """Read-only navigation through the host, separate from opening a project."""
+        try:
+            result = await self.shell.client.list_project_directory(path)
+            self._project_path = result.path
+            self.projects.update(browser_path=result.path, browser_loaded=True,
+                                 browser_error="", browser_truncated=result.truncated,
+                                 browser_rows=[{"name": "../", "path": str(PurePath(result.path).parent), "kind": "dir"},
+                                               *result.entries])
+        except Exception as exc:
+            self.projects["browser_error"] = error_text(exc)
+
     # -- data --------------------------------------------------------------------------
 
     def _sync_workspace(self, *, kick=True):
@@ -171,8 +185,10 @@ class SidebarController:
                 listed = view.project_rows(rows, workspace, self._manager_session(),
                                            list(getattr(result, "projects", None) or []))
                 self._openable = view.openable(listed)
-                self.projects = {"rows": listed, "truncated": bool(getattr(result, "truncated", False)),
-                                 "error": "", "loaded": True}
+                self.projects.update({"rows": listed, "truncated": bool(getattr(result, "truncated", False)),
+                                 "error": "", "loaded": True})
+                if not self.projects.get("browser_loaded"):
+                    await self.browse_project(workspace)
             elif tab == "Files":
                 target = self._files_path if path is None else path
                 result = await client.list_directory(target, session=session)
@@ -275,8 +291,18 @@ class SidebarController:
             await self.preview(action.get("path"))
         elif op == "refresh":
             await self.refresh(force=True)
+        elif op in {"browse_project", "project_path"}:
+            await self.browse_project(str(action.get("path", "")))
+        elif op == "select_project":
+            path = str(action.get("path", ""))
+            if path == self._project_path or any(
+                row["path"] == path and row["kind"] == "dir"
+                for row in self.projects.get("browser_rows", [])
+            ):
+                await self.shell.switch_project(path, create=True)
+                await self.close()
         elif op == "add_project":
-            await self.shell.workflows.operate({"kind": "project_open"})
+            await self.browse_project(self._project_path or str(self.shell.workspace))
         elif op == "open_project":
             workspace = action.get("workspace")
             if workspace not in {row.get("workspace") for row in self.projects.get("rows", [])}:

@@ -186,6 +186,9 @@ class Client:
     async def git_diff(self, *, staged: bool = False, ref: str = "", session: str = "") -> p.GitDiffResult:
         return await self._request(p.GitDiff(staged=staged, ref=ref, session=session))  # type: ignore[return-value]
 
+    async def list_project_directory(self, path: str, *, limit: int = 500) -> p.DirectoryListResult:
+        return await self._request(p.ProjectDirectoryList(path=path, limit=limit))  # type: ignore[return-value]
+
     async def list_directory(
         self, path: str = "", limit: int = 200, *, session: str = ""
     ) -> p.DirectoryListResult:

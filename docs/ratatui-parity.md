@@ -1941,14 +1941,12 @@ The line under the tabs uses `border` (dark `50,50,55`, light `200,200,205`). Th
 
 ### Opening any project from the Projects sidebar
 
-The launch directory is only the initial project. In the Projects tab, `a` ("add/open path") asks the
-Python shell (`sidebar` action `add_project`), which opens the host-side editor `project_open_form`
-for an absolute (or `~/`) path of at most 4096 bytes. Saving calls
-`ShellActions.switch_project(path, create=True)` → client `open_project_session(create=True)` →
-`ProjectSessionOpen(create=True)`, so the daemon validates the path with `resolve_project` (existing
-directory, no control characters), registers/loads the project and creates a fresh session in it;
-a project with no sessions is therefore immediately usable. Failures are toasted with the redacted
-host reason and the form stays open. The UI never inspects project databases or session files.
+The launch directory is only the initial project. The Projects tab presents a path field
+and host-backed directory rows (see [Project directory picker](#project-directory-picker)).
+**Open this folder** calls `ShellActions.switch_project(path, create=True)` → client
+`open_project_session(create=True)` → `ProjectSessionOpen(create=True)`. The daemon
+validates with `resolve_project`, registers/loads the project and creates a fresh session;
+a project with no sessions is immediately usable. Host errors remain redacted and visible.
 
 ### Context-header rail removal (2026-10)
 
@@ -2218,7 +2216,7 @@ desktop bridge, old snapshots, fixtures) keeps the legacy Sessions page.
 
 | Tab | Shows | Source |
 | --- | --- | --- |
-| Projects | Main repositories, each with its linked worktrees (`main` first) as foldable children; counts, newest age, a needs-you/working mark. Enter or a click folds a repository, or opens the newest session of a checkout. | `ProjectSessionsList` (limit 300, `projects` 300): `repo`, `worktree`, `workspace` of each row; projects with an eligible session, archived included (current always first), stay listed with count 0 and no session to open when all their sessions are archived; ordered by newest activity (`ProjectEntry.updated`); historical roots missing on disk (`exists` false) are omitted |
+| Projects | Editable path, parent/directory navigation, visible inert files, explicit Open this folder (fresh session). | `ProjectDirectoryList`: bounded read-only absolute directory listing; `ProjectSessionOpen(create=True)` opens the selected directory. |
 | Sessions | The dashboard in a column: filter, groups, status marks, rename, archive with confirmation, permission answers, `+ New Agent`. Only root sessions are listed (the Projects counts too): the workspace manager session and subagent children are not, and the manager's pinned entry is not drawn. | `SessionDashboard` (the same host rows and operations as the legacy page; polled every 2 s while open) |
 | Files | The current project's directory, navigable: folders first, `↑ ..` below the root, names only (sizes omitted), links shown and never followed. A click selects a file; a double-click on the same file row (within 500 ms) or Enter opens its start in the read-only modal (below). | `DirectoryList`, `FilePreview` |
 | Git | Read-only labelled status: `branch → upstream · ahead/behind`, then Conflicts, Staged changes, Changes and Untracked sections with a word per file (`modified`, `added`, `deleted`, `untracked`, …) and the file's base name (`config.md`, a rename `old.py → new.py`; rows keep the full `path` and the client draws `name`). Nothing here can change the repository. | `GitStatus` |
@@ -2262,7 +2260,8 @@ State and safety. Open/closed, tab and width persist as `sidebar_open` (default 
 untouched. Files and Git describe the current
 project and reload when it changes; every answer carries a sequence and the workspace it was asked
 for, so a slow or stale one is dropped. The client can only open a folder the last listing offered
-and a session the last Projects list showed; the host re-validates paths (no absolute paths, `..`,
+and a session the last Projects list showed. Project browsing accepts validated absolute directories;
+workspace Files browsing remains scoped. The host re-validates Files paths (no absolute paths, `..`,
 hidden segments, symlink crossings or read-deny roots) and bounds entries, bytes and time
 (`docs/host.md`). Text is control-escaped in Python and the host redacts file and path names.
 
@@ -2467,3 +2466,24 @@ transparency, no white panel and visible labels rather than colour. If real
 colour is needed, use a Mermaid engine that emits coloured SVG, or a semantic
 chart fallback drawn natively from parsed data (for example a Unicode bar chart
 for `pie`).
+
+### Project directory picker
+
+The native Projects tab now opens a read-only directory browser, rather than an
+Add Project dialog. Its first row is the editable absolute path (`~/` accepted):
+click it or press `/`/`a`, type, then Enter to browse. Backspace edits, Control-U
+clears, Escape cancels editing. Below it, **Open this folder · new session**
+switches through the existing validated `open_project_session(create=True)` path.
+Directory rows (including `../`) navigate on click or Enter; Left/Backspace goes
+to the parent when not editing. Files and links are labelled and inert. Browsing
+never creates sessions; opening the current directory explicitly does. Sessions
+remain available in the Sessions tab. Listings are bounded and truncation/errors
+are visible. No filesystem access occurs in the terminal bridge or Rust client.
+
+The project path uses the shared native single-line editor (cursor/word movement,
+Home/End, Delete, selection and undo), not an append-only search string. Click the
+path or press `/` to edit; bracketed paste belongs to the focused selector and
+never leaks into the conversation composer. Enter submits the `sidebar/project_path`
+bridge action to browse; Escape cancels the draft. Directory Enter/click browses,
+Left/Backspace visits the parent (a no-op at `/`); “Open this folder” is the separate
+explicit action that starts a project session.

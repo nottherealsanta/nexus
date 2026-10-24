@@ -55,6 +55,10 @@ async def test_focus_and_explicit_project_are_isolated(shared):
         assert len(daemon.projects.hosts) == 2
         (a / 'only-a').write_text('a')
         (b / 'only-b').write_text('b')
+        browser = await client.call(p.ProjectDirectoryList(path=str(b)))
+        assert isinstance(browser, p.DirectoryListResult)
+        assert browser.path == str(b.resolve())
+        assert [row["name"] for row in browser.entries] == ["only-b"]
         switched = await client.call(p.ProjectFocus(project=opened.project.key))
         assert switched.project.root == str(b)
         listing = await client.call(p.DirectoryList())

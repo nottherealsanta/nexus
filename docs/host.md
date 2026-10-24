@@ -691,3 +691,18 @@ claims are hints, not authority: multiple clients may focus different sessions. 
 GPT Live starts only on the singleton manager, never on a foreground root session.
 
 `SessionTurnDiff(session, seq, path, max_bytes)` returns a bounded diff of a worktree turn's saved commits in `SessionWorktreeResult.state`. `SessionTurnRevert(session, seq, include_later, confirm_token)` previews an idle owned-worktree revert and issues a 120-second single-use token bound to HEAD and selected commits. The main checkout saves no turns, so turn diff and revert there are refused with "No saved turns in the main checkout; work in a worktree to get them." Overlapping later turns require `include_later`. Merge commits are currently refused.
+
+### Read-only project picker listing
+
+`ProjectDirectoryList(path, limit=500)` returns `DirectoryListResult` with absolute
+paths. Unlike session-root-scoped `DirectoryList` (unchanged), it accepts arbitrary
+local absolute/`~/` directories, using the shared `ProjectOpen` path validator and
+its resolved launch directory, not the enclosing Git root. This operation only
+lists names/kinds/sizes: it does not read file contents, register projects, or
+create sessions. It retains the existing listing scan/output bounds, hidden-name
+and credential filtering, symlink classification, directory-first order and read
+deny checks. Opening remains a separate `ProjectOpen`/fresh-session operation.
+The authority is local-client-only: the optional device gateway's default-deny
+command policy rejects `ProjectDirectoryList`, even for devices with read/tool
+permissions. Local authenticated daemon clients have the same arbitrary-directory
+chooser authority as `ProjectOpen`; session `DirectoryList` stays confined.

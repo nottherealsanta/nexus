@@ -7,6 +7,8 @@
 //! filtering, selection, rename and archive confirmation. Painting records the geometry
 //! (tab cells, list rows, divider) that mouse handling uses, so both share one layout.
 use crate::bridge::Snapshot;
+use crate::editor::Editor;
+use crate::input::edit;
 use crate::picker::{self, Dashboard};
 use crate::render::Palette;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -18,7 +20,6 @@ use ratatui::{
     Frame,
 };
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
@@ -177,7 +178,7 @@ pub struct SidebarUi {
     tab_hits: Vec<(Rect, usize)>,
     list: Rect,
     line_items: Vec<Option<usize>>,
-    collapsed: HashSet<String>,
+    project_edit: Option<Editor>,
     proj_sel: usize,
     proj_top: usize,
     file_sel: usize,
@@ -340,6 +341,22 @@ fn move_selection(sel: &mut usize, len: usize, code: KeyCode) -> bool {
 }
 
 impl SidebarUi {
+    /// Consume sidebar paste rather than leaking it into the conversation draft.
+    pub fn paste(&mut self, text: &str, s: &Snapshot) -> bool {
+        if !self.is_open(s) || !self.focus {
+            return false;
+        }
+        if s.sidebar.tab == "Projects" {
+            if let Some(editor) = self.project_edit.as_mut() {
+                let text: String = text.chars().filter(|c| !c.is_control()).collect();
+                if editor.text.len() + text.len() <= 4096 {
+                    editor.insert(&text);
+                }
+            }
+        }
+        true
+    }
+
     pub fn is_open(&self, s: &Snapshot) -> bool {
         s.sidebar.open && !self.session_dismissed
     }
@@ -378,16 +395,6 @@ impl SidebarUi {
         }
     }
 
-    /// Projects shown now: checkouts under a collapsed project are hidden.
-    fn visible_projects<'a>(&self, s: &'a Snapshot) -> Vec<&'a Value> {
-        rows_of(&s.sidebar.projects)
-            .iter()
-            .filter(|row| {
-                !(text(row, "kind") == "checkout" && self.collapsed.contains(text(row, "parent")))
-            })
-            .collect()
-    }
-
     // ----- keys -----------------------------------------------------------------------
 
     /// One key while the sidebar has focus. `draft_empty` lets the Sessions list own letters
@@ -398,7 +405,8 @@ impl SidebarUi {
             return Out::action(act("toggle"));
         }
         let tab = s.sidebar.tab.as_str();
-        let editing = tab == "Sessions"
+        let editing = (tab == "Projects" && self.project_edit.is_some())
+            || tab == "Sessions"
             && (self.dash.searching
                 || self.dash.rename.is_some()
                 || self.dash.confirm_archive.is_some());
@@ -451,55 +459,81 @@ impl SidebarUi {
         Out::default()
     }
 
-    fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
-        if key.code == KeyCode::Char('a') {
-            return Out::action(act("add_project"));
-        }
-        let rows = self.visible_projects(s);
-        if move_selection(&mut self.proj_sel, rows.len(), key.code) {
+    fn activate_picker(&mut self, s: &Snapshot) -> Out {
+        let data = &s.sidebar.projects;
+        if self.proj_sel == 0 {
+            let mut editor = Editor::default();
+            editor.insert(text(data, "browser_path"));
+            self.project_edit = Some(editor);
             return Out::eat();
         }
-        let row = rows.get(self.proj_sel).copied();
-        match key.code {
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => match row {
-                Some(row) => self.activate_project(row),
-                None => Out::eat(),
-            },
-            KeyCode::Left => {
-                if let Some(row) = row {
-                    if text(row, "kind") == "checkout" {
-                        let parent = text(row, "parent");
-                        if let Some(at) = rows.iter().position(|r| text(r, "key") == parent) {
-                            self.proj_sel = at;
-                        }
-                    } else if flag(row, "expandable") {
-                        self.collapsed.insert(text(row, "key").to_owned());
+        if self.proj_sel == 1 {
+            return Out::action(
+                json!({"type":"sidebar","op":"select_project","path":text(data,"browser_path")}),
+            );
+        }
+        let Some(row) = data
+            .get("browser_rows")
+            .and_then(Value::as_array)
+            .and_then(|r| r.get(self.proj_sel - 2))
+        else {
+            return Out::eat();
+        };
+        if text(row, "kind") != "dir" {
+            return Out::eat();
+        }
+        Out::action(json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}))
+    }
+    fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
+        if let Some(draft) = self.project_edit.as_mut() {
+            match key.code {
+                KeyCode::Esc => self.project_edit = None,
+                KeyCode::Enter => {
+                    let path = self.project_edit.take().unwrap_or_default().text;
+                    return Out::action(json!({"type":"sidebar","op":"project_path","path":path}));
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *draft = Editor::default();
+                }
+                _ => {
+                    if !matches!(key.code, KeyCode::Char(c) if draft.text.len() + c.len_utf8() > 4096)
+                    {
+                        edit(draft, key, false);
                     }
                 }
-                Out::eat()
             }
-            KeyCode::Char('r') if key.modifiers.is_empty() => Out::action(act("refresh")),
+            return Out::eat();
+        }
+        let len = s
+            .sidebar
+            .projects
+            .get("browser_rows")
+            .and_then(Value::as_array)
+            .map_or(2, |r| r.len() + 2);
+        match key.code {
+            KeyCode::Char('/') | KeyCode::Char('a') => {
+                self.proj_sel = 0;
+                self.activate_picker(s)
+            }
+            KeyCode::Enter | KeyCode::Right => self.activate_picker(s),
+            KeyCode::Left | KeyCode::Backspace => {
+                let parent = s
+                    .sidebar
+                    .projects
+                    .get("browser_rows")
+                    .and_then(Value::as_array)
+                    .and_then(|rows| rows.first())
+                    .filter(|row| text(row, "name") == "..");
+                match parent {
+                    Some(row) => Out::action(
+                        json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}),
+                    ),
+                    None => Out::eat(),
+                }
+            }
+            _ if move_selection(&mut self.proj_sel, len, key.code) => Out::eat(),
             _ => self.unowned(&key),
         }
-    }
-
-    /// Enter or a click on a project row: fold it, or open its newest session.
-    fn activate_project(&mut self, row: &Value) -> Out {
-        let key = text(row, "key");
-        if flag(row, "expandable") {
-            if !self.collapsed.remove(key) {
-                self.collapsed.insert(key.to_owned());
-            }
-            return Out::eat();
-        }
-        let (workspace, session) = (text(row, "workspace"), text(row, "session"));
-        if workspace.is_empty() {
-            return Out::eat();
-        }
-        let op = if session.is_empty() { "open_project" } else { "open_session" };
-        Out::action(
-            json!({"type":"sidebar","op":op,"workspace":workspace,"session":session}),
-        )
     }
 
     fn files_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
@@ -550,10 +584,9 @@ impl SidebarUi {
             return self.open_directory(row);
         }
         let path = text(row, "path");
-        let double = self
-            .last_file_click
-            .as_ref()
-            .is_some_and(|(last, at)| last == path && now.saturating_duration_since(*at) <= DOUBLE_CLICK);
+        let double = self.last_file_click.as_ref().is_some_and(|(last, at)| {
+            last == path && now.saturating_duration_since(*at) <= DOUBLE_CLICK
+        });
         if double {
             return self.open_file(row);
         }
@@ -569,9 +602,7 @@ impl SidebarUi {
             KeyCode::PageDown => self.git_top += 10,
             KeyCode::Home => self.git_top = 0,
             KeyCode::End => self.git_top = usize::MAX / 2,
-            KeyCode::Char('r') if key.modifiers.is_empty() => {
-                return Out::action(act("refresh"))
-            }
+            KeyCode::Char('r') if key.modifiers.is_empty() => return Out::action(act("refresh")),
             _ => return self.unowned(&key),
         }
         Out::eat()
@@ -666,10 +697,7 @@ impl SidebarUi {
             "Projects" => {
                 if let Some(index) = self.list_row_at(ev.column, ev.row) {
                     self.proj_sel = index;
-                    let rows = self.visible_projects(s);
-                    if let Some(row) = rows.get(index).copied() {
-                        return self.activate_project(row);
-                    }
+                    return self.activate_picker(s);
                 }
                 Out::eat()
             }
@@ -696,7 +724,12 @@ impl SidebarUi {
     fn wheel(&mut self, down: bool, ev: MouseEvent, s: &Snapshot) -> Out {
         match s.sidebar.tab.as_str() {
             "Projects" => {
-                let len = self.visible_projects(s).len();
+                let len = s
+                    .sidebar
+                    .projects
+                    .get("browser_rows")
+                    .and_then(Value::as_array)
+                    .map_or(2, |r| r.len() + 2);
                 self.proj_sel = Self::scrolled(self.proj_sel, len, down);
             }
             "Files" => {
@@ -819,7 +852,7 @@ impl SidebarUi {
             return "Click to focus · Ctrl+B hides";
         }
         match s.sidebar.tab.as_str() {
-            "Projects" => "a add/open path · Enter open/fold · Esc back",
+            "Projects" => "/ edit path · Enter browse · ← parent · Open folder starts session",
             "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
             _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
@@ -870,98 +903,69 @@ impl SidebarUi {
         body: Rect,
         s: &Snapshot,
         p: &Palette,
-        spin: usize,
+        _spin: usize,
         mono: bool,
     ) {
         let data = &s.sidebar.projects;
         let quiet = Style::default().fg(p.quiet);
-        let rows = self.visible_projects(s);
-        let error = text(data, "error");
-        if rows.is_empty() {
-            let (message, style) = if !error.is_empty() {
-                (format!("Error: {error}"), Style::default().fg(p.error))
-            } else if flag(data, "loaded") {
-                ("No projects yet · start a session".to_owned(), quiet)
-            } else {
-                ("Loading projects…".to_owned(), quiet)
-            };
-            Self::note(frame, body, &message, style);
-            return;
+        let mut labels = vec![
+            match self.project_edit.as_ref() {
+                Some(editor) => format!(
+                    "Path: {}▏{}",
+                    &editor.text[..editor.cursor],
+                    &editor.text[editor.cursor..]
+                ),
+                None => format!("Path: {}", text(data, "browser_path")),
+            },
+            "Open this folder · new session".to_owned(),
+        ];
+        if let Some(rows) = data.get("browser_rows").and_then(Value::as_array) {
+            labels.extend(rows.iter().map(|r| {
+                format!(
+                    "{}{}",
+                    text(r, "name"),
+                    if text(r, "kind") == "dir" {
+                        " /"
+                    } else {
+                        " · file (not selectable)"
+                    }
+                )
+            }));
         }
-        self.proj_sel = self.proj_sel.min(rows.len() - 1);
-        let width = usize::from(body.width);
-        let glyphs = nexus_widgets::Glyphs::from_env();
-        let mut lines: Vec<(Line<'static>, Option<usize>)> = Vec::new();
-        if !error.is_empty() {
+        let mut lines = Vec::new();
+        let mut selected = None;
+        for (i, label) in labels.iter().enumerate() {
+            let active = i == self.proj_sel;
+            if active {
+                selected = Some(lines.len());
+            }
+            lines.push((
+                row_line(
+                    vec![Span::styled(if active { "› " } else { "  " }, quiet)],
+                    label,
+                    Style::default().fg(p.text),
+                    "",
+                    quiet,
+                    usize::from(body.width),
+                    if active { Some(p.element) } else { None },
+                    mono && active,
+                ),
+                Some(i),
+            ));
+        }
+        if !text(data, "browser_error").is_empty() {
             lines.push((
                 Line::styled(
-                    fit(&format!("Error: {error}"), width),
+                    fit(text(data, "browser_error"), usize::from(body.width)),
                     Style::default().fg(p.error),
                 ),
                 None,
             ));
         }
-        let mut selected_line = None;
-        for (index, row) in rows.iter().enumerate() {
-            let is_selected = index == self.proj_sel;
-            let depth = row.get("depth").and_then(Value::as_u64).unwrap_or(0);
-            let status = mark(row.get("rank").and_then(Value::as_u64).unwrap_or(2), spin, p);
-            let mut prefix = Vec::new();
-            if depth == 0 {
-                let chevron = if !flag(row, "expandable") {
-                    "  "
-                } else if self.collapsed.contains(text(row, "key")) {
-                    glyphs.closed
-                } else {
-                    glyphs.open
-                };
-                prefix.push(Span::styled(
-                    format!("{chevron:<2}"),
-                    Style::default().fg(p.muted),
-                ));
-            } else {
-                prefix.push(Span::raw("   "));
-            }
-            prefix.push(status);
-            prefix.push(Span::raw(" "));
-            let current = flag(row, "current");
-            let main_style = if current {
-                Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
-            } else if depth == 0 {
-                Style::default().fg(p.text)
-            } else {
-                Style::default().fg(p.muted)
-            };
-            let count = row.get("count").and_then(Value::as_u64).unwrap_or(0);
-            let age = text(row, "age");
-            let right = if age.is_empty() {
-                count.to_string()
-            } else {
-                format!("{count} · {age}")
-            };
-            let bg = if is_selected { Some(p.element) } else { None };
-            if is_selected {
-                selected_line = Some(lines.len());
-            }
-            lines.push((
-                row_line(
-                    prefix,
-                    text(row, "label"),
-                    main_style,
-                    &right,
-                    quiet,
-                    width,
-                    bg,
-                    mono && is_selected,
-                ),
-                Some(index),
-            ));
+        if flag(data, "browser_truncated") {
+            lines.push((Line::styled("… more entries not shown", quiet), None));
         }
-        if flag(data, "truncated") {
-            lines.push((Line::styled("… older sessions not listed", quiet), None));
-        }
-        let top = self.paint_list(frame, body, lines, selected_line, self.proj_top);
-        self.proj_top = top;
+        self.proj_top = self.paint_list(frame, body, lines, selected, self.proj_top);
     }
 
     pub fn draw_files(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette, mono: bool) {
@@ -1495,7 +1499,48 @@ mod tests {
         let s = open("Projects", 34);
         let mut ui = SidebarUi::default();
         let out = ui.key(key(KeyCode::Char('a')), &s, true);
-        assert_eq!(out.action, Some(act("add_project")));
+        assert!(out.consumed);
+        assert_eq!(ui.project_edit.as_ref().map(|e| e.text.as_str()), Some(""));
+        let out = ui.key(key(KeyCode::Char('/')), &s, true);
+        assert!(out.consumed);
+        let out = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(
+            out.action,
+            Some(json!({"type":"sidebar","op":"project_path","path":"/"}))
+        );
+    }
+
+    #[test]
+    fn project_path_uses_text_editor_and_owns_paste() {
+        let mut s = open("Projects", 34);
+        s.sidebar.projects = json!({"browser_path":"/repo"});
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        ui.key(key(KeyCode::Char('/')), &s, true);
+        ui.key(key(KeyCode::Home), &s, true);
+        ui.key(key(KeyCode::Delete), &s, true);
+        assert!(ui.paste("/tmp/", &s));
+        ui.key(key(KeyCode::End), &s, true);
+        ui.key(key(KeyCode::Left), &s, true);
+        ui.key(key(KeyCode::Backspace), &s, true);
+        let out = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(out.action, Some(json!({"type":"sidebar","op":"project_path","path":"/tmp/reo"})));
+        assert!(ui.paste("must not reach composer", &s));
+        assert!(ui.project_edit.is_none());
+        ui.focus = false;
+        assert!(!ui.paste("composer", &s));
+    }
+
+    #[test]
+    fn project_parent_at_filesystem_root_does_not_enter_first_child() {
+        let mut s = open("Projects", 34);
+        s.sidebar.projects = json!({"browser_path":"/","browser_rows":[
+            {"name":"child","kind":"dir","path":"/child"}
+        ]});
+        let mut ui = SidebarUi::default();
+        ui.focus = true;
+        assert!(ui.key(key(KeyCode::Left), &s, true).action.is_none());
+        assert!(ui.key(key(KeyCode::Backspace), &s, true).action.is_none());
     }
 
     #[test]
@@ -1713,28 +1758,31 @@ mod tests {
     }
 
     #[test]
-    fn projects_group_repositories_with_their_worktrees() {
-        let s = projects_snapshot();
+    fn projects_browser_layout_and_navigation() {
+        let mut s = projects_snapshot();
+        s.sidebar.projects = json!({"browser_path":"/repo","browser_rows":[
+            {"name":"..","kind":"dir","path":"/"},
+            {"name":"src","kind":"dir","path":"/repo/src"},
+            {"name":"main.py","kind":"file","path":"/repo/main.py"}
+        ]});
         let mut ui = SidebarUi::default();
-        let text = screen(&mut ui, &s, 40, 24);
-        let lines: Vec<&str> = text.lines().collect();
-        let at = |needle: &str| lines.iter().position(|line| line.contains(needle)).unwrap();
-        assert!(at("repo") < at("main") && at("main") < at("feature-x") && at("feature-x") < at("solo"));
-        let column = |line: &str, needle: &str| line[..line.find(needle).unwrap()].chars().count();
-        assert!(
-            column(lines[at("feature-x")], "feature-x") > column(lines[at("repo")], "repo"),
-            "worktrees are indented"
-        );
-        // Folding the repository hides its checkouts; a lone project opens its session.
-        ui.focus = true;
-        assert!(ui.key(key(KeyCode::Enter), &s, true).consumed);
-        let text = screen(&mut ui, &s, 40, 24);
-        assert!(!text.contains("feature-x") && text.contains("solo"));
-        ui.key(key(KeyCode::Down), &s, true);
-        let open = ui.key(key(KeyCode::Enter), &s, true);
+        let text = screen(&mut ui, &s, 60, 24);
+        assert!(text.contains("Path: /repo") && text.contains("main.py"));
+        ui.proj_sel = 3;
         assert_eq!(
-            open.action,
-            Some(json!({"type":"sidebar","op":"open_session","workspace":"/solo","session":"s3"}))
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"browse_project","path":"/repo/src"}))
+        );
+        ui.proj_sel = 4;
+        assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none());
+        assert_eq!(
+            ui.key(key(KeyCode::Left), &s, true).action,
+            Some(json!({"type":"sidebar","op":"browse_project","path":"/"}))
+        );
+        ui.proj_sel = 1;
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"select_project","path":"/repo"}))
         );
     }
 

@@ -2301,6 +2301,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         continue;
                     }
+                    if cache.sidebar.paste(&text, &s) {
+                        dirty = true;
+                        continue;
+                    }
                     if s.dashboard.is_some() {
                         continue;
                     }

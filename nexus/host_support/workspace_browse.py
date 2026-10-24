@@ -59,7 +59,8 @@ def normalize_relative(path: object) -> str:
 
 
 def list_directory(
-    runtime: object, path: str = "", limit: int = DEFAULT_LIST_ENTRIES, *, session: str = ""
+    runtime: object, path: str = "", limit: int = DEFAULT_LIST_ENTRIES, *, session: str = "",
+    project_root: Path | None = None,
 ) -> tuple[str, list[dict[str, Any]], bool]:
     """List one workspace directory: ``(path, entries, truncated)``.
 
@@ -72,7 +73,7 @@ def list_directory(
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("directory limit must be a positive integer")
     limit = min(limit, MAX_LIST_ENTRIES)
-    workspace = session_workspace(runtime, session)
+    workspace = project_root if project_root is not None else session_workspace(runtime, session)
     denied = _file_search_denied_roots(runtime, session=session, workspace=workspace)
     target = workspace
     for part in relative.split("/") if relative else ():
@@ -108,7 +109,7 @@ def list_directory(
             info = entry.stat(follow_symlinks=False)
         except (OSError, UnicodeError):
             continue
-        child = f"{relative}/{name}" if relative else name
+        child = str(resolved / name) if project_root is not None else (f"{relative}/{name}" if relative else name)
         if stat.S_ISLNK(info.st_mode):
             kind, size = "link", None
         elif stat.S_ISDIR(info.st_mode):
@@ -125,7 +126,7 @@ def list_directory(
         entries.append({"name": name, "path": child, "kind": kind, "size": size})
     entries.sort(key=lambda row: (row["kind"] != "dir", row["name"].casefold(), row["name"]))
     truncated = cut or len(entries) > limit
-    return relative, entries[:limit], truncated
+    return str(resolved) if project_root is not None else relative, entries[:limit], truncated
 
 
 def _walk_workspace_path(

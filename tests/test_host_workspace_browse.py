@@ -232,3 +232,28 @@ async def test_git_status_is_bounded(tmp_path, monkeypatch):
     result = await _facade(tmp_path).handle(p.GitStatus())
     assert isinstance(result, p.GitStatusResult)
     assert len(result.rows) == 3 and result.truncated
+
+
+async def test_project_directory_listing_outside_session_is_readonly_and_validated(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "src").mkdir()
+    (outside / "readme.txt").write_text("x")
+    result = await _facade(workspace).handle(p.ProjectDirectoryList(path=str(outside)))
+    assert isinstance(result, p.DirectoryListResult)
+    assert result.path == str(outside.resolve())
+    assert [(r["name"], r["kind"]) for r in result.entries] == [("src", "dir"), ("readme.txt", "file")]
+    assert all(r["path"].startswith(str(outside.resolve())) for r in result.entries)
+    for path in ("relative", str(outside / "readme.txt"), str(outside / "missing"), "/bad\npath"):
+        assert isinstance(await _facade(workspace).handle(p.ProjectDirectoryList(path=path)), p.ErrorResult)
+    limited = await _facade(workspace).handle(p.ProjectDirectoryList(path=str(outside), limit=1))
+    assert len(limited.entries) == 1 and limited.truncated
+    # The original workspace-scoped contract is unchanged.
+    assert isinstance(await _facade(workspace).handle(p.DirectoryList(path=str(outside))), p.ErrorResult)
+
+
+async def test_project_directory_listing_honours_denies(tmp_path, monkeypatch):
+    monkeypatch.setattr(wb, "_file_search_denied_roots", lambda runtime, **kwargs: (tmp_path.resolve(),))
+    assert isinstance(await _facade(tmp_path).handle(p.ProjectDirectoryList(path=str(tmp_path))), p.ErrorResult)

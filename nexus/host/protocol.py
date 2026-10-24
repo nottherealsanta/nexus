@@ -1072,6 +1072,16 @@ class GitDiff(msgspec.Struct, tag=True, frozen=True):
     project: str = ""
 
 
+class ProjectDirectoryList(msgspec.Struct, tag=True, frozen=True):
+    """Read-only local project picker; absolute/~/path, validated like ProjectOpen.
+
+    Returns DirectoryListResult with absolute paths. No file contents are read.
+    """
+
+    path: str = ""
+    limit: int = 500
+
+
 class DirectoryList(msgspec.Struct, tag=True, frozen=True):
     """List one workspace directory for the sidebar Files tab (read-only, bounded).
 
@@ -1500,6 +1510,7 @@ Command = (
     | ContextExtensionSelect
     | FileSearch
     | GitDiff
+    | ProjectDirectoryList
     | DirectoryList
     | FilePreview
     | GitStatus
@@ -1640,6 +1651,7 @@ COMMANDS: tuple[type, ...] = (
     ContextExtensionSelect,
     FileSearch,
     GitDiff,
+    ProjectDirectoryList,
     DirectoryList,
     FilePreview,
     GitStatus,
@@ -2902,6 +2914,7 @@ __all__ = [
     "FileSearchResult",
     "GitDiff",
     "GitDiffResult",
+    "ProjectDirectoryList",
     "DirectoryList",
     "DirectoryListResult",
     "FilePreview",

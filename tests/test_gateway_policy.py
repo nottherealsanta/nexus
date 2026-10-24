@@ -261,3 +261,9 @@ def test_field_less_commands_pass_unchanged():
     command = p.SessionList()
     assert policy.authorize(command, ("read",), "d") is command
     assert policy.authorize(p.Health(), ("read",), "d")
+
+
+def test_arbitrary_project_directory_browsing_is_not_remote_authority():
+    # Local chooser authority must not become filesystem discovery for devices.
+    with pytest.raises(policy.CommandDenied):
+        policy.authorize(p.ProjectDirectoryList(path="/tmp"), ALL, "dev_1")
