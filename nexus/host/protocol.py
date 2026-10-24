@@ -151,8 +151,9 @@ class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
 
 class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
     workspace: str
-    session: str
+    session: str = ""
     browser: bool = False
+    create: bool = False
     project: str = ""
 
 

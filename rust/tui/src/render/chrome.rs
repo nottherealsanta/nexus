@@ -319,7 +319,7 @@ pub fn layout_key(r: &Regions) -> LayoutKey {
 pub fn needs_full_repaint(previous: Option<LayoutKey>, next: LayoutKey) -> bool {
     previous.is_some_and(|previous| previous != next)
 }
-/// The workspace row under the tabs: `path branch worktree`, aligned with the first tab label.
+/// The project strip under the composer: the path's basename, then branch, full path and worktree.
 fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     // Presentation only: the manager has no workspace of its own to show.
     if s.manager.active {
@@ -330,9 +330,11 @@ fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     let mut room = width.saturating_sub(at + usize::from(width >= 12));
     let mut out: Vec<(usize, String, Seg)> = Vec::new();
     let mut column = at;
+    let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
     for (text, seg) in [
-        (path, Seg::Path),
+        (name, Seg::Title),
         (branch, Seg::Branch),
+        (path, Seg::Path),
         (s.worktree.as_str(), Seg::Worktree),
     ] {
         if text.is_empty() {
@@ -506,51 +508,61 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         Paragraph::new(row(tabs_layout)).style(background),
         bar,
     );
-    // Four rows: tabs, a thin line, the workspace row, then the closing rule. Three rows
-    // (short terminals) drop the line. The line shares the closing rule's extent; the closing rule is fainter (`rule_faint`).
-    let full = area.height > 3;
+    // Two rows: the tabs and a thin line closing the bar; one row (short terminals) drops the
+    // line. The project strip lives below the composer (`draw_project_strip`). Same inset as the
+    // tabs; no line in the manager view (no workspace to divide).
     let inset = if width < 12 { 0 } else { 2 };
-    let hline = |y: u16, color: ratatui::style::Color| {
+    if area.height > 1 && !s.manager.active {
         let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
-        (
+        frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(" ".repeat(inset), background),
                 Span::styled(
                     glyph.repeat(width.saturating_sub(2 * inset)),
-                    background.fg(color),
+                    background.fg(p.border),
                 ),
             ]))
             .style(background),
             Rect {
-                y,
+                y: area.y + 1,
                 height: 1,
                 ..area
             },
-        )
-    };
-    if full && !s.manager.active {
-        let (w, r) = hline(area.y + 1, p.border);
-        frame.render_widget(w, r);
-    }
-    // The workspace row sits under the tabs (and the line).
-    if area.height > 1 {
-        let crumbs = Rect {
-            y: area.y + if full { 2 } else { 1 },
-            height: 1,
-            ..area
-        };
-        frame.render_widget(
-            Paragraph::new(row(crumb_layout(s, width))).style(background),
-            crumbs,
         );
     }
-    // A thin rule closes the bar. `─` is drawn mid-cell, so the row reads as half a row of air
-    // above a line. Same inset as the tabs; absent in the manager view (no workspace to divide).
-    let rule_y = if full { 3 } else { 2 };
-    if area.height > rule_y && !s.manager.active {
-        let (w, r) = hline(area.y + rule_y, p.rule_faint);
-        frame.render_widget(w, r);
+}
+/// The project strip under the composer: `name branch path worktree` (see `crumb_layout`).
+pub(super) fn draw_project_strip(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette) {
+    if area.height == 0 || area.width == 0 || !s.agent_page.is_empty() {
+        return;
     }
+    let background = Style::default().bg(p.background);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut at = 0usize;
+    for (start, text, seg) in crumb_layout(s, usize::from(area.width)) {
+        if start > at {
+            spans.push(Span::styled(" ".repeat(start - at), background));
+        }
+        at = start + text.width();
+        let style = match seg {
+            Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
+            Seg::Worktree => match s.worktree_kind.as_str() {
+                "worktree" => background.fg(p.purple).add_modifier(Modifier::BOLD),
+                "main" => background.fg(p.muted),
+                _ => background.fg(p.quiet),
+            },
+            Seg::Path => background.fg(p.muted),
+            _ => background.fg(p.quiet),
+        };
+        spans.push(Span::styled(text, style));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(background),
+        Rect {
+            height: 1,
+            ..area
+        },
+    );
 }
 pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
     tab_cells(s, area.width as usize)
@@ -600,7 +612,17 @@ mod chrome_tests {
         }
     }
 
-    /// The two top-bar rows: the tabs, then the workspace path and branch directly beneath.
+    /// The project strip row (basename, branch, path, worktree) drawn under the composer.
+    fn strip_text(s: &Snapshot, width: u16) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_project_strip(frame, s, frame.area(), &Palette::new(false)))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..width).map(|x| buffer[(x, 0)].symbol()).collect()
+    }
+    /// The two top-bar rows: the tabs, then the thin line (blank in the manager view).
     fn bar_rows(s: &Snapshot, width: u16) -> Vec<String> {
         let backend = ratatui::backend::TestBackend::new(width, 2);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
@@ -654,34 +676,34 @@ mod chrome_tests {
         s.breadcrumb = "~/repo:main".into();
         s.title = "Fix bug".into();
         let rows = bar_rows(&s, 100);
+        let strip = strip_text(&s, 100);
         assert!(rows[0].contains("Fix bug"), "{:?}", rows[0]);
-        assert!(rows[1].contains("~/repo"), "{:?}", rows[1]);
-        assert!(rows[1].contains("main"), "{:?}", rows[1]);
+        assert!(!rows[0].contains("~/repo") && !rows[1].contains("~/repo"), "{rows:?}");
+        assert!(strip.contains("~/repo"), "{strip:?}");
+        assert!(strip.contains("main"), "{strip:?}");
     }
 
     #[test]
-    fn crumb_row_is_adjacent_and_columns_match_layout() {
+    fn project_strip_columns_match_layout() {
         let mut s = Snapshot::default();
         s.breadcrumb = "~/repo:main".into();
         s.tabs = open_tabs(2, 0);
-        let rows = bar_rows(&s, 100);
-        // Path starts at column 3, branch one gap cell after it.
-        assert_eq!(rows[1].find("~/repo"), Some(3), "{:?}", rows[1]);
-        assert_eq!(
-            rows[1].find("main"),
-            Some(3 + "~/repo".len() + 1),
-            "{:?}",
-            rows[1]
-        );
+        let strip = strip_text(&s, 100);
+        // The basename starts at column 3, the branch one gap cell after it, then the full path.
+        assert_eq!(strip.find("repo"), Some(3), "{strip:?}");
+        assert_eq!(strip.find("main"), Some(3 + "repo".len() + 1), "{strip:?}");
+        assert_eq!(strip.find("~/repo"), Some(3 + "repo main ".len()), "{strip:?}");
         let layout = crumb_layout(&s, 100);
         assert_eq!(layout[0].0, 3);
-        // Tab hit cells live on the first row only and are unaffected by the crumb row.
+        // Tab hit cells live on the first row only and are unaffected by the strip.
         assert!(tab_cells(&s, 100)
             .iter()
             .any(|c| c.kind == TabHit::Session(0)));
-        // Normal sessions use two rows; the second row is blank only for the manager.
+        // The bar's second row is the thin line, blank only for the manager.
+        assert!(!bar_rows(&s, 100)[1].trim().is_empty());
         s.manager.active = true;
         assert!(bar_rows(&s, 100)[1].trim().is_empty());
+        assert!(strip_text(&s, 100).trim().is_empty());
     }
 
     fn manager_snapshot(active: bool) -> Snapshot {
@@ -748,7 +770,7 @@ mod chrome_tests {
     }
 
     #[test]
-    fn closing_rule_is_fainter_than_the_line_under_the_tabs() {
+    fn the_bar_ends_with_the_line_under_the_tabs() {
         for light in [false, true] {
             let p = Palette::new(light);
             let s = Snapshot::default();
@@ -757,10 +779,7 @@ mod chrome_tests {
             terminal.draw(|f| draw_top_bar(f, &s, f.area(), &p, 0)).unwrap();
             let buf = terminal.backend().buffer();
             assert_eq!(buf[(10, 1)].fg, p.border, "line under the tabs");
-            assert_eq!(buf[(10, 3)].fg, p.rule_faint, "closing rule");
-            assert_ne!(p.rule_faint, p.border);
-            assert_ne!(p.rule_faint, p.quiet);
-            assert_ne!(p.rule_faint, p.element);
+            assert_eq!(buf[(10, 2)].symbol(), " ", "nothing below the line");
         }
     }
 
@@ -784,7 +803,7 @@ mod chrome_tests {
             tabs: open_tabs(1, 0),
             ..Snapshot::default()
         };
-        assert!(bar_rows(&s, 100)[1].contains("~/repo main main checkout"));
+        assert!(strip_text(&s, 100).contains("repo main ~/repo main checkout"));
         let parsed: Snapshot =
             serde_json::from_str(r#"{"worktree":"⎇ x","worktree_kind":"worktree"}"#).unwrap();
         assert_eq!(parsed.worktree_kind, "worktree");
@@ -808,9 +827,10 @@ mod chrome_tests {
             !text.contains("~/repo") && !text.contains("main") && !text.contains("wt-fix"),
             "workspace info left the tab row: {text}"
         );
-        assert!(rows[1].trim() == "~/repo main wt-fix", "{:?}", rows[1]);
+        let strip = strip_text(&s, 100);
+        assert!(strip.trim() == "repo main ~/repo wt-fix", "{strip:?}");
         assert_eq!(
-            rows[1].find('~'),
+            strip.find("repo"),
             Some(3),
             "aligned with the first tab label"
         );
@@ -846,7 +866,7 @@ mod chrome_tests {
             worktree: String::new(),
             ..s
         };
-        assert_eq!(bar_rows(&plain, 100)[1].trim(), "~/repo main");
+        assert_eq!(strip_text(&plain, 100).trim(), "repo main ~/repo");
     }
 
     #[test]
@@ -948,8 +968,9 @@ mod chrome_tests {
                 assert!(end <= usize::from(width), "overflow at {width}");
             }
             let _ = bar_rows(&s, width);
+            let _ = strip_text(&s, width);
         }
-        assert!(bar_rows(&s, 100)[1].contains("feature/branch"));
+        assert!(strip_text(&s, 100).contains("feature/branch"));
     }
 
     #[test]

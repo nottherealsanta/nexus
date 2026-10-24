@@ -23,7 +23,13 @@ class ProjectIdentity:
 
 
 def resolve_project(path: str | Path) -> ProjectIdentity:
-    launch = Path(path).expanduser().resolve()
+    raw = str(path)
+    if not raw or len(raw.encode("utf-8")) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise ValueError("Project path must be non-empty and at most 4096 bytes without control characters")
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("Project path must be absolute")
+    launch = candidate.resolve()
     if not launch.is_dir():
         raise ValueError(f"Project directory does not exist: {launch}")
     current = launch

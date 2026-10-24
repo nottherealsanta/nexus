@@ -63,3 +63,16 @@ def test_walk_is_bounded_and_paths_are_not_display_truncated(tmp_path):
     identity = resolve_project(path)
     assert identity.kind == 'plain' and identity.root == path
     assert len(str(identity.root)) > 200
+
+
+@pytest.mark.parametrize('path', ['', 'relative/path', '/tmp/with\nnewline', '/tmp/with\x00null', '/' + 'x' * 4096])
+def test_project_identity_rejects_invalid_paths(path):
+    with pytest.raises(ValueError):
+        resolve_project(path)
+
+
+def test_project_identity_expands_home(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    project = tmp_path / 'project'
+    project.mkdir()
+    assert resolve_project('~/project').root == project.resolve()

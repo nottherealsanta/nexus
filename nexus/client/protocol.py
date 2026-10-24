@@ -106,8 +106,8 @@ class Client:
             p.ProjectSessionsList(limit=limit, query=query, archived=archived, projects=projects)
         )
 
-    async def open_project_session(self, workspace: str, session: str, *, browser: bool = False) -> p.ProjectSessionOpenResult:
-        return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser))  # type: ignore[return-value]
+    async def open_project_session(self, workspace: str, session: str = "", *, browser: bool = False, create: bool = False) -> p.ProjectSessionOpenResult:
+        return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser, create=create))  # type: ignore[return-value]
 
     async def archive_session(self, session: str, *, reason: str = "user") -> Any:
         return (await self._request(p.SessionArchive(session=session, reason=reason))).session  # type: ignore[union-attr]

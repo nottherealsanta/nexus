@@ -263,7 +263,11 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
         if await self.worktree_operation(operation):
             return
         kind = operation["kind"]
-        if kind == "ownership_tree":
+        if kind == "project_open":
+            # The host validates the path (ProjectOpen rules); this editor only bounds the input.
+            self.edit("Open project: absolute path (or ~/path), then save", "", {"kind": "project_open_form"})
+            return
+        elif kind == "ownership_tree":
             from .ownership import tree_menu
             root = operation["id"]
             # Refresh / explicit return replaces the tree, never nests copies.
@@ -859,6 +863,22 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
                 target["builtin"] = False
                 target["overrides_builtin"] = bool(target.get("overrides_builtin")) or was_builtin
                 await self.refresh_settings_pages(target["scope"], target["category"])
+        elif target["kind"] == "project_open_form":
+            path = body.strip()
+            if not path or len(path.encode("utf-8")) > 4096:
+                self.form["status"] = "Enter a project path of at most 4096 bytes"
+                return
+            from .actions import ProjectOpenError
+            try:
+                await self.shell.switch_project(path, create=True)
+            except ProjectOpenError as exc:
+                self.form["status"] = str(exc)  # already toasted with the redacted reason
+                return
+            self.form = None
+            self.stack.clear()
+            self.shell.panel_title = ""
+            self.shell.panel_revision += 1
+            await self.shell.sidebar.close()
         elif target["kind"] == "skills_install_form":
             if not body.strip():
                 raise ValueError("Enter a source such as owner/repo")

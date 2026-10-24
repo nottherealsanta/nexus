@@ -1214,6 +1214,9 @@ pub struct Regions {
     /// The left sidebar column (zero width while closed or when the conversation has no room).
     pub sidebar: Rect,
     pub tabs: Rect,
+    /// The project strip (`name branch path worktree`) under the composer and Live panel, directly
+    /// above the bottom bar (zero height on the dashboard, sub agent pages and the manager view).
+    pub project: Rect,
     pub context: Rect,
     /// The GPT Live panel between the composer and the bottom bar (zero height when no call
     /// is open; while it opens or closes only the revealed rows).
@@ -1830,17 +1833,19 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     // The Live panel sits under the composer card, above the bottom bar (the activity meter
     // row). Its rows come out of the transcript, never the composer: it is capped so the
     // transcript keeps one row, and expanded it takes every row the transcript can spare.
-    // The session bar is four rows (tabs, thin line, workspace row, thin rule), three on short
-    // terminals (no line); the dashboard has none.
+    // The session bar is two rows (tabs, thin line), one on short terminals (no line); the
+    // dashboard has none. The project strip is one row below the composer, absent on the
+    // dashboard, sub agent pages and the manager view.
     let bar: u16 = if dash {
         0
     } else if area.height < TOP_LINE_MIN_HEIGHT {
-        3
+        1
     } else {
-        4
+        2
     };
+    let strip = u16::from(!dash && s.agent_page.is_empty() && !s.manager.active && composer_height > 0);
     let foot = u16::from(composer_height > 3);
-    let fixed = 1 + bar + composer_height;
+    let fixed = 1 + bar + strip + composer_height;
     let spare = middle.height.saturating_sub(fixed + 1);
     let mut pane = if composer_height > 0 {
         crate::live_bar::pane_rows(s)
@@ -1852,23 +1857,22 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     } else {
         pane.min(spare)
     };
-    // One empty row above the top bar (and the Sessions header). In a session the bar is three
-    // rows: the tabs, the workspace path and branch, then a thin `─` rule. The rule stands in
-    // for the old blank row below the bar (a terminal cannot allocate half a row; the rule
-    // glyph sits mid-cell, so it reads as half a row of air plus a line), so the transcript
-    // starts on the same row as before.
+    // Project/session information follows the composer (and any Live panel), immediately
+    // before the activity/context bar. On tiny terminals Layout bounds every region.
     let center = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(bar),
         Constraint::Length(0),
         Constraint::Min(1),
-        Constraint::Length(composer_height - foot),
+        Constraint::Length(composer_height.saturating_sub(foot)),
         Constraint::Length(pane),
+        Constraint::Length(strip),
         Constraint::Length(foot),
     ])
     .split(middle);
     Regions {
         tabs: center[1],
+        project: center[6],
         sidebar,
         details: if drawer {
             Rect::new(
@@ -1884,7 +1888,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         transcript: center[3],
         composer: center[4],
         live: center[5],
-        bottom_bar: center[6],
+        bottom_bar: center[7],
     }
 }
 /// The GPT Live panel under the composer card. It is laid out at its full height off screen and
@@ -2119,6 +2123,7 @@ pub fn draw(
     }
     if s.dashboard.is_none() {
         draw_top_bar(frame, s, r.tabs, &p, spin);
+        draw_project_strip(frame, s, r.project, &p);
     }
     cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
@@ -3921,13 +3926,13 @@ mod tests {
         let top = screen(0, &mut cache);
         assert!(top[0].trim().is_empty(), "spacing row above the top bar");
         assert!(
-            !top[1].trim().is_empty() && !top[3].trim().is_empty(),
-            "tabs on row 1 and the workspace row on row 3"
+            !top[1].trim().is_empty(),
+            "tabs on row 1"
         );
-        for y in [2, 4] {
+        for y in [2] {
             assert!(
                 top[y].contains('─') && top[y].trim_matches(|c| c == ' ' || c == '─').is_empty(),
-                "thin line on row {y} (between the tabs and the crumbs, and closing the bar): {:?}",
+                "thin line on row {y} closing the tabs: {:?}",
                 top[y]
             );
         }
@@ -3935,7 +3940,7 @@ mod tests {
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
         // The transcript starts right after the bar's spacing row.
-        let t = 5usize;
+        let t = 3usize;
         assert_eq!(rect.y as usize, t, "pinned at the top of the transcript");
         assert!(mid[t + 1].contains("question number 1"), "{:?}", &mid[..9]);
         assert!(
@@ -4455,7 +4460,8 @@ mod tests {
                     let rows = composer_rows(r.composer, &s);
                     assert_eq!(rows.len(), 4, "no spacer row under the card");
                     assert_eq!(rows[3].bottom(), r.composer.bottom());
-                    assert_eq!(r.composer.bottom(), r.bottom_bar.y);
+                    assert_eq!(r.composer.bottom(), r.project.y);
+                    assert_eq!(r.project.bottom(), r.bottom_bar.y);
                     assert_eq!(r.bottom_bar.height, 1);
                     let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
                     let mut cache = Cache::default();
@@ -4500,38 +4506,25 @@ mod tests {
                         assert_eq!(buffer[(meter_area.x + 3, r.bottom_bar.y)].symbol(), "─");
                     }
                     if r.tabs.height > 0 {
-                        assert_eq!(r.tabs.height, 4);
-                        let row = |y: u16| -> String {
-                            (r.tabs.x..r.tabs.right())
-                                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                        assert_eq!(r.tabs.height, 2);
+                        let row = |rect: Rect| -> String {
+                            (rect.x..rect.right())
+                                .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
                                 .collect()
                         };
-                        let top = row(r.tabs.y);
+                        let top = row(r.tabs);
                         if r.details.width == 0 {
                             assert!(top.contains('▤'), "dashboard button: {top}");
                         }
                         assert!(!top.contains("/workspace"), "path left the tab row: {top}");
-                        let crumbs = row(r.tabs.y + 2);
+                        assert_eq!(r.project.height, 1);
+                        let strip = row(r.project);
                         assert!(
-                            crumbs.contains("/workspace"),
-                            "path under the tabs : {crumbs}"
+                            strip.trim_start().starts_with("workspace"),
+                            "basename leads the strip: {strip}"
                         );
-                        // The narrow details drawer sits beside the bar, never over it; only
-                        // the bar's own columns carry the rule.
-                        let bar_right = if r.details.x > r.tabs.x && r.details.x < r.tabs.right() {
-                            r.details.x
-                        } else {
-                            r.tabs.right()
-                        };
-                        let rule: String = (r.tabs.x..bar_right)
-                            .map(|x| terminal.backend().buffer()[(x, r.tabs.y + 3)].symbol())
-                            .collect();
-                        assert!(
-                            rule.contains('─')
-                                && rule.trim_matches(|c| c == ' ' || c == '─').is_empty(),
-                            "thin rule under the workspace row: {rule}"
-                        );
-                        assert_eq!(r.transcript.y, r.tabs.bottom(), "rule is the margin");
+                        assert_eq!(r.project.y, r.composer.bottom(), "project strip follows composer");
+                        assert_eq!(r.project.bottom(), r.bottom_bar.y, "strip precedes activity");
                     }
                     assert_eq!(
                         buffer[(rows[2].x + 2, rows[2].y)].symbol(),
@@ -4544,7 +4537,7 @@ mod tests {
         }
     }
     #[test]
-    fn top_bar_line_sits_between_the_tabs_and_the_crumbs() {
+    fn top_bar_line_closes_the_tabs_and_the_project_strip_follows_the_composer() {
         let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
         for light in [false, true] {
             let p = Palette::new(light);
@@ -4576,11 +4569,14 @@ mod tests {
                     };
                     let ctx = format!("light={light} centered={centered} {width}x{height}");
                     if height < TOP_LINE_MIN_HEIGHT {
-                        assert_eq!(r.tabs.height, 3, "{ctx}: line row dropped");
-                        assert!(row(r.tabs.y + 1).contains("/workspace"), "{ctx}: crumbs move up");
+                        assert_eq!(r.tabs.height, 1, "{ctx}: line row dropped");
                         continue;
                     }
-                    assert_eq!(r.tabs.height, 4, "{ctx}");
+                    let strip: String = (r.project.x..r.project.right())
+                        .map(|x| buffer[(x, r.project.y)].symbol())
+                        .collect();
+                    assert!(strip.contains("workspace"), "{ctx}: project strip {strip:?}");
+                    assert_eq!(r.tabs.height, 2, "{ctx}");
                     let line = row(r.tabs.y + 1);
                     assert!(
                         line.contains(glyph) && line.trim_matches(|c| c == ' ' || c == glyph.chars().next().unwrap()).is_empty(),
@@ -4588,9 +4584,7 @@ mod tests {
                     );
                     let x = r.tabs.x + r.tabs.width / 2;
                     assert_eq!(buffer[(x, r.tabs.y + 1)].fg, p.border, "{ctx}: rule colour");
-                    assert_eq!(buffer[(x, r.tabs.y + 3)].fg, p.rule_faint, "{ctx}: closing rule colour");
                     assert!(!row(r.tabs.y).contains(glyph), "{ctx}: tabs row has no line");
-                    assert!(row(r.tabs.y + 2).contains("/workspace"), "{ctx}: crumbs under the line");
                 }
             }
         }
@@ -6770,7 +6764,8 @@ mod live_pane_tests {
         assert_eq!(r.live.height, crate::live_bar::PANE_ROWS);
         assert_eq!(r.transcript.bottom(), r.composer.y, "the transcript pays, not the composer");
         assert_eq!(r.live.y, r.composer.bottom(), "directly under the composer");
-        assert_eq!(r.live.bottom(), r.bottom_bar.y, "directly above the bottom bar");
+        assert_eq!(r.live.bottom(), r.project.y, "directly above the project strip");
+        assert_eq!(r.project.bottom(), r.bottom_bar.y);
         assert!(r.live.bottom() <= r.bottom_bar.y && r.bottom_bar.height == 1);
         assert_eq!(r.composer.height, before.composer.height);
         assert_eq!(
@@ -6788,7 +6783,7 @@ mod live_pane_tests {
         assert_eq!(r.transcript.height, 1);
         assert_eq!(r.composer.y, r.transcript.bottom());
         assert_eq!(r.live.y, r.composer.bottom());
-        assert_eq!(r.live.bottom(), r.bottom_bar.y);
+        assert_eq!(r.live.bottom(), r.project.y);
         assert!(r.live.height > crate::live_bar::PANE_ROWS);
     }
 
@@ -6824,10 +6819,10 @@ mod live_pane_tests {
             let r = regions(area, &s, 8, false);
             assert_eq!(r.live.height, shown);
             assert_eq!(r.live.y, r.composer.bottom());
-            assert_eq!(r.live.bottom(), r.bottom_bar.y);
+            assert_eq!(r.live.bottom(), r.project.y);
             assert_eq!(r.composer.height, full.composer.height);
             assert_eq!(r.bottom_bar, full.bottom_bar, "the bottom bar never moves");
-            assert_eq!(r.composer.bottom() + shown, r.bottom_bar.y, "the composer rises as it grows");
+            assert_eq!(r.composer.bottom() + shown, r.project.y, "the composer rises as it grows");
             assert_eq!(r.transcript.height, full.transcript.height + (6 - shown));
         }
         let mut cache = Cache::default();

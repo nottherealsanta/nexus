@@ -306,8 +306,8 @@ class ShellActions:
 
         self.usage_task = asyncio.create_task(refresh())
 
-    async def switch_project(self, workspace, session):
-        """Open ``session`` in ``workspace``, starting that project's daemon when needed.
+    async def switch_project(self, workspace, session="", *, create=False):
+        """Open ``session`` (or create a fresh one) through the shared daemon.
 
         A failed start (a stale install's ``ConfigError``, a daemon that never became ready, a
         timeout) is shown as an error toast with the redacted reason and the Sessions dashboard
@@ -317,19 +317,24 @@ class ShellActions:
         # The main action loop and the manager's show task may both navigate: one switch at a time.
         # ``switch`` and the helpers below never re-enter this method, so the lock cannot self-deadlock.
         async with self._switch_lock:
-            await self._switch_project(workspace, session)
+            await self._switch_project(workspace, session, create=create)
 
-    async def _switch_project(self, workspace, session):
+    async def _switch_project(self, workspace, session, *, create=False):
         if self.attachment_draft_key is None:
             self.attachment_draft_key = (self.workspace, self.controller.session)
         project = None
-        if workspace != self.workspace:
+        if workspace != self.workspace or create:
             self.usage_cache = None
             if self.usage_task:
                 self.usage_task.cancel()
             try:
-                result = await self.client.open_project_session(workspace, session)
+                if create:
+                    result = await self.client.open_project_session(workspace, session, create=True)
+                else:
+                    result = await self.client.open_project_session(workspace, session)
                 self.workspace = result.project.root
+                if create:
+                    session = result.session
                 project = result.project.key
             except Exception as exc:
                 from ...host_support.errors import error_text

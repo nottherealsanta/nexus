@@ -383,3 +383,24 @@ async def test_completed_non_follow_subscription_releases_host_and_server_slot(s
         if 'original_send' in locals():
             server_connection._send = original_send
         await client.close()
+
+
+async def test_project_session_open_creates_a_fresh_session_in_a_new_project(shared, tmp_path):
+    daemon, (a, _), _ = shared
+    target = tmp_path / 'new-project'
+    target.mkdir()
+    client = await connect(daemon, a)
+    try:
+        result = await client.call(p.ProjectSessionOpen(workspace=str(target), create=True))
+        assert isinstance(result, p.ProjectSessionOpenResult), result
+        assert result.project.root == str(target.resolve())
+        assert result.session
+        state = await client.call(p.SessionState(result.session, project=result.project.key))
+        assert isinstance(state, p.SessionStateResult), state
+        assert state.view.get('turns', []) == []
+        again = await client.call(p.ProjectSessionOpen(workspace=str(target), create=True))
+        assert isinstance(again, p.ProjectSessionOpenResult), again
+        assert again.session != result.session
+        assert again.project.key == result.project.key
+    finally:
+        await client.close()

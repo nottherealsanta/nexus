@@ -15,7 +15,13 @@ in memory. An explicit `project` key selects a project; ambiguous historical
 session ids require it when the focus cannot disambiguate them. `ProjectOpen`
 registers/loads a path and `ProjectList` lists known roots, including empty ones.
 `ProjectSessionOpen` focuses and opens the session on the existing connection;
-its result contains `project` and `session`, with no reconnect socket.
+its result contains `project` and `session`, with no reconnect socket. With
+`create=True` and an empty `session` it creates a fresh session in `workspace`
+(an absolute existing directory, at most 4096 bytes, no control characters;
+validated by `resolve_project`, the same rules as `ProjectOpen`), so a project
+never seen before becomes usable without existing sessions. The Ratatui
+Projects sidebar uses this to open any path; the launch directory is only the
+initial project.
 
 Each runtime has its own settings, grants, presence, MCP connections, shell jobs,
 environment and diagnostics. A shared supervisor names sessions by project and

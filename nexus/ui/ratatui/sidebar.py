@@ -275,6 +275,13 @@ class SidebarController:
             await self.preview(action.get("path"))
         elif op == "refresh":
             await self.refresh(force=True)
+        elif op == "add_project":
+            await self.shell.workflows.operate({"kind": "project_open"})
+        elif op == "open_project":
+            workspace = action.get("workspace")
+            if workspace not in {row.get("workspace") for row in self.projects.get("rows", [])}:
+                raise ValueError("That project is no longer listed")
+            await self.shell.switch_project(workspace, create=True)
         elif op == "open_session":
             await self.open_session(action.get("workspace"), action.get("session"))
         else:

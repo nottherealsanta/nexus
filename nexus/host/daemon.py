@@ -391,10 +391,18 @@ class _ClientConnection:
             return p.WebLaunchResult(url=await self.daemon.web_launch(self.focus))
         if isinstance(command, p.ProjectSessionOpen):
             target = resolve_project(command.workspace)
-            identity = projects.session_project(command.session, self.focus, target.key)
+            if command.create:
+                if command.session:
+                    raise ValueError("A fresh project session cannot specify a session id")
+                import uuid
+                session = uuid.uuid4().hex[:12]
+                identity = target
+            else:
+                session = command.session
+                identity = projects.session_project(session, self.focus, target.key)
             host = await projects.acquire(identity, self.environment, self.client_name)
             try:
-                opened = await host.facade.handle(p.SessionOpen(session=command.session, create=False, recover=True))
+                opened = await host.facade.handle(p.SessionOpen(session=session, create=command.create, recover=True))
                 if isinstance(opened, p.ErrorResult):
                     projects.release(host)
                     return opened
@@ -405,7 +413,7 @@ class _ClientConnection:
                 projects.release(self.focus)
             self.focus = host
             self.launch_path = identity.root
-            return p.ProjectSessionOpenResult(project=project_ref(identity), session=command.session)
+            return p.ProjectSessionOpenResult(project=project_ref(identity), session=session)
         if self.focus is None:
             raise ValueError("Control connections require an explicit project operation")
         session = getattr(command, "session", "") or getattr(command, "session_id", "")

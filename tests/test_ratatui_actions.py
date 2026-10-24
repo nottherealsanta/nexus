@@ -715,6 +715,50 @@ async def test_failed_project_open_toasts_the_redacted_reason_and_keeps_the_dash
     assert error_text(TimeoutError()) == "TimeoutError"
 
 
+async def test_project_open_prompts_for_a_path_and_creates_a_fresh_session_there():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from nexus.ui.ratatui.actions import ShellActions
+    from nexus.ui.ratatui.workflows import Workflows
+
+    shell = ShellActions.__new__(ShellActions)
+    shell._switch_lock = asyncio.Lock()
+    shell.workspace = "/here"
+    shell.attachment_draft_key = ("/here", "s")
+    shell.usage_cache = None
+    shell.usage_task = None
+    shell.controller = SimpleNamespace(session="s")
+    shell.controller.client = SimpleNamespace(open_project_session=AsyncMock(return_value=SimpleNamespace(
+        project=SimpleNamespace(root="/new", key="k"), session="abc123")))
+    shell.switch = AsyncMock()
+    shell.sidebar = SimpleNamespace(close=AsyncMock())
+    flows = Workflows.__new__(Workflows)
+    flows.shell = shell
+    flows.edit = Mock()
+    flows.form = {"status": ""}
+    flows.form_target = {"kind": "project_open_form"}
+    flows.form_id = None
+    flows.stack = []
+    shell.panel_title = "Open project"
+    shell.panel_revision = 0
+    shell.workflows = flows
+
+    await flows._operate({"kind": "project_open"})
+    assert flows.edit.call_args.args[2] == {"kind": "project_open_form"}
+
+    flows.form = {"id": "f", "status": "", "revision": 0, "body": ""}
+    await flows.save("f", "x" * 5000, 1)
+    assert "4096" in flows.form["status"]
+    shell.client.open_project_session.assert_not_awaited()
+
+    await flows.save("f", "  /new\n", 2)
+    shell.client.open_project_session.assert_awaited_once_with("/new", "", create=True)
+    shell.switch.assert_awaited_once_with("abc123", project="k")
+    shell.sidebar.close.assert_awaited_once()
+    assert shell.workspace == "/new"
+
+
 def _tab_shell(tmp_path, monkeypatch, current="new1"):
     shell = _shell(tmp_path, monkeypatch)
     shell.workspace = "w"

@@ -1904,22 +1904,22 @@ and clicks share the header layout.
 
 ### Top bar spacer row (TODO item 1)
 
-The in-session top bar is four rows (`Regions.tabs.height == 4`): tabs, a thin `─` line, the
-workspace row, then the closing `─` rule (`p.border`, inset 2 cells each side, `-` under
-`NEXUS_ASCII=1`; both hidden in the manager view but the rows stay reserved). Terminals shorter than
-`render::TOP_LINE_MIN_HEIGHT` (24 rows) drop the line and the bar is three rows (tabs, crumbs,
-rule); the extra row always comes out of the transcript. Reason: a terminal cannot draw a half-height gap
-without a filled shape, and a full blank row between the tabs and the crumbs read as too much empty
-space, so that row carries a line instead. The line shares the closing rule's colour and x-extent
-(the bar's own columns, so the narrow details drawer and the centered layout are respected), and
-does not join the active tab. The transcript starts right after the rule (`transcript.y == tabs.bottom()`). One empty
-row is kept above the bar. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
+The in-session top bar is two rows (`Regions.tabs.height == 2`): tabs, then a thin `─` line
+(`p.border`, inset 2 cells each side, `-` under `NEXUS_ASCII=1`; hidden in the manager view but the
+row stays reserved). Terminals shorter than `render::TOP_LINE_MIN_HEIGHT` (24 rows) drop the line and
+the bar is one row. The transcript starts right after the line (`transcript.y == tabs.bottom()`). One
+empty row is kept above the bar. Row 1 keeps the session tabs (`Seg::Session`/`Close`/`New`) and the
 right-hand controls; consecutive tabs are separated by a straight vertical `│`
-(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab). The workspace row
-(`crumb_layout`, blank in the manager view) holds the workspace path, branch and worktree,
-aligned with the first tab label and truncated to the width. Hit-testing still uses row 1
-only (`tab_cells`); the sub-agent page header and the Sessions page are unchanged (the page
-header draws on the first row of its area). The workspace branch is
+(`Seg::Divider`, quiet colour, one cell, not clickable, none around a lone tab).
+
+The project strip (`Regions.project`, `draw_project_strip`, `crumb_layout`) is one row **below the
+composer and any Live panel, directly above the activity/context bar** (`project.y == composer.bottom()`
+without a Live panel, `project.bottom() == bottom_bar.y`). It shows the path's basename (last
+component, bold) on the left, then the branch, the full path and the worktree, aligned with the first
+tab label and truncated to the width. It has zero height on the Sessions page, sub-agent pages and the
+manager view. Hit-testing for the top bar still uses row 1 only (`tab_cells`); the sub-agent page
+header and the Sessions page are unchanged (the page header draws on the first row of its area). The
+workspace branch is
 polled asynchronously about every three seconds; it is not an instantaneous filesystem
 watch, though a shell command submission triggers a refresh. Background refresh results
 are discarded if the selected workspace changed meanwhile. Covered by focused Python and
@@ -1936,9 +1936,19 @@ elements (`▐ ▌ █`) are avoided for icons. `NEXUS_ASCII=1` uses `o`/`*`, `=
 `◨` stay banned (can fall back to a wide font glyph). Alignment was checked in the screenshot font
 only.
 
-The top bar's closing rule (under the crumbs) uses the `rule_faint` palette token (dark `32,32,35`,
-light `227,227,230`), about 40% of the way from the background to `border`; the line under the tabs
-stays `border` (dark `50,50,55`, light `200,200,205`).
+The line under the tabs uses `border` (dark `50,50,55`, light `200,200,205`). The `rule_faint` token
+(dark `32,32,35`, light `227,227,230`) is no longer used by the top bar.
+
+### Opening any project from the Projects sidebar
+
+The launch directory is only the initial project. In the Projects tab, `a` ("add/open path") asks the
+Python shell (`sidebar` action `add_project`), which opens the host-side editor `project_open_form`
+for an absolute (or `~/`) path of at most 4096 bytes. Saving calls
+`ShellActions.switch_project(path, create=True)` → client `open_project_session(create=True)` →
+`ProjectSessionOpen(create=True)`, so the daemon validates the path with `resolve_project` (existing
+directory, no control characters), registers/loads the project and creates a fresh session in it;
+a project with no sessions is therefore immediately usable. Failures are toasted with the redacted
+host reason and the form stays open. The UI never inspects project databases or session files.
 
 ### Context-header rail removal (2026-10)
 

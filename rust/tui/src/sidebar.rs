@@ -452,6 +452,9 @@ impl SidebarUi {
     }
 
     fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
+        if key.code == KeyCode::Char('a') {
+            return Out::action(act("add_project"));
+        }
         let rows = self.visible_projects(s);
         if move_selection(&mut self.proj_sel, rows.len(), key.code) {
             return Out::eat();
@@ -490,11 +493,12 @@ impl SidebarUi {
             return Out::eat();
         }
         let (workspace, session) = (text(row, "workspace"), text(row, "session"));
-        if workspace.is_empty() || session.is_empty() {
+        if workspace.is_empty() {
             return Out::eat();
         }
+        let op = if session.is_empty() { "open_project" } else { "open_session" };
         Out::action(
-            json!({"type":"sidebar","op":"open_session","workspace":workspace,"session":session}),
+            json!({"type":"sidebar","op":op,"workspace":workspace,"session":session}),
         )
     }
 
@@ -815,7 +819,7 @@ impl SidebarUi {
             return "Click to focus · Ctrl+B hides";
         }
         match s.sidebar.tab.as_str() {
-            "Projects" => "↑↓ move · Enter open/fold · Tab tab · Esc back",
+            "Projects" => "a add/open path · Enter open/fold · Esc back",
             "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
             _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
@@ -1484,6 +1488,14 @@ mod tests {
         assert_eq!(width_at(0, area, 200), MIN_WIDTH);
         assert_eq!(width_at(150, area, 200), MAX_WIDTH);
         assert_eq!(width_at(150, area, 100), 100 - MIN_CONVERSATION);
+    }
+
+    #[test]
+    fn projects_tab_a_key_asks_the_host_to_add_a_project_by_path() {
+        let s = open("Projects", 34);
+        let mut ui = SidebarUi::default();
+        let out = ui.key(key(KeyCode::Char('a')), &s, true);
+        assert_eq!(out.action, Some(act("add_project")));
     }
 
     #[test]
