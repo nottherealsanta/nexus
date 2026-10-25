@@ -103,6 +103,7 @@ _V2_NUMERIC = {
     "code_mode.max_sub_input_tokens": int,
     "code_mode.max_total_sub_tokens": int,
     "code_mode.max_depth": int,
+    "agent.tool_call_nudge": int,
     "agent.max_iterations": int,
     "agent.max_turn_seconds": float,
     "model.params.temperature": float,

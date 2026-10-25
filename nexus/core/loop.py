@@ -2162,6 +2162,7 @@ async def run_turn(
     limits: TurnLimits | None = None,
     cancel: CancelToken | None = None,
     malformed_budget: int = DEFAULT_MALFORMED_BUDGET,
+    tool_call_nudge: int = 100,
     persist_user_message: bool = True,
     manifest_ref: ManifestRefView | None = None,
     environment_for: EnvironmentFactory | None = None,
@@ -2229,6 +2230,8 @@ async def run_turn(
     if cancel is not None and cancel is not token:
         watcher = asyncio.create_task(_forward_cancel(cancel, token))
 
+    tool_call_count = 0
+    nudged_threshold = 0
     malformed_total = 0
     terminal: TurnState | None = None
     limit_reason: str | None = None
@@ -2328,9 +2331,15 @@ async def run_turn(
                 else hooks
             ) or hooks
 
-            # Record what this request's ``subagent`` description advertises
-            # before assembly, so a changed roster reaches history as a tail
-            # notice in the same request (never in the cached prefix).
+            # Persist advisory context only after cancellation and hard-limit checks.
+            token.raise_if_cancelled()
+            if tool_call_nudge > 0:
+                threshold = tool_call_count // tool_call_nudge * tool_call_nudge
+                note_nudge = getattr(session, "note_tool_call_nudge", None)
+                if threshold > nudged_threshold and callable(note_nudge):
+                    await _maybe_await(note_nudge(tool_call_count, threshold, turn_id=lease.turn_id))
+                    nudged_threshold = threshold
+
             roster_digest = getattr(iteration_tools, "subagent_roster_digest", None)
             note_roster = getattr(session, "note_subagent_roster", None)
             if isinstance(roster_digest, Mapping) and callable(note_roster):
@@ -2601,6 +2610,7 @@ async def run_turn(
                 break
 
             tool_uses = [b for b in blocks if isinstance(b, ToolUse)]
+            tool_call_count += len(tool_uses)
 
             # Every root and child call gets the same bounded presentation
             # events.  These remain separate from the model's durable ToolUse

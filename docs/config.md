@@ -59,7 +59,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 
 | Section | Key fields (defaults) |
 | --- | --- |
-| `[agent]` | `name` orchestrator, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
+| `[agent]` | `name` orchestrator, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `tool_call_nudge` 100 (0 disables), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
 | `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `usage_refresh_seconds` 300 (60-3600), `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback`, `subagent_usage` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
@@ -375,3 +375,9 @@ max_depth = 1
 The manager profile never gains the kernel tools. Disabled sessions and installations
 without the exact optional dependency do not advertise them. Exposure intersects
 the selected tool catalog and excludes loop-driving tools.
+
+### Tool-call wrap-up reminder
+
+`agent.tool_call_nudge` is a nonnegative integer, default `100`; `0` disables it.
+At each crossed multiple, the next model request receives an advisory wrap-up
+notice. This does not change hard limits.

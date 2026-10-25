@@ -1121,3 +1121,34 @@ async def test_fallback_request_uses_its_route_effort():
     assert outcome.ok
     assert primary.requests[0].params.reasoning_effort == "low"
     assert fallback.requests[0].params.reasoning_effort == "max"
+
+
+@pytest.mark.parametrize("async_notice", [False, True])
+@pytest.mark.parametrize("interval,maximum,expected", [(2, 0, [2, 4]), (0, 0, []), (2, 1, [])])
+async def test_tool_call_nudge_batches_recur_and_respect_limits(interval, maximum, expected, async_notice):
+    class NoticeSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.notices = []
+
+        def note_tool_call_nudge(self, count, threshold, *, turn_id):
+            assert self.messages[-1].role == "user"
+            assert all(isinstance(b, ToolResult) for b in self.messages[-1].content)
+            self.notices.append(threshold)
+
+    session = NoticeSession()
+    if async_notice:
+        sync_notice = session.note_tool_call_nudge
+
+        async def note_nudge(count, threshold, *, turn_id):
+            sync_notice(count, threshold, turn_id=turn_id)
+
+        session.note_tool_call_nudge = note_nudge
+    provider = ScriptedProvider(
+        tool_response(("a", "Read", {}), ("b", "Read", {}), ("c", "Read", {})),
+        tool_response(("d", "Read", {})),
+        text_response("done"),
+    )
+    await _run(session, provider, FakeSink(), FakeLease("t"),
+               tool_call_nudge=interval, limits=TurnLimits(max_iterations=maximum))
+    assert session.notices == expected

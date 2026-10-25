@@ -1724,6 +1724,31 @@ class Session:
             self._roster_digest = latest
         return self._roster_digest  # type: ignore[return-value]
 
+    def note_tool_call_nudge(self, count: int, threshold: int, *, turn_id: str) -> None:
+        """Persist advisory model context and its visible notice atomically."""
+        text = (
+            f"Tool-call wrap-up reminder: this turn has emitted {count} tool calls "
+            f"(threshold {threshold}). Consider wrapping up with a summary of results "
+            "and any remaining work. Continue using tools if needed; this is advisory, "
+            "not a hard limit."
+        )
+        stamp = time.time()
+        records = self._store.append_batch(self._id, [
+            lambda seq: MessageRecord(seq=seq, ts=stamp, message=Message(
+                role="user", content=[Text(text=text)],
+                meta=MessageMeta(turn_id=turn_id, notice="tool_call_nudge"))),
+            lambda seq: EventRecord(seq=seq, ts=stamp, event=Event(
+                type="context.notice", seq=seq, ts=stamp, session=self.id, turn=turn_id,
+                data={"kind": "tool_call_nudge", "message": text,
+                      "tool_calls": count, "threshold": threshold})),
+        ])
+        self._read = None
+        for record in records:
+            if isinstance(record, EventRecord):
+                self._observe_event(record.event)
+                self._publish(record.event)
+                self._offer_attached(record.event)
+
     def note_subagent_roster(self, digest: Mapping[str, str] | None) -> bool:
         """Record what the ``subagent`` tool description advertises for this request.
 
@@ -2840,6 +2865,10 @@ class Session:
                 manifest_ref=getattr(tool_turn, "manifest_ref", None),
                 environment_for=getattr(tool_turn, "environment_for", None),
                 hooks=getattr(tool_turn, "hooks", None),
+                tool_call_nudge=getattr(
+                    getattr(getattr(assembler.effective_config(), "v2", None), "agent", None),
+                    "tool_call_nudge", 100,
+                ) if callable(getattr(assembler, "effective_config", None)) else 100,
             )
 
         task = asyncio.create_task(produce())

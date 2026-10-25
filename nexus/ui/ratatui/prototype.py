@@ -1246,7 +1246,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 blocks.append({"id": f"root-move:{item.seq}", "kind": "literal", "title": "Worktree",
                                "text": escape_controls(root_move_text(item)), "gap": 1})
                 continue
-            title = {"subagent_wake_paused": "Subagent reports paused"}.get(str(item.data.get("kind")), "Notice")
+            title = {"subagent_wake_paused": "Subagent reports paused", "tool_call_nudge": "Tool-call wrap-up reminder"}.get(str(item.data.get("kind")), "Notice")
             blocks.append({"id": f"notice:{item.seq}", "kind": "literal", "title": title,
                            "text": escape_controls(str(item.data.get("message"))[:600]), "gap": 1})
 

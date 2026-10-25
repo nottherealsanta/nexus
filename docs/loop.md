@@ -231,3 +231,14 @@ before the next iteration's steering, assembly and compaction; the session appli
 the queued move there (setup runs under a process slot, Stop stays available) and,
 if the root changed, hands back a rebuilt assembler/dispatcher/gate/environment
 factory that the loop swaps in. The turn, its iteration count and limits carry on.
+
+### Tool-call wrap-up nudge
+
+Each turn counts assistant-emitted tool-use blocks, including blocked, duplicate,
+and malformed calls, independently of execution. Calls inside code execution or
+child agents do not contribute to the parent count. With `agent.tool_call_nudge`
+(default 100, 0 disables), crossing a multiple adds a durable user-role harness
+notice and `context.notice` event atomically at the next live request boundary,
+after tool results and hard-limit/cancellation checks. A batch crossing several
+multiples produces one notice identifying the latest threshold and total. Later
+thresholds recur. The notice is advisory, never steering or queued input.

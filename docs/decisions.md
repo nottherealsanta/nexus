@@ -1699,3 +1699,10 @@ direct tools stay).
   Since Phase 3, when a checkpoint exists the next call restores it instead (the lost cell is in
   `missing_cells`); the empty reset remains when none exists.
 - **The kernel manifest names variables but never their values, and compaction never restores a kernel to list them (plan code-mode-kernel §3.9).** A summary or handoff brief is the only place the model keeps what a compacted prefix held, so the manifest (kernel id, attachments, targets, cells, and a `whos()`-style table of names, types and sizes) goes there. Values would bring secrets and bulk back into context, which the kernel exists to keep out. An evicted or lost kernel is listed from metadata with the reason its variables are absent, because restoring it just to compact would spend a worker and a snapshot on a summary. Reused summaries make no model call and keep the manifest they already have.
+
+## Tool-call wrap-up reminders are context, not limits
+
+`agent.tool_call_nudge` defaults to 100 assistant tool calls per turn. Persist
+reminders as atomic user-role notice/event pairs at request boundaries, rather
+than steering, so replay retains the same model context and users see why the
+harness asked for a wrap-up. Hard stops take precedence; child counts are isolated.

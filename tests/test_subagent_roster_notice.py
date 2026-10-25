@@ -384,3 +384,29 @@ def test_context_tail_starts_at_the_real_user_message_not_the_notice():
 
 def test_message_meta_notice_defaults_to_none():
     assert MessageMeta().notice is None
+
+
+def test_tool_call_nudge_is_atomic_durable_context_not_input(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("demo")
+    session.note_tool_call_nudge(103, 100, turn_id="t")
+    message = session.messages[-1]
+    assert message.role == "user"
+    assert message.meta.notice == "tool_call_nudge"
+    assert not is_user_prompt(message)
+    assert _notice_events(session)[-1].data["threshold"] == 100
+    replay = SessionManager(tmp_path).open("demo")
+    assert replay.messages[-1] == message
+    assert _notice_events(replay)[-1].data["tool_calls"] == 103
+
+
+def test_tool_call_nudge_config_is_nonnegative():
+    import msgspec
+    import pytest
+
+    from nexus.config.schema import AgentSection
+
+    assert AgentSection().tool_call_nudge == 100
+    assert msgspec.convert({"tool_call_nudge": 0}, type=AgentSection).tool_call_nudge == 0
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.convert({"tool_call_nudge": -1}, type=AgentSection)
