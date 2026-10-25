@@ -2498,9 +2498,18 @@ the first Escape only cancels the draft). Its first row is the editable absolute
 click it or press `/`/`a`, type, then Enter to browse. Backspace edits, Control-U
 clears, Escape cancels editing. Below it, **Open this folder · new session**
 switches through the existing validated `open_project_session(create=True)` path.
-Directory rows (including `../`) navigate on click or Enter; Left/Backspace goes
+Directory rows navigate on Right-arrow (drill in for a look around); Enter or
+click on a directory row opens it as a project directly, so adding a directory
+takes one step. The `../` row still navigates up on Enter/click, and
+Left/Backspace goes
 to the parent when not editing. Files and links are labelled and inert. Browsing
-never creates sessions; opening the current directory explicitly does. Sessions
+never creates sessions; opening a directory explicitly does. The picker cannot
+create directories either: the host contract offers no directory-creation
+command and `resolve_project` rejects paths that do not already exist, so make
+a new folder outside Nexus (shell or file manager) first, then open it by
+typing its full path (`/` + Enter) or by browsing to its parent and pressing
+Enter (or clicking) on its row. Typing a path that does not exist keeps the
+picker open with the host's redacted error instead of switching. Sessions
 remain available in the Sessions tab. Listings are bounded and truncation/errors
 are visible. No filesystem access occurs in the terminal bridge or Rust client.
 
@@ -2508,9 +2517,10 @@ The project path uses the shared native single-line editor (cursor/word movement
 Home/End, Delete, selection and undo), not an append-only search string. Click the
 path or press `/` to edit; bracketed paste belongs to the focused selector and
 never leaks into the conversation composer. Enter submits the `sidebar/project_path`
-bridge action to browse; Escape cancels the draft. Directory Enter/click browses,
-Left/Backspace visits the parent (a no-op at `/`); “Open this folder” is the separate
-explicit action that starts a project session.
+bridge action to browse; Escape cancels the draft. Directory Enter/click opens the
+folder as a project, Right drills into it, Left/Backspace visits the parent
+(a no-op at `/`); “Open this folder” remains the explicit action for the current
+directory that starts a project session.
 
 The picker state lives in an in-place-mutated host dict, so `SidebarController.snapshot()` sends a copy of `projects`: the terminal wire diff keeps the previous snapshot by reference, and a shared dict would compare equal to itself and the open picker would never reach the client. Every host `show` (`/sessions`, Ctrl+B open) also bumps `sidebar.reveal`; the client clears its local “hidden after opening a session” state on a change, so `/sessions` shows the sidebar again after a session was opened from it.
 

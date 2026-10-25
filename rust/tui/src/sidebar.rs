@@ -513,7 +513,16 @@ impl SidebarUi {
         if text(row, "kind") != "dir" {
             return Out::eat();
         }
-        Out::action(json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}))
+        // Enter (and single click) on a subdirectory opens it as a project
+        // right away instead of merely browsing into it, so adding a new
+        // directory takes one step. The `..` entry still navigates upward;
+        // Right-arrow drills into a folder for a look before opening it.
+        if text(row, "name") == ".." {
+            return Out::action(
+                json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}),
+            );
+        }
+        Out::action(json!({"type":"sidebar","op":"select_project","path":text(row,"path")}))
     }
     fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
         if !flag(&s.sidebar.projects, "browser_open") {
@@ -559,7 +568,26 @@ impl SidebarUi {
                 self.proj_sel = 0;
                 self.activate_picker(s)
             }
-            KeyCode::Enter | KeyCode::Right => self.activate_picker(s),
+            KeyCode::Enter => self.activate_picker(s),
+            KeyCode::Right => {
+                // Right drills into the highlighted folder for a look around
+                // without opening it; Enter (or click) opens it as a project.
+                if self.proj_sel >= 2 {
+                    if let Some(row) = s
+                        .sidebar
+                        .projects
+                        .get("browser_rows")
+                        .and_then(Value::as_array)
+                        .and_then(|rows| rows.get(self.proj_sel - 2))
+                        .filter(|row| text(row, "kind") == "dir")
+                    {
+                        return Out::action(
+                            json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}),
+                        );
+                    }
+                }
+                self.activate_picker(s)
+            },
             KeyCode::Left | KeyCode::Backspace => {
                 let parent = s
                     .sidebar
@@ -892,7 +920,7 @@ impl SidebarUi {
             "Projects" if !flag(&s.sidebar.projects, "browser_open") => {
                 "↑↓ move · Enter open · a Add project · Esc close"
             }
-            "Projects" => "/ edit path · Enter browse · ← parent · Open folder starts session",
+            "Projects" => "/ edit path · Enter open · → drill in · ← parent · Open folder starts session",
             "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
             _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
@@ -1924,7 +1952,19 @@ mod tests {
         ui.proj_sel = 3;
         assert_eq!(
             ui.key(key(KeyCode::Enter), &s, true).action,
-            Some(json!({"type":"sidebar","op":"browse_project","path":"/repo/src"}))
+            Some(json!({"type":"sidebar","op":"select_project","path":"/repo/src"})),
+            "Enter on a directory row opens it as a project directly"
+        );
+        assert_eq!(
+            ui.key(key(KeyCode::Right), &s, true).action,
+            Some(json!({"type":"sidebar","op":"browse_project","path":"/repo/src"})),
+            "Right still drills into a directory for a look before opening it"
+        );
+        ui.proj_sel = 2;
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"browse_project","path":"/"})),
+            "Enter on the `..` row navigates up instead of opening the parent"
         );
         ui.proj_sel = 4;
         assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none());

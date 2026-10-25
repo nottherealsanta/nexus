@@ -687,6 +687,30 @@ async def test_project_picker_cancel_and_root_parent(shell):
         await sidebar.handle({"op": "project_path", "path": "/"})
 
 
+@pytest.mark.asyncio
+async def test_project_picker_typed_missing_directory_cannot_be_opened(tmp_path, shell):
+    """The picker has no directory-creation command: typing a path that does not
+    exist must not switch or create anything, and the picker stays open with the
+    host's error so the user can correct the path (docs/ratatui-parity.md)."""
+    from nexus.ui.ratatui.sidebar import SidebarController
+
+    missing = tmp_path / "not-yet-created"
+    assert not missing.exists()
+    shell.switch_project = AsyncMock()
+    shell.client.list_project_directory = AsyncMock(side_effect=ValueError(
+        f"Project directory does not exist: {missing}"))
+    sidebar = SidebarController(shell)
+    sidebar.enabled = True
+    await sidebar.handle({"op": "add_project"})
+    await sidebar.handle({"op": "project_path", "path": str(missing)})
+    shell.switch_project.assert_not_awaited()
+    assert sidebar.projects["browser_open"]
+    assert "does not exist" in sidebar.projects["browser_error"]
+    await sidebar.handle({"op": "select_project", "path": str(missing)})
+    shell.switch_project.assert_not_awaited()
+    assert sidebar.projects["browser_open"]
+
+
 @pytest.mark.parametrize("path,expected", [
     ("/private/var/folders/p3/swkn2y6x6sg_cndh1r0084s40000gn/T/tmpftw3zyc1", True),
     ("/private/var/folders/p3/swkn2y6x6sg_cndh1r0084s40000gn/T/tmpbqv6_lmw", True),
