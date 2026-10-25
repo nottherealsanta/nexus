@@ -329,6 +329,22 @@ native TUI renders it as box-drawing art. The packaged `build` prompt carries
 the same diagram guidance. The live
 tool list and `subagent` roster still come from runtime.
 
+The packaged `task` prompt is the longest subagent body because it carries the
+working contract for unattended edits: read the brief's "done" and verification
+bar, follow the workspace instructions, note the pre-existing dirty tree and
+never revert others' changes, stay in scope (report a wrong premise instead of
+doing a different task; `escalate` real blocks and never route around a denial),
+verify without weakening checks, stop after a few failed attempts, review its own
+diff, and end with a self-contained Summary / Files changed / Verification / Open
+issues report. A user override in `~/.nexus/agents/task.md` shadows it.
+The other subagent bodies share its frame (no parent conversation, a
+self-contained report the root will check): `scout` splits the brief into
+questions, searches wide, records confirmed absences and labels inferences;
+`quick` checks every occurrence of a mechanical edit and hands back early when the
+job outgrows it (design decision, wrong premise, unclear failure, denial);
+`advisor` verifies the brief's claims, finds causes rather than symptoms, and adds a
+**Plan** section an implementer can act on.
+
 **Code-mode guidance (plan code-mode-kernel §3.10).** One paragraph is added by the
 environment context part (`nexus/context/parts.py`, `CODE_MODE_GUIDANCE`) whenever
 one of `code_start`, `code_attach`, `code_run` or `code_reset` is in the agent's tool

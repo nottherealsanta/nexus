@@ -2863,7 +2863,7 @@ class _ChildRuntime:
                     gate=gate,
                     lease=lease,
                     persist_user_message=True,
-                    tool_call_nudge=config.v2.agent.tool_call_nudge if getattr(config, "v2", None) else 100,
+                    tool_call_nudge=config.v2.agent.tool_call_nudge if getattr(config, "v2", None) else 300,
                     hooks=spec.hooks,
                     relay_transcript=True,
                 )

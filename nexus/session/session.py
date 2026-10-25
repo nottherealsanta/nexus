@@ -2867,8 +2867,8 @@ class Session:
                 hooks=getattr(tool_turn, "hooks", None),
                 tool_call_nudge=getattr(
                     getattr(getattr(assembler.effective_config(), "v2", None), "agent", None),
-                    "tool_call_nudge", 100,
-                ) if callable(getattr(assembler, "effective_config", None)) else 100,
+                    "tool_call_nudge", 300,
+                ) if callable(getattr(assembler, "effective_config", None)) else 300,
             )
 
         task = asyncio.create_task(produce())

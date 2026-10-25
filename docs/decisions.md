@@ -1702,7 +1702,7 @@ direct tools stay).
 
 ## Tool-call wrap-up reminders are context, not limits
 
-`agent.tool_call_nudge` defaults to 100 assistant tool calls per turn. Persist
+`agent.tool_call_nudge` defaults to 300 assistant tool calls per turn. Persist
 reminders as atomic user-role notice/event pairs at request boundaries, rather
 than steering, so replay retains the same model context and users see why the
 harness asked for a wrap-up. Hard stops take precedence; child counts are isolated.

@@ -716,6 +716,13 @@ def test_builtin_roles_match_the_default_contract(tmp_path):
     # Editing roles tell the root agent which files they changed.
     for name in ("task", "quick"):
         assert "Files changed" in mgr.load_body(name)
+    task = mgr.load_body("task")
+    for rule in ("Never revert", "escalate", "Never make a check pass by weakening it",
+                 "Do not loop", "Review your own diff", "Open issues"):
+        assert rule in task
+    assert "confirmed absence" in scout
+    assert "When to stop and hand back" in mgr.load_body("quick")
+    assert "**Plan**" in mgr.load_body("advisor")
     assert len({mgr.require(name).color for name in SEEDED_ROLES}) == len(SEEDED_ROLES)
 
 

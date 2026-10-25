@@ -145,7 +145,7 @@ class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
     agents_file: str = "AGENTS.md"
-    tool_call_nudge: Annotated[int, msgspec.Meta(ge=0)] = 100
+    tool_call_nudge: Annotated[int, msgspec.Meta(ge=0)] = 300
     max_iterations: int = 0  # 0 = unlimited
     max_turn_seconds: float = 0  # 0 = unlimited
     # Carried so a flat v1 layer can be bridged into v2 without losing it.

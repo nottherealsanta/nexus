@@ -406,7 +406,7 @@ def test_tool_call_nudge_config_is_nonnegative():
 
     from nexus.config.schema import AgentSection
 
-    assert AgentSection().tool_call_nudge == 100
+    assert AgentSection().tool_call_nudge == 300
     assert msgspec.convert({"tool_call_nudge": 0}, type=AgentSection).tool_call_nudge == 0
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert({"tool_call_nudge": -1}, type=AgentSection)

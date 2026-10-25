@@ -2162,7 +2162,7 @@ async def run_turn(
     limits: TurnLimits | None = None,
     cancel: CancelToken | None = None,
     malformed_budget: int = DEFAULT_MALFORMED_BUDGET,
-    tool_call_nudge: int = 100,
+    tool_call_nudge: int = 300,
     persist_user_message: bool = True,
     manifest_ref: ManifestRefView | None = None,
     environment_for: EnvironmentFactory | None = None,
