@@ -1159,6 +1159,9 @@ def _is_opencode_host(base_url: str) -> bool:
     return host == "opencode.ai" or host.endswith(".opencode.ai")
 
 
+_CACHE_KEY_MAX = 64  #: bound on the prompt_cache_key / session_id sent upstream
+
+
 def _is_codex_host(base_url: str) -> bool:
     """True for the ChatGPT-subscription Codex backend (rejects sampling params)."""
     return (urlsplit(base_url).hostname or "").lower() == "chatgpt.com"
@@ -1303,6 +1306,10 @@ class OpenAIProvider:
         if session_id and _is_opencode_host(self._base_url):
             # OpenCode Go asks every client for one stable id per conversation.
             headers.setdefault("x-opencode-session", session_id)
+        if session_id and _is_codex_host(self._base_url):
+            # The Codex CLI sends its conversation id as ``session_id``; the
+            # backend uses it with ``prompt_cache_key`` to route to one cache.
+            headers.setdefault("session_id", session_id[:_CACHE_KEY_MAX])
         if self._auth_headers is not None:
             headers.update(await self._auth_headers.headers())
             # A strategy may add per-request headers derived from the body
@@ -1436,6 +1443,15 @@ class OpenAIProvider:
         )
         body = self._finalize_body(body, api)
         session_id = req.metadata.get("session_id") if isinstance(req.metadata, Mapping) else None
+        if (
+            isinstance(session_id, str)
+            and session_id
+            and api == API_RESPONSES
+            and _is_codex_host(self._base_url)
+        ):
+            # Without a stable key the Codex backend barely reuses its prompt
+            # cache (~5% hits); the CLI keys it by conversation id.
+            body.setdefault("prompt_cache_key", session_id[:_CACHE_KEY_MAX])
         headers = await self._headers(body, session_id if isinstance(session_id, str) else None)
         usage = _UsageTotals()
         accumulator = ToolCallAccumulator()

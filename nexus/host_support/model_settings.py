@@ -289,7 +289,7 @@ async def tier_set(runtime: object, tier: str, refs: list[str], *, efforts: dict
             if reference not in refs:
                 raise ConfigError("tier effort model must be in the tier list")
             query = getattr(runtime, "candidate_supported_efforts", None)
-            supported = query(*reference.split("/", 1)) if callable(query) else ()
+            supported = query(*reference.split("/", 1), subagent=True) if callable(query) else ()
             if effort not in supported:
                 raise ConfigError(f"{reference} does not support effort {effort!r}")
         updates.append(("models.tier_efforts", tier, efforts))

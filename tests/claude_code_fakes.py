@@ -18,7 +18,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 args = sys.argv[1:]
 HELP = ("--restricted --tools --strict-mcp-config --mcp-config --setting-sources --settings "
         "--session-id --permission-mode manual acceptEdits plan auto dontAsk --no-chrome "
-        "--allowedTools --disallowedTools --disable-slash-commands")
+        "--allowedTools --disallowedTools --disable-slash-commands --resume --fork-session --effort")
 if args == ["--version"]:
     print("2.1.296 (Claude Code)"); sys.exit()
 if args == ["--help"]:
@@ -41,7 +41,10 @@ def reader():
         with open(os.path.join(here, "stdin.log"), "ab") as f:
             f.write(data)
 threading.Thread(target=reader, daemon=True).start()
-session = args[args.index("--session-id") + 1]
+resumed = "--resume" in args
+session = args[(args.index("--resume") if resumed else args.index("--session-id")) + 1]
+if resumed and cfg.get("new_session_on_resume"):
+    session = cfg["new_session_on_resume"]  # a resume that reports a replacement session id
 settings = json.load(open(args[args.index("--settings") + 1]))
 munged = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(os.getcwd()))
 if cfg.get("derived"):

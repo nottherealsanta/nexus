@@ -512,7 +512,7 @@ export function renderContextGroups({result, usage = ''}) {
   const bar = node('div', 'ctx-bar');
   bar.setAttribute('aria-hidden', 'true');
   const legend = node('p', 'context-muted ctx-legend');
-  legend.append(`Next request (estimated) · ${groups.filter(row => row.key.startsWith('turn:')).length} turn(s) · `);
+  legend.append(`${result.actually_sent ? 'Recorded request' : 'Next request'} (estimated) · ${groups.filter(row => row.key.startsWith('turn:')).length} turn(s) · `);
   for (const [name, tokens] of parts) {
     const segment = node('span', `ctx-bar-${name}`);
     segment.style.setProperty('--share', `${(tokens / total) * 100}%`);

@@ -84,11 +84,20 @@ class SessionDashboard:
         self.query = ""
         self.rows_query = ""
         self.rows = []
+        epoch = self.epoch
         manager = getattr(self.shell, "manager", None)
-        if manager is not None:
-            await manager.refresh()  # the pinned entry shows the current status the moment the page opens
-        await self.refresh()
-        if self.visible:
+        try:
+            if manager is not None:
+                await manager.refresh()  # the pinned entry shows the current status the moment the page opens
+            await self.refresh()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A failed first read must not leave a visible list with no poll (it would never fill,
+            # and `/sessions` would find it "already open"): show the error and keep polling.
+            if self.visible and epoch == self.epoch:
+                self.error = escape_controls(str(exc))
+        if self.visible and epoch == self.epoch:
             self.task = asyncio.create_task(self._poll())
 
     def close(self):
@@ -111,6 +120,7 @@ class SessionDashboard:
             return
         self.rows = _plain(session_rows(result, self.shell.controller.session, self.shell.seen_seq))
         self.rows_query = query
+        self.error = ""
         self.shell.refresh_session_tabs([row for row in self.rows if not row.get("archived")])
         self.shell.sessions_truncated = bool(result.truncated)
         ids = [row["id"] for row in self.rows if row.get("id")]

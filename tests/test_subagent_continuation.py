@@ -311,6 +311,97 @@ async def test_external_workers_and_worktree_children_are_not_continuable(tmp_pa
     assert outcome.is_error and "worktree" in outcome.text
 
 
+CLAUDE_SESSION = "0a1b2c3d-1111-4222-8333-444455556666"
+
+
+def external_world(tmp_path, *, kind="claude-code", label="Claude Code", record=True, session=CLAUDE_SESSION):
+    """A world whose child ran on an external worker, reporting like ``_run_external``."""
+    world = World(tmp_path)
+    world.specs = []
+
+    async def worker(spec):
+        world.specs.append(spec)
+        metrics = {
+            "authority": "its own tools", "usage": "unknown", "provider": "claude-code",
+            "external_kind": kind, "external_label": label,
+        }
+        if session:
+            metrics["claude_session"] = session
+        if record and spec.config_record is not None and not spec.resume:
+            world.sessions.configs[spec.session_id] = {
+                **spec.config_record,
+                "external": {"kind": kind, "label": label, "model": "claude-haiku-4-5",
+                             "claude_session": session, "policy": {"permission_mode": "dontAsk"}},
+            }
+        return SubagentOutcome(
+            agent=spec.agent, session_id=spec.session_id, text=f"done: {spec.prompt}", metrics=metrics)
+
+    world.factory._behavior = worker
+    return world
+
+
+async def test_claude_code_worker_child_is_continuable_and_resumes_its_session(tmp_path):
+    world = external_world(tmp_path)
+    first = await world.spawn()
+    assert first.continuable is True
+    assert world.rec.of("agent.completed")[-1]["continuable"] is True
+    assert world.rec.of("agent.completed")[-1]["external_kind"] == "claude-code"
+
+    second = await world.resume("and the tests?")
+    assert not second.is_error and second.run == 2 and second.continuable is True
+    spec = world.specs[-1]
+    assert spec.resume and spec.run == 2 and spec.prompt == "and the tests?"
+    # The stored record (with the Claude session and the worker policy) travels to the runtime;
+    # the first-run record is not rewritten.
+    assert spec.config_record is None
+    assert spec.resume_record["external"]["claude_session"] == CLAUDE_SESSION
+    resumed = world.rec.of("agent.resumed")[-1]
+    assert resumed["run"] == 2 and resumed["from"] == "root"
+    completed = world.rec.of("agent.completed")[-1]
+    assert completed["run"] == 2 and completed["continuable"] is True
+    # The fold sees an external Claude Code child that is idle again.
+    life = fold_child_lifecycle(world.events(), "root/sub/1")
+    assert life.runs == 2 and life.status == "completed" and life.external_kind == "claude-code"
+
+
+async def test_antigravity_and_unrecorded_external_children_are_refused_specifically(tmp_path):
+    agy = external_world(tmp_path / "agy", kind="antigravity", label="Antigravity", record=False)
+    outcome = await agy.spawn()
+    assert outcome.continuable is False and "external Antigravity worker" in outcome.render()
+    refused = await agy.resume()
+    assert refused.is_error
+    assert "ran as an external Antigravity worker, which can't be continued" in refused.text
+    assert "no recorded configuration" not in refused.text
+
+    # A Claude Code child from before sessions were recorded: external, but nothing to resume.
+    old = external_world(tmp_path / "old", record=False)
+    await old.spawn()
+    refused = await old.resume()
+    assert "external worker started before external workers could be continued" in refused.text
+    assert "no recorded configuration" not in refused.text
+
+    # A record that names no Claude session cannot be resumed (and is not guessed at).
+    bare = external_world(tmp_path / "bare")
+    await bare.spawn()
+    bare.sessions.configs["root/sub/1"]["external"]["claude_session"] = ""
+    assert "no recorded session to resume" in (await bare.resume()).text
+    bare.sessions.configs["root/sub/1"]["external"]["kind"] = "antigravity"
+    assert "no recorded session to resume" in (await bare.resume()).text
+
+
+async def test_claude_code_child_without_a_reported_session_is_not_continuable(tmp_path):
+    world = external_world(tmp_path, session="")
+    outcome = await world.spawn()
+    assert outcome.continuable is False and "without a recorded session" in outcome.render()
+
+
+async def test_external_worktree_record_is_refused(tmp_path):
+    world = external_world(tmp_path)
+    await world.spawn()
+    world.sessions.configs["root/sub/1"]["worktree"] = True
+    assert "worktree" in (await world.resume()).text
+
+
 async def test_missing_role_unrunnable_tier_and_moved_workspace_are_refused(tmp_path):
     world = World(tmp_path)
     await world.spawn()

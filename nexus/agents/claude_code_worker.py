@@ -61,6 +61,9 @@ from ..tools.names import canonical_tool_name
 from ..util import redact_secrets
 from .model import READ_ONLY_TOOLS
 
+#: The levels ``claude --effort`` accepts (checked against ``claude --help`` 2.1.310).
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
 __all__ = [
     "ClaudeCodeWorker",
     "PROVENANCE",
@@ -106,6 +109,8 @@ PROVIDER = "claude-code"
 READ_ONLY_CLAUDE_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
 #: An exact ID: ``claude-<family>-<version...>``. Aliases (``sonnet``, ``*-latest``) fail.
 _MODEL_RE = re.compile(r"claude-[a-z]+-[0-9][a-z0-9.-]*")
+#: A Claude session id: the lowercase UUID Nexus assigns (never a name or a path).
+_SESSION_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 #: Tools the worker can never serve: Nexus writes no answers into the terminal,
 #: so a question menu would only stall the assignment until its deadline.
 ALWAYS_DISALLOWED: tuple[str, ...] = ("AskUserQuestion",)
@@ -225,10 +230,26 @@ try:
     raw = sys.stdin.buffer.read(limit + 1)
     if len(raw) > limit: raise ValueError()
     value = json.loads(raw)
-    if value.get("session_id") != sys.argv[2]: raise ValueError()
     event = value.get("hook_event_name")
     if event not in ("SessionStart", "Stop", "StopFailure"): raise ValueError()
-    out = {"event": event}
+    sid = value.get("session_id")
+    if len(sys.argv) > 3:
+        # Resume: the first SessionStart pins the session id (a resumed session may
+        # keep the old id or get a new one); every later event must carry that id.
+        pin = os.path.join(sys.argv[1], "session")
+        if event == "SessionStart" and isinstance(sid, str):
+            try:
+                fd = os.open(pin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as handle: handle.write(sid)
+            except FileExistsError:
+                pass
+        try:
+            with open(pin) as handle: pinned = handle.read()
+        except FileNotFoundError:
+            pinned = sys.argv[2]
+        if sid != pinned: raise ValueError()
+    elif sid != sys.argv[2]: raise ValueError()
+    out = {"event": event, "session_id": sid}
     for key in ("last_assistant_message", "error", "error_details", "reason", "stop_reason"):
         item = value.get(key)
         if isinstance(item, str): out[key] = item[:262144]
@@ -327,6 +348,27 @@ class WorkerPolicy:
             detail.append("read-only role")
         return (f"Claude Code ran its own tools ({', '.join(detail)}) in {workspace}; "
                 "Nexus permissions/PathGuard did not mediate them")
+
+
+def policy_fingerprint(policy: WorkerPolicy) -> dict[str, Any]:
+    """The part of a policy that bounds what Claude may do, for the continuation record.
+
+    Names and modes only (the MCP config is reduced to a digest): no executable
+    path, config directory, environment or credentials. A follow-up runs only
+    under a policy whose fingerprint equals the recorded one, so a continuation
+    never gains authority over the run it resumes.
+    """
+    import hashlib
+
+    return {
+        "permission_mode": policy.permission_mode,
+        "tools": list(policy.tools) if policy.tools is not None else None,
+        "allowed_tools": list(policy.allowed_tools),
+        "disallowed_tools": list(policy.disallowed_tools),
+        "setting_sources": policy.setting_sources,
+        "mcp": hashlib.sha256(policy.mcp_config.encode()).hexdigest()[:16] if policy.mcp_config else None,
+        "restricted": policy.restricted,
+    }
 
 
 def nexus_child_is_read_only(tools: Sequence[str], *, flagged: bool = False) -> bool:
@@ -491,12 +533,16 @@ class TranscriptReader:
         self._pending = b""
         self._skipping = False
         self._seen: set[str] = set()
+        #: Resume: bytes of the session's own file that earlier runs wrote; they
+        #: are never replayed as this run's activity.
+        self.baseline = 0
 
     def set_path(self, path: Path) -> None:
         """Follow ``path``; a changed path restarts the read (items are de-duplicated)."""
         if self.path == path:
             return
-        self.path, self.offset, self._pending, self._skipping = path, 0, b"", False
+        start = self.baseline if path.name == f"{self.session}.jsonl" else 0
+        self.path, self.offset, self._pending, self._skipping = path, start, b"", False
 
     def _line(self, raw: bytes) -> list[dict[str, Any]]:
         try:
@@ -620,6 +666,8 @@ class _Run:
     tail: bytes = b""
     #: The assignment text, so its terminal echo is not read as Claude's own output.
     prompt: str = ""
+    #: A resumed session: the hook may report a different session id than asked.
+    resumed: bool = False
 
 
 class ClaudeCodeWorker:
@@ -679,7 +727,9 @@ class ClaudeCodeWorker:
             await self._stop(process)
             self._active.discard(process)
 
-    async def _preflight(self, policy: WorkerPolicy, env: dict, cwd: str) -> None:
+    async def _preflight(
+        self, policy: WorkerPolicy, env: dict, cwd: str, *, resume: bool = False, effort: str | None = None
+    ) -> None:
         version = await self._probe(policy.executable, "--version", env, cwd)
         match = re.fullmatch(r"\s*(\d+)\.(\d+)\.(\d+) \(Claude Code\)\s*", version)
         if not match or tuple(map(int, match.groups())) < MIN_VERSION:
@@ -687,6 +737,10 @@ class ClaudeCodeWorker:
         help_text = await self._probe(policy.executable, "--help", env, cwd)
         required = ["--tools", "--strict-mcp-config", "--mcp-config", "--setting-sources", "--settings",
                     "--session-id", "--permission-mode", "--no-chrome", policy.permission_mode]
+        if resume:
+            required.append("--resume")
+        if effort:
+            required.append("--effort")
         if policy.restricted:
             required.append("--restricted")
         if policy.allowed_tools:
@@ -699,13 +753,26 @@ class ClaudeCodeWorker:
     # -- argv ------------------------------------------------------------
 
     @staticmethod
-    def build_argv(policy: WorkerPolicy, *, model: str, session: str, settings: Path, prompt: str) -> list[str]:
-        """The exact Claude argv. Never contains bypass flags or ``--tools ""``."""
-        argv = [policy.executable, "--model", model, "--session-id", session,
+    def build_argv(
+        policy: WorkerPolicy, *, model: str, session: str, settings: Path, prompt: str, resume: bool = False,
+        effort: str | None = None,
+    ) -> list[str]:
+        """The exact Claude argv. Never contains bypass flags or ``--tools ""``.
+
+        ``resume`` continues the stored Claude session ``session`` (``--resume``,
+        never ``--fork-session``, and no ``--session-id``); otherwise ``session`` is
+        the fresh id Nexus assigns. Every policy flag is identical either way.
+        ``effort`` (one of :data:`CLAUDE_EFFORTS`) becomes ``--effort``; ``None``
+        leaves Claude Code's own default.
+        """
+        argv = [policy.executable, "--model", model,
+                *(("--resume", session) if resume else ("--session-id", session)),
                 "--permission-mode", policy.permission_mode,
                 "--setting-sources", policy.setting_sources, "--settings", str(settings),
                 "--strict-mcp-config", "--mcp-config", policy.mcp_config or '{"mcpServers":{}}',
                 "--no-chrome"]
+        if effort:
+            argv += ["--effort", effort]
         if not policy.setting_sources:
             argv.append("--disable-slash-commands")
         if policy.restricted:
@@ -743,6 +810,13 @@ class ClaudeCodeWorker:
             return None
         path = Path(raw)
         return path if path.is_absolute() and path.name == f"{session}.jsonl" else None
+
+    @staticmethod
+    def _adopt_session(run: _Run, value: Mapping[str, Any]) -> None:
+        """A resumed Claude session may report a new id: follow it (hook-pinned)."""
+        reported = value.get("session_id")
+        if run.resumed and isinstance(reported, str) and reported != run.session and _SESSION_RE.fullmatch(reported):
+            run.session = run.reader.session = reported
 
     # -- transcript -> events --------------------------------------------
 
@@ -815,8 +889,16 @@ class ClaudeCodeWorker:
         policy: WorkerPolicy,
         cancel: object | None = None,
         emit: Emit | None = None,
+        resume: str | None = None,
+        effort: str | None = None,
     ) -> WorkerResult:
         """Run one assignment to a terminal :class:`WorkerResult`.
+
+        ``resume`` is the Claude session id of an earlier run of the same child:
+        the worker starts ``claude --resume <id>`` with the same policy flags and
+        the follow-up ``prompt``; the transcript is read from where the earlier
+        runs ended. :attr:`WorkerResult.claude_session` is the id Claude reported
+        (normally the same one).
 
         There is no wall-clock deadline: the run ends on Claude's Stop hook, a
         startup/permission block, process exit, or cancellation. Claude-side
@@ -837,22 +919,27 @@ class ClaudeCodeWorker:
         workspace = Path(workspace).resolve()
         if not workspace.is_dir():
             raise ConfigError(f"claude-code workspace is not a directory: {workspace}")
+        if effort is not None and effort not in CLAUDE_EFFORTS:
+            raise ConfigError(f"claude-code does not support effort {effort!r}")
+        if resume is not None and not _SESSION_RE.fullmatch(resume):
+            raise ConfigError("claude-code resume needs the UUID of a recorded Claude session")
         env = self._env()
         state_dir = private_working_directory()
-        session = str(uuid4())
+        session = resume or str(uuid4())
         process = None
         master = slave = None
         started = time.monotonic()
         run = _Run(session=session, model=model, workspace=workspace, policy=policy, emit=emit,
-                   reader=TranscriptReader(session), prompt=prompt)
+                   reader=TranscriptReader(session), prompt=prompt, resumed=resume is not None)
         result: WorkerResult | None = None
         try:
             with tempfile.TemporaryDirectory(prefix="worker-", dir=state_dir) as directory:
-                await self._preflight(policy, env, str(state_dir))
+                await self._preflight(policy, env, str(state_dir), resume=resume is not None, effort=effort)
                 root = Path(directory)
                 hook = root / "hook.py"
                 hook.write_text(HOOK)
-                command = shlex.join([sys.executable, "-I", str(hook), str(root), session])
+                command = shlex.join([sys.executable, "-I", str(hook), str(root), session,
+                                      *(["resume"] if resume else [])])
                 settings = {
                     "enabledPlugins": {}, "enableAllProjectMcpServers": False, "autoMemoryEnabled": False,
                     "hooks": {event: [{"hooks": [{"type": "command", "command": command, "timeout": 10}]}]
@@ -861,8 +948,11 @@ class ClaudeCodeWorker:
                 settings_path = root / "settings.json"
                 settings_path.write_text(json.dumps(settings))
                 argv = self.build_argv(policy, model=model, session=session, settings=settings_path,
-                                       prompt=prompt)
+                                       prompt=prompt, resume=resume is not None, effort=effort)
                 derived = derive_transcript_path(policy.config_dir, workspace, session)
+                if resume:
+                    with suppress(OSError):
+                        run.reader.baseline = derived.stat().st_size
                 import fcntl
                 import pty
                 import termios
@@ -989,6 +1079,8 @@ class ClaudeCodeWorker:
 
             start = self._read_hook(root, "SessionStart")
             if start is not None:
+                self._adopt_session(run, start)
+                session = run.session
                 hooked = self._hook_transcript(start, session)
                 if hooked is not None:
                     run.reader.set_path(hooked)
@@ -1000,6 +1092,8 @@ class ClaudeCodeWorker:
             failure = None if stop is not None else self._read_hook(root, "StopFailure")
             value = stop if stop is not None else failure
             if value is not None:
+                self._adopt_session(run, value)
+                session = run.session
                 hooked = self._hook_transcript(value, session)
                 if hooked is not None:
                     run.reader.set_path(hooked)

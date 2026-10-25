@@ -604,6 +604,7 @@ async def test_project_browser_browse_parent_and_open_only_directories(tmp_path,
         truncated=False))
     sidebar = SidebarController(shell)
     sidebar.enabled = True
+    await sidebar.handle({"op": "add_project"})
     await sidebar.handle({"op": "project_path", "path": str(tmp_path)})
     assert sidebar.projects["browser_path"] == str(tmp_path)
     assert sidebar.projects["browser_rows"][0]["path"] == str(tmp_path.parent)
@@ -611,5 +612,120 @@ async def test_project_browser_browse_parent_and_open_only_directories(tmp_path,
     shell.switch_project.assert_not_awaited()
     await sidebar.handle({"op": "select_project", "path": str(child)})
     shell.switch_project.assert_awaited_once_with(str(child), create=True)
+    assert not sidebar.projects["browser_open"]
+    await sidebar.handle({"op": "add_project"})
     await sidebar.handle({"op": "browse_project", "path": str(tmp_path.parent)})
     assert shell.client.list_project_directory.call_args.args == (str(tmp_path.parent),)
+
+
+@pytest.mark.asyncio
+async def test_projects_refresh_keeps_list_and_registered_projects(shell, tmp_path):
+    from nexus.host.protocol import ProjectEntry
+
+    shell.client.project_sessions = AsyncMock(return_value=SimpleNamespace(
+        sessions=[], truncated=False, workspace="/repo",
+        projects=[ProjectEntry(workspace="/registered")]))
+    shell.client.list_project_directory = AsyncMock()
+    recent = tmp_path / "recent"
+    recent.mkdir()
+    shell.preferences.set("project_recent", [str(recent)])
+    shell.preferences.set("sidebar_tab", "Projects")
+    shell.preferences.set("sidebar_open", True)
+    await shell.sidebar.refresh("Projects", force=True)
+    listed = shell.sidebar.snapshot()["projects"]
+    assert {row["workspace"] for row in listed["rows"]} >= {"/repo", "/registered", str(recent)}
+    assert not listed["browser_open"]
+    shell.client.list_project_directory.assert_not_awaited()
+    shell.switch_project = AsyncMock()
+    await shell.sidebar.handle({"op": "open_project", "workspace": "/registered"})
+    shell.switch_project.assert_awaited_once_with("/registered", create=True)
+    assert not shell.sidebar.open
+
+
+@pytest.mark.asyncio
+async def test_add_project_reaches_the_terminal_wire(shell):
+    from nexus.ui.ratatui.wire import TerminalWire
+
+    shell.client.list_project_directory = AsyncMock(return_value=SimpleNamespace(
+        path="/repo", entries=[], truncated=False))
+    shell.preferences.set("sidebar_open", True)
+    wire = TerminalWire()
+    base = {"generation": 1, "revision": 1, "blocks": []}
+    wire.encode({**base, "sidebar": shell.sidebar.snapshot()})
+    await shell.sidebar.handle({"op": "add_project"})
+    sent = wire.encode({**base, "revision": 2, "sidebar": shell.sidebar.snapshot()})
+    assert sent is not None and sent["sidebar"]["projects"]["browser_open"] is True, \
+        "the picker state is mutated in place, so the snapshot must not alias it"
+    await shell.sidebar.handle({"op": "cancel_project"})
+    sent = wire.encode({**base, "revision": 3, "sidebar": shell.sidebar.snapshot()})
+    assert sent["sidebar"]["projects"]["browser_open"] is False
+
+
+@pytest.mark.asyncio
+async def test_every_show_bumps_reveal_so_the_client_can_unhide(shell):
+    _fake_dashboard(shell)
+    await shell.command("/sessions", ())
+    first = shell.sidebar.snapshot()["reveal"]
+    await shell.command("/sessions", ())
+    assert shell.sidebar.snapshot()["reveal"] == first + 1
+
+
+@pytest.mark.asyncio
+async def test_project_picker_cancel_and_root_parent(shell):
+    sidebar = shell.sidebar
+    shell.client.list_project_directory = AsyncMock(return_value=SimpleNamespace(
+        path="/", entries=[], truncated=False))
+    shell.switch_project = AsyncMock()
+    await sidebar.handle({"op": "add_project"})
+    assert sidebar.projects["browser_open"]
+    assert sidebar.projects["browser_rows"] == []
+    await sidebar.handle({"op": "cancel_project"})
+    assert not sidebar.projects["browser_open"]
+    await sidebar.handle({"op": "select_project", "path": "/"})
+    shell.switch_project.assert_not_awaited()
+    with pytest.raises(ValueError):
+        await sidebar.handle({"op": "project_path", "path": "/"})
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("/private/var/folders/p3/swkn2y6x6sg_cndh1r0084s40000gn/T/tmpftw3zyc1", True),
+    ("/private/var/folders/p3/swkn2y6x6sg_cndh1r0084s40000gn/T/tmpbqv6_lmw", True),
+    ("/tmp/tmpabcdefgh", True),
+    ("/repos/tmpftw3zyc1", False),
+    ("/tmp/my-project", False),
+    ("/repos/tmp-project", False),
+    ("/tmp/tmpabcdefgh/regular-project", False),
+])
+def test_generated_temporary_project_filter_is_narrow(path, expected):
+    from nexus.ui.ratatui.sidebar import _temporary_project
+    assert _temporary_project(path) is expected
+
+
+@pytest.mark.asyncio
+async def test_projects_prune_temporary_and_stale_recents_without_deleting(shell, tmp_path, monkeypatch):
+    from nexus.host.protocol import ProjectEntry
+    from nexus.ui.ratatui import sidebar as module
+
+    monkeypatch.setattr(module.tempfile, "gettempdir", lambda: str(tmp_path))
+    temporary = tmp_path / "tmpftw3zyc1"
+    regular = tmp_path / "regular-project"
+    temporary.mkdir()
+    regular.mkdir()
+    missing = tmp_path / "gone"
+    shell.preferences.set("project_recent", [str(temporary), str(regular), str(missing)])
+    shell.client.project_sessions = AsyncMock(return_value=SimpleNamespace(
+        sessions=[], truncated=False, projects=[ProjectEntry(workspace=str(temporary)),
+                                               ProjectEntry(workspace=str(regular))]))
+    await shell.sidebar.show("Projects")
+    workspaces = {r["workspace"] for r in shell.sidebar.projects["rows"]}
+    assert str(temporary) not in workspaces
+    assert str(regular) in workspaces
+    assert shell.workspace in workspaces
+    assert shell.preferences.values["project_recent"] == [str(regular)]
+    assert temporary.is_dir() and regular.is_dir()
+
+    shell.workspace = str(temporary)
+    await shell.sidebar.refresh("Projects", force=True)
+    assert str(temporary) in {r["workspace"] for r in shell.sidebar.projects["rows"]}
+    shell.sidebar._remember_project(str(temporary))
+    assert str(temporary) not in shell.preferences.values["project_recent"]

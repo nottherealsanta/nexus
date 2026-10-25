@@ -1486,11 +1486,23 @@ its `max_live` slot until `subagent_stop`/`AgentClose`. Reasons for the shape:
 - **`send` and `stop` are keyed by the child's own `<role>:<tier>`** and share `Task(...)`
   rules, so `deny Task(*:high)` also blocks continuing a high-tier child; `list` is
   read-only and always allowed.
-- **External workers are not continuable in v1** (Claude Code starts a fresh
-  `--session-id` per run and Nexus does not check `--resume`; Antigravity closes stdin at
-  the end of a run). `continuable = false` on `agent.spawned/completed`; the error tells
-  the model to start a new subagent. `claude_code_subagent_backend = "sdk"` children are
-  normal Nexus children and continue. Spike: plan Q7.
+- **Claude Code workers continue by resuming their Claude session; other external workers do
+  not (2026-10-24, replaces the v1 "external workers are not continuable").** A completed
+  worker child records, in its own `agent.config` (last record wins), an `external` block: the
+  Claude session id the worker reported, the exact model, and a fingerprint of the worker
+  policy (permission mode, tools, allowed/disallowed tools, setting sources, MCP digest,
+  restricted). A follow-up runs `claude --resume <session>` with the same policy flags and
+  only the follow-up prompt (the role instructions are already in that session) as run N+1.
+  The log is the authority after a restart. If the policy fingerprint or model no longer
+  equals the recorded one, or the tier was lowered, the follow-up is refused unchanged
+  (never widened, and not silently narrowed): start a new subagent. If Claude reports a new
+  session id on resume (not verified), the worker follows it and a newer record is written.
+  Antigravity stays not continuable (agy closes stdin at the end of a run); the refusal names
+  the worker kind. Children from before this change have no record and are refused with an
+  "external worker started before ... could be continued" message.
+  `claude_code_subagent_backend = "sdk"` children are normal Nexus children and continue.
+  Not verified against a real `claude` binary: only `claude --help` (2.1.310) was checked for
+  `--resume`/`--fork-session`; behavior is covered by the fake CLI in `tests/claude_code_fakes.py`.
 - **A send to a running child is refused, not queued** (plan Q3): queueing needs
   child-side steering; the refusal says to wait for the report or stop it.
 - **A worktree child is reopened (`finalized -> active`) and every review and
@@ -1574,8 +1586,8 @@ still no detached child, report queue, wake, idle slot or `subagent_send`. Decis
 - **Immutable config in the child log.** `agent.config` (role prompt snapshot, tools,
   model/fallbacks, tier, effort, limits, workspace) is written once, redacted, never
   relayed or sent to a model; the parent log carries `config_sha` only. A role-file edit
-  does not change a continued child. Children without a record (older, external) are not
-  continuable. Chosen over fields on `agent.spawned` (bloats and relays a sensitive
+  does not change a continued child. Children without a record (older, Antigravity) are not
+  continuable; Claude Code worker children carry an `external` block in the record (see above). Chosen over fields on `agent.spawned` (bloats and relays a sensitive
   prompt to every UI) and over a new table (migration).
 - **Continuation is not fan-out.** `SubagentBudget.reserve_continuation` charges
   tokens/cost like a spawn but does not touch `children`; separate caps (8 follow-ups per

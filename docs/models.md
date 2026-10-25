@@ -194,6 +194,15 @@ the effort prompt for remembered models; `/effort` remains available to change i
   the override. Routing applies each fallback model's own effort; an explicit
   role effort wins. The subagent tool lists each tier's ordered provider/model
   IDs and tells the caller to try the next listed model if a child route fails.
+- Tier effort choices describe what a **subagent** run honors, not the main
+  session (`candidate_supported_efforts(..., subagent=True)`, used by the tier
+  page and `tier_set` validation). Responses-API routes offer their registry
+  levels; Chat Completions routes (for example `github-copilot` with
+  `api = "chat"`) offer none because the dialect drops effort. A worker-backed
+  `claude-code` route offers the registry levels `low..max` and passes them as
+  `claude --effort`. Antigravity offers none: `agy` models carry the level in
+  their id (`...-high`) and the worker passes no effort (not verified against
+  `agy --effort`).
 - Antigravity discovery probes the built-in `antigravity` route even when a
   differently named Antigravity section exists. Reported models appear in the
   subagent picker, never the main/title picker. Execution inherits agy settings by default; an explicit opt-out and all
@@ -229,6 +238,8 @@ Live `/models` and Luna inference were verified; the device sign-in flow was not
 live-tested. CLI: `nexus auth codex login|status|logout`, `nexus claude init`.
 xAI signs in from Settings → Providers only (no CLI subcommand).
 The Codex backend (`chatgpt.com`) rejects `temperature` and `top_p` with HTTP 400, so `OpenAIProvider._finalize_body` drops both for that host only (this is what broke session auto-titles).
+
+Prompt caching on that host needs a stable per-conversation key: when the request carries `metadata["session_id"]`, `OpenAIProvider._stream_api` adds `prompt_cache_key` (Responses body only) and a `session_id` header, both the session id truncated to 64 characters, matching the Codex CLI convention. Without them real sessions saw about 5% cache hits. Other hosts, including api.openai.com, are unchanged. Not verified against the live backend.
 Claude sign-in from Settings was verified up to the printed URL and the code
 prompt; completing it with a real code was not live-tested (it would replace the
 machine's Claude Code login).
@@ -346,6 +357,8 @@ Subagent tier requests use these ordered model preferences. An explicitly config
 | `high` | `openai-codex/gpt-6.1-sol` → `claude-agent/claude-sonnet-5.5` | `low` on Codex; provider default on Claude |
 
 A user-selected effort remains authoritative, and the tier effort applies consistently to fallback attempts when that fallback has a tier-specific default.
+
+Tier efforts reach the router through `metadata["tier"]` on the request, because the context manager assembles the concrete model and the tier name is otherwise lost. Both the root turn (`Runtime.for_turn`, carried to each iteration via the session's `_turn_tier`) and every subagent (`Runtime._build_child_assembler`, from the spawn's tier) stamp it; a role-level `reasoning_effort` marks the effort explicit so the tier default does not override it. Covered by `tests/test_tier_effort_subagent.py`.
 
 ### Probe cache and tier reload
 

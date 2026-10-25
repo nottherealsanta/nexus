@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
+import re
+import tempfile
 import time
-from pathlib import PurePath
+from pathlib import Path, PurePath
+from types import SimpleNamespace
 
 from ...host_support.errors import error_text
 from ...ui_support import sidebar as view
@@ -26,6 +30,21 @@ PROJECT_LIMIT = 300
 DUE_SECONDS = {"Projects": 10.0, "Files": 5.0, "Git": 3.0}
 
 
+def _temporary_project(path: str) -> bool:
+    """Generated tempfile roots, not projects merely named ``tmp*`` elsewhere.
+
+    Python's default mkdtemp names have eight random characters. Match only direct
+    children of system temp roots (including macOS's per-user T directory). Nexus
+    worktree/test checkouts can register these in the shared project registry.
+    """
+    root = PurePath(path)
+    if not re.fullmatch(r"tmp[a-z0-9_]{8}", root.name):
+        return False
+    parent = str(root.parent)
+    return (parent in {tempfile.gettempdir().rstrip("/"), "/tmp", "/private/tmp", "/var/tmp"}
+            or bool(re.fullmatch(r"/(?:private/)?var/folders/[^/]+/[^/]+/T", parent)))
+
+
 class SidebarController:
     def __init__(self, shell):
         self.shell = shell
@@ -33,6 +52,8 @@ class SidebarController:
         self.enabled = False
         #: Bumped only by an explicit ``show(focus=True)``; opening alone leaves focus alone.
         self.focus = 0
+        #: Bumped by every ``show``; the client re-shows a sidebar it hid after a session open.
+        self.reveal = 0
         self.workspace = ""
         self.session = ""
         self.tasks: set[asyncio.Task] = set()
@@ -40,7 +61,8 @@ class SidebarController:
 
     def _reset(self):
         self._project_path = ""
-        self.projects = {"rows": [], "truncated": False, "error": "", "loaded": False}
+        self._browser_sequence = getattr(self, "_browser_sequence", 0) + 1
+        self.projects = {"rows": [], "truncated": False, "error": "", "loaded": False, "browser_open": False}
         self.files = {"path": "", "label": "", "rows": [], "truncated": False, "error": "", "loaded": False}
         self.git = {"available": False, "message": "", "branch": "", "summary": "", "rows": [],
                     "truncated": False, "error": "", "loaded": False}
@@ -77,6 +99,7 @@ class SidebarController:
         """Open the sidebar (on ``tab``), start its data feeds; opening never steals keyboard focus."""
         prefs = self.shell.preferences
         prefs.set("sidebar_open", True)
+        self.reveal += 1  # un-hides a sidebar the client dismissed after opening a session
         if tab:
             prefs.set("sidebar_tab", view.normalize_tab(tab))
         if focus:
@@ -97,6 +120,8 @@ class SidebarController:
         await self.refresh(force=True)
 
     async def close(self):
+        self.projects["browser_open"] = False
+        self._browser_sequence += 1
         self.shell.preferences.set("sidebar_open", False)
         self.shell.workflows.close_dashboard(force=True)
 
@@ -109,15 +134,21 @@ class SidebarController:
 
     async def browse_project(self, path: str) -> None:
         """Read-only navigation through the host, separate from opening a project."""
+        self._browser_sequence += 1
+        sequence = self._browser_sequence
         try:
             result = await self.shell.client.list_project_directory(path)
+            if sequence != self._browser_sequence:
+                return
             self._project_path = result.path
+            parent = str(PurePath(result.path).parent)
             self.projects.update(browser_path=result.path, browser_loaded=True,
                                  browser_error="", browser_truncated=result.truncated,
-                                 browser_rows=[{"name": "../", "path": str(PurePath(result.path).parent), "kind": "dir"},
-                                               *result.entries])
+                                 browser_rows=([{"name": "..", "path": parent, "kind": "dir"}]
+                                               if parent != result.path else []) + list(result.entries))
         except Exception as exc:
-            self.projects["browser_error"] = error_text(exc)
+            if sequence == self._browser_sequence:
+                self.projects["browser_error"] = view.clean(error_text(exc))
 
     # -- data --------------------------------------------------------------------------
 
@@ -182,13 +213,33 @@ class SidebarController:
                     return
                 from .workflows import session_rows
                 rows = session_rows(result, self.shell.controller.session, {})
-                listed = view.project_rows(rows, workspace, self._manager_session(),
-                                           list(getattr(result, "projects", None) or []))
+                registered = list(getattr(result, "projects", None) or [])
+                # The registry is shared with other clients/tests; hide generated temp
+                # checkouts here, never delete registry records or directories. A current
+                # checkout remains visible even when it is temporary.
+                def keep(path):
+                    return path == workspace or not _temporary_project(path)
+
+                rows = [row for row in rows if row.get("workspace") == workspace or
+                        (keep(str(row.get("repo") or row.get("workspace") or ""))
+                         and keep(str(row.get("workspace") or "")))]
+                registered = [entry for entry in registered
+                              if getattr(entry, "workspace", "") == workspace or
+                              (keep(str(getattr(entry, "workspace", "")))
+                               and keep(str(getattr(entry, "repo", "") or getattr(entry, "workspace", ""))))]
+                recent = self.shell.preferences.values.get("project_recent", [])
+                cleaned = [path for path in recent if isinstance(path, str) and
+                           (path == workspace or (keep(path) and Path(path).is_dir()))]
+                if cleaned != recent:
+                    self.shell.preferences.set("project_recent", cleaned)
+                known = {getattr(entry, "workspace", "") for entry in registered}
+                registered.extend(SimpleNamespace(workspace=path) for path in
+                                  dict.fromkeys([workspace, *cleaned])
+                                  if path and path not in known)
+                listed = view.project_rows(rows, workspace, self._manager_session(), registered)
                 self._openable = view.openable(listed)
                 self.projects.update({"rows": listed, "truncated": bool(getattr(result, "truncated", False)),
                                  "error": "", "loaded": True})
-                if not self.projects.get("browser_loaded"):
-                    await self.browse_project(workspace)
             elif tab == "Files":
                 target = self._files_path if path is None else path
                 result = await client.list_directory(target, session=session)
@@ -292,26 +343,44 @@ class SidebarController:
         elif op == "refresh":
             await self.refresh(force=True)
         elif op in {"browse_project", "project_path"}:
-            await self.browse_project(str(action.get("path", "")))
+            if not self.projects.get("browser_open"):
+                raise ValueError("The project picker is not open")
+            path = action.get("path")
+            if not isinstance(path, str) or not path:
+                raise ValueError("A project path is required")
+            await self.browse_project(path)
         elif op == "select_project":
             path = str(action.get("path", ""))
-            if path == self._project_path or any(
+            if self.projects.get("browser_open") and (path == self._project_path or any(
                 row["path"] == path and row["kind"] == "dir"
                 for row in self.projects.get("browser_rows", [])
-            ):
+            )):
                 await self.shell.switch_project(path, create=True)
+                self._remember_project(path)
                 await self.close()
+        elif op == "cancel_project":
+            self.projects["browser_open"] = False
+            self._browser_sequence += 1
         elif op == "add_project":
+            self.projects["browser_open"] = True
             await self.browse_project(self._project_path or str(self.shell.workspace))
         elif op == "open_project":
             workspace = action.get("workspace")
             if workspace not in {row.get("workspace") for row in self.projects.get("rows", [])}:
                 raise ValueError("That project is no longer listed")
             await self.shell.switch_project(workspace, create=True)
+            self._remember_project(workspace)
+            await self.close()
         elif op == "open_session":
             await self.open_session(action.get("workspace"), action.get("session"))
         else:
             raise ValueError("Unknown sidebar action")
+
+    def _remember_project(self, path):
+        recent = self.shell.preferences.values.get("project_recent", [])
+        # Do not seed persistent recents when launching from a generated worktree.
+        paths = [path, *[p for p in recent if p != path]]
+        self.shell.preferences.set("project_recent", [p for p in paths if not _temporary_project(p)][:100])
 
     # -- projection --------------------------------------------------------------------
 
@@ -324,5 +393,8 @@ class SidebarController:
         sessions = None
         if dashboard is not None and dashboard.visible:
             sessions = view.sessions_payload(dashboard.snapshot(), self._manager_session())
+        # ``projects`` is updated in place (picker open/browse); the wire diff keeps the previous
+        # snapshot by reference, so a shared dict would compare equal to itself and never be sent.
         return {"available": True, "open": self.open, "tab": self.tab, "width": self.width, "focus": self.focus,
-                "sessions": sessions, "projects": self.projects, "files": self.files, "git": self.git}
+                "reveal": self.reveal, "sessions": sessions, "projects": copy.deepcopy(self.projects),
+                "files": self.files, "git": self.git}

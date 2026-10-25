@@ -1961,8 +1961,10 @@ The line under the tabs uses `border` (dark `50,50,55`, light `200,200,205`). Th
 
 ### Opening any project from the Projects sidebar
 
-The launch directory is only the initial project. The Projects tab presents a path field
-and host-backed directory rows (see [Project directory picker](#project-directory-picker)).
+The launch directory is only the initial project. The Projects tab defaults to the registered
+project list (including projects without sessions), with an **Add project** button. Selecting
+a project opens a fresh session; Add project opens the host-backed folder-picker modal
+(see [Project directory picker](#project-directory-picker)).
 **Open this folder** calls `ShellActions.switch_project(path, create=True)` → client
 `open_project_session(create=True)` → `ProjectSessionOpen(create=True)`. The daemon
 validates with `resolve_project`, registers/loads the project and creates a fresh session;
@@ -2236,7 +2238,7 @@ desktop bridge, old snapshots, fixtures) keeps the legacy Sessions page.
 
 | Tab | Shows | Source |
 | --- | --- | --- |
-| Projects | Editable path, parent/directory navigation, visible inert files, explicit Open this folder (fresh session). | `ProjectDirectoryList`: bounded read-only absolute directory listing; `ProjectSessionOpen(create=True)` opens the selected directory. |
+| Projects | Registered/current/recent projects by default; Add project opens a modal with editable path, parent/directory navigation, inert files and explicit Open this folder (fresh session). | `ProjectDirectoryList`: bounded read-only absolute directory listing; `ProjectSessionOpen(create=True)` opens the selected directory. |
 | Sessions | The dashboard in a column: filter, groups, status marks, rename, archive with confirmation, permission answers, `+ New Agent`. Only root sessions are listed (the Projects counts too): the workspace manager session and subagent children are not, and the manager's pinned entry is not drawn. | `SessionDashboard` (the same host rows and operations as the legacy page; polled every 2 s while open) |
 | Files | The current project's directory, navigable: folders first, `↑ ..` below the root, names only (sizes omitted), links shown and never followed. A click selects a file; a double-click on the same file row (within 500 ms) or Enter opens its start in the read-only modal (below). | `DirectoryList`, `FilePreview` |
 | Git | Read-only labelled status: `branch → upstream · ahead/behind`, then Conflicts, Staged changes, Changes and Untracked sections with a word per file (`modified`, `added`, `deleted`, `untracked`, …) and the file's base name (`config.md`, a rename `old.py → new.py`; rows keep the full `path` and the client draws `name`). Nothing here can change the repository. | `GitStatus` |
@@ -2489,8 +2491,10 @@ for `pie`).
 
 ### Project directory picker
 
-The native Projects tab now opens a read-only directory browser, rather than an
-Add Project dialog. Its first row is the editable absolute path (`~/` accepted):
+The native Projects tab shows the project list by default; refresh never opens a browser.
+Select **Add project** and press Enter, click it, or press `a` to open a read-only folder-picker modal. Escape
+cancels the picker back to the project list without switching projects (while editing,
+the first Escape only cancels the draft). Its first row is the editable absolute path (`~/` accepted):
 click it or press `/`/`a`, type, then Enter to browse. Backspace edits, Control-U
 clears, Escape cancels editing. Below it, **Open this folder · new session**
 switches through the existing validated `open_project_session(create=True)` path.
@@ -2507,3 +2511,16 @@ never leaks into the conversation composer. Enter submits the `sidebar/project_p
 bridge action to browse; Escape cancels the draft. Directory Enter/click browses,
 Left/Backspace visits the parent (a no-op at `/`); “Open this folder” is the separate
 explicit action that starts a project session.
+
+The picker state lives in an in-place-mutated host dict, so `SidebarController.snapshot()` sends a copy of `projects`: the terminal wire diff keeps the previous snapshot by reference, and a shared dict would compare equal to itself and the open picker would never reach the client. Every host `show` (`/sessions`, Ctrl+B open) also bumps `sidebar.reveal`; the client clears its local “hidden after opening a session” state on a change, so `/sessions` shows the sidebar again after a session was opened from it.
+
+Projects omit generated temporary checkout roots (`tmp` plus eight tempfile characters directly under system temp directories, including macOS per-user `T` directories). Ordinary project names elsewhere and the current project remain visible. Temporary and missing recent paths are pruned from `project_recent`; launching in a generated temporary root does not add it to recents. This only cleans the terminal list/preferences: shared project registry records and filesystem directories are never deleted.
+
+Native child-agent pages retain their read-only task/transcript and now reuse the
+root page's expandable context header (including system prompt, environment,
+AGENTS/MEMORY, skills, tools and MCP sections). The header uses only the child's
+host-projected recorded request, never root context or UI filesystem/manager
+reads, and honors the context-preview preference. Missing recorded sections remain
+empty; this does not reconstruct context for older sessions. Existing bounded host
+capture/projection remains the source of truth; opaque attachment payloads are not
+rendered as context.

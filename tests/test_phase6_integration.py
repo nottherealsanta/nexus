@@ -803,6 +803,15 @@ async def test_agent_transcript_carries_the_child_request_it_actually_sent(tmp_p
     assert child_request.system and context["system_text"] == redact_secrets(child_request.system)
     assert [tool["name"] for tool in context["tools"]] == [tool.name for tool in child_request.tools]
     assert all("input_schema" in tool for tool in context["tools"])
+    import msgspec
+    assert context["params"] == msgspec.to_builtins(child_request.params)
+    assert context["request_context"] == child_request.metadata.get("context", {})
+    assert context["included_parts"] == [
+        {"name": name, "text": redact_secrets(text)}
+        for name, text in child_request.metadata.get("included_parts", {}).items()
+    ]
+    assert context["messages"][0]["blocks"][0]["text"]
+
     assert context["agent"]["name"] == agent.type == "task"
     from nexus.host.protocol import AgentTranscript, ContextInspectResult
 

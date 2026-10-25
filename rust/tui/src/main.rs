@@ -1122,6 +1122,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     // The left sidebar owns the keys while it has focus; a key it does not
                     // want (typing, composer shortcuts) falls through to the composer.
                     if cache.sidebar.is_open(&s)
+                        && cache.sidebar.focus
                         && drawn_regions.sidebar.width > 0
                         && s.panel_title.is_empty()
                         && s.prompt.is_none()

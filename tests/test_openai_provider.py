@@ -401,3 +401,41 @@ async def test_codex_backend_omits_temperature_and_top_p(base_url, api, expected
     assert bodies
     assert ("temperature" in bodies[0]) is expected
     assert ("top_p" in bodies[0]) is expected
+
+
+@pytest.mark.parametrize(
+    ("base_url", "api", "session_id", "expect"),
+    [
+        ("https://chatgpt.com/backend-api/codex", "responses", "sess-1", "sess-1"),
+        ("https://chatgpt.com/backend-api/codex", "responses", "s" * 100, "s" * 64),
+        ("https://chatgpt.com/backend-api/codex", "responses", None, None),
+        ("https://api.openai.com/v1", "responses", "sess-1", None),
+        ("https://api.example.com/v1", "chat", "sess-1", None),
+    ],
+)
+async def test_codex_prompt_cache_key_and_session_header(base_url, api, session_id, expect):
+    seen: list[tuple[Any, Any]] = []
+    done = _sse(
+        ("response.created", {"type": "response.created", "response": {"id": "r", "model": "m", "status": "in_progress"}}),
+        ("response.completed", {"type": "response.completed", "response": {"id": "r", "status": "completed"}}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((json.loads(request.content).get("prompt_cache_key"), request.headers.get("session_id")))
+        return httpx.Response(200, content=done, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAIProvider(
+        api_key="k", model="m", api=api, base_url=base_url, environ={},
+        http_transport=httpx.MockTransport(handler),
+    )
+    req = ModelRequest(
+        model="m", messages=[Message(role="user", content=[Text(text="hi")])],
+        metadata={"session_id": session_id} if session_id else {},
+    )
+    try:
+        async for _ in provider.stream(req):
+            pass
+    except Exception:  # chat dialect gets a Responses stream; only the request matters
+        pass
+    await provider.aclose()
+    assert seen == [(expect, expect)]

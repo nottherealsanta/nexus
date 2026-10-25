@@ -76,7 +76,12 @@ pub fn width_at(column: u16, area: Rect, available: u16) -> u16 {
 pub fn selector_area(area: Rect) -> Rect {
     let width = area.width.saturating_sub(4).min(90);
     let height = area.height.saturating_sub(4).min(32);
-    Rect::new(area.x + (area.width - width) / 2, area.y + (area.height - height) / 2, width, height)
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
 }
 
 /// A browser view of the shared host payload without changing selector state.
@@ -373,6 +378,9 @@ impl SidebarUi {
     /// A new snapshot may ask the already-open sidebar for keyboard focus (the host bumps
     /// `sidebar.focus`). Opening it never takes focus: the composer keeps the keys until a click.
     pub fn take_host_focus(&mut self, prev: &Snapshot, next: &Snapshot) {
+        if next.sidebar.open && next.sidebar.reveal != prev.sidebar.reveal {
+            self.session_dismissed = false; // `/sessions` after opening a session shows the sidebar again
+        }
         if self.is_open(next) && (!prev.sidebar.open || next.sidebar.focus != prev.sidebar.focus) {
             self.focus = true;
         }
@@ -380,6 +388,9 @@ impl SidebarUi {
 
     /// Called every loop: local state lives only while the host shows the sidebar.
     pub fn sync(&mut self, s: &Snapshot) {
+        if !s.sidebar.open || !flag(&s.sidebar.projects, "browser_open") {
+            self.project_edit = None;
+        }
         if !s.sidebar.open {
             self.session_dismissed = false;
             if self.focus || self.dragging {
@@ -419,6 +430,10 @@ impl SidebarUi {
                     return Out::action(tab_message(
                         TABS[(tab_index(s) + TABS.len() - 1) % TABS.len()],
                     ))
+                }
+                KeyCode::Esc if tab == "Projects" && flag(&s.sidebar.projects, "browser_open") => {
+                    self.proj_sel = 0;
+                    return Out::action(act("cancel_project"));
                 }
                 KeyCode::Esc if !(tab == "Sessions" && !self.dash.query.is_empty()) => {
                     self.focus = false;
@@ -461,6 +476,22 @@ impl SidebarUi {
 
     fn activate_picker(&mut self, s: &Snapshot) -> Out {
         let data = &s.sidebar.projects;
+        if !flag(data, "browser_open") {
+            if self.proj_sel == 0 {
+                self.proj_sel = 0;
+                return Out::action(act("add_project"));
+            }
+            let rows = rows_of(data);
+            let Some(row) = rows.get(self.proj_sel - 1) else {
+                return Out::eat();
+            };
+            if text(row, "workspace").is_empty() {
+                return Out::eat();
+            }
+            return Out::action(
+                json!({"type":"sidebar","op":"open_project","workspace":text(row,"workspace")}),
+            );
+        }
         if self.proj_sel == 0 {
             let mut editor = Editor::default();
             editor.insert(text(data, "browser_path"));
@@ -485,6 +516,19 @@ impl SidebarUi {
         Out::action(json!({"type":"sidebar","op":"browse_project","path":text(row,"path")}))
     }
     fn projects_key(&mut self, key: KeyEvent, s: &Snapshot) -> Out {
+        if !flag(&s.sidebar.projects, "browser_open") {
+            let len = rows_of(&s.sidebar.projects).len() + 1;
+            return match key.code {
+                KeyCode::Char('a') => {
+                    self.proj_sel = 0;
+                    self.activate_picker(s)
+                }
+                KeyCode::Enter | KeyCode::Right => self.activate_picker(s),
+                KeyCode::Char('r') => Out::action(act("refresh")),
+                _ if move_selection(&mut self.proj_sel, len, key.code) => Out::eat(),
+                _ => self.unowned(&key),
+            };
+        }
         if let Some(draft) = self.project_edit.as_mut() {
             match key.code {
                 KeyCode::Esc => self.project_edit = None,
@@ -563,9 +607,7 @@ impl SidebarUi {
     /// Opens a listed folder (or the parent row); files and links do nothing.
     fn open_directory(&mut self, row: &Value) -> Out {
         if matches!(text(row, "kind"), "dir" | "up") {
-            return Out::action(
-                json!({"type":"sidebar","op":"dir","path":text(row, "path")}),
-            );
+            return Out::action(json!({"type":"sidebar","op":"dir","path":text(row, "path")}));
         }
         Out::eat()
     }
@@ -793,12 +835,7 @@ impl SidebarUi {
         let (cells, rows) = tab_cells(inner.width);
         let active = tab_index(s);
         for cell in &cells {
-            let rect = Rect::new(
-                inner.x + cell.x,
-                inner.y + 1 + cell.row,
-                cell.width,
-                1,
-            );
+            let rect = Rect::new(inner.x + cell.x, inner.y + 1 + cell.row, cell.width, 1);
             let style = if cell.tab == active {
                 let mut style = Style::default()
                     .fg(p.text)
@@ -852,6 +889,9 @@ impl SidebarUi {
             return "Click to focus · Ctrl+B hides";
         }
         match s.sidebar.tab.as_str() {
+            "Projects" if !flag(&s.sidebar.projects, "browser_open") => {
+                "↑↓ move · Enter open · a Add project · Esc close"
+            }
             "Projects" => "/ edit path · Enter browse · ← parent · Open folder starts session",
             "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
@@ -861,10 +901,7 @@ impl SidebarUi {
 
     fn note(frame: &mut Frame, body: Rect, message: &str, style: Style) {
         frame.render_widget(
-            Paragraph::new(Line::styled(
-                fit(message, usize::from(body.width)),
-                style,
-            )),
+            Paragraph::new(Line::styled(fit(message, usize::from(body.width)), style)),
             Rect::new(body.x, body.y, body.width, 1),
         );
     }
@@ -891,7 +928,12 @@ impl SidebarUi {
         self.list = body;
         self.line_items = visible.iter().map(|(_, item)| *item).collect();
         frame.render_widget(
-            Paragraph::new(visible.into_iter().map(|(line, _)| line).collect::<Vec<_>>()),
+            Paragraph::new(
+                visible
+                    .into_iter()
+                    .map(|(line, _)| line)
+                    .collect::<Vec<_>>(),
+            ),
             body,
         );
         top
@@ -908,6 +950,16 @@ impl SidebarUi {
     ) {
         let data = &s.sidebar.projects;
         let quiet = Style::default().fg(p.quiet);
+        let picking = flag(data, "browser_open");
+        let body = if picking {
+            frame.render_widget(Clear, body);
+            let block = Block::bordered().title(" Add project · Esc cancel ");
+            let inner = block.inner(body);
+            frame.render_widget(block, body);
+            inner
+        } else {
+            body
+        };
         let mut labels = vec![
             match self.project_edit.as_ref() {
                 Some(editor) => format!(
@@ -932,6 +984,18 @@ impl SidebarUi {
                 )
             }));
         }
+        if !picking {
+            labels = vec!["+ Add project".to_owned()];
+            labels.extend(rows_of(data).iter().map(|row| {
+                format!(
+                    "{}{}{}",
+                    "  ".repeat(row.get("depth").and_then(Value::as_u64).unwrap_or(0) as usize),
+                    if flag(row, "current") { "● " } else { "" },
+                    text(row, "label")
+                )
+            }));
+        }
+        self.proj_sel = self.proj_sel.min(labels.len().saturating_sub(1));
         let mut lines = Vec::new();
         let mut selected = None;
         for (i, label) in labels.iter().enumerate() {
@@ -953,7 +1017,7 @@ impl SidebarUi {
                 Some(i),
             ));
         }
-        if !text(data, "browser_error").is_empty() {
+        if picking && !text(data, "browser_error").is_empty() {
             lines.push((
                 Line::styled(
                     fit(text(data, "browser_error"), usize::from(body.width)),
@@ -962,13 +1026,20 @@ impl SidebarUi {
                 None,
             ));
         }
-        if flag(data, "browser_truncated") {
+        if picking && flag(data, "browser_truncated") {
             lines.push((Line::styled("… more entries not shown", quiet), None));
         }
         self.proj_top = self.paint_list(frame, body, lines, selected, self.proj_top);
     }
 
-    pub fn draw_files(&mut self, frame: &mut Frame, body: Rect, s: &Snapshot, p: &Palette, mono: bool) {
+    pub fn draw_files(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        s: &Snapshot,
+        p: &Palette,
+        mono: bool,
+    ) {
         let data = &s.sidebar.files;
         let quiet = Style::default().fg(p.quiet);
         let rows = rows_of(data);
@@ -1496,24 +1567,55 @@ mod tests {
 
     #[test]
     fn projects_tab_a_key_asks_the_host_to_add_a_project_by_path() {
-        let s = open("Projects", 34);
+        let s = projects_snapshot();
         let mut ui = SidebarUi::default();
-        let out = ui.key(key(KeyCode::Char('a')), &s, true);
-        assert!(out.consumed);
-        assert_eq!(ui.project_edit.as_ref().map(|e| e.text.as_str()), Some(""));
-        let out = ui.key(key(KeyCode::Char('/')), &s, true);
-        assert!(out.consumed);
-        let out = ui.key(key(KeyCode::Enter), &s, true);
+        assert!(screen(&mut ui, &s, 60, 24).contains("Add project"));
         assert_eq!(
-            out.action,
-            Some(json!({"type":"sidebar","op":"project_path","path":"/"}))
+            ui.key(key(KeyCode::Char('a')), &s, true).action,
+            Some(act("add_project"))
         );
+        assert!(ui.project_edit.is_none());
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(act("add_project")),
+            "the selected Add project row must activate with Enter"
+        );
+        let y = ui.line_items.iter().position(|item| *item == Some(0)).unwrap();
+        assert_eq!(
+            ui.click(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: ui.list.x,
+                row: ui.list.y + y as u16,
+                modifiers: KeyModifiers::NONE,
+            }, &s).action,
+            Some(act("add_project")),
+            "mouse and keyboard use the same Add action"
+        );
+        ui.proj_sel = 1;
+        assert_eq!(
+            ui.key(key(KeyCode::Enter), &s, true).action,
+            Some(json!({"type":"sidebar","op":"open_project","workspace":"/repo"}))
+        );
+    }
+
+    #[test]
+    fn host_reveal_shows_a_sidebar_hidden_after_a_session_open() {
+        let s = open("Sessions", 34);
+        let mut ui = SidebarUi::default();
+        ui.session_operation(json!({"kind":"session_open","id":"a","workspace":"/repo"}));
+        assert!(!ui.is_open(&s), "opening a session hides the sidebar locally");
+        ui.take_host_focus(&s, &s);
+        assert!(!ui.is_open(&s), "an unchanged snapshot keeps it hidden");
+        let mut next = open("Sessions", 34);
+        next.sidebar.reveal = 1; // `/sessions` while the host still thinks it is open
+        ui.take_host_focus(&s, &next);
+        assert!(ui.is_open(&next));
     }
 
     #[test]
     fn project_path_uses_text_editor_and_owns_paste() {
         let mut s = open("Projects", 34);
-        s.sidebar.projects = json!({"browser_path":"/repo"});
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/repo"});
         let mut ui = SidebarUi::default();
         ui.focus = true;
         ui.key(key(KeyCode::Char('/')), &s, true);
@@ -1534,7 +1636,7 @@ mod tests {
     #[test]
     fn project_parent_at_filesystem_root_does_not_enter_first_child() {
         let mut s = open("Projects", 34);
-        s.sidebar.projects = json!({"browser_path":"/","browser_rows":[
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/","browser_rows":[
             {"name":"child","kind":"dir","path":"/child"}
         ]});
         let mut ui = SidebarUi::default();
@@ -1621,21 +1723,51 @@ mod tests {
         let mut ui = SidebarUi::default();
         screen(&mut ui, &s, 34, 24);
         let area = Rect::new(0, 0, 34, 24);
-        let down = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 33, 5), &s, area, 200);
+        let down = ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 33, 5),
+            &s,
+            area,
+            200,
+        );
         assert!(down.consumed && ui.dragging && down.action.is_none());
-        let drag = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 80, 9), &s, area, 200);
+        let drag = ui.mouse(
+            mouse(MouseEventKind::Drag(MouseButton::Left), 80, 9),
+            &s,
+            area,
+            200,
+        );
         assert_eq!(drag.width, Some(MAX_WIDTH));
-        let drag = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, 9), &s, area, 200);
+        let drag = ui.mouse(
+            mouse(MouseEventKind::Drag(MouseButton::Left), 2, 9),
+            &s,
+            area,
+            200,
+        );
         assert_eq!(drag.width, Some(MIN_WIDTH));
-        let up = ui.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 40, 9), &s, area, 200);
+        let up = ui.mouse(
+            mouse(MouseEventKind::Up(MouseButton::Left), 40, 9),
+            &s,
+            area,
+            200,
+        );
         assert!(!ui.dragging);
         assert_eq!(
             up.action,
             Some(json!({"type":"sidebar","op":"width","width":41}))
         );
-        let narrow = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 33, 5), &s, area, 90);
+        let narrow = ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 33, 5),
+            &s,
+            area,
+            90,
+        );
         assert!(narrow.consumed);
-        let up = ui.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 70, 5), &s, area, 90);
+        let up = ui.mouse(
+            mouse(MouseEventKind::Up(MouseButton::Left), 70, 5),
+            &s,
+            area,
+            90,
+        );
         assert_eq!(up.width, Some(90 - MIN_CONVERSATION));
     }
 
@@ -1667,7 +1799,11 @@ mod tests {
         );
         let esc = ui.key(key(KeyCode::Esc), &s, true);
         assert!(esc.consumed && !ui.focus);
-        let ctrl_b = ui.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL), &s, true);
+        let ctrl_b = ui.key(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            &s,
+            true,
+        );
         assert_eq!(ctrl_b.action, Some(act("toggle")));
     }
 
@@ -1724,7 +1860,12 @@ mod tests {
         let text = screen(&mut ui, &s, 34, 24);
         let row = text.lines().position(|line| line.contains("Beta")).unwrap() as u16;
         let area = Rect::new(0, 0, 34, 24);
-        let first = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, row), &s, area, 200);
+        let first = ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 5, row),
+            &s,
+            area,
+            200,
+        );
         assert!(first.consumed && first.operation.is_none());
         assert_eq!(ui.dash.selected_id, "b");
         assert!(!text.contains("+ New Agent"));
@@ -1749,7 +1890,7 @@ mod tests {
     fn projects_snapshot() -> Snapshot {
         let mut s = open("Projects", 34);
         s.sidebar.projects = json!({"loaded":true,"rows":[
-            {"kind":"project","key":"/repo","depth":0,"label":"repo","count":3,"age":"5m","rank":1,"expandable":true,"current":true},
+            {"kind":"project","key":"/repo","depth":0,"label":"repo","count":3,"age":"5m","rank":1,"expandable":true,"current":true,"workspace":"/repo"},
             {"kind":"checkout","key":"/repo|/repo","parent":"/repo","depth":1,"label":"main","count":2,"age":"5m","rank":1,"workspace":"/repo","session":"s1"},
             {"kind":"checkout","key":"/repo|/wt","parent":"/repo","depth":1,"label":"feature-x","count":1,"age":"1h","rank":2,"workspace":"/wt","session":"s2"},
             {"kind":"project","key":"/solo","depth":0,"label":"solo","count":1,"age":"2d","rank":2,"expandable":false,"workspace":"/solo","session":"s3"},
@@ -1758,9 +1899,21 @@ mod tests {
     }
 
     #[test]
+    fn project_picker_escape_returns_to_list_and_path_escape_only_cancels_edit() {
+        let mut s = projects_snapshot();
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/repo","browser_rows":[]});
+        let mut ui = SidebarUi::default();
+        ui.key(key(KeyCode::Char('/')), &s, true);
+        assert!(ui.project_edit.is_some());
+        assert!(ui.key(key(KeyCode::Esc), &s, true).action.is_none());
+        assert!(ui.project_edit.is_none());
+        assert_eq!(ui.key(key(KeyCode::Esc), &s, true).action, Some(act("cancel_project")));
+    }
+
+    #[test]
     fn projects_browser_layout_and_navigation() {
         let mut s = projects_snapshot();
-        s.sidebar.projects = json!({"browser_path":"/repo","browser_rows":[
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/repo","browser_rows":[
             {"name":"..","kind":"dir","path":"/"},
             {"name":"src","kind":"dir","path":"/repo/src"},
             {"name":"main.py","kind":"file","path":"/repo/main.py"}
@@ -1911,12 +2064,25 @@ mod tests {
         let mut ui = SidebarUi::default();
         ui.focus = true;
         let text = screen(&mut ui, &s, 44, 24);
-        for want in ["main → origin/main", "Staged changes · 1", "added", "new.rs", "untracked", "notes.txt", "config.md"] {
+        for want in [
+            "main → origin/main",
+            "Staged changes · 1",
+            "added",
+            "new.rs",
+            "untracked",
+            "notes.txt",
+            "config.md",
+        ] {
             assert!(text.contains(want), "{want:?} missing:\n{text}");
         }
         assert!(!text.contains("docs/config.md"), "a row shows the base name only:\n{text}");
         // Every key either scrolls, refreshes or is ignored: nothing can change the repository.
-        for code in [KeyCode::Enter, KeyCode::Delete, KeyCode::Char('d'), KeyCode::Char('a')] {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Delete,
+            KeyCode::Char('d'),
+            KeyCode::Char('a'),
+        ] {
             let out = ui.key(key(code), &s, true);
             assert!(out.action.is_none() && out.operation.is_none(), "{code:?}");
         }

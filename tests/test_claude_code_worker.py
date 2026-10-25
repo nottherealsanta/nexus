@@ -637,3 +637,81 @@ async def test_no_attention_without_a_denial(tmp_path, workspace, fake):
     _, exe = fake(mode="success")
     result, _ = await run(tmp_path, workspace, exe)
     assert result.attention is None
+
+
+# -- resume (subagent_continue) -------------------------------------------------
+
+
+UUID_NEW = "11111111-2222-4333-8444-555555555555"
+
+
+async def run_resume(tmp_path, workspace, exe, session, *, prompt="and the tests?", **config):
+    worker, policy = worker_for(tmp_path, exe, **config)
+    events: list[tuple[str, dict]] = []
+
+    async def emit(kind, data):
+        events.append((kind, data))
+
+    result = await worker.run(prompt=prompt, model=MODEL, workspace=workspace, policy=policy,
+                              emit=emit, resume=session)
+    return result, events
+
+
+async def test_resume_argv_resumes_the_session_under_the_same_policy(tmp_path, workspace, fake):
+    directory, exe = fake(mode="success", derived=True, config_dir=str(tmp_path / "claude-home"))
+    first, _ = await run(tmp_path, workspace, exe)
+    first_args = invocation(directory)["args"]
+    cfgfile = directory / "fake.json"
+    cfgfile.write_text(json.dumps({"mode": "multi", "derived": True, "config_dir": str(tmp_path / "claude-home")}))
+    second, events = await run_resume(tmp_path, workspace, exe, first.claude_session)
+    args = invocation(directory)["args"]
+    assert args[args.index("--resume") + 1] == first.claude_session
+    assert "--session-id" not in args and "--fork-session" not in args
+    assert args[-2:] == ["--", "and the tests?"]
+    # Every policy flag is the one the first run used.
+    def policy_flags(argv):
+        return [a for i, a in enumerate(argv) if a not in ("--session-id", "--resume", "--settings")
+                and argv[i - 1] not in ("--session-id", "--resume", "--settings") and a != "--"][:-1]
+    assert policy_flags(args) == policy_flags(first_args)
+    # Same session, and the first run's transcript is not replayed as this run's activity.
+    assert second.status == "completed" and second.claude_session == first.claude_session
+    texts = [d["text"] for k, d in events if k == "text"]
+    assert texts == ["first", "second", "third"]
+    assert all(d["session"] == first.claude_session for k, d in events if k == "external.started")
+
+
+async def test_resume_follows_a_replacement_session_id(tmp_path, workspace, fake):
+    # SessionStart pins the id Claude actually reports; the Stop hook must carry the same one.
+    directory, exe = fake(mode="success")
+    first, _ = await run(tmp_path, workspace, exe)
+    (directory / "fake.json").write_text(json.dumps({"mode": "multi", "new_session_on_resume": UUID_NEW}))
+    second, _ = await run_resume(tmp_path, workspace, exe, first.claude_session)
+    assert second.status == "completed" and second.claude_session == UUID_NEW
+    assert second.transcript_path.endswith(f"{UUID_NEW}.jsonl")
+
+
+async def test_resume_needs_a_session_uuid_and_does_not_widen_the_preflight(tmp_path, workspace, fake):
+    _, exe = fake(mode="success")
+    for bad in ("s1", "../x", "--fork-session", ""):
+        with pytest.raises(ConfigError, match="UUID"):
+            await run_resume(tmp_path, workspace, exe, bad)
+
+
+# -- effort ---------------------------------------------------------------------
+
+
+async def test_effort_is_passed_as_the_cli_flag_only_when_given(tmp_path, workspace, fake):
+    directory, exe = fake(mode="success")
+    worker, policy = worker_for(tmp_path, exe)
+    await worker.run(prompt="do it", model=MODEL, workspace=workspace, policy=policy, effort="high")
+    args = invocation(directory)["args"]
+    assert args[args.index("--effort") + 1] == "high"
+    await run(tmp_path, workspace, exe)
+    assert "--effort" not in invocation(directory)["args"]
+
+
+async def test_unsupported_effort_is_refused_before_starting(tmp_path, workspace, fake):
+    _, exe = fake(mode="success")
+    worker, policy = worker_for(tmp_path, exe)
+    with pytest.raises(cw.ConfigError, match="effort"):
+        await worker.run(prompt="x", model=MODEL, workspace=workspace, policy=policy, effort="none")

@@ -946,7 +946,12 @@ def test_agent_page_uses_child_conversation_and_recorded_context(tmp_path, monke
     first = snapshot["blocks"][0]  # the task opens the page as a prompt card, no header strip
     assert first["kind"] == "user" and first["title"] == "Inspect the UI" and "color" not in first
     assert snapshot["agent_color"]
-    assert all(b["kind"] != "context_header" for b in snapshot["blocks"])
+    header = next(b for b in snapshot["blocks"] if b["kind"] == "context_header")
+    members = {b["id"]: b for b in header["members"]}
+    assert members["context:system"]["text"] == "Child instructions"
+    assert {"context:tools", "context:mcp", "context:skills", "context:agents"} <= members.keys()
+    shell.preferences.values["context_preview"] = False
+    assert not any(b["kind"] == "context_header" for b in project(controller, 2, shell=shell)["blocks"])
     assert shell.workflows.agent_context["system_text"] == "Child instructions"
     assert any(b["kind"] == "markdown" and b["text"] == "Hello!" for b in snapshot["blocks"])
     shell.workflows.back()

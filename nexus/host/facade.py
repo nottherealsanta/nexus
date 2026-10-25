@@ -1347,7 +1347,12 @@ class HostFacade:
             efforts: object = ()
             if callable(query):
                 try:
-                    efforts = query(row.get("provider"), row.get("id"))
+                    # Subagent-only rows (Antigravity, worker-backend Claude Code)
+                    # never run as the main model: ask what a child run honors.
+                    efforts = query(
+                        row.get("provider"), row.get("id"),
+                        subagent=row.get("scope") == "subagents",
+                    )
                 except Exception:  # noqa: BLE001 - metadata cannot block model listing
                     efforts = ()
             if not isinstance(efforts, (tuple, list)):

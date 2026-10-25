@@ -74,6 +74,31 @@ async def test_snapshot_has_no_preview_and_poll_never_requests_one(monkeypatch):
     assert dashboard.snapshot() is None
 
 
+@pytest.mark.asyncio
+async def test_a_failed_first_read_still_polls_and_recovers(monkeypatch):
+    from nexus.ui.ratatui import bridge
+
+    monkeypatch.setattr(bridge, "POLL_SECONDS", 0)
+    calls = {"list": 0}
+
+    class Client:
+        async def project_sessions(self, *, limit=1000, query="", archived=0):
+            calls["list"] += 1
+            if calls["list"] == 1:
+                raise RuntimeError("host busy")
+            return SimpleNamespace(sessions=[], truncated=False)
+
+    shell = SimpleNamespace(client=Client(), sessions_truncated=False, controller=SimpleNamespace(session="s"),
+                            seen_seq={}, refresh_session_tabs=lambda rows: None)
+    dashboard = SessionDashboard(shell)
+    await dashboard.open()  # `/sessions` must not raise or leave a visible list without a poll
+    assert dashboard.visible and dashboard.task is not None and dashboard.error == "host busy"
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert calls["list"] >= 2 and dashboard.error == ""
+    dashboard.close()
+
+
 def _visible(rows):
     shell = SimpleNamespace(client=SimpleNamespace(), sessions_truncated=False, flash=lambda *a, **k: None,
                             toast=lambda *a, **k: None)

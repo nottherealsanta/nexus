@@ -52,6 +52,7 @@ from typing import Any, NamedTuple, Protocol
 
 from ..errors import ConfigError, NexusError, OperationCancelled
 from ..events import Event
+from ..model.registry import ADAPTER_CLAUDE_CODE
 from ..model.tiers import (
     DEFAULT_TIER,
     TierResolution,
@@ -1059,6 +1060,10 @@ class ChildSpec:
     #: The immutable ``agent.config`` record a first run persists in the child's
     #: own log (secret-safe; never relayed). ``None`` for a follow-up.
     config_record: Mapping[str, Any] | None = None
+    #: A follow-up of an external Claude Code child: the stored ``agent.config``
+    #: record (its ``external`` block names the Claude session to resume and the
+    #: worker policy it ran under). ``None`` for a first run and for Nexus children.
+    resume_record: Mapping[str, Any] | None = None
 
 
 class ChildRuntime(Protocol):
@@ -1311,6 +1316,12 @@ class ChildLifecycle:
     open: bool = False
     stopped: bool = False
     background: bool = False
+    #: The last finished run was executed by an external worker (usage unknown),
+    #: and which one (``external_kind``/``external_label``; empty on records from
+    #: before the kind was logged).
+    external: bool = False
+    external_kind: str = ""
+    external_label: str = ""
 
 
 def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecycle:
@@ -1323,6 +1334,8 @@ def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecyc
     runs = 0
     status: str | None = None
     before: str | None = None
+    external = False
+    kind = label = ""
     for event in events:
         if event.type not in _LIFECYCLE_EVENTS or not isinstance(event.data, Mapping):
             continue
@@ -1335,6 +1348,7 @@ def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecyc
         if event.type == "agent.spawned":
             found, open_run, runs, status = True, True, 1, None
             background = bool(event.data.get("background"))
+            external, kind, label = False, "", ""
         elif not found:
             continue
         elif event.type == "agent.resumed":
@@ -1346,6 +1360,10 @@ def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecyc
             status = str(event.data.get("status") or "completed")
             if event.data.get("unchanged") and before is not None:
                 status = before  # the refused follow-up left the child as it was
+            else:
+                external = bool(event.data.get("usage_unknown"))
+                kind = str(event.data.get("external_kind") or "") if external else ""
+                label = str(event.data.get("external_label") or "") if external else ""
             if run is not None:
                 runs = max(runs, run)
         elif event.type == "agent.stopped":
@@ -1353,6 +1371,7 @@ def fold_child_lifecycle(events: Iterable[Event], agent_id: str) -> ChildLifecyc
     return ChildLifecycle(
         found=found, runs=runs, status=status, open=open_run,
         stopped=stopped, background=background,
+        external=external, external_kind=kind, external_label=label,
     )
 
 
@@ -2402,15 +2421,40 @@ class SubagentRunner:
                 f"its last run ended {lifecycle.status!r}; only a completed subagent "
                 "can be continued, so start a new subagent"
             )
+        if lifecycle.external and lifecycle.external_kind != ADAPTER_CLAUDE_CODE:
+            if lifecycle.external_kind:
+                return refuse(
+                    f"it ran as an external {lifecycle.external_label or lifecycle.external_kind} "
+                    "worker, which can't be continued; start a new subagent"
+                )
         record = self._child_record(agent_id)
         if record is None:
+            if lifecycle.external:
+                return refuse(
+                    "it ran as an external worker started before external workers could be "
+                    "continued; start a new subagent"
+                )
             return refuse(
-                "it has no recorded configuration (started by an older version or "
-                "an external worker); start a new subagent"
+                "it has no recorded configuration (started by an older version); "
+                "start a new subagent"
             )
         if record.get("worktree"):
             return refuse("worktree subagents cannot be continued; start a new subagent")
-        if record.get("prompt_redacted"):
+        external = record.get("external")
+        if lifecycle.external or external:
+            if (
+                not isinstance(external, Mapping)
+                or external.get("kind") != ADAPTER_CLAUDE_CODE
+                or not isinstance(external.get("claude_session"), str)
+                or not external["claude_session"]
+            ):
+                return refuse(
+                    "it ran as an external worker with no recorded session to resume; "
+                    "start a new subagent"
+                )
+        elif record.get("prompt_redacted"):
+            # An external worker's role text was sent on its first run and lives in
+            # the resumed Claude session; it is not re-sent, so redaction is moot.
             return refuse("its role prompt contained redacted text; start a new subagent")
         role_name = str(record["role"])
         if req.subagent_type is not None and req.subagent_type != role_name:
@@ -2439,6 +2483,13 @@ class SubagentRunner:
             )
         except Exception:  # noqa: BLE001 - an unknown tier is a refusal, not a crash
             return refuse(f"its tier {record['tier']!r} no longer resolves")
+        if external and resolution.clamped:
+            # The recorded model is an exact Claude Code route; a tier that moved
+            # would swap it, and an external worker is never moved to another model.
+            return refuse(
+                f"its tier {record['tier']!r} was lowered, which would change the Claude Code "
+                "model it ran on; start a new subagent"
+            )
         tier = resolution.tier
         allowed = self.allowed_tiers(role)
         if allowed and tier not in allowed:
@@ -2573,9 +2624,15 @@ class SubagentRunner:
             return False, outcome.status or "failed"
         if worktree is not None or p.req.worktree or self._worktree_scope:
             return False, "worktree subagent"
-        if outcome.usage_unknown or outcome.metrics.get("authority"):
-            return False, "external worker"
-        if p.config_record is not None and p.config_record.get("prompt_redacted"):
+        external = outcome.usage_unknown or bool(outcome.metrics.get("authority"))
+        if external:
+            kind = outcome.metrics.get("external_kind")
+            if kind != ADAPTER_CLAUDE_CODE:
+                label = outcome.metrics.get("external_label")
+                return False, f"external {label} worker" if label else "external worker"
+            if not outcome.metrics.get("claude_session"):
+                return False, "external Claude Code worker without a recorded session"
+        elif p.config_record is not None and p.config_record.get("prompt_redacted"):
             return False, "role prompt contained redacted text"
         if not callable(getattr(self._sessions, "child_config", None)):
             return None, ""
@@ -2670,6 +2727,11 @@ class SubagentRunner:
                 resume=p.resume,
                 run=p.run,
                 config_record=None if p.resume else p.config_record,
+                resume_record=(
+                    p.config_record
+                    if p.resume and p.config_record and p.config_record.get("external")
+                    else None
+                ),
             )
             outcome = await self._run_child(spec, cancel)
         except OperationCancelled:
@@ -2932,6 +2994,14 @@ class SubagentRunner:
                 **({"run": outcome.run} if outcome.agent_id else {}),
                 **({"continuable": outcome.continuable} if outcome.continuable is not None else {}),
                 **({"unchanged": True} if outcome.metrics.get("unchanged") else {}),
+                **(
+                    {
+                        "external_kind": str(outcome.metrics["external_kind"]),
+                        "external_label": str(outcome.metrics.get("external_label") or ""),
+                    }
+                    if outcome.usage_unknown and outcome.metrics.get("external_kind")
+                    else {}
+                ),
                 "iterations": outcome.iterations,
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),

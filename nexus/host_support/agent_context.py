@@ -44,6 +44,10 @@ def project_agent_context(
         else []
     )
     return project_context_preview({
+        **{key: snapshot[key] for key in (
+            "included_parts", "skills_index", "mcp_index", "system_files",
+            "params", "budget", "omitted",
+        ) if key in snapshot},
         "mode": "sent_request",
         "actually_sent": True,
         "agent": {
@@ -53,11 +57,12 @@ def project_agent_context(
             "model": reference,
             "tier": getattr(agent, "tier", None),
         },
-        "system_text": snapshot.get("system") if isinstance(snapshot.get("system"), str) else None,
+        "system_text": snapshot.get("system_text", snapshot.get("system")),
         "redacted_for_display": True,
         "tools": list(tools) if isinstance(tools, (list, tuple)) else [],
         "tools_supported": bool(tools),
-        "messages": messages,
+        "messages": snapshot.get("messages", messages),
+        "request_context": snapshot.get("request_context", snapshot.get("context", {})),
         "model": reference,
         "provider": provider if isinstance(provider, str) else None,
     })

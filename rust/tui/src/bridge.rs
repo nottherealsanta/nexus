@@ -176,6 +176,8 @@ pub struct Sidebar {
     pub width: u16,
     /// Bumped by the host to focus an already-open sidebar; ignored while opening.
     pub focus: u64,
+    /// Bumped by every host `show` (`/sessions`, Ctrl+B): re-shows a sidebar hidden after a session open.
+    pub reveal: u64,
     pub sessions: Option<Value>,
     pub projects: Value,
     pub files: Value,

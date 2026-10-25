@@ -284,6 +284,65 @@ async def test_end_to_end_success_records_and_reports_external_authority(tmp_pat
         await runtime.aclose()
 
 
+async def test_end_to_end_follow_up_resumes_the_recorded_claude_session(tmp_path):
+    from nexus.agents.runner import AGENT_CONFIG
+    from claude_code_fakes import configure, invocation
+
+    runtime, spec, outcome, _, workspace = await external_run(
+        tmp_path, "success", derived=True, config_dir=str(tmp_path / "claude-home"))
+    try:
+        # The runner hands the runtime its config record; the runtime adds the external block.
+        assert outcome.metrics["external_kind"] == "claude-code"
+        record = {"version": 1, "role": "claude", "tier": "medium", "workspace": str(workspace)}
+        facade = runtime._ensure_child_sessions()
+        real_id = facade.manager.store.resolve_child_id("root/sub/2")
+
+        async def run_child(spec_, **extra):
+            child = _ChildRuntime(runtime, replace(spec_, **extra), object())
+            try:
+                return await child.run()
+            finally:
+                await child.aclose()
+
+        first_spec = replace(spec, session_id="root/sub/2", agent_id="root/sub/2", config_record=record)
+        first = await run_child(first_spec)
+        assert first.status == "completed"
+        session = facade.manager.open(real_id, recover=False)
+        configs = [e.data for e in session.read().events() if e.type == AGENT_CONFIG]
+        assert len(configs) == 1
+        external = configs[0]["external"]
+        assert external["kind"] == "claude-code" and external["claude_session"] == first.metrics["claude_session"]
+        assert external["model"] == "claude-haiku-4-5" and external["policy"]["permission_mode"] == "dontAsk"
+        dumped = str(configs[0])
+        assert "PATH" not in dumped and str(tmp_path / "bin") not in dumped  # no executable or environment
+
+        # Follow-up: resume that session; the same worker policy; the answer lands in the same child log.
+        configure(tmp_path / "bin", mode="multi", derived=True, config_dir=str(tmp_path / "claude-home"))
+        follow = await run_child(first_spec, prompt="and the tests?", resume=True, run=2, config_record=None,
+                                 resume_record=configs[0])
+        assert follow.status == "completed" and follow.text == "third"
+        assert follow.metrics["claude_session"] == external["claude_session"]
+        args = invocation(tmp_path / "bin")["args"]
+        assert args[args.index("--resume") + 1] == external["claude_session"] and "--session-id" not in args
+        assert args[-2:] == ["--", "and the tests?"]  # no role-instruction prefix on a resumed session
+        session = facade.manager.open(real_id, recover=False)
+        roles = [(m.role, "".join(b.text for b in m.content if hasattr(b, "text"))) for m in session.messages]
+        assert roles == [("user", "fix the bug"), ("assistant", "All done."),
+                         ("user", "and the tests?"), ("assistant", "third")]
+        assert len([e for e in session.read().events() if e.type == AGENT_CONFIG]) == 1
+
+        # A policy that differs from the recorded one never runs: refused before anything is sent.
+        widened = dict(configs[0], external={**external, "policy": {**external["policy"], "permission_mode": "acceptEdits"}})
+        before = (tmp_path / "bin" / "argv.json").read_text()
+        refused = await run_child(first_spec, prompt="more", resume=True, run=3, config_record=None,
+                                  resume_record=widened)
+        assert refused.status == "failed" and refused.metrics.get("unchanged")
+        assert "policy or model changed" in refused.text
+        assert (tmp_path / "bin" / "argv.json").read_text() == before  # claude was never started
+    finally:
+        await runtime.aclose()
+
+
 @pytest.mark.parametrize(("mode", "status", "handoff"), [
     ("exit", "failed", True), ("trust", "needs_attention", False),
 ])

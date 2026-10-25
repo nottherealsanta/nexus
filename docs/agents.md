@@ -57,6 +57,10 @@ or a descendant of one) is refused too: the worktree profile is the reviewed no-
 tool set, and Claude's tools (and any shell `worker_tools` grants) are not bound by it.
 Use a non-worktree child for Claude Code.
 
+**Follow-ups.** A completed worker child can take `subagent_continue`: the worker resumes
+its Claude session with `claude --resume <id>` under the recorded policy (see
+[Continuing a finished subagent](#continuing-a-finished-subagent)); Antigravity cannot.
+
 **Role instructions and context.** Claude Code has no Nexus system-prompt channel, so
 the role body is sent as a labelled prefix of the single prompt
 (`Role instructions (Nexus agent role '<name>'):` ... `Task:` ...). The 64 KiB prompt
@@ -510,6 +514,23 @@ tokens/cost exactly like a spawn, and is bounded by two separate limits, both fi
 (`DEFAULT_MAX_CONTINUATIONS_PER_TURN`) and 4 total runs per child
 (`DEFAULT_MAX_RUNS_PER_CHILD`, counted from the parent log so a restart cannot reset it).
 Failed and cancelled follow-ups count.
+
+*External Claude Code workers.* A completed `claude-code/<model>` worker child is continuable.
+After a completed first run the runtime appends the same `agent.config` record with an
+`external` block (`kind`, `label`, `provider`, exact `model`, `claude_session`, and a
+`policy` fingerprint: mode, tools, allowed/disallowed tools, setting sources, MCP digest,
+restricted; no executable path, environment or credentials). `child_config` returns the last
+record, so a newer one supersedes it. `subagent_continue` then runs the worker with
+`claude --resume <claude_session>` instead of `--session-id <new>`, with the identical policy
+flags, the follow-up prompt alone (no role-instruction prefix), the transcript read from where
+earlier runs ended, and the same event shape as any continuation (`agent.resumed` run n, relayed
+`external.*` events, `agent.completed` with `continuable`). The Claude session id is pinned by
+the first SessionStart hook, so a session id that changes on resume is followed. A current
+policy or model that differs from the recorded one, or a lowered tier, refuses the follow-up
+unchanged: a continuation never widens, and is not silently narrowed. Antigravity workers are
+not continuable (`it ran as an external Antigravity worker, which can't be continued`), nor
+are worktree children (they cannot run Claude Code at all) or Claude Code children from before
+this record existed. Not verified against a real `claude` binary.
 
 *Events.* The runner emits `agent.resumed {run, message, …}` through the spawning call's
 emitter and a closing `agent.completed` carrying `run` and `continuable`; the reducer and

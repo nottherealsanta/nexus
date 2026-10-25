@@ -292,7 +292,7 @@ def test_shared_candidates_include_skipped_pins_in_runtime_order(tmp_path, monke
 
 def test_tier_effort_selections_persist_validate_and_reset(tmp_path, monkeypatch):
     runtime, home = _runtime(tmp_path, monkeypatch)
-    runtime.candidate_supported_efforts = lambda provider, model: ["low", "high"]
+    runtime.candidate_supported_efforts = lambda provider, model, subagent=False: ["low", "high"]
     asyncio.run(model_settings.tier_set(runtime, "low", ["openai/cheap-1"], efforts={"openai/cheap-1": "high"}))
     assert _config(home)["models"]["tier_efforts"]["low"] == {"openai/cheap-1": "high"}
     before = (home / ".nexus" / "config.toml").read_text()

@@ -1605,13 +1605,10 @@ fn draw_status_line(
     } else {
         "∴"
     };
-    let mut spans = vec![
-        Span::styled(mark, Style::default().fg(shimmer_greys(p).1)),
-        Span::raw(" "),
-    ];
+    let mut spans = vec![Span::styled(mark, Style::default().fg(shimmer_greys(p).1))];
     spans.extend(shimmer_spans(&label, frame_tick, animate, mono, p));
     // The only elapsed time is the right-hand turn clock.
-    let used = 2 + label.width();
+    let used = 1 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + right.width());
     spans.push(Span::raw(" ".repeat(gap)));
     let (info, button) = right.split_at(stop);
@@ -5429,12 +5426,12 @@ mod editor_layout_tests {
             "the ∴ mark is the base dark grey"
         );
         assert_eq!(
-            buffer[(row.x + 2, row.y)].fg,
+            buffer[(row.x + 1, row.y)].fg,
             shimmer_greys(&p).1,
-            "animations off: the word in the base grey"
+            "animations off: the word starts immediately after the mark"
         );
         let status = text(row.y);
-        assert!(status.contains("∴ Waiting for response…"), "{status}");
+        assert!(status.contains("∴Waiting for response…"), "{status}");
         assert!(
             !status.contains("2.0s") && !status.contains("response… 2"),
             "{status}"

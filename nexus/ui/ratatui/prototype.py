@@ -1427,15 +1427,16 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                                     if tool.call_id == agent.parent_call_id), agent.task or agent.description)
             from ...ui_support.timeline import _literal
             page_color = _agent_color(child_shell, (getattr(preview, "agent", {}) or {}).get("name", "build"))
-            # A subagent page opens with the task as a prompt card (no header strip, and no
-            # agent colour: the colour marks only the agent's name), then its thoughts,
-            # tool rows and reply.
+            # Reuse the root header with only the child's host-projected request.
+            # The task remains a prompt card, followed by thoughts, tools and reply.
             first, _, rest = prompt_text.partition("\n")
             child_blocks = [{"id": agent.id + ":task", "kind": "user", "title": _literal(first),
                              "text": _literal(rest), "gap": 0}]
             if not context and agent.status == "spawned":
                 child_blocks.append({"id": agent.id + ":wait", "kind": "literal", "text": "Waiting for the first request…", "gap": 1})
             child_blocks = _safe_blocks(child_blocks)
+            if shell.preferences.values["context_preview"]:
+                child_blocks.extend(_safe_blocks(_compact_header(child_shell, agent.body)))
             from ...ui_support.timeline import agent_model_label
             from ...ui_support.external_worker import external_blocks
             external_head, external_foot = external_blocks(agent.id, agent.body.external)

@@ -1326,6 +1326,9 @@ class _ContextCoordinator:
             # Captured by the manifest factory for every iteration of this root
             # turn. Subsequent session selection changes are next-turn only.
             session._turn_reasoning_effort = selected_agent_effort
+            # The per-iteration assemblers are rebuilt from the shared context
+            # manager, so the tier stamp must travel with the turn too.
+            session._turn_tier = (tier_name, assembler._effort_explicit)
         if hasattr(assembler, "_reasoning_effort"):
             assembler._reasoning_effort = selected_agent_effort
         if hasattr(assembler, "_agent_effort_supported"):
@@ -1720,6 +1723,9 @@ class _ManifestEnvironmentFactory:
         facts = getattr(runtime, "_session_worktree_facts", None)
         assembler._session_worktree = facts(session_id) if callable(facts) else ()
         assembler._kernel_source = getattr(runtime, "_kernel_blocks_for", None)
+        turn_tier = getattr(self._session, "_turn_tier", None)
+        if isinstance(turn_tier, tuple) and len(turn_tier) == 2 and turn_tier[0] is not None:
+            assembler._tier_name, assembler._effort_explicit = turn_tier
         if self._agent_definition is not None:
             assembler._agent_effort_supported = getattr(
                 assembler, "_reasoning_effort", None
@@ -2355,14 +2361,16 @@ class _ChildSessionFacade:
                 or identity not in (row.get("logical_session_id"), row.get("agent_id"))
             ):
                 return None
+            # The last record wins: a normal child writes exactly one; an external
+            # Claude Code child writes a newer one only when its session id moved.
+            found: dict[str, Any] | None = None
             for record in store.records(real_id):
                 event = getattr(record, "event", None)
-                if getattr(event, "type", None) == AGENT_CONFIG:
-                    data = event.data
-                    return dict(data) if isinstance(data, Mapping) else None
+                if getattr(event, "type", None) == AGENT_CONFIG and isinstance(event.data, Mapping):
+                    found = dict(event.data)
         except Exception:  # noqa: BLE001 - an unreadable child is simply not continuable
             return None
-        return None
+        return found
 
 
 def _child_models(session: Any) -> tuple[str, ...]:
@@ -2943,7 +2951,7 @@ class _ChildRuntime:
                 metrics["clip_notes"] = list(result.clip_notes)
         return changed, metrics
 
-    def _context_snapshot(self, instructions: str, workspace: Path) -> dict[str, Any]:
+    def _context_snapshot(self, instructions: str, workspace: Path, *, resumed: bool = False) -> dict[str, Any]:
         """What the external worker was actually given, in the ``context.assembled`` request shape."""
         from .core.loop import MAX_SNAPSHOT_SYSTEM_CHARS
 
@@ -2951,7 +2959,10 @@ class _ChildRuntime:
         assert external is not None
         policy = external.policy
         label = external.label
-        if instructions:
+        if resumed:
+            head = (f"{label} resumed its earlier session (same worker policy); only the follow-up "
+                    "prompt was sent. The role instructions are already in that session.")
+        elif instructions:
             head = (f"{label} has no Nexus system prompt. The role instructions below were "
                     "prepended to the task prompt it received:\n\n" + instructions)
         else:
@@ -2974,6 +2985,61 @@ class _ChildRuntime:
             "request": {"system": redact_secrets(system[:MAX_SNAPSHOT_SYSTEM_CHARS]), "tools": tools},
         }
 
+    def _external_effort(self) -> str | None:
+        """The effort a Claude Code worker child is started with, or ``None``.
+
+        An explicit role/Task effort wins, else the tier's per-route
+        ``models.tier_efforts`` entry. Only ``claude --effort`` levels are passed;
+        the Antigravity worker has no effort control (its model ids carry it).
+        """
+        external, spec = self._external, self._spec
+        if external is None or external.kind != ADAPTER_CLAUDE_CODE:
+            return None
+        from .agents.claude_code_worker import CLAUDE_EFFORTS
+
+        effort = getattr(spec, "reasoning_effort", None)
+        if not effort:
+            models = getattr(getattr(getattr(spec, "config", None), "v2", None), "models", None)
+            table = getattr(models, "tier_efforts", None) or {}
+            effort = (table.get(getattr(spec, "tier", None)) or {}).get(
+                f"{external.provider}/{external.model}")
+        return effort if effort in CLAUDE_EFFORTS else None
+
+    def _record_external(
+        self, spec: Any, session: Any, real_id: str, result: Any, resume_session: str | None
+    ) -> None:
+        """Persist what a later ``subagent_continue`` needs to resume this Claude Code session.
+
+        A first run writes the runner's ``agent.config`` record plus an ``external``
+        block (Claude session id, exact model, the worker policy fingerprint) to the
+        child's own log; the log is the authority after a daemon restart. A follow-up
+        writes a newer record only when Claude reported a different session id. No
+        paths, environment, executable or credentials are stored.
+        """
+        external = self._external
+        assert external is not None
+        claude_session = getattr(result, "claude_session", None)
+        if not isinstance(claude_session, str) or not claude_session:
+            return
+        if resume_session is None:
+            base = getattr(spec, "config_record", None)
+        elif claude_session != resume_session:
+            base = getattr(spec, "resume_record", None)
+        else:
+            return
+        if not base or (resume_session is None and getattr(result, "status", None) != "completed"):
+            return  # only a completed first run is ever continued
+        from .agents.claude_code_worker import policy_fingerprint
+
+        record = dict(base)
+        record["external"] = {
+            "kind": external.kind, "label": external.label, "provider": external.provider,
+            "model": external.model, "claude_session": claude_session,
+            "policy": policy_fingerprint(external.policy),
+        }
+        with contextlib.suppress(Exception):
+            session.append_event(Event(type=AGENT_CONFIG, data=record, session=real_id))
+
     async def _run_external(self) -> SubagentOutcome:
         """Run an explicit ``claude-code`` child through the external worker.
 
@@ -2982,7 +3048,7 @@ class _ChildRuntime:
         transcript in the child's own log (relayed upward like any child's), and
         verifies file changes itself. No Nexus tool dispatcher is involved.
         """
-        from .agents.claude_code_worker import snapshot_workspace
+        from .agents.claude_code_worker import policy_fingerprint, snapshot_workspace
         from .agents.runner import MAX_REPORTED_FILES
 
         runtime, spec, external = self._runtime, self._spec, self._external
@@ -2990,9 +3056,29 @@ class _ChildRuntime:
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
         real_id = facade.manager.store.resolve_child_id(spec.session_id)
+        resuming = bool(getattr(spec, "resume", False))
         session = facade.manager.open(
-            real_id, create=True, recover=False, ownership=_child_ownership(spec),
+            real_id, create=not resuming, recover=False, ownership=_child_ownership(spec),
         )
+        resume_session: str | None = None
+        if resuming:
+            recorded = (getattr(spec, "resume_record", None) or {}).get("external")
+            recorded = recorded if isinstance(recorded, Mapping) else {}
+            current = policy_fingerprint(external.policy) if external.kind == ADAPTER_CLAUDE_CODE else None
+            if recorded.get("kind") != external.kind or not recorded.get("claude_session"):
+                problem = "no Claude Code session was recorded for this child"
+            elif recorded.get("model") != external.model or recorded.get("policy") != current:
+                # A follow-up never gains authority over the run it resumes, and the
+                # worker is not narrowed silently either: refuse before anything runs.
+                problem = ("the Claude Code worker policy or model changed since it was spawned "
+                           "(a continuation keeps the recorded one)")
+            else:
+                problem = ""
+                resume_session = str(recorded["claude_session"])
+            if problem:
+                return self._failed(
+                    spec, session, f"cannot resume the Claude Code session: {problem}",
+                    metrics={"unchanged": True}, handoff=False)
         # External workers have no wall-clock deadline; only cancellation stops them.
         limits = TurnLimits(max_iterations=0, max_seconds=0.0)
         lease = session.begin_turn(limits=limits)
@@ -3010,18 +3096,24 @@ class _ChildRuntime:
             # Claude Code has no system-prompt channel here, so the role's
             # instructions travel as a labelled prefix of the one prompt it gets.
             instructions = str(getattr(spec, "system_prompt", "") or "").strip()
+            if resume_session:
+                instructions = ""  # already in the resumed session; only the follow-up goes in
             prompt = (f"Role instructions (Nexus agent role {spec.agent!r}):\n{instructions}\n\n"
                       f"Task:\n{spec.prompt}") if instructions else spec.prompt
-            await emit("context.assembled", self._context_snapshot(instructions, workspace))
+            await emit("context.assembled", self._context_snapshot(
+                instructions, workspace, resumed=bool(resume_session)))
             session.append_message(Message(
                 role="user", content=[Text(spec.prompt)], meta=MessageMeta(turn_id=lease.turn_id)))
             with contextlib.suppress(Exception):
                 before = await asyncio.to_thread(snapshot_workspace, workspace)
+            effort = self._external_effort()
             try:
                 result = await external.worker.run(
                     prompt=prompt, model=external.model, workspace=workspace,
                     policy=external.policy,
-                    cancel=getattr(spec, "cancel", None), emit=emit)
+                    cancel=getattr(spec, "cancel", None), emit=emit,
+                    **({"resume": resume_session} if resume_session else {}),
+                    **({"effort": effort} if effort else {}))
             except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
                 crash = exc
             with contextlib.suppress(Exception):
@@ -3031,6 +3123,8 @@ class _ChildRuntime:
                     role="assistant", content=[Text(result.text)],
                     meta=MessageMeta(provider=external.provider, model=external.model,
                                      turn_id=lease.turn_id)))
+            if result is not None and external.kind == ADAPTER_CLAUDE_CODE:
+                self._record_external(spec, session, real_id, result, resume_session)
             if crash is None and result is not None:
                 if result.status == "completed":
                     reported = (_reported_usage(getattr(result, "usage", None))
@@ -4513,7 +4607,7 @@ class Runtime:
         )
 
     def candidate_supported_efforts(
-        self, provider: str, model: str
+        self, provider: str, model: str, *, subagent: bool = False
     ) -> tuple[str, ...]:
         """Return efforts supported by this candidate's effective runtime route.
 
@@ -4522,6 +4616,10 @@ class Runtime:
         capability, and registry checks used by root-session effort metadata.
         An unresolvable candidate or route that cannot apply effort has no
         choices. It never selects a model or changes session effort state.
+
+        ``subagent=True`` answers for a subagent (tier) run instead: a
+        ``claude-code`` route on the worker backend honors the catalogue's
+        efforts via ``claude --effort``; Antigravity has no effort control.
         """
         if (
             not isinstance(provider, str)
@@ -4530,6 +4628,20 @@ class Runtime:
             or not model
         ):
             return ()
+        if subagent:
+            sections = getattr(getattr(self._load_config(), "v2", None), "providers", {}) or {}
+            kind = self._adapter_kind(provider, sections.get(provider))
+            if kind == ADAPTER_ANTIGRAVITY:
+                return ()
+            models = getattr(getattr(self._load_config(), "v2", None), "models", None)
+            if kind == ADAPTER_CLAUDE_CODE and getattr(
+                models, "claude_code_subagent_backend", "worker"
+            ) == "worker":
+                from .agents.claude_code_worker import CLAUDE_EFFORTS
+
+                info = self._registry.get(f"{provider}/{model}") if self._registry is not None else None
+                offered = set(getattr(info, "reasoning_efforts", ()) or ())
+                return tuple(level for level in CLAUDE_EFFORTS if level in offered)
         try:
             selection = self._validate_model_selection(f"{provider}/{model}")
             # Custom tiers/aliases can shadow a catalogue coordinate. Do not
@@ -7612,6 +7724,12 @@ class Runtime:
             },
         )()
         assembler._agent_effort_supported = selected_agent_effort is not None
+        # The context manager assembles the concrete model, so the router can only
+        # recover the tier (and apply ``models.tier_efforts``) from this stamp.
+        child_tier = getattr(spec, "tier", None)
+        if isinstance(child_tier, str) and child_tier in self._tiers.order:
+            assembler._tier_name = child_tier
+            assembler._effort_explicit = bool(getattr(spec, "reasoning_effort", None))
         if getattr(spec, "resume", False):
             # A follow-up appends to the stored transcript and never compacts it:
             # an assembly that would drop or summarize history refuses instead.

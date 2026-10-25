@@ -20,6 +20,56 @@ to a session view, a context assembler, a provider resolver, a tool dispatcher,
 a permission gate and an event sink, and imports no concrete manager. That makes
 the loop testable with fakes and every manager replaceable.
 
+## How it works
+
+One picture: clients hold no state, the daemon owns every turn, and the durable
+event log is the only thing a UI draws.
+
+```mermaid
+flowchart TD
+    subgraph clients["Clients"]
+        TUI["nexus chat"]
+        CLI["nexus run"]
+        WEB["nexus web"]
+        DESK["nexus desktop"]
+    end
+
+    subgraph daemon["Shared daemon - one per Nexus home"]
+        PROTO["host protocol"]
+        FACADE["HostFacade"]
+        SUP["Supervisor"]
+        RUNTIME["Runtime"]
+        SESSION["Session"]
+        LOOP["agent loop"]
+    end
+
+    PROVIDER["Model provider"]
+    TOOLS["Tools"]
+    DB[("SQLite events")]
+    REDUCER["reduce - pure"]
+    VIEW["ConversationView"]
+
+    TUI --> PROTO
+    CLI --> PROTO
+    WEB --> PROTO
+    DESK --> PROTO
+    PROTO --> FACADE
+    FACADE --> SUP
+    SUP --> RUNTIME
+    RUNTIME --> SESSION
+    SESSION --> LOOP
+    LOOP -->|request| PROVIDER
+    LOOP -->|dispatch| TOOLS
+    LOOP -->|append| DB
+    DB --> REDUCER
+    REDUCER --> VIEW
+    VIEW -->|snapshots| clients
+```
+
+The two halves are independent: a turn can run with no viewer attached (the
+event log is written first), and a client can start with no turn in flight (it
+replays the log). The next section expands the middle box.
+
 ## Request path
 
 The [GPUI desktop client](desktop.md) is another host client. Its Rust window

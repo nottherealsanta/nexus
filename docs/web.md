@@ -328,3 +328,19 @@ connection status. Model downloads remain explicitly confirmed.
 Normal composer sends steer an active turn at the next model step after the
 current operation. Ctrl+Enter queues a new turn; Alt+Enter interrupts. Idle
 sends start a new turn regardless of the chosen mode.
+
+### Subagent context
+
+The subagent page uses the root context header and dialog for the child's recorded
+request. In addition to its system prompt, task and tool schemas, any reported
+AGENTS.md/system-file parts, skills and MCP indexes, messages, request parameters
+and request context are preserved through the root display-safety projection.
+These are the child's recorded values, not the current root context. Older child
+logs may only contain a prompt and tools; missing metadata is not reconstructed
+from the root or presented as if it had been sent.
+
+New child snapshots record the granted system contributions from the child
+assembler, included skills/MCP indexes, actual ordered request messages, sampling
+parameters and assembler accounting. They do not borrow the root inventory.
+Attachment payloads are omitted; snapshots have a one-million-character aggregate
+text budget, per-field and collection caps, and secret redaction before persistence.

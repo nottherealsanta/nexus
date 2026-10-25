@@ -142,10 +142,60 @@ def _request_snapshot(request: ModelRequest) -> dict[str, Any]:
             "description": redact_secrets(tool.description or "")[:4_000],
             "input_schema": schema,
         })
-    return {
-        "system": redact_secrets((request.system or "")[:MAX_SNAPSHOT_SYSTEM_CHARS]),
+    remaining = [1_000_000]
+
+    def bounded(value: Any, depth: int = 0) -> Any:
+        if depth > 12 or remaining[0] <= 0:
+            return "[context omitted]"
+        if isinstance(value, str):
+            text = value[:min(remaining[0], 200_000)]
+            remaining[0] -= len(text)
+            return redact_secrets(text) + ("…" if len(text) < len(value) else "")
+        if isinstance(value, Mapping):
+            return {str(key)[:128]: bounded(item, depth + 1)
+                    for key, item in list(value.items())[:256] if remaining[0] > 0}
+        if isinstance(value, (list, tuple)):
+            return [bounded(item, depth + 1) for item in value[:256] if remaining[0] > 0]
+        return value if value is None or isinstance(value, (bool, int, float)) else "[omitted]"
+
+    parts = request.metadata.get("included_parts", {})
+    parts = parts if isinstance(parts, Mapping) else {}
+    def display_block(block: ContentBlock) -> dict[str, Any]:
+        # Explicit display allowlist: IR structs also carry harness-only fields
+        # and opaque provider signatures which must never enter this snapshot.
+        if isinstance(block, Text):
+            return {"type": "text", "text": block.text}
+        if isinstance(block, Thinking):
+            return {"type": "thinking", "text": block.text}
+        if isinstance(block, ToolUse):
+            return {"type": "tool_use", "id": block.id, "name": block.name,
+                    "input": {key: value for key, value in block.input.items()
+                              if key != DUPLICATE_TOOL_CALL_KEY}}
+        if isinstance(block, ToolResult):
+            return {"type": "tool_result", "tool_use_id": block.tool_use_id,
+                    "is_error": block.is_error,
+                    "content": [display_block(item) for item in block.content[:256]]}
+        # Never persist attachment bytes, titles or signed URLs, including
+        # attachments nested inside tool results.
+        return {"type": "attachment", "text": "[attachment omitted]"}
+
+    messages = [
+        {"role": message.role,
+         "blocks": [display_block(block) for block in message.content[:256]]}
+        for message in request.messages[:256]
+    ]
+    return bounded({
+        "system": (request.system or "")[:MAX_SNAPSHOT_SYSTEM_CHARS],
         "tools": tools,
-    }
+        "included_parts": [{"name": name, "text": text} for name, text in parts.items()],
+        "skills_index": [{"name": line.split(":", 1)[0], "description": line.partition(":")[2].strip(),
+                          "included": True} for line in str(parts.get("skills_index", "")).splitlines() if line],
+        "mcp_index": parts.get("mcp_index", ""),
+        "messages": messages,
+        "params": msgspec.to_builtins(request.params),
+        "request_context": request.metadata.get("context", {}),
+        "omitted": ["Display snapshot is bounded; attachment payloads are omitted."],
+    })
 
 #: Provider stop reasons that may terminate a turn without tool handling.
 _COMPLETION_REASONS = frozenset({"end_turn", "max_tokens", "stop_sequence", "refusal"})

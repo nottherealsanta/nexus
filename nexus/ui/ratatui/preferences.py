@@ -15,7 +15,7 @@ class Preferences:
     #: terminal's left sidebar (Projects, Sessions, Files, Git) is ``sidebar_open``, closed until opened.
     DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
                 "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": [],
-                "sidebar_open": False, "sidebar_width": 34, "sidebar_tab": "Sessions",
+                "sidebar_open": False, "sidebar_width": 34, "sidebar_tab": "Sessions", "project_recent": [],
                 "details_width": details_view.DEFAULT_WIDTH}
 
     def __init__(self, path=None):

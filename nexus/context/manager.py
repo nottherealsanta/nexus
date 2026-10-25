@@ -1756,6 +1756,8 @@ class ContextManager:
                 else None,
             },
             "cache": cache_metadata,
+            # Exact granted contributions, not the unbudgeted/root inventory.
+            "included_parts": dict(self._last_included_parts),
         }
         # The local Claude Agent worker must start in the selected session
         # checkout. Keep this provider-specific so other providers' request
