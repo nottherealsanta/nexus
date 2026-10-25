@@ -1191,12 +1191,32 @@ Attachment More info uses `ratatui-image` for a resized native preview with name
 media type and byte size. Image bytes come only from the daemon's bounded
 `AttachmentPreview` command, never a surface filesystem read. The image protocol
 is chosen once at startup (`rust/tui/src/graphics.rs`), before the event loop reads
-input: stdin/stdout are the bridge pipes, so the client asks `/dev/tty` for Kitty
-graphics support, the cell size in pixels and DA1 (Sixel), waiting at most 400 ms
-for the DA1 reply. iTerm2 and tmux come from the environment; anything else falls
-back to half blocks. `NEXUS_IMAGE_PROTOCOL` forces a protocol and skips the probe
-(the test suite sets `halfblocks`, since PTY harnesses never answer). Decode
-dimensions/allocation are bounded; an undecodable image shows a labelled notice.
+input: stdin/stdout are the bridge pipes, so the client probes `/dev/tty`
+for Kitty graphics, pixel cell size and DA1 (Sixel). A final device-status query
+ends the bounded 400 ms read, rather than DA1 prematurely cutting off subsequent
+replies. Raw mode is already enabled; the Crossterm input reader starts afterward.
+Rendering never queries the terminal or consumes bridge input.
+
+Automatic selection is conservative: Kitty/Ghostty require a successful Kitty
+reply and a matching terminal identity; iTerm2, WezTerm, mintty and rio use iTerm2
+output; otherwise a Sixel advertisement selects Sixel. Unknown terminals, Warp
+and tmux use **coloured half-block pixels**, not metadata-only previews.
+`ratatui-image` 8.1.1's Kitty renderer uses Unicode placeholders: a basic Kitty
+query proves image transmission support, **not** placeholder support. Warp lacks
+those placeholders, and the library's environment-based iTerm2 guess for Warp is
+also documented upstream as unsupported. Inherited tmux environment hints do
+not establish working passthrough either.
+
+`NEXUS_IMAGE_PROTOCOL=kitty|sixel|iterm2|halfblocks` forces a protocol and skips
+the probe (`auto`/unset probes). Force `halfblocks` to diagnose blank previews;
+force graphics only when the terminal supports that output dialect and any tmux
+passthrough is configured. PTY tests force halfblocks since harnesses do not
+answer probes. Decode dimensions/allocation are bounded; undecodable images
+show a labelled notice. A Crossterm-output regression test checks actual visible
+half-block glyphs and true-colour escapes: TestBackend cells alone cannot prove
+that a terminal understands a graphics protocol. The reporting terminal was not
+available for manual visual verification.
+
 Kitty-style protocols transmit the pixels only on a protocol's first render and then
 draw bare placeholders, so the client never lets protocol state outlive the
 terminal's copy: `Cache::forget_image` runs whenever the preview is not shown, on a

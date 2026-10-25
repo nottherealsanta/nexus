@@ -7013,6 +7013,44 @@ mod image_preview_tests {
     }
 
     #[test]
+    fn fallback_writes_visible_pixels_to_the_crossterm_backend() {
+        // Buffer cells cannot prove that a terminal understands an escape protocol.
+        let mut picker = ratatui_image::picker::Picker::from_fontsize((10, 20));
+        picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(png())
+            .unwrap();
+        let mut protocol = picker.new_resize_protocol(image::load_from_memory(&bytes).unwrap());
+        let mut output = Vec::<u8>::new();
+        let backend = ratatui::backend::CrosstermBackend::new(&mut output);
+        let mut terminal = Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(Rect::new(0, 0, 40, 20)),
+            },
+        )
+        .unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_stateful_widget(
+                    ratatui_image::StatefulImage::new(),
+                    frame.area(),
+                    &mut protocol,
+                );
+            })
+            .unwrap();
+        drop(terminal);
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains('▄'),
+            "fallback must output picture glyphs: {output:?}"
+        );
+        assert!(output.contains("38;2;"), "fallback must output true colour");
+        assert!(!output.contains("\x1b_G"));
+        assert!(!output.contains("1337;File="));
+    }
+
+    #[test]
     fn a_decodable_image_paints_its_area() {
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut cache = Cache::default();

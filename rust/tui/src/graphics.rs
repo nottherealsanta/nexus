@@ -3,10 +3,12 @@
 //! stdin/stdout are the bridge pipes, so the library's own stdio query cannot be
 //! used. Instead the controlling terminal (`/dev/tty`) is asked once at startup,
 //! before the event loop reads input: a Kitty graphics probe, the cell size in
-//! pixels (`CSI 16 t`) and primary device attributes (`CSI c`, Sixel = 4). The DA1
-//! reply ends the read; the wait is bounded by `TIMEOUT`. iTerm2 and tmux are
-//! taken from the environment by `Picker::from_fontsize`. Anything undetected
-//! falls back to half blocks, which every terminal draws. `NEXUS_IMAGE_PROTOCOL`
+//! pixels (`CSI 16 t`) and primary device attributes (`CSI c`, Sixel = 4). A final DSR
+//! status reply ends the read; the wait is bounded by `TIMEOUT`. Environment guesses
+//! from the library are overridden: basic Kitty support does not imply support
+//! for its Unicode placeholders, and some iTerm2 guesses are unsupported.
+//! Anything undetected falls back to half blocks, which every terminal draws.
+//! `NEXUS_IMAGE_PROTOCOL`
 //! overrides detection for terminals that never answer the probe.
 use ratatui_image::picker::{Picker, ProtocolType};
 use std::sync::OnceLock;
@@ -26,7 +28,7 @@ pub struct Reply {
     pub kitty: bool,
     pub sixel: bool,
     pub font: Option<(u16, u16)>,
-    /// DA1 arrived, so no further reply is coming.
+    /// The final device status response arrived.
     pub done: bool,
 }
 
@@ -34,14 +36,14 @@ pub struct Reply {
 pub fn parse(bytes: &[u8]) -> Reply {
     let text = String::from_utf8_lossy(bytes);
     let mut reply = Reply {
-        kitty: text.contains("\x1b_Gi=31;OK"),
+        kitty: text.contains("\x1b_Gi=31;OK\x1b\\"),
+        done: text.contains("\x1b[0n"),
         ..Reply::default()
     };
     for part in text.split("\x1b[").skip(1) {
         if let Some(body) = part.strip_prefix('?') {
             if let Some(end) = body.find('c') {
                 if body[..end].bytes().all(|b| b.is_ascii_digit() || b == b';') {
-                    reply.done = true;
                     reply.sixel |= body[..end].split(';').skip(1).any(|p| p == "4");
                 }
             }
@@ -64,14 +66,14 @@ fn query() -> Option<Reply> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     if std::env::var_os("TMUX").is_some() {
-        return None; // tmux answers for itself; from_fontsize handles passthrough.
+        return None; // tmux replies describe itself, not the outer terminal.
     }
     let mut tty = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/tty")
         .ok()?;
-    tty.write_all(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[16t\x1b[c")
+    tty.write_all(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[16t\x1b[c\x1b[5n")
         .ok()?;
     tty.flush().ok()?;
     let deadline = Instant::now() + TIMEOUT;
@@ -121,6 +123,28 @@ fn forced() -> Option<ProtocolType> {
     }
 }
 
+/// Select only implementations known to support the library's output dialect.
+/// A Kitty query acknowledges image transmission, not Unicode placeholders.
+/// In particular Warp acknowledges Kitty but cannot render these placements;
+/// the library also guesses iTerm2 for Warp despite marking it unsupported.
+/// tmux's inherited outer-terminal environment is not a capability guarantee.
+fn automatic(reply: &Reply, program: &str, term: &str, tmux: bool) -> ProtocolType {
+    if tmux || program == "WarpTerminal" {
+        return ProtocolType::Halfblocks;
+    }
+    match program {
+        "iTerm.app" | "WezTerm" | "mintty" | "rio" => ProtocolType::Iterm2,
+        _ if reply.kitty
+            && (matches!(program, "kitty" | "ghostty")
+                || matches!(term, "xterm-kitty" | "xterm-ghostty")) =>
+        {
+            ProtocolType::Kitty
+        }
+        _ if reply.sixel => ProtocolType::Sixel,
+        _ => ProtocolType::Halfblocks,
+    }
+}
+
 /// Probe once; the terminal must already be in raw mode with no reader running.
 pub fn detect() {
     if let Some(protocol) = forced() {
@@ -131,20 +155,22 @@ pub fn detect() {
     }
     let reply = query().unwrap_or_default();
     let mut picker = Picker::from_fontsize(reply.font.unwrap_or(FALLBACK_FONT));
-    if reply.kitty {
-        picker.set_protocol_type(ProtocolType::Kitty);
-    } else if picker.protocol_type() == ProtocolType::Halfblocks && reply.sixel {
-        picker.set_protocol_type(ProtocolType::Sixel);
-    }
+    picker.set_protocol_type(automatic(
+        &reply,
+        &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+        &std::env::var("TERM").unwrap_or_default(),
+        std::env::var_os("TMUX").is_some(),
+    ));
     let _ = PICKER.set(picker);
 }
 
 /// The detected picker, or the half-block fallback when detection never ran.
 pub fn picker() -> Picker {
-    PICKER
-        .get()
-        .cloned()
-        .unwrap_or_else(|| Picker::from_fontsize(FALLBACK_FONT))
+    PICKER.get().cloned().unwrap_or_else(|| {
+        let mut picker = Picker::from_fontsize(FALLBACK_FONT);
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        picker
+    })
 }
 
 #[cfg(test)]
@@ -152,8 +178,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_protocol_requires_the_renderers_dialect() {
+        let kitty = Reply {
+            kitty: true,
+            ..Reply::default()
+        };
+        for program in ["WarpTerminal", "vscode", "Hyper", "", "unknown"] {
+            assert_eq!(
+                automatic(&kitty, program, "xterm-256color", false),
+                ProtocolType::Halfblocks
+            );
+        }
+        assert_eq!(
+            automatic(&kitty, "WarpTerminal", "xterm-kitty", false),
+            ProtocolType::Halfblocks
+        );
+        for (program, term) in [("ghostty", "xterm-256color"), ("", "xterm-kitty")] {
+            assert_eq!(automatic(&kitty, program, term, false), ProtocolType::Kitty);
+        }
+        assert_eq!(
+            automatic(&kitty, "WezTerm", "", false),
+            ProtocolType::Iterm2
+        );
+        assert_eq!(
+            automatic(&kitty, "ghostty", "xterm-ghostty", true),
+            ProtocolType::Halfblocks
+        );
+        assert_eq!(
+            automatic(&Reply::default(), "", "xterm-kitty", false),
+            ProtocolType::Halfblocks
+        );
+        assert_eq!(
+            automatic(
+                &Reply {
+                    sixel: true,
+                    ..Reply::default()
+                },
+                "",
+                "",
+                false
+            ),
+            ProtocolType::Sixel
+        );
+    }
+
+    #[test]
+    fn da1_does_not_cut_off_later_replies() {
+        assert!(!parse(b"\x1b[?62;4c").done);
+        let complete = b"\x1b[?62;4c\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[0n";
+        assert_eq!(
+            parse(complete),
+            Reply {
+                kitty: true,
+                sixel: true,
+                font: Some((10, 20)),
+                done: true
+            }
+        );
+        assert!(!parse(b"\x1b_Gi=31;OK").kitty);
+    }
+
+    #[test]
     fn parses_kitty_cell_size_and_sixel_replies() {
-        let reply = parse(b"\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[?62;4;22c");
+        let reply = parse(b"\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[?62;4;22c\x1b[0n");
         assert_eq!(
             reply,
             Reply {
@@ -164,7 +251,7 @@ mod tests {
             }
         );
         let plain = parse(b"\x1b[?1;2c");
-        assert!(plain.done && !plain.kitty && !plain.sixel && plain.font.is_none());
+        assert!(!plain.done && !plain.kitty && !plain.sixel && plain.font.is_none());
         assert!(!parse(b"\x1b[6;18").done);
     }
 }
