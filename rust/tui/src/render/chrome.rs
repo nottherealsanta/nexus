@@ -210,7 +210,26 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
         left.push((text, seg));
     };
     let mut room = room;
-    // The manager view names itself through the pressed right-hand toggle, not a left title.
+    // The Manager screen (plan 10 §4.1) names itself on the left instead of showing session
+    // tabs: `◆ Manager · <model>` with the Live phase while a call is open. The right buttons
+    // are unchanged (`◆` pressed); `Ctrl+X .` returns to the session left behind.
+    if s.manager.active {
+        let diamond = if crate::transcript::look::glyphs().ascii {
+            "*"
+        } else {
+            "◆"
+        };
+        let mut label = format!("{diamond} Manager · {}", s.manager.model);
+        if s.live.active && !s.live.phase.is_empty() {
+            label.push_str(&format!(" · Live: {}", s.live.phase));
+        }
+        place(
+            &crate::transcript::truncate(&label, room),
+            Seg::Title,
+            &mut left,
+            &mut room,
+        );
+    }
     let title = if s.manager.active {
         ""
     } else if s.title.is_empty() {
@@ -218,7 +237,9 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
     } else {
         s.title.as_str()
     };
-    if s.tabs.is_empty() {
+    if s.manager.active {
+        // No session tabs on the Manager screen: the label above names it.
+    } else if s.tabs.is_empty() {
         place(
             &crate::transcript::truncate(title, 40.min(room)),
             Seg::Title,
@@ -284,7 +305,7 @@ fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String,
             }
         }
     }
-    if !s.tabs.is_empty() {
+    if !s.tabs.is_empty() && !s.manager.active {
         place(" + ", Seg::New, &mut left, &mut room);
     }
     let mut out = Vec::new();
@@ -330,7 +351,12 @@ fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     let mut room = width.saturating_sub(at + usize::from(width >= 12));
     let mut out: Vec<(usize, String, Seg)> = Vec::new();
     let mut column = at;
-    let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or(path);
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path);
     for (text, seg) in [
         (name, Seg::Title),
         (branch, Seg::Branch),
@@ -478,9 +504,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                     "main" => background.fg(p.muted),
                     _ => background.fg(p.quiet),
                 },
-                Seg::Branch | Seg::Sep | Seg::Gap | Seg::Divider => {
-                    background.fg(p.quiet)
-                }
+                Seg::Branch | Seg::Sep | Seg::Gap | Seg::Divider => background.fg(p.quiet),
                 Seg::Path => background.fg(p.text),
                 Seg::Notice => background.fg(p.accent),
                 Seg::Back | Seg::Dashboard | Seg::Details => background.fg(p.muted),
@@ -504,16 +528,17 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
     };
     let bar = Rect { height: 1, ..area };
     let tabs_layout = top_layout_at(s, width, spin);
-    frame.render_widget(
-        Paragraph::new(row(tabs_layout)).style(background),
-        bar,
-    );
+    frame.render_widget(Paragraph::new(row(tabs_layout)).style(background), bar);
     // Two rows: the tabs and a thin line closing the bar; one row (short terminals) drops the
     // line. The project strip lives below the composer (`draw_project_strip`). Same inset as the
     // tabs; no line in the manager view (no workspace to divide).
     let inset = if width < 12 { 0 } else { 2 };
     if area.height > 1 && !s.manager.active {
-        let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
+        let glyph = if crate::transcript::look::glyphs().ascii {
+            "-"
+        } else {
+            "─"
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(" ".repeat(inset), background),
@@ -558,10 +583,7 @@ pub(super) fn draw_project_strip(frame: &mut Frame, s: &Snapshot, area: Rect, p:
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(background),
-        Rect {
-            height: 1,
-            ..area
-        },
+        Rect { height: 1, ..area },
     );
 }
 pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
@@ -651,23 +673,47 @@ mod chrome_tests {
     }
 
     #[test]
-    fn manager_view_hides_left_title_path_and_branch() {
+    fn manager_view_names_itself_and_hides_path_and_branch() {
         let mut s = Snapshot::default();
         s.breadcrumb = "~/repo:main".into();
         s.title = "Fix bug".into();
         s.manager.known = true;
         s.manager.enabled = true;
         s.manager.active = true;
+        s.manager.model = "codex/gpt-6-luna".into();
         for tabs in [open_tabs(2, 0), Vec::new()] {
             s.tabs = tabs;
             let rows = bar_rows(&s, 100);
-            assert!(!rows[0].contains("Manager"), "{:?}", rows[0]);
+            // Plan 10: the left names the screen instead of listing session tabs.
+            assert!(
+                rows[0].contains("◆ Manager · codex/gpt-6-luna"),
+                "{:?}",
+                rows[0]
+            );
             assert!(!rows[0].contains("Fix bug"), "{:?}", rows[0]);
+            assert!(!rows[0].contains("Session 0"), "{:?}", rows[0]);
             assert!(rows[0].contains('■'), "{:?}", rows[0]);
             assert!(!rows[1].contains("~/repo"), "{:?}", rows[1]);
             assert!(!rows[1].contains("main"), "{:?}", rows[1]);
             assert!(crumb_layout(&s, 100).is_empty());
+            // No session tab is clickable on the Manager screen.
+            assert!(tab_cells(&s, 100)
+                .iter()
+                .all(|c| !matches!(c.kind, TabHit::Session(_) | TabHit::Close(_) | TabHit::New)));
         }
+    }
+
+    #[test]
+    fn manager_screen_shows_the_live_phase_while_a_call_is_open() {
+        let mut s = manager_snapshot(true);
+        s.manager.model = "codex/gpt-6-luna".into();
+        s.live.active = true;
+        s.live.phase = "listening".into();
+        let row = bar_text(&s, 100);
+        assert!(
+            row.contains("◆ Manager · codex/gpt-6-luna · Live: listening"),
+            "{row:?}"
+        );
     }
 
     #[test]
@@ -678,7 +724,10 @@ mod chrome_tests {
         let rows = bar_rows(&s, 100);
         let strip = strip_text(&s, 100);
         assert!(rows[0].contains("Fix bug"), "{:?}", rows[0]);
-        assert!(!rows[0].contains("~/repo") && !rows[1].contains("~/repo"), "{rows:?}");
+        assert!(
+            !rows[0].contains("~/repo") && !rows[1].contains("~/repo"),
+            "{rows:?}"
+        );
         assert!(strip.contains("~/repo"), "{strip:?}");
         assert!(strip.contains("main"), "{strip:?}");
     }
@@ -692,7 +741,11 @@ mod chrome_tests {
         // The basename starts at column 5, the branch one gap cell after it, then the full path.
         assert_eq!(strip.find("repo"), Some(5), "{strip:?}");
         assert_eq!(strip.find("main"), Some(5 + "repo".len() + 1), "{strip:?}");
-        assert_eq!(strip.find("~/repo"), Some(5 + "repo main ".len()), "{strip:?}");
+        assert_eq!(
+            strip.find("~/repo"),
+            Some(5 + "repo main ".len()),
+            "{strip:?}"
+        );
         let layout = crumb_layout(&s, 100);
         assert_eq!(layout[0].0, 5);
         // Tab hit cells live on the first row only and are unaffected by the strip.
@@ -776,7 +829,9 @@ mod chrome_tests {
             let s = Snapshot::default();
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 4)).unwrap();
-            terminal.draw(|f| draw_top_bar(f, &s, f.area(), &p, 0)).unwrap();
+            terminal
+                .draw(|f| draw_top_bar(f, &s, f.area(), &p, 0))
+                .unwrap();
             let buf = terminal.backend().buffer();
             assert_eq!(buf[(10, 1)].fg, p.border, "line under the tabs");
             assert_eq!(buf[(10, 2)].symbol(), " ", "nothing below the line");

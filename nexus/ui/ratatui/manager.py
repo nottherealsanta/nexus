@@ -22,12 +22,14 @@ USAGE = "Use /manager [open|live|status]"
 STALE_SECONDS = 30.0  # ManagerState is read at start, on open and about this often while polling
 SHOW_TTL_SECONDS = 30.0  # a manager.show is actionable this long after it was recorded
 SHOWN_MEMORY = 64  # manager.show events already acted on (bounded)
+MOVED_MEMORY = 16  # manager turns this client already auto-moved for (bounded; plan 10 G1)
 
 
 class Manager:
     def __init__(self, shell):
         self.shell = shell
         self._shown: OrderedDict[tuple[str, int, str], None] = OrderedDict()
+        self._moved: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._show_task: asyncio.Task | None = None
         self.state = None  # the last ManagerStateResult
         self.error = ""
@@ -110,7 +112,7 @@ class Manager:
         return True
 
     async def toggle(self) -> None:
-        """The top-bar button and ``Ctrl+X A``: open the manager view, or close it and restore the prior session."""
+        """The top-bar button and ``Ctrl+X A`` / ``Ctrl+X .``: open the manager view, or close it and restore the prior session."""
         if self.is_active():
             await self.close()
         else:
@@ -132,7 +134,7 @@ class Manager:
             await shell.switch_project(*target)
 
     async def live(self) -> None:
-        """Start the Live call; it is always on the manager, and the session on screen stays put."""
+        """Start the Live call; the manager screen opens once it connects (plan 10)."""
         self.shell.workflows.close_dashboard()  # the call panel is drawn on conversation pages
         await self.shell.live.start()
 
@@ -209,7 +211,9 @@ class Manager:
             return False  # one switch at a time; the per-turn cap bounds the rest
         blocked = self._blocked()
         if blocked:
-            shell.flash(f"The Manager asked to show {target}, but {blocked}", "warning")
+            shell.flash(f"The Manager asked to show {target}, but {blocked}", "warning",
+                        action={"label": "Open", "operation": {"kind": "session_open",
+                                                              "workspace": shell.workspace, "id": target}})
             return False
         if shell.controller.session == target:
             return False
@@ -223,6 +227,10 @@ class Manager:
         neither): a fresh, recent, not-yet-acted-on event of the manager log, with the manager
         in front on this client or this client's Live call following it. The child's tab is
         created by ``switch`` and the stream replays its events.
+
+        Only the first launch of a manager turn moves the user (plan 10 G1): a later launch of
+        the same turn raises an info toast with an ``Open`` action instead of moving twice in
+        one breath. A blocked move also carries the ``Open`` action (plan 10 G2).
         """
         session = session or str(getattr(event, "session", "") or "")
         data = event.data if isinstance(getattr(event, "data", None), dict) else {}
@@ -236,24 +244,62 @@ class Manager:
         key = (session, int(getattr(event, "seq", 0) or 0), str(getattr(event, "id", "") or ""))
         if key in self._shown:
             return False
+        turn = data.get("turn")
+        turn = turn if isinstance(turn, str) and 0 < len(turn) <= 128 else ""
         shell = self.shell
         mine = shell.controller.session == session
         live = self._live_follows(session)
         if not (mine or live):
+            # Not in front (and no Live call following): silent, unless this client already
+            # auto-moved for this turn — then offer the new child instead of a second move.
+            self._offer_later_launch(session, turn, key, child)
             return False
         self._shown[key] = None
         while len(self._shown) > SHOWN_MEMORY:
             self._shown.popitem(last=False)
         if self._show_task is not None and not self._show_task.done():
+            # One switch at a time; when this turn already moved once, still offer the child.
+            self._offer_later_launch(session, turn, key, child)
             return False
         blocked = self._blocked()
         if blocked:
-            shell.flash(f"The Manager launched session {child}, but {blocked}", "warning")
+            shell.flash(f"The Manager launched session {child}, but {blocked}", "warning",
+                        action={"label": "Open", "operation": {"kind": "session_open",
+                                                              "workspace": shell.workspace, "id": child}})
             return False
         if shell.controller.session == child:
             return False
+        if turn:
+            self._moved[(session, turn)] = None
+            while len(self._moved) > MOVED_MEMORY:
+                self._moved.popitem(last=False)
         self._show_task = asyncio.get_running_loop().create_task(self._show(session, child, live))
         return True
+
+    def _offer_later_launch(self, session: str, turn: str, key: tuple, child: str) -> None:
+        """Offer a later launch of an already-moved turn instead of moving again (plan 10 G1).
+
+        Records the event like an acted-on one, so a duplicate delivery (shown stream plus
+        Live follow) toasts once.
+        """
+        if turn and (session, turn) in self._moved:
+            self._shown[key] = None
+            while len(self._shown) > SHOWN_MEMORY:
+                self._shown.popitem(last=False)
+            shell = self.shell
+            shell.flash(f"Manager launched {self._child_title(child)}", "info",
+                        action={"label": "Open", "operation": {"kind": "session_open",
+                                                              "workspace": shell.workspace, "id": child}})
+
+    def _child_title(self, child: str) -> str:
+        """A readable name for a launched child: its session title when known, else its id."""
+        shell = self.shell
+        for row in (*getattr(shell, "tabs", ()), *getattr(shell, "sessions", ())):
+            if isinstance(row, dict) and row.get("id") == child:
+                title = str(row.get("title") or row.get("name") or "").strip()
+                if title and title != "New Session":
+                    return escape_controls(title)[:80]
+        return child
 
     def _live_follows(self, session: str) -> bool:
         live = getattr(self.shell, "live", None)

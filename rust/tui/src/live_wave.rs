@@ -109,7 +109,11 @@ pub fn heights(kind: Kind, cells: usize, frame: usize, animate: bool, input: &In
                     // A narrow highlight crossing the band left to right, a little off-screen
                     // at both ends so it enters and leaves smoothly.
                     let span = cells as f32 + 6.0;
-                    let at = if animate { (t * 0.22) % span - 3.0 } else { (cells as f32) / 2.0 };
+                    let at = if animate {
+                        (t * 0.22) % span - 3.0
+                    } else {
+                        (cells as f32) / 2.0
+                    };
                     let d = x - at;
                     0.1 + 0.9 * (-(d * d) / 3.0).exp()
                 }
@@ -139,7 +143,11 @@ pub fn band(
             let fg = match kind {
                 Kind::Flat => p.quiet,
                 // Dim at the edges, full accent in the middle, brighter as the bar rises.
-                Kind::Speaking => mix(p.element, tone, 0.35 + 0.65 * bell(i, cells) * (0.5 + 0.5 * v)),
+                Kind::Speaking => mix(
+                    p.element,
+                    tone,
+                    0.35 + 0.65 * bell(i, cells) * (0.5 + 0.5 * v),
+                ),
                 Kind::Shimmer => mix(p.quiet, tone, v),
                 Kind::Listening => mix(p.quiet, tone, 0.45 + 0.55 * v),
             };
@@ -153,17 +161,34 @@ mod tests {
     use super::*;
 
     fn quiet() -> Inputs<'static> {
-        Inputs { history: &[], level_in: 0.0, level_out: 0.0 }
+        Inputs {
+            history: &[],
+            level_in: 0.0,
+            level_out: 0.0,
+        }
     }
     fn loud() -> Inputs<'static> {
-        Inputs { history: &[0.2, 0.5, 0.9], level_in: 0.6, level_out: 0.6 }
+        Inputs {
+            history: &[0.2, 0.5, 0.9],
+            level_in: 0.6,
+            level_out: 0.6,
+        }
     }
     fn text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
     }
     fn draw(kind: Kind, cells: usize, frame: usize, animate: bool, ascii: bool) -> String {
         let p = Palette::new(false);
-        text(&band(kind, cells, frame, animate, ascii, p.accent, &p, &loud()))
+        text(&band(
+            kind,
+            cells,
+            frame,
+            animate,
+            ascii,
+            p.accent,
+            &p,
+            &loud(),
+        ))
     }
 
     #[test]
@@ -171,9 +196,16 @@ mod tests {
         for kind in [Kind::Listening, Kind::Speaking, Kind::Shimmer] {
             let frames: std::collections::HashSet<_> =
                 (0..60).map(|f| draw(kind, 12, f, true, false)).collect();
-            assert!(frames.len() > 6, "{kind:?} should move, saw {}", frames.len());
+            assert!(
+                frames.len() > 6,
+                "{kind:?} should move, saw {}",
+                frames.len()
+            );
         }
-        assert_eq!(draw(Kind::Flat, 12, 0, true, false), draw(Kind::Flat, 12, 40, true, false));
+        assert_eq!(
+            draw(Kind::Flat, 12, 0, true, false),
+            draw(Kind::Flat, 12, 40, true, false)
+        );
     }
 
     #[test]
@@ -192,7 +224,12 @@ mod tests {
     #[test]
     fn each_state_has_its_own_pattern() {
         let k = |kind| draw(kind, 12, 17, true, false);
-        let all = [k(Kind::Listening), k(Kind::Speaking), k(Kind::Shimmer), k(Kind::Flat)];
+        let all = [
+            k(Kind::Listening),
+            k(Kind::Speaking),
+            k(Kind::Shimmer),
+            k(Kind::Flat),
+        ];
         for i in 0..all.len() {
             for j in i + 1..all.len() {
                 assert_ne!(all[i], all[j], "{i} vs {j}");
@@ -215,7 +252,9 @@ mod tests {
         assert!(mean(heights(Kind::Speaking, 12, 9, true, &loud())) > mean(calm));
         let peak = |f| {
             let h = heights(Kind::Shimmer, 12, f, true, &quiet());
-            h.iter().position(|v| *v == h.iter().cloned().fold(0.0, f32::max)).unwrap()
+            h.iter()
+                .position(|v| *v == h.iter().cloned().fold(0.0, f32::max))
+                .unwrap()
         };
         assert!(peak(20) < peak(40) && peak(40) < peak(60));
     }
@@ -235,7 +274,11 @@ mod tests {
     #[test]
     fn reduced_motion_is_static_and_ascii_has_no_blocks() {
         for kind in [Kind::Listening, Kind::Speaking, Kind::Shimmer, Kind::Flat] {
-            assert_eq!(draw(kind, 12, 0, false, false), draw(kind, 12, 77, false, false), "{kind:?}");
+            assert_eq!(
+                draw(kind, 12, 0, false, false),
+                draw(kind, 12, 77, false, false),
+                "{kind:?}"
+            );
             for f in [0, 13, 50] {
                 let a = draw(kind, 12, f, true, true);
                 assert!(a.is_ascii() && a.chars().count() == 12, "{kind:?}: {a:?}");
@@ -264,7 +307,11 @@ mod tests {
 
     #[test]
     fn frames_are_only_wanted_while_the_call_moves() {
-        let mut live = crate::bridge::LiveBar { active: true, phase: "listening".into(), ..Default::default() };
+        let mut live = crate::bridge::LiveBar {
+            active: true,
+            phase: "listening".into(),
+            ..Default::default()
+        };
         assert!(wants_frames(&live));
         live.phase = "speaking".into();
         assert!(wants_frames(&live));
@@ -287,24 +334,71 @@ mod tests {
     #[ignore]
     fn dump_frames() {
         let mut out = String::new();
-        let mic = [0.02, 0.05, 0.3, 0.6, 0.2, 0.05, 0.4, 0.8, 0.5, 0.1, 0.05, 0.02, 0.3, 0.7];
+        let mic = [
+            0.02, 0.05, 0.3, 0.6, 0.2, 0.05, 0.4, 0.8, 0.5, 0.1, 0.05, 0.02, 0.3, 0.7,
+        ];
         for (name, kind, input) in [
-            ("listening, quiet (breathing)", Kind::Listening, Inputs { history: &[], level_in: 0.0, level_out: 0.0 }),
-            ("listening, user speaking (mic)", Kind::Listening, Inputs { history: &mic, level_in: 0.5, level_out: 0.0 }),
-            ("speaking (assistant)", Kind::Speaking, Inputs { history: &[], level_in: 0.0, level_out: 0.5 }),
-            ("connecting / working (shimmer)", Kind::Shimmer, Inputs { history: &[], level_in: 0.0, level_out: 0.0 }),
-            ("muted / ended (flat)", Kind::Flat, Inputs { history: &[], level_in: 0.0, level_out: 0.0 }),
+            (
+                "listening, quiet (breathing)",
+                Kind::Listening,
+                Inputs {
+                    history: &[],
+                    level_in: 0.0,
+                    level_out: 0.0,
+                },
+            ),
+            (
+                "listening, user speaking (mic)",
+                Kind::Listening,
+                Inputs {
+                    history: &mic,
+                    level_in: 0.5,
+                    level_out: 0.0,
+                },
+            ),
+            (
+                "speaking (assistant)",
+                Kind::Speaking,
+                Inputs {
+                    history: &[],
+                    level_in: 0.0,
+                    level_out: 0.5,
+                },
+            ),
+            (
+                "connecting / working (shimmer)",
+                Kind::Shimmer,
+                Inputs {
+                    history: &[],
+                    level_in: 0.0,
+                    level_out: 0.0,
+                },
+            ),
+            (
+                "muted / ended (flat)",
+                Kind::Flat,
+                Inputs {
+                    history: &[],
+                    level_in: 0.0,
+                    level_out: 0.0,
+                },
+            ),
         ] {
             out += &format!("== {name}, 14 cells, one row per 4th frame at 30 Hz\n");
             for f in (0..48).step_by(4) {
                 let p = Palette::new(false);
-                out += &format!("f{f:02}  {}   ascii {}\n",
+                out += &format!(
+                    "f{f:02}  {}   ascii {}\n",
                     text(&band(kind, 14, f, true, false, p.accent, &p, &input)),
-                    text(&band(kind, 14, f, true, true, p.accent, &p, &input)));
+                    text(&band(kind, 14, f, true, true, p.accent, &p, &input))
+                );
             }
             out += "\n";
         }
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../artifacts/live-panel-anim");
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../artifacts/live-panel-anim"
+        );
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(format!("{dir}/bands.txt"), out).unwrap();
     }

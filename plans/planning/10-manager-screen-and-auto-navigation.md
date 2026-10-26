@@ -1,6 +1,10 @@
 # Plan 10: Manager screen, `Ctrl+X .`, GPT Live opens it, composer talks to it, auto-move to launched sessions (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md`
+Status: implemented (2026-10-26) in this worktree: `Ctrl+X .` alias, Live opens the
+Manager screen after connect (blocked → toast with `Open Manager`), once-per-turn auto-move
+with `Open` toasts, and the managed-sessions board with top-bar label, expanded Live pane and
+`Talk to the Manager…` composer. Python/Rust unit tests and a PTY toggle/board/draft test pass;
+not verified against real Codex or GPT Live; no screenshot review. Source: root `TODO.md`
 items 1 and 2, quoted unchanged:
 
 > - auto move to new session while talking to manager
@@ -164,11 +168,11 @@ All of this is presentation over existing durable state; nothing new is persiste
 - PTY: extend `tests/test_ratatui_pty_manager.py` with `Ctrl+X .` open/close (needs the debug
   binary, `docs/manager.md:392-394`).
 - Acceptance:
-  - [ ] `Ctrl+X .` toggles the Manager screen; `Ctrl+X A` still does.
-  - [ ] The Manager screen is visibly distinct (board + label) and its composer sends to the manager, including during a Live call.
-  - [ ] Starting Live opens the Manager screen unless something modal is open (then a toast with `Open`).
-  - [ ] A manager launch moves the user once per manager turn; later launches toast with `Open`.
-  - [ ] Docs updated: `docs/manager.md`, `docs/ratatui-parity.md`, `docs/decisions.md`; screenshots reviewed or "not visually verified" stated.
+  - [x] `Ctrl+X .` toggles the Manager screen; `Ctrl+X A` still does.
+  - [x] The Manager screen is visibly distinct (board + label) and its composer sends to the manager, including during a Live call.
+  - [x] Starting Live opens the Manager screen unless something modal is open (then a toast with `Open`).
+  - [x] A manager launch moves the user once per manager turn; later launches toast with `Open`.
+  - [x] Docs updated: `docs/manager.md`, `docs/ratatui-parity.md`, `docs/decisions.md`; screenshots reviewed or "not visually verified" stated.
 
 ## 7. Risks and open questions
 

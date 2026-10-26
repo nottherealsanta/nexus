@@ -381,6 +381,8 @@ def test_shared_shortcuts_have_native_keymap_coverage():
     import importlib.util
     from pathlib import Path
 
+    from tests.test_desktop_keymap_parity import NATIVE_ONLY_LEADER
+
     spec = importlib.util.spec_from_file_location(
         "shared_shortcuts", Path("nexus/ui_support/shortcuts.py")
     )
@@ -408,6 +410,8 @@ def test_shared_shortcuts_have_native_keymap_coverage():
             else:
                 assert baseline[key] in bindings, f"{key} is missing from native keymap"
     for letter, action_id, _ in shortcuts.LEADER_SHORTCUTS:
+        if letter in NATIVE_ONLY_LEADER:
+            continue  # native-only alias (plan 10); the desktop binds the primary key
         assert f"ctrl-x {letter}" in bindings, f"Ctrl+X {letter} is missing from native keymap"
 
 

@@ -62,14 +62,31 @@ tool and no hook runs in it.
   `SessionEnd`), and no automatic title or summary side call is made (`AutoTitler.candidate` returns
   `None`; the context has no summarizer). The title stays the derived first message.
 
-## Native presentation: a view, not a tab
+## Native presentation: its own screen (plan 10), not a tab
 
-The native clients (Ratatui, desktop) never list the manager in the tab strip. A top-bar button immediately
-before the Sessions button, and `Ctrl+X A`, toggle it: the first press opens the manager view (`ManagerOpen`,
-nothing new on the wire) and remembers the session in front; the second restores that session. The button reads
-pressed while the manager is in front. Closing is only a client switch: the singleton is never archived, deleted
-or cancelled, and a Live call (always attached to the manager) is unaffected. Details:
-[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui), [desktop.md](desktop.md). Web is unchanged.
+The native clients (Ratatui, desktop) never list the manager in the tab strip. On the Manager
+screen the top bar names it instead of showing session tabs (`◆ Manager · <model>`, plus the
+Live phase while a call is open), a managed-sessions board sits above the conversation, and the
+composer reads `Talk to the Manager…` and stays usable during a Live call. A top-bar button
+immediately before the Sessions button, and `Ctrl+X A` or `Ctrl+X .`, toggle it: the first press
+opens the manager view (`ManagerOpen`, nothing new on the wire) and remembers the session in
+front; the second restores that session. The button reads pressed while the manager is in front.
+Closing is only a client switch: the singleton is never archived, deleted or cancelled.
+
+Starting a GPT Live call opens the Manager screen once the call connects (never on a refused
+consent or an unavailable helper; never over a modal, form, dashboard, recording or pending
+prompt — then a toast offers `Open Manager`). Ending the call never switches back. The board
+(`nexus/ui/ratatui/manager_board.py`, drawn by `rust/tui/src/render/manager.rs`) joins the
+`ManagerState` managed ids with the polled session rows the client already keeps: one row per
+managed root, newest first, six rows plus `+N more · /sessions`, collapsible by its heading,
+`needs you` while a permission or question waits. A row click is the ordinary `session_open`
+switch; `Ctrl+X .` returns. With an empty draft, Tab focuses the board heading;
+arrows/Tab move between visible rows, Enter/Space activates, and Escape or typing
+returns to the composer. Focus is visibly highlighted. The first launch of a manager turn moves the user to the new
+session; later launches of the same turn raise an info toast with `Open` instead of a second
+move, and a blocked move carries the same `Open` action. Details:
+[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui), [desktop.md](desktop.md).
+Web is unchanged. No screenshot review has been done ("not visually verified").
 
 ## Port, provenance and caps
 
