@@ -1639,6 +1639,13 @@ user's main checkout is untouched unless they explicitly ask for it. A non-Git w
 `worktree=false` with a disclosure to the user. The tool schema default stays `false` (debug MCP and other callers
 are unchanged); the policy is prompt-level, so offline tests pin the wording only. See [manager.md](manager.md).
 
+## A worktree name is never the session title
+
+A name given to `promote_session` or a worktree launch only names the folder and branch. It used to be stored
+as a user title (`title_source='user'`), so the auto title could never replace it and sessions showed slugs.
+Now the title is derived from the first message and auto-titled as for any session; an explicit rename still
+wins. The launch `title` of a worktree launch is the worktree name only.
+
 ## System-prompt parts are uncapped by default
 
 `context.limits.*` (`memory`, `agents_md`, `skills_index`, `environment`, `attachments`) used to default to

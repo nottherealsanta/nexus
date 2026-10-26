@@ -314,3 +314,7 @@ characters), using the existing restricted scalar grammar. Imports preserve the
 original declaration and file; license text is not executed or interpreted.
 `compatibility` and `metadata` mappings are not supported. Unknown fields,
 duplicate fields, nested values, and broader `allowed-tools` syntax remain rejected.
+
+Repository-maintained development skills live in `.agents/skills/`, alongside
+other workspace skills, so normal workspace discovery finds them. There is no
+second root `skills/` copy; user-home skills remain under `~/.nexus/skills/`.

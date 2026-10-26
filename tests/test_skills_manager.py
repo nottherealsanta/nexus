@@ -654,3 +654,14 @@ def test_manager_invocation_output_is_delimited_bounded_with_provenance(tmp_path
     assert 'source="workspace"' in invocation.text
     assert invocation.body_sha256 == mgr.require("demo").body_sha256
     assert invocation.fingerprint == mgr.require("demo").fingerprint()
+
+
+def test_repository_development_skills_are_discovered_once(tmp_path):
+    workspace = Path(__file__).resolve().parents[1]
+    manager = SkillManager.for_workspace(workspace, home=tmp_path, builtin=[])
+    for name in ("gpui-nexus", "native-app-review", "nsh-nexus"):
+        assert manager.names.count(name) == 1
+        assert manager.require(name).source is SkillSource.WORKSPACE
+        assert (workspace / ".agents" / "skills" / name / "SKILL.md").is_file()
+        assert not (workspace / "skills" / name).exists()
+    assert not manager.shadowed

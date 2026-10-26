@@ -16,6 +16,7 @@ import {createSettingsFiles} from './settings-files.js';
 import {renderToolDetails,toolDetailSections} from './tool-details.js';
 import {renderUsage} from './usage.js';
 import {pickHints} from './hints.js';
+import {sessionTitle, sessionMeta, managerCard, treeRows} from './sidebar.js';
 import {fuzzyFilter, fuzzyMatch, highlightSpans} from './fuzzy.js';
 
 const $=id=>document.getElementById(id), el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
@@ -180,9 +181,8 @@ function seenMap(){try{return JSON.parse(localStorage.getItem(SEEN_KEY())||'{}')
 function markSeen(id,seq){if(!id)return;const map=seenMap();if((map[id]||0)>=seq)return;map[id]=seq;try{localStorage.setItem(SEEN_KEY(),JSON.stringify(map));}catch{}}
 function sessionStatus(s){if(s.state==='running')return 'working';if(s.state==='awaiting_permission'||s.state==='awaiting_input')return 'input';if(s.id===state.session&&state.view?.phase==='running')return 'working';const seen=seenMap()[s.id];if(s.id!==state.session&&seen!==undefined&&s.last_seq>seen)return 'done';return 'idle';}
 const STATUS_LABEL={working:'Working',input:'Needs input',done:'Done',idle:'',archived:'Archived'};
-const SESSION_WORDS={working:'working now',input:'needs input',done:'finished',archived:'archived'};
 function sessionOrder(s){return s.last_user_at||s.created_at||s.last_activity||0;}
-function sessionSubline(s,status){const count=Number(s.message_count)||0,words=SESSION_WORDS[status]||(count?`${count} message${count===1?'':'s'}`:'no messages'),age=relativeTime(s.last_activity);return age?`${words} · ${age}`:words;}
+function sessionSubline(s,status){return sessionMeta(s,status,relativeTime(s.last_activity));}
 function sessionDay(ts){if(!ts)return 'Earlier';const day=new Date(Number(ts)*1000),today=new Date();return day.toDateString()===today.toDateString()?'Today':day.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'}).replaceAll(',','');}
 function renderSessions(){
   const list=$('session-list'),frag=document.createDocumentFragment(),archivedFrag=document.createDocumentFragment(),query=($('session-filter')?.value||'').trim().toLowerCase(),seen=seenMap();let dirty=false;
@@ -196,7 +196,7 @@ function renderSessions(){
   for(const [s,archived,target] of [...rows.map(s=>[s,false,frag]),...archivedRows.map(s=>[s,true,archivedFrag])]){
     const foreign=s.workspace&&s.workspace!==state.workspace,active=!foreign&&s.id===state.session;
     if(!archived){if(s.workspace!==lastProject){const name=s.workspace.split('/').filter(Boolean).at(-1)||s.workspace,heading=el('h3','session-project',projectNames.filter(n=>n===name).length>1?s.workspace:name);heading.title=s.workspace;target.append(heading);lastProject=s.workspace;lastDay=null;}const day=sessionDay(sessionOrder(s));if(day!==lastDay){target.append(el('h4','session-day',day));lastDay=day;}}
-    const status=archived?'archived':foreign?'idle':sessionStatus(s),title=s.title||'Untitled session',item=el('div','session-item');item.setAttribute('role','listitem');item.dataset.status=status;
+    const status=archived?'archived':foreign?'idle':sessionStatus(s),title=sessionTitle(s.title),item=el('div','session-item');item.setAttribute('role','listitem');item.dataset.status=status;
     const b=el('button',`session-row ${active?'active':''} ${s.state==='running'?'running':''}`);b.type='button';b.setAttribute('aria-current',active?'page':'false');b.title=`${title} · ${s.workspace||state.workspace} · ${s.id}`;
     const glyph=el('span','session-status');glyph.dataset.status=status;glyph.dataset.glyph=status==='input'?'●':status==='done'?'✓':status==='archived'?'◇':'·';glyph.setAttribute('aria-hidden','true');
     const text=el('span','session-text');text.append(el('span','session-name',title),el('span','session-sub',sessionSubline(s,status)));
@@ -204,12 +204,13 @@ function renderSessions(){
     b.append(glyph,text);b.addEventListener('click',()=>foreign?openProjectSession(s.workspace,s.id):openSession(s.id));
     const remove=el('button','session-delete');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',`Delete ${title}`);
     const busy=!archived&&s.state!=='idle';remove.disabled=busy;remove.title=busy?'Stop the turn before deleting':'Delete session';remove.onclick=e=>{e.stopPropagation();deleteSession(s);};
-    item.append(b);if(!foreign)item.append(remove);target.append(item);
+    const tree=el('button','session-tree','Tree');tree.type='button';tree.title='Show the agent tree of this session';tree.setAttribute('aria-label',`Tree of ${title}`);tree.onclick=e=>{e.stopPropagation();showSessionTree(s,title);};
+    item.append(b);if(!foreign)item.append(tree,remove);target.append(item);
   }
   if(!rows.length)frag.append(el('p','session-empty',query?'No matching sessions':'No sessions yet'));
   list.replaceChildren(frag);$('session-count').textContent=allRows.length?`${allRows.length}${state.projectsTruncated?'+':''}`:'';
   $('archived-list').replaceChildren(archivedFrag);$('archived-group').hidden=!state.archived.length;$('archived-count').textContent=state.archived.length?String(state.archived.length):'';
-  renderTabs();
+  renderManagerCard();renderTabs();
 }
 // any opened here, and any working / needing input / finished unseen. Closing a tab only
 // hides it; it comes back on its own when its status changes.
@@ -237,6 +238,27 @@ async function deleteSession(s){
     renderSessions();
     notify(`Deleted “${s.title||s.id}”`,{label:'Undo',run:async()=>{try{await api.command({type:'SessionRestore',trash_id:result.trash_id});await refreshSessions();await refreshArchived();}catch(e){notify(`Could not restore: ${e.message}`);}}});
   }catch(e){notify(`Could not delete: ${e.message}`);}
+}
+// The pinned Manager card (docs/manager.md): never one of the session rows; opens the singleton manager session.
+function renderManagerCard(){
+  const box=$('manager-card'),card=managerCard(state.manager,state.session);box.hidden=!card;if(!card){box.replaceChildren();return;}
+  box.classList.toggle('active',card.active);box.setAttribute('aria-current',card.active?'page':'false');
+  const glyph=el('span','session-status');glyph.dataset.status=card.status;glyph.dataset.glyph=card.status==='input'?'●':'·';glyph.setAttribute('aria-hidden','true');
+  const head=el('div','manager-head');head.append(glyph,el('span','manager-name','Manager'),el('span','manager-pin',card.active?'PINNED · OPEN':'PINNED'));
+  const lines=[head,el('div',`manager-summary ${card.tone}`,card.summary)];
+  if(card.detail)lines.push(el('div','manager-note',card.detail));
+  if(card.privacy)lines.push(el('div','manager-note',card.privacy));
+  box.replaceChildren(...lines);box.setAttribute('aria-label',`Manager · ${card.summary}`);
+}
+async function refreshManager(){try{state.manager=await api.command({type:'ManagerState'});}catch(e){state.manager=null;}renderManagerCard();}
+async function openManager(){try{const result=await api.command({type:'ManagerOpen'});await openSession(result.session.id);}catch(e){notify(`Could not open the Manager: ${e.message}`);}}
+async function showSessionTree(s,title){
+  try{
+    const result=await api.command({type:'SessionTree',session:s.id}),rows=treeRows(result.tree),list=el('ul','session-tree-list');
+    for(const row of rows){const item=el('li','session-tree-row');item.style.setProperty('--depth',String(row.depth));item.append(el('span','session-tree-title',row.title),el('span','tag',row.status||'idle'));list.append(item);}
+    if(!rows.length)list.append(el('li','session-tree-row','No agents in this session'));
+    showText(`Tree · ${title}`,'',{node:list});
+  }catch(e){notify(`Could not read the session tree: ${e.message}`);}
 }
 function messageText(m){return Array.isArray(m.blocks)?m.blocks.filter(b=>b.kind==='text').map(b=>b.text).join(''):m.text||'';}
 function markdown(text){return markdownHTML(text,{headingOffset:1});}
@@ -774,7 +796,7 @@ function openSetup(){if($('setup-overlay').hidden){setup.returnFocus=document.ac
 function closeSetup(){clearInterval(setup.timer);if($('setup-overlay').hidden)return;$('setup-overlay').hidden=true;app.inert=false;(setup.returnFocus?.isConnected?setup.returnFocus:$('settings-open')).focus({preventScroll:true});}
 function setupDialogKeydown(event){const overlay=$('setup-overlay');if(overlay.hidden)return;if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();closeSetup();return;}if(event.key!=='Tab')return;const dialog=$('setup-dialog'),focusable=[...dialog.querySelectorAll('button:not([disabled]):not([hidden]),input:not([disabled]):not([hidden])')].filter(node=>node.getClientRects().length);if(!focusable.length){event.preventDefault();dialog.focus();return;}const first=focusable[0],last=focusable.at(-1);if(document.activeElement===dialog){event.preventDefault();(event.shiftKey?last:first).focus();}else if(event.shiftKey&&(document.activeElement===first||!dialog.contains(document.activeElement))){event.preventDefault();last.focus();}else if(!event.shiftKey&&(document.activeElement===last||!dialog.contains(document.activeElement))){event.preventDefault();first.focus();}}
 document.addEventListener('keydown',setupDialogKeydown,true);$('setup-overlay').addEventListener('click',event=>{if(event.target===$('setup-overlay'))closeSetup();});$('setup-dismiss').addEventListener('click',closeSetup);$('setup-retry').addEventListener('click',()=>{setup.failed.clear();$('setup-retry').hidden=true;setupMessage('');pollSetup();});
-async function start(){autoPanel();setInterval(renderSessions,30000);setInterval(()=>loadWorkspaceHealth(),30000);try{const boot=await api.bootstrap();state.workspace=boot.workspace||'Nexus';loadWorkspaceHealth();$('workspace-name').textContent=state.workspace;updateDetail();refreshVoiceStatus();try{const setupStatus=await api.command({type:'SetupStatus'});if(setupStatus.required){setup.status=setupStatus;openSetup();}}catch(error){notify(`Could not check first-run setup: ${error.message}`);}await refreshSessions();await refreshProjectSessions();await refreshArchived();setInterval(refreshProjectSessions,5000);startWorkspaceStream();const match=api.routePath().match(/^\/s\/([^/]+)(?:\/a\/([^/]+))?$/),route=match?decodeURIComponent(match[1]):'',target=route||state.sessions[0]?.id;if(target){state.session=target;loadDraft(target);updateDetail();renderSessions();await api.command({type:'SessionOpen',session:target,create:false,recover:true}).catch(()=>{});await connectSession(target);if(match?.[2]&&route===target)openAgent(decodeURIComponent(match[2]),{push:false});}else{renderHeader();renderContextInline();setConnection(true);}}catch(e){setConnection(false);notify(`Nexus is unavailable: ${e.message}`);$('sync-error').hidden=false;$('session-title').textContent='Waiting for Nexus';}}
+async function start(){autoPanel();setInterval(renderSessions,30000);setInterval(()=>loadWorkspaceHealth(),30000);try{const boot=await api.bootstrap();state.workspace=boot.workspace||'Nexus';loadWorkspaceHealth();$('workspace-name').textContent=state.workspace;updateDetail();refreshVoiceStatus();try{const setupStatus=await api.command({type:'SetupStatus'});if(setupStatus.required){setup.status=setupStatus;openSetup();}}catch(error){notify(`Could not check first-run setup: ${error.message}`);}await refreshSessions();await refreshProjectSessions();await refreshArchived();refreshManager();setInterval(refreshProjectSessions,5000);setInterval(refreshManager,5000);$('manager-card').addEventListener('click',openManager);$('manager-card').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openManager();}});startWorkspaceStream();const match=api.routePath().match(/^\/s\/([^/]+)(?:\/a\/([^/]+))?$/),route=match?decodeURIComponent(match[1]):'',target=route||state.sessions[0]?.id;if(target){state.session=target;loadDraft(target);updateDetail();renderSessions();await api.command({type:'SessionOpen',session:target,create:false,recover:true}).catch(()=>{});await connectSession(target);if(match?.[2]&&route===target)openAgent(decodeURIComponent(match[2]),{push:false});}else{renderHeader();renderContextInline();setConnection(true);}}catch(e){setConnection(false);notify(`Nexus is unavailable: ${e.message}`);$('sync-error').hidden=false;$('session-title').textContent='Waiting for Nexus';}}
 
  $('new-session').onclick=()=>chooseNewSessionAgent();$('open-palette').onclick=showPalette;$('session-filter').addEventListener('input',renderSessions);$('session-filter').addEventListener('keydown',e=>{if(e.key==='Escape'&&e.target.value){e.stopPropagation();e.target.value='';renderSessions();}});$('settings-open').onclick=openSettings;$('settings-overlay').addEventListener('click',e=>{if(e.target===$('settings-overlay'))closeSettings();});$('sidebar-toggle').onclick=toggleSidebar;$('text-overlay').addEventListener('click',event=>{if(event.target===$('text-overlay'))closeText();});$('topbar-new').onclick=()=>chooseNewSessionAgent();syncSidebarToggle();$('mobile-nav').onclick=()=>app.classList.toggle('sidebar-open');$('inspector-toggle').onclick=toggleInspector;$('logs-toggle').onclick=openLogs;$('close-inspector').onclick=closeInspector;$('composer-model').onclick=chooseModel;$('composer-agent').onclick=chooseAgent;$('session-menu').onclick=()=>exportCurrent('markdown');$('stop-button').onclick=stopTurn;$('reconnect').onclick=()=>connectSession(state.session);$('banner-reconnect').onclick=()=>connectSession(state.session);$('composer-form').addEventListener('submit',e=>{e.preventDefault();if(!e.isComposing)sendMessage();});input.addEventListener('input',saveDraft);input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();sendMessage(e.altKey?'interrupt':e.ctrlKey?'queue':'steer');}if(e.key.toLowerCase()==='t'&&e.ctrlKey&&!e.metaKey&&!e.altKey&&!e.shiftKey){const blocked=e.isComposing||e.keyCode===229||e.target!==input||document.activeElement!==input||input.disabled||Boolean(input.closest('[inert]'))||!$('settings-overlay').hidden||!$('overlay').hidden||Boolean($('approval-strip').querySelector('.permission-card'))||Boolean(state.selectedAgent);if(blocked)return;e.preventDefault();cycleReasoningEffort();}});
   $('reasoning-effort').onclick=chooseModel;

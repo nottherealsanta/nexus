@@ -301,7 +301,7 @@ Nexus supports dynamic, runtime model switching across providers without restart
 
 ### 4. Extensions & Hot-Reload
 - **Model Context Protocol (MCP)**: Native client support for external MCP servers over stdio and SSE.
-- **Skills**: Discoverable markdown manuals and procedural playbooks (`.agents/skills/` and `skills/`).
+- **Skills**: Discoverable markdown manuals and procedural playbooks (`.agents/skills/`).
 - **Event Hooks**: Python hooks responding to lifecycle triggers (`on_turn_start`, `on_tool_execute`, `on_turn_end`).
 - **Live Configuration**: Modifying `.agents/settings.toml` or workspace rules updates the daemon immediately without session drops.
 

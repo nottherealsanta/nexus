@@ -165,6 +165,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | `js/usage.js` | `renderUsage(result, el)`: the Ctrl+U / `/usage` provider usage modal body (shown in `#text-overlay` by `openUsage`); port of `ui_support/usage.py` + `ui/ratatui/workflows.py` |
 | `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
 | `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
+| `js/sidebar.js` | sessions sidebar wording shared with the desktop panel: `sessionTitle` (descriptive title, `Untitled conversation`), `sessionMeta` (`N messages · active 5m ago`), `managerCard` (port of `ui_support/manager.py:entry` over `ManagerState`), `treeRows` (`SessionTree` rows) |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
 | `js/hints.js` | empty-session tips (copy of `ui_support/hints.py`), seeded per session |
 | `js/fuzzy.js` | fuzzy matcher shared in scoring with `ui_support/fuzzy.py` (palette, model picker) |
@@ -180,7 +181,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | State | the `state` object (session, view, seq, sessions, tab, detail, theme, context, worktrees, logs, openFiles, health); `nodes` = keyed DOM cache for the timeline |
 | Boot and routing | `start`, `autoPanel` (details panel opens by default ≥ 1280px unless closed; localStorage `nexus-web-panel`), `openSession`, `connectSession` (snapshot → SSE → `applyOperations` → `queuePaint`), `startWorkspaceStream`, `popstate` |
 | Top bar | `renderTabs`/`syncTabs`/`closeTab` (session tabs; `state.tabs`, `state.closedTabs`), `renderCrumbs` (Doctor `git`/`home`) |
-| Sessions sidebar | `renderSessions` (two-line cards via `sessionSubline`; visible Delete → `SessionDelete` to restorable trash), `archiveSession` (`SessionArchive`; both offer Undo), `#session-filter`, `toggleSidebar`/`syncSidebarToggle` (localStorage `nexus-web-sidebar`; overlay below 960px) |
+| Sessions sidebar | `renderSessions` (two-line cards via `sessionSubline`, always showing `N messages · active <age>`; hover Tree → `SessionTree` in a dialog; visible Delete → `SessionDelete` to restorable trash), `renderManagerCard`/`refreshManager`/`openManager` (pinned Manager card from `ManagerState`, opens via `ManagerOpen`; polled every 5s; no Voice button in the browser), `archiveSession` (`SessionArchive`; both offer Undo), `#session-filter`, `toggleSidebar`/`syncSidebarToggle` (localStorage `nexus-web-sidebar`; overlay below 960px) |
 | Header and composer | `renderHeader` (title, status, agent/model/effort, `--agent-color` on `#app`, `↵`/`■ stop`), `renderContextMeter` (`usageText`, same format as `context_usage`), `sendMessage`, `stopTurn`, drafts (`saveDraft`/`loadDraft` in sessionStorage) |
 | Chat commands | `SLASH_COMMANDS` (mirrors `commands.SPECS`), `SLASH_ALIASES`, `parseSlash`, `renderSlash`, `runSlash`; `showText`/`closeText` for `/help`, `/hotkeys`, `/diff`, `/mcp`, `/skills` |
 | Timeline | `renderTimeline` → `renderContextHeader` → `renderEmptyHints` → `entities` → `renderMessage` (`renderUserChrome` adds the turn number), `renderTool` (`liveShellTail`), `renderBoundary`, `renderFooter` (right-aligned stats); `markdown`/`updateMarkdown` (escaping mini-Markdown) |
@@ -305,6 +306,12 @@ updated on the right. Long lines wrap within their column.
 
 Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
 with no global/project selector. Other file categories retain scoped editing.
+
+The sessions sidebar follows the desktop panel (`rust/desktop/src/panels.rs`): a
+**New conversation** button, a **Search sessions** field, the pinned **Manager**
+card (hidden until the host answers `ManagerState`; it is never a session row),
+then project and date groups. Rows show the descriptive title and the metadata
+line, with **Tree** and Delete on hover.
 
 The sessions sidebar refreshes the cross-project index every five seconds and
 groups projects by newest activity, then dates and sessions newest first. Opening

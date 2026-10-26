@@ -62,7 +62,7 @@ MAX_FIND_LIMIT = 50
 MAX_QUERY_CHARS = 256
 MAX_STATUS_IDS = 20
 MAX_TITLE_CHARS = 160
-#: A launch ``worktree`` name: it is the session title, the worktree folder and the
+#: A launch ``worktree`` name: it is the worktree folder and the
 #: ``nexus/wt/<name>`` branch suffix (same rule as the host's session worktree names).
 WORKTREE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9_-]{0,59}"
 WORKTREE_BRANCH_PREFIX = "nexus/wt/"
@@ -162,11 +162,11 @@ class SessionResult:
 @dataclass(frozen=True, slots=True)
 class LaunchResult:
     id: str
-    #: The title hint the manager gave, control-free and clipped; ``""`` when none.
+    #: The descriptive launch title, control-free and clipped; worktree launches use the instruction.
     title: str
     #: ``queued``: the instruction is admitted; the root starts when the host schedules it.
     state: str = "queued"
-    #: The worktree name (= folder = title) when launched with ``worktree``; ``""`` otherwise.
+    #: The worktree name (= folder and branch suffix) when launched with ``worktree``; ``""`` otherwise.
     worktree_name: str = ""
 
 

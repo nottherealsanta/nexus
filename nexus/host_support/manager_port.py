@@ -442,8 +442,9 @@ class HostManagerPort:
         hint = sanitize_text(title, limit=MAX_TITLE_CHARS) if title else ""
         wt_name = ""
         if worktree:
+            # The name only names the worktree; the session title is derived from the instruction.
             wt_name = _worktree_name(title)
-            hint = wt_name
+            hint = ""
         session_id = host.new_session_id()
         digest = hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:16]
         # The supervision edge first: a started root can never lack its link.
@@ -473,7 +474,10 @@ class HostManagerPort:
             ) from exc
         except Exception as exc:  # noqa: BLE001
             raise LaunchRefused("error", f"could not start the session: {_why(exc)}") from exc
-        return LaunchResult(id=session_id, title=hint, state="queued", worktree_name=wt_name)
+        return LaunchResult(
+            id=session_id, title=hint or sanitize_text(instruction, limit=MAX_TITLE_CHARS),
+            state="queued", worktree_name=wt_name,
+        )
 
     async def wait(
         self, ids: tuple[str, ...], until: Literal["any", "all"], max_wait_seconds: int
@@ -824,7 +828,6 @@ class FacadeManagerHost:
                 await facade._invoke_runtime_worktree(
                     "promote_session", session_id, reason="worktree requested by the launching manager",
                     name=worktree_name)
-                facade.titles.cancel(session_id)
             except Exception as exc:  # noqa: BLE001
                 raise _WorktreeSetupFailed(str(exc)) from exc
         await facade.enqueue(

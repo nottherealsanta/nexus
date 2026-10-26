@@ -386,8 +386,8 @@ async def main() -> None:
             await _wait_for(lambda: daemon.started or task.done())
             if task.done():
                 task.result()
+            terminal = await UDSClient.connect(socket, client_id="playwright-terminal", focus=str(workspace))
             launch_url = await daemon.web_launch()
-            terminal = await UDSClient.connect(socket, client_id="playwright-terminal")
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True, args=[
                     "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",

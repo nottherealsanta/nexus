@@ -176,7 +176,7 @@ async def test_launch_worktree_selects_the_named_worktree_before_the_enqueue():
     assert bad["isError"] and mutations(client) == []
     reply = json.loads(text_of(await server.call_tool(
         "session_launch", {"instruction": "go", "worktree": True, "title": "fix-sync"})))
-    assert reply["id"].startswith(DEBUG_ID_PREFIX) and reply["title"] == "fix-sync"
+    assert reply["id"].startswith(DEBUG_ID_PREFIX) and reply["title"] == "go"
     assert reply["worktree_branch"] == "nexus/wt/fix-sync"
     assert mutations(client) == [
         ("promote_session", reply["id"], "fix-sync"), ("enqueue", reply["id"], "go", "queue"),

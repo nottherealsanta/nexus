@@ -54,8 +54,9 @@
     </header>
     <aside class="sidebar" id="sidebar" aria-label="Sessions">
       <span class="sr-only" id="workspace-label">workspace</span>
-      <button class="new-session" id="new-session" title="New session (⌘N)"><span><svg aria-hidden="true"><use href="#i-plus"/></svg>New session</span><kbd>ctrl+n</kbd></button>
-      <label class="session-search"><span class="sr-only">Filter sessions</span><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off" spellcheck="false"></label>
+      <button class="new-session" id="new-session" title="New conversation (⌘N)"><span><svg aria-hidden="true"><use href="#i-plus"/></svg>New conversation</span><kbd>ctrl+n</kbd></button>
+      <label class="session-search"><span class="sr-only">Search sessions</span><input id="session-filter" type="search" placeholder="Search sessions" autocomplete="off" spellcheck="false"></label>
+      <div class="manager-card" id="manager-card" role="button" tabindex="0" hidden></div>
       <div class="session-scroll">
         <section class="session-group">
           <h2><span>Sessions</span><span class="session-count" id="session-count"></span></h2>

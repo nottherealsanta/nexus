@@ -40,8 +40,8 @@ Update the matching doc in the same change as the code.
 | Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
 | `nexus web`, the browser client (**to be deprecated**; `nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
 | Native Ratatui terminal client | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
-| Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](skills/gpui-nexus/SKILL.md), [native screenshot skill](skills/native-app-review/SKILL.md) |
-| NSH desktop + web client (planned; `rust/app`, `rust/client-core`) | [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](skills/nsh-nexus/SKILL.md) |
+| Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](.agents/skills/gpui-nexus/SKILL.md), [native screenshot skill](.agents/skills/native-app-review/SKILL.md) |
+| NSH desktop + web client (planned; `rust/app`, `rust/client-core`) | [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](.agents/skills/nsh-nexus/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | GPT Live voice calls (experimental) | [docs/live.md](docs/live.md) |
 | The workspace manager session (implemented, unverified, off by default) | [docs/manager.md](docs/manager.md) |

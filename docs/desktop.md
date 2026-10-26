@@ -30,7 +30,7 @@ the normal release build still uses precompiled shaders.
 For a local macOS bundle (also gives native automation a stable app identity):
 
 ```sh
-python3 skills/native-app-review/scripts/package_macos.py \
+python3 .agents/skills/native-app-review/scripts/package_macos.py \
   rust/desktop/target/debug/nexus-desktop rust/desktop/Nexus.app \
   --name Nexus --bundle-id dev.nexus.desktop
 NEXUS_DESKTOP_BINARY="$PWD/rust/desktop/Nexus.app/Contents/MacOS/nexus-desktop" \
@@ -136,7 +136,7 @@ verified.** Daemon, helper and call flow: [live.md](live.md).
   "responsible process" at the top of that chain: when started from a terminal, the
   terminal app (grant Privacy > Microphone to it); when the bundle itself is the
   responsible process, `NSMicrophoneUsageDescription` in its `Info.plist` supplies the
-  prompt text. `skills/native-app-review/scripts/package_macos.py` now writes that key
+  prompt text. `.agents/skills/native-app-review/scripts/package_macos.py` now writes that key
   (it also covers dictation). **Which process macOS actually charges for the helper's
   capture, and whether the prompt appears for the bundle, is not verified.**
 
@@ -234,9 +234,9 @@ so a terminal keymap update cannot silently remove the desktop shortcuts.
 
 ## Visual verification
 
-The repo-local [GPUI skill](../skills/gpui-nexus/SKILL.md) adapts reviewed Longbridge
+The repo-local [GPUI skill](../.agents/skills/gpui-nexus/SKILL.md) adapts reviewed Longbridge
 GPUI guidance to the pinned client. Its provenance and licenses travel with it.
-The reusable [native-app-review skill](../skills/native-app-review/SKILL.md) defines
+The reusable [native-app-review skill](../.agents/skills/native-app-review/SKILL.md) defines
 launch/capture/review of the actual application with computer-use tools. Captures
 and the review ledger live in ignored `artifacts/desktop/`. `--preview SNAPSHOT.json`
 on the Rust binary renders a labelled, read-only fixture for repeatable visual QA;

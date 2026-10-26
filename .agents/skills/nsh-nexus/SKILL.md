@@ -5,7 +5,7 @@ description: Build the Nexus desktop and web client on Native Shell (NSH, nsh.de
 
 # Nexus on Native Shell (NSH)
 
-The plan is [plans/planning/nsh-cross-platform-clients.md](../../plans/planning/nsh-cross-platform-clients.md).
+The plan is [plans/planning/nsh-cross-platform-clients.md](../../../plans/planning/nsh-cross-platform-clients.md).
 Read §4 (architecture), §5A (desktop + web track: layout spec, allowed
 platform differences, milestones) before any change. This skill does not
 copy NSH docs: it says **which page to open** and what Nexus adds on top.

@@ -21,6 +21,7 @@ the caller is a developer's debugging agent and not the in-app manager session:
 * Host commands carry no message origin, so a ``send`` is prefixed with a visible line
   naming the debug MCP. A launch ``title`` is applied with ``SessionRename`` right after
   the enqueue (best effort: the reply's ``title`` is empty if that failed).
+  Worktree launches instead return the instruction as a title hint without renaming.
 * ``show`` is always refused: there is no UI here and no manager log to carry the request.
 * ``session_wait`` has no user-interruption signal (``interrupted`` is always false); the
   MCP client ends a wait with ``notifications/cancelled``.
@@ -301,7 +302,7 @@ class DaemonManagerPort:
             self._launched.pop(next(iter(self._launched)))
         applied = ""
         if worktree:
-            applied = str(title)  # the host set the title together with the worktree
+            applied = sanitize_text(instruction, limit=MAX_TITLE_CHARS)
         elif hint:
             # The session exists once the enqueue is accepted; a user title also stops
             # auto-titling. The launch already happened, so a rename failure only drops the hint.
