@@ -321,7 +321,7 @@ async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_pat
     assert "SOUL-B" in second.system and "MEMORY-B" in second.system
     assert "reader: read things" in second.system
     assert {tool.name for tool in second.tools} == {
-        "read", "glob", "grep", "subagent",
+        "read", "glob", "grep", "subagent", "subagent_continue",
         "question", "webfetch", "websearch", "skill",
     }
     await runtime.aclose()

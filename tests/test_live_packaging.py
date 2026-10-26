@@ -88,6 +88,9 @@ def test_cargo_lock_pins_webrtc_ice_past_the_consent_freshness_fix():
 
 
 def test_native_toolchain_pin_matches_the_crate_msrv():
-    manifest = tomllib.loads((ROOT / "rust/live/Cargo.toml").read_text(encoding="utf-8"))
-    rust_version = manifest["package"]["rust-version"]
+    versions = [
+        tomllib.loads((ROOT / f"rust/{crate}/Cargo.toml").read_text(encoding="utf-8"))["package"]["rust-version"]
+        for crate in ("live", "tui")
+    ]
+    rust_version = max(versions, key=lambda value: tuple(map(int, value.split("."))))
     assert f"{rust_version}.0" in _workflow()
