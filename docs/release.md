@@ -398,6 +398,9 @@ on Linux and macOS, each with x86-64 and arm64 runners, for Python 3.13 and
 and verifies the installed executable with `nexus-ratatui --version`. The release
 publisher waits for every matrix job, downloads those wheels, and builds only
 the source distribution locally. A failed platform job prevents publication.
+The publish job pins Python 3.13 through setup-uv for both the sdist build and
+packaging tests: constriction has cp313/cp314-only wheels, so resolving the newest
+Python (3.15) fails before the packaging checks can run.
 CI also runs locked Cargo tests and the controlling-PTY Python check. The matrix
 configuration has not yet been run on hosted CI; only the local macOS arm64
 wheel has been installed and verified. Windows remains unsupported by the
