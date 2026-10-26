@@ -14,7 +14,7 @@ client gets it once. Backups are never pruned automatically. See [sessions.md](s
 
 ## The agent manages its own worktrees; there are no modes (2026-10-24)
 
-Plan: [agent-managed-worktrees](../plans/planning/agent-managed-worktrees.md). This part is
+Plan: [agent-managed-worktrees](../plans/done/agent-managed-worktrees.md). This part is
 the UI, host and config side; the runtime, tools, prompt and storage decisions are recorded
 with their own changes. Status: the UI/host/config/view track is written but not yet run or
 integrated with the runtime track.

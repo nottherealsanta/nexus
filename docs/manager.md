@@ -1,6 +1,6 @@
 # Manager session
 
-Plan: [`plans/in-progress/02-manager-session-orchestration.md`](../plans/in-progress/02-manager-session-orchestration.md).
+Plan: [`plans/done/02-manager-session-orchestration.md`](../plans/done/02-manager-session-orchestration.md).
 **Status: implemented and verified offline; off by default (`[manager] enabled = false`).**
 The backend, the native presentation (`nexus/ui_support/manager.py`, `nexus/ui/ratatui/manager.py`,
 the Rust TUI and desktop panels) and the manager PTY flow pass offline; `cargo test` passes for
@@ -222,7 +222,7 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 
 ## Automatic compaction and machine memory
 
-Plan: [`plans/planning/manager-automatic-compaction.md`](../plans/planning/manager-automatic-compaction.md).
+Plan: [`plans/in-progress/manager-automatic-compaction.md`](../plans/in-progress/manager-automatic-compaction.md).
 The manager is one log for the life of the workspace, so it compacts itself, lazily and durably, with no
 timer and no model-callable tool (a `<session_result>` could otherwise talk it into erasing its context).
 
