@@ -2,3 +2,5 @@
 - When sub-agents continue, we have to redesign the UI better that there is no spinning on both the instance and there is a connection on the left side by a faint colored line, the same color as the agent, that connects these two. And when user hovers over any one, the other also should highlight. But mostly both the spinners should not be spinning, only the latest instance
 - ![alt text](image-1.png) auto retry for this - and the ability for root agent to continue the subagent 
 - ![alt text](image-2.png) remove this
+- for codex the 10% cutoff is not being kept - no lauching any subagents with codex if codex 5h limit is 10%
+- 

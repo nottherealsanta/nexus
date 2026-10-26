@@ -736,9 +736,9 @@ def test_orchestrator_prompt_has_roster_and_difficult_problem_workflow(tmp_path)
     assert body.index("`advisor`") < body.index("actionable brief for `task`")
     assert "cannot be spawned" not in body
     assert "never shared automatically" in body
-    assert "at most one subagent instance" in body
+    assert "at most one subagent instance" not in body
     assert "subagent_continue" in body
-    assert "Do not parallelize work" in body
+    assert "prefer continuing the same child" in body
 
 
 def test_legacy_names_resolve_to_the_new_builtins(tmp_path):

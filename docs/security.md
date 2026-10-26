@@ -57,8 +57,10 @@ for setup and usage.
 
 The optional gateway is separate and opt-in. It binds loopback only; remote
 access requires an operator-managed private HTTPS proxy. Do not expose it
-publicly or use Tailscale Funnel. Pairing codes expire after 120 seconds by
-default and are stored hashed. Device bearer tokens are revocable, scoped and
+publicly or use Tailscale Funnel. Pairing codes are six digits, single use and
+expire after 120 seconds by default; they are stored hashed. A million-value code
+is acceptable only because failed redemptions are limited to 8 per minute (about
+16 guesses in a code's lifetime). Device bearer tokens are revocable, scoped and
 expire after seven days by default; the registry is not stored in the OS
 Keychain. A bearer token grants its assigned scopes and workspace access. The
 gateway does not sandbox host processes: access to allowed workspaces is bounded

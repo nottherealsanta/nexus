@@ -197,6 +197,13 @@ def test_a_code_is_single_use(store, tmp_path):
     assert len(store.devices()) == 1
 
 
+def test_codes_are_six_digits_and_unique_while_pending(store, tmp_path):
+    store.allow(workspace(tmp_path))
+    codes = [store.create_pairing()[0] for _ in range(MAX_PENDING)]
+    assert all(len(code) == 6 and code.isdigit() for code in codes)
+    assert len(set(codes)) == MAX_PENDING
+
+
 def test_code_format_and_normalization(store, tmp_path):
     store.allow(workspace(tmp_path))
     code, _ = store.create_pairing()

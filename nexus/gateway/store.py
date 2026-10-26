@@ -10,7 +10,6 @@ seen on the next check.
 """
 from __future__ import annotations
 
-import base64
 import contextlib
 import fcntl
 import hashlib
@@ -38,6 +37,7 @@ DEFAULT_TTL_DAYS = 90
 DEFAULT_CODE_TTL = 120.0
 MAX_CODE_TTL = 600.0
 MAX_NAME = 64
+CODE_DIGITS = 6
 HOST_ID = re.compile(r"[0-9a-f]{16}\Z")
 _STATE_VERSION = 1
 
@@ -279,9 +279,7 @@ class GatewayStore:
             raise GatewayError(f"ttl must be 1 to {MAX_TTL_DAYS} days")
         if not 1 <= float(code_ttl) <= MAX_CODE_TTL:
             raise GatewayError(f"the code lifetime must be 1 to {int(MAX_CODE_TTL)} seconds")
-        code = base64.b32encode(secrets.token_bytes(16)).decode().rstrip("=")
-
-        def change(state: dict[str, Any], now: float) -> float:
+        def change(state: dict[str, Any], now: float) -> tuple[str, float]:
             allowed = sorted(state["hosts"])
             chosen = sorted(set(host_ids)) if host_ids else allowed
             if not chosen:
@@ -294,6 +292,10 @@ class GatewayStore:
             if len(state["devices"]) + len(state["pending"]) >= MAX_DEVICES:
                 raise GatewayError(f"at most {MAX_DEVICES} devices may be paired; revoke one first")
             expires = now + float(code_ttl)
+            # Short for typing on a phone; safe only because redemption is rate limited.
+            code = f"{secrets.randbelow(10**CODE_DIGITS):0{CODE_DIGITS}d}"
+            while hash_secret(code) in state["pending"]:
+                code = f"{secrets.randbelow(10**CODE_DIGITS):0{CODE_DIGITS}d}"
             state["pending"][hash_secret(code)] = {
                 "name": clean_name(name),
                 "scopes": list(granted),
@@ -301,10 +303,10 @@ class GatewayStore:
                 "ttl_days": int(ttl_days),
                 "expires_at": expires,
             }
-            return expires
+            return code, expires
 
-        expires_at = self._mutate(change)
-        return "-".join(code[i : i + 5] for i in range(0, len(code), 5)), expires_at
+        code, expires_at = self._mutate(change)
+        return code, expires_at
 
     def redeem(self, code: str, device_name: str = "") -> tuple[Device, str]:
         """Atomically consume ``code`` and issue a device token (shown once)."""

@@ -72,9 +72,10 @@ class _Endpoint:
 def parse_launch_url(url: str) -> tuple[str, str, str]:
     """Validate a daemon ``WebLaunch`` URL; return ``(base, origin, ticket)``.
 
-    Only ``http://<loopback IP literal>:<port>/#ticket=<token>`` is accepted, so a
-    compromised or confused daemon reply can never point the gateway (and the
-    ticket it redeems) at another machine.
+    Only ``http://<loopback IP literal>:<port>[/w/<project>]/#ticket=<token>`` is
+    accepted, so a compromised or confused daemon reply can never point the
+    gateway (and the ticket it redeems) at another machine. The shared daemon
+    serves each project under ``/w/<project>``; that prefix joins ``base`` only.
     """
     try:
         parts = urlsplit(url)
@@ -84,6 +85,13 @@ def parse_launch_url(url: str) -> tuple[str, str, str]:
     except ValueError as exc:
         raise UpstreamError("bad_launch", 502) from exc
     ticket = re.fullmatch(r"ticket=([A-Za-z0-9_-]{16,256})", parts.fragment)
+    project = re.fullmatch(r"/w/([A-Za-z0-9_-]{1,64})/?", parts.path)
+    if (parts.path in ("", "/") or project is not None) and (
+        parts.scheme == "http" and address.is_loopback and ticket is not None
+    ):
+        prefix = f"/w/{project.group(1)}" if project else ""
+    else:
+        prefix = None
     if (
         parts.scheme != "http"
         or not address.is_loopback
@@ -91,14 +99,14 @@ def parse_launch_url(url: str) -> tuple[str, str, str]:
         or not 1 <= port <= 65535
         or parts.username is not None
         or parts.password is not None
-        or parts.path not in ("", "/")
+        or prefix is None
         or parts.query
         or ticket is None
     ):
         raise UpstreamError("bad_launch", 502)
     authority = f"[{address}]" if address.version == 6 else str(address)
     origin = f"http://{authority}:{port}"
-    return origin, origin, ticket.group(1)
+    return origin + prefix, origin, ticket.group(1)
 
 
 async def daemon_launcher(workspace: Path) -> str:
@@ -193,7 +201,7 @@ class Upstream:
             csrf = msgspec.json.decode(response.content)["csrf"]
         except (msgspec.DecodeError, KeyError, TypeError) as exc:
             raise UpstreamError("host_unavailable", 502) from exc
-        cookie = _cookie_value(response.headers.get_list("set-cookie"))
+        cookie = _cookie_value(response.headers.get_list("set-cookie"), _cookie_name(base))
         if not cookie or not isinstance(csrf, str) or not _TOKEN.fullmatch(csrf):
             raise UpstreamError("host_unavailable", 502)
         return _Endpoint(base, origin, cookie, csrf, self._clock() + CREDENTIAL_TTL)
@@ -210,7 +218,7 @@ class Upstream:
 
     @staticmethod
     def _headers(endpoint: _Endpoint, *, post: bool, extra: dict[str, str] | None = None) -> dict[str, str]:
-        headers = {"Cookie": f"{COOKIE_NAME}={endpoint.cookie}", "Origin": endpoint.origin}
+        headers = {"Cookie": f"{_cookie_name(endpoint.base)}={endpoint.cookie}", "Origin": endpoint.origin}
         if post:
             headers["X-CSRF-Token"] = endpoint.csrf
         headers.update(extra or {})
@@ -314,14 +322,20 @@ class Upstream:
             await self._client.aclose()
 
 
-def _cookie_value(headers: list[str]) -> str | None:
+def _cookie_name(base: str) -> str:
+    """The host suffixes its cookie with the project key when served under ``/w/<key>``."""
+    key = urlsplit(base).path.removeprefix("/w/")
+    return f"{COOKIE_NAME}_{key}" if key else COOKIE_NAME
+
+
+def _cookie_value(headers: list[str], name: str = COOKIE_NAME) -> str | None:
     for header in headers:
         jar: SimpleCookie = SimpleCookie()
         try:
             jar.load(header)
         except CookieError:
             continue
-        morsel = jar.get(COOKIE_NAME)
+        morsel = jar.get(name)
         if morsel is not None and _TOKEN.fullmatch(morsel.value):
             return morsel.value
     return None
