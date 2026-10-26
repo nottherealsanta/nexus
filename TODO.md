@@ -1,14 +1,13 @@
 # TODO
 
-Every item below is planned, **not implemented**. Each row quotes the original TODO text
-unchanged and links to its plan in `plans/planning/`. Tick an item only when its plan's
-acceptance criteria are met. Focus: the native Ratatui client (`nexus chat`); desktop (GPUI) is
-paused and the web client is to be deprecated (`AGENTS.md`).
+Each row quotes the original TODO text unchanged and links to its plan in `plans/planning/` or
+completed record in `plans/done/`. Focus: the native Ratatui client (`nexus chat`); desktop
+(GPUI) is paused and the web client is to be deprecated (`AGENTS.md`).
 
 | # | Original item (verbatim) | Plan | State |
 | --- | --- | --- | --- |
-| 1 | "auto move to new session while talking to manager" | [10 · Manager screen and auto-navigation](plans/planning/10-manager-screen-and-auto-navigation.md) §4.4 | Partly in code already (launch autofocus, `nexus/ui/ratatui/manager.py:219`); gaps and verification planned |
-| 2 | "Manager your screen needs to look different - open with ctrl + x and "." . this also opens when gpt-live is initiated. but manager can be talked to by composer itself as well." | [10 · Manager screen and auto-navigation](plans/planning/10-manager-screen-and-auto-navigation.md) §4.1–4.3 | Planned; design and `Ctrl+X .` reading are assumptions to confirm |
+| 1 | "auto move to new session while talking to manager" | [10 · Manager screen and auto-navigation](plans/done/10-manager-screen-and-auto-navigation.md) §4.4 | Implemented (2026-10-26); offline tests pass; not verified against real Codex or GPT Live |
+| 2 | "Manager your screen needs to look different - open with ctrl + x and "." . this also opens when gpt-live is initiated. but manager can be talked to by composer itself as well." | [10 · Manager screen and auto-navigation](plans/done/10-manager-screen-and-auto-navigation.md) §4.1–4.3 | Implemented (2026-10-26); offline tests pass; no screenshot review |
 | 3 | "worktree merge should not ask for permission to merge" | [11 · Worktree landing and auto cleanup](plans/planning/11-worktree-landing-without-prompts-and-auto-cleanup.md) §4.1–4.3 | Canonical landing already exempt (`nexus/tools/permissions.py:1513`); remaining prompts to be measured |
 | 4 | "Auto delete worktree when done with it" | [11 · Worktree landing and auto cleanup](plans/planning/11-worktree-landing-without-prompts-and-auto-cleanup.md) §4.4 | Planned |
 | 5 | "subagent screen/modal should look like the root agent except that there is back button which is the first two cols of TUI ( with a <-  in the center )" | [12 · Subagent page with back rail](plans/planning/12-subagent-page-root-layout-with-back-rail.md) | Planned |
