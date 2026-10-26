@@ -531,3 +531,27 @@ def test_settings_native_focus_reorder_and_loading_guard():
         stop.set(); thread.join(timeout=1)
         process.stdin.close(); process.stdout.close()
         os.close(master); os.close(slave)
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_status_dots_have_one_cell_gap_before_waiting():
+    from ratatui_latency_probe import NativeProbe
+    from ratatui_screen import Screen
+
+    probe = NativeProbe(BINARY)
+    try:
+        probe.send({"schema": 3, "reset": True, "revision": 1, "generation": 1,
+                    "status": "running", "sessions_sidebar": False, "details_sidebar": False,
+                    "turn_status": {"activity": "Waiting for response", "activity_since": time.time(),
+                                    "turn_since": time.time()}})
+        deadline = time.monotonic() + 4
+        while True:
+            screen = Screen(40, 140)
+            screen.feed(bytes(probe.output))
+            if "... Waiting for response…" in screen.text():
+                break
+            assert time.monotonic() < deadline, screen.text()
+            time.sleep(.02)
+        assert probe.process.poll() is None
+    finally:
+        probe.close()

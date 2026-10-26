@@ -847,13 +847,15 @@ typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
 models and the live `Thinking · …` summary). While a turn runs, one status line sits above the
-composer (`render.rs::above_layout`): `∴ Waiting for response…` on the left
+composer (`render.rs::above_layout`): `... Waiting for response…` on the left
 (the host's activity word, no time of its own; design overhaul step 6, THK-4: the word always shows
 its real characters and a soft grey shimmer sweeps left to right once every 54 motion frames (1.8 s at
 30 Hz, `cache.activity_frame`, not the 125 ms `cache.spin`), each grapheme blending dark grey to light
 grey over about four graphemes either side of the highlight; `render.rs::shimmer_spans`. The greys are the
 darker and lighter of `p.quiet` and `p.text` (dark theme: `p.quiet` dark, `p.text` light; light theme:
-`p.text` dark, `p.quiet` light), and the `∴` is the dark base grey; no purple or accent. Only colours change,
+`p.text` dark, `p.quiet` light), and three separate one-cell dots pulse left to right on the same motion clock, with exactly one
+terminal-cell space before the first status letter; no purple or accent. With animations off the
+dots stay dark grey; Monochrome uses static plain `...`. Only colours change,
 so the label keeps its width and `stop_at` its geometry; animations off draw the word in the dark base
 grey, Monochrome plain text) and `4m40s ↓121k [stop]`
 right-aligned (turn time, output tokens when known, `[stop]`). The fields come from
