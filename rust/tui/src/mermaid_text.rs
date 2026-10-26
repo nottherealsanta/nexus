@@ -79,7 +79,11 @@ fn pie(head: &str, rest: &[&str], width: usize) -> Option<Vec<Row>> {
         if let Some(t) = line.strip_prefix("title ") {
             title = t.trim().to_owned();
         } else if let Some((label, value)) = line.rsplit_once(':') {
-            let value: f64 = value.trim().parse().ok().filter(|v: &f64| v.is_finite() && *v >= 0.0)?;
+            let value: f64 = value
+                .trim()
+                .parse()
+                .ok()
+                .filter(|v: &f64| v.is_finite() && *v >= 0.0)?;
             slices.push((unquote(label).to_owned(), value));
         } else if !line.starts_with("showData") {
             return None;
@@ -134,7 +138,11 @@ fn timeline(rest: &[&str], width: usize) -> Option<Vec<Row>> {
             let period_w = period.width().min(width / 3).max(4);
             let mut first = true;
             for event in parts.filter(|e| !e.is_empty()) {
-                let lead = if first { pad(period, period_w) } else { " ".repeat(period_w) };
+                let lead = if first {
+                    pad(period, period_w)
+                } else {
+                    " ".repeat(period_w)
+                };
                 rows.push(vec![
                     (lead, Tone::Label),
                     (" │ ".into(), Tone::Quiet),
@@ -224,9 +232,8 @@ fn gantt(rest: &[&str], width: usize) -> Option<Vec<Row>> {
                     return None;
                 }
             }
-            "axisFormat" | "tickInterval" | "excludes" | "includes" | "todayMarker"
-            | "weekday" | "weekend" | "inclusiveEndDates" | "topAxis" | "accTitle"
-            | "accDescr" | "click" => {}
+            "axisFormat" | "tickInterval" | "excludes" | "includes" | "todayMarker" | "weekday"
+            | "weekend" | "inclusiveEndDates" | "topAxis" | "accTitle" | "accDescr" | "click" => {}
             _ => {
                 let (name, spec) = line.split_once(':')?;
                 let mut tokens: Vec<&str> = spec
@@ -241,8 +248,9 @@ fn gantt(rest: &[&str], width: usize) -> Option<Vec<Row>> {
                     tokens.remove(0);
                 }
                 let is_when = |t: &str| t.starts_with("after ") || days(t).is_some();
-                let id = (tokens.len() >= 2 && !is_when(tokens[0]) && duration(tokens[0]).is_none())
-                    .then(|| tokens.remove(0).to_owned());
+                let id =
+                    (tokens.len() >= 2 && !is_when(tokens[0]) && duration(tokens[0]).is_none())
+                        .then(|| tokens.remove(0).to_owned());
                 let (start_tok, end_tok) = match tokens.as_slice() {
                     [end] => (None, *end),
                     [start, end] => (Some(*start), *end),
@@ -293,12 +301,8 @@ fn gantt(rest: &[&str], width: usize) -> Option<Vec<Row>> {
     if !title.is_empty() {
         rows.push(vec![(fit(&title, width), Tone::Title)]);
     }
-    let axis = |text: String| -> Row {
-        vec![
-            (" ".repeat(name_w + 2), Tone::Quiet),
-            (text, Tone::Quiet),
-        ]
-    };
+    let axis =
+        |text: String| -> Row { vec![(" ".repeat(name_w + 2), Tone::Quiet), (text, Tone::Quiet)] };
     let (a, b) = (civil(first), civil(last));
     if bar_w >= a.width() + b.width() + 1 {
         let gap = bar_w - a.width() - b.width();
@@ -339,10 +343,17 @@ mod tests {
 
     #[test]
     fn pie_lists_labels_values_and_shares() {
-        let rows = render("pie title Pets\n\"Dogs\" : 386\n\"Cats\" : 85\n\"Rats\" : 15", 60).unwrap();
+        let rows = render(
+            "pie title Pets\n\"Dogs\" : 386\n\"Cats\" : 85\n\"Rats\" : 15",
+            60,
+        )
+        .unwrap();
         let t = text(&rows);
         assert_eq!(t[0], "Pets");
-        assert!(t[1].contains("Dogs") && t[1].contains("386") && t[1].contains("79.4%"), "{t:?}");
+        assert!(
+            t[1].contains("Dogs") && t[1].contains("386") && t[1].contains("79.4%"),
+            "{t:?}"
+        );
         assert!(t[3].contains("Rats") && t[3].contains("3.1%"), "{t:?}");
         assert!(t.iter().all(|l| l.width() <= 60));
     }
@@ -352,7 +363,17 @@ mod tests {
         let src = "gantt\n dateFormat YYYY-MM-DD\n title Plan\n section Build\n Parse :a, 2024-01-01, 5d\n Render :b, after a, 6d\n section Ship\n Test :c, after b, 4d\n Release :d, after c, 2d";
         let t = text(&render(src, 80).unwrap());
         let all = t.join("\n");
-        for needle in ["Plan", "Build", "Ship", "Parse", "Render", "Test", "Release", "2024-01-01 → 2024-01-06", "2024-01-06 → 2024-01-12"] {
+        for needle in [
+            "Plan",
+            "Build",
+            "Ship",
+            "Parse",
+            "Render",
+            "Test",
+            "Release",
+            "2024-01-01 → 2024-01-06",
+            "2024-01-06 → 2024-01-12",
+        ] {
             assert!(all.contains(needle), "missing {needle}: {all}");
         }
         assert!(t.iter().all(|l| l.width() <= 80), "{t:?}");
@@ -366,7 +387,8 @@ mod tests {
 
     #[test]
     fn gantt_narrow_uses_durations_and_tiny_widths_decline() {
-        let src = "gantt\n dateFormat YYYY-MM-DD\n Parse :a, 2024-01-01, 5d\n Render :b, after a, 6d";
+        let src =
+            "gantt\n dateFormat YYYY-MM-DD\n Parse :a, 2024-01-01, 5d\n Render :b, after a, 6d";
         let t = text(&render(src, 36).unwrap());
         assert!(t.iter().any(|l| l.contains("6d")), "{t:?}");
         assert!(render(src, 14).is_none());
@@ -374,7 +396,13 @@ mod tests {
 
     #[test]
     fn timeline_rows_pair_periods_with_events() {
-        let t = text(&render("timeline\n title History\n 2024 : Shipped : Scaled\n 2025 : Rewrote", 50).unwrap());
+        let t = text(
+            &render(
+                "timeline\n title History\n 2024 : Shipped : Scaled\n 2025 : Rewrote",
+                50,
+            )
+            .unwrap(),
+        );
         assert_eq!(t[0], "History");
         assert!(t[1].contains("2024") && t[1].contains("Shipped"));
         assert!(!t[2].contains("2024") && t[2].contains("Scaled"));

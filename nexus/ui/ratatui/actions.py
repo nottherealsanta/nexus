@@ -128,6 +128,7 @@ class ShellActions:
         self.expanded = set()
         self.collapsed_turns = set()
         self.verbose = False
+        self.manager_board_collapsed = False  # the Manager screen's board starts expanded
         self.mcp_report = None
         self.mcp_error = None
         self.mcp_due = 0.0

@@ -1320,6 +1320,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     display_view = _context_display_view(view, shell)
     used, window, _measured = context_measure(display_view)
     manager_entry = _guarded(failures, "Manager", lambda: shell.manager.entry(), {}) if shell and getattr(shell, "manager", None) else {}
+    from .manager_board import board as _manager_board
+    manager_board = _guarded(failures, "Manager board", lambda: _manager_board(shell), None) if shell else None
     snapshot = {"schema": 1, "revision": revision, "title": _session_title(view.session_id, shell),
             "status": view.phase,
             "panel_layout": shell.panel_layout if shell else "modal",
@@ -1410,6 +1412,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 (shell.model_names.get((getattr(controller, "provider", None) or "", getattr(controller, "model", None) or "")) if shell else None)
                 or getattr(controller, "model", None) or "default"),
             "manager": manager_entry,
+            "manager_board": manager_board,
             "attachments": len(shell.attachments) if shell else 0,
             "lines": lines}
     if shell and shell.workflows.agent_page_id:
@@ -1603,6 +1606,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 *[item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")],
                 *[item.get(key) for item in shell.items for key in ("move_up", "move_down", "remove")],
                 (snapshot.get("live") or {}).get("operation"),  # the Live pane's open/close
+                (snapshot.get("manager_board") or {}).get("toggle"),  # the board heading
+                *[row.get("operation") for row in (snapshot.get("manager_board") or {}).get("rows", [])],
                 *_block_operations(snapshot["blocks"])] if op}
             snapshot["completion_bell"] = controller.completion_bell
             shell.notify_completion()

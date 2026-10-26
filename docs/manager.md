@@ -1,6 +1,6 @@
 # Manager session
 
-Plan: [`plans/in-progress/02-manager-session-orchestration.md`](../plans/in-progress/02-manager-session-orchestration.md).
+Plan: [`plans/done/02-manager-session-orchestration.md`](../plans/done/02-manager-session-orchestration.md).
 **Status: implemented and verified offline; off by default (`[manager] enabled = false`).**
 The backend, the native presentation (`nexus/ui_support/manager.py`, `nexus/ui/ratatui/manager.py`,
 the Rust TUI and desktop panels) and the manager PTY flow pass offline; `cargo test` passes for
@@ -62,14 +62,31 @@ tool and no hook runs in it.
   `SessionEnd`), and no automatic title or summary side call is made (`AutoTitler.candidate` returns
   `None`; the context has no summarizer). The title stays the derived first message.
 
-## Native presentation: a view, not a tab
+## Native presentation: its own screen (plan 10), not a tab
 
-The native clients (Ratatui, desktop) never list the manager in the tab strip. A top-bar button immediately
-before the Sessions button, and `Ctrl+X A`, toggle it: the first press opens the manager view (`ManagerOpen`,
-nothing new on the wire) and remembers the session in front; the second restores that session. The button reads
-pressed while the manager is in front. Closing is only a client switch: the singleton is never archived, deleted
-or cancelled, and a Live call (always attached to the manager) is unaffected. Details:
-[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui), [desktop.md](desktop.md). Web is unchanged.
+The native clients (Ratatui, desktop) never list the manager in the tab strip. On the Manager
+screen the top bar names it instead of showing session tabs (`◆ Manager · <model>`, plus the
+Live phase while a call is open), a managed-sessions board sits above the conversation, and the
+composer reads `Talk to the Manager…` and stays usable during a Live call. A top-bar button
+immediately before the Sessions button, and `Ctrl+X A` or `Ctrl+X .`, toggle it: the first press
+opens the manager view (`ManagerOpen`, nothing new on the wire) and remembers the session in
+front; the second restores that session. The button reads pressed while the manager is in front.
+Closing is only a client switch: the singleton is never archived, deleted or cancelled.
+
+Starting a GPT Live call opens the Manager screen once the call connects (never on a refused
+consent or an unavailable helper; never over a modal, form, dashboard, recording or pending
+prompt — then a toast offers `Open Manager`). Ending the call never switches back. The board
+(`nexus/ui/ratatui/manager_board.py`, drawn by `rust/tui/src/render/manager.rs`) joins the
+`ManagerState` managed ids with the polled session rows the client already keeps: one row per
+managed root, newest first, six rows plus `+N more · /sessions`, collapsible by its heading,
+`needs you` while a permission or question waits. A row click is the ordinary `session_open`
+switch; `Ctrl+X .` returns. With an empty draft, Tab focuses the board heading;
+arrows/Tab move between visible rows, Enter/Space activates, and Escape or typing
+returns to the composer. Focus is visibly highlighted. The first launch of a manager turn moves the user to the new
+session; later launches of the same turn raise an info toast with `Open` instead of a second
+move, and a blocked move carries the same `Open` action. Details:
+[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui), [desktop.md](desktop.md).
+Web is unchanged. No screenshot review has been done ("not visually verified").
 
 ## Port, provenance and caps
 
@@ -222,7 +239,7 @@ diagnostics) and labels a manager-launched root's first message with `origin.kin
 
 ## Automatic compaction and machine memory
 
-Plan: [`plans/planning/manager-automatic-compaction.md`](../plans/planning/manager-automatic-compaction.md).
+Plan: [`plans/in-progress/manager-automatic-compaction.md`](../plans/in-progress/manager-automatic-compaction.md).
 The manager is one log for the life of the workspace, so it compacts itself, lazily and durably, with no
 timer and no model-callable tool (a `<session_result>` could otherwise talk it into erasing its context).
 

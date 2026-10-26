@@ -31,6 +31,12 @@ def shell(request):
     client.manager_open.return_value = SimpleNamespace(session=SimpleNamespace(id=MANAGER), created=False)
     base.controller.session = "work"
     base.controller.view = initial_state("work")
+
+    async def switch(session):
+        base.controller.session = session
+        base.controller.view = initial_state(session)
+
+    base.switch = AsyncMock(side_effect=switch)
     return base
 
 
@@ -38,29 +44,42 @@ def ask(view, **fields):
     view.permissions.append(PermissionView(id="p1", ts=5.0, tool="bash", key="ls -la", **fields))
 
 
-async def test_live_attaches_to_the_manager_and_the_foreground_stays(shell):
+async def test_live_attaches_to_the_manager_and_opens_its_screen(shell):
     await shell.command("/live", ())
     assert FakeCall.instances[0].session == MANAGER
-    assert shell.controller.session == "work" and shell.live.session == MANAGER
+    assert shell.controller.session == MANAGER, "a connected call opens the Manager screen"
+    assert shell.manager.previous == (shell.workspace, "work"), "the way back is remembered"
+    assert shell.live.session == MANAGER
     bar = shell.live.bar()
-    assert bar["manager"] is True and bar["elsewhere"] == "Manager" and bar["attention"] == ""
+    assert bar["manager"] is True and bar["elsewhere"] == "" and bar["attention"] == ""
     assert shell.live.follow.session == MANAGER, "the panel subscribes to the manager itself"
     await shell.live.shutdown()
     assert shell.live.follow.session == "" and shell.live.state == "idle"
 
 
-async def test_the_pane_keeps_the_calls_rows_while_another_session_is_in_front(shell):
+async def test_the_pane_keeps_the_calls_rows_on_the_manager_screen(shell):
     await shell.command("/live", ())
-    shell.live.follow.view = fold(call_events(ended=False))  # what the manager subscription folded
+    shell.controller.view = fold(call_events(ended=False))  # the shown manager view folded the call
     snapshot = project(shell.controller, 1, shell=shell, literal=False)
     assert "Sent to agent (queue)" in snapshot["live"]["detail"]
     assert snapshot["live"]["operation"] == {"kind": "live_toggle", "id": "c1"}
-    assert not [b for b in snapshot["blocks"] if b["kind"] == "live"], "the foreground timeline is not touched"
+    assert not [b for b in snapshot["blocks"] if b["kind"] == "live"], "the timeline is not touched"
+    await shell.live.shutdown()
+
+
+async def test_a_manager_approval_is_offered_on_the_manager_screen(shell):
+    await shell.command("/live", ())
+    ask(shell.controller.view)  # the shown manager view owns the prompt
+    assert shell.live.bar()["attention"] == "", "nothing is elsewhere: the manager is in front"
+    prompt = project(shell.controller, 1, shell=shell, literal=False)["prompt"]
+    assert prompt["kind"] == "permission" and prompt["id"] == "p1"
+    assert "session" not in prompt, "the manager's own prompt needs no routing"
     await shell.live.shutdown()
 
 
 async def test_a_manager_approval_reaches_the_user_in_another_session(shell):
     await shell.command("/live", ())
+    shell.controller.session, shell.controller.view = "work", initial_state("work")
     ask(shell.live.follow.view)
     assert shell.live.bar()["attention"] == "approval waiting"
     prompt = project(shell.controller, 1, shell=shell, literal=False)["prompt"]
@@ -97,7 +116,8 @@ async def test_the_composer_still_sends_to_the_displayed_session(shell):
     await shell.command("/live", ())
     await shell.submit("hello there")
     shell.client.enqueue.assert_awaited_once()
-    assert shell.client.enqueue.await_args.args[:2] == ("work", "hello there")
+    assert shell.client.enqueue.await_args.args[:2] == (MANAGER, "hello there"), (
+        "the call opens the manager, and the composer sends to the session on screen")
     await shell.live.shutdown()
 
 

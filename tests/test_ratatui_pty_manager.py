@@ -113,6 +113,10 @@ def test_pinned_manager_is_drawn_apart_from_the_roots_and_opens_by_key():
         time.sleep(.4)
         t.redraw()
         text = t.text()
+        deadline = time.monotonic() + 5
+        while "pinned" not in text and time.monotonic() < deadline:
+            t.redraw()
+            text = t.text()
         assert "Manager" in text and "pinned" in text, text
         assert "Ready · 2 sessions launched" in text
         assert "codex/gpt-6-luna" in text and "Voice ready" in text, "model and Live readiness"
@@ -143,5 +147,58 @@ def test_disabled_manager_is_visible_with_the_fix_and_still_answers():
         assert "Voice M" not in text, "no voice while it is off"
         t.key(b"m")  # opening explains why it is off
         assert t.action()["operation"] == {"kind": "manager_open"}
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_ctrl_x_period_toggles_the_manager_screen_with_its_board():
+    """Plan 10: `Ctrl+X .` (like `Ctrl+X A`) opens the Manager screen; the board draws.
+
+    Drafts live per workspace/session in the client, so text typed mid-session survives
+    the trip to the manager screen and back.
+    """
+    board = {
+        "total": 1, "collapsed": False, "updated_at": 1_700_000_100.0,
+        "toggle": {"kind": "manager_board_toggle"},
+        "rows": [{
+            "id": "kid", "title": "Fix the flaky sync test", "status": "working", "sub": "2 messages",
+            "age": "2m", "attention": "needs you",
+            "operation": {"kind": "session_open", "workspace": "/w", "id": "kid"},
+        }],
+        "more": 0, "missing": 0,
+    }
+    manager_on = {**READY, "active": True, "model": "codex/gpt-6-luna"}
+    session_key = '["/w", "s1"]'
+    t = Terminal(36, 120)
+    try:
+        t.send(title="Fix the flaky sync", manager=READY, composer_key=session_key, generation=1)
+        time.sleep(.4)
+        t.key(b"keep me")  # a mid-draft in the ordinary session
+        time.sleep(.2)
+        t.key(b"\x18.")  # Ctrl+X . opens the Manager screen
+        assert t.action() == {"type": "manager_toggle", "text": ""}
+        t.send(title="Manager", manager=manager_on, manager_board=board,
+               composer_key='["/w", "nexus-manager"]', generation=2)
+        time.sleep(.4)
+        t.redraw()
+        text = t.text()
+        assert "◆ Manager · codex/gpt-6-luna" in text, text
+        assert "Managed sessions (1)" in text, text
+        assert "Fix the flaky sync test" in text and "needs you" in text, text
+        assert "Talk to the Manager" in text, text
+        # Empty composer Tab focuses the heading, Enter collapses; Down opens a row.
+        t.key(b"\t\r")
+        assert t.action()["operation"] == {"kind": "manager_board_toggle"}
+        t.key(b"\x1b[B\r")
+        assert t.action()["operation"] == board["rows"][0]["operation"]
+        t.key(b"\x1b")  # return to composer
+
+        t.key(b"\x18.")  # and back: the toggle restores the session left behind
+        assert t.action() == {"type": "manager_toggle", "text": ""}
+        t.send(title="Fix the flaky sync", manager=READY, composer_key=session_key, generation=3)
+        time.sleep(.4)
+        t.redraw()
+        assert "keep me" in t.text(), "the session draft survives the manager round trip"
     finally:
         t.close()

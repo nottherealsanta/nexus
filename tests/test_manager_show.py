@@ -593,9 +593,9 @@ async def test_focus_is_reported_before_the_replay_so_the_host_knows_the_manager
 # -- a session the manager launched takes the screen --------------------------------------------
 
 
-def launch_event(seq=7, *, child="kid", ts=None, session=MANAGER_ID, kind="managed"):
+def launch_event(seq=7, *, child="kid", ts=None, session=MANAGER_ID, kind="managed", turn="t1"):
     ts = time.time() if ts is None else ts
-    data = {"kind": kind, "child": child, "turn": "t1", "origin_message_id": "m1",
+    data = {"kind": kind, "child": child, "turn": turn, "origin_message_id": "m1",
             "instruction_digest": "d", "agent": ""}
     return Event(type="session.linked", data=data, seq=seq, ts=ts, session=session)
 
@@ -628,3 +628,42 @@ async def test_a_launch_never_replaces_a_modal_a_toast_says_so(shell):
     assert shell.manager.on_event(launch_event()) is False
     shell.switch_project.assert_not_awaited()
     assert shell.toasts and "launched session kid" in shell.toasts[-1]["title"] + shell.toasts[-1]["body"]
+
+
+async def test_a_second_launch_of_the_same_turn_toasts_with_open_instead_of_moving(shell):
+    """Plan 10 G1: the first launch of a manager turn moves the user; later ones only offer to open."""
+    assert shell.manager.on_event(launch_event(seq=7, child="kid")) is True
+    await settle(shell)
+    shell.switch_project.assert_awaited_once_with("/w", "kid")
+    # The manager is no longer in front (the user is on the child); a second launch of the
+    # same turn must not move them again.
+    assert shell.manager.on_event(launch_event(seq=8, child="kid2")) is False
+    await settle(shell)
+    assert shell.switch_project.await_count == 1, "one move per manager turn"
+    toast = shell.toasts[-1]
+    assert toast["level"] == "info" and "kid2" in toast["title"] + toast["body"]
+    assert toast["action"] == {"label": "Open",
+                               "operation": {"kind": "session_open", "workspace": "/w", "id": "kid2"}}
+    await shell.workflows.operate(toast["action"]["operation"])
+    assert shell.controller.session == "kid2"
+    # A duplicate delivery (shown stream plus Live follow) toasts once, never twice.
+    assert shell.manager.on_event(launch_event(seq=8, child="kid2")) is False
+    assert sum(1 for t in shell.toasts if t["action"] and t["action"]["operation"]["id"] == "kid2") == 1
+    # A launch of the next turn moves again.
+    shell.controller.session = MANAGER_ID
+    assert shell.manager.on_event(launch_event(seq=9, child="kid3", turn="t2")) is True
+    await settle(shell)
+    assert shell.controller.session == "kid3"
+
+
+async def test_a_blocked_show_and_launch_carry_an_open_action(shell):
+    """Plan 10 G2: a switch the guards refuse still offers a way to go there."""
+    shell.panel_title = "Something"
+    assert shell.manager.on_event(launch_event()) is False
+    toast = shell.toasts[-1]
+    assert toast["level"] == "warning" and toast["action"] == {
+        "label": "Open", "operation": {"kind": "session_open", "workspace": "/w", "id": "kid"}}
+    assert shell.manager.on_event(show_event(target="tgt")) is False
+    toast = shell.toasts[-1]
+    assert toast["level"] == "warning" and toast["action"] == {
+        "label": "Open", "operation": {"kind": "session_open", "workspace": "/w", "id": "tgt"}}

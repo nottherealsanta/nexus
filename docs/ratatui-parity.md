@@ -961,7 +961,10 @@ Switching to the manager view, or leaving the manager, never closes a tab.
 Manager launches autofocus: when the manager (in front on this client, or followed by this
 client's Live call) records a fresh `session.linked` with `kind: "managed"`, the client switches
 to the `child` session like a `manager.show` (same replay, 30 s, dedupe and modal/prompt guards;
-a toast says so when blocked). Live PTY behaviour of both is not verified.
+a toast says so when blocked). Only the first launch of a manager turn moves the user (plan 10):
+a later launch of the same turn raises an info toast `Manager launched <title>` with an `Open`
+action (`session_open`) instead of a second move, and a blocked move carries the same `Open`
+action. Tests: `tests/test_manager_show.py`. Live PTY behaviour of both is not verified.
 
 ## UI polish verification (2026-10-02)
 
@@ -1703,34 +1706,52 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
 - **Top-bar toggle, not a tab.** The Manager is never in the tab strip (`switch` adds no tab for it and
   `_tab_rows` drops it). A `◈` button (`◆` while the manager view is in front; `o`/`*` under `NEXUS_ASCII=1`) sits on the right of the top bar immediately before the Sessions `▤`
   button (drawn once the host has answered `ManagerState`, also while the manager is off, so it stays
-  discoverable). Clicking it, or `Ctrl+X A`, sends `manager_toggle`: `Manager.toggle` opens the manager view and
+  discoverable). Clicking it, or `Ctrl+X A` / `Ctrl+X .`, sends `manager_toggle`: `Manager.toggle` opens the manager screen and
   remembers `(workspace, session)` in front (`Manager.previous`); toggling again restores that session through
   `switch_project`, or the first remaining tab if it was closed meanwhile, or `/new` if there is none. While the
   manager is in front the button reads pressed (`◆`, accent, panel background; `manager.active`) and the top bar
-  shows no left title and the workspace row (path, branch, worktree) is blank. Closing never archives, deletes or cancels anything and never touches the Live
-  call (always on the manager, below). `/manager` and the pinned Sessions entry still open the view, and keep the
-  same way back. `Ctrl+X a` and `Ctrl+X Shift+A` are always the toggle, never context-dependent; the old
-  "run the newest toast's action" moved to `Ctrl+X y`. The shared `LEADER_SHORTCUTS` row (`a`, `toggle_manager`) lists it in
-  `Ctrl+X ?`, Settings > Keyboard and the desktop keymap.
+  names the screen on the left instead of showing tabs (`◆ Manager · <model>`, plus `· Live: <phase>` while a
+  call is open) with a blank second row and a blank workspace row (path, branch, worktree). Closing never archives, deletes or cancels anything. `/manager` and the pinned Sessions entry still open the view, and keep the
+  same way back. `Ctrl+X a`/`A`/`.` are always the toggle, never context-dependent; the old
+  "run the newest toast's action" moved to `Ctrl+X y`. The shared `LEADER_SHORTCUTS` rows (`a` and `.`,
+  `toggle_manager`) list it in `Ctrl+X ?` and Settings > Keyboard; the desktop binds `a` only (desktop is
+  paused, so `.` is native-only in `tests/test_desktop_keymap_parity.py`).
 - **Open.** `manager_open` / `/manager [open]` call `ManagerOpen` (idempotent), switch to the returned session
   (no tab; it records the way back for the toggle) and re-read the state. While off, nothing is created: a panel explains
   `[manager] enabled = true` and the daemon restart. Signed out of Codex still opens (the log is readable)
   and warns with the exact fix. `/manager status` lists every `ManagerState` fact.
 - **Dedicated session.** While the manager is the open session (`manager.active`) the composer shows
-  `Manager · <model>` with no `/agent`, `/model` or `/effort` hit targets; `Shift+Tab`, `Ctrl+T` and the
+  `Talk to the Manager…` with no `/agent`, `/model` or `/effort` hit targets; `Shift+Tab`, `Ctrl+T` and the
   leader `M/G/F` keys, `/model`, `/effort`, `/agent`, `/fork`, `/handoff` and `!` shell mode answer with a one-line
   reason (the host refuses them too). The title and details sidebar read `Manager`, show `Kind` and the
   pinned model, and drop the Agent/Effort rows.
+- **Manager screen (plan 10, offline-tested, not verified live).** A managed-sessions board sits
+  between the top bar and the transcript while the manager is in front (`manager_board.py` projects
+  the `manager_board` snapshot field; `rust/tui/src/render/manager.rs` draws and hit-tests it with
+  one shared layout). It joins the `ManagerState` managed ids with the session rows the client
+  already polls (`shell.sessions`, dashboard rows): one row per managed root, newest first, six rows
+  plus `+N more · /sessions`, a staleness age on the heading (`· Nm ago`, `updating…` before the
+  first join), `needs you` while a permission or question waits, collapsible by its heading
+  (`manager_board_toggle`). A row click is the ordinary `session_open` switch (`Ctrl+X .`
+  returns). No new host command: a join that ever needs more than the rows carry is a host field,
+  never a storage read. The Live pane opens expanded on this screen (`live_expanded` defaults on
+  here), so voice and text share it; the composer stays a first-class input during a call.
 - **Live.** `manager_live` / `/manager live` open the manager, then run the ordinary `/live` bridge
   (`LiveStart(manager id)`). The manager asks its **own** consent through `LiveConsent(scope="manager")`: a dialog
   `Use GPT Live with the Manager?` that carries the base notice and the explicit cross-session text (titles, status,
   final reports of other sessions, launch instructions go to OpenAI; launches need no confirmation). The base notice
   is asked first when missing; the daemon's `live_consent_required` reopens the dialog. `/live revoke manager` withdraws
   only the cross-session notice. Superseded for the call itself by the next bullet: every call asks it.
-- **Live is always on the manager (plan 02 §10, offline-tested, not verified live).** `/live`, `Ctrl+X D`,
-  `manager_live` and `/manager live` all start a call attached to the manager session
-  (`Manager.live_ready` reads `ManagerState`, `Manager.live_session` calls `ManagerOpen`) and **never switch the
-  session on screen**; `LiveStart` carries the manager id and the manager notice is always asked. While the
+- **Live always attaches to the manager and opens its screen (plan 10, offline-tested, not
+  verified live).** `/live`, `Ctrl+X D`, `manager_live` and `/manager live` all start a call attached
+  to the manager session (`Manager.live_ready` reads `ManagerState`, `Manager.live_session` calls
+  `ManagerOpen`); once the call connects the client moves to the Manager screen. This reverses the
+  plan-02 "never switch the session on screen" rule: the user asked to see the manager during a
+  call (see [decisions.md](decisions.md)). Never on a refused consent or an unavailable helper (the
+  move happens after `_connect` succeeds), and never over a modal, form, dashboard, voice recording
+  or pending prompt — then an info toast offers `Open Manager`. `Manager.previous` records the
+  session left behind, so `Ctrl+X .` returns; ending the call never switches back. `LiveStart`
+  carries the manager id and the manager notice is always asked. While the
   call is open the Live pane under the composer stays in every session (header `· in Manager`, rows from the
   manager's call). `nexus/ui/ratatui/manager_follow.py` is the panel's own subscription to the manager stream
   (read-only, replayed from seq 0, retried with backoff, ends with the call); `Live._view()` uses the shown
@@ -1740,8 +1761,8 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   `answer` action resolves it there (`resolve_permission` / `answer_question` on that session; manager
   launch, cancel, send and show raise none). The bar adds `manager: true` and `attention`
   (`approval waiting` / `question waiting`, drawn as a bold warning chip after the phase in the terminal header
-  and as an amber chip in the desktop bar). The composer is untouched: it sends to the displayed session and
-  the pane takes no keystrokes. Once the call ends the manager's prompts are visible only in the manager session.
+  and as an amber chip in the desktop bar). The composer is untouched on other sessions: it sends to the
+  displayed session and the pane takes no keystrokes. Once the call ends the manager's prompts are visible only in the manager session.
 - **Focus reporting.** Each native client reports its foreground session (`nexus/ui/ratatui/focus.py`,
   `Focus`): on start, after every `ShellActions.switch`, every 15 s while polling (so the host can expire a stale
   client) and an empty session on exit. It calls `Client.session_focus(session, client_id)` (or
@@ -1765,11 +1786,14 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   `ui/cli/approve.py` carry no special case and every tool keeps the ordinary four-way prompt. The Rust `what_rows`
   / `why` prompt fields are now unused by Python.
 - Tests: `tests/test_manager_ui.py`, `tests/test_ratatui_manager.py`, `tests/test_ratatui_pty_manager.py`
-  (real binary: pinned block, `m`/`M`, disabled state), Rust unit tests in
-  `render/sessions.rs`, `picker.rs`, `render/dialogs.rs`, `render.rs` and `bridge.rs`. Real terminals were not
+  (real binary: pinned block, `m`/`M`, disabled state; extended by plan 10 with `Ctrl+X .` open/close
+  and draft retention), Rust unit tests in
+  `render/sessions.rs`, `picker.rs`, `render/dialogs.rs`, `render/manager.rs` (rows, `+N more`,
+  narrow widths, collapsed state, hit-test parity with drawing), `render.rs` and `bridge.rs`. Real terminals were not
   inspected by eye. The top-bar toggle: `tests/test_ratatui_manager.py` (toggle, restore, fallbacks, no tab,
   shortcut wiring) and `render/chrome.rs` unit tests (position before `▤`, absent until reported, pressed
-  style). No PTY check of `Ctrl+X A` exists; not verified in a running terminal.
+  style, the manager label with the Live phase). The `Ctrl+X .` open/close PTY check needs the debug
+  binary (`docs/manager.md` "Not done"); not verified in a running terminal.
 
 ### Antigravity visibility and safe discovery
 

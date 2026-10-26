@@ -235,9 +235,13 @@ def test_ctrl_x_a_and_the_top_bar_button_are_wired_natively():
     from pathlib import Path
     from nexus.ui_support.shortcuts import KEYBOARD_SHORTCUTS, LEADER_SHORTCUTS
     assert ("a", "toggle_manager") == next((k, a) for k, a, _ in LEADER_SHORTCUTS if a == "toggle_manager")
+    assert (".", "toggle_manager") in [(k, a) for k, a, _ in LEADER_SHORTCUTS], \
+        "Ctrl+X . toggles the Manager too (plan 10); Ctrl+X A stays"
     assert any("Ctrl+X A" in line and "Manager" in line for line in KEYBOARD_SHORTCUTS)
+    assert any("Ctrl+X ." in line and "Manager" in line for line in KEYBOARD_SHORTCUTS)
     tui = Path("rust/tui/src/main.rs").read_text()
-    assert "KeyCode::Char('A')" in tui and tui.count('"manager_toggle"') >= 2  # the chord and the click
+    assert "KeyCode::Char('A')" in tui and "KeyCode::Char('.')" in tui
+    assert tui.count('"manager_toggle"') >= 2  # the chord and the click
     assert "TabHit::Manager" in Path("rust/tui/src/render/chrome.rs").read_text()
     desktop = Path("rust/desktop/src/panels.rs").read_text()
     assert '"manager-toggle"' in desktop and desktop.index('"manager-toggle"') < desktop.index('"sessions-toggle"')
@@ -331,6 +335,71 @@ def test_projection_without_a_shell_has_an_empty_manager_field():
     assert project(SimpleNamespace(view=initial_state("s")), 1)["manager"] == {}
 
 
+def test_projection_without_a_shell_has_no_manager_board():
+    assert project(SimpleNamespace(view=initial_state("s")), 1)["manager_board"] is None
+
+
+# -- the managed-sessions board (plan 10 §4.1) ----------------------------------------------
+
+
+def board_rows():
+    return [
+        {"id": "old", "title": "Old work", "status": "idle", "sub": "3 messages", "age": "1h",
+         "workspace": "/w", "updated": 100.0, "pending": {}},
+        {"id": "new", "title": "New work", "status": "working", "sub": "1 message", "age": "2m",
+         "workspace": "/w", "updated": 200.0,
+         "pending": {"request_id": "r1", "kind": "permission", "summary": "rm?", "ts": 1.0}},
+    ]
+
+
+async def board_snapshot(shell, managed):
+    shell.client.manager_state.return_value = state(managed=managed)
+    await shell.manager.refresh()
+    shell.controller.session = "nexus-manager"
+    shell.sessions = board_rows()
+    return project(shell.controller, 3, shell=shell, literal=False)["manager_board"]
+
+
+async def test_board_lists_managed_roots_newest_first_with_attention(shell):
+    board = await board_snapshot(shell, ["old", "new"])
+    assert board["total"] == 2 and board["more"] == 0 and board["missing"] == 0
+    assert board["collapsed"] is False
+    assert [row["id"] for row in board["rows"]] == ["new", "old"], "newest first"
+    new, old = board["rows"]
+    assert new["attention"] == "needs you" and old["attention"] == ""
+    assert new["operation"] == {"kind": "session_open", "workspace": "/w", "id": "new"}
+    assert board["toggle"] == {"kind": "manager_board_toggle"}
+    assert board["updated_at"] == 200.0
+
+
+async def test_board_is_bounded_and_labels_what_it_cannot_show(shell):
+    board = await board_snapshot(shell, ["old", "new", "gone", "x4", "x5", "x6", "x7"])
+    assert board["total"] == 7
+    assert [row["id"] for row in board["rows"]] == ["new", "old", "gone", "x4", "x5", "x6"]
+    assert board["more"] == 1, "+N more past the six drawn rows"
+    assert board["missing"] == 5, "managed ids with no polled row are counted"
+    assert board["rows"][2]["status"] == "idle" and board["rows"][2]["age"] == ""
+
+
+async def test_board_collapse_hides_rows_but_keeps_the_heading(shell):
+    shell.manager_board_collapsed = True
+    board = await board_snapshot(shell, ["old", "new"])
+    assert board["collapsed"] is True and board["rows"] == [] and board["more"] == 0
+    assert board["total"] == 2
+    await shell.workflows.operate({"kind": "manager_board_toggle"})
+    assert shell.manager_board_collapsed is False
+
+
+async def test_board_is_absent_off_the_manager_or_while_off(shell):
+    shell.sessions = board_rows()
+    snap = project(shell.controller, 4, shell=shell, literal=False)
+    assert snap["manager_board"] is None, "not the manager screen"
+    shell.controller.session = "nexus-manager"
+    shell.client.manager_state.return_value = state(enabled=False, session="")
+    await shell.manager.refresh()
+    assert project(shell.controller, 5, shell=shell, literal=False)["manager_board"] is None
+
+
 def test_manager_rides_the_sessions_topic_on_the_desktop_wire():
     from nexus.ui.desktop.wire import DesktopWire
 
@@ -391,12 +460,13 @@ async def test_a_daemon_refusal_on_the_manager_reopens_the_manager_notice(shell)
     assert shell.panel_title == "Use GPT Live with the Manager?" and shell.live.state == "idle"
 
 
-async def test_manager_live_attaches_to_the_manager_and_leaves_the_foreground_alone(shell):
+async def test_manager_live_attaches_to_the_manager_and_opens_its_screen(shell):
     await shell.workflows.operate({"kind": "manager_live"})
-    assert shell.controller.session == "s", "Live never moves the session on screen"
-    shell.switch.assert_not_awaited()
+    assert shell.controller.session == "nexus-manager", "a connected call opens the Manager screen"
+    assert shell.manager.previous == ("/w", "s"), "Ctrl+X . returns to the session left behind"
+    shell.switch.assert_awaited_once_with("nexus-manager")
     assert shell.live.state == "active" and FakeCall.instances[0].session == "nexus-manager"
-    assert shell.live.bar()["elsewhere"] == "Manager" and shell.live.bar()["manager"] is True
+    assert shell.live.bar()["elsewhere"] == "" and shell.live.bar()["manager"] is True
     await shell.live.shutdown()
 
 
@@ -410,9 +480,29 @@ async def test_manager_live_while_off_starts_nothing(shell):
 async def test_live_from_an_ordinary_session_is_on_the_manager_and_asks_for_its_notice(shell):
     await shell.command("/live", ())
     shell.client.live_consent.assert_awaited_once_with(None, scope="manager")
-    assert FakeCall.instances[0].session == "nexus-manager" and shell.controller.session == "s"
+    assert FakeCall.instances[0].session == "nexus-manager" and shell.controller.session == "nexus-manager"
     assert shell.live.state == "active"
     await shell.live.shutdown()
+
+
+async def test_live_blocked_by_a_panel_offers_to_open_the_manager_instead(shell):
+    shell.panel_title = "Something"
+    await shell.command("/live", ())
+    assert shell.live.state == "active" and shell.controller.session == "s", "a panel is never replaced"
+    toast = shell.toasts[-1]
+    assert toast["level"] == "info" and toast["action"] == {
+        "label": "Open Manager", "operation": {"kind": "manager_open"}}
+    shell.panel_title = ""
+    await shell.workflows.operate(toast["action"]["operation"])
+    assert shell.controller.session == "nexus-manager"
+    await shell.live.shutdown()
+
+
+async def test_live_consent_refused_or_unavailable_never_moves_the_user(shell):
+    shell.client.live_consent.return_value = p.LiveConsentResult(accepted=False, scope="manager")
+    await shell.command("/live", ())
+    assert shell.controller.session == "s" and shell.live.state == "idle"
+    shell.switch.assert_not_awaited()
 
 
 async def test_revoking_the_manager_scope_keeps_the_base_notice(shell):

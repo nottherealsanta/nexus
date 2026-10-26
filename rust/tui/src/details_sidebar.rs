@@ -128,7 +128,9 @@ fn inner_of(area: Rect) -> Option<Rect> {
 /// Index into `TABS` of the tab the snapshot shows (a stored `Files` or a `Changes` both match).
 pub fn active(s: &Snapshot) -> usize {
     TABS.iter()
-        .position(|(id, label)| *id == s.details_panel.tab || (*label == "Changes" && s.details_panel.tab == "Changes"))
+        .position(|(id, label)| {
+            *id == s.details_panel.tab || (*label == "Changes" && s.details_panel.tab == "Changes")
+        })
         .unwrap_or(0)
 }
 
@@ -210,7 +212,13 @@ pub fn geometry(area: Rect, s: &Snapshot, p: &Palette) -> Option<Geometry> {
 
 /// The first row of `rows` drawn in a body `height` rows tall: Logs follow the tail (scrolled
 /// back by `logs_scroll`), the other tabs start at `scroll`.
-pub fn first_row(s: &Snapshot, rows: usize, height: u16, scroll: usize, logs_scroll: usize) -> usize {
+pub fn first_row(
+    s: &Snapshot,
+    rows: usize,
+    height: u16,
+    scroll: usize,
+    logs_scroll: usize,
+) -> usize {
     let height = usize::from(height);
     if TABS[active(s)].0 == "Logs" {
         rows.saturating_sub(height).saturating_sub(logs_scroll)
@@ -451,7 +459,9 @@ fn mcp_rows(s: &Snapshot, p: &Palette) -> Vec<Line<'static>> {
 /// The job the Jobs tab has selected (Python owns the selection; the first row by default).
 pub fn selected_job(s: &Snapshot) -> Option<&crate::bridge::JobRow> {
     let rows = &s.details_panel.jobs.rows;
-    rows.iter().find(|row| row.selected).or_else(|| rows.first())
+    rows.iter()
+        .find(|row| row.selected)
+        .or_else(|| rows.first())
 }
 
 /// The id of the job a step of `delta` rows from the selection would select.
@@ -522,7 +532,11 @@ fn jobs_rows(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
         &format!(
             "JOBS · {} running{}",
             jobs.running,
-            if jobs.truncated { " · list clipped" } else { "" }
+            if jobs.truncated {
+                " · list clipped"
+            } else {
+                ""
+            }
         ),
     )];
     out.push(Line::default());
@@ -561,10 +575,16 @@ fn jobs_rows(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
             first.spans[0] = Span::styled(mark, Style::default().fg(p.accent));
         }
         out.extend(head);
-        let mut facts = vec![Span::raw("  "), Span::styled(row.label.clone(), Style::default().fg(tone))];
+        let mut facts = vec![
+            Span::raw("  "),
+            Span::styled(row.label.clone(), Style::default().fg(tone)),
+        ];
         for part in [row.source.as_str(), row.mode.as_str(), row.facts.as_str()] {
             if !part.is_empty() {
-                facts.push(Span::styled(format!(" · {part}"), Style::default().fg(p.quiet)));
+                facts.push(Span::styled(
+                    format!(" · {part}"),
+                    Style::default().fg(p.quiet),
+                ));
             }
         }
         out.push(Line::from(facts));
@@ -601,7 +621,11 @@ fn log_header(s: &Snapshot, p: &Palette, width: u16) -> Vec<(usize, Line<'static
                 &[Span::styled(
                     format!(
                         "{label:<10}{value}{}",
-                        if entry == 0 && label == "Session" { " ⧉" } else { "" }
+                        if entry == 0 && label == "Session" {
+                            " ⧉"
+                        } else {
+                            ""
+                        }
                     ),
                     Style::default().fg(p.muted),
                 )],
@@ -842,7 +866,10 @@ mod tests {
     }
 
     fn text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|span| span.content.as_ref()).collect()
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     fn screen(s: &Snapshot, area: Rect, scroll: usize, logs_scroll: usize) -> Vec<String> {
@@ -876,14 +903,21 @@ mod tests {
         s.details_panel.width = 0;
         assert_eq!(width_for(&s, 100), 40);
         assert_eq!(width_for(&s, 80), 40, "the drawer is 40 wide at 80 columns");
-        assert_eq!(width_for(&s, 50), 26, "and leaves the conversation 24 columns");
+        assert_eq!(
+            width_for(&s, 50),
+            26,
+            "and leaves the conversation 24 columns"
+        );
         for total in 0..=240u16 {
             for wanted in [0, 24, 40, 60] {
                 s.details_panel.width = wanted;
                 let width = width_for(&s, total);
                 assert!(width <= total, "{total}");
                 if total >= DRAWER_BELOW {
-                    assert!(total - width >= MIN_CONVERSATION, "{total}/{wanted}: {width}");
+                    assert!(
+                        total - width >= MIN_CONVERSATION,
+                        "{total}/{wanted}: {width}"
+                    );
                     assert!(width >= MIN_WIDTH);
                 } else {
                     assert!(total - width >= DRAWER_CONVERSATION.min(total), "{total}");
@@ -900,7 +934,11 @@ mod tests {
         assert_eq!(width_at(199, 200, 200), MIN_WIDTH);
         assert_eq!(width_at(0, 200, 200), MAX_WIDTH);
         assert_eq!(width_at(0, 100, 100), 100 - MIN_CONVERSATION);
-        assert_eq!(width_at(0, 80, 80), 56, "a drawer may grow while 24 columns remain");
+        assert_eq!(
+            width_at(0, 80, 80),
+            56,
+            "a drawer may grow while 24 columns remain"
+        );
         assert_eq!(width_at(0, 20, 20), MIN_WIDTH, "never below the minimum");
     }
 
@@ -911,19 +949,45 @@ mod tests {
         let out = ui.mouse(mouse(MouseEventKind::Moved, 160, 5), area, 200);
         assert!(out.consumed && ui.hot() && out.action.is_none());
         let out = ui.mouse(mouse(MouseEventKind::Moved, 170, 5), area, 200);
-        assert!(out.consumed && !ui.hot(), "leaving the divider redraws once");
+        assert!(
+            out.consumed && !ui.hot(),
+            "leaving the divider redraws once"
+        );
         let out = ui.mouse(mouse(MouseEventKind::Moved, 171, 5), area, 200);
         assert!(!out.consumed, "plain movement is left to the caller");
-        let out = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 170, 5), area, 200);
-        assert!(!out.consumed && !ui.dragging, "only the divider starts a drag");
-        ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 160, 5), area, 200);
+        let out = ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 170, 5),
+            area,
+            200,
+        );
+        assert!(
+            !out.consumed && !ui.dragging,
+            "only the divider starts a drag"
+        );
+        ui.mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 160, 5),
+            area,
+            200,
+        );
         assert!(ui.dragging);
-        let out = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 150, 5), area, 200);
+        let out = ui.mouse(
+            mouse(MouseEventKind::Drag(MouseButton::Left), 150, 5),
+            area,
+            200,
+        );
         assert_eq!((out.consumed, out.width), (true, Some(50)));
         assert!(out.action.is_none(), "nothing is persisted mid-drag");
-        let out = ui.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5), area, 200);
+        let out = ui.mouse(
+            mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5),
+            area,
+            200,
+        );
         assert_eq!(out.width, Some(MAX_WIDTH));
-        let out = ui.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 145, 5), area, 200);
+        let out = ui.mouse(
+            mouse(MouseEventKind::Up(MouseButton::Left), 145, 5),
+            area,
+            200,
+        );
         assert!(!ui.dragging);
         assert_eq!(out.width, Some(55));
         assert_eq!(
@@ -940,7 +1004,10 @@ mod tests {
             assert_eq!(cells.len(), TABS.len());
             assert_eq!(rows, cells.iter().map(|c| c.row).max().unwrap() + 1);
             for cell in &cells {
-                assert!(cell.x + cell.width <= inner, "{inner}: {cell:?} past the edge");
+                assert!(
+                    cell.x + cell.width <= inner,
+                    "{inner}: {cell:?} past the edge"
+                );
                 assert_eq!(cell.width, TABS[cell.tab].1.width() as u16 + 2, "{inner}");
             }
             for a in &cells {
@@ -975,7 +1042,11 @@ mod tests {
             assert_eq!(tab_at(area, area.x, 1), None, "the divider is not a tab");
         }
         let area = Rect::new(0, 0, 24, 24);
-        assert_eq!(tab_rects(area).iter().map(|(r, _)| r.y).max(), Some(3), "wrapped");
+        assert_eq!(
+            tab_rects(area).iter().map(|(r, _)| r.y).max(),
+            Some(3),
+            "wrapped"
+        );
     }
 
     #[test]
@@ -987,28 +1058,46 @@ mod tests {
         let session = all("Session");
         assert_eq!(session[0], "SESSION METADATA");
         assert!(session.iter().any(|row| row.contains("Title:")));
-        assert!(!session.iter().any(|row| row.contains("CHANGES") || row.contains("src/main.rs")));
+        assert!(!session
+            .iter()
+            .any(|row| row.contains("CHANGES") || row.contains("src/main.rs")));
         assert!(!session.iter().any(|row| row.contains("MCP SERVERS")));
 
         let changes = all("Files");
         assert_eq!(changes[0], "CHANGES · 2 files");
         assert!(changes.iter().any(|row| row.contains("src/main.rs")));
-        assert!(!changes.iter().any(|row| row.contains("Title:") || row.contains("MCP")));
-        assert_eq!(rows(&snapshot("Changes"), &p, 36).0.len(), changes.len(), "alias");
+        assert!(!changes
+            .iter()
+            .any(|row| row.contains("Title:") || row.contains("MCP")));
+        assert_eq!(
+            rows(&snapshot("Changes"), &p, 36).0.len(),
+            changes.len(),
+            "alias"
+        );
 
         let mcp = all("MCP");
         assert_eq!(mcp[0], "MCP SERVERS");
-        assert!(mcp.iter().any(|row| row.contains("cvc") && row.contains("4 tools")));
+        assert!(mcp
+            .iter()
+            .any(|row| row.contains("cvc") && row.contains("4 tools")));
         assert!(mcp.iter().any(|row| row == "broken"));
-        assert!(!mcp.iter().any(|row| row.contains("CHANGES") || row.contains("Title:")));
+        assert!(!mcp
+            .iter()
+            .any(|row| row.contains("CHANGES") || row.contains("Title:")));
 
         let logs = all("Logs");
         assert_eq!(logs, ["first log", "second log", "third log"]);
 
         let empty = rows(&Snapshot::default(), &p, 36);
-        assert_eq!(text(&empty.0[0]), "SESSION METADATA", "an unknown tab is Session");
+        assert_eq!(
+            text(&empty.0[0]),
+            "SESSION METADATA",
+            "an unknown tab is Session"
+        );
         let (rows_empty, hits) = changes_rows(&Snapshot::default(), &p);
-        assert!(rows_empty.iter().any(|row| text(row) == "No files changed yet."));
+        assert!(rows_empty
+            .iter()
+            .any(|row| text(row) == "No files changed yet."));
         assert!(hits.iter().all(Option::is_none));
     }
 
@@ -1038,10 +1127,14 @@ mod tests {
         assert_eq!(rows[0], "JOBS · 1 running");
         assert!(rows.iter().any(|row| row == "▸ pytest -q"), "{rows:?}");
         assert!(rows.iter().any(|row| row == "  make build"));
-        assert!(rows.iter().any(|row| row == "  running · agent · foreground · 5s"));
+        assert!(rows
+            .iter()
+            .any(|row| row == "  running · agent · foreground · 5s"));
         assert!(rows.iter().any(|row| row == "  failed · you · 2s · exit 2"));
         assert!(rows.iter().any(|row| row == "Stopped the job."));
-        assert!(!rows.iter().any(|row| row.contains('{') || row.contains("\"id\"")));
+        assert!(!rows
+            .iter()
+            .any(|row| row.contains('{') || row.contains("\"id\"")));
         assert_eq!(selected_job(&s).map(|job| job.id.as_str()), Some("j1"));
         assert_eq!(neighbour_job(&s, 1), Some("j2"));
         assert_eq!(neighbour_job(&s, -1), Some("j1"), "clamped at the top");
@@ -1051,9 +1144,13 @@ mod tests {
         let mut idle = jobs_snapshot(Value::Null);
         idle.details_panel.jobs.rows.clear();
         let rows: Vec<String> = rows_text(&idle, &p);
-        assert!(rows.iter().any(|row| row == "No shell jobs in this session."));
+        assert!(rows
+            .iter()
+            .any(|row| row == "No shell jobs in this session."));
         idle.details_panel.jobs.loaded = false;
-        assert!(rows_text(&idle, &p).iter().any(|row| row == "Loading jobs…"));
+        assert!(rows_text(&idle, &p)
+            .iter()
+            .any(|row| row == "Loading jobs…"));
     }
 
     fn rows_text(s: &Snapshot, p: &Palette) -> Vec<String> {
@@ -1071,10 +1168,13 @@ mod tests {
         assert!(rows.iter().any(|row| row == "… earlier output not shown"));
         assert_eq!(&rows[rows.len() - 3..], ["one", "", "two"]);
         assert_eq!(hint(&ok), "↑↓ scroll · Esc back · [ ] tab");
-        let gone = jobs_snapshot(json!({"id": "j1", "status": "unavailable", "message": "Log removed."}));
+        let gone =
+            jobs_snapshot(json!({"id": "j1", "status": "unavailable", "message": "Log removed."}));
         assert!(rows_text(&gone, &p).iter().any(|row| row == "Log removed."));
         let loading = jobs_snapshot(json!({"id": "j1", "status": "loading"}));
-        assert!(rows_text(&loading, &p).iter().any(|row| row == "Loading log…"));
+        assert!(rows_text(&loading, &p)
+            .iter()
+            .any(|row| row == "Loading log…"));
         assert!(hint(&jobs_snapshot(Value::Null)).contains("Enter log"));
     }
 
@@ -1101,13 +1201,28 @@ mod tests {
             for y in g.body.y..g.body.bottom() {
                 let hit = file_at(area, &s, &p, &rows, scroll, 0, g.body.x, y);
                 let row = drawn[usize::from(y)].trim_end();
-                assert_eq!(row.contains("main.rs"), hit == Some(0), "scroll {scroll} row {y}: {row}");
-                assert_eq!(row.contains("b.rs"), hit == Some(1), "scroll {scroll} row {y}: {row}");
+                assert_eq!(
+                    row.contains("main.rs"),
+                    hit == Some(0),
+                    "scroll {scroll} row {y}: {row}"
+                );
+                assert_eq!(
+                    row.contains("b.rs"),
+                    hit == Some(1),
+                    "scroll {scroll} row {y}: {row}"
+                );
             }
         }
-        assert_eq!(file_at(area, &s, &p, &rows, 0, 0, area.x, g.body.y), None, "the divider");
+        assert_eq!(
+            file_at(area, &s, &p, &rows, 0, 0, area.x, g.body.y),
+            None,
+            "the divider"
+        );
         let other = snapshot("Session");
-        assert_eq!(file_at(area, &other, &p, &rows, 0, 0, g.body.x, g.body.y + 1), None);
+        assert_eq!(
+            file_at(area, &other, &p, &rows, 0, 0, g.body.x, g.body.y + 1),
+            None
+        );
     }
 
     #[test]
@@ -1117,12 +1232,22 @@ mod tests {
         for width in [24u16, 40] {
             let area = Rect::new(20, 0, width, 20);
             let g = geometry(area, &s, &p).unwrap();
-            assert_eq!(g.header.y, g.rule.y + 1, "the header sits right under the rule");
+            assert_eq!(
+                g.header.y,
+                g.rule.y + 1,
+                "the header sits right under the rule"
+            );
             let drawn = screen(&s, area, 0, 0);
             let session_row = &drawn[usize::from(g.header.y)];
-            assert!(session_row.contains("Session") && session_row.contains("⧉"), "{session_row}");
+            assert!(
+                session_row.contains("Session") && session_row.contains("⧉"),
+                "{session_row}"
+            );
             assert!(copy_id_at(area, &s, &p, g.header.x, g.header.y));
-            assert!(!copy_id_at(area, &s, &p, g.header.x, g.header.y + 1), "Daemon pid is not the ID");
+            assert!(
+                !copy_id_at(area, &s, &p, g.header.x, g.header.y + 1),
+                "Daemon pid is not the ID"
+            );
             assert!(!copy_id_at(area, &s, &p, g.header.x, g.rule.y));
             let tail: Vec<&String> = drawn[usize::from(g.body.y)..usize::from(g.body.bottom())]
                 .iter()
@@ -1130,13 +1255,23 @@ mod tests {
                 .collect();
             assert_eq!(tail.len(), 3, "the tail shows every line when it fits");
         }
-        assert!(!copy_id_at(Rect::new(0, 0, 40, 20), &snapshot("Session"), &p, 1, 4));
+        assert!(!copy_id_at(
+            Rect::new(0, 0, 40, 20),
+            &snapshot("Session"),
+            &p,
+            1,
+            4
+        ));
         // Scrolling back reveals earlier lines; the tail follows by default.
         let rows = vec![Line::raw("a"); 30];
         assert_eq!(first_row(&s, rows.len(), 10, 0, 0), 20);
         assert_eq!(first_row(&s, rows.len(), 10, 0, 7), 13);
         assert_eq!(first_row(&s, rows.len(), 10, 0, 99), 0);
-        assert_eq!(first_row(&snapshot("Session"), 30, 10, 99, 0), 20, "clamped");
+        assert_eq!(
+            first_row(&snapshot("Session"), 30, 10, 99, 0),
+            20,
+            "clamped"
+        );
     }
 
     fn open_left(width: u16) -> Snapshot {
@@ -1160,10 +1295,16 @@ mod tests {
                     if r.details.width > 0 {
                         assert_eq!(r.details.right(), total, "{total}: right edge");
                         assert_eq!(r.details.width, width_for(&s, total), "{total}");
-                        assert!(r.transcript.right() <= r.details.x, "{total}: under the sidebar");
+                        assert!(
+                            r.transcript.right() <= r.details.x,
+                            "{total}: under the sidebar"
+                        );
                     }
                     if r.sidebar.width > 0 {
-                        assert_eq!(r.sidebar, crate::sidebar::selector_area(Rect::new(0, 0, total, 40)));
+                        assert_eq!(
+                            r.sidebar,
+                            crate::sidebar::selector_area(Rect::new(0, 0, total, 40))
+                        );
                     }
                     assert_eq!(
                         crate::render::sidebar_available(Rect::new(0, 0, total, 40), &s),
@@ -1179,13 +1320,20 @@ mod tests {
         assert_eq!((r.sidebar.width, r.details.width), (90, 52));
         assert_eq!(r.transcript.width, 200 - 52);
         let small = crate::render::regions(Rect::new(0, 0, 80, 24), &s, 8, false);
-        assert_eq!(small.sidebar.width, 76, "the selector remains an overlay in drawer layout");
+        assert_eq!(
+            small.sidebar.width, 76,
+            "the selector remains an overlay in drawer layout"
+        );
         // Below DRAWER_BELOW the requested 52 is honoured, leaving DRAWER_CONVERSATION or more.
         assert_eq!((small.details.width, small.transcript.width), (52, 28));
         assert!(small.transcript.width >= DRAWER_CONVERSATION);
         s.details_panel.width = 60;
         let tight = crate::render::regions(Rect::new(0, 0, 80, 24), &s, 8, false);
-        assert_eq!((tight.details.width, tight.transcript.width), (56, 24), "bounded by the drawer minimum");
+        assert_eq!(
+            (tight.details.width, tight.transcript.width),
+            (56, 24),
+            "bounded by the drawer minimum"
+        );
     }
 
     #[test]
@@ -1193,7 +1341,10 @@ mod tests {
         let mut s = snapshot("Files");
         s.details_panel.width = 56;
         let r = crate::render::regions(Rect::new(0, 0, 160, 40), &s, 8, false);
-        assert_eq!((r.details.x, r.details.width, r.transcript.width), (104, 56, 104));
+        assert_eq!(
+            (r.details.x, r.details.width, r.transcript.width),
+            (104, 56, 104)
+        );
         let p = Palette::new(false);
         let g = geometry(r.details, &s, &p).unwrap();
         assert!(g.body.x > r.details.x && g.body.right() < r.details.right());

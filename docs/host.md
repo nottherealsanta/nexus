@@ -7,7 +7,10 @@ One socket per Nexus home and Python install serves up to 32 project runtimes:
 is an absolute launch path; its bounded environment (1,024 variables / 256 KiB)
 is captured once per project and is never returned or logged. `Welcome.focus`
 identifies the resolved project. Administrative connections use `client=control`
-and do not load a runtime.
+and do not load a runtime at handshake. An explicit `ProjectReload` loads a fresh
+runtime without retaining a control-connection reference, so subsequent unload
+does not race administrative connection teardown. Other viewers still prevent
+non-forced unload; a successful unload clears the connection's old focus.
 
 `ProjectFocus` changes the connection default without cancelling subscriptions.
 Session commands route to the owning project, including drafts that are still

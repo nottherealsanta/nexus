@@ -619,7 +619,7 @@ handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 `render.rs` (palette, layout regions, the draw pass), `render/toasts.rs` (toasts: ingest by id, timers paused on hover, hit targets, drawn by the `rust/widgets` kit), `render/notifications.rs` (client-side toast history of 50, the top-bar counter text and the notifications drawer), `panic_log.rs` (panic hook and bounded `~/.nexus/tui-panic.log` crash log), `splash.rs` (launch splash state machine: converging wordmark, milestone bar, flash, curtain), `render/components.rs`
 (shared button/toggle/section/selectable styles and bounded local hover state;
 composer controls are the first adopters), `render/chrome.rs` (top bar,
-tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations; the closed-header `total` row), `render/dialogs.rs` (dialog frames, toned
+tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations; the closed-header `total` row), `render/manager.rs` (the Manager screen's managed-sessions board: one shared layout for drawing and hit-testing, `+N more` overflow, ASCII twins; plan 10 §4.1), `render/dialogs.rs` (dialog frames, toned
 panel text, Settings area list, prompt and logs regions, completion popup),
 `settings_page/` (one-page Settings: `model.rs` parses the host's typed page, `input.rs` focus/keys/mouse, `draw.rs` lays the blocks out and `grok.rs` draws them in the Grok row grammar, `root.rs` is the Grok-style root list with search and drill rows), `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `rust/widgets` is the shared component kit (see its crate docs). `main()` is still one long
 loop over local state; splitting it further needs a state struct and is not done.
@@ -649,6 +649,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
 | `focus.py` | Reports foreground session changes through SessionFocus, including initial attachment and reconnects |
 | `manager_follow.py` | Independent manager event subscription for Live captions and cross-session approval/question attention |
+| `manager_board.py` | The Manager screen's managed-sessions board (plan 10): `ManagerState` managed ids joined with polled session rows, newest first, bounded to six rows plus `+N more`; the `manager_board` snapshot field (plan 10 §4.1) |
 | `live.py` | Native GPT Live call bridge: `/live` commands, consent dialog, helper lifecycle through `ui_support/live_helper.py`, call-bar state, error panels |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |
 | `run.py` | Native launch seam and binary discovery |

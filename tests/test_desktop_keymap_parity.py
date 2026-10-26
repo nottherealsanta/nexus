@@ -50,6 +50,9 @@ UNNAMED = {
 KNOWN_GAPS = {
     "enter", "ctrl+enter", "alt+enter", "shift+enter",  # editor-level (ctrl/alt+enter bound in "Editor")
 }
+#: Leader rows the paused desktop client does not route (plan 10): the native
+#: Ratatui client binds them, the parity test skips them. Shrink, never grow.
+NATIVE_ONLY_LEADER = {"."}
 
 
 def _rows():
@@ -85,6 +88,8 @@ def test_escape_twice_stops_the_turn_in_the_desktop_shell():
 
 def test_leader_shortcuts_have_matching_desktop_routes():
     for letter, action_id, _ in LEADER_SHORTCUTS:
+        if letter in NATIVE_ONLY_LEADER:
+            continue  # native-only alias; the desktop binds the primary key
         if action_id in KNOWN_GAPS:
             continue
         assert ACTIONS[action_id] in _global(f"ctrl-x {letter}"), f"ctrl+x {letter} -> {action_id}"

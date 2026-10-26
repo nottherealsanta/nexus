@@ -198,8 +198,10 @@ class Live:
     async def start(self, *, new_conversation: bool = False, consented: bool = False) -> None:
         """Start a call. Live always attaches to the manager, never to the session on screen.
 
-        The foreground session stays where it is: the call, its pane and the manager's approvals
-        follow the user across sessions (plan 02 section 10).
+        Once the call connects, the foreground moves to the manager screen (plan 10): the call,
+        its pane and the manager's approvals share one screen with the composer, which stays
+        usable during the call. A modal, form, recording or pending prompt is never replaced;
+        a toast offers to open the manager instead. Ending the call never switches back.
         """
         if self.state != "idle":
             self.shell.notice = f"A Live call is {self.state} · /live stop ends it"
@@ -266,6 +268,24 @@ class Live:
         play_cue("start")
         self.shell.notice = "Live call connected · speak naturally, /live stop to hang up"
         self.watch = asyncio.create_task(self._watch(self.call))
+        await self._open_manager()
+
+    async def _open_manager(self) -> None:
+        """Move to the manager screen now the call is up (plan 10 §4.3).
+
+        Never steals a modal, form, dashboard, recording or pending prompt: then a toast
+        offers to open the manager instead. Consent refusals and unavailable helpers never
+        reach here (``start`` returns before ``_connect``), so they never move the user.
+        """
+        manager = self.shell.manager
+        if manager.is_active():
+            return
+        blocked = manager._blocked()
+        if blocked:
+            self.shell.toast(f"Live call connected · the Manager screen is withheld: {blocked}", "info",
+                             action={"label": "Open Manager", "operation": {"kind": "manager_open"}})
+            return
+        await manager.open()
 
     async def stop(self) -> None:
         call = self.call

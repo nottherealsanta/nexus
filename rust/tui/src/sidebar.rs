@@ -86,8 +86,16 @@ pub fn selector_area(area: Rect) -> Rect {
 
 /// A browser view of the shared host payload without changing selector state.
 pub fn details_snapshot(s: &Snapshot) -> Snapshot {
-    let mut view = Snapshot { sidebar: s.sidebar.clone(), ..Snapshot::default() };
-    view.sidebar.tab = if s.details_panel.tab == "Browser" { "Files" } else { "Git" }.into();
+    let mut view = Snapshot {
+        sidebar: s.sidebar.clone(),
+        ..Snapshot::default()
+    };
+    view.sidebar.tab = if s.details_panel.tab == "Browser" {
+        "Files"
+    } else {
+        "Git"
+    }
+    .into();
     view
 }
 
@@ -328,7 +336,12 @@ fn session_rank(row: &Value) -> u64 {
 fn move_selection(sel: &mut usize, len: usize, code: KeyCode) -> bool {
     let nav = matches!(
         code,
-        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+        KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Home
+            | KeyCode::End
     );
     if !nav || len == 0 {
         return nav;
@@ -418,9 +431,9 @@ impl SidebarUi {
         let tab = s.sidebar.tab.as_str();
         let editing = (tab == "Projects" && self.project_edit.is_some())
             || tab == "Sessions"
-            && (self.dash.searching
-                || self.dash.rename.is_some()
-                || self.dash.confirm_archive.is_some());
+                && (self.dash.searching
+                    || self.dash.rename.is_some()
+                    || self.dash.confirm_archive.is_some());
         if !editing {
             match key.code {
                 KeyCode::Tab => {
@@ -587,7 +600,7 @@ impl SidebarUi {
                     }
                 }
                 self.activate_picker(s)
-            },
+            }
             KeyCode::Left | KeyCode::Backspace => {
                 let parent = s
                     .sidebar
@@ -803,7 +816,8 @@ impl SidebarUi {
                 self.proj_sel = Self::scrolled(self.proj_sel, len, down);
             }
             "Files" => {
-                self.file_sel = Self::scrolled(self.file_sel, rows_of(&s.sidebar.files).len(), down);
+                self.file_sel =
+                    Self::scrolled(self.file_sel, rows_of(&s.sidebar.files).len(), down);
             }
             "Git" => {
                 self.git_top = if down {
@@ -920,7 +934,9 @@ impl SidebarUi {
             "Projects" if !flag(&s.sidebar.projects, "browser_open") => {
                 "↑↓ move · Enter open · a Add project · Esc close"
             }
-            "Projects" => "/ edit path · Enter open · → drill in · ← parent · Open folder starts session",
+            "Projects" => {
+                "/ edit path · Enter open · → drill in · ← parent · Open folder starts session"
+            }
             "Files" => "↑↓ move · Enter open/view · ← up · r refresh · Esc back",
             "Git" => "↑↓ scroll · r refresh · Tab tab · Esc back",
             _ => "↑↓ move · Enter open · / filter · d archive · Esc back",
@@ -1328,7 +1344,11 @@ impl SidebarUi {
         let glyphs = nexus_widgets::Glyphs::from_env();
         for (key, members) in &groups {
             let collapsed = dash.is_collapsed(key);
-            let chevron = if collapsed { glyphs.closed } else { glyphs.open };
+            let chevron = if collapsed {
+                glyphs.closed
+            } else {
+                glyphs.open
+            };
             lines.push((
                 Line::from(vec![
                     Span::styled(format!("{chevron} {key}"), muted),
@@ -1462,7 +1482,11 @@ impl SidebarUi {
             })
             .unwrap_or(0);
         let mut selected_end = selected_line;
-        if lines.get(selected_line).and_then(|(_, index, _)| *index).is_some() {
+        if lines
+            .get(selected_line)
+            .and_then(|(_, index, _)| *index)
+            .is_some()
+        {
             while selected_end + 1 < lines.len()
                 && lines[selected_end + 1].1 == lines[selected_line].1
             {
@@ -1564,11 +1588,23 @@ mod tests {
         let mut s = open("Sessions", 34);
         assert_eq!(width_for(&s, 200), 34);
         s.sidebar.width = 5;
-        assert_eq!(width_for(&s, 200), MIN_WIDTH, "a stored width below the minimum is raised");
+        assert_eq!(
+            width_for(&s, 200),
+            MIN_WIDTH,
+            "a stored width below the minimum is raised"
+        );
         s.sidebar.width = 500;
-        assert_eq!(width_for(&s, 200), MAX_WIDTH, "and one above the maximum is lowered");
+        assert_eq!(
+            width_for(&s, 200),
+            MAX_WIDTH,
+            "and one above the maximum is lowered"
+        );
         s.sidebar.width = 0;
-        assert_eq!(width_for(&s, 200), DEFAULT_WIDTH, "no stored width uses the default");
+        assert_eq!(
+            width_for(&s, 200),
+            DEFAULT_WIDTH,
+            "no stored width uses the default"
+        );
         for available in 0..=200u16 {
             s.sidebar.width = 60;
             let width = width_for(&s, available);
@@ -1578,7 +1614,11 @@ mod tests {
             );
             assert!(width == 0 || width >= MIN_WIDTH);
         }
-        assert_eq!(width_for(&s, MIN_CONVERSATION + MIN_WIDTH - 1), 0, "no room: hidden");
+        assert_eq!(
+            width_for(&s, MIN_CONVERSATION + MIN_WIDTH - 1),
+            0,
+            "no room: hidden"
+        );
         assert_eq!(width_for(&s, MIN_CONVERSATION + MIN_WIDTH), MIN_WIDTH);
         s.sidebar.open = false;
         assert_eq!(width_for(&s, 200), 0, "closed takes no columns");
@@ -1587,7 +1627,11 @@ mod tests {
     #[test]
     fn dragging_is_bounded_by_the_room_left_for_the_conversation() {
         let area = Rect::new(0, 0, 34, 30);
-        assert_eq!(width_at(33, area, 200), 34, "the divider column is the last one");
+        assert_eq!(
+            width_at(33, area, 200),
+            34,
+            "the divider column is the last one"
+        );
         assert_eq!(width_at(0, area, 200), MIN_WIDTH);
         assert_eq!(width_at(150, area, 200), MAX_WIDTH);
         assert_eq!(width_at(150, area, 100), 100 - MIN_CONVERSATION);
@@ -1608,14 +1652,22 @@ mod tests {
             Some(act("add_project")),
             "the selected Add project row must activate with Enter"
         );
-        let y = ui.line_items.iter().position(|item| *item == Some(0)).unwrap();
+        let y = ui
+            .line_items
+            .iter()
+            .position(|item| *item == Some(0))
+            .unwrap();
         assert_eq!(
-            ui.click(MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Left),
-                column: ui.list.x,
-                row: ui.list.y + y as u16,
-                modifiers: KeyModifiers::NONE,
-            }, &s).action,
+            ui.click(
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: ui.list.x,
+                    row: ui.list.y + y as u16,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &s
+            )
+            .action,
             Some(act("add_project")),
             "mouse and keyboard use the same Add action"
         );
@@ -1631,7 +1683,10 @@ mod tests {
         let s = open("Sessions", 34);
         let mut ui = SidebarUi::default();
         ui.session_operation(json!({"kind":"session_open","id":"a","workspace":"/repo"}));
-        assert!(!ui.is_open(&s), "opening a session hides the sidebar locally");
+        assert!(
+            !ui.is_open(&s),
+            "opening a session hides the sidebar locally"
+        );
         ui.take_host_focus(&s, &s);
         assert!(!ui.is_open(&s), "an unchanged snapshot keeps it hidden");
         let mut next = open("Sessions", 34);
@@ -1654,7 +1709,10 @@ mod tests {
         ui.key(key(KeyCode::Left), &s, true);
         ui.key(key(KeyCode::Backspace), &s, true);
         let out = ui.key(key(KeyCode::Enter), &s, true);
-        assert_eq!(out.action, Some(json!({"type":"sidebar","op":"project_path","path":"/tmp/reo"})));
+        assert_eq!(
+            out.action,
+            Some(json!({"type":"sidebar","op":"project_path","path":"/tmp/reo"}))
+        );
         assert!(ui.paste("must not reach composer", &s));
         assert!(ui.project_edit.is_none());
         ui.focus = false;
@@ -1680,8 +1738,15 @@ mod tests {
             assert_eq!(cells.len(), TABS.len());
             assert_eq!(rows, cells.iter().map(|c| c.row).max().unwrap() + 1);
             for cell in &cells {
-                assert!(cell.x + cell.width <= inner, "{inner}: {cell:?} past the edge");
-                assert_eq!(cell.width, TABS[cell.tab].width() as u16 + 2, "{inner}: label clipped");
+                assert!(
+                    cell.x + cell.width <= inner,
+                    "{inner}: {cell:?} past the edge"
+                );
+                assert_eq!(
+                    cell.width,
+                    TABS[cell.tab].width() as u16 + 2,
+                    "{inner}: label clipped"
+                );
             }
             for a in &cells {
                 for b in &cells {
@@ -1705,8 +1770,15 @@ mod tests {
             let rect = ui.tab_hits[cell.tab].0;
             assert_eq!((rect.x, rect.width), (2 + cell.x, cell.width));
             assert_eq!(usize::from(rect.y), 2 + usize::from(cell.row));
-            let row: Vec<char> = text.lines().nth(usize::from(rect.y)).unwrap().chars().collect();
-            let drawn: String = row[usize::from(rect.x)..usize::from(rect.right())].iter().collect();
+            let row: Vec<char> = text
+                .lines()
+                .nth(usize::from(rect.y))
+                .unwrap()
+                .chars()
+                .collect();
+            let drawn: String = row[usize::from(rect.x)..usize::from(rect.right())]
+                .iter()
+                .collect();
             assert_eq!(drawn, format!(" {} ", TABS[cell.tab]));
         }
     }
@@ -1722,7 +1794,10 @@ mod tests {
         let mut asked = open("Sessions", 34);
         asked.sidebar.focus = 2;
         ui.take_host_focus(&opened, &asked);
-        assert!(ui.focus, "an explicit request to the open sidebar still focuses it");
+        assert!(
+            ui.focus,
+            "an explicit request to the open sidebar still focuses it"
+        );
     }
 
     #[test]
@@ -1819,7 +1894,10 @@ mod tests {
         let s = open("Projects", 34);
         let mut ui = SidebarUi::default();
         ui.focus = true;
-        assert_eq!(ui.key(key(KeyCode::Tab), &s, true).action, Some(tab_message("Sessions")));
+        assert_eq!(
+            ui.key(key(KeyCode::Tab), &s, true).action,
+            Some(tab_message("Sessions"))
+        );
         assert_eq!(
             ui.key(key(KeyCode::BackTab), &s, true).action,
             Some(tab_message("Sessions")),
@@ -1860,7 +1938,9 @@ mod tests {
         let mut ui = SidebarUi::default();
         ui.focus = true;
         let text = screen(&mut ui, &s, 34, 24);
-        assert!(text.contains("Alpha") && text.contains("Beta") && text.contains("Search sessions"));
+        assert!(
+            text.contains("Alpha") && text.contains("Beta") && text.contains("Search sessions")
+        );
         let out = ui.key(key(KeyCode::Char('/')), &s, true);
         assert!(out.consumed && ui.dash.searching, "/ starts the filter");
         let out = ui.key(key(KeyCode::Char('b')), &s, true);
@@ -1899,7 +1979,12 @@ mod tests {
         assert!(!text.contains("+ New Agent"));
         assert_eq!(ui.dash.new_hit, Rect::default());
         let blank_y = ui.dash.search_hit.y + 1;
-        assert!(text.lines().nth(usize::from(blank_y)).unwrap().trim().is_empty());
+        assert!(text
+            .lines()
+            .nth(usize::from(blank_y))
+            .unwrap()
+            .trim()
+            .is_empty());
         assert_eq!(ui.dash.list_area.y, blank_y + 1);
         let blank = ui.mouse(
             mouse(
@@ -1935,7 +2020,10 @@ mod tests {
         assert!(ui.project_edit.is_some());
         assert!(ui.key(key(KeyCode::Esc), &s, true).action.is_none());
         assert!(ui.project_edit.is_none());
-        assert_eq!(ui.key(key(KeyCode::Esc), &s, true).action, Some(act("cancel_project")));
+        assert_eq!(
+            ui.key(key(KeyCode::Esc), &s, true).action,
+            Some(act("cancel_project"))
+        );
     }
 
     #[test]
@@ -2005,7 +2093,10 @@ mod tests {
             "Enter on a file asks the host for its preview, never a folder change"
         );
         ui.key(key(KeyCode::Down), &s, true);
-        assert!(ui.key(key(KeyCode::Enter), &s, true).action.is_none(), "links are never followed");
+        assert!(
+            ui.key(key(KeyCode::Enter), &s, true).action.is_none(),
+            "links are never followed"
+        );
         assert_eq!(
             ui.key(key(KeyCode::Backspace), &s, true).action,
             Some(json!({"type":"sidebar","op":"dir","path":""})),
@@ -2039,7 +2130,10 @@ mod tests {
         let mut ui = SidebarUi::default();
         screen(&mut ui, &s, 34, 24);
         let first = click_at(&mut ui, &s, 1);
-        assert!(first.consumed && first.action.is_none(), "one click selects only");
+        assert!(
+            first.consumed && first.action.is_none(),
+            "one click selects only"
+        );
         assert_eq!(ui.file_sel, 1);
         // A different file within the interval is a new first click, not a double-click.
         assert!(click_at(&mut ui, &s, 2).action.is_none());
@@ -2049,14 +2143,20 @@ mod tests {
             second.action,
             Some(json!({"type":"sidebar","op":"file","path":"src/b.rs"}))
         );
-        assert!(click_at(&mut ui, &s, 2).action.is_none(), "the pair is consumed");
+        assert!(
+            click_at(&mut ui, &s, 2).action.is_none(),
+            "the pair is consumed"
+        );
         // Folders keep opening on a single click and reset the pair; links do nothing.
         assert_eq!(
             click_at(&mut ui, &s, 0).action,
             Some(json!({"type":"sidebar","op":"dir","path":"src/core"}))
         );
         assert!(click_at(&mut ui, &s, 3).action.is_none());
-        assert!(click_at(&mut ui, &s, 3).action.is_none(), "links never preview");
+        assert!(
+            click_at(&mut ui, &s, 3).action.is_none(),
+            "links never preview"
+        );
     }
 
     #[test]
@@ -2068,7 +2168,10 @@ mod tests {
         let late = start + DOUBLE_CLICK + Duration::from_millis(1);
         assert!(ui.click_file_row(&row, late).action.is_none(), "too slow");
         let quick = late + Duration::from_millis(100);
-        assert!(ui.click_file_row(&row, quick).action.is_some(), "the late click started a new pair");
+        assert!(
+            ui.click_file_row(&row, quick).action.is_some(),
+            "the late click started a new pair"
+        );
     }
 
     #[test]
@@ -2083,10 +2186,16 @@ mod tests {
         ui.focus = true;
         let text = screen(&mut ui, &s, 34, 24);
         for want in ["AGENTS.md", "README.md", "src/"] {
-            assert!(text.contains(want), "{want:?} missing in files list:\n{text}");
+            assert!(
+                text.contains(want),
+                "{want:?} missing in files list:\n{text}"
+            );
         }
         for unwanted in ["10.5K", "1K"] {
-            assert!(!text.contains(unwanted), "{unwanted:?} size should not be rendered:\n{text}");
+            assert!(
+                !text.contains(unwanted),
+                "{unwanted:?} size should not be rendered:\n{text}"
+            );
         }
     }
 
@@ -2094,13 +2203,13 @@ mod tests {
     fn git_status_is_labelled_and_read_only() {
         let mut s = open("Git", 40);
         s.sidebar.git = json!({"loaded":true,"available":true,"summary":"main → origin/main · ahead 1 · behind 0",
-            "rows":[
-                {"kind":"heading","text":"Staged changes · 1"},
-                {"kind":"entry","code":"A","label":"added","path":"new.rs"},
-                {"kind":"heading","text":"Untracked · 1"},
-                {"kind":"entry","code":"?","label":"untracked","path":"notes.txt"},
-                {"kind":"entry","code":"M","label":"modified","path":"docs/config.md","name":"config.md"},
-            ]});
+        "rows":[
+            {"kind":"heading","text":"Staged changes · 1"},
+            {"kind":"entry","code":"A","label":"added","path":"new.rs"},
+            {"kind":"heading","text":"Untracked · 1"},
+            {"kind":"entry","code":"?","label":"untracked","path":"notes.txt"},
+            {"kind":"entry","code":"M","label":"modified","path":"docs/config.md","name":"config.md"},
+        ]});
         let mut ui = SidebarUi::default();
         ui.focus = true;
         let text = screen(&mut ui, &s, 44, 24);
@@ -2115,7 +2224,10 @@ mod tests {
         ] {
             assert!(text.contains(want), "{want:?} missing:\n{text}");
         }
-        assert!(!text.contains("docs/config.md"), "a row shows the base name only:\n{text}");
+        assert!(
+            !text.contains("docs/config.md"),
+            "a row shows the base name only:\n{text}"
+        );
         // Every key either scrolls, refreshes or is ignored: nothing can change the repository.
         for code in [
             KeyCode::Enter,
@@ -2138,7 +2250,8 @@ mod tests {
             for tab in TABS {
                 let mut s = s.clone_for_test();
                 s.sidebar.tab = tab.into();
-                let mut terminal = Terminal::new(TestBackend::new(width.max(1), height.max(1))).unwrap();
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width.max(1), height.max(1))).unwrap();
                 terminal
                     .draw(|frame| {
                         let area = frame.area();
