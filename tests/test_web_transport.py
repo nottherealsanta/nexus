@@ -255,26 +255,18 @@ async def test_browser_ticket_cookie_csrf_and_snapshot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_static_app_and_deep_link_are_same_origin_hardened():
+async def test_old_browser_urls_redirect_to_nsh_app_and_ticket_flow():
     server = await HTTPSSEServer(_Facade()).start()
     try:
-        status, headers, body = await _request(server.port, "GET", "/s/session-1")
-        assert status == 200
-        assert b"Nexus" in body
-        assert "default-src 'self'" in headers["content-security-policy"]
-        assert headers["x-content-type-options"] == "nosniff"
-        assert "frame-ancestors 'none'" in headers["content-security-policy"]
-        assert headers["permissions-policy"] == "microphone=(self)"
-        # A subagent page deep link (the agent id is percent-encoded) serves the same app.
-        status, _, body = await _request(server.port, "GET", "/s/session-1/a/session-1%2Fsub%2F1")
-        assert status == 200 and b"Nexus" in body
+        for path in ("/", "/s/session-1", "/s/session-1/a/session-1%2Fsub%2F1"):
+            status, headers, _ = await _request(server.port, "GET", path)
+            assert status == 303 and headers["location"] == "/app/", path
+            assert headers["x-content-type-options"] == "nosniff"
         status, _, _ = await _request(server.port, "GET", "/s/session-1/a/../../etc/passwd")
-        assert status != 200  # not an app route: falls through to the authenticated API
-        status, headers, body = await _request(server.port, "GET", "/styles/tokens.css")
-        assert status == 200 and b"--" in body
-        assert headers["cache-control"] == "no-cache"
-        status, _, _ = await _request(server.port, "GET", "/styles/../../etc/passwd")
-        assert status == 404
+        assert status != 303  # not an app route: falls through to the authenticated API
+        for path in ("/styles/tokens.css", "/js/app.js", "/assets/x.css"):
+            status, _, _ = await _request(server.port, "GET", path)
+            assert status != 200  # old static serving is gone
         ticket = server._web.issue_ticket()
         origin = f"http://127.0.0.1:{server.port}"
         status, headers, payload = await _request(

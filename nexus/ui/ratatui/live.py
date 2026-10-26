@@ -52,7 +52,7 @@ class Live:
         self.watch_interval = 0.5
         self.status_interval = 5.0
         # The native terminal draws the open call in a pane above the composer instead of
-        # a timeline card; the desktop client keeps the card (prototype.run sets this).
+        # a timeline card.
         self.pane = True
         # The panel subscribes to the manager session itself, so its rows and approvals reach the
         # user wherever they are (a hidden manager view would deadlock or auto-deny an approval).

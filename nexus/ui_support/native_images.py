@@ -1,4 +1,4 @@
-"""Bounded desktop image presentation from host data (docs/desktop.md).
+"""Bounded native image presentation from host data.
 
 Never reads paths or fetches remote URLs. Full images remain daemon-owned;
 inline previews share a four-MiB encoded budget and eight-image count cap.

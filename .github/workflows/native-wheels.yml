@@ -25,6 +25,15 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: '3.13'
+      # The NSH browser client (nexus/ui/nsh/, git-ignored) must exist before the wheel is
+      # built so setuptools packages it. Not verified locally; see docs/nsh-client.md.
+      - name: Build the NSH web client bundle
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | NSH_VERSION=v0.2.0 sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          rustup target add wasm32-unknown-unknown
+          scripts/nsh-app.sh package web
       - name: Pin Rust 1.97 on macOS (Linux installs it inside the build container)
         if: runner.os == 'macOS'
         run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
@@ -60,6 +69,7 @@ jobs:
           CIBW_TEST_COMMAND: >-
             nexus-ratatui --version &&
             nexus-live --version &&
+            python -c "from nexus.host.web import NSH_ROOT; assert (NSH_ROOT / 'index.html').is_file(), 'wheel lacks the NSH client'" &&
             python -c "import sys; import nexus.ui.ratatui.prototype as p, nexus.ui.ratatui.run as r; assert 'textual' not in sys.modules, 'native import pulled in textual'; print(r.binary_path())" &&
             python -c "from nexus.ui_support import live_helper; import websockets; print(live_helper.binary_path())"
       - uses: actions/upload-artifact@v4

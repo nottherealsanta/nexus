@@ -94,15 +94,16 @@ def test_built_wheel_contains_catalogue_and_notice(tmp_path: Path):
     assert b'"logo' not in payload.lower()
 
 
-def test_built_wheel_ships_web_and_agent_assets(tmp_path: Path):
-    """A one-line install must not lose the browser client or agents."""
+def test_built_wheel_ships_nsh_and_agent_assets(tmp_path: Path):
+    """A one-line install must not lose the NSH client (when built) or agents."""
     wheel = _build_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
     assert "nexus/host_support/searchserver/compose.yaml" in names
     assert "nexus/host_support/searchserver/searxng/settings.yml" in names
-    assert "nexus/ui/web/index.html" in names
-    assert "nexus/ui/web/js/app.js" in names
+    if (Path(__file__).resolve().parents[1] / "nexus" / "ui" / "nsh" / "index.html").is_file():
+        assert "nexus/ui/nsh/index.html" in names
+    assert not any(n.startswith("nexus/ui/web/") for n in names)
     assert not any(n.startswith("nexus/ui/tui/") for n in names)
     assert any(n.startswith("nexus/agents/data/") and n.endswith(".md") for n in names)
 

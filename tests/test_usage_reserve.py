@@ -2,8 +2,7 @@
 
 Reserve is the share of a weekly or monthly window already elapsed minus the
 share used (half the month gone with 20% used leaves 30% in reserve). The host
-reports ``period_seconds`` and ``resets_at``; ``ui_support/usage.py`` words it
-and ``js/usage.js`` is a port of the same arithmetic.
+reports ``period_seconds`` and ``resets_at``; ``ui_support/usage.py`` words it.
 """
 from __future__ import annotations
 

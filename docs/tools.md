@@ -634,7 +634,7 @@ concurrent runs per session. Stop (`SessionCancel`) kills running `!` commands.
    in `builtin/__init__.py` and the right bundle in `bundles.py`.
 2. Choose `mutates`/`concurrency` honestly (mutating ⇒ exclusive and gated) and a
    `permission_key` that canonicalises paths; bound every size and time.
-3. Present it: `ui_support/tool_details.py` and `ui/web/js/tool-details.js` must
+3. Present it: `ui_support/tool_details.py` must
    show every parameter and output as labelled rows ([surfaces.md](surfaces.md)).
 4. Tests next to peers: `tests/test_builtin_*.py`, `test_tool*.py`.
 
@@ -836,8 +836,7 @@ into that tool row (`view/reduce.py:_on_code`); replay equals live (golden
 **no longer emitted** but still reduce, so old sessions replay and render unchanged
 (`code_mode.*` golden). `permission.requested`/`.resolved` for a nested call carry
 `parent_call_id` and `parent_program`. Surfaces: `tool_details._code_sections` renders the
-labelled sections for `code` and the kernel tools ([ratatui-parity.md](ratatui-parity.md),
-[desktop.md](desktop.md)); the web client has only the generic tool fallback.
+labelled sections for `code` and the kernel tools ([ratatui-parity.md](ratatui-parity.md)).
 
 **Removed with the `code` tool:** `store` / `load` / `store_delete` and `store.py` (kernel
 variables replace the store) and `[code_mode] inline_budget_tokens`.

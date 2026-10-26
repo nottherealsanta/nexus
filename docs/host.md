@@ -63,7 +63,9 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 | `transports/__init__.py` | shared frames (`Hello`, `Welcome`, `CommandFrame`, `ResultFrame`, `EventFrame`, `Ping`/`Pong`, `Reject`, `Bye`, `SubscribeDone`, `Unsubscribe`), `MAX_FRAME_BYTES` (16 MiB), error taxonomy |
 | `transports/uds.py` | client half of the Unix-socket link (`UDSClient.connect(...).call(cmd)`) |
 | `transports/http_sse.py` | `HTTPSSEServer`: commands as POST, events as SSE; dispatches browser routes |
-| `web.py` | `BrowserRoutes`: tickets, cookies, CSRF, static files, `/v1/web/*` |
+| `web.py` | `BrowserRoutes`: tickets, cookies, CSRF, `/v1/web/*` (client-neutral); delegates `/app/*` to `nsh_static.py` |
+| `nsh_static.py` | the only module that knows the NSH bundle location: static serving, CSP, `?ticket=` redirect ([nsh-client.md](nsh-client.md)) |
+| `web_poll.py` | `PollHub`: `GET /v1/web/session-poll` long-poll over `subscribe_web` (one feed per browser session and session id; [nsh-client.md](nsh-client.md#session-poll-long-poll-patch-transport)) |
 | `doctor.py`, `diagnostics.py`, `session_diagnostics.py` | compatibility import paths for `host_support` / `observability` |
 
 ## Commands
@@ -355,7 +357,7 @@ or `Daemon(http=True)`; off by default; the `nexus` CLI has no flag for it):
 
 The browser surface rides the same listener: `nexus web` sends `WebLaunch` over
 UDS; `Daemon.web_launch()` starts the listener and returns
-`http://127.0.0.1:<port>/w/<project-key>/#ticket=…`. Routes, auth and CSP are in [web.md](web.md).
+`http://127.0.0.1:<port>/w/<project-key>/#ticket=…`. Routes, auth and CSP are in [nsh-client.md](nsh-client.md#the-v1web-api); `nexus web` rewrites the URL to `/app/?ticket=` ([nsh-client.md](nsh-client.md)).
 
 ## `host_support/` and `observability/`
 
@@ -422,7 +424,7 @@ the composer (`queue_remove_content`). The gateway does not expose `SessionQueue
 
 `SessionCancel(return_queue=True)` atomically captures pending queued text before
 removing it from scheduling and returns `returned_messages` in queue order.
-The TUI and web Stop actions prepend these messages to the current draft.
+The TUI Stop action prepend these messages to the current draft.
 Consumed inputs are excluded; the original input records remain in the durable
 log. Other callers retain the existing cancellation contract by default.
 
@@ -625,7 +627,7 @@ keep legacy submission behavior. Shell submissions and queue edits are excluded.
 
 Python `Client.start_turn`/`enqueue` generate an id unless explicitly supplied;
 callers retrying after a lost reply should retain and pass that id. The shared
-stream helper accepts an explicit retry id. Native/desktop shared composer actions
+stream helper accepts an explicit retry id. Native shared composer actions
 and the existing web composer retain a pending id across a failed send, replacing
 it when content/session/mode/attachments change or a send succeeds. This adds no
 new web UI. Durable queue/index commit precedes scheduling, cancellation for an
@@ -657,7 +659,7 @@ there is no attachment upload or permission bypass in this command.
 `SessionHandoffRead(session, namespace="main", handoff_id="")` is project/namespace scoped,
 read-only, and returns a bounded redacted brief plus head/version/boundary.
 It does not open/recover a live handle. Both commands share protocol codecs
-across direct, socket and desktop clients. `LogsRead` projects a constant
+across direct and socket clients. `LogsRead` projects a constant
 `context.handoff` message, never the private brief/preview.
 
 ### Immutable session names

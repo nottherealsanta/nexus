@@ -180,7 +180,11 @@ async def _chat(workspace: Path, *, session: str, renderer: str = "ratatui") -> 
 
 
 async def _web(workspace: Path, *, open_browser: bool) -> int:
-    """Open the same workspace daemon in a local browser window."""
+    """Open the same workspace daemon in the NSH client (docs/nsh-client.md).
+
+    The URL is ``/app/?ticket=`` because NSH 0.2.0 apps cannot read the fragment;
+    the daemon redeems it and redirects to the bare ``/app/`` URL.
+    """
     from .host import protocol as p
     from .host.daemon import ensure_daemon
 
@@ -193,16 +197,19 @@ async def _web(workspace: Path, *, open_browser: bool) -> int:
         raise RuntimeError(  # noqa: TRY004 - daemon protocol failure, not bad input
             getattr(result, "message", "daemon did not return a browser URL")
         )
+    url = result.url
+    base, _, ticket = url.partition("/#ticket=")
+    url = f"{base}/app/?ticket={ticket}"
     if open_browser:
         import webbrowser
 
         try:
-            if webbrowser.open(result.url, new=2):
+            if webbrowser.open(url, new=2):
                 print("Opened Nexus in your browser.")
                 return 0
         except Exception:  # noqa: BLE001, S110 - browser launch is best-effort
             pass
-    print(result.url)
+    print(url)
     return 0
 
 
@@ -1725,10 +1732,7 @@ def build_parser() -> argparse.ArgumentParser:
     web = sub.add_parser("web", help="Open the workspace in a local browser")
     web.add_argument("--no-browser", action="store_true", help="Print the one-time launch URL")
 
-    desktop = sub.add_parser("desktop", help="Open the native GPUI desktop client")
-    desktop.add_argument("--session", default=None, help="Reopen a session (default: new session)")
-
-    for dev_capable in (run, chat, web, desktop):  # trailing --dev is accepted by interactive clients
+    for dev_capable in (run, chat, web):  # trailing --dev is accepted by interactive clients
         dev_capable.add_argument("--dev", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     mock = sub.add_parser("mock", help="Dev mode: run scripted mock scenarios headlessly")
     mock.add_argument("mock_action", choices=["list", "run", "all", "clean"])
@@ -2019,10 +2023,6 @@ def main(argv: list[str] | None = None) -> int:
             return _chat_entry(workspace, session=args.session or _new_session_id(), renderer="ratatui")
         if args.command == "mock":
             return asyncio.run(_mock(workspace, args, stdout, stderr))
-        if args.command == "desktop":
-            from .ui.desktop.run import run as run_desktop
-
-            return asyncio.run(run_desktop(workspace, session=args.session or _new_session_id()))
         if args.command == "web":
             return asyncio.run(_web(workspace, open_browser=not args.no_browser))
         if args.command == "replay":

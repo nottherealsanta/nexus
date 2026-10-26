@@ -79,7 +79,7 @@ jobs:
           pattern: native-wheels-*
           path: dist
           merge-multiple: true
-      - name: Wheel contains the web, TUI and agent assets
+      - name: Wheel contains the NSH, TUI and agent assets
         run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
       - run: uv publish --trusted-publishing always
       - name: Attach installer, checksums and dists to the release

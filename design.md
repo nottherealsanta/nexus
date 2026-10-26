@@ -1,3 +1,5 @@
+> **The browser client specified here was removed on 2026-10-26.** `nexus web` now serves the NSH client (`docs/nsh-client.md`); the web-specific notes below are history.
+
 > Browser finish update: `docs/web.md` is authoritative for the current web UI.
 > Use system sans-serif for interface text, Monaspace Argon for code, stroke
 > icons, rounded controls and soft dialog shadows. Keep the TUI region order

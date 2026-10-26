@@ -2,12 +2,8 @@
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
 harness. One shared daemon per Nexus home and install owns project runtimes, sessions and turns. Four surfaces are clients
-of it: a terminal chat client (the native Ratatui client), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
-browser app, and a Rust GPUI desktop client.
-
-> **Desktop (GPUI) development is paused right now.** Focus new UI work on the native
-> TUI (Ratatui client). Do not make desktop changes (`rust/desktop/`) unless the user
-> explicitly resumes it.
+of it: a terminal chat client (the native Ratatui client), a one-shot CLI and JSONL stream, and the NSH
+browser client (`rust/app`, served by `nexus web`).
 
 **The idea of Nexus is that the context is clearly presented to the user and to
 agents.** Keep this in mind for every change: show everything that matters
@@ -38,10 +34,9 @@ Update the matching doc in the same change as the code.
 | Host commands, daemon, transports, presence | [docs/host.md](docs/host.md) |
 | CLI subcommands and chat slash commands | [docs/cli.md](docs/cli.md) |
 | Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
-| `nexus web`, the browser client (**to be deprecated**; `nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
 | Native Ratatui terminal client | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
-| Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](skills/gpui-nexus/SKILL.md), [native screenshot skill](skills/native-app-review/SKILL.md) |
-| NSH desktop + web client (planned; `rust/app`, `rust/client-core`) | [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](skills/nsh-nexus/SKILL.md) |
+| Native macOS screenshot review (TUI, NSH) | [native screenshot skill](skills/native-app-review/SKILL.md) |
+| `nexus web` client (basic NSH web client; `/v1/web/*` API) and the planned NSH desktop client (`rust/app`, `rust/client-core`) | [docs/nsh-client.md](docs/nsh-client.md), [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](skills/nsh-nexus/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | GPT Live voice calls (experimental) | [docs/live.md](docs/live.md) |
 | The workspace manager session (implemented, unverified, off by default) | [docs/manager.md](docs/manager.md) |
@@ -67,7 +62,6 @@ uv sync --extra dev            # or: pip install -e '.[dev]'  (Python ≥3.13; t
 .venv/bin/python -m pytest -q tests/test_host_facade.py -k name   # one area
 ruff check nexus tests         # ruff is installed separately
 python -m playwright install chromium                            # once, for browser checks
-.venv/bin/python tests/playwright_web_check.py                   # real-browser web client check
 ```
 
 Run the product: `nexus chat` (TUI, needs a TTY), `nexus run "prompt"` (one
@@ -107,20 +101,13 @@ Tests need no network or credentials. They use temporary workspaces,
 
 ## Conventions
 
-- **The web app is to be deprecated.** Do not add new features to it or port
-  new work to it unless the user asks; terminal clients come first. Until it is
-  removed, it mirrors the TUI: `nexus web` has the same functionality as
-  `nexus chat`, with everything in the same place: top bar (`▌` title … status
-  `+` `▐`), sessions sidebar, the context header opening every conversation,
-  timeline, composer rows, details sidebar, the same chat commands (from
-  `ui/cli/commands.py`) and the same Control-key shortcuts. It should feel and
-  behave the same. It may look more modern (softer corners, taller lines,
-  floating dialogs) and uses sans-serif interface text, stroke icons, and Monaspace Argon for code. Existing
-  features stay in sync, but new features need not be ported. Details are in [docs/web.md](docs/web.md).
+- **The browser client is NSH.** The old plain HTML/CSS/JS web app was removed
+  (2026-10-26); `nexus web` serves the NSH bundle at `/app/` and keeps the
+  `/v1/web/*` API ([docs/nsh-client.md](docs/nsh-client.md)). The bundle
+  (`nexus/ui/nsh/`) is git-ignored build output: `scripts/nsh-app.sh package web`.
 
 - **Present context clearly.** Tool calls, results, context blocks and errors
-  render as labelled, structured rows that miss nothing (`ui_support/tool_details.py`
-  and its web port `ui/web/js/tool-details.js`); clipping is always announced.
+  render as labelled, structured rows that miss nothing (`ui_support/tool_details.py`); clipping is always announced.
 
 - **Docs travel with code.** A behavior or design change updates the matching
   `docs/` page in the same commit; a new module gets a row in

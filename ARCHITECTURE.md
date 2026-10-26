@@ -328,9 +328,9 @@ mutable runtime-global manager.
   discovery file beside the socket, and never logs the token. The root `nexus`
   CLI is a pure client with no switch to enable it. The browser client is a
   separate surface on the same listener: `nexus web` asks the daemon for a
-  one-use launch ticket (`WebLaunch`), and `host/web.py` serves the static app
-  in `ui/web/` plus `/v1/web/*` routes behind a cookie, CSRF token, and strict
-  CSP (see `docs/web.md`).
+  one-use launch ticket (`WebLaunch`), and `host/web.py` serves the NSH app
+  (`nexus/ui/nsh/`, build output) plus `/v1/web/*` routes behind a cookie, CSRF token, and strict
+  CSP (see `docs/nsh-client.md`).
 
 ### `view/`
 

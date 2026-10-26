@@ -108,9 +108,8 @@ Adapter rules:
   shared transport already redacts.
 
 Clients need no change for a provider that signs in with an API key: the
-native and desktop Settings pages render `ProvidersStatus` rows and send
-`ProviderKeySet`. The web client keeps a hard-coded list and is deprecated;
-do not port to it unless asked.
+native Settings pages render `ProvidersStatus` rows and send
+`ProviderKeySet`.
 
 ## 4. Test
 

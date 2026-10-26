@@ -77,8 +77,8 @@ full key list is under [Get started](#get-started).
   </tr>
 </table>
 
-Screenshots are from the native Ratatui client, which is the primary interface. The
-browser client (`nexus web`) is being deprecated; see [docs/web.md](docs/web.md).
+Screenshots are from the native Ratatui client, which is the primary interface. `nexus web`
+opens the basic NSH browser client; see [docs/nsh-client.md](docs/nsh-client.md).
 
 ## Why Nexus
 
@@ -170,12 +170,12 @@ skip the key entirely — see [Offline and local](#offline-and-local).
 
 ## Get started
 
-On first opening `nexus chat` or `nexus web`, Nexus guides you through
+On first opening `nexus chat`, Nexus guides you through
 connecting one provider and choosing a model. That model is saved in
 `~/.nexus/config.toml` as the default for every workspace; an exact workspace
 config may override it. Codex login runs locally with `nexus auth codex login`;
 for API-key providers, set the named environment variable **before** starting
-the daemon. Credentials are never entered into the browser or sent by setup
+the daemon. Credentials are never sent by setup
 commands. After saving, restart the daemon when its turns finish to activate
 the new provider route. Noninteractive `nexus run` requires a configured model.
 
@@ -275,7 +275,7 @@ nexus restart            # stop, then start a fresh daemon (picks up code/config
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
 | `nexus` / `nexus chat` | Interactive terminal client: the native Ratatui client. `--session NAME`. Requires stdin/stdout TTY. |
-| `nexus web [--no-browser]` | Open the workspace in a local browser client served by the running daemon (one-use launch URL). |
+| `nexus web [--no-browser]` | Open the workspace in the NSH browser client served by the running daemon (one-use launch URL; `--no-browser` prints it). |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |
 | `nexus restart` / `nexus daemon restart` | Restart the workspace daemon. |
@@ -357,8 +357,7 @@ out like the root: its context header (its own system prompt, then the Task the
 root agent wrote on a grey background, then every tool definition it was
 actually sent), its whole conversation updated live while it runs, and its
 details. A sub agent's system prompt is its role alone: it carries no "You are
-Nexus" identity. In the browser the page has its own URL
-(`/s/<session>/a/<agent>`), and Back or Esc returns to the parent. Tool blocks show a bounded preview where the event carries one (a permission request's key/preview, a tool's
+Nexus" identity. Tool blocks show a bounded preview where the event carries one (a permission request's key/preview, a tool's
 progress line, or a result/summary field); control characters and obvious
 credentials are escaped or redacted, and byte payloads are shown by size rather
 than dumped. Assistant prose is rendered as Markdown with terminal controls
@@ -380,8 +379,8 @@ full request inspection view.
 
 By default nothing asks: `permissions.mode` is `"allow"`, so every tool runs
 without a prompt (hard path boundaries and any `deny` rules still apply). Set
-`mode = "ask"`, or add `ask` rules, to approve calls. The chat and web clients
-show an approval as a list above the composer, like the model and command
+`mode = "ask"`, or add `ask` rules, to approve calls. The chat client
+shows an approval as a list above the composer, like the model and command
 pickers: ↑/↓ and Enter, or `y`/`a`/`n`/`d`, with Esc denying once.
 
 Interactive runs prompt before an `ask` action with four choices: `y` allow
@@ -608,9 +607,8 @@ user's privileges.
 
 ### File and image attachments
 
-Use `/attach <path>` in `nexus chat` or `nexus web`; `/attach clear` removes
-pending files. The browser also offers Attach file, clipboard image/file paste,
-and drag/drop. Inspect document or image previews before sending. Images remain
+Use `/attach <path>` in `nexus chat`; `/attach clear` removes
+pending files. Inspect document or image previews before sending. Images remain
 vision input, while supported documents convert automatically to Markdown with
 AnyDoc, included in the default install. Text and source files are included
 directly. Enter sends attachments even without prompt text; queue, steer, and
@@ -619,7 +617,7 @@ interrupt preserve them. Submitted content survives reconnects.
 Attachments support PNG, JPEG, GIF, WebP, PDF, Office, OpenDocument, RTF, EPUB,
 and CSV. Unsupported binary files and scanned PDFs requiring hosted OCR report
 an error. Limits: 8 MiB per file, eight files per message, and 12 MiB for the
-encoded combined input. Large browser input previews announce clipping and
+encoded combined input. Large input previews announce clipping and
 provide an inspector containing the complete input.
 
 ### Local document reading
@@ -697,7 +695,7 @@ Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 
 The `question` tool lets the root agent or any subagent pause for a decision
 that is genuinely the user's: a prompt with one to three options, or free text.
-The chat and web clients show it as the same list prompt as approvals (number
+The chat client shows it as the same list prompt as approvals (number
 keys pick an option); the answer returns to the waiting agent as its tool
 result. `question.requested`/`question.resolved` are durable events, and a
 pending question is simply the running `question` call, so it reappears after a
@@ -805,7 +803,7 @@ every workspace. Edit them in **Settings → Agents**: saving writes an override
 `~/.nexus/agents/<name>.md`, and "Reset to default" moves that override to trash.
 
 Every new session starts with `build`. To change that, pick another root agent
-under **New sessions start with** in Settings → Agents (terminal and browser).
+under **New sessions start with** in Settings → Agents (terminal).
 It writes `[agent] name` to `~/.nexus/config.toml`, or to
 `.agents/nexus.toml` with the project scope, which wins over the global one.
 Choosing an agent inside a session (`/agent`, `Shift+Tab`) changes only that
@@ -952,12 +950,10 @@ CLI speaks a length-framed JSON protocol over a Unix domain socket.
   traverse the facade in either direction, and every error the wire can observe
   is redacted.
 
-`nexus web` opens the browser client: the daemon starts a loopback listener and
-prints a one-use launch URL whose ticket is exchanged for an `HttpOnly` cookie
-and CSRF token (`nexus/host/web.py`). The page (`nexus/ui/web/`, plain
-HTML/CSS/JS) shows the same sessions with live status and archive, the
-conversation, approvals, a details panel with modified files and MCP health,
-and settings. See `docs/web.md`.
+`nexus web` opens the NSH browser client: the daemon starts a loopback listener and
+prints a one-use launch URL (`/app/?ticket=`) whose ticket is exchanged for an `HttpOnly` cookie
+and CSRF token, then redirected away (`nexus/host/web.py`). The client (`rust/app`, bundle
+`nexus/ui/nsh/`) is basic: sessions, timeline and send. See `docs/nsh-client.md`.
 
 `http_sse` is also the peer transport: commands as POST,
 events as SSE (whose `Last-Event-ID` maps exactly onto the log's `seq`). It is
@@ -1134,7 +1130,7 @@ account. If Claude Code is not installed separately, use the SDK's bundled CLI:
 uv run --no-project --with 'nexus-harness' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
 ```
 
-First-run setup in both `nexus chat` and `nexus web` detects the subscription login
+First-run setup in `nexus chat` detects the subscription login
 and offers **Claude Pro/Max**. For an existing installation, add this to your
 user-global `~/.nexus/config.toml` (or workspace `.agents/nexus.toml`), or run
 `nexus claude init [--model ID]` to write it and make Claude the default model:

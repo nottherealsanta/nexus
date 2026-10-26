@@ -1,17 +1,11 @@
 # Surfaces: what every client does the same way
 
-Four surfaces sit on the host contract: the native Ratatui terminal app (`nexus
-chat`), the GPUI desktop app (`nexus desktop`,
-[desktop.md](desktop.md)), the browser app (`nexus web`, [web.md](web.md)) and
-the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds shared behavior and
-context contracts. The browser is being deprecated: preserve existing behavior,
-but new terminal/desktop features need not be ported unless requested.
+Surfaces sit on the host contract: the native Ratatui terminal app (`nexus
+chat`), the NSH browser client (`nexus web`, [nsh-client.md](nsh-client.md); basic, the old
+HTML/JS client was removed) and the one-shot CLI/JSONL ([cli.md](cli.md)).
+This page holds shared behavior and context contracts.
 
 ## Principles
-
-The additional [GPUI desktop client](desktop.md) follows these host and context
-contracts while using desktop typography, native text input and window controls.
-It reuses the native terminal workflows; adding it does not require new web work.
 
 1. **Present context clearly.** Show everything that matters (every parameter,
    every output), labelled and readable, never a raw JSON dump, and never hide
@@ -21,9 +15,9 @@ It reuses the native terminal workflows; adding it does not require new web work
 3. **Host contract only.** New data or actions are host commands
    ([host.md](host.md#adding-a-capability-a-ui-can-use)).
 4. **Durable state survives reconnect.** A turn started in the terminal is live
-   in the browser and vice versa; closing a view never stops work.
+   in the NSH client and vice versa; closing a view never stops work.
 5. **Everything from the host is untrusted text.** Control-safe (not redacted) in
-   the terminal; `textContent`/escaped Markdown in the browser.
+   the terminal; escaped in the browser.
 6. **Tolerate stale async results.** Compare session and request ids before
    applying a late response.
 
@@ -32,24 +26,24 @@ It reuses the native terminal workflows; adding it does not require new web work
 Pure presentation helpers, importable by all surfaces. Rich is used only by
 `context.py` to render context Markdown.
 
-| Module | Shared logic | Web port |
-| --- | --- | --- |
-| `tool_details.py` | labelled tool-call sections (Overview, Parameters flattened to `a.b[0]` rows, Code, Progress, Summary, Result blocks, Error, Context, Metrics, Diff) | `ui/web/js/tool-details.js` |
-| `context.py` | `context_groups`, `tool_groups`, `context_summary`, `context_measure` (the one source for the context meter), `context_usage`, `thinking_status` | `ui/web/js/context-view.js` |
-| `timeline.py` | tool headings/summaries, batch glyphs, diff splitting (`split_diff_files`, `diff_sections`), thought titles | `renderTool`, `diffFiles`, `splitDiff` |
-| `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
-| `manager.py` | the pinned Manager entry (status, pinned model, sign-in fix, Live readiness), cross-session Live notice, commands a manager chat refuses | none (no web) |
-| `text.py` | control-safe text | `el(tag, cls, text)` |
-| `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
-| `usage.py` | provider usage wording: thin `bar` (`━` used, `─` left, `┃` even pace), `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `reserve` / `reserve_phrase`, `summary` (`38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)`), `heading` | `ui/web/js/usage.js` |
-| `ui/cli/commands.py` | slash commands | `SLASH_COMMANDS` |
+| Module | Shared logic |
+| --- | --- |
+| `tool_details.py` | labelled tool-call sections (Overview, Parameters flattened to `a.b[0]` rows, Code, Progress, Summary, Result blocks, Error, Context, Metrics, Diff) |
+| `context.py` | `context_groups`, `tool_groups`, `context_summary`, `context_measure` (the one source for the context meter), `context_usage`, `thinking_status` |
+| `timeline.py` | tool headings/summaries, batch glyphs, diff splitting (`split_diff_files`, `diff_sections`), thought titles |
+| `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions |
+| `manager.py` | the pinned Manager entry (status, pinned model, sign-in fix, Live readiness), cross-session Live notice, commands a manager chat refuses |
+| `text.py` | control-safe text |
+| `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form |
+| `usage.py` | provider usage wording: thin `bar` (`━` used, `─` left, `┃` even pace), `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `reserve` / `reserve_phrase`, `summary` (`38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)`), `heading` |
+| `ui/cli/commands.py` | slash commands |
 
 ## Layout (both surfaces)
 
 - The native TUI's left sidebar (Projects, Sessions, Files, Git; `Ctrl+B`, `/sessions`) is
   specified in [ratatui-parity.md](ratatui-parity.md#left-sidebar-projects-sessions-files-git).
   Its data comes only from host commands (`ProjectSessionsList`, `DirectoryList`, `GitStatus`); the
-  pure data helpers are `ui_support/sidebar.py` (the web and desktop have their own sidebars).
+  pure data helpers are `ui_support/sidebar.py`.
 - Two-row **top bar**. Row 1, **session tabs**: `▌` toggles the sessions
   sidebar (`Ctrl+B`), then one tab per active session (status glyph, the
   title's first 36 characters, `×`), `+` new session, `▐` toggles the details
@@ -63,8 +57,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
   **breadcrumb**: the workspace directory (`~/…`) `›` linked worktree `›` `⎇`
   branch (from the Doctor report's `git`), and the status in words on the right
   (`Idle`, `Working`, `Needs input`); the glyph is on the tab. Toggles are
-  accent-colored while open. The web keeps its Context/Logs/Export buttons on
-  row 2.
+  accent-colored while open. 
 - **Sessions sidebar** (34 cells / 272px): `+ New session`, a filter, then a
   two-line card per session (glyph and title; status in words or the message
   count, then age; `×`), grouped by project folder, then local activity date,
@@ -75,8 +68,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
   counts; their live status is available after opening them. Opening one
   connects to its owning workspace; delete/archive apply to the active project. The current session has
   a left accent bar. Glyphs: braille spinner while working, `●` needs input,
-  `✓` done, `·` idle, `◇` archived. The native Ratatui client differs (not ported
-  to the web): 40 columns, one row per session (glyph and title), colored
+  `✓` done, `·` idle, `◇` archived. The native Ratatui client differs: 40 columns, one row per session (glyph and title), colored
   `project › worktree · day` headings, project chips under the title that show
   one project (Git worktrees group with their repository), and `Esc`/`Ctrl+C`
   close it ([ratatui-parity.md](ratatui-parity.md)).
@@ -109,8 +101,7 @@ footers share the same left inset in both surfaces.
 - The first reply of a turn sits under its agent label (`◆ Build`, agent
   color), indented two cells.
 - Ordinary tool calls are one muted, clipped summary line, consecutive calls
-  tightly stacked. Native Ratatui uses no batch glyphs or result gutters; the
-  legacy browser retains its existing batch decoration.
+  tightly stacked. Native Ratatui uses no batch glyphs or result gutters.
   Read and Grep show arguments without appending a repeated result summary.
   Activating a call opens its full parameters/result in a modal, never inline.
   A **running shell** (Bash) additionally shows its latest four output lines
@@ -142,14 +133,13 @@ footers share the same left inset in both surfaces.
   spinner. The host actions are `AgentCancel` (stop one running child) and `AgentClose`
   (close a legacy child for good); a surface needs no list or send command. The native
   client's rendering is in
-  [ratatui-parity.md](ratatui-parity.md#background-subagents-persistent-children); the
-  browser client does not draw the new labels (it tolerates the fields and origins).
+  [ratatui-parity.md](ratatui-parity.md#background-subagents-persistent-children).
 - **Tool groups** (native projection, `ui/ratatui/verb_groups.py`): a run of tool calls
   and thoughts is one group, except that file-change tools (edit, write, apply_patch, …)
   group only with each other and a lone change keeps its own row. The label drops its
   nouns above five members (`Read 4, Searched 2, Ran 1`). A running group is labelled
   `Working` and lists its newest five members; a failed member ends in a quiet
-  ` · failed`. The legacy browser keeps its own grouping.
+  ` · failed`.
 - Completed Edit/Patch rows show a diff per file (original on the left, updated on the right at every width), from the durable `ToolCallView.diff` only.
 - Errors are plain red lines; each finished turn has a right-aligned footer
   `model · 1.2s · ↑64K ↓3.1K · 81% cached · 800 r` (parts with no data are left
@@ -193,16 +183,15 @@ A draft starting with `!` is a bash command, not a prompt. The composer shows
 it: the rail turns the warning (amber) colour and a `! bash` tag with "Enter
 runs in the workspace · output goes to context" appears; slash and `@`
 completion stay closed. Submit goes through `client.shell` (`SessionShell`),
-shared by Ratatui and desktop in `ui/ratatui/actions.py`. The run appears as a
+in `ui/ratatui/actions.py`. The run appears as a
 shell turn with a `bash` row; its output is added to the model context without
-starting the agent ([tools.md](tools.md#shell-mode--in-the-composer)). The web
-client (to be deprecated) does not have it.
+starting the agent ([tools.md](tools.md#shell-mode--in-the-composer)).
 
 ## `@` completion contract
 
 `@` completes workspace paths through `ui_support/completion.complete`. Files-only
 is the default; the native TUI opts in to directories (`dir/` rows, accepting one
-keeps completion open without a trailing space). Desktop and web stay files-only.
+keeps completion open without a trailing space).
 `@path` is never expanded; see [ratatui-parity.md](ratatui-parity.md#composer-command-choices-2026-10-02).
 
 ## Messages during a turn
@@ -211,7 +200,7 @@ Enter **steers** the active turn at the next model step, after the current
 operation (or starts a new turn when idle). `Ctrl+Enter` explicitly **queues**
 a message as a new turn. `Alt+Enter` **interrupts**
 and sends first, keeping other queued messages. `Shift+Enter` and `Ctrl+J`
-insert a newline in the terminal (`Shift+Enter` only in the browser). Pending
+insert a newline in the terminal . Pending
 input is durable and visible after reconnecting ([loop.md](loop.md#steering-queue-interrupt)).
 
 ## Keyboard
@@ -230,7 +219,7 @@ report explains reserve when any row shows it. A configured Antigravity (`agy`)
 row reads the built-in `agy -p /usage` TSV quota command (verified with agy
 1.3.4), inverts remaining percentages into used bars, and reports parse or CLI
 failures as unavailable notes/row errors without inventing quota numbers. Settings → Providers shows Antigravity as a manual CLI
-sign-in (`agy` in a terminal); the browser client gains nothing new for it. The remaining share is the bar's
+sign-in (`agy` in a terminal). The remaining share is the bar's
 track and is no longer repeated as `N% left`. In the
 TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), `D` (start or end a GPT Live call; `L` is the details sidebar), `A` (open or close the Manager view; native clients only), or
 an alias from `LEADER_SHORTCUTS` (`?` lists them). The model picker is one
@@ -242,7 +231,7 @@ fallbacks stay).
 ## Approvals and questions
 
 Shown as list prompts docked above the composer (TUI `PermissionScreen` /
-`QuestionScreen`; web `renderApprovals`). Choices come from `approval_choices`
+`QuestionScreen`). Choices come from `approval_choices`
 (`y` once, `a` always, `n` deny once, `d` deny always, or `1–3` for questions).
 While an approval is pending the background is inert. Arbitration is daemon-side
 (first responder wins); with no viewer attached `on_unattended` applies.
@@ -253,7 +242,7 @@ prompt.
 
 ## Settings
 
-Settings is a full-screen page (TUI) or dialog (web) with the same sections:
+Settings is a full-screen page (TUI) with the same sections:
 GENERAL (Appearance, Layout, Conversation detail, Keyboard, Workspace, Providers,
 Models, Session titles, Voice) and CONFIGURE (Agents, Tools, MCP, Skills, Hooks, Config, Soul). File
 categories share a global/project scope, a list and an editor over the `Settings*`
@@ -273,16 +262,15 @@ commands ([extensions.md](extensions.md#settings-files-host)).
   states it downloads and runs third-party code, then `SkillsInstall` runs as a background
   task: the page stays usable, the result is a toast (installed, skipped, failed, conflicts),
   and conflicts offer an overwrite confirmation. A result that arrives after a session or
-  project switch only toasts. Desktop and web have no install action yet.
+  project switch only toasts.
 - **MCP add (Ratatui):** *Add server…* under each scope of Settings → MCP servers opens a JSON
   editor prefilled with a one-server map, then a masked confirmation (name, file, transport,
   command basename and argument count or credential-free URL, env/header names, enabled,
   loading; a warning for literal secrets in a project file; "Nexus starts this command now and
   in new sessions."). Confirming runs `SettingsMcpAdd` as one background task: no input is
   blocked, the result is a toast, and the MCP page refreshes only if it is still showing. The
-  draft stays in workflow state; the operation carries only the scope. Desktop, web and the CLI
-  have no add action yet. See `docs/extensions.md`.
-  Keyboard, Workspace and Providers have no reset. Browser conversation detail
+  draft stays in workflow state; the operation carries only the scope. The CLI has no add action yet. See `docs/extensions.md`.
+  Keyboard, Workspace and Providers have no reset. Conversation detail
   resets session, workspace and browser preferences together; appearance resets
   to System.
 - **Agents page:** a "New sessions start with" row (`AgentDefaultSet`), one Model
@@ -325,7 +313,7 @@ without sending; Enter stops and sends. Other stopping keys keep without sending
 and typed keys are also applied. These explicit choices override `auto_send`;
 capture-limit stops retain the preference. Explicit discard is separate.
 
-The legacy/web flow below retains its own stop/cancel semantics:
+The flow below retains its own stop/cancel semantics:
 `Ctrl+Space` toggles bounded dictation, `/voice status|download|on|off` and
 Settings → Voice manage it. First use asks before downloading the model;
 preparation is silent. An orange dot at the far left of the context-size row shows
@@ -348,10 +336,10 @@ Muted badge); the editor stays usable and typing is ordinary steering. First use
 consent dialog (audio, summaries of the agent's work and a bounded excerpt of the session conversation go to
 OpenAI through the ChatGPT account); errors show the host's redacted message with the fix. The timeline shows a
 labelled **Live** card per call (captions, `Sent to agent`, `Told voice`, commentary collapsed
-with a count, start and end rows) and marks delegated user messages `via voice`. The web client has no
+with a count, start and end rows) and marks delegated user messages `via voice`. The NSH client has no
 Live support. Real microphone behavior: not verified.
 
-## Manager (native Ratatui and desktop)
+## Manager (native Ratatui)
 
 `/manager [open|live|status]` and the pinned **Manager** entry open the workspace manager session (off by default,
 `[manager] enabled = false`; [manager.md](manager.md)). Both native sidebars show it as its own block above the
@@ -361,21 +349,19 @@ fork, handoff or shell controls (the clients answer with the reason, the host re
 `Manager`. `Voice` / `/manager live` open it and start the ordinary Live call there; the call asks a **separate**
 cross-session consent (`LiveConsent(scope="manager")`) that says titles, status, reports of other sessions and launch
 instructions go to OpenAI, and `/live revoke manager` withdraws only that. Details: [ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui),
-[desktop.md](desktop.md#manager-entry). The web client has no Manager.
+The NSH client has no Manager.
 
 ## Dev mode
 
-`nexus --dev chat|web` (or `NEXUS_DEV=1`) uses an isolated home and sandbox
+`nexus --dev chat` (or `NEXUS_DEV=1`) uses an isolated home and sandbox
 workspace and exposes `/mock` (list, run `NAME [--speed N] [--seed N]`, `clean`);
-the web shows a `DEV` badge (from `Health.dev`). See [devtools.md](devtools.md).
+`Health.dev` reports the mode. See [devtools.md](devtools.md).
 
 ## Adding a user-visible feature
 
 1. Host command or reducer field first ([host.md](host.md), [events-and-view.md](events-and-view.md)).
-2. Shared logic in `ui_support/` if it is pure; then the native TUI (`ui/ratatui/`) and the
-   web (`ui/web/js/`) in the same place.
-3. A check in each: a native PTY test and `tests/playwright_web_check.py`
-   ([testing.md](testing.md)).
+2. Shared logic in `ui_support/` if it is pure; then the native TUI (`ui/ratatui/`).
+3. A native PTY test ([testing.md](testing.md)).
 
 Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)
 and restore focus on the main conversation. On the main conversation, two Escape
@@ -395,14 +381,13 @@ and an unknown bare word (`/modle`) is still reported, to catch typos.
 
 Attachments insert editable `image 1`, `image 2`, or `document 1`,
 `document 2` references at the composer cursor (each kind is numbered separately
-within a draft). Preview rows show the same reference and filename. Removing a
-browser attachment does not renumber remaining references. Submitted attachment
+within a draft). Preview rows show the same reference and filename. Removing an
+attachment does not renumber remaining references. Submitted attachment
 metadata carries the same labels beside the image bytes or complete document text
 in the durable user message, so references in sentences stay meaningful on replay.
 
 Submitted messages separate the prompt sentence from numbered attachment rows.
-The browser shows labelled image thumbnails and expandable full document cards,
-also in request-context messages. The terminal shows compact labelled rows;
+The terminal shows compact labelled rows;
 clicking the message body opens the complete attached text and image metadata.
 
 ## MCP tool loading
@@ -427,21 +412,19 @@ configuration actions before the first turn. Settings → MCP shows Global then 
 and refresh the page. Server details also offer persistent Switch On/Off controls
 (including disabled servers), distinct from session context toggles. Doctor and
 `/mcp` show redacted config diagnostics even when no servers are live.
-Desktop uses these same host-backed workflows. The MCP
+The MCP
 inspector shows the mode alongside counts. `/mcp` opens the server list.
 
 `McpSearch` disclosures label each query and display schema fields as rows.
 `McpCall` headings name the resolved server/tool; parameters remain fully
 inspectable. Permission requests use the target's rules and show “via McpCall”.
 The durable `tool.started.target` field preserves the target during replay.
-The deprecated web surface continues using generic rows and receives no new controls.
+Other surfaces use generic rows.
 
 ### Read-only session ownership (P3)
 
-Both native clients use `SessionTree` and `SessionInspect` through the client/host
-boundary. Ratatui exposes `t` on the selected Sessions dashboard root; desktop
-exposes **Tree** on sidebar rows and **Ownership tree** under Sessions → root
-actions. The indented list is ownership, never fork ancestry. Select a node for
+Ratatui uses `SessionTree` and `SessionInspect` through the client/host
+boundary and exposes `t` on the selected Sessions dashboard root. The indented list is ownership, never fork ancestry. Select a node for
 readable bounded facts, durable transcript and last-request/context details;
 scrollable detail pages use the existing Back stack. Root nodes can open their
 main session; child nodes never offer send/resume/fork or a root switch.
@@ -458,9 +441,9 @@ not implemented by P3.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+back. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
 Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
-(or the desktop session picker) to open a result and return to Manager. Entry
+to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.

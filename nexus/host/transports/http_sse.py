@@ -433,6 +433,10 @@ class HTTPSSEServer:
                 )
         self._writers.clear()
         self._tasks.clear()
+        for web in (self._web, *self.project_web.values()):
+            if web is not None:
+                with contextlib.suppress(Exception):
+                    await web.aclose()
         if server is not None:
             with contextlib.suppress(Exception):
                 await server.wait_closed()

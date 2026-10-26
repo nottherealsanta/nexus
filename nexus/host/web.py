@@ -1,4 +1,4 @@
-"""Browser-only HTTP routes and short-lived launch/session credentials.
+"""Browser HTTP routes (`/v1/web/*` API; `/app/` is delegated to `nsh_static`) and short-lived launch/session credentials.
 
 The peer API remains bearer authenticated. This module handles only the local
 browser surface and is intentionally independent of terminal and the runtime.
@@ -8,19 +8,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
-import mimetypes
 import re
 import secrets
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import parse_qs
 
 import msgspec
 
 from . import protocol as p
+from .nsh_static import serve_app
+from .web_poll import POLL_MAX_WAIT, PollHub
 
-WEB_ROOT = Path(__file__).resolve().parents[1] / "ui" / "web"
 TICKET_TTL = 60.0
 COOKIE_TTL = 12 * 60 * 60.0
 MAX_WEB_RESPONSE = 32 * 1024 * 1024
@@ -43,6 +42,7 @@ class BrowserRoutes:
         self.prefix = prefix
         self.cookie_name = COOKIE_NAME + ("_" + prefix.split("/")[2] if prefix else "")
         self.facade = facade
+        self._polls = PollHub(facade)
         self.workspace = workspace
         self.port = port
         self._tickets: dict[str, float] = {}
@@ -77,6 +77,22 @@ class BrowserRoutes:
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         }
 
+    async def _redeem(self, ticket) -> str | None:
+        """Consume a launch ticket; return the new browser session key."""
+        async with self._lock:
+            expiry = self._tickets.pop(ticket, 0) if isinstance(ticket, str) else 0
+            if expiry <= time.monotonic():
+                return None
+            key, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            if len(self._sessions) >= 512:
+                oldest = min(self._sessions, key=lambda item: self._sessions[item].expires)
+                del self._sessions[oldest]
+            self._sessions[key] = _BrowserSession(csrf, time.monotonic() + COOKIE_TTL)
+            return key
+
+    def _session_cookie(self, key: str) -> str:
+        return f"{self.cookie_name}={key}; HttpOnly; SameSite=Strict; Path={self.prefix or "/"}; Max-Age={int(COOKIE_TTL)}"
+
     def _host_ok(self, value: str) -> bool:
         return value.lower() in {
             f"127.0.0.1:{self.port}", f"localhost:{self.port}",
@@ -109,13 +125,16 @@ class BrowserRoutes:
         value = self._sessions.get(key or "")
         return (key, value) if key and value else None
 
+    async def aclose(self) -> None:
+        """Release long-poll feeds (their viewers) on shutdown."""
+        await self._polls.aclose()
+
     async def route(self, request, writer, server) -> bool:
         """Serve a browser route; return False for paths owned by peer API."""
         path = request.path
         is_session_page = bool(re.fullmatch(r"/s/[A-Za-z0-9_.:-]{1,128}(/a/[A-Za-z0-9_.:%-]{1,384})?", path))
-        is_web = path == "/" or is_session_page or path.startswith(
-            ("/assets/", "/styles/", "/js/", "/v1/web/")
-        )
+        is_app = path == "/app" or path.startswith("/app/")
+        is_web = path == "/" or is_session_page or is_app or path.startswith("/v1/web/")
         if not is_web:
             return False
         common = self._headers()
@@ -135,19 +154,13 @@ class BrowserRoutes:
                 ticket = body.get("ticket") if isinstance(body, dict) else None
             except (msgspec.DecodeError, AttributeError):
                 ticket = None
-            async with self._lock:
-                expiry = self._tickets.pop(ticket, 0) if isinstance(ticket, str) else 0
-                if expiry <= time.monotonic():
-                    await server._write_response(writer, 401, self._json({"error": "invalid launch ticket"}), headers=common)
-                    return True
-                key, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                if len(self._sessions) >= 512:
-                    oldest = min(self._sessions, key=lambda item: self._sessions[item].expires)
-                    del self._sessions[oldest]
-                self._sessions[key] = _BrowserSession(csrf, time.monotonic() + COOKIE_TTL)
-            common["Set-Cookie"] = f"{self.cookie_name}={key}; HttpOnly; SameSite=Strict; Path={self.prefix or "/"}; Max-Age={int(COOKIE_TTL)}"
+            key = await self._redeem(ticket)
+            if key is None:
+                await server._write_response(writer, 401, self._json({"error": "invalid launch ticket"}), headers=common)
+                return True
+            common["Set-Cookie"] = self._session_cookie(key)
             common["Content-Type"] = "application/json"
-            await server._write_response(writer, 200, self._json({"csrf": csrf, "workspace": self.workspace}), headers=common)
+            await server._write_response(writer, 200, self._json({"csrf": self._sessions[key].csrf, "workspace": self.workspace}), headers=common)
             return True
         if path == "/v1/web/logout":
             active = self._session(request.headers)
@@ -257,6 +270,25 @@ class BrowserRoutes:
                     return True
                 await self._stream(session, from_seq, writer, server)
                 return True
+            if path == "/v1/web/session-poll" and request.method == "GET":
+                if not _SESSION_ID.fullmatch(session):
+                    await server._write_response(writer, 400, self._json({"error": "invalid session"}), headers=common)
+                    return True
+                try:
+                    from_seq = int((params.get("from_seq") or ["0"])[0])
+                    if from_seq < 0:
+                        raise ValueError
+                    wait = float((params.get("wait") or [str(POLL_MAX_WAIT)])[0])
+                    if wait != wait:  # NaN
+                        raise ValueError
+                except ValueError:
+                    await server._write_response(writer, 400, self._json({"error": "invalid from_seq or wait"}), headers=common)
+                    return True
+                wait = min(max(wait, 0.0), POLL_MAX_WAIT)
+                data = await self._polls.poll(active[0], session, from_seq, wait)
+                common["Content-Type"] = "application/json"
+                await server._write_response(writer, 200, data, headers=common)
+                return True
             if path == "/v1/web/workspace-events" and request.method == "GET":
                 await self._workspace_stream(writer, server)
                 return True
@@ -265,22 +297,14 @@ class BrowserRoutes:
         if request.method not in ("GET", "HEAD"):
             await server._write_response(writer, 405, self._json({"error": "method not allowed"}), headers=common)
             return True
-        relative = "index.html" if path == "/" or is_session_page else path.lstrip("/")
-        root = WEB_ROOT.resolve()
-        target = (root / relative).resolve()
-        try:
-            target.relative_to(root)
-            data = target.read_bytes()
-        except (ValueError, OSError):
-            await server._write_response(writer, 404, self._json({"error": "not found"}), headers=common)
+        if is_app:
+            await serve_app(
+                path, request, writer, server, common,
+                prefix=self.prefix, redeem=self._redeem, session_cookie=self._session_cookie,
+            )
             return True
-        if self.prefix and target.suffix in {".html", ".css"}:
-            for segment in (b"/styles/", b"/js/", b"/assets/"):
-                data = data.replace(segment, self.prefix.encode() + segment)
-        common.update({"Content-Type": mimetypes.guess_type(target.name)[0] or "application/octet-stream", "Cache-Control": "no-cache"})
-        if path == "/" or is_session_page:
-            common["Permissions-Policy"] = "microphone=(self)"
-        await server._write_response(writer, 200, b"" if request.method == "HEAD" else data, headers=common)
+        # Old browser-client URLs (`/`, `/s/<id>...`) land on the static client under /app/.
+        await server._write_response(writer, 303, b"", headers={**common, "Location": f"{self.prefix}/app/"})
         return True
 
     async def _stream(self, session, from_seq, writer, server):
@@ -369,4 +393,4 @@ class BrowserRoutes:
                 await iterator.aclose()
 
 
-__all__ = ["COOKIE_NAME", "WEB_ROOT", "BrowserRoutes"]
+__all__ = ["COOKIE_NAME", "BrowserRoutes"]

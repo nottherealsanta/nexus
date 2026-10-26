@@ -12,8 +12,7 @@ quality but not one that lands on several word boundaries (``gm`` prefers
 "git merge" over the substring in "fragment"). The best
 alignment is found by an O(query * text) dynamic programme. Text is capped
 at 512 characters and the query at 128. Positions index ``text`` by code
-point. ``nexus/ui/web/js/fuzzy.js`` ports this with the same constants, so
-both surfaces rank identically; keep the two in step. Pure stdlib.
+point. Pure stdlib.
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ Use this to audit a feature against the documented host and surface contracts. M
       reachable.
 - [ ] Narrow (about 60 cols), medium (110-169), wide (170+) checked in dark and light.
 - [ ] Clipping is announced; nothing the agent sees is hidden from the user.
-- [ ] Existing web behavior updated when needed; new web features only when requested (`docs/web.md`).
+- [ ] NSH client (`docs/nsh-client.md`) updated only when requested.
 
 ## Areas and current status (update as you go)
 

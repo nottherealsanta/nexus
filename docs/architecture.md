@@ -12,8 +12,8 @@ Project runtimes share a process; their settings, grants and sessions remain iso
 
 Nexus is a provider-agnostic agent harness. One **daemon per Nexus home and install** owns the
 runtime, sessions and turns. Four surfaces are pure clients of it: the native Ratatui terminal app (`nexus chat`,
-sole terminal client), a one-shot CLI and JSONL stream (`nexus run`), a plain-JS
-browser app (`nexus web`), and the GPUI desktop app (`nexus desktop`).
+sole terminal client), a one-shot CLI and JSONL stream (`nexus run`),
+and the NSH browser client (`nexus web`, `rust/app`).
 
 The rule that keeps it modular: **`core/loop.py` knows only protocols.** It talks
 to a session view, a context assembler, a provider resolver, a tool dispatcher,
@@ -31,7 +31,6 @@ flowchart TD
         TUI["nexus chat"]
         CLI["nexus run"]
         WEB["nexus web"]
-        DESK["nexus desktop"]
     end
 
     subgraph daemon["Shared daemon - one per Nexus home"]
@@ -52,7 +51,6 @@ flowchart TD
     TUI --> PROTO
     CLI --> PROTO
     WEB --> PROTO
-    DESK --> PROTO
     PROTO --> FACADE
     FACADE --> SUP
     SUP --> RUNTIME
@@ -72,10 +70,6 @@ replays the log). The next section expands the middle box.
 
 ## Request path
 
-The [GPUI desktop client](desktop.md) is another host client. Its Rust window
-receives owned presentation snapshots from the existing Python native bridge;
-it owns neither the runtime nor session persistence.
-
 The terminal mirror receives schema-3 section deltas and ordered transcript suffixes.
 Python reduces canonical session events, prepares labelled/control-safe content and
 executes host actions. Rust owns disclosure, navigation, viewport and drawing.
@@ -94,7 +88,7 @@ project only the changed tail. Other events and child pages use full projection.
 
 
 ```
-client (TUI / CLI / browser / desktop)
+client (TUI / CLI / browser / NSH)
   └─ host/protocol.py command ──► host/daemon.py      one per home/install: UDS (+ loopback HTTP)
                                     └─ host/facade.py HostFacade   the only surface API
                                          ├─ host/supervisor.py     global turn cap, per-session FIFO
@@ -114,7 +108,7 @@ loop events ─► session records (SQLite) ─► view/reduce.py (pure) ─► 
 Strict one-way imports: a lower layer never imports a higher one.
 
 ```
-L5   ui/ ui_support/ client/     surfaces (Ratatui, GPUI, CLI, JSONL, browser)
+L5   ui/ ui_support/ client/     surfaces (Ratatui, CLI, JSONL, browser, NSH)
 L4½  host/ host_support/ observability/   facade, protocol, daemon, transports
 L4   runtime.py                  composition root: managers, providers, router, reload
 L3   session/ context/ tools/ skills/ mcp/ agents/ hooks/ ext/ voice/ live/ auth/ net/   managers
@@ -170,7 +164,7 @@ Details: [models.md](models.md), [tools.md](tools.md), [events-and-view.md](even
 | `net/` | pinned public-address-only HTTP | [security.md](security.md) |
 | `runtime.py` | composition root | below |
 | `host/`, `host_support/`, `observability/` | facade, protocol, daemon, transports, projections | [host.md](host.md) |
-| `client/`, `ui/`, `ui_support/` | surfaces | [cli.md](cli.md), [surfaces.md](surfaces.md), [ratatui-parity.md](ratatui-parity.md), [web.md](web.md) |
+| `client/`, `ui/`, `ui_support/` | surfaces | [cli.md](cli.md), [surfaces.md](surfaces.md), [ratatui-parity.md](ratatui-parity.md), [nsh-client.md](nsh-client.md) |
 | `devtools/` | mock provider and scenarios (dev mode) | [devtools.md](devtools.md) |
 
 ## Runtime (`runtime.py`)

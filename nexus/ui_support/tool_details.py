@@ -5,8 +5,7 @@ opened from the timeline therefore renders as labelled sections (Overview,
 Parameters, Code, Progress, Summary, Result, Error, Context, Metrics, Diff)
 made of ``label: value`` rows. Nested objects flatten to dotted paths
 (``edits[0].old``) and multi-line values become indented blocks. Values are
-redacted and control-safe; anything clipped says so. The browser port lives in
-``ui/web/js/tool-details.js`` and must stay in step (plan section 14.7).
+redacted and control-safe; anything clipped says so (plan section 14.7).
 """
 
 from __future__ import annotations

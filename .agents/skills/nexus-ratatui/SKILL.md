@@ -85,8 +85,7 @@ host daemon  <->  Python (nexus/ui/ratatui/)  --JSONL snapshots-->  Rust (rust/t
 - **Margins collapse in Python.** Python computes `gap` (blank rows before a
   block) with `max(prev_bottom, top)`; do not add blank rows in Rust.
 - **Wide characters and graphemes** stay whole; wrap with `transcript::wrap`.
-- **Web mirrors the TUI.** A wording/feature change in one surface goes in the other
-  (`docs/web.md`); new web features are opt-in.
+- **Browser client.** The old web client is gone; `nexus web` serves the basic NSH client (`docs/nsh-client.md`).
 
 ## Commands
 

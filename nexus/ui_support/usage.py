@@ -1,8 +1,7 @@
 """Provider usage formatting shared by surfaces (``ProvidersUsageResult``).
 
 Pure functions: the native usage panel (``ui/ratatui/actions.py``, also the
-desktop client's ``/usage``) renders these strings and the web client's
-``js/usage.js`` is a line-for-line port, so every surface words a limit
+desktop client's ``/usage``) renders these strings, so every surface words a limit
 identically: ``38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)``.
 
 **Reserve** (weekly and monthly windows only, when the host reports

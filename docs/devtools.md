@@ -24,7 +24,7 @@ them); nothing touches the network or your workspace. Setup is never required.
 | Debug manager MCP (the manager's session tools over stdio; [manager.md](manager.md#debug-mcp-server-debug-only)) | `devtools/manager_debug_mcp.py`, `debug_mcp_port.py` |
 | Catalogue | `devtools/mock/scenarios/__init__.py` (`_MODULES`) |
 | Host dispatch | `host_support/mock.py`; commands `MockList`, `MockStart`, `MockClean` (error outside dev mode) |
-| Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/ratatui/actions.py`, `ui/web/js/mock.js` |
+| Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/ratatui/actions.py` |
 
 **How the provider works:** it is stateless. The actor comes from a `⟦mock …⟧`
 directive in the first user message and the step from the number of assistant
@@ -57,7 +57,6 @@ need a person; `stress` is slow.
 
 ```sh
 nexus --dev chat            # then /mock, /mock NAME [--speed N] [--seed N], /mock clean
-nexus --dev web
 nexus mock list | run NAME | run all | clean [--speed N --seed N --json]
 ```
 

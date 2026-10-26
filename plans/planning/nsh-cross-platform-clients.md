@@ -1,8 +1,66 @@
 # One Rust client for desktop, web and mobile on Native Shell (NSH)
 
-Status: **proposal, not started.** Research date 2026-10-26. Nothing below is
-verified in this repo yet; every NSH claim comes from nsh.dev docs and the
-`longbridge/nsh` README and must be confirmed in the Phase 0 spike.
+Status: **in progress (2026-10-26).** NSH replaces both the old browser client
+and the GPUI desktop client, which are removed. `rust/app` is the one client for
+web and macOS; `nexus web` opens it. Current state and next steps are in
+[Progress](#progress-2026-10-26) below; user-facing docs are
+[docs/nsh-client.md](../../docs/nsh-client.md). Sections 1–8 are the original
+research proposal; where they disagree with Progress, Progress wins.
+
+## Progress (2026-10-26)
+
+Decisions made by the user:
+- The old browser client (`nexus/ui/web/`) and the GPUI desktop client
+  (`rust/desktop/`, `nexus/ui/desktop/`) are **removed**, not kept behind a flag.
+  `nexus web` serves the NSH bundle at `/w/<key>/app/`; `/` and `/s/...` redirect there.
+- Goal: **full parity with the Ratatui TUI** on web and macOS from one crate.
+- **Nexus core stays separate from the clients.** Clients use only the
+  `/v1/web/*` HTTP API. `nexus/host/nsh_static.py` is the only Python module
+  that knows about the bundle; `tests/test_client_separation.py` enforces this
+  and that `rust/app` never reads Nexus files or the database directly.
+- Verification: web with Playwright only. macOS shares the same root and must
+  behave the same; it is compile-checked, not run.
+
+Done (verified on web with Playwright unless noted):
+- NSH 0.2.0 toolchain; `scripts/nsh-app.sh package|run web|macos`.
+- Launch: `nexus web` prints/opens `/app/?ticket=…`; the daemon redeems the
+  one-use ticket, sets the cookie and 303-redirects (NSH 0.2.0 apps cannot read
+  the URL fragment and have no `web.host` page hook). Route-scoped CSP with
+  inline-script hashes and `'wasm-unsafe-eval'`.
+- Live updates: Rust `fetch` cannot stream, so the client long-polls
+  `GET /v1/web/session-poll` (client-neutral route; per-client feed in
+  `nexus/host/web_poll.py`, `from_seq` acks, bounded buffer, resync on
+  overflow). SSE routes are unchanged for other clients.
+- `rust/app` foundation (WP1): `api.rs`, `platform/` (only place for `cfg`),
+  `ops.rs` patch applier with captured-frame fixtures, `store.rs` live loop with
+  backoff and stale-result guards, `present/`, `components/`.
+- UI: sessions sidebar, new session, timeline (messages, labelled tool rows,
+  turn errors, announced clipping), composer send.
+- macOS: native launch via `NEXUS_URL`/`NEXUS_TICKET`, manual cookie + CSRF.
+  **Not verified.**
+- Packaging: wheel includes `nexus/ui/nsh/`; `native-wheels.yml` builds the
+  bundle. **Not verified in CI yet.**
+
+Next: work packages WP2–WP8 from
+[nsh-tui-parity-inventory.md](nsh-tui-parity-inventory.md) §4, run in parallel,
+each in its own git worktree from the committed foundation, merged one at a time
+with a Playwright check after each:
+
+| WP | Scope | Status |
+| --- | --- | --- |
+| WP1 | Transport, store, ops applier, long-poll | done |
+| WP2 | Chrome and sidebars (top bar, toasts/notifications, projects/sessions/files/git, details sidebar, breakpoints) | next |
+| WP3 | Timeline presentation port (markdown, tool groups, diffs, code mode, subagents, notices, clocks, streaming) | next |
+| WP4 | Composer and slash commands, keymap, queue/steer/stop, `@`/`/` completion, attachments, pickers | next |
+| WP5 | Approvals and questions, session ops, worktrees, `/merge` | next |
+| WP6 | Context header and inspectors (tools, skills, MCP, usage, message/agent pages) | next |
+| WP7 | Settings and onboarding (all areas) | next |
+| WP8 | Dictation, `/speak`, manager, dev mode; Live (WebRTC) likely deferred | after WP2–WP7 |
+
+Known limits: `/restart`, `/reload` and daemon shutdown are not possible over
+`/v1/web/*`; the view has no `slot_wait` or manager show events (poll
+`SessionActivity` / `ManagerState`); local TUI state (prefs, history, drafts)
+must be kept by the client itself.
 
 ## 1. What NSH is
 
@@ -60,8 +118,8 @@ does not scroll, partial UAX #14 line breaking, no hyphenation.
 | Surface | Code | Talks to | Status |
 | --- | --- | --- | --- |
 | Ratatui TUI | `rust/tui`, `rust/widgets`, `nexus/ui/ratatui/` | daemon via Python bridge | primary |
-| GPUI desktop | `rust/desktop` (gpui `=0.2.2`) | Python bridge, private JSONL wire schema 3 (`nexus/ui/desktop/wire.py`) | **paused** |
-| Browser | `nexus/ui/web/`, `nexus/host/web.py` (`/v1/web/*`, ticket → cookie + CSRF, SSE) | daemon HTTP/SSE | **to be deprecated** |
+| GPUI desktop | `rust/desktop` (gpui `=0.2.2`) | Python bridge, private JSONL wire schema 3 (`nexus/ui/desktop/wire.py`) | **removed** (2026-10-26) |
+| Browser | `nexus/ui/web/`, `nexus/host/web.py` (`/v1/web/*`, ticket → cookie + CSRF, SSE) | daemon HTTP/SSE | **removed** (2026-10-26), replaced by NSH |
 | iOS | `ios/` SwiftUI + `NexusKit` (`GatewayClient`, `SSEDecoder`, `ViewStore`) | opt-in gateway (`/v1/pair`, `/v1/me`, `/v1/hosts/...`), bearer token, snapshot + SSE `ops` | runtime unverified |
 | Android | — | — | none |
 
@@ -83,8 +141,8 @@ except what Phase 1 proves is missing.
 Mobile (Phase 4) waits until desktop + web reach M5 in §5A. §5A is the working
 spec for that track.
 
-Non-goals for this plan: touching `rust/desktop/` (paused; needs explicit
-resume), adding features to `nexus/ui/web/`, runtime-delivered TSX modules,
+Non-goals for this plan: touching `rust/desktop/` (removed; recreating it needs explicit
+approval), adding features to `nexus/ui/web/`, runtime-delivered TSX modules,
 voice/live calls (phase 6+), changing core/manager layers.
 
 **Decisions the user must make before Phase 2** (recommendations in bold):
@@ -93,7 +151,7 @@ voice/live calls (phase 6+), changing core/manager layers.
 2. iOS: replace SwiftUI or keep both? **Keep SwiftUI until the NSH iOS build
    matches its feature list; do not maintain both long-term.**
 3. Desktop: NSH native backends or GPUI embedding? **Native AppKit first** (no
-   GPUI version coupling with the paused client); revisit GPUI only if desktop
+   GPUI version coupling with the removed client); revisit GPUI only if desktop
    work resumes.
 4. Presentation helpers (`ui_support/tool_details.py`, `context.py`,
    `timeline.py`, `prompts.py`): port to Rust with golden parity tests (as the

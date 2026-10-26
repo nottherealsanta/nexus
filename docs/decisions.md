@@ -1,5 +1,16 @@
 # Design decisions
 
+## GPUI desktop client removed (2026-10-26)
+
+`rust/desktop/` (the GPUI client), its Python bridge `nexus/ui/desktop/`, the private
+wire schema 3 encoder, the `nexus desktop` command and `skills/gpui-nexus/` are gone.
+The NSH client in `rust/app` replaces it ([nsh-client.md](nsh-client.md)): one Rust crate
+targeting macOS (AppKit) and the web, over the same host contract, so there is one
+client codebase to keep in step with the terminal instead of a GPUI-pinned second one.
+The terminal bridge (`ui/ratatui/prototype.py`) now serves only the Ratatui binary.
+Left behind on purpose: the `sessions_sidebar` preference key (unused) and the
+`desktop.py` clipboard helper in `ui/ratatui/` (a terminal feature despite its name).
+
 ## Schema 10 resets the session database instead of migrating (2026-10-24)
 
 Nine forward-only migrations with Python backfills had become the riskiest code in
@@ -156,21 +167,11 @@ this page and the code win.
 | Decision | Why | Where |
 | --- | --- | --- |
 | **Context is presented clearly to the user and the agent.** Every parameter and output is shown, labelled and readable; never a raw JSON dump; nothing the agent sees is hidden from the user; clipping is announced. | This is the reason Nexus exists: trust comes from seeing the real request. | `ui_support/tool_details.py`, `context.py`, [surfaces.md](surfaces.md) |
-| **The web mirrors the TUI.** Same regions, commands, shortcuts and wording; a change in one lands in the other. It may look more modern. | Users switch surfaces mid-task; muscle memory must transfer. | [surfaces.md](surfaces.md), [web.md](web.md) |
+| **The old web client mirrored the TUI (removed 2026-10-26).** Same regions, commands, shortcuts and wording. `nexus web` now serves the NSH client; see "Old browser client removed" below. | Users switch surfaces mid-task; muscle memory must transfer. | [surfaces.md](surfaces.md), [nsh-client.md](nsh-client.md) |
 | **Browser-native finish, not "Signal".** Sans-serif text, Monaspace Argon for code, three radius tokens, soft shadows. The older 0-radius, hard-offset-shadow look is history (`design.md`). | The CSS mixed both looks; one consistent system was asked for. | `ui/web/styles/tokens.css` |
 | **First run only asks to connect a provider**, then picks that provider's newest tool-calling model. | Minimum steps to a working chat; credentials never enter setup commands. | `host_support/setup.py` |
 | **Skill, MCP and root-agent choices lock after a session's first turn.** | Changing the prompt prefix would invalidate the prompt cache and confuse the record. | `session/session.py:context_locked` |
 | **Native tool/task rows omit failure badges and result gutters.** | The loop handles tool failures; expanded details and the agent page retain errors without adding noisy duplicate status marks to the transcript. | [surfaces.md](surfaces.md), `rust/tui/src/transcript.rs` |
-
-The desktop copies the Ratatui design language: `theme.rs` derives its palette
-from the TUI `Palette` (neutral greys, warm `#FAB283`/`#C8672F` brand accent,
-semantic blue/purple/cyan/success/warning/error) and resolves host colour tokens
-(`$nx-*`, agent hex) the way `transcript::color` does, so agent identity, thoughts,
-tasks and context sources carry the same colours on both native surfaces. Native
-type, curved controls and window chrome remain desktop-specific. Its composer
-retains Ratatui's editor/controls/context ordering. Image previews are bounded
-presentation data from the existing host; custom clients never read local image
-paths themselves. See [desktop.md](desktop.md).
 
 ## Architecture
 
@@ -274,7 +275,7 @@ automated merge strategy is introduced.
 
 | Decision | Why | Where |
 | --- | --- | --- |
-| **Plain HTML/CSS/ES modules, no build step, no framework.** | Served from the wheel; edits visible on reload. | `ui/web/` |
+| **Plain HTML/CSS/ES modules, no build step, no framework** (superseded: the old web client was removed 2026-10-26). | Served from the wheel; edits visible on reload. | removed |
 | **Strict CSP:** no inline script or `style=""`, no external hosts (font is vendored). | Untrusted text must not execute. | `host/web.py` |
 | **One-use ticket → `HttpOnly; SameSite=Strict` cookie + CSRF; exact `Origin`.** | A local listener still must defend against other pages. | `host/web.py` |
 | **Browser state comes from a versioned snapshot plus JSON-Pointer patches with `resync`.** | Cheap live updates, safe reconnects. | `host_support/browser_view.py` |
@@ -363,7 +364,7 @@ Stated so nobody builds on a false assumption.
   `PermissionEngine`'s constructor and in examples; set it explicitly.
 - **Root `README.md`** still says raw GitHub Copilot is omitted, that the web
   frontend is deferred, and suggests `summarize` for context overflow; the code
-  differs (see above and [web.md](web.md)).
+  differs (see above).
 - **`examples/nexus.toml`** predates `.agents/`, `default_type = "task"` and
   lowercase tool names. [config.md](config.md) is authoritative.
 - **Docstrings** in `hooks/__init__.py` and `examples/hooks.toml` mention
@@ -533,17 +534,6 @@ titles, which names the model the first message goes to (it can be another
 provider than the session's). Cost: schema 2 means an older Nexus refuses the
 shared database. Not done: re-titling later, manual rename (`user` is reserved).
 
-## GPUI desktop reuses native host workflows
-
-The desktop client is a separate Rust crate in `rust/desktop/`, using GPUI for
-windowing, layout, rendering and native text input. It reuses the Ratatui
-presentation bridge and includes its wire structs, so approvals, settings,
-sessions, context and subagents keep one host-only implementation. UI geometry
-and native input stay in Rust; providers and durable reduction stay in Python.
-This avoids maintaining a second agent harness or copying the host protocol into
-Rust. The cost is a Python presentation process and GPUI's pre-1.0 dependency;
-GPUI is pinned and desktop packaging is separate from the terminal wheel.
-
 ## Subagent roles own their allowed tiers
 
 Each subagent role lists the tiers it may use (`tiers:`, default first) so a quick
@@ -563,32 +553,6 @@ and its dependency stack is no longer part of the product. Missing native binari
 fail with build/install guidance. Optional binary builds still allow CLI/browser
 installs on platforms without a Rust toolchain; terminal chat requires the binary.
 
-## Desktop keys follow the terminal, with Cmd aliases
-
-The shared `ui_support/shortcuts.py` tables are canonical for the desktop as well
-as Ratatui: every `SHORTCUTS` and `LEADER_SHORTCUTS` row has a desktop route, and
-`tests/test_desktop_keymap_parity.py` enforces it. Ratatui meanings win where they
-collide with macOS text editing; `Cmd` bindings are aliases only. This is why
-`Ctrl+E` toggles the Logs drawer rather than moving to end of line (`Cmd+→` does
-that), matching the terminal. New leader rows (`c` context popover, `z` update
-help) were added to the shared table because the terminal and web already handled
-them; the desktop now routes them too. The transient Ctrl+X leader is expressed
-with GPUI multi-stroke bindings. Scoped keys never intercept typing: `a`, the
-PageUp/PageDown transcript scroll and the `[` / `]` inspector tabs carry
-`!Editor`, and `Ctrl+S` saves only inside the `Form` context. See
-[desktop.md](desktop.md#keys).
-
-## Desktop overhaul starts with measured performance
-
-The desktop source launcher prefers a release binary to a newer debug binary,
-with dependency optimization in dev builds and a warning for debug fallback.
-Composer synchronization is debounced while native editing stays local. Bounded
-CPU traces identify bridge/render costs before the store and visual overhaul;
-they do not claim display FPS. Transcript rows borrow the projected content
-directly, avoiding per-frame deep copies without a duplicate Arc store. See
-[desktop.md](desktop.md#overhaul-performance-foundation).
-
-
 ### Terminal interaction and incremental mirroring
 
 Tool/group/output, thought and turn folding belong to Rust. Python supplies
@@ -602,7 +566,7 @@ this avoids retransmitting session/history/sidebar data per token. Omitted
 one-shots never replay. Ordinary root deltas reuse the projected history and
 wrapped row prefix. Other events and child pages retain full projection for
 correctness; an open subagent page skips the unused root projection and reuses
-per-turn safe blocks and the modified-files scan. Desktop keeps its encoder. This boundary avoids duplicating domain
+per-turn safe blocks and the modified-files scan. This boundary avoids duplicating domain
 reduction in Rust while removing presentation round trips. Large first-load and
 first-wrap costs remain explicit benchmark cases.
 
@@ -710,7 +674,7 @@ and is wired only by the sandbox's generated `mcp.json`, so the product path nev
 imports it. Empty blocks are greyed, and the header has no total footer or overflow
 text; the five-row inventory cap is therefore silent (a known tension with "clipping
 is announced"). Toggling from a tool page works in place (the list underneath is
-rebuilt); not verified on the desktop client.
+rebuilt).
 
 ## File changes stand alone; MCP restart is a host command (2026-10)
 
@@ -1224,8 +1188,7 @@ controls around. In the terminal the open call's rows now sit in a 5-row pane be
 timeline and the composer. It follows the newest rows, the wheel scrolls it, and a button
 expands it to read the transcript; the expanded state is local and resets when the call ends.
 The open call is left out of the timeline, and its card joins the timeline once the call
-ends, so the record reads in call order. The desktop client keeps the card in the timeline
-during a call, because its layout has no pane. Tests: `tests/test_ratatui_live.py`. Not verified
+ends, so the record reads in call order. Tests: `tests/test_ratatui_live.py`. Not verified
 in a real terminal.
 
 ## GPT Live: delegation text is the heard utterance; no voice-authored handoff yet (2026-10)
@@ -1751,3 +1714,22 @@ supports one-time approvals and retains queued messages when stopping a turn;
 persistent rules, question controls and voice integration remain separate work.
 Transport and app-state behavior are mock-tested; physical-device networking and
 runtime UI remain unverified without a simulator runtime/device.
+
+## Old browser client removed; `nexus web` serves the NSH client (2026-10-26)
+
+The plain HTML/CSS/JS browser app (`nexus/ui/web/`, former `docs/web.md`) and its
+JS-only tests and Playwright checks were deleted. `nexus web` opens the NSH client
+(`rust/app`, bundle `nexus/ui/nsh/`, served at `/app/`) with a
+`/app/?ticket=` URL; the daemon redeems the ticket, sets the cookie and redirects
+at once. `GET /`, `/s/...` redirect (303) to `/app/` so old bookmarks land on the
+new client. The `/v1/web/*` API, ticket/cookie/CSRF auth, SSE endpoints and
+`/v1/web/voice` stay unchanged for the NSH app, the gateway and iOS
+([nsh-client.md](nsh-client.md)). One client stack to maintain was worth more
+than the old app's features.
+
+Known feature gap: the NSH client is basic. It has sessions, a timeline and
+send; it polls (no SSE yet) and has no settings, voice, attachments or approvals
+UI. Until it catches up, those flows exist only in the TUI. The wheel build must
+run `scripts/nsh-app.sh package web` first because the bundle is git-ignored build
+output; the workflow change is not verified locally.
+

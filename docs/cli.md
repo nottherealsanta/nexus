@@ -30,8 +30,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | Command | What it does |
 | --- | --- |
 | `chat` | Native Ratatui chat; needs stdin/stdout TTYs and never falls back to a line reader |
-| `desktop [--session ID]` | native Rust GPUI window; no TTY required, separate source build ([desktop.md](desktop.md)) |
-| `web [--no-browser]` | `WebLaunch` → one-use browser URL ([web.md](web.md)) |
+| `web [--no-browser]` | `WebLaunch` → one-use `/app/?ticket=` URL for the NSH client ([nsh-client.md](nsh-client.md)) |
 | `run MESSAGE [--session ID] [--json]` | one turn (session defaults to `default`) over the daemon; `-` reads stdin; human rendering with terminal approvals, or `--json` JSONL event envelopes (unattended) |
 | `live [--session ID] [--voice V] [--new] [--workspace PATH]` | headless GPT Live voice call (experimental): asks for consent on the terminal the first time, prints captions, delegations and appends labelled, Ctrl+C or Ctrl+D hangs up ([live.md](live.md#headless-cli-nexus-live)) |
 | `replay SESSION [--json]` / `sessions replay` | re-render a session from its log through the reducer |
@@ -78,7 +77,7 @@ forces). The `details` model/provider shown is the *effective* one
 
 ## Chat slash commands (`commands.SPECS`)
 
-Declared once and used by the TUI palette, the CLI and the web client (same
+Declared once and used by the TUI palette and the CLI (same
 names, usage, summaries, aliases). `parse` resolves aliases to the canonical name.
 
 | Command | Usage | Aliases | Summary |
@@ -151,8 +150,7 @@ Other chat clients do not implement `/restart` yet; use `nexus daemon restart`.
 ## Adding a command
 
 - **Slash command:** add a `CommandSpec` in `commands.py`; add a branch in
-  `nexus/ui/ratatui/actions.py`. Existing browser behavior lives in
-  the web client's `SLASH_COMMANDS` / `runSlash` ([web.md](web.md)). The palette
+  `nexus/ui/ratatui/actions.py`. The palette
   reads `SPECS`.
 - **Subcommand:** add the parser in `build_parser`, call the host command through
   `Client`, render with the shared pure helpers. Tests: `tests/test_cli.py`,
@@ -179,10 +177,10 @@ row as on the hovered one.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+back. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
 Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
-(or the desktop session picker) to open a result and return to Manager. Entry
+to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.
 
@@ -205,5 +203,5 @@ end when the old daemon stops; durable transcript state replays. The launcher
 builds only after the bridge and clients have closed, and stops the daemon only
 after a successful build. Build/restart errors appear in the terminal; fix them
 and launch `nexus chat` again. `/restart` remains a daemon-only in-place restart.
-Desktop does not support native `/reload`. The former extension/MCP reload is
+The former extension/MCP reload is
 available as `/reload-extensions`, without rebuilding or restarting anything.

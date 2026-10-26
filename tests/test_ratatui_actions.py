@@ -388,44 +388,6 @@ def test_every_shared_shortcut_is_bound_natively():
     assert "KeyModifiers::ALT" in source and "KeyCode::BackTab" in source and "1500" in source
 
 
-def test_shared_shortcuts_have_native_keymap_coverage():
-    import importlib.util
-    from pathlib import Path
-
-    from tests.test_desktop_keymap_parity import NATIVE_ONLY_LEADER
-
-    spec = importlib.util.spec_from_file_location(
-        "shared_shortcuts", Path("nexus/ui_support/shortcuts.py")
-    )
-    shortcuts = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(shortcuts)
-
-    source = Path("rust/desktop/src/keymap.rs").read_text()
-    bindings = set(__import__("re").findall(r'KeyBinding::new\("([^\"]+)"', source))
-    # `enter` is bound by the shared editor (input.rs), not the shell keymap.
-    baseline = {
-        "ctrl+enter": "ctrl-enter", "alt+enter": "alt-enter",
-        "ctrl+p": "ctrl-p", "ctrl+n": "ctrl-n", "ctrl+o": "ctrl-o",
-        "ctrl+g": "ctrl-g", "ctrl+b": "ctrl-b",
-        "ctrl+l": "ctrl-l", "ctrl+s": "ctrl-s", "ctrl+i": "ctrl-i",
-        "ctrl+t": "ctrl-t", "ctrl+space": "ctrl-space", "ctrl+e": "ctrl-e",
-        "ctrl+u": "ctrl-u", "ctrl+c": "ctrl-c", "ctrl+r": "ctrl-r",
-        "ctrl+q": "ctrl-q", "escape": "escape",
-    }
-    for key, _, _ in shortcuts.SHORTCUTS:
-        if key in baseline:
-            if key == "ctrl+f":
-                # The terminal implements fork_session; no equivalent native
-                # action is currently declared in main.rs.
-                assert baseline[key] not in bindings
-            else:
-                assert baseline[key] in bindings, f"{key} is missing from native keymap"
-    for letter, action_id, _ in shortcuts.LEADER_SHORTCUTS:
-        if letter in NATIVE_ONLY_LEADER:
-            continue  # native-only alias (plan 10); the desktop binds the primary key
-        assert f"ctrl-x {letter}" in bindings, f"Ctrl+X {letter} is missing from native keymap"
-
-
 async def test_preview_refusal_while_a_turn_runs_is_not_an_error(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from nexus.ui.ratatui.actions import ShellActions

@@ -160,8 +160,8 @@ async def test_browser_tickets_and_cookies_are_project_scoped(shared):
             assert r2.status_code == 200
             assert r1.headers['set-cookie'].split('=')[0] != r2.headers['set-cookie'].split('=')[0]
             page = await browser.get(first.path)
-            assert page.status_code == 200
-            assert first.path + 'js/app.js' in page.text
+            assert page.status_code == 303
+            assert page.headers['location'] == first.path + 'app/'
     finally:
         await c1.close()
         await c2.close()

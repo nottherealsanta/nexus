@@ -3,8 +3,8 @@
 Plan: [`plans/done/02-manager-session-orchestration.md`](../plans/done/02-manager-session-orchestration.md).
 **Status: implemented and verified offline; off by default (`[manager] enabled = false`).**
 The backend, the native presentation (`nexus/ui_support/manager.py`, `nexus/ui/ratatui/manager.py`,
-the Rust TUI and desktop panels) and the manager PTY flow pass offline; `cargo test` passes for
-`rust/tui` and `rust/desktop`. Nothing has been soaked against the real Codex or GPT Live
+the Rust TUI panels) and the manager PTY flow pass offline; `cargo test` passes for
+`rust/tui`. Nothing has been soaked against the real Codex or GPT Live
 services. With the flag on, a client can
 `ManagerOpen`, talk to the manager like any session, and connect GPT Live to it; nothing
 else in Nexus changes when it is off.
@@ -27,7 +27,7 @@ tool and no hook runs in it.
 | Port protocol | `nexus/tools/manager_port.py` | `ManagerPort`: `find`, `status`, `result`, `launch`, `wait`, `cancel`, `send`, `show`; frozen bounded value types; `LaunchRefused` carries a reason code |
 | Tools | `nexus/tools/manager_tools.py` | The eight `ManagerToolDef`s and `build_manager_catalog(port)`, the manager's whole catalog |
 | Host port | `nexus/host_support/manager_port.py` | `HostManagerPort`: visibility, provenance, caps, `session.linked`, wait, cancel, send, show (`manager.show`); `FacadeManagerHost` starts, cancels and messages roots through `HostFacade` and reads `focused_clients` |
-| Client | `nexus/ui/ratatui/manager.py`, `manager_follow.py` | `Manager.on_event` turns a fresh `manager.show` into a switch (terminal and desktop share it; see [Show](#show-a-session-on-the-users-screen)) |
+| Client | `nexus/ui/ratatui/manager.py`, `manager_follow.py` | `Manager.on_event` turns a fresh `manager.show` into a switch (the terminal uses it; see [Show](#show-a-session-on-the-users-screen)) |
 | Facade | `nexus/host/facade.py` | `open_manager`, `manager_state`, the `manager_port_factory` injection, reserved id, refusals |
 | Wire | `nexus/host/protocol.py`, `nexus/client/protocol.py` | `ManagerOpen`/`ManagerOpenResult`, `ManagerState`/`ManagerStateResult`, `LiveConsent.scope` |
 | Storage | `nexus/session/db.py`, `manager.py`, `session.py` | `kind = "manager"` row (no schema change), `Session.kind`, list exclusion, archive/delete/fork refusal, no hooks |
@@ -64,7 +64,7 @@ tool and no hook runs in it.
 
 ## Native presentation: its own screen (plan 10), not a tab
 
-The native clients (Ratatui, desktop) never list the manager in the tab strip. On the Manager
+The native client (Ratatui) never lists the manager in the tab strip. On the Manager
 screen the top bar names it instead of showing session tabs (`◆ Manager · <model>`, plus the
 Live phase while a call is open), a managed-sessions board sits above the conversation, and the
 composer reads `Talk to the Manager…` and stays usable during a Live call. A top-bar button
@@ -85,7 +85,7 @@ arrows/Tab move between visible rows, Enter/Space activates, and Escape or typin
 returns to the composer. Focus is visibly highlighted. The first launch of a manager turn moves the user to the new
 session; later launches of the same turn raise an info toast with `Open` instead of a second
 move, and a blocked move carries the same `Open` action. Details:
-[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui), [desktop.md](desktop.md).
+[ratatui-parity.md](ratatui-parity.md#manager-entry-plan-02-native-ui).
 Web is unchanged. No screenshot review has been done ("not visually verified").
 
 ## Port, provenance and caps
@@ -176,7 +176,7 @@ It writes one durable `manager.show` record in the manager log and a native clie
 * **Focus ordering**: `switch` reports the foreground session before replaying it, so the host knows the client is
   on the manager before the user can type. A client without a claim (old host, expired claim) gets `no_viewer`;
   there is deliberately no wider fallback.
-* The desktop and web clients get no new behaviour here. The debug MCP lists the tool and always refuses it.
+* The web client gets no new behaviour here. The debug MCP lists the tool and always refuses it.
 
 ## Visibility is not authorisation to read
 
@@ -405,7 +405,6 @@ Not verified against a live daemon or a real MCP client.
 
 ## Not done
 
-- **Desktop visual pass not done**: the desktop manager card has Rust tests but no interactive or screenshot review.
 - **PTY tests need the debug binary**: `tests/test_ratatui_pty*.py` read a fixed
   `rust/tui/target/debug/nexus-ratatui` (no `NEXUS_RATATUI_BIN` override exists) and are `skipif` when it is missing, so
   a green Python run without `cargo build --manifest-path rust/tui/Cargo.toml` skips them rather than passing them.

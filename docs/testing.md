@@ -26,7 +26,6 @@ uv sync --extra dev                                 # or: pip install -e '.[dev]
 ruff check nexus tests                              # ruff is installed separately; rules E4 E9 F E713
 ./rust-build-test.sh                                # locked Rust build and unit tests (Ratatui)
 python -m playwright install chromium               # once, for browser checks
-.venv/bin/python tests/playwright_web_check.py      # real-browser web client check
 .venv/bin/python tests/playwright_ratatui_check.py  # native PTY screenshots
 python -m tests.provider_conformance                # provider conformance matrix (offline)
 ANTHROPIC_API_KEY=… pytest -m live tests/test_anthropic_live.py   # gated live test
@@ -66,7 +65,7 @@ fails, say so; do not change it.
   when it runs out.
 - **Full stack in-process:** `Runtime(path, config=Config(...), providers={"scripted": provider})`
   wrapped in `Daemon(workspace, socket_path=..., runtime_factory=...)`; see
-  `tests/playwright_web_check.py:main()`. **macOS limits Unix socket paths to
+  `tests/test_host_daemon_projects.py`. **macOS limits Unix socket paths to
   ~104 bytes**, so keep `socket_path` short or relative.
 - **Loop with fakes:** the loop takes protocols, so `test_core_loop.py` passes fake
   sessions, assemblers and dispatchers.
@@ -89,7 +88,7 @@ fails, say so; do not change it.
 | Tools | `test_tool*.py`, `test_builtin_*.py`, `test_patch_*.py` |
 | Extensions | `test_ext_*.py`, `test_hot_*.py`, `test_skills*.py`, `test_hooks_manager.py`, `test_mcp_*.py` (fixtures in `tests/fixtures/{extensions,hooks,mcp}`) |
 | Agents | `test_agents_manager.py`, `test_subagent_*.py`, `test_worktree_*.py`, `test_host_worktrees.py` |
-| Host | `test_host_*.py` (`test_host_agent_cancel.py`, `test_host_claude_code_settings.py`), `test_uds_*.py`, `test_http_*.py`, `test_web_transport.py` |
+| Host | `test_host_*.py` (`test_host_agent_cancel.py`, `test_host_claude_code_settings.py`), `test_uds_*.py`, `test_http_*.py`, `test_web_transport.py`, `test_host_web_nsh.py` |
 | Security | `test_security_regressions.py`, `test_extension_security.py`, `test_outbound_*.py`, `test_config_secrets.py` |
 | TUI | `test_ratatui_*.py`, `test_prompt_history.py` |
 | Dev mode | `test_mock_*.py`, `test_benchmark.py` |
@@ -109,8 +108,7 @@ cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
 
 | Script | What it does |
 | --- | --- |
-| `tests/playwright_web_check.py` | end-to-end web check; screenshots to `artifacts/web-e2e/`; a few minutes |
-| `tests/playwright_context_web_check.py`, `playwright_message_check.py` | web context and queued-message flows |
+| `tests/playwright_ratatui_check.py`, `playwright_ratatui_live.py` | native TUI over a PTY in xterm.js (below) |
 
 `artifacts/` holds ignored screenshots and benchmark output.
 
@@ -124,10 +122,7 @@ cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
   credentials, headers, encrypted reasoning or private output in fixtures.
 - Never weaken, skip or delete a test to make it pass.
 
-`tests/playwright_project_sessions_check.py` starts two offline workspace daemons
-sharing an isolated home. It checks duplicate project/session names, date groups,
-path filtering, opening the owning project, reconnect, and light/dark screenshots
-at 1440, 1024 and 400px (`artifacts/project-sessions/`).
+The old browser-client Playwright checks (web, usage, attachments, context, message, project-sessions) were deleted with the client on 2026-10-26. The NSH app has no browser check yet.
 
 ### Native terminal checks
 
@@ -237,9 +232,7 @@ integration tests; `rust/widgets` all passed; `design-mockups` 20 passed;
 columns × dark/light, 24 captures under `NEXUS_ASCII=1` with paired text dumps and
 `.geometry.json` sidecars asserting grid, PTY size and screen fit) was regenerated
 and all 24 PNGs were pixel-reviewed; they are Rust → PTY → xterm captures, not OS
-screenshots. `tests/playwright_web_check.py` failed twice (timeout in the archive
-sidebar check, line 762; cause unproven, possibly an unrelated web `archivedCount`
-race) and is unresolved: this is not an all-green run. The native harnesses honour `NEXUS_TUI_BINARY` (binary under
+screenshots. The old web check no longer exists. The native harnesses honour `NEXUS_TUI_BINARY` (binary under
 test) and `NEXUS_TUI_TRACE_FILE`, which lets a clean `HEAD` build be compared with
 the working tree. Before/after data is in `artifacts/grok-acceptance/` (ignored);
 it is not isolated attribution and not an idle-animation proof (see

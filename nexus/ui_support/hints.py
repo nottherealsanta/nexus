@@ -1,7 +1,6 @@
 """Hints shown in the middle of an empty session (both surfaces).
 
-A pure list plus a seeded pick, so the terminal shell and the browser (which
-keeps an identical copy in ``ui/web/js/hints.js``) show the same kind of tip.
+A pure list plus a seeded pick, so every surface shows the same kind of tip.
 Hints disappear as soon as the user types; they never carry state.
 """
 

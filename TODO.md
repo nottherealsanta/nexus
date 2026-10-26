@@ -4,7 +4,7 @@ Each row quotes the original TODO text unchanged and links to its plan in `plans
 completed record in `plans/done/`. State reflects implementation and verification evidence;
 tick only when plan acceptance criteria are met. Implemented work with remaining acceptance
 gaps stays unchecked and in planning. Focus: the native Ratatui client (`nexus chat`); desktop
-(GPUI) is paused and the web client is to be deprecated (`AGENTS.md`).
+(GPUI) and the old web client were removed; the NSH client (`rust/app`) replaces both (`AGENTS.md`).
 
 | # | Original item (verbatim) | Plan | State |
 | --- | --- | --- | --- |

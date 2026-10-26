@@ -12,9 +12,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `nexus/` | the package (below) |
 | `nexus/gateway/` | opt-in loopback device gateway; module file map below |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, code-mode detail cards in `src/code_detail.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
-| `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
 | `tests/` | offline suite, Playwright/visual checks, fixtures, provider conformance ([testing.md](testing.md)) |
@@ -22,6 +20,7 @@ here, so add a row when you add a file.
 | `benchmark/` | live-model benchmark ([devtools.md](devtools.md#benchmark-benchmark)) |
 | `websearch/` | local SearXNG Compose project |
 | `plans/` | historical plan ledgers cited by docstrings ("plan section X.Y") |
+| `scripts/nsh-app.sh` | builds (`package web`) or runs the NSH client in `rust/app`; output goes to git-ignored `nexus/ui/nsh/` ([nsh-client.md](nsh-client.md)) |
 | `scripts/hooks/` | `commit-msg` Conventional Commits check |
 | `.github/workflows/` | `ci.yml`, `release.yml`, `install.yml`, `pr-title.yml` ([release.md](release.md)) |
 | `install.sh`, `install.ps1` | installers |
@@ -38,7 +37,7 @@ here, so add a row when you add a file.
 | `nexus/auth/NOTICE`, `nexus/voice/NOTICE`, `nexus/live/NOTICE` | third-party attributions |
 | `nexus/live/prompts/instructions.md` | bundled GPT Live voice instructions (override: `<workspace>/.agents/live/instructions.md`) |
 | `nexus/host_support/searchserver/` | packaged SearXNG `compose.yaml` and `searxng/settings.yml` |
-| `nexus/ui/web/index.html`, `js/*.js`, `styles/*.css`, `assets/*` | the browser app ([web.md](web.md#file-map)) |
+| `nexus/ui/nsh/` (git-ignored build output) | the packaged NSH web client served at `/app/` ([nsh-client.md](nsh-client.md)) |
 
 ## Python modules
 
@@ -228,7 +227,9 @@ here, so add a row when you add a file.
 | `reports.py` | Legacy subagent report delivery and one-shot activity; historical detached-run reports are not replayed |
 | `session_diagnostics.py` | Compatibility module path for the session diagnostics implementation |
 | `supervisor.py` | Turn scheduling across sessions under one global concurrency cap |
-| `web.py` | Browser-only HTTP routes and short-lived launch/session credentials |
+| `web.py` | Browser HTTP API (`/v1/web/*`), launch tickets and session cookies; delegates `/app/` to `nsh_static.py` and long-poll feeds to `web_poll.py` |
+| `nsh_static.py` | Serves the built NSH bundle at `/app/` (route-scoped CSP, MIME/cache, `?ticket=` redirect); the only module that knows the bundle path ([nsh-client.md](nsh-client.md)) |
+| `web_poll.py` | `PollHub`: client-neutral long-poll `session-poll` feeds over `subscribe_web` (bounded buffer, `from_seq` acks, idle expiry) |
 
 ### `nexus/host/transports/`
 
@@ -493,21 +494,6 @@ here, so add a row when you add a file.
 | `stream.py` | Turn streaming helpers shared by the one-shot and interactive surfaces |
 | `uds.py` | Unix-socket transport for the CLI, over the canonical host wire |
 
-### `nexus/ui/web/`
-
-| File | Purpose |
-| --- | --- |
-| `__init__.py` | Static browser client for the Nexus daemon |
-| `js/agent-settings.js` | Guided agent routing editor (session/model/tier, ordered fallbacks) that preserves prompt and unrelated frontmatter and checks SHA conflicts |
-| `js/composer-navigation.js` | Composer history (Up/Down, per-session, draft restore) and Ctrl+A/E/K/U/W line editing |
-| `js/context-preferences.js` | Browser-local visibility of context-header cards; hidden cards stay in the full request context |
-| `js/mcp-settings.js` | Settings pane for MCP servers: scope, loading mode, enabled state and errors via the host contract |
-| `js/model-settings.js` | Settings pane for default model, title model and tier routes |
-| `js/speech.js` | `/speak`, speech status and stop on the daemon host, with explicit model download confirmation |
-| `js/markdown.js` | Shared HTML-free transcript and context Markdown renderer; safe links, aligned tables, nested and task lists, quotes, and code fences with a language label and Copy button |
-| `js/highlight.js` | Bounded, presentation-only syntax colouring for fenced code (comments, strings, numbers, keywords, calls; diff lines) |
-| `js/fuzzy.js` | Fuzzy matcher for the palette and model picker (port of `ui_support/fuzzy.py`) |
-| `js/voice-strip.js` | Floating dictation waveform and bounded live transcript preview |
 
 ### `nexus/ui_support/`
 
@@ -522,12 +508,12 @@ here, so add a row when you add a file.
 | `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells, plus the terminal right sidebar's stored tabs (`Changes` = `Files`) and width bounds (mirrored in `rust/tui/src/details_sidebar.rs`) |
 | `external_worker.py` | Labelled authority/outcome blocks for an external Claude Code worker (`ConversationView.external`): launch authority, attention state with the manual instruction, transcript path, usage unknown |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
-| `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
+| `hints.py` | Randomized tips shown in the middle of an empty session  |
 | `manager.py` | Toolkit-free presentation of the workspace manager session from `ManagerState`: pinned sidebar entry, cross-session Live notice, and refused chat commands; mirrors (never imports) the facade and prompt constants ([manager.md](manager.md)) |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |
 | `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
-| `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
+| `native_images.py` | Bounded host-backed draft and submitted image previews; no path or remote URL reads |
 | `native_schedule.py` | `UpdateCoalescer`: frame-rate coalescing of native bridge updates; user actions flush immediately |
 | `prompt_history.py` | Durable prompt history for the native composer: 500 entries, prompts up to 1M characters, 16 MiB file budget (oldest dropped first) |
 | `prompts.py` | UI-neutral choices for operator prompts: approvals and agent questions |
@@ -547,7 +533,7 @@ here, so add a row when you add a file.
 | `tool_signal.py` | The relevant-only view of a tool call: what it did and what it produced |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
 | `live_card.py` | Rows of the GPT Live timeline card from a `LiveCallView`: captions, "Sent to agent", "Told voice", started/ended rows, commentary collapsed with a count, clips announced; shared by native clients |
-| `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal, desktop and CLI clients |
+| `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal and CLI clients |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
 | `live_settings.py` | Host-backed GPT Live `[live]` settings (mirrored bounds, voices, pinned model) with safe TOML updates and reset |
@@ -584,14 +570,6 @@ here, so add a row when you add a file.
 | `model.py` | Voice lifecycle and transcription values |
 | `store.py` | Pinned, bounded local storage for the Bark weights and NVIDIA processor files |
 
-
-### `nexus/ui/desktop/`
-
-| File | Contract |
-| --- | --- |
-| `run.py` | GPUI executable discovery and host-only native presentation bridge launch. |
-| `wire.py` | Topic-fingerprinted incremental desktop snapshot serialization and transcript block deltas. |
-| `wire_schedule.py` | Import shim re-exporting the shared `UpdateCoalescer` for the desktop bridge. |
 
 ### `nexus/ui/ratatui/`
 

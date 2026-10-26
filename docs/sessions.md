@@ -643,7 +643,7 @@ to start with the reason. A crash between steps 4 and 5 leaves a valid backup bu
 `nexus chat` (Ratatui toast) or `nexus run` (stderr) after a reset shows "Nexus started
 a new session database. Your old sessions are backed up at <path>." through the
 `DatabaseNotice` host command, which marks `reset.notice_shown` so it appears once.
-The web app does not show it.
+
 `SessionResolve(include_retired=True)` explicitly permits tombstone lookup and
 returns `retired: true`; default resolution refuses purged names. Retired results
 are metadata only and cannot be opened.

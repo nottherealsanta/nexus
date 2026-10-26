@@ -99,7 +99,9 @@ include = ["nexus*"]
 "nexus.voice" = ["NOTICE"]
 "nexus.live" = ["NOTICE", "prompts/*.md"]
 "nexus.agents" = ["data/*.md"]
-"nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]
+# NSH client bundle: git-ignored build output of `scripts/nsh-app.sh package web`
+# (docs/nsh-client.md). Absent in a checkout that has not built it.
+"nexus.ui.nsh" = ["*", "**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

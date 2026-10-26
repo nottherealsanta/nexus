@@ -1,7 +1,6 @@
 """Offline native review fixture using the real shared MCP workflows.
 
-Run under ratatui_browser_demo --bridge for a terminal, or with --desktop after
-building the desktop binary. No daemon, credentials or private sessions involved.
+Run under ratatui_browser_demo --bridge for a terminal. No daemon, credentials or private sessions involved.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ from visual_tui_demo import DemoTransport
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def main(desktop=False, state="context"):
+async def main(state="context"):
     controller = NativeController(Client(DemoTransport("reference")), "visual")
     await controller.bootstrap()
     shell = ShellActions(controller)
@@ -57,8 +56,7 @@ async def main(desktop=False, state="context"):
         await shell.workflows.settings("project", "mcp")
     elif state == "loading":
         await shell.workflows.operate({"kind": "settings_mcp_loading", "scope": "project", "name": "github", "tokens": 8200})
-    binary = os.environ.get("NEXUS_DESKTOP_BINARY") if desktop else os.environ.get("NEXUS_TUI_BINARY")
-    binary = binary or str(ROOT / ("rust/desktop/target/debug/nexus-desktop" if desktop else "rust/tui/target/debug/nexus-ratatui"))
+    binary = os.environ.get("NEXUS_TUI_BINARY") or str(ROOT / "rust/tui/target/debug/nexus-ratatui")
     process = await asyncio.create_subprocess_exec(binary, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     revision = 0
     try:
@@ -93,7 +91,6 @@ def replace_preview(preview, name, mode):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--state", choices=("context", "details", "settings", "loading"), default="context")
     args = parser.parse_args()
-    asyncio.run(main(args.desktop, args.state))
+    asyncio.run(main(args.state))

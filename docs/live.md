@@ -1,15 +1,14 @@
 # GPT Live voice calls (`nexus/live/`)
 
 Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper), M4
-(the native Ratatui client), and M5 (GPUI desktop and headless `nexus live`) are
+(the native Ratatui client), and M5 (headless `nexus live`) are
 implemented and tested offline. Nothing has been exercised against the real service,
 a real microphone or a real call: not verified. The cause of a `peer_failed` disconnect cannot be identified from the screenshot alone;
 the helper now logs ICE state names only, without sensitive data. This logging has not
 been verified in a real call. `rust/live/src/peer.rs` uses a different WebRTC API from
 reference `codex-rs/voice-host/src/transport.rs` (`APIBuilder` versus
-`PeerConnectionBuilder`/`SettingEngine`); do not infer equivalent runtime behavior.** The desktop client draws the call
-bar and card and routes `Ctrl+X D` (see [desktop.md](desktop.md#gpt-live-voice-calls));
-a native-harness render check passed, but screenshot review has not run. Plan:
+`PeerConnectionBuilder`/`SettingEngine`); do not infer equivalent runtime behavior.** The GPUI desktop client that once drew the call
+bar and card was removed (2026-10-26). Plan:
 `plans/done/GPT_LIVE_PLAN.md`; protocol observations and citations:
 `plans/done/GPT_LIVE_PROTOCOL_NOTES.md`.
 
@@ -84,7 +83,7 @@ on screen (plan 02 §10, offline-tested only): the panel follows the manager its
 approvals while another session is in front, and the composer keeps sending to the displayed
 session (see `ratatui-parity.md`, "Live is always on the manager"). The step list below
 predates this and describes a call on the shown session. Code: `ui/ratatui/live.py` (bridge state) over
-`ui_support/live_helper.py` (stdlib only; the desktop client and a CLI reuse it).
+`ui_support/live_helper.py` (stdlib only; a CLI reuses it).
 
 1. `LiveStatus`. Not available (`disabled`, `unsupported`, `no_credential`, `busy`)
    shows a panel with the host's message and the fix (`nexus auth codex login`,
@@ -204,8 +203,7 @@ open everything. Nothing is dropped. A user message created by a delegation show
 `via voice` beside its turn number. The card is rebuilt from the durable events, so a
 reconnect or replay shows the same thing (`tests/test_ratatui_live.py`). In the terminal the
 open call is left out of the timeline while it is open, and its card joins the timeline when
-the call ends. The desktop client (`shell.live.pane = False`) keeps the card in the timeline
-during the call and has no pane.
+the call ends.
 
 ## Pause vs stop
 
@@ -219,8 +217,8 @@ during the call and has no pane.
 | Resume | a new call (`Ctrl+X D`); the transcript is carried over | `Ctrl+X P` again: held results are spoken in order |
 
 **Why `Ctrl+X P` and not `Ctrl+X F`.** `F` is already Fork session in the terminal client
-(`rust/tui/src/main.rs` leader `f`, `LEADER_SHORTCUTS`) and the desktop client (`ctrl-x f`), so it was not free.
-`P` was unbound in both (desktop `Ctrl+P` is the palette, which does not collide with the chord).
+(`rust/tui/src/main.rs` leader `f`, `LEADER_SHORTCUTS`), so it was not free.
+`P` was unbound.
 
 **What Codex does.** Nothing named pause. Its voice mode has `toggle_voice` and `toggle_voice_mute`
 (`tui/src/keymap.rs`), and mute only keeps the WebRTC/RTP track alive with generated silence: "Muted capture
@@ -274,8 +272,7 @@ the seconds it lasts; a long one costs at most `pause_seconds` of idle time and 
 Setting `pause_seconds = 5` makes pause almost a stop; `3600` keeps a quiet call open for an hour at full price.
 
 **Where it shows.** The Live pane header reads `PAUSED      ends in mm:ss  Ctrl+X P resume   mm:ss` (the
-countdown is the time to the end of the pause; `Ctrl+X P resume` replaces the `/live stop` hint), the desktop call bar shows `PAUSED mm:ss`
-and a resume button, `/live status` has a `Paused` row, and `LiveStatusResult` carries `paused` and
+countdown is the time to the end of the pause; `Ctrl+X P resume` replaces the `/live stop` hint), `/live status` has a `Paused` row, and `LiveStatusResult` carries `paused` and
 `pause_remaining_s`. State is the daemon's, so every view agrees and a reconnect sees it. Tested offline
 (`tests/test_live_manager.py`, `test_ratatui_live.py`, `test_ui_support_live_helper.py`, Rust `cargo test`);
 no real call: not verified.

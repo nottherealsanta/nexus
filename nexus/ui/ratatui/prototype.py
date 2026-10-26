@@ -880,7 +880,7 @@ def _details_panel(controller, view, shell):
         "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
                         ["Socket", escape_controls(str(daemon.get("socket") or "unavailable"))],
                         ["Client", str(getattr(getattr(getattr(controller, "client", None), "health", None), "version", "unavailable"))],
-                        ["Bridge", "3 (schema 1/2 compatible)" if shell and getattr(shell, "local_transcript", False) else "Desktop schema 3"], ["Nexus", version("nexus-harness")],
+                        ["Bridge", "3 (schema 1/2 compatible)"], ["Nexus", version("nexus-harness")],
                         *[["Timing", line] for line in (getattr(getattr(shell, "logs", None), "trace", []) + getattr(getattr(shell, "logs", None), "python_trace", []))]],
         "session": [[label, escape_controls(value)] for label, value in rows],
         "files": [{"path": escape_controls(f.path), "added": f.added, "removed": f.removed, "created": f.created,
@@ -1508,19 +1508,17 @@ async def dismiss(shell) -> bool:
     return True
 
 
-async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, desktop=False, process=None) -> int:
+async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, process=None) -> int:
     client = client or await open_client(workspace)
     controller = TuiController(client, session)
     shell = ShellActions(controller)
     from ..cli.commands import SPECS
     shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
     shell.command_help = {spec.name: spec.summary for spec in SPECS if not spec.hidden}
-    shell.local_transcript = not desktop
-    shell.native_reload = not desktop
-    shell.sidebar.enabled = not desktop  # the left sidebar is a terminal feature
-    shell.live.pane = not desktop  # the terminal shows the open call above the composer
+    shell.local_transcript = True
+    shell.native_reload = True
+    shell.sidebar.enabled = True  # the left sidebar is a terminal feature
     shell.ui_ack = 0
-    shell.inline_images_enabled = desktop
     shell.workspace = str(workspace)
     shell.tabs = [{"id": session, "title": session, "workspace": str(workspace), "state": "idle"}]
     shell.reconnect = reconnect or (lambda: open_client(workspace))
@@ -1539,10 +1537,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     displayed_prompt = None
     from .wire import TerminalWire
     terminal_wire = TerminalWire()
-    desktop_wire = None
     update_coalescer = None
     async def update(event=False, *, immediate=True, _scheduled=False):
-        nonlocal revision, desktop_wire, event_sent_at, event_kind, allowed_operations, displayed_prompt, stream_turn
+        nonlocal revision, event_sent_at, event_kind, allowed_operations, displayed_prompt, stream_turn
         if event is not False and event is not None:
             event_kind = event.type
             if event.type == "manager.show" or (event.type == "session.linked" and isinstance(event.data, dict)
@@ -1560,7 +1557,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     shell.notice = f"Ownership refresh failed: {type(exc).__name__}: {exc}"
         elif not _scheduled:
             stream_turn = False
-        if event is not False and event is not None and not desktop:
+        if event is not False and event is not None:
             immediate = event.type in {"permission.requested", "permission.resolved", "question.requested", "question.answered", "question.resolved", "tool.requested", "turn.completed", "turn.failed"}
         if not immediate and event is not None:
             if event is not False and event is not None:
@@ -1592,11 +1589,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         async with write_lock:
             # The literal `lines` projection is a test seam; the native typed blocks already
             # carry the transcript and the full-detail actions, so it is not built here.
-            if desktop:
-                from ...ui_support.native_images import refresh_draft_images
-                await refresh_draft_images(shell)
             started = time.perf_counter()
-            snapshot = stream_projection.project(controller, shell, revision, stream_turn, _project_turn) if not desktop and stream_turn else None
+            snapshot = stream_projection.project(controller, shell, revision, stream_turn, _project_turn) if stream_turn else None
             full_projection = snapshot is None
             if full_projection:
                 snapshot = project(controller, revision, shell=shell, literal=False)
@@ -1625,17 +1619,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             # Poll ticks that change nothing are not resent; one-shot composer
             # fields (restore/insert) always are, since they repeat legitimately.
             started = time.perf_counter()
-            if desktop:
-                if desktop_wire is None:
-                    from ..desktop.wire import DesktopWire
-                    desktop_wire = DesktopWire()
-                wire = desktop_wire.encode(snapshot)
-                if wire is None:
-                    return
-            else:
-                wire = terminal_wire.encode(snapshot)
-                if wire is None:
-                    return
+            wire = terminal_wire.encode(snapshot)
+            if wire is None:
+                return
             trace.elapsed("fingerprint", started)
             started = time.perf_counter()
             encoded = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))

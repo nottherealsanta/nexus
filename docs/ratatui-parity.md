@@ -144,7 +144,7 @@ selection, and click the label or press Enter to inspect definitions/details.
 Switches show LOCKED after the first turn and on read-only child pages; the host
 still enforces that lock. These controls change session context, not config files.
 Covered by native workflow, Rust layout/hit-target and controlling-PTY tests.
-Live-provider and real-desktop visual verification are not claimed.
+Live-provider and real-terminal visual verification are not claimed.
 
 Tools and reasoning share activity groups interleaved with visible agent replies.
 Each reply closes the preceding group; task/subagent cards remain separate, and so
@@ -303,7 +303,7 @@ picker without selecting a model. Sort, favorite, refresh and details keys sit
 on the bottom row (`panel_hint`). Agent model/fallback pickers share compact
 names and Ctrl+I details. The `Search` box matches the
 label and the hidden `provider/model` reference, so a provider name such as `open` finds
-OpenCode Go (the browser and desktop clients already did this; the native filter
+OpenCode Go (the browser client already did this; the native filter
 previously matched the label only). Not verified visually in a
 real terminal; the `Free` price tag and the "Connect an integration" action from
 the reference are not ported.
@@ -876,11 +876,19 @@ the highlight share `stop_at`) draws them bold in the error colour on the elemen
 background (`stop_button_highlights_only_its_cells_on_hover`). The transcript draws no second working row.
 Pending steering, queued and interrupt messages form Grok's unboxed sections under it
 (only messages waiting behind a running turn: the head input of an idle send starts its own
-turn and is never listed, `_waiting_inputs` in `prototype.py`)
+turn and is never listed in these sections, `_waiting_inputs` in `prototype.py`)
 after one blank row: `▾ Steering N` (`steer` plus `interrupt`) and `▾ Queued N`
 (ordinary queued inputs), then each group's `#n text` rows (`#n` quiet, accent for
 steering; four rows total when there is one group and a shared smaller limit when there
 are both, then per-group `+N more`). Real queue positions are retained across groups.
+An idle send's durable head input appears immediately as a user card labelled
+`starting…`, including attachment labels, until `input.consumed` replaces it with
+the ordinary prompt. Both cards use `message:input:<queued_id>:user`, so the
+transition does not duplicate the message. This also covers the gap after
+`turn.started` and before consumption. Inputs held by the global turn cap keep
+their existing waiting rows. Queue lifecycle and turn-start events flush the
+projection immediately instead of waiting for the 16 ms streaming coalescer.
+
 Only queued items are reordered: ↑/↓ are available when the adjacent queue entry is also
 queued (the first member cannot move above the unlisted active-turn input), disabled arrows
 are blank and their click targets do nothing, and steering/interrupt items have no arrows.
@@ -933,9 +941,7 @@ Labelled panels read as dim `label: ` then value. `/usage` renders per-provider
 thin limit bars (`ui_support/usage.usage_lines`, tone `meter-<tone>`): the
 label stays in the text colour, used cells take the tone, the track and summary
 are dim, the pace marker `┃` is plain, and `N% in reserve` / `N% over pace` are
-green / amber (`render/dialogs.rs:meter_spans`). The desktop client draws the
-same rows as plain dimmed text (same wording as
-modal). `/settings` opens on Appearance, like terminal.
+green / amber (`render/dialogs.rs:meter_spans`). `/settings` opens on Appearance, like terminal.
 
 Dictation shows a strip above the composer like `VoiceStrip`: `● Recording m:ss`,
 a level wave of the last 28 samples (kept in Rust from the `voice_level` field of
@@ -1080,7 +1086,7 @@ provider overload are not verified.
 The `/` and `@` menus always show 10 rows (fewer only when fewer exist) so the popup
 never changes height while typing. Rows rank prefix matches, then substring/fuzzy,
 then typo matches (adjacent swap or one substitution, so `/mew` finds `/new`), then
-padding. Python (`ui_support/completion.rank_menu`) serves desktop and `@` files; the
+padding. Python (`ui_support/completion.rank_menu`) serves `@` files; the
 TUI ranks slash commands locally with the same tiers (`rank_commands`).
 
 `@` completion in the native TUI also offers visible directories (2026-10-20, plan
@@ -1093,7 +1099,7 @@ before files of equal rank. Accepting a `@dir/` row (keyboard or mouse) inserts
 `@dir/` with no trailing space so the 120 ms debounce lists its children; files and
 other completions still end with a space. `@` stays literal text: no content is
 expanded and the prompt gets no notice. Paths containing spaces remain a limitation
-(the token ends at whitespace). Desktop and web keep files-only results.
+(the token ends at whitespace). The web client keeps files-only results.
 
 Native slash/file completion and command choice menus use the full transcript
 width directly above the composer, without borders. Agent, model, effort and
@@ -1250,26 +1256,6 @@ the next model step after the current operation; idle sends start a turn.
 Ctrl+Enter explicitly queues a new turn; Alt+Enter interrupts. Bridge submit
 actions that omit `mode` also default to steering.
 
-### Shared desktop bridge attachment actions
-
-The operation allowlist includes `chip_operation` recursively alongside block and
-output operations. This lets the GPUI client inspect submitted attachment chips
-using the existing message page; it accepts only operations projected for the
-current view. Covered by `test_projected_attachment_operations_are_allowed_recursively`.
-
-Forms also project a defaulted `can_delete` capability for settings-file targets.
-The desktop shows delete/reset only where the shared host workflow supports it;
-confirmation and built-in-default protection remain in that workflow.
-
-## Desktop image presentation shared seam
-
-The GPUI launcher opts into bounded inline-image projection; Ratatui does not
-fetch draft thumbnail data. Submitted-message inspection now replaces embedded
-base64 with labelled media/size information and exposes each image as a projected
-preview operation. Both clients retain complete text and other content blocks.
-The daemon remains the source of draft image bytes. See [desktop.md](desktop.md)
-for bounds and native capture evidence.
-
 ## Sole terminal renderer
 
 The legacy terminal client, widgets, dependencies and browser fixtures have been
@@ -1296,7 +1282,6 @@ without a user row are never folded, since nothing could reopen them. A folded t
 its prompt's first line (ending ` …` when more was hidden) and, beneath it in the muted
 color, `N tools · tokens · model` (`_fold_summary`; token and model parts with no data are omitted), drawn outside and below the prompt card, aligned with its text.
 Fold choices live only in the running client and are not saved anywhere.
-Desktop retains its existing projection and wire encoder.
 
 The terminal writes schema 3: omitted sections are unchanged, explicit empty/null
 values clear them, `reset` establishes a session/page, and `blocks_from` replaces
@@ -1437,7 +1422,7 @@ focus, right-click actions, the `sessions_request` snapshot field and the
 Settings → Layout row). Sessions replaces it: `/session`,
 `/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Sessions]` all send
 `/sessions`. The right details sidebar (`Ctrl+L`) stays, on the Sessions page too. The saved
-`sessions_sidebar` preference and snapshot key stay for the GPUI desktop client only. A new
+`sessions_sidebar` preference and snapshot key stay unused since the GPUI desktop client was removed. A new
 left sidebar ("Left sidebar" at the end of this file) supersedes the `/sessions`, `Ctrl+B` and
 `▤` wiring above for hosts that send a `sidebar` block.
 
@@ -1668,8 +1653,7 @@ composer no longer shows it; the clock is computed in Rust from the
 call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the
 snapshot every 250 ms while a call is open so the mic levels move (the client keeps the newest samples and eases them per frame). The band's bars (breathing listening swell lifted by the mic, accent gradient wave while speaking, left-to-right shimmer while connecting or working, flat line when muted or ended) replace the former dots, braille orbit and `∿` ripple; they run on the 30 Hz activity clock only while the call moves, rest static with animations off and use `_.:-=+*#` in ASCII. Covered by Python tests
 (`tests/test_ratatui_live.py`, fake helper and fake transport) and Rust unit tests; real terminal,
-microphone and call behavior are not verified. The desktop route for `Ctrl+X D` lands with M5
-(`tests/test_desktop_keymap_parity.py` lists it as pending).
+microphone and call behavior are not verified.
 
 While a call is open, the terminal draws the card rows in a Live pane under the composer card and above
 the bottom bar (activity meter row; order: transcript, composer, Live pane, bottom bar), not in the timeline.
@@ -1679,8 +1663,7 @@ settles, and it jumps to the final state with animations off (`docs/live.md`) (`
 right (` ⤢ expand ` / ` ⤡ collapse `) expands it to nearly full screen (up to just below the top bar,
 leaving the timeline one row) and collapses it again, and
 hidden rows are announced. The expanded state is local to the terminal client and resets when the call
-ends. The open call is left out of the timeline; its card joins the timeline when the call ends. The
-desktop client (`shell.live.pane = False`) keeps the card in the timeline. A call on another session
+ends. The open call is left out of the timeline; its card joins the timeline when the call ends. A call on another session
 (or one still connecting, no rows yet) shows the header alone as a one-row pane, with `· in <session>`.
 Python matches the call before its id is known (state `starting`) by the newest non-ended call of the shown
 session, so the card never flashes in the timeline. Not verified in a real terminal.
@@ -1697,7 +1680,7 @@ script model responses, not `live.*` events. Real microphone and OpenAI behavior
 
 Status: implemented and tested offline (Python, Rust unit tests, PTY); **the feature stays off by
 default (`[manager] enabled = false`) and is not soaked against real Codex or GPT Live.** Backend
-and rules: [manager.md](manager.md). The terminal and the desktop client share one Python bridge
+and rules: [manager.md](manager.md). The terminal uses one Python bridge
 (`nexus/ui/ratatui/manager.py`, presentation in `nexus/ui_support/manager.py`).
 
 - **Pinned entry.** The Sessions page (`▤`, `Ctrl+B`, `/sessions`) draws a Manager block between
@@ -1722,8 +1705,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   call is open) with a blank second row and a blank workspace row (path, branch, worktree). Closing never archives, deletes or cancels anything. `/manager` and the pinned Sessions entry still open the view, and keep the
   same way back. `Ctrl+X a`/`A`/`.` are always the toggle, never context-dependent; the old
   "run the newest toast's action" moved to `Ctrl+X y`. The shared `LEADER_SHORTCUTS` rows (`a` and `.`,
-  `toggle_manager`) list it in `Ctrl+X ?` and Settings > Keyboard; the desktop binds `a` only (desktop is
-  paused, so `.` is native-only in `tests/test_desktop_keymap_parity.py`).
+  `toggle_manager`) list it in `Ctrl+X ?` and Settings > Keyboard.
 - **Open.** `manager_open` / `/manager [open]` call `ManagerOpen` (idempotent), switch to the returned session
   (no tab; it records the way back for the toggle) and re-read the state. While off, nothing is created: a panel explains
   `[manager] enabled = true` and the daemon restart. Signed out of Codex still opens (the log is readable)
@@ -1768,8 +1750,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   own: first line and `title` are prefixed `Manager · `, the prompt carries `session` (the manager id) and the
   `answer` action resolves it there (`resolve_permission` / `answer_question` on that session; manager
   launch, cancel, send and show raise none). The bar adds `manager: true` and `attention`
-  (`approval waiting` / `question waiting`, drawn as a bold warning chip after the phase in the terminal header
-  and as an amber chip in the desktop bar). The composer is untouched on other sessions: it sends to the
+  (`approval waiting` / `question waiting`, drawn as a bold warning chip after the phase in the terminal header). The composer is untouched on other sessions: it sends to the
   displayed session and the pane takes no keystrokes. Once the call ends the manager's prompts are visible only in the manager session.
 - **Focus reporting.** Each native client reports its foreground session (`nexus/ui/ratatui/focus.py`,
   `Focus`): on start, after every `ShellActions.switch`, every 15 s while polling (so the host can expire a stale
@@ -1787,7 +1768,7 @@ and rules: [manager.md](manager.md). The terminal and the desktop client share o
   `expires_at`, once per event (64 remembered), and only when this client's `Focus.client_id` is in `clients` while the
   manager is in front, or the event is from Live and this client's Live call follows the manager. It never replaces a
   panel, form, Sessions dashboard, voice recording or pending prompt: a warning toast names the request instead.
-  Terminal and desktop share it; no Rust change. Tests: `tests/test_manager_show.py`; the `prototype.update`
+  No Rust change. Tests: `tests/test_manager_show.py`; the `prototype.update`
   hook itself is covered only through `Manager.on_event` and `ManagerFollow`, not a PTY run.
 - **No confirmation.** Manager `session_launch` / `session_cancel` / `session_send` / `session_show` run without an approval
   request (attended or not), so there is no manager-specific prompt; `ui_support/manager.py` and
@@ -2098,7 +2079,6 @@ The shared native command table exposes `/handoff` and `/handoff read` without
 switching tabs or session IDs. The former writes an idle cutover with a request
 ID; the latter reads a bounded redacted brief without recovery. The shared
 transcript projection renders a stable divider; earlier cards stay readable.
-The desktop NativeShell bridge uses the same command/projection and host codec.
 No web feature expansion is required. Terminal skill service was unavailable;
 this document remains the native implementation/parity guidance.
 
@@ -2175,10 +2155,10 @@ in a real terminal.
 ratatui; `nexus manager status` is the non-interactive status command. These use
 HostClient ManagerOpen/ManagerState, not session storage. Native session pickers
 pin Manager above ordinary sessions: press `m` in the terminal picker to jump
-back, or select Manager in the desktop picker. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
+back. While it is open the right-hand `◆` toggle is pressed and the left title, workspace path and git branch are hidden (presentation only).
 Ask “Start a session to do X” to launch through a tool call that needs no confirmation;
 ask “What finished in the last two hours?” to find sessions, then use `/sessions`
-(or the desktop session picker) to open a result and return to Manager. Entry
+to open a result and return to Manager. Entry
 notes show launch/find guidance and provider/voice readiness. Live real-provider
 verification remains outstanding; offline UI tests do not establish it.
 
@@ -2265,8 +2245,8 @@ Sessions tab instead of replacing the conversation with the old full-page dashbo
 never steals keyboard focus (the composer keeps the keys; a click focuses the column); `Ctrl+B` and the top bar's `▤` toggle it. Snapshot block `sidebar`
 (`{available, open, tab, width, focus, sessions, projects, files, git}`), built by
 `ui/ratatui/sidebar.py` from host results through `ui_support/sidebar.py`; drawn and
-hit-tested by `rust/tui/src/sidebar.rs`. A host that sends no `sidebar.available` (the
-desktop bridge, old snapshots, fixtures) keeps the legacy Sessions page.
+hit-tested by `rust/tui/src/sidebar.rs`. A host that sends no `sidebar.available` (old
+snapshots, fixtures) keeps the legacy Sessions page.
 
 | Tab | Shows | Source |
 | --- | --- | --- |
@@ -2310,7 +2290,7 @@ editor is started. A preview that returns after the project changed or a newer o
 dropped.
 
 State and safety. Open/closed, tab and width persist as `sidebar_open` (default closed),
-`sidebar_tab` and `sidebar_width`; the older `sessions_sidebar` key belongs to the desktop and is
+`sidebar_tab` and `sidebar_width`; the older `sessions_sidebar` key is the removed GPUI desktop's and is
 untouched. Files and Git describe the current
 project and reload when it changes; every answer carries a sequence and the workspace it was asked
 for, so a slow or stale one is dropped. The client can only open a folder the last listing offered
@@ -2511,7 +2491,7 @@ rows), with eight cached success/failure results (arbitrary eviction when full;
 more than eight visible diagrams can regenerate). Width changes request a new
 raster under a new key; old widths age out of the cache. Each timeline row paints
 its own two-pixel strip of the single raster, so scrolling clips the diagram
-instead of resizing it. This is native-only; desktop/web rendering is unchanged.
+instead of resizing it. This is native-only; web rendering is unchanged.
 
 **Monochrome limitation.** Ondine's default theme is monochrome. Pie slices,
 gantt bars and sankey bands therefore differ in grey tone (the `--ondine-series-*`

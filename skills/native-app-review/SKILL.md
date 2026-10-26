@@ -1,6 +1,6 @@
 ---
 name: native-app-review
-description: Launch, exercise, capture, and visually refine a real native desktop app using computer-use screenshots. Use for Rust GPUI and other native app UI work; excludes web-only mockups and generated pictures of apps.
+description: Launch, exercise, capture, and visually refine a real native desktop app using computer-use screenshots. Use for native app UI work such as the NSH macOS client; excludes web-only mockups and generated pictures of apps.
 ---
 
 # Native app visual review
@@ -11,7 +11,7 @@ Build and launch the actual application before judging its appearance. Screensho
 
 - Read the project's UI contract and build instructions. Preserve working host integration and the user's requested functionality while improving presentation.
 - Use an isolated development workspace and recorded/scripted data for repeatable screenshots. Keep credentials and private conversations out of captures. Label fixture mode visibly, and verify real host integration separately.
-- Build with the project's normal compiler. For GPUI on macOS, check that the Metal toolchain is available; do not switch the system developer directory automatically. Pin framework versions and consult that version's source for APIs.
+- Build with the project's normal compiler. Pin framework versions and consult that version's source for APIs.
 - Capture a matrix that reflects the app: empty conversation, populated transcript, expanded tools/context, settings, model picker, approval/question, attachments, subagent, narrow window, and both themes when supported. Record omissions honestly.
 - If a source binary has no application identity, use [scripts/package_macos.py](scripts/package_macos.py) to create a local `.app` wrapper: `python package_macos.py PATH_TO_BINARY OUTPUT.app --name NAME --bundle-id ID`. Launch its `Contents/MacOS` executable through the app's normal bridge when stdin carries presentation data; launching it through Finder would lose that bridge. The helper does not sign or install the app.
 
@@ -39,4 +39,4 @@ Deliver build/run instructions, screenshot locations, verified journeys, and rem
 
 ## macOS rebuilds
 
-Close the previous window before replacing its executable. The packaging helper replaces the executable inode to avoid stale macOS code-signing cache after a rebuild. If multiple old windows remain, select by title and close only the review windows; verify the visible build against a known changed label. Computer-use capture may expand the window back to its review viewport even after a resize request succeeds; record narrow-layout capture as unverified in that case, and check the layout with GPUI tests separately. Screenshot coordinates use the returned image dimensions; do not assume logical pixels equal capture pixels.
+Close the previous window before replacing its executable. The packaging helper replaces the executable inode to avoid stale macOS code-signing cache after a rebuild. If multiple old windows remain, select by title and close only the review windows; verify the visible build against a known changed label. Computer-use capture may expand the window back to its review viewport even after a resize request succeeds; record narrow-layout capture as unverified in that case, and check the layout with the app's own tests separately. Screenshot coordinates use the returned image dimensions; do not assume logical pixels equal capture pixels.

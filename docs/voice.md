@@ -1,7 +1,7 @@
 # Local dictation (`nexus/voice/`)
 
 Optional, consent-gated speech-to-text for the composer. Audio is transient and
-bounded; the TUI and web use the host contract and never touch the runtime or the
+bounded; the TUI and the `/v1/web/voice` API use the host contract (the browser dictation UI was removed with the old web client on 2026-10-26; only the API remains) and never touch the runtime or the
 model cache. Plans and spike notes: `plans/VOICE_PLAN.md`, `plans/VOICE_SPIKE.md`.
 
 Voice status reports `cached` separately from the in-memory lifecycle state.
@@ -32,8 +32,8 @@ and cache-only preparation check runtime availability first and report the
 | `voice/audio.py` | strict WAV validation: mono, 16 kHz, PCM16, ≥ 0.2 s, ≤ `voice.max_seconds` (≤ 120) |
 | `voice/model.py` | `VoiceState`, `TranscribeResult`, `VoiceError` |
 | `host_support/voice.py` | bounded, redacted host dispatch and Doctor projection |
-| `ui_support/voice_capture.py`, `ui/ratatui/voice.py`; `ui/web/js/voice.js`, `voice-worklet.js` | TUI and browser capture and consent flow |
-| `ui/ratatui/voice.py`, `ui/web/js/voice-strip.js` | the live dictation strip (waveform + running transcript) |
+| `ui_support/voice_capture.py`, `ui/ratatui/voice.py` | TUI capture and consent flow |
+| `ui/ratatui/voice.py` | the live dictation strip (waveform + running transcript) |
 
 ## Diagnosing setup failures
 
@@ -83,7 +83,7 @@ summary, with the full traceback in the `nexus.voice` logger.
    daemon and downloads the model in a fresh interpreter, since a uv reinstall
    replaces the running venv. It refuses on musl. With the runtime present it is
    `nexus voice download`. The model (~180 MB) is **not** bundled.
-2. **Consent:** the first use shows a confirmation dialog in the TUI and web;
+2. **Consent:** the first use shows a confirmation dialog in the TUI;
    `nexus voice download` is itself an explicit action. `VoicePrepare` carries no
    consent token, so UI consent is a client-flow contract, not host-enforced.
 3. **Prepare:** the daemon may warm a *verified* cache at startup but always passes
@@ -98,7 +98,7 @@ summary, with the full traceback in the `nexus.voice` logger.
    capture-limit stops retain the `auto_send` preference. Explicit discard remains
    a separate cancellation path. Failed or empty transcription does not send.
 5. **Live preview:** while recording, clients re-send the growing recording as
-   `VoiceTranscribe(partial=True)` (web: `?partial=1`), request id
+   `VoiceTranscribe(partial=True)` (`/v1/web/voice`: `?partial=1`), request id
    `<recording id>-p<n>`. At most one preview is in flight, sent only after
    ≥ 0.4 s of new audio and no sooner than `max(0.7 s, 1.5 × last preview
    time)`, so slow devices self-throttle. The manager answers a partial with
@@ -134,7 +134,7 @@ are pinned to the one trusted manifest (Bark `6d34ed86…`). `NEXUS_VOICE=off` d
   as proven offline.
 - The weights and processor files are CC-BY-4.0; keep the attribution in
   `nexus/voice/NOTICE`.
-- Legacy/web UI behavior (orange dot only while recording, the floating live strip with
+- Legacy UI behavior (orange dot only while recording, the floating live strip with
   waveform and preview text, any key stops, `Esc` discards, no auto
   "loading/ready" model labels): [surfaces.md](surfaces.md#dictation).
 
@@ -160,10 +160,10 @@ limit; at most one preview is in flight, with pacing based on inference latency.
 endpoint. Partial requests bypass final-result deduplication, never mark a
 session as voice-used, and do not insert text. Stopping cancels the preview and
 requests a final transcript of the full recording; only that result enters the
-composer. Legacy/web Escape discards capture and cancels inference; native
+composer. Legacy Escape discards capture and cancels inference; native
 Ratatui Escape finishes and keeps the final transcript without sending.
 
-The browser renders the same preview phases with a canvas waveform. Real-
+Real-
 microphone latency and inference on supported hardware are **not verified**.
 
 `nexus voice` defaults to status. Missing-runtime download failures point to
@@ -207,7 +207,7 @@ independently of recording cues; playback is best-effort without audio support.
 Starting dictation plays a short rising two-note cue; stopping plays a falling
 one. The cue (`ui_support/voice_capture.py:play_cue`, via `sounddevice`
 output) finishes before the microphone opens so it is not recorded. It is
-terminal-only (Ratatui); the web app has none. Cues are best-effort (a
+terminal-only (Ratatui). Cues are best-effort (a
 missing output device is silent) and `NEXUS_VOICE_SOUNDS=off` disables them. Native
 Escape plays the stop cue while keeping the transcript; explicit discard also
 plays the stop cue. Audible result on
@@ -223,7 +223,7 @@ transcripts. An active turn, missing final text, or a tool-call-only final
 message is refused. Markdown in the final answer is passed through as text.
 Playback happens on the daemon machine's default output device, not remotely
 on the client. Both Ratatui dispatch the same `Speak` host command;
-the deprecated browser client has no new speech UI.
+the NSH client has no speech UI.
 
 Speech is enabled by default: its runtime installs with Nexus and no `[speech]`
 switch exists. Nothing speaks on its own (only `/speak` does) and the model download

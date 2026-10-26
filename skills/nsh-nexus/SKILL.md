@@ -33,8 +33,8 @@ NSH API questions from memory or from React/RN/GPUI analogy.
 5. **Bounded and untrusted.** Host text is untrusted; cap SSE line/event sizes,
    queues and caches. Never retry a write automatically. Compare session and
    revision ids before applying late results.
-6. **Paused/deprecated areas.** Do not touch `rust/desktop/` (GPUI, paused) or
-   add features to `nexus/ui/web/` (deprecated).
+6. **Removed/deprecated areas.** The GPUI desktop client (`rust/desktop/`) was
+   removed; do not recreate it. The old `nexus/ui/web/` was removed (2026-10-26); `nexus web` serves this client.
 
 ## Where to read in the NSH docs
 

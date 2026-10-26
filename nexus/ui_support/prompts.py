@@ -1,8 +1,8 @@
 """UI-neutral choices for operator prompts: approvals and agent questions.
 
 Every attended surface shows both prompts as a list (like the model and
-slash-command pickers). This module owns the non-visual part so the TUI and
-the web client offer the same rows and shortcuts:
+slash-command pickers). This module owns the non-visual part so every surface
+offers the same rows and shortcuts:
 
 * :func:`approval_choices` turns a ``permission.requested`` payload into the
   four protocol decisions, degrading fail-closed exactly as the CLI approver.

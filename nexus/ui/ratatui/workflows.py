@@ -1217,7 +1217,7 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
     async def sessions(self):
         """Open the dashboard without switching the selected session."""
         if not getattr(self.shell, "local_transcript", True):
-            # GPUI consumes typed menus, not the Ratatui-only dashboard snapshot.
+            # Hosts without a local transcript get typed menus, not the Ratatui-only dashboard snapshot.
             result = await self.client.list_sessions()
             rows = [(escape_controls(row.title or row.id),
                      {"kind": "session_actions", "id": row.id,

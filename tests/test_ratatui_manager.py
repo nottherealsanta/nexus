@@ -243,8 +243,6 @@ def test_ctrl_x_a_and_the_top_bar_button_are_wired_natively():
     assert "KeyCode::Char('A')" in tui and "KeyCode::Char('.')" in tui
     assert tui.count('"manager_toggle"') >= 2  # the chord and the click
     assert "TabHit::Manager" in Path("rust/tui/src/render/chrome.rs").read_text()
-    desktop = Path("rust/desktop/src/panels.rs").read_text()
-    assert '"manager-toggle"' in desktop and desktop.index('"manager-toggle"') < desktop.index('"sessions-toggle"')
 
 
 async def test_slash_manager_and_pinned_operation_open_it(shell):
@@ -398,18 +396,6 @@ async def test_board_is_absent_off_the_manager_or_while_off(shell):
     shell.client.manager_state.return_value = state(enabled=False, session="")
     await shell.manager.refresh()
     assert project(shell.controller, 5, shell=shell, literal=False)["manager_board"] is None
-
-
-def test_manager_rides_the_sessions_topic_on_the_desktop_wire():
-    from nexus.ui.desktop.wire import DesktopWire
-
-    wire = DesktopWire()
-    base = {"schema": 2, "revision": 1, "generation": 1, "agent_page": "", "blocks": [], "blocks_from": 0,
-            "sessions": [], "manager": {"summary": "Ready"}}
-    wire.encode(base)
-    encoded = wire.encode({**base, "revision": 2, "manager": {"summary": "Working"}})
-    assert set(encoded["topics"]) == {"sessions"}, "the pinned entry never invalidates the (larger) header topic"
-    assert encoded["topics"]["sessions"]["manager"] == {"summary": "Working"}
 
 
 # -- Live on the manager -------------------------------------------------------------------

@@ -90,7 +90,7 @@ unchanged. The subagent task row's `external_tool_calls` (separate from native
 `tool_calls`, which stays unreported for external workers) is derived from the
 child's unique `external.tool` rows, raised to `external.finished.tool_calls`
 when that is larger, so live and replayed sessions agree. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
-a web port is not planned (the web client is being deprecated).
+no browser port exists.
 
 ### Code mode (`code.*`, plan 03 section 3.12; kernel plan §3.8)
 
@@ -278,15 +278,14 @@ event contract records a bounded snapshot.
   `seq + 1` (`HostFacade.state` + `subscribe`).
 - **Browser patches.** `host_support/browser_view.py` projects the view to JSON
   and diffs it into JSON-Pointer ops (`add`/`replace`/`remove`/`append`) with a
-  `resync` escape hatch ([web.md](web.md)).
+  `resync` escape hatch ([nsh-client.md](nsh-client.md#the-v1web-api)).
 
 ## Adding an event or view field
 
 1. Emit it from the owning layer and add the name to its group in `events.py`.
 2. Teach `view/reduce.py` to fold it and extend `view/model.py` if the UI must
    draw it. Keep the reducer pure and bounded.
-3. If the browser needs it, it rides the existing snapshot/patch path; add a
-   port in `ui/web/js/` and keep the TUI and web rows matching
+3. If the NSH client needs it, it rides the existing snapshot/patch path
    ([surfaces.md](surfaces.md)).
 4. Tests: `tests/test_view_reduce.py`, the fixtures under `tests/fixtures/view/`,
    and `tests/test_events*.py` where the catalogue is pinned.

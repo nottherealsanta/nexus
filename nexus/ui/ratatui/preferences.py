@@ -11,7 +11,7 @@ from ...ui_support.sidebar import TABS, clamp_width, normalize_tab
 
 
 class Preferences:
-    #: ``sessions_sidebar`` is the GPUI desktop's sessions sidebar (default open, shared file); the
+    #: ``sessions_sidebar`` was the removed GPUI desktop client's sessions sidebar (kept for old files); the
     #: terminal's left sidebar (Projects, Sessions, Files, Git) is ``sidebar_open``, closed until opened.
     DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
                 "details_tab": "Session", "context_preview": True, "centered_layout": False, "tabs_vertical": False, "model_favorites": [], "model_recent": [],
