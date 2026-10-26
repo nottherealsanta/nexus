@@ -1706,3 +1706,22 @@ direct tools stay).
 reminders as atomic user-role notice/event pairs at request boundaries, rather
 than steering, so replay retains the same model context and users see why the
 harness asked for a wrap-up. Hard stops take precedence; child counts are isolated.
+
+## GPT Live opens the Manager screen; launches move once per manager turn (plan 10, 2026-10)
+
+The manager gets its own screen instead of the blanked ordinary conversation: `Ctrl+X .`
+toggles it next to `Ctrl+X A` (kept), the top bar names it (`◆ Manager · <model>`, Live phase
+while a call is open), a board lists the managed roots newest first (six rows plus `+N more`),
+and the composer reads `Talk to the Manager…`. Starting a GPT Live call moves to that screen
+once the call connects — a reversal of the plan-02 "Live never switches the session on screen"
+rule, because the user wants the manager visible during a call. Never on a refused consent or
+unavailable helper, never over a modal, panel, dashboard, recording or pending prompt (then a
+toast offers `Open Manager`), and ending the call never switches back. The composer already
+sent to the manager when it is in front and stays usable during a call: no routing change.
+
+When the manager launches a session while the user is talking to it (typing, or a Live call
+following it), the client still moves to the new session — but only the first launch of a
+manager turn moves. Moving twice in one breath is disorienting; later launches of the same
+turn raise an info toast with an `Open` action, and a blocked move carries the same action.
+Implemented offline only (Python/Rust unit tests, PTY for the toggle, board and draft
+retention); not verified against real Codex or GPT Live, no screenshot review.

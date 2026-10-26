@@ -666,6 +666,9 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
                 await self.shell.manager.live()
             else:
                 await self.shell.manager.open()
+        elif kind == "manager_board_toggle":
+            # The board heading on the Manager screen: collapse or expand the managed rows.
+            self.shell.manager_board_collapsed = not self.shell.manager_board_collapsed
         elif kind == "session_open":
             # The dashboard stays up until the switch succeeds, so a failed open leaves it (and the
             # error toast) in place; `switch` hides it.

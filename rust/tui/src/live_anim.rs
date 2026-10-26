@@ -162,7 +162,10 @@ mod tests {
         a.apply(&mut s, base, true);
         assert!(a.apply(&mut s, ms(base, 100), true));
         assert!(a.apply(&mut s, ms(base, 300), true), "sweep still runs");
-        assert!(a.apply(&mut s, ms(base, 600), true), "one frame draws the final state");
+        assert!(
+            a.apply(&mut s, ms(base, 600), true),
+            "one frame draws the final state"
+        );
         assert!(!a.apply(&mut s, ms(base, 700), true));
         assert!(!a.apply(&mut s, ms(base, 5000), true));
     }

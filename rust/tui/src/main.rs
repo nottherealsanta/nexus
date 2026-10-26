@@ -354,6 +354,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshot_received: Option<Instant> = None;
     let spin_clock = Instant::now();
     let mut nav: Option<usize> = None;
+    let mut manager_nav: Option<usize> = None;
     let mut recording_since: Option<Instant> = None;
     let mut press: Option<(usize, usize)> = None;
     // Source offset where a left press began inside the composer text; set while dragging.
@@ -490,6 +491,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             if next.generation != s.generation {
                 page_positions.clear();
+                manager_nav = None;
                 session_drafts.insert(s.composer_key.clone(), std::mem::take(&mut draft));
                 draft = session_drafts
                     .remove(&next.composer_key)
@@ -700,7 +702,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 next.details_panel.width = s.details_panel.width;
             }
             next.queue_collapsed = s.queue_collapsed;
-            next.live_expanded = s.live_expanded && next.live.active;
+            // The Live pane opens expanded on the Manager screen (plan 10 §4.1), so voice
+            // and text share one screen; an explicit collapse still sticks until the next
+            // call opens or the screen is entered with a call up.
+            let collapsed_here = !s.live_expanded && s.live.active && s.manager.active;
+            next.live_expanded =
+                (s.live_expanded || (next.manager.active && !collapsed_here)) && next.live.active;
             // The completion cue is played by the Python shell
             // (`notify_completion`); ringing the terminal bell here as well
             // made one completion sound twice.
@@ -831,6 +838,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             last_draw = Instant::now();
+            cache.manager_focus = manager_nav;
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             let drawing_at = Instant::now();
             let mut drawn_at = drawing_at;
@@ -996,9 +1004,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // The Live panel opening or closing under the composer: each pass sets the rows revealed
         // so far and asks for frames only until the motion (and its settled frame) is drawn.
         let live_moving = cache.live_anim.apply(&mut s, Instant::now(), cache.animate);
-        let folding = cache.folding()
-            || cache.queue_flash.live(Instant::now(), cache.animate)
-            || live_moving;
+        let folding =
+            cache.folding() || cache.queue_flash.live(Instant::now(), cache.animate) || live_moving;
         if folding {
             dirty = true;
         }
@@ -1109,15 +1116,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         action("quit", "")?;
                         break 'app;
                     }
-                    if !s.sidebar.open && cache.sidebar.focus
-                        && s.details_sidebar && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
-                        && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
+                    if !s.sidebar.open
+                        && cache.sidebar.focus
+                        && s.details_sidebar
+                        && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
                         && !matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
                     {
                         let browser = sidebar::details_snapshot(&s);
                         let out = cache.sidebar.key(key, &browser, draft.text.is_empty());
-                        if let Some(message) = out.action { send(message)?; }
-                        if out.consumed { dirty = true; continue; }
+                        if let Some(message) = out.action {
+                            send(message)?;
+                        }
+                        if out.consumed {
+                            dirty = true;
+                            continue;
+                        }
                     }
                     // The left sidebar owns the keys while it has focus; a key it does not
                     // want (typing, composer shortcuts) falls through to the composer.
@@ -1360,6 +1376,61 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             cache.queue_ui.focus = None;
                         }
                     }
+                    // Empty-draft Tab enters the board; typing/Escape returns to the composer.
+                    if s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
+                        && !cache.sidebar.focus
+                    {
+                        if let Some(board) = s.manager_board.as_ref().filter(|_| s.manager.active) {
+                            let entries =
+                                crate::render::manager::layout(board, drawn_regions.manager_board);
+                            if let Some(index) = manager_nav {
+                                let index = index.min(entries.len().saturating_sub(1));
+                                match key.code {
+                                    KeyCode::Up | KeyCode::BackTab => {
+                                        manager_nav = Some(index.saturating_sub(1))
+                                    }
+                                    KeyCode::Down | KeyCode::Tab => {
+                                        manager_nav =
+                                            Some((index + 1).min(entries.len().saturating_sub(1)))
+                                    }
+                                    KeyCode::Home => manager_nav = Some(0),
+                                    KeyCode::End => {
+                                        manager_nav = Some(entries.len().saturating_sub(1))
+                                    }
+                                    KeyCode::Enter | KeyCode::Char(' ') => {
+                                        if let Some(operation) = entries
+                                            .get(index)
+                                            .and_then(|entry| entry.operation.as_ref())
+                                        {
+                                            send(
+                                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                            )?;
+                                        }
+                                    }
+                                    KeyCode::Esc => manager_nav = None,
+                                    _ => {
+                                        manager_nav = None;
+                                    }
+                                }
+                                dirty = true;
+                                if manager_nav.is_some() || key.code == KeyCode::Esc {
+                                    continue;
+                                }
+                            } else if key.code == KeyCode::Tab
+                                && draft.text.is_empty()
+                                && !entries.is_empty()
+                            {
+                                manager_nav = Some(0);
+                                nav = None;
+                                dirty = true;
+                                continue;
+                            }
+                        } else {
+                            manager_nav = None;
+                        }
+                    }
                     // Keyboard focus over clickable transcript blocks: Tab (empty draft) enters,
                     // arrows/Tab move, Enter or Space opens what a click would, Escape or any
                     // other key leaves.
@@ -1478,8 +1549,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        // `Ctrl+X A` (either case) always toggles the Manager view. The newest
-                        // toast's action moved to `Ctrl+X Y`.
+                        // `Ctrl+X A` (either case) and `Ctrl+X .` toggle the Manager
+                        // view. The newest toast's action moved to `Ctrl+X Y`.
                         let toast_action = if key.code == KeyCode::Char('y') {
                             cache.toasts.newest_action()
                         } else {
@@ -1493,7 +1564,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        if matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A')) {
+                        if matches!(
+                            key.code,
+                            KeyCode::Char('a') | KeyCode::Char('A') | KeyCode::Char('.')
+                        ) {
                             action("manager_toggle", "")?;
                             dirty = true;
                             continue;
@@ -2368,16 +2442,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         dirty = true;
                         continue;
                     }
-                    if !s.sidebar.open && s.details_sidebar
+                    if !s.sidebar.open
+                        && s.details_sidebar
                         && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
-                        && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none()
                     {
                         let palette = render::Palette::new(s.theme == "nexus-light");
-                        if let Some(g) = details_sidebar::geometry(drawn_regions.details, &s, &palette) {
-                            if g.body.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+                        if let Some(g) =
+                            details_sidebar::geometry(drawn_regions.details, &s, &palette)
+                        {
+                            if g.body
+                                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                            {
                                 let browser = sidebar::details_snapshot(&s);
                                 let out = cache.sidebar.details_mouse(mouse, &browser, g.body);
-                                if let Some(message) = out.action { send(message)?; }
+                                if let Some(message) = out.action {
+                                    send(message)?;
+                                }
                                 dirty = true;
                                 continue;
                             }
@@ -3166,6 +3249,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     follow = false;
                                     scroll = top.min(cache.max_scroll);
                                 }
+                            } else if r.manager_board.height > 0
+                                && r.manager_board.contains((mouse.column, mouse.row).into())
+                            {
+                                // The Manager screen's board: a row opens that session
+                                // (`session_open`, the ordinary switch), the heading
+                                // collapses or expands the rows. Same layout draws and
+                                // hit-tests (plan 10 §4.1).
+                                if let Some(board) = s.manager_board.as_ref() {
+                                    if let Some(operation) = crate::render::manager::hit(
+                                        board,
+                                        r.manager_board,
+                                        mouse.column,
+                                        mouse.row,
+                                    ) {
+                                        send(
+                                            json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                        )?;
+                                    }
+                                }
+                                dirty = true;
+                                continue;
                             } else if r.transcript.contains((mouse.column, mouse.row).into())
                                 && s.panel_title.is_empty()
                                 && s.prompt.is_none()
@@ -3258,9 +3362,15 @@ mod tests {
         assert_eq!(draft_state_report("", 1, None), Some((false, 1)));
         assert_eq!(draft_state_report("", 1, Some((false, 1))), None);
         assert_eq!(draft_state_report("  \n", 1, Some((false, 1))), None);
-        assert_eq!(draft_state_report("hi", 1, Some((false, 1))), Some((true, 1)));
+        assert_eq!(
+            draft_state_report("hi", 1, Some((false, 1))),
+            Some((true, 1))
+        );
         assert_eq!(draft_state_report("hi", 1, Some((true, 1))), None);
-        assert_eq!(draft_state_report("hi", 2, Some((true, 1))), Some((true, 2)));
+        assert_eq!(
+            draft_state_report("hi", 2, Some((true, 1))),
+            Some((true, 2))
+        );
     }
 
     #[test]

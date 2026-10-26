@@ -709,8 +709,16 @@ mod tests {
                 );
             }
         }
-        assert_eq!(super::live_offset(10, 10), 6, "an exact fit includes the bottom buffer");
-        assert_eq!(super::live_offset(10, 4), 6 + 1, "a tiny viewport still pads one row");
+        assert_eq!(
+            super::live_offset(10, 10),
+            6,
+            "an exact fit includes the bottom buffer"
+        );
+        assert_eq!(
+            super::live_offset(10, 4),
+            6 + 1,
+            "a tiny viewport still pads one row"
+        );
     }
 
     #[test]

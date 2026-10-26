@@ -158,6 +158,10 @@ pub struct Snapshot {
     /// The pinned Manager entry beside the sessions list (empty before the first host read);
     /// `manager.active` is true while the open session is the manager.
     pub manager: ManagerEntry,
+    /// The Manager screen's managed-sessions board (`nexus/ui/ratatui/manager_board.py`);
+    /// null unless the manager is in front (plan 10).
+    #[serde(default)]
+    pub manager_board: Option<ManagerBoard>,
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
@@ -424,6 +428,58 @@ impl ManagerEntry {
     /// Whether the host reported anything: an unread entry draws no pinned row.
     pub fn shown(&self) -> bool {
         self.known || !self.summary.is_empty()
+    }
+}
+
+/// One managed root on the Manager screen's board: the newest first, at most
+/// `BOARD_LIMIT` rows, then `+N more · /sessions` (plan 10 §4.1).
+#[derive(Clone, Default, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct ManagerBoardRow {
+    pub id: String,
+    pub title: String,
+    /// `working`, `input`, `done` or `idle`: the status glyph of the row.
+    pub status: String,
+    /// Compact second line (`2 messages · 14m`), empty when unknown.
+    pub sub: String,
+    /// Compact age (`2m`, `1h`), empty when unknown.
+    pub age: String,
+    /// `needs you` while a permission or question waits, else empty.
+    pub attention: String,
+    /// `session_open`: the ordinary switch to this root (`Ctrl+X .` returns).
+    pub operation: Option<Value>,
+}
+
+/// Rows drawn before `+N more · /sessions` (mirrors `manager_board.BOARD_LIMIT`).
+pub const BOARD_ROWS: usize = 6;
+
+/// The Manager screen's board over existing durable state (plan 10 §4.1).
+#[derive(Clone, Default, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct ManagerBoard {
+    /// Every managed id the host reported, including rows not drawn.
+    pub total: u64,
+    pub collapsed: bool,
+    /// Newest row timestamp seen: the board labels its own staleness.
+    pub updated_at: f64,
+    /// `manager_board_toggle`: collapse or expand the rows.
+    pub toggle: Option<Value>,
+    pub rows: Vec<ManagerBoardRow>,
+    /// Drawn rows beyond the limit (`+N more · /sessions`), 0 while collapsed.
+    pub more: u64,
+    /// Managed ids with no polled row yet (stale join, labelled on screen).
+    pub missing: u64,
+}
+
+impl ManagerBoard {
+    /// Rows the screen reserves for the board (plan 10 §4.1): the heading, the drawn
+    /// rows (at most `BOARD_ROWS`), and the `+N more` row when one overflows.
+    pub fn height(&self) -> u16 {
+        if self.collapsed {
+            return 1;
+        }
+        let drawn = self.rows.len().min(BOARD_ROWS) as u16;
+        1 + drawn + u16::from(self.more > 0)
     }
 }
 

@@ -19,6 +19,7 @@ mod dialogs;
 // Reused by later modals (Settings): see `dialogs::dim_backdrop`.
 #[allow(unused_imports)]
 pub use dialogs::{dim_area, dim_backdrop, BACKDROP_BLEND};
+pub mod manager;
 pub mod notifications;
 mod sessions;
 pub mod toasts;
@@ -402,6 +403,7 @@ pub struct Cache {
     mermaid_generation: u64,
     pub disclosure: crate::disclosure::Disclosure,
     pub settings_nav_focus: bool,
+    pub manager_focus: Option<usize>,
     dirty_from: Option<usize>,
     dirty_until: Option<usize>,
     patch_known: bool,
@@ -1217,6 +1219,9 @@ pub struct Regions {
     /// The project strip (`name branch path worktree`) under the composer and Live panel, directly
     /// above the bottom bar (zero height on the dashboard, sub agent pages and the manager view).
     pub project: Rect,
+    /// The Manager screen's managed-sessions board between the top bar and the transcript
+    /// (plan 10 §4.1); zero height unless the manager is in front with a board to show.
+    pub manager_board: Rect,
     pub context: Rect,
     /// The GPT Live panel between the composer and the bottom bar (zero height when no call
     /// is open; while it opens or closes only the revealed rows).
@@ -1579,9 +1584,16 @@ fn draw_status_line(
     if s.turn_status.is_none() {
         // The root is idle but background subagents still run: say so, and where to stop them.
         if s.agents_running > 0 {
-            let noun = if s.agents_running == 1 { "agent" } else { "agents" };
+            let noun = if s.agents_running == 1 {
+                "agent"
+            } else {
+                "agents"
+            };
             let text = crate::transcript::truncate(
-                &format!("{} {noun} running · /tasks to open or stop", s.agents_running),
+                &format!(
+                    "{} {noun} running · /tasks to open or stop",
+                    s.agents_running
+                ),
                 usize::from(row.width).saturating_sub(2),
             );
             frame.render_widget(
@@ -1840,7 +1852,8 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     } else {
         2
     };
-    let strip = u16::from(!dash && s.agent_page.is_empty() && !s.manager.active && composer_height > 0);
+    let strip =
+        u16::from(!dash && s.agent_page.is_empty() && !s.manager.active && composer_height > 0);
     let foot = u16::from(composer_height > 3);
     let fixed = 1 + bar + strip + composer_height;
     let spare = middle.height.saturating_sub(fixed + 1);
@@ -1867,9 +1880,27 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         Constraint::Length(foot),
     ])
     .split(middle);
+    // The Manager screen's board takes its rows off the top of the transcript (plan 10 §4.1):
+    // the same height feeds drawing (`manager::draw_board`) and clicks (`manager::hit`).
+    let mut transcript = center[3];
+    let mut board_rect = Rect::default();
+    if s.manager.active {
+        if let Some(board) = s.manager_board.as_ref() {
+            let height = board.height().min(transcript.height);
+            if height > 0 {
+                board_rect = Rect {
+                    height,
+                    ..transcript
+                };
+                transcript.y += height;
+                transcript.height -= height;
+            }
+        }
+    }
     Regions {
         tabs: center[1],
         project: center[6],
+        manager_board: board_rect,
         sidebar,
         details: if drawer {
             Rect::new(
@@ -1882,7 +1913,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
             columns[1]
         },
         context: Rect::default(),
-        transcript: center[3],
+        transcript,
         composer: center[4],
         live: center[5],
         bottom_bar: center[7],
@@ -1917,7 +1948,11 @@ fn draw_live_panel(
     let width = rows[1].width.saturating_sub(4);
     let now_epoch = crate::live_bar::now_epoch();
     // The motion band runs on the smooth 30 Hz clock, and rests at frame 0 without animation.
-    let motion = if cache.animate { cache.activity_frame } else { 0 };
+    let motion = if cache.animate {
+        cache.activity_frame
+    } else {
+        0
+    };
     if target == 1 {
         // No rows to show (connecting, or the call is on another session): the header alone.
         Paragraph::new(Line::from(crate::live_bar::spans(
@@ -2121,6 +2156,9 @@ pub fn draw(
     if s.dashboard.is_none() {
         draw_top_bar(frame, s, r.tabs, &p, spin);
         draw_project_strip(frame, s, r.project, &p);
+        if r.manager_board.height > 0 {
+            manager::draw_board(frame, s, r.manager_board, &p, cache.manager_focus);
+        }
     }
     cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
@@ -2559,10 +2597,17 @@ pub fn draw(
                     editor_area,
                 );
             } else if displayed.text.is_empty() {
+                // The Manager screen invites talking to the Manager (plan 10 §4.1); the
+                // composer stays enabled during a Live call, like any message.
+                let rest = if s.manager.active {
+                    "alk to the Manager…"
+                } else {
+                    "ype a message…"
+                };
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled("T", Style::default().bg(p.text).fg(p.background)),
-                        Span::styled("ype a message…", Style::default().fg(p.quiet)),
+                        Span::styled(rest, Style::default().fg(p.quiet)),
                     ]))
                     .style(Style::default().bg(cp.panel)),
                     editor_area,
@@ -2700,7 +2745,9 @@ pub fn draw(
     }
     if r.sidebar.width > 0 && s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none() {
         dim_backdrop(frame, &p);
-        cache.sidebar.draw(frame, r.sidebar, s, &p, spin, cache.mono);
+        cache
+            .sidebar
+            .draw(frame, r.sidebar, s, &p, spin, cache.mono);
     }
     if !s.panel_title.is_empty() || s.prompt.is_some() {
         // One dimmed backdrop under every modal kind (panels, Settings, pickers, prompts).
@@ -3922,10 +3969,7 @@ mod tests {
         let mut cache = Cache::default();
         let top = screen(0, &mut cache);
         assert!(top[0].trim().is_empty(), "spacing row above the top bar");
-        assert!(
-            !top[1].trim().is_empty(),
-            "tabs on row 1"
-        );
+        assert!(!top[1].trim().is_empty(), "tabs on row 1");
         for y in [2] {
             assert!(
                 top[y].contains('─') && top[y].trim_matches(|c| c == ' ' || c == '─').is_empty(),
@@ -4520,8 +4564,16 @@ mod tests {
                             strip.trim_start().starts_with("workspace"),
                             "basename leads the strip: {strip}"
                         );
-                        assert_eq!(r.project.y, r.composer.bottom(), "project strip follows composer");
-                        assert_eq!(r.project.bottom(), r.bottom_bar.y, "strip precedes activity");
+                        assert_eq!(
+                            r.project.y,
+                            r.composer.bottom(),
+                            "project strip follows composer"
+                        );
+                        assert_eq!(
+                            r.project.bottom(),
+                            r.bottom_bar.y,
+                            "strip precedes activity"
+                        );
                     }
                     assert_eq!(
                         buffer[(rows[2].x + 2, rows[2].y)].symbol(),
@@ -4535,11 +4587,16 @@ mod tests {
     }
     #[test]
     fn top_bar_line_closes_the_tabs_and_the_project_strip_follows_the_composer() {
-        let glyph = if crate::transcript::look::glyphs().ascii { "-" } else { "─" };
+        let glyph = if crate::transcript::look::glyphs().ascii {
+            "-"
+        } else {
+            "─"
+        };
         for light in [false, true] {
             let p = Palette::new(light);
             for centered in [false, true] {
-                for (width, height) in [(60u16, 24u16), (100, 30), (140, 40), (100, 23), (100, 12)] {
+                for (width, height) in [(60u16, 24u16), (100, 30), (140, 40), (100, 23), (100, 12)]
+                {
                     let s = Snapshot {
                         title: "Test".into(),
                         breadcrumb: "/workspace · main".into(),
@@ -4553,16 +4610,31 @@ mod tests {
                     terminal
                         .draw(|frame| {
                             regions_out = Some(draw(
-                                frame, &s, &Editor::default(), &Editor::default(),
-                                &Editor::default(), "", 0, 0, 0, &mut cache, true, false,
-                                false, false, 0, 0,
+                                frame,
+                                &s,
+                                &Editor::default(),
+                                &Editor::default(),
+                                &Editor::default(),
+                                "",
+                                0,
+                                0,
+                                0,
+                                &mut cache,
+                                true,
+                                false,
+                                false,
+                                false,
+                                0,
+                                0,
                             ));
                         })
                         .unwrap();
                     let r = regions_out.unwrap();
                     let buffer = terminal.backend().buffer();
                     let row = |y: u16| -> String {
-                        (r.tabs.x..r.tabs.right()).map(|x| buffer[(x, y)].symbol()).collect()
+                        (r.tabs.x..r.tabs.right())
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect()
                     };
                     let ctx = format!("light={light} centered={centered} {width}x{height}");
                     if height < TOP_LINE_MIN_HEIGHT {
@@ -4572,16 +4644,25 @@ mod tests {
                     let strip: String = (r.project.x..r.project.right())
                         .map(|x| buffer[(x, r.project.y)].symbol())
                         .collect();
-                    assert!(strip.contains("workspace"), "{ctx}: project strip {strip:?}");
+                    assert!(
+                        strip.contains("workspace"),
+                        "{ctx}: project strip {strip:?}"
+                    );
                     assert_eq!(r.tabs.height, 2, "{ctx}");
                     let line = row(r.tabs.y + 1);
                     assert!(
-                        line.contains(glyph) && line.trim_matches(|c| c == ' ' || c == glyph.chars().next().unwrap()).is_empty(),
+                        line.contains(glyph)
+                            && line
+                                .trim_matches(|c| c == ' ' || c == glyph.chars().next().unwrap())
+                                .is_empty(),
                         "{ctx}: line row {line:?}"
                     );
                     let x = r.tabs.x + r.tabs.width / 2;
                     assert_eq!(buffer[(x, r.tabs.y + 1)].fg, p.border, "{ctx}: rule colour");
-                    assert!(!row(r.tabs.y).contains(glyph), "{ctx}: tabs row has no line");
+                    assert!(
+                        !row(r.tabs.y).contains(glyph),
+                        "{ctx}: tabs row has no line"
+                    );
                 }
             }
         }
@@ -5977,25 +6058,40 @@ mod local_cache_regressions {
         cache.refresh_mermaid();
         let source = "mindmap\n  root((layout completion regression))\n    Child";
         let blocks = vec![crate::bridge::Content {
-            id: "async-chart".into(), kind: "markdown".into(),
-            rev: "1".into(), text: format!("```mermaid\n{source}\n```"),
+            id: "async-chart".into(),
+            kind: "markdown".into(),
+            rev: "1".into(),
+            text: format!("```mermaid\n{source}\n```"),
             ..Default::default()
         }];
         let palette = Palette::new(false);
         cache.update_content(&[], &blocks, 80, &palette);
-        assert!(!cache.active_parts[0].as_ref().unwrap().operations.iter()
+        assert!(!cache.active_parts[0]
+            .as_ref()
+            .unwrap()
+            .operations
+            .iter()
             .any(|op| op.as_ref().is_some_and(|o| o.get("inline_image").is_some())));
         crate::mermaid_image::tests::wait_raster(source, 73);
         assert!(cache.refresh_mermaid());
         cache.update_content(&[], &blocks, 80, &palette);
-        assert!(cache.active_parts[0].as_ref().unwrap().operations.iter()
+        assert!(cache.active_parts[0]
+            .as_ref()
+            .unwrap()
+            .operations
+            .iter()
             .any(|op| op.as_ref().is_some_and(|o| o.get("inline_image").is_some())));
         // End to end: every image row of the refreshed layout paints cells, and
         // together they cover the diagram rather than leaving it blank.
         let part = cache.active_parts[0].as_ref().unwrap();
         let mut painted = 0;
         let mut strips = 0;
-        for image in part.operations.iter().flatten().filter_map(|op| op.get("inline_image")) {
+        for image in part
+            .operations
+            .iter()
+            .flatten()
+            .filter_map(|op| op.get("inline_image"))
+        {
             let area = Rect::new(0, 0, 40, 1);
             let mut buffer = ratatui::buffer::Buffer::empty(area);
             crate::mermaid_image::render(
@@ -6010,7 +6106,10 @@ mod local_cache_regressions {
                 .filter(|&x| buffer[(x, 0)].symbol() != " " || buffer[(x, 0)].bg != Color::Reset)
                 .count();
         }
-        assert!(strips > 0 && painted > 0, "strips {strips} painted {painted}");
+        assert!(
+            strips > 0 && painted > 0,
+            "strips {strips} painted {painted}"
+        );
     }
 
     use crate::bridge::Content;
@@ -6759,9 +6858,17 @@ mod live_pane_tests {
         s = call(3);
         let r = regions(area, &s, 8, false);
         assert_eq!(r.live.height, crate::live_bar::PANE_ROWS);
-        assert_eq!(r.transcript.bottom(), r.composer.y, "the transcript pays, not the composer");
+        assert_eq!(
+            r.transcript.bottom(),
+            r.composer.y,
+            "the transcript pays, not the composer"
+        );
         assert_eq!(r.live.y, r.composer.bottom(), "directly under the composer");
-        assert_eq!(r.live.bottom(), r.project.y, "directly above the project strip");
+        assert_eq!(
+            r.live.bottom(),
+            r.project.y,
+            "directly above the project strip"
+        );
         assert_eq!(r.project.bottom(), r.bottom_bar.y);
         assert!(r.live.bottom() <= r.bottom_bar.y && r.bottom_bar.height == 1);
         assert_eq!(r.composer.height, before.composer.height);
@@ -6819,7 +6926,11 @@ mod live_pane_tests {
             assert_eq!(r.live.bottom(), r.project.y);
             assert_eq!(r.composer.height, full.composer.height);
             assert_eq!(r.bottom_bar, full.bottom_bar, "the bottom bar never moves");
-            assert_eq!(r.composer.bottom() + shown, r.project.y, "the composer rises as it grows");
+            assert_eq!(
+                r.composer.bottom() + shown,
+                r.project.y,
+                "the composer rises as it grows"
+            );
             assert_eq!(r.transcript.height, full.transcript.height + (6 - shown));
         }
         let mut cache = Cache::default();
@@ -6827,9 +6938,18 @@ mod live_pane_tests {
         cache.live_anim.target = crate::live_bar::PANE_ROWS;
         let (r, lines) = paint(&s, &mut cache);
         assert!(lines[usize::from(r.live.y)].contains("LISTENING"));
-        assert!(lines[usize::from(r.live.y + 1)].contains("row number 7"), "top rows first");
-        assert!(!lines.iter().any(|l| l.contains("row number 11")), "the rest is still hidden");
-        assert!(lines[usize::from(r.bottom_bar.y)].contains('─'), "the bottom bar stays put");
+        assert!(
+            lines[usize::from(r.live.y + 1)].contains("row number 7"),
+            "top rows first"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("row number 11")),
+            "the rest is still hidden"
+        );
+        assert!(
+            lines[usize::from(r.bottom_bar.y)].contains('─'),
+            "the bottom bar stays put"
+        );
         s.live_reveal = Some(0);
         assert_eq!(regions(area, &s, 8, false).live.height, 0);
     }
@@ -6859,9 +6979,22 @@ mod live_pane_tests {
                         terminal
                             .draw(|f| {
                                 draw(
-                                    f, &s, &Editor::default(), &Editor::default(),
-                                    &Editor::default(), "", 0, 0, 0, &mut cache, true, false,
-                                    false, false, 0, 0,
+                                    f,
+                                    &s,
+                                    &Editor::default(),
+                                    &Editor::default(),
+                                    &Editor::default(),
+                                    "",
+                                    0,
+                                    0,
+                                    0,
+                                    &mut cache,
+                                    true,
+                                    false,
+                                    false,
+                                    false,
+                                    0,
+                                    0,
                                 );
                             })
                             .unwrap();
@@ -7054,7 +7187,10 @@ mod image_preview_tests {
         let buffer = paint(&mut terminal, &snapshot(true), &mut cache);
         assert!(cache.image_protocol.is_some(), "the PNG decodes");
         assert!(cache.image_area.area() > 0);
-        assert!(painted(&buffer, cache.image_area) > 0, "picture cells are not blank");
+        assert!(
+            painted(&buffer, cache.image_area) > 0,
+            "picture cells are not blank"
+        );
     }
 
     #[test]
@@ -7063,7 +7199,10 @@ mod image_preview_tests {
         let mut cache = Cache::default();
         cache.mono = true;
         let buffer = paint(&mut terminal, &snapshot(true), &mut cache);
-        assert!(painted(&buffer, cache.image_area) > 0, "mono must not blank the picture");
+        assert!(
+            painted(&buffer, cache.image_area) > 0,
+            "mono must not blank the picture"
+        );
         let area = cache.image_area;
         assert!(buffer.content().iter().enumerate().all(|(index, cell)| {
             let (x, y) = ((index % 100) as u16, (index / 100) as u16);
@@ -7078,7 +7217,10 @@ mod image_preview_tests {
         paint(&mut terminal, &snapshot(true), &mut cache);
         assert!(cache.image_protocol.is_some());
         paint(&mut terminal, &snapshot(false), &mut cache);
-        assert!(cache.image_protocol.is_none(), "a closed preview keeps no protocol state");
+        assert!(
+            cache.image_protocol.is_none(),
+            "a closed preview keeps no protocol state"
+        );
         assert!(cache.image_source.is_empty());
         paint(&mut terminal, &snapshot(true), &mut cache);
         assert!(cache.image_protocol.is_some(), "reopening decodes afresh");

@@ -124,7 +124,9 @@ impl Mic {
             }
         }
         if self.frame != Some(frame) {
-            let steps = self.frame.map_or(1, |f| frame.saturating_sub(f).clamp(1, 8));
+            let steps = self
+                .frame
+                .map_or(1, |f| frame.saturating_sub(f).clamp(1, 8));
             self.frame = Some(frame);
             self.eased_in = ease(self.eased_in, live.level_in.clamp(0.0, 1.0) as f32, steps);
             self.eased_out = ease(self.eased_out, live.level_out.clamp(0.0, 1.0) as f32, steps);
@@ -235,7 +237,11 @@ fn animation(
         _ => String::new(),
     };
     let label_room = room.saturating_sub(crate::live_wave::MIN_CELLS);
-    let label = if label.width() <= label_room { label } else { String::new() };
+    let label = if label.width() <= label_room {
+        label
+    } else {
+        String::new()
+    };
     let cells = cells_for(room - label.width().min(room));
     let cells = if kind == Kind::Shimmer && !label.is_empty() {
         cells.min(6)
@@ -705,16 +711,26 @@ mod tests {
                 .filter(|c| LEVELS.contains(c))
                 .collect::<String>()
         };
-        assert_eq!(band(&live, 0, true).chars().count(), crate::live_wave::MAX_CELLS);
+        assert_eq!(
+            band(&live, 0, true).chars().count(),
+            crate::live_wave::MAX_CELLS
+        );
         assert_ne!(band(&live, 0, true), band(&live, 20, true));
         assert_eq!(band(&live, 0, false), band(&live, 20, false));
-        assert!(!text(&header(&live, 3, 60, true, &[])).contains(['●', '○', '⣾']), "no dots");
+        assert!(
+            !text(&header(&live, 3, 60, true, &[])).contains(['●', '○', '⣾']),
+            "no dots"
+        );
         live.phase = "working".into();
         live.detail = "sent\tSent to agent (steer)\tfix it  → turn #7".into();
         let line = text(&header(&live, 1, 80, true, &[]));
         assert!(line.contains("agent turn #7 running"), "{line}");
         assert!(!line.contains(['⣾', '⣽', '⣻']), "no braille dots: {line}");
-        assert_eq!(band(&live, 5, true).chars().count(), 6, "narrow band beside the label");
+        assert_eq!(
+            band(&live, 5, true).chars().count(),
+            6,
+            "narrow band beside the label"
+        );
         assert_eq!(
             latest_turn("sent\tSent to agent\ta → turn #2\nsent\tx\tb → turn #11"),
             Some(11)
@@ -772,7 +788,15 @@ mod tests {
         let mut live = bar();
         live.phase = "speaking".into();
         let line = |level: f32, frame: usize, animate: bool| {
-            spans(&live, &p, frame, 1161.0, 60, animate, &Mic::from_levels(&[], level))
+            spans(
+                &live,
+                &p,
+                frame,
+                1161.0,
+                60,
+                animate,
+                &Mic::from_levels(&[], level),
+            )
         };
         let bars = |spans: &[Span]| {
             spans
@@ -784,8 +808,16 @@ mod tests {
         let a = bars(&line(1.0, 3, true));
         assert_eq!(a.len(), crate::live_wave::MAX_CELLS);
         assert_ne!(a, bars(&line(1.0, 9, true)), "it moves with the frame");
-        assert_eq!(bars(&line(1.0, 3, false)), bars(&line(1.0, 9, false)), "still without animation");
-        assert_ne!(a.first().unwrap().1, a[a.len() / 2].1, "dimmer at the edges");
+        assert_eq!(
+            bars(&line(1.0, 3, false)),
+            bars(&line(1.0, 9, false)),
+            "still without animation"
+        );
+        assert_ne!(
+            a.first().unwrap().1,
+            a[a.len() / 2].1,
+            "dimmer at the edges"
+        );
         let sum = |level| {
             bars(&line(level, 3, true))
                 .iter()
@@ -799,7 +831,15 @@ mod tests {
     fn band_fits_the_room_and_ascii_mode_has_no_blocks() {
         let p = Palette::new(false);
         let mut live = bar();
-        for phase in ["listening", "speaking", "connecting", "working", "muted", "ended", "paused"] {
+        for phase in [
+            "listening",
+            "speaking",
+            "connecting",
+            "working",
+            "muted",
+            "ended",
+            "paused",
+        ] {
             live.phase = phase.into();
             for width in 1..90 {
                 let used: usize = header(&live, 7, width, true, &[0.4])
@@ -810,7 +850,16 @@ mod tests {
             }
         }
         live.phase = "speaking".into();
-        let ascii = animation(&live, "speaking", &p, 5, true, &Mic::from_levels(&[], 0.5), true, 30);
+        let ascii = animation(
+            &live,
+            "speaking",
+            &p,
+            5,
+            true,
+            &Mic::from_levels(&[], 0.5),
+            true,
+            30,
+        );
         let t = text(&ascii);
         assert!(t.is_ascii() && !t.is_empty(), "{t:?}");
     }

@@ -222,7 +222,11 @@ mod tests {
         let rows = rows_text(&out);
         assert!(rows.len() > 1, "{rows:?}");
         assert!(rows.iter().all(|row| row.width() <= 44), "{rows:?}");
-        let joined = rows.iter().map(|row| row.trim()).collect::<Vec<_>>().join(" ");
+        let joined = rows
+            .iter()
+            .map(|row| row.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(joined.contains("resets Nov 1)"), "{joined:?}");
         assert!(joined.contains("1.5% left ≤ 2%"), "{joined:?}");
     }
@@ -259,7 +263,10 @@ mod tests {
         );
         let text = rows_text(&routed);
         assert_eq!(text.len(), 3, "{text:?}");
-        assert!(text[2].contains("low → openai-codex/gpt-6-luna"), "{text:?}");
+        assert!(
+            text[2].contains("low → openai-codex/gpt-6-luna"),
+            "{text:?}"
+        );
         // The route line sits after the model line and before any detail.
         assert!(text[1].contains("gpt-6-luna"), "{text:?}");
     }
