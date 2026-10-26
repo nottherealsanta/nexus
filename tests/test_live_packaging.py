@@ -68,6 +68,19 @@ def test_wheel_ci_installs_alsa_and_pkgconfig_for_both_linux_libcs():
     assert "unsafe-libopus" in manifest
 
 
+def test_wheel_ci_skips_musllinux_x86_64_but_keeps_musl_aarch64():
+    # torch/constriction (the default dictation runtime) publish no musl
+    # wheels, and Python markers cannot tell musl from glibc, so the musllinux
+    # x86_64 leg could never install the repaired wheel and blocked the 0.7.x
+    # publishes. musllinux aarch64 must still build -- musl coverage comes
+    # from that leg and the apk ALSA step above.
+    workflow = _workflow()
+    assert "*-musllinux_x86_64" in workflow
+    assert "musllinux" in workflow.replace("*-musllinux_x86_64", "")
+    for needle in ("alsa-lib-dev", "alsa-lib-devel", "apk add", "pkg"):
+        assert needle in workflow
+
+
 def test_cargo_lock_keeps_uuid_within_the_crate_msrv():
     # Regression: the locked uuid 1.28 needs Rust 1.89, but CI and the crate use 1.88.
     # The optional bin was then silently skipped and the wheel shipped without the helper.
