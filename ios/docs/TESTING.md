@@ -1,67 +1,46 @@
-# Test plan (proposed)
+# iOS verification
 
-**No test for the iOS app, NexusKit or the gateway has been written or executed.**
-Repo test conventions live in [testing.md](../../docs/testing.md); the gateway and
-fixture exporter would follow them (offline, no credentials, fakes).
+## Verified in this change
 
-## 1. Python: gateway and host additions
+- `swift test --package-path ios/NexusKit`: nine tests pass. JSON round trip,
+  HTTPS enforcement, request payload/authentication/path, canonical host `ops`
+  replay, cursor handling, atomic patch failure, SSE Unicode/multiline/bounds,
+  array insertion and gateway address validation.
+- `swift test --package-path ios`: eleven real AppStore tests pass against an
+  in-process URLProtocol mock. Session creation, selection/draft preservation,
+  late-response isolation, live host patch updates, automatic resync/reconnect,
+  background stream cancellation, read-only devices, failed-send draft/no retry,
+  navigating during a successful send, forget/revocation, and stop/approval payloads.
+  The tests use isolated preferences and injected credential functions, never
+  developer Keychain credentials or a real gateway.
+- Xcode simulator app build and `build-for-testing` for the shared `Nexus` scheme
+  succeed. This compiles the `NexusUITests` onboarding/HTTPS-validation tests.
 
-| Area | Cases |
+Run the commands from [the app README](../README.md#build-and-verify).
+
+## Not verified
+
+No simulator runtime is installed on the verification machine. Xcode UI tests
+have been **compiled, not executed**; there are no runtime screenshots. Install an
+iOS 17+ simulator runtime, select its device in Xcode, and run the shared Nexus
+scheme tests. Debug UI tests pass `--ui-testing` to start unpaired with isolated
+preferences and no real Keychain access. Release builds ignore that argument.
+
+Physical-device pairing, Keychain behavior, TLS certificates, Tailscale Serve,
+network handoff, appearance and accessibility remain unverified. A mock transport
+is not evidence of successful device networking or OS suspension behavior.
+
+## Manual device checklist
+
+| Area | Check |
 | --- | --- |
-| Pairing | secret single-use; expires at ~120 s; replay after success; wrong secret rate-limited; secret absent from logs/errors |
-| Device auth | missing/expired/replayed/forged token; token for another audience or device; clock skew window; revoked device rejected on next request |
-| Revocation | open SSE streams closed immediately; in-flight writes re-checked and refused |
-| Authorization | every non-allowlisted command type denied (iterate the full `Command` union and assert only the allowlist passes); denied set (`Shutdown`, `WebLaunch`, `Provider*`, `Settings*`, `Extensions*`, `Mock*`); unknown workspace id; workspace outside the device allowlist; user-supplied path rejected |
-| Bounds | header/body/route-specific size, connection caps, per-device rate, subscription count, slow-consumer drop does not stall a turn, upload cap enforced before buffering |
-| Redaction | tokens, keys, provider credentials, absolute secret-bearing paths never in results, errors, logs |
-| Presence | gateway viewer counts as a view; closing it frees approval leases; last-viewer unattended policy |
-| Replay/resync | snapshot+subscribe race with concurrent events; `from_seq` older than retention; patch with wrong `base_seq` forces resync; empty-ops frame advances cursor; oversize frame becomes `resync` |
-| Routing | aggregated listing reports per-workspace `truncated`; one daemon down does not fail the rest |
-| Idempotency (if built) | duplicate key does not duplicate send; expired key semantics |
-| Upload | WAV validation errors, oversize, wrong content type, cancel, no persisted audio |
+| Pairing | One-use code, expiry, wrong code, revoked device, clear HTTPS error; no credential disclosure. |
+| Network | Same Wi-Fi, cellular over Tailscale, Wi-Fi/cellular handoff, airplane mode, Tailscale off, host asleep. |
+| Sessions | Multiple authorized workspaces, empty workspace, creation, title search, truncated lists, fast switching, iPhone back and iPad selection. |
+| Conversation | Streamed text, tools/context, long text, queue, reconnect, approvals answered from another client, stop retaining queue. |
+| Drafts | Failed send, uncertain timeout, switching sessions during send, relaunch, forgetting device. |
+| Lifecycle | Foreground/background, screen lock, suspension, force quit, reconnect with draft. |
+| Accessibility | Small iPhone, iPad, dark mode, VoiceOver, largest Dynamic Type, hardware keyboard. |
 
-Extend the style of `tests/test_web_transport.py` and
-`tests/test_security_regressions.py` rather than inventing a new harness.
-
-## 2. Fixture export (Python → Swift)
-
-A script (proposed) writes golden files from the real reducer/projection:
-snapshots (including reconciliation ids), patch sequences with `add`/`remove`/
-`replace`/`append`, JSON Pointer escaping (`~`, `/`), empty-ops frames, resync
-frames, Live cards, truncated/clipped content, unknown event types. Swift tests
-fail if a fixture changes without regenerating. Fixtures contain no credentials.
-
-## 3. Swift unit tests (NexusKit)
-
-Decode every fixture; patch applier: all ops, escaping, bounded depth/op count,
-**atomicity** (a bad op in a frame leaves state unchanged and triggers resync),
-final state equals a fresh snapshot; SSE parser (partial chunks, keepalives,
-`retry`, error frames); reconnect/resync state machine; Keychain wrapper with an
-injectable store; no-secret-in-description checks for model types.
-
-## 4. UI tests against a mock gateway
-
-Scripted mock gateway: sessions list (including truncated, archived scope),
-streaming conversation, tool detail sections, clipping labels, approvals (answered
-elsewhere), connection loss and recovery, revoked device, draft persistence and
-no auto-retry of writes. Accessibility audits: Dynamic Type extremes, VoiceOver
-labels, dark mode, iPad keyboard.
-
-## 5. Real-device matrix (manual until automated)
-
-| Dimension | Values |
-| --- | --- |
-| Network | same Wi-Fi, cellular via Tailscale, Wi-Fi↔cellular handoff, airplane toggle, host asleep, Tailscale off on phone |
-| Lifecycle | foreground, background, suspended, killed, relaunch with open draft |
-| Permissions | mic granted/denied/revoked mid-use, local-network prompt if relevant |
-| Audio | speaker, AirPods, route changes, incoming call, Siri, other-audio interruption |
-| Live | start, mute, stop, background, lock, deadline, daemon restart, `live_busy`, consent missing |
-| Devices | one small iPhone, one large iPhone, one iPad; Simulator is **not** a substitute for Keychain/Secure Enclave, mic or WebRTC checks |
-
-Real GPT Live and real dictation latency stay **unverified** until this matrix is
-run and recorded.
-
-## 6. Exit evidence
-
-Each phase in [ROADMAP](ROADMAP.md) lists the tests that must pass; results are
-recorded as dated entries in the repo docs when features ship, not in this folder.
+Dictation, Live and attachment flows remain future integration work; no tests or
+latency claims are made for them by this change.

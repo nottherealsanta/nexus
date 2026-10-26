@@ -19,7 +19,7 @@ public struct ViewStore: Sendable {
               let seq = obj["seq"]?.int, seq >= 0,
               let sid = obj["session"]?.string, GatewayProtocol.validIdentifier(sid),
               let view = obj["view"] else { return .needsSnapshot("invalid snapshot envelope") }
-        if let old = sequence, seq < old { return .ignoredStale }
+        if sessionID == sid, let old = sequence, seq < old { return .ignoredStale }
         guard bounded(view) else { return .needsSnapshot("snapshot exceeds bounds") }
         document = view; sequence = seq; sessionID = sid; return .applied
     }
@@ -27,11 +27,11 @@ public struct ViewStore: Sendable {
         guard let obj = event.object, let seq = obj["seq"]?.int, seq >= 0,
               obj["schema_version"]?.int == 1,
               let sid = obj["session"]?.string, GatewayProtocol.validIdentifier(sid),
-              let type = obj["type"]?.string, type == "patch" else { return .needsSnapshot("invalid patch envelope") }
+              obj["resync"]?.bool != true else { return .needsSnapshot("invalid patch envelope") }
         if let current = sessionID, sid != current { return .needsSnapshot("session changed") }
         if let old = sequence, seq <= old { return .ignoredStale }
         guard let oldDoc = document else { return .needsSnapshot("snapshot required") }
-        let ops = obj["patch"]?.array
+        let ops = obj["ops"]?.array
         guard let ops, ops.count <= maximumOperations else { return .needsSnapshot("invalid or oversized patch") }
         var candidate = oldDoc
         do {
@@ -63,8 +63,8 @@ public struct ViewStore: Sendable {
         guard parts.count <= depthLimit else { throw NexusError.responseTooLarge }
         func update(_ node: JSONValue, _ index: Int) throws -> JSONValue {
             if index == parts.count {
-                if kind == "replace" { guard value != nil else { throw NexusError.invalidResponse("missing value") }; return value! }
-                if kind == "append" { guard case .string(let old) = root, case .string(let suffix)? = value else { throw NexusError.invalidResponse("append requires strings") }; return .string(old + suffix) }
+                if kind == "replace" || kind == "add" { guard value != nil else { throw NexusError.invalidResponse("missing value") }; return value! }
+                if kind == "append" { guard case .string(let old) = node, case .string(let suffix)? = value else { throw NexusError.invalidResponse("append requires strings") }; return .string(old + suffix) }
                 if kind == "remove" { throw NexusError.invalidResponse("cannot remove root") }
                 throw NexusError.invalidResponse("unsupported operation")
             }
@@ -82,7 +82,8 @@ public struct ViewStore: Sendable {
             if case .array(var array) = node {
                 if index == parts.count - 1 {
                     if kind == "add", key == "-" { guard let value else { throw NexusError.invalidResponse("missing value") }; array.append(value); return .array(array) }
-                    guard let n = Int(key), n >= 0, n < array.count else { throw NexusError.invalidResponse("array index invalid") }
+                    guard let n = Int(key), String(n) == key, n >= 0,
+                          n < array.count || (kind == "add" && n == array.count) else { throw NexusError.invalidResponse("array index invalid") }
                     switch kind { case "add": guard let value else { throw NexusError.invalidResponse("missing value") }; array.insert(value, at: n)
                     case "replace": guard let value else { throw NexusError.invalidResponse("missing value") }; array[n] = value
                     case "append": guard case .string(let old) = array[n], case .string(let suffix)? = value else { throw NexusError.invalidResponse("append requires strings") }; array[n] = .string(old + suffix)

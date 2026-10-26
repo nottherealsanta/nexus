@@ -1,64 +1,71 @@
-# Nexus for iPhone and iPad (planning only)
+# Nexus for iPhone and iPad
 
-> **Status: planning only.** This folder holds design documents. There is no
-> Xcode project, no Swift code, no build, no gateway and no test for any of it.
-> Nothing here is implemented or has been run on a device. The Nexus server
-> **never runs on iOS**; the app is a remote client of a Nexus host (a Mac or
-> Linux machine) that the user already runs.
+A SwiftUI remote client for the opt-in [Nexus gateway](../docs/gateway.md).
+The daemon runs on your Mac or Linux machine; the phone connects over HTTPS
+inside your Tailscale network. No Nexus core changes are needed for this client.
 
-The goal: an iPhone/iPad app that connects to the machine running Nexus
-(typically over Tailscale), shows every authorized session across workspaces,
-renders a session's structured conversation, lets the user send messages and
-answer approvals, and later adds dictation and GPT Live voice. Almost all
-behavior is routed to Nexus core; the app renders and relays.
+## Connect your device
 
-## Source-of-truth rule
+1. Connect Tailscale on the Nexus machine and iPhone/iPad.
+2. Allow a workspace: `nexus gateway allow /absolute/path/to/workspace`.
+3. Configure Tailscale Serve to proxy your private HTTPS address to
+   `http://127.0.0.1:8765`. Keep it private to your tailnet.
+4. Start `nexus gateway serve --port 8765 --public-url https://your-machine.your-tailnet.ts.net`.
+5. Run `nexus gateway pair --name phone`; enter the HTTPS URL and one-use code
+   in the app within two minutes. Session viewing needs `read`; creating sessions
+   and sending messages also need `prompt`. Tokens stay in device-only Keychain.
+6. Choose an allowed workspace, open a session, or tap New session.
 
-The repository docs and code are authoritative: see [docs/README.md](../docs/README.md),
-[host.md](../docs/host.md), [security.md](../docs/security.md),
-[events-and-view.md](../docs/events-and-view.md), [surfaces.md](../docs/surfaces.md),
-[voice.md](../docs/voice.md), [live.md](../docs/live.md). These iOS docs are scoped
-design. Where they disagree with the backend, **the backend wins** and these docs
-get fixed.
+The app supports pairing, reconnecting, workspace selection, session search,
+session creation, message submission, per-session drafts, stopping a turn, one-time
+approval/denial (with `approve` scope), and structured conversation inspection. Messages appear as cards; expandable details retain all snapshot fields,
+including tools and context. Connection settings are available from the network button.
+Read-only devices cannot create sessions or send messages.
 
-## Labels used throughout
+Conversations load a complete snapshot, then apply the host’s live SSE `ops`
+frames. Reconnects fetch a fresh snapshot before resubscribing; failed reads retry
+after three seconds while foregrounded. Backgrounding closes the stream, and
+returning to the app refreshes it. Stale responses cannot replace another session.
+Failed writes keep the draft and are never automatically retried. Stop retains
+queued messages. Approval actions allow or deny once; permanent rules are not
+created by this UI. Lists announce truncation; search covers loaded active sessions.
 
-| Label | Meaning |
-| --- | --- |
-| **current** | Verified in this repo's code/docs when written |
-| **proposed** | Design in this folder; nothing exists |
-| **unverified** | An assumption about an external system or device, not tested |
+Follow latest can be paused while reading older messages. All tool arguments,
+outputs, context, errors and snapshot fields remain available in labelled details.
+Dictation, live calls, question-answer controls, attachments, persistent approval
+rules and background notifications are not integrated yet. Voice source files
+remain outside the application build until that integration is ready.
 
-Gateway command names, routes and file names in these docs are sketches, not existing commands.
+## Build and verify
 
-## Documents
+Open `ios/Nexus.xcodeproj`, select the Nexus scheme and an iOS 17+ destination.
+Choose your signing team to install on a physical device.
 
-| Doc | Read it for |
-| --- | --- |
-| [ARCHITECTURE](docs/ARCHITECTURE.md) | components, ownership, what stays on the host |
-| [GATEWAY](docs/GATEWAY.md) | the proposed opt-in gateway, routing, allowlist, bounds |
-| [SECURITY](docs/SECURITY.md) | pairing, device auth, Tailscale exposure, revocation |
-| [CONTRACT_GAPS](docs/CONTRACT_GAPS.md) | what the host lacks today for a phone client |
-| [UX](docs/UX.md) | sessions list, conversation, approvals, composer, accessibility |
-| [VOICE_AND_LIVE](docs/VOICE_AND_LIVE.md) | dictation and GPT Live on iOS |
-| [ROADMAP](docs/ROADMAP.md) | phases and acceptance criteria |
-| [TESTING](docs/TESTING.md) | test plan; none executed yet |
-| [DECISIONS](docs/DECISIONS.md) | defaults, rejected options, blockers |
-
-Suggested order: ARCHITECTURE, CONTRACT_GAPS, GATEWAY, SECURITY, then the rest.
-
-## Proposed layout (does not exist yet)
-
-```
-ios/
-  README.md, docs/              # this planning set
-  project.yml                   # XcodeGen spec (later)
-  Packages/NexusKit/            # Swift package: transport, models, SSE + patch applier, Keychain
-    Sources/NexusKit/  Tests/NexusKitTests/  Fixtures/   # fixtures exported from Python
-  App/                          # SwiftUI shell
-    Features/{Sessions,Conversation,Approvals,Composer,Dictation,Live}/
-  UITests/                      # mock-gateway UI tests
+```sh
+xcodebuild -project ios/Nexus.xcodeproj -scheme Nexus -sdk iphonesimulator \
+  -derivedDataPath /tmp/nexus-ios-build CODE_SIGNING_ALLOWED=NO build
+swift test --package-path ios/NexusKit
+swift test --package-path ios
+# Compile both the app and UI tests without running a simulator:
+xcodebuild -project ios/Nexus.xcodeproj -scheme Nexus \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/nexus-ios-build CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
-Baseline: SwiftUI, iOS/iPadOS 17, Swift concurrency. No code until the host and
-security contract in [ROADMAP](docs/ROADMAP.md) P1 is approved.
+App and UI-test compilation, nine NexusKit tests and eleven app-state tests
+are verified. App-state tests run on macOS with a mock gateway, without network
+or real Keychain credentials. They cover session creation, live patches, resync,
+foreground/background stream cancellation, draft retention, stale responses,
+failed-write behavior, stop/approval requests and revoked access.
+
+Runtime UI and real-device/Tailscale connectivity are **not verified**: the
+verification machine has no installed iOS simulator runtime. The shared Nexus
+scheme includes `NexusUITests`; run it in Xcode after installing a runtime. Debug
+UI tests start unpaired without accessing developer Keychain credentials. Device
+background/suspension behavior, accessibility and network handoff still need manual
+verification. See [testing](docs/TESTING.md).
+
+The remaining architecture and roadmap files under [docs/](docs/) include
+historical proposals. The implementation, this README, [UX](docs/UX.md) and
+[testing](docs/TESTING.md) describe the current session client. See the main [gateway guide](../docs/gateway.md)
+for pairing scopes, revocation and server configuration.

@@ -689,3 +689,16 @@ streaming, input and CPU cost.
   the context integration seam (`bind(session, targets) -> dict` of callables).
 
 - `rust/tui/src/mermaid_image.rs` — native Ondine SVG → resvg fallback for non-Unicode Mermaid types. Rasterises directly to the half-block grid (`columns` × `2·rows` pixels, 4× supersampled and box-filtered, aspect-preserving, upscaled to fill the width, ≤48 rows), keeps transparency, lightens near-black ink and drops solid white panels for the dark canvas, then paints `▀`/`▄` cells straight into the ratatui buffer one terminal row at a time (viewport clipping is per row; transparent halves leave the transcript background). Does not use ratatui-image or the detected image protocol. The raster cache is bounded to 8 entries.
+
+### iOS remote client (`ios/`)
+
+| File | Contract |
+| --- | --- |
+| `NexusApp/RootView.swift` | Private-gateway pairing, workspace selection, session navigation and creation. |
+| `NexusApp/AppStore.swift` | Keychain-bound connection, host commands, live snapshots/patches, lifecycle and drafts. |
+| `NexusApp/ConversationView.swift` | Ordered message/tool cards, complete structured details, approval actions and composer. |
+| `NexusKit/Sources/NexusKit/GatewayClient.swift` | Authenticated gateway transport and host command payloads. |
+| `Package.swift`, `Tests/NexusAppStateTests/` | Simulator-free mock-gateway tests of the real app state. |
+| `NexusUITests/`, `Nexus.xcodeproj/xcshareddata/` | Shared Xcode scheme and onboarding UI tests. |
+
+Build instructions and verification limits: [iOS README](../ios/README.md).

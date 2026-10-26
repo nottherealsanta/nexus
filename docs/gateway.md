@@ -55,3 +55,21 @@ may have reached the host.
 
 See [security notes](security.md#gateway) for trust boundaries and
 [host documentation](host.md) for the unchanged local host service.
+
+## iOS client
+
+The SwiftUI client in [`ios/`](../ios/README.md) pairs against this gateway's
+private HTTPS address. It lists authorized workspaces and active sessions, creates
+sessions with `SessionOpen`, sends with `SessionEnqueue`, stops turns without
+dropping the queue, and answers one-time approvals using existing host commands.
+It makes no changes to the core or gateway contract. Credentials stay in Keychain;
+the client refuses redirects and gateway addresses containing embedded credentials,
+queries or fragments.
+
+The client follows a validated snapshot with the host's canonical SSE `ops`
+frames, resnapshotting on a resync or dropped connection. Streams close in the
+background; returning foreground refreshes state. Writes are never automatically
+retried. Drafts persist per gateway/workspace/session and survive failed sends.
+Twenty Swift transport/state tests and app/UI-test compilation are verified;
+runtime UI, real-device/Tailscale connection and suspension are not verified.
+See the iOS README for setup and remaining limitations.

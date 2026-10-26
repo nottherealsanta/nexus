@@ -8,7 +8,9 @@ public actor GatewayClient {
 
     public init(baseURL: URL, token: String? = nil, allowInsecureLoopback: Bool = false, session: URLSession = .shared) throws {
         guard let scheme = baseURL.scheme?.lowercased(), scheme == "https" || (scheme == "http" && allowInsecureLoopback && Self.isLoopback(baseURL.host)) else { throw NexusError.invalidURL }
-        guard baseURL.host != nil else { throw NexusError.invalidURL }
+        guard let parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+              let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
+              parts.query == nil, parts.fragment == nil else { throw NexusError.invalidURL }
         self.baseURL = baseURL; self.token = token; self.session = session
     }
     private static func isLoopback(_ host: String?) -> Bool { guard let h = host?.lowercased() else { return false }; return ["localhost", "127.0.0.1", "::1"].contains(h) }
@@ -19,11 +21,11 @@ public actor GatewayClient {
         guard let result = c.url else { throw NexusError.invalidURL }; return result
     }
     private func request(_ method: String, path: String, body: Data? = nil, authenticated: Bool = true, query: [URLQueryItem] = [], contentType: String = "application/json") async throws -> Data {
-        var req = URLRequest(url: try url(path, query: query)); req.httpMethod = method; req.httpBody = body
-        if let body { req.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        var req = URLRequest(url: try url(path, query: query)); req.httpMethod = method; req.httpBody = body; req.timeoutInterval = 20
+        if body != nil { req.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if authenticated, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await session.data(for: req)
+        let (data, response) = try await session.data(for: req, delegate: GatewayRedirectPolicy())
         guard data.count <= maxResponseBytes else { throw NexusError.responseTooLarge }
         guard let http = response as? HTTPURLResponse else { throw NexusError.invalidResponse("non-HTTP response") }
         guard (200..<300).contains(http.statusCode) else {
@@ -54,6 +56,18 @@ public actor GatewayClient {
     public func command(hostID: String, payload: JSONValue) async throws -> JSONValue {
         try await json(JSONValue.self, method: "POST", path: try hostPath(hostID, "/command"), value: payload)
     }
+    /// Commands use the host protocol tags and fields without gateway translation.
+    public func createSession(hostID: String, sessionID: String) async throws -> JSONValue {
+        guard GatewayProtocol.validIdentifier(sessionID) else { throw NexusError.invalidIdentifier }
+        return try await command(hostID: hostID, payload: .object([
+            "type": .string("SessionOpen"), "session": .string(sessionID), "create": .bool(true)]))
+    }
+    public func enqueue(hostID: String, sessionID: String, content: String, requestID: UUID) async throws -> JSONValue {
+        guard GatewayProtocol.validIdentifier(sessionID), !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw NexusError.invalidResponse("Select a session and enter a message") }
+        return try await command(hostID: hostID, payload: .object([
+            "type": .string("SessionEnqueue"), "session": .string(sessionID), "content": .string(content),
+            "mode": .string("queue"), "client_request_id": .string(requestID.uuidString)]))
+    }
     public func voice(hostID: String, requestID: UUID, wav: Data) async throws -> JSONValue {
         guard wav.count <= 8 * 1024 * 1024 else { throw NexusError.responseTooLarge }
         let path = try hostPath(hostID, "/voice")
@@ -68,21 +82,39 @@ public actor GatewayClient {
         let endpoint = try url("/v1/hosts/\(hostID)/sessions/\(sessionID)/events", query: fromSeq.map { [URLQueryItem(name: "from_seq", value: String($0))] } ?? [])
         var request = URLRequest(url: endpoint); request.setValue("text/event-stream", forHTTPHeaderField: "Accept"); if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let session = self.session
-        return AsyncThrowingStream { continuation in
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(32)) { continuation in
             let task = Task {
                 do {
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw NexusError.invalidResponse("event stream failed") }
-                    var decoder = SSEDecoder()
+                    let (bytes, response) = try await session.bytes(for: request, delegate: GatewayRedirectPolicy())
+                    guard let http = response as? HTTPURLResponse else { throw NexusError.invalidResponse("event stream failed") }
+                    guard (200..<300).contains(http.statusCode) else { throw NexusError.httpStatus(http.statusCode, "Event connection was refused") }
+                    var decoder = SSEDecoder(maximumLineBytes: 512 * 1024, maximumEventBytes: 512 * 1024)
                     for try await byte in bytes {
-                        for event in try decoder.feed(Data([byte])) { continuation.yield(event) }
+                        for event in try decoder.feed(Data([byte])) {
+                            switch continuation.yield(event) {
+                            case .enqueued: break
+                            case .dropped: throw NexusError.resyncRequired("Live updates exceeded the device buffer")
+                            case .terminated: return
+                            @unknown default: return
+                            }
+                        }
                         if Task.isCancelled { break }
                     }
-                    for event in try decoder.finish() { continuation.yield(event) }
+                    for event in try decoder.finish() {
+                        if case .dropped = continuation.yield(event) { throw NexusError.resyncRequired("Live updates exceeded the device buffer") }
+                    }
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+/// The pairing origin is a credential boundary; proxies must serve it directly.
+private final class GatewayRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

@@ -1725,3 +1725,16 @@ manager turn moves. Moving twice in one breath is disorienting; later launches o
 turn raise an info toast with an `Open` action, and a blocked move carries the same action.
 Implemented offline only (Python/Rust unit tests, PTY for the toggle, board and draft
 retention); not verified against real Codex or GPT Live, no screenshot review.
+
+## iOS uses the existing gateway presentation stream
+
+The iOS session client consumes the gateway's existing snapshot plus SSE `ops`
+contract and sends existing host commands; it introduces no core or gateway
+protocol. One app-owned stream follows the selected session, with fresh snapshots
+on reconnect and epochs rejecting late responses. A bounded 32-frame queue
+resyncs on overflow. Backgrounding closes the stream. Writes are never retried
+automatically because a timeout can occur after host acceptance. The first UI
+supports one-time approvals and retains queued messages when stopping a turn;
+persistent rules, question controls and voice integration remain separate work.
+Transport and app-state behavior are mock-tested; physical-device networking and
+runtime UI remain unverified without a simulator runtime/device.

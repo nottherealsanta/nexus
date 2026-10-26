@@ -20,6 +20,7 @@ struct StructuredValueView: View {
             case .array(let values):
                 VStack(alignment: .leading, spacing: 10) { ForEach(values.indices, id: \.self) { index in StructuredValueView(value: values[index]) } }
             case .string(let text): Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            case .number(let number): Text(String(number)).textSelection(.enabled)
             case .integer(let number): Text(String(number)).textSelection(.enabled)
             case .bool(let flag): Text(flag ? "Yes" : "No")
             case .null: Text("—").foregroundStyle(.secondary)

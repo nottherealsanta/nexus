@@ -8,14 +8,18 @@ public struct SSEDecoder: Sendable {
     private var lastID: String?
     private var retry: Int?
     private var firstLine = true
+    private var eventBytes = 0
     public let maximumLineBytes: Int
-    public init(maximumLineBytes: Int = 8 * 1024 * 1024) { self.maximumLineBytes = maximumLineBytes }
+    public let maximumEventBytes: Int
+    public init(maximumLineBytes: Int = 8 * 1024 * 1024, maximumEventBytes: Int = 8 * 1024 * 1024) {
+        self.maximumLineBytes = maximumLineBytes; self.maximumEventBytes = maximumEventBytes
+    }
 
     public mutating func feed(_ chunk: Data) throws -> [ServerSentEvent] {
         bytes.append(chunk)
-        guard bytes.count <= maximumLineBytes else { throw NexusError.responseTooLarge }
         var events: [ServerSentEvent] = []
         while let idx = bytes.firstIndex(of: 10) {
+            guard bytes.distance(from: bytes.startIndex, to: idx) <= maximumLineBytes else { throw NexusError.responseTooLarge }
             var line = Data(bytes[..<idx]); bytes.removeSubrange(...idx)
             if line.last == 13 { line.removeLast() }
             guard let text = String(data: line, encoding: .utf8) else { throw NexusError.invalidResponse("invalid UTF-8 SSE") }
@@ -42,7 +46,10 @@ public struct SSEDecoder: Sendable {
         if value.first == " " { value.removeFirst() }
         switch field {
         case "event": eventName = value
-        case "data": dataLines.append(value)
+        case "data":
+            eventBytes += value.utf8.count + 1
+            guard eventBytes <= maximumEventBytes else { throw NexusError.responseTooLarge }
+            dataLines.append(value)
         case "id": if !value.contains("\0") { lastID = value }
         case "retry": if let n = Int(value), n >= 0 { retry = n }
         default: break
@@ -50,6 +57,6 @@ public struct SSEDecoder: Sendable {
     }
     private mutating func dispatch(into output: inout [ServerSentEvent]) {
         if !dataLines.isEmpty { output.append(ServerSentEvent(event: eventName, data: dataLines.joined(separator: "\n"), id: lastID, retry: retry)) }
-        eventName = nil; dataLines.removeAll(keepingCapacity: true); retry = nil
+        eventName = nil; dataLines.removeAll(keepingCapacity: true); retry = nil; eventBytes = 0
     }
 }

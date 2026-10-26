@@ -59,3 +59,20 @@ public enum GatewayProtocol {
         !value.isEmpty && value.utf8.count <= maxIdentifierLength && value != "." && value != ".." && value.rangeOfCharacter(from: CharacterSet(charactersIn: "/%\\?#\u{0}\r\n")) == nil
     }
 }
+
+extension NexusError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .invalidURL: return "Enter a valid HTTPS gateway address from Tailscale Serve."
+        case .invalidIdentifier: return "The workspace or session identifier is invalid."
+        case .responseTooLarge: return "The gateway response exceeds the device limit."
+        case .httpStatus(let status, let reason):
+            if status == 401 { return "Your device pairing has expired or was revoked. Pair this device again." }
+            if (300..<400).contains(status) { return "Gateway redirects are not accepted. Enter the final HTTPS address from Tailscale Serve." }
+            if status == 403 { return "This device does not have permission for this action. \(reason)" }
+            return "Gateway request failed (\(status)): \(reason)"
+        case .invalidResponse(let reason): return "The gateway returned an unexpected response: \(reason)"
+        case .resyncRequired(let reason): return "Refresh this session to reconnect: \(reason)"
+        }
+    }
+}
