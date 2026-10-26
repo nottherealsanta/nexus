@@ -6,6 +6,8 @@ browser surface and is intentionally independent of terminal and the runtime.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import contextlib
 import hmac
 import mimetypes
@@ -20,7 +22,7 @@ import msgspec
 
 from . import protocol as p
 
-WEB_ROOT = Path(__file__).resolve().parents[1] / "ui" / "web"
+WEB_ROOT = Path(__file__).resolve().parents[1] / "ui" / "nsh_web"
 TICKET_TTL = 60.0
 COOKIE_TTL = 12 * 60 * 60.0
 MAX_WEB_RESPONSE = 32 * 1024 * 1024
@@ -113,9 +115,7 @@ class BrowserRoutes:
         """Serve a browser route; return False for paths owned by peer API."""
         path = request.path
         is_session_page = bool(re.fullmatch(r"/s/[A-Za-z0-9_.:-]{1,128}(/a/[A-Za-z0-9_.:%-]{1,384})?", path))
-        is_web = path == "/" or is_session_page or path.startswith(
-            ("/assets/", "/styles/", "/js/", "/v1/web/")
-        )
+        is_web = not path.startswith("/v1/") or path.startswith("/v1/web/")
         if not is_web:
             return False
         common = self._headers()
@@ -265,6 +265,9 @@ class BrowserRoutes:
         if request.method not in ("GET", "HEAD"):
             await server._write_response(writer, 405, self._json({"error": "method not allowed"}), headers=common)
             return True
+        if not (WEB_ROOT / "index.html").is_file():
+            await server._write_response(writer, 503, self._json({"error": "NSH web build missing; run python scripts/package_nsh_web.py"}), headers=common)
+            return True
         relative = "index.html" if path == "/" or is_session_page else path.lstrip("/")
         root = WEB_ROOT.resolve()
         target = (root / relative).resolve()
@@ -274,6 +277,13 @@ class BrowserRoutes:
         except (ValueError, OSError):
             await server._write_response(writer, 404, self._json({"error": "not found"}), headers=common)
             return True
+        # NSH's generated bootstrap contains inline scripts: authorize only their
+        # exact build hashes, never arbitrary inline script or JavaScript eval.
+        if target.suffix == ".html":
+            data = data.replace(b"<head>", b'<head><base href="' + (self.prefix or "").encode() + b'/">')
+        html = (root / "index.html").read_text()
+        hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(code.encode()).digest()).decode() + "'" for code in re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, re.S) if code.strip())
+        common["Content-Security-Policy"] = common["Content-Security-Policy"].replace("base-uri 'none'", "base-uri 'self'").replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval' " + hashes).replace("style-src 'self'", "style-src 'self' 'unsafe-inline'")
         if self.prefix and target.suffix in {".html", ".css"}:
             for segment in (b"/styles/", b"/js/", b"/assets/"):
                 data = data.replace(segment, self.prefix.encode() + segment)

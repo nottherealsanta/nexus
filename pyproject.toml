@@ -99,7 +99,7 @@ include = ["nexus*"]
 "nexus.voice" = ["NOTICE"]
 "nexus.live" = ["NOTICE", "prompts/*.md"]
 "nexus.agents" = ["data/*.md"]
-"nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]
+"nexus.ui" = ["nsh_web/*", "nsh_web/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

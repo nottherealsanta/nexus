@@ -703,3 +703,6 @@ streaming, input and CPU cost.
 | `NexusUITests/`, `Nexus.xcodeproj/xcshareddata/` | Shared Xcode scheme and onboarding UI tests. |
 
 Build instructions and verification limits: [iOS README](../ios/README.md).
+
+| `rust/app/src/lib.rs` | NSH browser client and cookie/CSRF transport |
+| `rust/client-core/src/lib.rs` | Shared protocol commands and labelled projection rendering |

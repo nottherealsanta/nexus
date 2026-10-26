@@ -32,3 +32,9 @@ ios/**/DerivedData/
 
 # Local demo-video workspace (plan, recordings, edits; never committed)
 /demo-video/
+
+# Generated NSH engine and browser package
+rust/app/.nsh/
+rust/app/target/
+nexus/ui/nsh_web/
+rust/client-core/target/

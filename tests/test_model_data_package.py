@@ -101,8 +101,12 @@ def test_built_wheel_ships_web_and_agent_assets(tmp_path: Path):
         names = archive.namelist()
     assert "nexus/host_support/searchserver/compose.yaml" in names
     assert "nexus/host_support/searchserver/searxng/settings.yml" in names
-    assert "nexus/ui/web/index.html" in names
-    assert "nexus/ui/web/js/app.js" in names
+    assert "nexus/ui/nsh_web/index.html" in names
+    assert any(n.startswith("nexus/ui/nsh_web/") and n.endswith(".js") for n in names)
+    wasm = [n for n in names if n.startswith("nexus/ui/nsh_web/") and n.endswith(".wasm")]
+    assert wasm, "Build NSH assets with python scripts/package_nsh_web.py before wheel tests"
+    with zipfile.ZipFile(wheel) as archive:
+        assert all(archive.read(n).startswith(b"\0asm") for n in wasm)
     assert not any(n.startswith("nexus/ui/tui/") for n in names)
     assert any(n.startswith("nexus/agents/data/") and n.endswith(".md") for n in names)
 
