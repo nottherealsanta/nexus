@@ -259,6 +259,17 @@ async def test_new_session_reuses_agent_without_picker(tmp_path, monkeypatch, na
 
 
 @pytest.mark.asyncio
+async def test_failed_new_session_keeps_selector_open(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.agent_name = "code"
+    shell.close_selector = AsyncMock()
+    shell.switch = AsyncMock(side_effect=RuntimeError("session unavailable"))
+    with pytest.raises(RuntimeError, match="session unavailable"):
+        await shell.command("/new", ("fresh",))
+    shell.close_selector.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
     rows = [SimpleNamespace(id="alpha-1"), SimpleNamespace(id="beta-2")]
     diff = SimpleNamespace(patch="", truncated=False)
@@ -736,7 +747,7 @@ async def test_project_open_prompts_for_a_path_and_creates_a_fresh_session_there
     shell.controller.client = SimpleNamespace(open_project_session=AsyncMock(return_value=SimpleNamespace(
         project=SimpleNamespace(root="/new", key="k"), session="abc123")))
     shell.switch = AsyncMock()
-    shell.sidebar = SimpleNamespace(close=AsyncMock())
+    shell.sidebar = SimpleNamespace(enabled=True, close=AsyncMock())
     flows = Workflows.__new__(Workflows)
     flows.shell = shell
     flows.edit = Mock()

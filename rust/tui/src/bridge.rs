@@ -150,6 +150,8 @@ pub struct Snapshot {
     pub context_preview: bool,
     /// Settings → Layout: the conversation column is at most `render::CENTERED_WIDTH` wide, centered.
     pub centered_layout: bool,
+    #[serde(default)]
+    pub tabs_vertical: bool,
     pub voice_phase: String,
     pub voice_preview: String,
     pub voice_level: f64,
@@ -728,6 +730,9 @@ pub struct Content {
     pub inspect_operation: Option<Value>,
     /// A tool's relevant-only body: `[kind, text]` rows (`nexus/ui_support/tool_signal.py`).
     pub signal: Vec<(String, String)>,
+    /// Bounded shell preview; absent under verbose rendering and on older hosts.
+    pub shell: Option<Value>,
+    pub input_operation: Option<Value>,
     /// Context blocks: the compact figure (`~348`, `~?`) and whether the block contributes anything.
     pub tokens: Tokens,
     pub active: bool,
@@ -1079,6 +1084,9 @@ impl Snapshot {
         }
         if !present.contains_key("context_preview") {
             self.context_preview = std::mem::take(&mut previous.context_preview);
+        }
+        if !present.contains_key("tabs_vertical") {
+            self.tabs_vertical = previous.tabs_vertical;
         }
         if !present.contains_key("centered_layout") {
             self.centered_layout = previous.centered_layout;

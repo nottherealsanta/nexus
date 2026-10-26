@@ -1,6 +1,8 @@
 """Real turn lifecycle tests for agent-managed session worktrees."""
 from __future__ import annotations
 
+import asyncio
+
 import subprocess
 
 import pytest
@@ -360,5 +362,75 @@ async def test_status_tracks_create_and_move_back(project, tmp_path):
         state = await rt.detach_session_worktree(handle.id)
         assert state["kind"] == "main"
         assert any(e.type == "worktree.moved" for e in handle.events)
+    finally:
+        await rt.aclose()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_landed_turn_returns_to_main_without_request(project, tmp_path, enabled):
+    provider = ScriptedProvider(tool_response(("create", "worktree_create", {"reason": "isolate", "name": "landed"})), text_response("ready"), text_response("done"))
+    rt = runtime(project, tmp_path, provider, remove_after_landing=enabled)
+    try:
+        handle = rt.session("landed")
+        await drain(handle, "create isolated checkout")
+        root = rt.session_root(handle.id)
+        (root.path / "landed.txt").write_text("landed\n")
+        git(root.path, "add", ".")
+        git(root.path, "commit", "-m", "landed change")
+        git(project, "merge", "--ff-only", root.branch)
+        await drain(handle, "report status")
+        assert rt.session_root(handle.id).kind == ("main" if enabled else "worktree")
+        assert root.path.exists() is not enabled
+        if enabled:
+            assert any(e.type == "session.root_set" and e.data.get("reason") == "landed" for e in handle.events)
+            assert any(m.meta.notice == "worktree_move" and "Working directory is now" in m.content[0].text for m in handle.messages)
+    finally:
+        await rt.aclose()
+
+
+async def test_archive_returns_landed_checkout(project, tmp_path):
+    provider = ScriptedProvider(tool_response(("create", "worktree_create", {"reason": "isolate", "name": "archive"})), text_response("ready"))
+    rt = runtime(project, tmp_path, provider)
+    try:
+        handle = rt.session("archive-landed")
+        await drain(handle, "create checkout")
+        root = rt.session_root(handle.id)
+        (root.path / "landed.txt").write_text("landed\n")
+        git(root.path, "add", ".")
+        git(root.path, "commit", "-m", "landed change")
+        git(project, "merge", "--ff-only", root.branch)
+        await asyncio.to_thread(rt.sessions.archive, handle.id)
+        assert rt.session_root(handle.id).kind == "main"
+        assert not root.path.exists()
+    finally:
+        await rt.aclose()
+
+
+@pytest.mark.parametrize("gate", ["dirty", "queued", "running", "divergent"])
+async def test_auto_return_retains_checkout_when_safety_gate_blocks(project, tmp_path, monkeypatch, gate):
+    provider = ScriptedProvider(tool_response(("create", "worktree_create", {"reason": "isolate", "name": "gated"})), text_response("ready"))
+    rt = runtime(project, tmp_path, provider)
+    try:
+        handle = rt.session("gated-return")
+        await drain(handle, "create checkout")
+        root = rt.session_root(handle.id)
+        (root.path / "landed.txt").write_text("landed\n")
+        git(root.path, "add", ".")
+        git(root.path, "commit", "-m", "landed change")
+        git(project, "merge", "--ff-only", root.branch)
+        if gate == "dirty":
+            (root.path / "tracked.txt").write_text("local changes\n")
+        elif gate == "queued":
+            handle.enqueue("keep working")
+        elif gate == "running":
+            monkeypatch.setattr(rt, "session_has_active_jobs", lambda session: True)
+        else:
+            (root.path / "unlanded.txt").write_text("new work\n")
+            git(root.path, "add", ".")
+            git(root.path, "commit", "-m", "not landed")
+        await rt._session_worktrees._return_landed(handle, root)
+        assert rt.session_root(handle.id).kind == "worktree"
+        assert root.path.exists()
+        assert not any(e.type == "worktree.removed" for e in handle.events)
     finally:
         await rt.aclose()

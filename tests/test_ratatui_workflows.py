@@ -39,6 +39,19 @@ async def test_stale_form_does_not_save(shell):
 
 
 @pytest.mark.asyncio
+async def test_shell_input_modal_keeps_full_command_and_escapes_controls(shell, monkeypatch):
+    shell.controller.view = SimpleNamespace()
+    command = "\n".join(f"echo {i}" for i in range(80)) + "\n\x1b[31m"
+    monkeypatch.setattr("nexus.ui.ratatui.workflows.find_tool",
+                        lambda view, call_id: SimpleNamespace(input={"command": command}))
+    await shell.workflows.operate({"kind": "tool_input", "call_id": "shell"})
+    assert shell.panel_title == "Shell input"
+    text = "\n".join(shell.panel_lines)
+    assert f"81 lines · {len(command)} characters" in text
+    assert "echo 79" in text and "\x1b" not in text
+
+
+@pytest.mark.asyncio
 async def test_provider_secret_not_returned_in_snapshot(shell):
     shell.client.provider_key_set = AsyncMock(return_value=SimpleNamespace(message="Key saved"))
     shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[

@@ -1,7 +1,7 @@
 # Plan 18: Remove the delay before a new message (and a steer→interrupt promotion) shows up
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented, and **the cause is not yet
-confirmed**: this plan starts with measurement. Source: root `TODO.md` item 11, quoted unchanged:
+Status: implemented measurement fixtures, acceptance incomplete. Idle Enter→prompt p95 is 78.944 ms; first worktree prompt p95 is 135.465 ms, above the 100 ms target. Interrupt marker frame correlation remains missing, and **the end-to-end cause is not yet confirmed**. No production host scheduling change was justified. Source: root
+`TODO.md` item 11, quoted unchanged:
 
 > - new messages takes a second to show up ( remove the lag ) (same for steer to interupt promotion )
 
@@ -120,6 +120,45 @@ Git in a thread), and the next turn must start before the promoted message becom
 
 ## 6. Risks and open questions
 
+### Host-only investigation ledger
+
+Measured before any change with the main checkout's Python at
+`/Users/santa/repos/nexus/.venv/bin/python` (this worktree has no `.venv`).
+`python -m cProfile -o /tmp/plan18-before.prof -m pytest -q tests/test_host_facade.py
+-k 'enqueue_runs_at_the_next_turn_boundary or queue_interrupt_cancels or
+queue_set_mode_promotes or cancel_returns_pending' --durations=10` passed all
+four selected tests. Profile totals below are cumulative active Python time
+across the selected tests, **not** wall-clock request latency or p95; coroutine
+resumptions count as calls and nested times overlap.
+
+| Boundary | Profile cumulative time | Calls/resumptions |
+| --- | ---: | ---: |
+| Host enqueue | 2.470 ms | 8 |
+| Host set queued mode | 0.359 ms | 4 |
+| Host cancel | 0.412 ms | 3 |
+| Supervisor submit | 122.129 ms | 16 |
+| Supervisor start | 186.932 ms | 14 |
+
+These scripted paths do not reproduce a one-second host delay. There is no
+evidence here to change cancellation, title generation, compaction or Git work.
+A new gate-controlled host regression proves that an admitted prompt is already
+in `ConversationView.input_queue` while `start_turn` is blocked and the enqueue
+reply is unfinished; its content/mode and replay agree, then it disappears on
+consumption. Integration should render that existing contract as **Waiting**,
+with the current mode, keyed by `queued_id`. No new host field is necessary.
+
+Final targeted run: five tests passed in 0.81 s (whole test call times: idle
+enqueue 130 ms, interrupt 100 ms, promotion/removal 180 ms, gated pending 90 ms,
+cancel 30 ms; these include setup/cleanup, not visibility latency). Wider host
+facade/supervisor run: 96 passed, one unrelated failure in the exhaustive command
+inventory, missing `ProjectDirectoryList` in
+`test_protocol_round_trips_every_command_and_result`; it does not execute the
+new pending test or scheduling path. No UI files were changed in this work.
+
+Still unmeasured: actual daemon transport/PTY frame timestamps, manager admission,
+worktree setup and p95 screen visibility. The acceptance boxes above remain
+unchecked; do not archive this plan on the strength of these host tests.
+
 - Q1. Is the lag seen on the manager session in particular? (Manager turn admission runs idle
   compaction, `docs/manager.md:229-243`.) Measure it separately.
 - Q2. Is the lag seen only in worktree sessions? (Worktree creation at the first message, and turn
@@ -128,3 +167,79 @@ Git in a thread), and the next turn must start before the promoted message becom
   as waiting, as the queue rows do.
 - Risk: moving turn-end Git work off the critical path can reorder commits; do not do it without a
   test.
+
+### Finisher baseline measurements (no performance changes)
+
+Command: `PYTHONPATH=.:tests python tests/tui_responsiveness_bench.py --label
+plan18-finisher --native --live --output /tmp/nexus-plan18-finisher` completed.
+Artifacts are outside repository, JSON at `/tmp/nexus-plan18-finisher/plan18-finisher.json`.
+Native 10-turn key→frame p50/p95/max 16.931/18.031/18.031 ms (n=8);
+500-turn 18.590/615.733/615.733 ms (n=14). Snapshot→frame medians
+18.039/26.174 ms respectively; maxima 1142.867/1029.445 ms include startup.
+Disclosure click→frame p50/p95 16.441/18.004 ms (10), 16.971/21.384 ms (500).
+Draw p95 5.415/8.285 ms. Live harness completes but reports “No trace” and
+“No Python trace” for both sizes: it does NOT provide interrupt/message latency.
+Therefore no causal interrupt diagnosis or safe performance fix is supported yet.
+No runtime performance change made. Plan requires regressions and before/after
+message/interrupt evidence, so remains OPEN, not investigated-closed or archived.
+
+### Live fixture measurement continuation
+
+Found the reason prior live runs published no trace: the headless PTY never
+answers graphics negotiation; the scripted stream finishes before startup and
+quit is sent before the native loop is ready. Fixture now explicitly selects
+halfblocks, as existing PTY tests already do. No production scheduling change.
+`live_benchmark(10/500, '/tmp/nexus-live-recheck')` now gracefully exits and writes
+native/Python traces; results saved at `/tmp/nexus-live-recheck/results.json`.
+
+| Scripted real-host workload | event→frame p50/p95 ms | stream→frame p50/p95 ms | snapshot→frame p50/p95 ms |
+| --- | --- | --- | --- |
+| 10 history turns | 27.677 / 36.954 | 27.680 / 38.251 | 10.078 / 19.622 |
+| 500 history turns | 34.784 / 53.806 | 34.622 / 47.630 | 16.453 / 28.880 |
+
+This uses in-process facade transport, not a daemon socket. Startup maxima remain
+603–669 ms; Python projection p95 1.245/3.028 ms, maximum 7.838/155.271 ms.
+These are streaming-event measurements, NOT Enter→message or interrupt-promotion
+measurements. Those acceptance scenarios remain open; numbers do not justify
+changing cancellation/Git ordering. No false latency-completion claim or archive.
+
+### Deterministic admission/cancellation cases
+
+Added reusable `scenario_benchmark` plus real-host fixture modes idle, worktree,
+interrupt, shell. Ran all four (single samples, NOT p95): Enter→prompt bytes
+69.868 ms idle, 131.423 ms first worktree-tool turn; steer→interrupt facade reply
+1.218 ms with provider stream cancellation→idle 51.428 ms; running `sleep 10`
+shell promotion reply 0.870 ms, cancellation→idle 54.108 ms. Artifacts and native
+traces: `/tmp/nexus-live-recheck/scenarios.json` and `scenario-*.ansi/.log`.
+The draft buffer is cleared before Enter measurement, so composer echo is excluded.
+Worktree setup follows the actual `worktree_create` tool path. The initial attempt
+to promote inside start_turn was reentrant and was removed before final measurement.
+These are in-process facade, local native PTY cases, not external-provider or daemon
+socket timings. Promotion visibility still needs operation-specific frame correlation;
+aggregate event→frame traces cannot honestly prove that exact frame. No performance
+change is warranted from these single samples. Plan remains open for p95 acceptance.
+
+### Twenty-sample continuation
+
+Ran 20 samples of each scenario through `scenario_benchmark`; durable sample
+JSON at `/tmp/nexus-scenario-repeat/samples.json`, per-sample ANSI/native traces
+in sibling directories. p95 uses sorted index floor(n*.95), capped at n-1 (with
+20 samples this is the maximum); values in ms:
+
+| Scenario/boundary | p50 | p95 | n |
+| --- | ---: | ---: | ---: |
+| Idle Enter→prompt terminal bytes | 72.597 | 78.944 | 20 |
+| First worktree-tool turn Enter→prompt bytes | 127.214 | 135.465 | 20 |
+| Provider steer→interrupt facade reply | 0.804 | 1.167 | 20 |
+| Provider promotion→idle | 43.739 | 50.073 | 20 |
+| Running shell promotion reply | 0.552 | 0.898 | 20 |
+| Running shell promotion→idle | 44.951 | 56.828 | 20 |
+
+Fixed measurement buffer race exposed by repetition (immutable output snapshots
+instead of resizing a shared bytearray while decoding). One aborted interrupt
+sample is excluded, not treated as a successful latency sample. First-message
+worktree visibility exceeds the requested 100ms target; no claim of completion.
+Interrupt uses facade operation start, not a native click; event-specific rendered
+promotion marker correlation remains unimplemented. Existing aggregate frame traces
+are insufficient to prove the marker frame. These are honest substantive gaps, so
+plan 18 remains open; there is no evidence to weaken durability or cancellation.

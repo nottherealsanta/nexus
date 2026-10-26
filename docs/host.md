@@ -243,6 +243,14 @@ snapshot fits; `detail` carries availability notices and resource templates.
   the submission first (`input.queued`), then the supervisor decides *when*, so
   the global cap applies to queued work; `mode` is `queue`, `steer` or
   `interrupt`.
+  Admission already exposes the durable waiting message through
+  `ConversationView.input_queue` before slow turn-start hooks finish, even while
+  the enqueue reply is pending. Clients should label these rows **Waiting**
+  (and show their current `mode`), not imply the model has received them. Use
+  `queued_id` to reconcile the row when it is consumed; no new pending-message
+  host command or optimistic persistence is required. This ordering is covered
+  by `test_facade_pending_input_is_visible_before_slow_turn_start` (plan 18);
+  end-to-end screen latency is not established by that test.
 - **Legacy subagent reports** (`reports.py`; subagents are foreground-only,
   [agents.md](agents.md#foreground-only); the module is legacy and detached-run
   reports are historical records, not replayed). `SessionActivity` answers

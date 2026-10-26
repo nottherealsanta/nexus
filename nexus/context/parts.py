@@ -662,7 +662,8 @@ def render_session_worktree(facts: Sequence[tuple[str, str]]) -> str:
              "git commit -m \"<subject>\" -m \"<body summarising the change>\"`." if not shared else
              "2. Another session is in this worktree: do NOT squash (it rewrites the branch under them). Skip to step 3."),
             f"3. Land it by fast-forwarding the main checkout: `git -C {main} merge --ff-only {branch}`. "
-            + (f"If {base} is not the main checkout's branch, first run `git -C {main} checkout {base}`." if base != "its base branch" else ""),
+            + (f"If {base} is not the main checkout's branch, first run `git -C {main} checkout {base}`." if base != "its base branch" else "")
+            + " Run each command on its own (one command per shell call, no `&&` chaining, no `cd` first).",
             f"4. If `--ff-only` refuses because {base} has diverged, run `git merge {base}` here (or rebase), resolve any "
             "conflicts, re-run the checks, commit, (squash again) and retry. If it still fails, stop and tell the user. "
             "If git refuses because uncommitted changes in the main checkout would be overwritten, stop and tell the user which files.",

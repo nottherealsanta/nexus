@@ -1,6 +1,28 @@
 # Plan 11: Landing a worktree without a permission prompt, and removing the checkout when done
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md`
+Status: implemented and offline verified; acceptance remains partial (2026-10-26). What the code already does
+(tested): §4.4 automatic return — a clean landed worktree session returns to
+main at turn close and before archive (`SessionWorktrees._return_landed` /
+`archive_landed`, `remove_after_landing` user-only key defaulting to true;
+`docs/sessions.md` "Automatic return after landing", `docs/config.md` "Landed
+worktree lifecycle"; tests `test_landed_turn_returns_to_main_without_request`,
+`test_archive_returns_landed_checkout`, `test_remove_after_landing_is_user_only`).
+This change implements on top of that: §4.1 evidence + §4.2 parser widening —
+`is_worktree_landing` now also accepts the told `&&` chains of landing commands
+(checkout-then-merge, at most three `-C` segments, or `cd <main>` plus up to two
+bare-`git` landings), the `cd <main> && git …` spellings, `~`-expanded mains,
+`--` before the branch and `--ff-only` after it; every near-miss (extra segment,
+`;`/`||`/pipe/redirect, wrong path or branch, `-c`/env prefix) keeps the forced
+ask, and `deny` rules still win first (probed 2026-10-26 against the running
+code, e.g. chained/`cd`/reordered shapes returned `False` before this change and
+`True` after; near-misses stay `False`). Instructions now run the told landing
+one command per shell call (`parts.py`, `worktree_bar.py`); the stale
+"always approves" paragraph is fixed (`docs/decisions.md`), with the widened
+exemption stated in `docs/tools.md`/`docs/security.md`. Not in this change: §4.3
+`/worktrees` Integrate confirm (Q1 unanswered — default no), anything that
+weakens the forced ask for arbitrary Git writes elsewhere. Remaining unverified:
+live end-to-end landings issued by the agent in a real checkout, and real-agent
+telemetry of which new shape fires in practice. Source: root `TODO.md`
 items 3 and 4, quoted unchanged:
 
 > - worktree merge should not ask for permission to merge
@@ -181,3 +203,49 @@ the runtime layer, not from the session layer (one-way layering, `AGENTS.md:82-8
 - Risk: moving the root at turn end races a user message that arrives during `finish`; re-check the
   queue under the session lock and skip the move if anything is pending.
 - Not verified: unattended daemons with `on_unattended = "allow"` (`docs/decisions.md:82-84`).
+
+### Offline verification follow-up
+
+Permission parser, worktree runtime, cleanup-host, shared-session and replay/view
+suites: 95 passed (42.16 s). This is offline evidence only; no real-agent session
+export or live prompt telemetry was collected. No allowlist or permission policy
+was widened in this follow-up. Live evidence gaps above remain open.
+
+### Finisher acceptance audit (offline versus live)
+
+Focused permission/runtime/cleanup/shared-session/view plus layering run: 337 passed.
+Criterion mapping:
+- canonical landing and explicit deny precedence -> test_worktree_merge_permission.py
+  (including test_explicit_deny_rule_still_wins_over_the_landing), passed;
+- full create/edit/merge/move turn -> test_worktree_sessions_runtime.py::
+  test_full_agent_flow_list_create_edit_merge_and_move_to_main, passed;
+- landed turn returns to main with feature toggle -> same file::
+  test_landed_turn_returns_to_main_without_request, passed;
+- archive returns landed checkout -> same file::test_archive_returns_landed_checkout, passed;
+- only last session releases shared checkout -> test_worktree_shared_sessions.py::
+  test_merged_clean_worktree_is_cleaned_up_only_when_the_last_session_leaves, passed;
+- refusal on ignored files and stale preview -> test_worktree_cleanup_host.py::
+  test_cleanup_refuses_ignored_files_and_stale_preview, passed;
+- remove retains branch and next turn recreates -> same file::
+  test_host_remove_keeps_branch_and_next_turn_recreates_checkout, passed;
+- worktree removal reduction -> test_view_worktree.py, passed.
+Live permission-request export/classification and real-session landing telemetry are absent.
+The explicit divergent/dirty/running/queued individual acceptance mapping is not yet
+complete; do not infer this audit proved all cleanup gates. Remains in planning.
+
+### Offline gate continuation
+
+Added real-repository parameterized `_return_landed` acceptance for dirty tracked
+files, queued input, active jobs, and a new unlanded commit after an earlier merge.
+All four pass and retain checkout/root with no removal event. Broader permission,
+runtime, cleanup, shared-session, reduction and sidebar/native run: 162 passed,
+1 native capture failure (subsequently fixed by explicit PTY resize notification).
+Integrate confirmation remains intentionally unchanged: it authorizes a separate
+user-selected integration preview, while the exemption is for the agent's own
+parsed fast-forward landing. Advisor question if changing this scope is desired:
+Should a user-selected clean fast-forward Integrate consume its preview token
+without a second confirmation? Current safe default is no. Live telemetry absent.
+
+Resolved scope decision: retain the explicit user Integrate preview confirmation.
+The agent landing exemption is distinct; §4.3 is not selected. See
+`docs/decisions.md`, "Agent landing versus explicit Integrate confirmation".

@@ -1739,7 +1739,7 @@ class Session:
                 meta=MessageMeta(turn_id=turn_id, notice="tool_call_nudge"))),
             lambda seq: EventRecord(seq=seq, ts=stamp, event=Event(
                 type="context.notice", seq=seq, ts=stamp, session=self.id, turn=turn_id,
-                data={"kind": "tool_call_nudge", "message": text,
+                data={"kind": "tool_call_nudge", "model_visible": True, "message": text,
                       "tool_calls": count, "threshold": threshold})),
         ])
         self._read = None
@@ -1793,7 +1793,7 @@ class Session:
             ),
             lambda seq: EventRecord(seq=seq, ts=stamp, event=Event(
                 type=_NOTICE_EVENT, seq=seq, ts=stamp, session=self._id, turn=turn_id,
-                data={"kind": _ROSTER_NOTICE, **current, "changed": changed},
+                data={"kind": _ROSTER_NOTICE, "model_visible": True, **current, "changed": changed},
             )),
         ])
         self._read = None

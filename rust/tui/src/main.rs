@@ -112,6 +112,15 @@ fn resolve_operation(
     })
 }
 
+/// Only a notice's isolated close chip may be invoked by the dismiss keys.
+fn notice_dismiss_operation(operation: &Option<Value>) -> Option<Value> {
+    let inner = copy_button::inner(operation)?;
+    inner["chips"].as_array()?.iter().find_map(|chip| {
+        let operation = &chip["operation"];
+        (operation["kind"] == "dismiss_notice").then(|| operation.clone())
+    })
+}
+
 /// The inspector a row opens (`i` or a double click): the row's own `inspect_operation`
 /// (group and header rows share their hit region), else the tool/context inspector.
 fn inspect_for(operation: &Option<serde_json::Value>) -> Option<serde_json::Value> {
@@ -1489,6 +1498,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         nav = None;
                         dirty = true;
                         match key.code {
+                            KeyCode::Char('x') | KeyCode::Delete if key.modifiers.is_empty() => {
+                                if let Some(operation) = blocks
+                                    .get(index)
+                                    .and_then(|(first, _)| cache.operations.get(*first))
+                                    .and_then(notice_dismiss_operation)
+                                {
+                                    send(
+                                        json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                    )?;
+                                }
+                                continue;
+                            }
                             KeyCode::Enter | KeyCode::Char(' ') => {
                                 if let Some(operation) = blocks
                                     .get(index)
@@ -2442,6 +2463,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         dirty = true;
                         continue;
                     }
+                    if drawn_regions
+                        .tabs_rail
+                        .contains((mouse.column, mouse.row).into())
+                        && matches!(
+                            mouse.kind,
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        )
+                    {
+                        cache.rail_offset = if mouse.kind == MouseEventKind::ScrollUp {
+                            cache.rail_offset.saturating_sub(3)
+                        } else {
+                            cache.rail_offset.saturating_add(3)
+                        }
+                        .min(render::rail_max_start(&s, drawn_regions.tabs_rail));
+                        dirty = true;
+                        continue;
+                    }
                     if !s.sidebar.open
                         && s.details_sidebar
                         && matches!(s.details_panel.tab.as_str(), "Browser" | "Git")
@@ -2924,6 +2962,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
+                            let rails = drawn_regions;
+                            if rails.back_rail.contains((mouse.column, mouse.row).into()) {
+                                action("dismiss", "")?;
+                                continue;
+                            }
+                            if rails.tabs_rail.contains((mouse.column, mouse.row).into()) {
+                                if mouse.row == rails.tabs_rail.y {
+                                    action("command", "/new")?;
+                                } else if let Some(tab) = s.tabs.get(
+                                    cache.rail_offset
+                                        + usize::from(mouse.row - rails.tabs_rail.y - 1),
+                                ) {
+                                    let kind = if mouse.column >= rails.tabs_rail.right() - 2 {
+                                        "tab_close"
+                                    } else {
+                                        "session_open"
+                                    };
+                                    send(
+                                        json!({"type":kind,"workspace":tab.workspace,"text":tab.id}),
+                                    )?;
+                                }
+                                continue;
+                            }
                             // The notifications drawer: a click inside is swallowed, a click
                             // outside closes it (the counter then reopens only on its own click).
                             if cache.toasts.notes.is_open() {
@@ -3293,9 +3354,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 && mouse.row == r.tabs.y
                             {
                                 let column = usize::from(mouse.column.saturating_sub(r.tabs.x));
-                                let hit = render::top_cells(&s, r.tabs).into_iter().find(|cell| {
-                                    column >= cell.start && column < cell.end.max(cell.start + 1)
-                                });
+                                let hit = render::top_cells(&s, r.tabs, r.tabs_rail.width > 0)
+                                    .into_iter()
+                                    .find(|cell| {
+                                        column >= cell.start
+                                            && column < cell.end.max(cell.start + 1)
+                                    });
                                 match hit.map(|cell| cell.kind) {
                                     Some(render::TabHit::Back) => action("dismiss", "")?,
                                     Some(render::TabHit::Session(index)) => {
@@ -3449,6 +3513,32 @@ mod tests {
 #[cfg(test)]
 mod click_tests {
     use super::*;
+
+    #[test]
+    fn notice_close_click_is_isolated_and_keyboard_does_not_dismiss() {
+        for width in [8, 24, 80] {
+            let row = Some(json!({"kind":"context_chips", "default":null, "chips":[
+                {"start":width-3,"end":width,"operation":{"kind":"dismiss_notice","id":"s:1"}}
+            ]}));
+            assert_eq!(notice_dismiss_operation(&row).unwrap()["id"], "s:1");
+            assert!(notice_dismiss_operation(&None).is_none());
+            assert!(notice_dismiss_operation(&Some(json!({"kind":"context_show"}))).is_none());
+            for column in 0..width - 3 {
+                assert!(resolve_operation(&row, Some(column)).is_none());
+            }
+            for column in width - 3..width {
+                assert_eq!(
+                    resolve_operation(&row, Some(column)).unwrap()["kind"],
+                    "dismiss_notice"
+                );
+            }
+            assert!(resolve_operation(&row, Some(width)).is_none());
+            assert_eq!(
+                resolve_operation(&row, None).unwrap()["kind"],
+                "context_menu"
+            );
+        }
+    }
 
     #[test]
     fn a_header_click_opens_the_chip_under_the_column_not_the_menu() {

@@ -541,6 +541,7 @@ class SessionWorktrees:
             root = self.runtime.session_root(handle.id)
             if root.kind == "worktree":
                 await self._close_part(handle, terminal.turn, root)
+                await self._return_landed(handle, root)
             pending = self._moves.pop(handle.id, None)
             if pending is not None:
                 self._event(handle, "worktree.move_failed", {"request_id": pending.get("request_id"), "to": pending.get("to") or pending["action"],
@@ -1125,7 +1126,7 @@ class SessionWorktrees:
         """Durable in-band notice the model reads (kept in history; facts are re-rendered every step)."""
         handle.append_message(Message(role="user", content=[Text(text)],
                                       meta=MessageMeta(turn_id=turn_id or None, notice=_NOTICE_KIND)))
-        self._event(handle, "context.notice", {"kind": _NOTICE_KIND, "message": redact_secrets(text)[:2000]})
+        self._event(handle, "context.notice", {"kind": _NOTICE_KIND, "model_visible": True, "message": redact_secrets(text)[:2000]})
 
     async def _apply(self, handle, request, *, in_turn, held=False):
         action = request["action"]
@@ -1297,6 +1298,50 @@ class SessionWorktrees:
         if reason:
             text += f" Reason: {redact_secrets(reason)[:300]}"
         return text + " Tool calls and shell commands now run there."
+
+    async def _return_landed(self, handle, root):
+        """Return only a clean, landed, idle session; never discard local work."""
+        if not self.policy().remove_after_landing or self.runtime.session_has_active_jobs(handle.id):
+            return
+        if handle.queued_ids or handle.id in self._moves or self._others_in(handle.id, root.worktree_id):
+            return
+        record = await self._thread(handle.id, self.service.get_worktree, root.worktree_id,
+                                    root=self.registry, parent_workspace=self.runtime.workspace)
+        state = await self._thread(handle.id, self._merge_state, record)
+        if not state["merged"] or not state["has_work"]:
+            return
+        info = await self._thread(handle.id, self.service.session_status, root.worktree_id, root=self.registry)
+        if info.get("missing") or any(info.get("uncommitted", {}).values()):
+            return
+        from .worktree_cleanup import _ignored_paths, _operation_markers
+        if await self._thread(handle.id, _ignored_paths, root.path):
+            return
+        if await self._thread(handle.id, _operation_markers, root.path):
+            return
+        if info.get("branch") != record.branch:
+            return
+        await self._apply(handle, {"action": "move", "to": "main",
+                                  "reason": "landed"},
+                          in_turn=False, held=True)
+        self._model_notice(
+            handle, "Working directory is now the main checkout; the worktree work is merged.",
+            handle.active_turn_id,
+        )
+
+    def archive_landed(self, session):
+        """Runtime-owned archive hook; reuse the turn-boundary lifecycle under its lock."""
+        handle = self.handle(session)
+        root = self.runtime.session_root(session)
+        if root.kind != "worktree" or not self.policy().remove_after_landing:
+            return
+        self._idle(handle)
+        handle._lock.acquire(shared=False, blocking=False)
+        try:
+            if self.runtime.sessions._has_pending_work(session):
+                return
+            asyncio.run(self._return_landed(handle, root))
+        finally:
+            handle._lock.release()
 
     async def _cleanup_left(self, handle, record):
         """Remove the checkout of a merged, clean worktree once its last session left."""

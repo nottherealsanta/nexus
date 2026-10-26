@@ -381,3 +381,11 @@ the selected tool catalog and excludes loop-driving tools.
 `agent.tool_call_nudge` is a nonnegative integer, default `300`; `0` disables it.
 At each crossed multiple, the next model request receives an advisory wrap-up
 notice. This does not change hard limits.
+
+### Landed worktree lifecycle
+
+`worktrees.remove_after_landing` defaults to `true` and is a user-only setting.
+At a turn boundary (or before archive), a clean landed session worktree returns
+to main when there are no queued messages, shell jobs, pending moves, or other
+occupants. Set it to `false` to keep the session in its landed checkout. This
+setting does not change permissions, merge commands, or `auto_remove_clean`.

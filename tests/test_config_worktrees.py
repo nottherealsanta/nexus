@@ -17,6 +17,7 @@ def _home(tmp_path):
 def test_worktree_defaults_and_project_configuration_load(tmp_path):
     assert WorktreesSection() == ConfigV2().worktrees
     assert WorktreesSection().base == "current"
+    assert WorktreesSection().remove_after_landing is True
     assert WorktreesSection().auto_remove_clean is False
     assert WorktreesSection().max_worktrees == 16
     assert WorktreesSection().commit_max_files == 2000
@@ -44,6 +45,7 @@ def test_removed_worktree_keys_are_rejected(key):
     "kwargs,field",
     [
         ({"auto_remove_clean": 1}, "auto_remove_clean"),
+        ({"remove_after_landing": 1}, "remove_after_landing"),
         ({"max_worktrees": 0}, "max_worktrees"),
         ({"max_worktrees": True}, "max_worktrees"),
         ({"commit_max_files": 0}, "commit_max_files"),
@@ -129,3 +131,10 @@ def test_user_layer_can_enable_auto_remove_clean_with_project_worktree_settings(
     loaded = Config.load(tmp_path, home=home, environ={})
     assert loaded.v2.worktrees.auto_remove_clean is True
     assert loaded.v2.worktrees.base == "main"
+
+
+def test_remove_after_landing_is_user_only(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n[worktrees]\nremove_after_landing = false\n")
+    with pytest.raises(ConfigError, match="worktrees.remove_after_landing.*user-level"):
+        Config.load(tmp_path, home=home, environ={})

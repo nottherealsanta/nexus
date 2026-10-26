@@ -145,11 +145,22 @@ fn partition(text: &str) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
-    top_layout_at(s, width, 0)
+    top_layout_at(s, width, 0, false)
 }
 /// `top_layout` with the working-tab spinner on animation frame `spin` (all frames are one cell
 /// wide, so geometry and click ranges do not depend on it).
-fn top_layout_at(s: &Snapshot, width: usize, spin: usize) -> Vec<(usize, String, Seg)> {
+fn top_layout_at(
+    s: &Snapshot,
+    width: usize,
+    spin: usize,
+    rail_visible: bool,
+) -> Vec<(usize, String, Seg)> {
+    if rail_visible {
+        return agent_layout(s, width)
+            .into_iter()
+            .filter(|(_, _, seg)| !matches!(seg, Seg::Back))
+            .collect();
+    }
     let dash = format!(" {} ", dashboard_glyph());
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
@@ -456,6 +467,10 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         let mut spans = Vec::new();
         let mut at = 0;
         for (start, text, seg) in agent_layout(s, usize::from(area.width)) {
+            // A shifted child header means regions reserved the dedicated back rail.
+            if area.x >= 2 && matches!(seg, Seg::Back) {
+                continue;
+            }
             spans.push(Span::raw(" ".repeat(start.saturating_sub(at))));
             at = start + text.width();
             let fg = match seg {
@@ -527,7 +542,12 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         Line::from(spans)
     };
     let bar = Rect { height: 1, ..area };
-    let tabs_layout = top_layout_at(s, width, spin);
+    let tabs_layout = top_layout_at(
+        s,
+        width,
+        spin,
+        super::tabs_rail_visible(s, frame.area().width),
+    );
     frame.render_widget(Paragraph::new(row(tabs_layout)).style(background), bar);
     // Two rows: the tabs and a thin line closing the bar; one row (short terminals) drops the
     // line. The project strip lives below the composer (`draw_project_strip`). Same inset as the
@@ -586,7 +606,25 @@ pub(super) fn draw_project_strip(frame: &mut Frame, s: &Snapshot, area: Rect, p:
         Rect { height: 1, ..area },
     );
 }
-pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
+pub fn top_cells(s: &Snapshot, area: Rect, rail_visible: bool) -> Vec<TabCell> {
+    if !s.agent_page.is_empty() && area.x >= 2 {
+        return tab_cells(s, usize::from(area.width))
+            .into_iter()
+            .filter(|cell| cell.kind != TabHit::Back)
+            .collect();
+    }
+    if rail_visible {
+        return agent_layout(s, usize::from(area.width))
+            .into_iter()
+            .filter_map(|(start, text, seg)| {
+                matches!(seg, Seg::Details).then_some(TabCell {
+                    kind: TabHit::Details,
+                    start,
+                    end: start + text.width(),
+                })
+            })
+            .collect();
+    }
     tab_cells(s, area.width as usize)
 }
 
@@ -952,7 +990,7 @@ mod chrome_tests {
                 "only the working tab spins: {text}"
             );
         }
-        let widths = |spin: usize| top_layout_at(&s, 80, spin).len();
+        let widths = |spin: usize| top_layout_at(&s, 80, spin, false).len();
         assert_eq!(widths(0), widths(5), "geometry is frame independent");
     }
 

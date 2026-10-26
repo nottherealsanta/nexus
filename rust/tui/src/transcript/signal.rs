@@ -33,6 +33,7 @@ pub fn styled(kind: &str, text: &str, p: &Palette) -> Vec<Span<'static>> {
     let fg = |color| Style::default().fg(color);
     match kind {
         "code" => vec![span(text, fg(p.text).add_modifier(Modifier::BOLD))],
+        "shell_out" => vec![span(text, fg(p.muted))],
         "out" => match numbered(text) {
             Some((number, rest)) => vec![span(number, fg(p.quiet)), span(rest, fg(p.text))],
             None => vec![span(text, fg(p.muted))],

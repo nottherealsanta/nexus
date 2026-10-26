@@ -191,6 +191,8 @@ pub struct SidebarUi {
     tab_hits: Vec<(Rect, usize)>,
     list: Rect,
     line_items: Vec<Option<usize>>,
+    /// The last painted Add-project picker geometry; clicks resolve rows here.
+    picker: Option<PickerLayout>,
     project_edit: Option<Editor>,
     proj_sel: usize,
     proj_top: usize,
@@ -204,6 +206,36 @@ pub struct SidebarUi {
 
 /// Two clicks on the same file row within this interval open the file preview.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+
+/// The Add-project picker rows, in paint order: path input (0), primary open
+/// action (1), then one per listed directory row (2 + index). The layout is a
+/// pure function of the draw area; `draw_project_picker` stores one copy per
+/// frame so clicks resolve against the painted geometry.
+#[derive(Clone, Copy)]
+struct PickerLayout {
+    header: Rect,
+    input: Rect,
+    action: Rect,
+    list: Rect,
+    footer: Rect,
+    rows: usize,
+}
+
+impl PickerLayout {
+    /// Which picker row a click falls on; `None` outside the picker.
+    fn row_at(&self, y: u16) -> Option<usize> {
+        if self.input.contains(Position::new(self.input.x, y)) {
+            return Some(0);
+        }
+        if self.action.contains(Position::new(self.action.x, y)) {
+            return Some(1);
+        }
+        if self.list.contains(Position::new(self.list.x, y)) {
+            return Some(2 + usize::from(y.saturating_sub(self.list.y)));
+        }
+        None
+    }
+}
 
 fn rows_of(value: &Value) -> &[Value] {
     value
@@ -380,7 +412,11 @@ impl SidebarUi {
     }
 
     fn session_operation(&mut self, operation: Value) -> Out {
-        if operation.get("kind").and_then(Value::as_str) == Some("session_open") {
+        if operation
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "session_open" | "session_new"))
+        {
             self.session_dismissed = true;
             self.focus = false;
             self.dragging = false;
@@ -391,6 +427,9 @@ impl SidebarUi {
     /// A new snapshot may ask the already-open sidebar for keyboard focus (the host bumps
     /// `sidebar.focus`). Opening it never takes focus: the composer keeps the keys until a click.
     pub fn take_host_focus(&mut self, prev: &Snapshot, next: &Snapshot) {
+        if !next.sidebar.open {
+            self.session_dismissed = false;
+        }
         if next.sidebar.open && next.sidebar.reveal != prev.sidebar.reveal {
             self.session_dismissed = false; // `/sessions` after opening a session shows the sidebar again
         }
@@ -778,6 +817,17 @@ impl SidebarUi {
     fn click(&mut self, ev: MouseEvent, s: &Snapshot) -> Out {
         match s.sidebar.tab.as_str() {
             "Projects" => {
+                if flag(&s.sidebar.projects, "browser_open") {
+                    if let Some(index) = self
+                        .picker
+                        .as_ref()
+                        .and_then(|layout| layout.row_at(ev.row))
+                    {
+                        self.proj_sel = index;
+                        return self.activate_picker(s);
+                    }
+                    return Out::eat();
+                }
                 if let Some(index) = self.list_row_at(ev.column, ev.row) {
                     self.proj_sel = index;
                     return self.activate_picker(s);
@@ -860,6 +910,7 @@ impl SidebarUi {
         self.tab_hits.clear();
         self.list = Rect::default();
         self.line_items.clear();
+        self.picker = None;
         frame.render_widget(Clear, area);
         frame.render_widget(
             Block::default().style(Style::default().bg(p.composer)),
@@ -983,6 +1034,249 @@ impl SidebarUi {
         top
     }
 
+    /// Project picker geometry shared by drawing and hit-testing: the header,
+    /// path input, primary open action, directory list and footer rows.
+    fn picker_layout(body: Rect, row_count: usize, narrow: bool) -> PickerLayout {
+        let mut y = body.y;
+        let mut next = |rows: u16| {
+            let rect = Rect::new(
+                body.x,
+                y,
+                body.width,
+                rows.min(body.bottom().saturating_sub(y)),
+            );
+            y = y.saturating_add(rows);
+            rect
+        };
+        let header = next(2);
+        let input = next(2);
+        let action = next(2);
+        let footer = if narrow {
+            Rect::default()
+        } else {
+            Rect::new(
+                body.x,
+                body.bottom().saturating_sub(1),
+                body.width,
+                1.min(body.bottom().saturating_sub(y)),
+            )
+        };
+        let list = Rect::new(
+            body.x,
+            y,
+            body.width,
+            body.bottom()
+                .saturating_sub(y)
+                .saturating_sub(if footer.height > 0 { 1 } else { 0 }),
+        );
+        PickerLayout {
+            header,
+            input,
+            action,
+            list,
+            footer,
+            rows: row_count,
+        }
+    }
+
+    /// The Add-project picker with a labelled header, a distinct path field, a
+    /// primary open action and directory rows: the plan-16 redesign.
+    fn draw_project_picker(
+        &mut self,
+        frame: &mut Frame,
+        body: Rect,
+        data: &Value,
+        s: &Snapshot,
+        p: &Palette,
+        mono: bool,
+    ) {
+        let quiet = Style::default().fg(p.quiet);
+        let muted = Style::default().fg(p.muted);
+        let narrow = body.width < 40;
+        let raw_path = text(data, "browser_path");
+        let home = std::env::var("HOME").unwrap_or_default();
+        let shown_path = if !home.is_empty()
+            && (raw_path == home || raw_path.starts_with(&format!("{home}/")))
+        {
+            format!("~{}", &raw_path[home.len()..])
+        } else {
+            raw_path.to_owned()
+        };
+        let rows = data
+            .get("browser_rows")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let dir_count = rows.iter().filter(|r| text(r, "kind") == "dir").count();
+        let file_count = rows.len().saturating_sub(
+            rows.iter()
+                .filter(|r| text(r, "kind") == "dir" || text(r, "kind") != "file")
+                .count(),
+        );
+        let title = if narrow {
+            " Add project ".to_owned()
+        } else {
+            format!(
+                " Add project · {dir_count} folders{} ",
+                if file_count > 0 {
+                    format!(" · {file_count} files")
+                } else {
+                    String::new()
+                }
+            )
+        };
+        let block = Block::bordered().title(title);
+        let block = if narrow {
+            block
+        } else {
+            block.title_bottom(" ↑↓ move · ↵ open · → inside · ← up · / path · Esc cancel ")
+        };
+        let inner = block.inner(body);
+        frame.render_widget(Clear, body);
+        frame.render_widget(block, body);
+        let layout = Self::picker_layout(inner, rows.len(), narrow);
+        // Header: the current directory and the entry counts.
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("in ", quiet),
+                Span::styled(
+                    crate::transcript::truncate(
+                        &shown_path,
+                        usize::from(layout.header.width).saturating_sub(5),
+                    ),
+                    Style::default().fg(p.text),
+                ),
+            ])),
+            layout.header,
+        );
+        // Path field: its own bordered row, distinct from the list.
+        let field = Block::bordered()
+            .title(" path ")
+            .border_style(Style::default().fg(if self.project_edit.is_some() {
+                p.accent
+            } else {
+                p.border
+            }));
+        let field_inner = field.inner(layout.input);
+        frame.render_widget(field, layout.input);
+        match self.project_edit.as_ref() {
+            Some(editor) => frame.render_widget(
+                Paragraph::new(format!(
+                    "{}▏{}",
+                    &editor.text[..editor.cursor],
+                    &editor.text[editor.cursor..]
+                )),
+                field_inner,
+            ),
+            None => frame.render_widget(
+                Paragraph::new(Span::styled(raw_path.to_owned(), muted)),
+                field_inner,
+            ),
+        }
+        // Primary action: accent, separated from the list by its own row.
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("↵ Open ", Style::default().fg(p.accent)),
+                Span::styled(
+                    crate::transcript::truncate(
+                        raw_path,
+                        usize::from(layout.action.width).saturating_sub(8),
+                    ),
+                    Style::default().fg(p.accent),
+                ),
+                Span::styled(" as a project", Style::default().fg(p.accent)),
+            ])),
+            layout.action,
+        );
+        // Directory rows: glyph + name; files dimmed with no trailing text.
+        let mut lines = Vec::new();
+        let mut selected = None;
+        let offset = layout.rows.min(self.proj_sel.saturating_sub(2));
+        for (index, row) in rows.iter().enumerate() {
+            let line = index.saturating_sub(offset);
+            if line >= usize::from(layout.list.height) {
+                break;
+            }
+            let active = self.proj_sel == index + 2;
+            if active {
+                selected = Some(line);
+            }
+            let is_dir = text(row, "kind") == "dir";
+            let glyph = if is_dir {
+                if mono {
+                    "> "
+                } else {
+                    "▸ "
+                }
+            } else {
+                "  "
+            };
+            let name = text(row, "name");
+            lines.push((
+                row_line(
+                    vec![Span::styled(glyph, quiet)],
+                    name,
+                    if is_dir {
+                        Style::default().fg(p.text)
+                    } else {
+                        Style::default().fg(p.quiet)
+                    },
+                    if text(row, "repo") == "true" && !narrow {
+                        "git"
+                    } else {
+                        ""
+                    },
+                    quiet,
+                    usize::from(layout.list.width),
+                    if active { Some(p.element) } else { None },
+                    mono && active,
+                ),
+                Some(index + 2),
+            ));
+        }
+        if rows.is_empty() {
+            lines.push((Line::styled("  (empty folder)", quiet), None));
+        }
+        self.proj_top = self.paint_list(frame, layout.list, lines, selected, self.proj_top);
+        // Errors read directly under the field, not at the bottom of the list.
+        if !text(data, "browser_error").is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    fit(text(data, "browser_error"), usize::from(layout.input.width)),
+                    Style::default().fg(p.error),
+                )),
+                Rect::new(
+                    layout.input.x,
+                    layout.input.bottom().min(body.bottom().saturating_sub(1)),
+                    layout.input.width,
+                    1,
+                ),
+            );
+        }
+        if flag(data, "browser_truncated") {
+            frame.render_widget(
+                Paragraph::new(Line::styled("… more entries not shown", quiet)),
+                Rect::new(
+                    layout.list.x,
+                    layout.list.bottom().saturating_sub(1).max(layout.list.y),
+                    layout.list.width,
+                    1,
+                ),
+            );
+        }
+        if !narrow {
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    " ↑↓ move · ↵ open · → inside · ← up · / path · Esc cancel",
+                    quiet,
+                )),
+                layout.footer,
+            );
+        }
+        self.picker = Some(layout);
+        let _ = (s, mono);
+    }
+
     fn draw_projects(
         &mut self,
         frame: &mut Frame,
@@ -995,15 +1289,11 @@ impl SidebarUi {
         let data = &s.sidebar.projects;
         let quiet = Style::default().fg(p.quiet);
         let picking = flag(data, "browser_open");
-        let body = if picking {
-            frame.render_widget(Clear, body);
-            let block = Block::bordered().title(" Add project · Esc cancel ");
-            let inner = block.inner(body);
-            frame.render_widget(block, body);
-            inner
-        } else {
-            body
-        };
+        if picking {
+            self.draw_project_picker(frame, body, data, s, p, mono);
+            return;
+        }
+        let body = body;
         let mut labels = vec![
             match self.project_edit.as_ref() {
                 Some(editor) => format!(
@@ -1013,7 +1303,7 @@ impl SidebarUi {
                 ),
                 None => format!("Path: {}", text(data, "browser_path")),
             },
-            "Open this folder · new session".to_owned(),
+            format!("↵ Open {} as a project", text(data, "browser_path")),
         ];
         if let Some(rows) = data.get("browser_rows").and_then(Value::as_array) {
             labels.extend(rows.iter().map(|r| {
@@ -1051,7 +1341,15 @@ impl SidebarUi {
                 row_line(
                     vec![Span::styled(if active { "› " } else { "  " }, quiet)],
                     label,
-                    Style::default().fg(p.text),
+                    Style::default().fg(if picking && i == 1 {
+                        p.accent
+                    } else if picking && i == 0 {
+                        p.muted
+                    } else if picking && label.ends_with(" · file") {
+                        p.quiet
+                    } else {
+                        p.text
+                    }),
                     "",
                     quiet,
                     usize::from(body.width),
@@ -2036,7 +2334,11 @@ mod tests {
         ]});
         let mut ui = SidebarUi::default();
         let text = screen(&mut ui, &s, 60, 24);
-        assert!(text.contains("Path: /repo") && text.contains("main.py"));
+        assert!(
+            text.contains("/repo") && text.contains("main.py"),
+            "picker header and rows: {text}"
+        );
+        assert!(text.contains("Open") && text.contains("as a project"));
         ui.proj_sel = 3;
         assert_eq!(
             ui.key(key(KeyCode::Enter), &s, true).action,
@@ -2065,6 +2367,68 @@ mod tests {
             ui.key(key(KeyCode::Enter), &s, true).action,
             Some(json!({"type":"sidebar","op":"select_project","path":"/repo"}))
         );
+    }
+
+    #[test]
+    fn picker_clicks_hit_the_painted_rows() {
+        let mut s = open("Projects", 40);
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/repo","browser_rows":[
+            {"name":"..","kind":"dir","path":"/"},
+            {"name":"src","kind":"dir","path":"/repo/src"},
+            {"name":"main.py","kind":"file","path":"/repo/main.py"}
+        ]});
+        let mut ui = SidebarUi::default();
+        let backend_area = Rect::new(0, 0, 40, 24);
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                ui.draw(frame, backend_area, &s, &Palette::new(false), 0, false);
+            })
+            .unwrap();
+        let picker = ui
+            .picker
+            .clone()
+            .expect("picker geometry is stored per frame");
+        // Input row focuses the path editor; the action row opens the current folder.
+        assert_eq!(picker.row_at(picker.input.y), Some(0));
+        assert_eq!(picker.row_at(picker.action.y), Some(1));
+        // List rows map to 2 + index; below the last row there is no target.
+        assert_eq!(picker.row_at(picker.list.y), Some(2));
+        assert_eq!(picker.row_at(picker.list.y + 2), Some(4));
+        assert_eq!(picker.row_at(picker.list.y + 3), Some(5));
+        // Clicking the action row opens the current folder as a project.
+        let action = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: picker.action.x + 1,
+            row: picker.action.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        ui.proj_sel = 9;
+        assert_eq!(
+            ui.mouse(action, &s, backend_area, 40).action,
+            Some(json!({"type":"sidebar","op":"select_project","path":"/repo"}))
+        );
+        // Clicking a directory row opens that folder.
+        let row = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: picker.list.x + 1,
+            row: picker.list.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            ui.mouse(row, &s, backend_area, 40).action,
+            Some(json!({"type":"sidebar","op":"select_project","path":"/repo/src"}))
+        );
+        // Clicking the input row focuses the editor instead of opening anything.
+        let field = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: picker.input.x + 1,
+            row: picker.input.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        ui.proj_sel = 9;
+        assert!(ui.mouse(field, &s, backend_area, 40).action.is_none());
+        assert_eq!(ui.proj_sel, 0);
     }
 
     #[test]

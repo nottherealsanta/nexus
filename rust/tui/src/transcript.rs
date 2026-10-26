@@ -10,6 +10,7 @@ pub(crate) mod fold;
 pub(crate) mod groups;
 mod header;
 pub mod look;
+mod notices;
 mod route;
 mod signal;
 mod thought;
@@ -826,7 +827,7 @@ pub fn live_rows(
 pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
     let padded = !matches!(
         b.kind.as_str(),
-        "user" | "context_header" | "context" | "hints"
+        "user" | "context_header" | "context" | "hints" | "notice" | "context_notice"
     );
     let mut rows = build_inner(b, width.saturating_sub(u16::from(padded)), p);
     if padded {
@@ -846,6 +847,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
     let mut out: Rows = (0..b.gap).map(|_| (Line::default(), None)).collect();
     let op = &b.operation;
     match b.kind.as_str() {
+        "notice" | "context_notice" => notices::draw(&mut out, b, width, p),
         "user" => user(&mut out, b, width, p),
         "agent_report" => agent_report(&mut out, b, width, p),
         "context_header" => header::draw(&mut out, b, viewport_width, p),

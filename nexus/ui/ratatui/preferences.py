@@ -14,9 +14,9 @@ class Preferences:
     #: ``sessions_sidebar`` is the GPUI desktop's sessions sidebar (default open, shared file); the
     #: terminal's left sidebar (Projects, Sessions, Files, Git) is ``sidebar_open``, closed until opened.
     DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
-                "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": [],
+                "details_tab": "Session", "context_preview": True, "centered_layout": False, "tabs_vertical": False, "model_favorites": [], "model_recent": [],
                 "sidebar_open": False, "sidebar_width": 34, "sidebar_tab": "Sessions", "project_recent": [],
-                "details_width": details_view.DEFAULT_WIDTH}
+                "details_width": details_view.DEFAULT_WIDTH, "dismissed_notices": []}
 
     def __init__(self, path=None):
         self._worker = None
@@ -58,7 +58,8 @@ class Preferences:
                 return
             value = clamp_width(value)
         if isinstance(value, list):
-            value = list(dict.fromkeys(item for item in value if isinstance(item, str) and len(item) <= 256))[:100]
+            value = list(dict.fromkeys(item for item in value if isinstance(item, str) and len(item) <= 256))
+            value = value[-4096:] if key == "dismissed_notices" else value[:100]
         self.values[key] = value
         self._revision += 1
         try:

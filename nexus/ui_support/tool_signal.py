@@ -155,6 +155,30 @@ def strip_workspace(command: str, workspace: str | None) -> str:
 
 _JOB_HEADER = re.compile(r"(?:job_id|status|exit_code|signal|stdout_offset|stderr_offset): [^\n]*")
 SHELL_TOOLS = frozenset({"shell", "bash", "run"})
+
+
+def shell_preview(tool: ToolCallView, workspace: str | None = None) -> dict[str, object] | None:
+    """Bounded native shell window; progress is last-line samples, not a stdout stream."""
+    if tool.name.casefold() not in SHELL_TOOLS:
+        return None
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    cuts: list[int] = []
+    command = strip_workspace(_clean(args.get("command") or args.get("cmd") or "", cuts=cuts), workspace)
+    lines = command.split("\n") if command else []
+    output = strip_job_header(_result_text(tool, cuts))
+    if tool.status == "running" and tool.progress:
+        output = "\n".join(_clean(line, cuts=cuts) for line in tool.progress[-64:])
+    tail = _lines(output)
+    failure = _clean(tool.error or "", cuts=cuts)
+    if cuts:
+        failure += f" · … {sum(cuts)} characters clipped"
+    return {
+        "input": [f"$ {line}" if i == 0 else f"  {line}" for i, line in enumerate(lines[:2])],
+        "input_lines": len(lines), "input_clipped": len(lines) > 2 or bool(cuts),
+        "output_tail": tail[-4:], "output_lines": len(tail), "failure": failure,
+    }
+
+
 COMMAND_CELLS = 40  # display cells of a command on a closed row
 
 

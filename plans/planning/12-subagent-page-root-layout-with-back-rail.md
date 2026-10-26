@@ -1,6 +1,6 @@
 # Plan 12: Subagent page looks like the root page, with a two-column back rail (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 5,
+Status: implemented and offline/PTY verified; pixel/contrast acceptance remains open (2026-10-26). Source: root `TODO.md` item 5,
 quoted unchanged:
 
 > - subagent screen/modal should look like the root agent except that there is back button which is the first two cols of TUI ( with a <-  in the center )
@@ -118,3 +118,32 @@ narrower width must be part of the key so returning to the root does not reuse p
   (`docs/ratatui-parity.md:204-209` vs `:741-742`.) Default: use the root's rule.
 - Risk: a 2-column rail is easy to hit by accident when selecting text from the left edge; the rail
   must not start a selection, and selection must start at column 2.
+
+### Geometry follow-up
+
+Child composer now uses the empty-root seven-row minimum rather than the old
+three-row strip. Rust geometry coverage checks the child rail and composer.
+Full Rust suite passes; native visual/chrome parity acceptance remains pending.
+
+### Finisher native acceptance
+
+Added native PTY child back-rail click -> dismiss; same process then verifies root
+vertical-tab open/close/new actions. The test passes. Root-like full chrome visual
+review remains unverified; do not interpret action routing as visual approval.
+
+### Native capture inspection
+
+Captured 40/140-column real native PTYs to ignored
+`artifacts/planning-acceptance/child-{40,140}.ansi/.txt`; asserted child title and
+read-only composer in each. Inspected textual terminal captures: centred back rail
+is present, but the header still has a second `←` affordance. This conflicts with
+the plan's default single-affordance intent; no claim of full visual acceptance.
+Narrow composer clips its hint. Text capture is not pixel/contrast approval.
+
+### Duplicate-back and narrow-hint correction
+
+Removed the duplicate header back glyph/hit target only while the dedicated rail
+is reserved. Narrow (<26 column) fallback keeps the header back control; keyboard
+back remains unchanged. Composer chooses a complete width-appropriate instruction.
+Real PTY tests at 24/40/140 columns assert exactly one left arrow, complete hint,
+and Escape dismissal; all pass. Pixel/contrast review remains unverified.

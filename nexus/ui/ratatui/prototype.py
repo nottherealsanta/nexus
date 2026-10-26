@@ -31,7 +31,7 @@ from .turn_status import running_agents, turn_status
 from ...host_support.errors import error_text
 from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
-from ...ui_support.tool_signal import tool_signal
+from ...ui_support.tool_signal import shell_preview, tool_signal
 from ...ui_support.timeline import TASK_TOOL_NAMES
 
 
@@ -159,7 +159,7 @@ def _sidebar_state(shell) -> dict:
 def _block_operations(blocks):
     """Allow only actions present in the current projected transcript, including chips."""
     for block in blocks:
-        for key in ("operation", "output_operation", "chip_operation", "inspect_operation"):
+        for key in ("operation", "output_operation", "input_operation", "chip_operation", "inspect_operation"):
             if operation := block.get(key):
                 yield operation
         yield from block.get("chip_operations", [])
@@ -680,6 +680,10 @@ def _project_turn(turn, shell, agents=None, literal=True, number=None):
             # The relevant-only expanded body; `detail`/`local_detail` keep the full labelled
             # details for /verbose and for `inspect_operation`.
             block["signal"] = tool_signal(tool, getattr(shell, "workspace", "") or None).wire()
+            preview = shell_preview(tool, getattr(shell, "workspace", "") or None)
+            if preview is not None:
+                block["shell"] = preview
+                block["input_operation"] = {"kind": "tool_input", "call_id": tool.call_id}
         if local_ui:
             block.update(local_ui=True, local_detail=full_body, fold_lines=output_end, local_open=False)
         if tool.name.casefold() in CHANGE_TOOLS:
@@ -1247,8 +1251,14 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                                "text": escape_controls(root_move_text(item)), "gap": 1})
                 continue
             title = {"subagent_wake_paused": "Subagent reports paused", "tool_call_nudge": "Tool-call wrap-up reminder"}.get(str(item.data.get("kind")), "Notice")
-            blocks.append({"id": f"notice:{item.seq}", "kind": "literal", "title": title,
-                           "text": escape_controls(str(item.data.get("message"))[:600]), "gap": 1})
+            from ...view.notices import model_visible
+            context = model_visible(item.data)
+            identity = json.dumps([str(shell.workspace) if shell else "", view.session_id, item.seq], separators=(",", ":"))
+            if not context and shell and identity in shell.preferences.values["dismissed_notices"]:
+                continue
+            blocks.append({"id": f"notice:{item.seq}", "kind": "context_notice" if context else "notice", "title": title,
+                           "text": escape_controls(str(item.data.get("message"))), "gap": 1,
+                           "operation": None if context else {"kind": "dismiss_notice", "id": identity}})
 
     ordinal = 0  # user-initiated turns so far (shell turns and turns without a prompt don't count)
     for turn in () if on_agent_page else view.turns:
@@ -1363,6 +1373,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions_sidebar": shell.preferences.values["sessions_sidebar"] if shell else True,
             "details_sidebar": shell.preferences.values["details_sidebar"] if shell else True,
             "context_preview": shell.preferences.values["context_preview"] if shell else True,
+            "tabs_vertical": shell.preferences.values["tabs_vertical"] if shell else False,
             "centered_layout": shell.preferences.values["centered_layout"] if shell else False,
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
@@ -1910,7 +1921,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if operation_allowed(shell, allowed_operations, operation) and not shell.panel_loading:
                         if operation["kind"] in {"block_toggle", "turn_toggle"} and shell.local_transcript:
                             continue  # disclosure belongs exclusively to Rust
-                        if operation["kind"] == "block_toggle":
+                        if operation["kind"] == "dismiss_notice":
+                            shell.preferences.set("dismissed_notices", [*shell.preferences.values["dismissed_notices"], operation["id"]])
+                        elif operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])
                             elif len(shell.expanded) < 4096: shell.expanded.add(operation["id"])
                         else:
@@ -2048,9 +2061,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.workflows.operate({"kind": "session_actions", **row})
                 elif action["type"] == "tab_close":
                     await shell.close_tab(action["workspace"], action["text"])
+                    await shell.close_selector()
                 elif action["type"] == "session_open":
                     if any(row["id"] == action["text"] and row["workspace"] == action["workspace"] for row in [*shell.sessions, *shell.tabs]):
                         await shell.switch_project(action["workspace"], action["text"])
+                        await shell.close_selector()
                 shell.ui_ack = max(shell.ui_ack, int(action.get("ui_sequence", 0)))
                 if not controller.running:
                     controller.resume(update)

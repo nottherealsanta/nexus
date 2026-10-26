@@ -102,7 +102,11 @@ The permission engine forces an ask for any shell command that runs a Git write
 subcommand with `-C`, `--git-dir`, `--work-tree` or after a `cd`
 (`_is_git_write_elsewhere` in `tools/permissions.py`), in every mode and despite
 allow rules or grants (deny rules still win), with **one narrow exemption**: the
-parsed landing (`is_worktree_landing`, [security.md](security.md)) never asks.
+parsed landing (`is_worktree_landing`, [security.md](security.md)) never asks:
+`git -C <main> merge --ff-only <branch>` and `git -C <main> checkout|switch
+<base>`, including the documented `&&` chains (`checkout` then `merge`) and
+`cd <main> && git …` spellings. Any other flag, order, redirect, pipe or
+unknown path or branch keeps the forced ask.
 Plain `git merge main` and read-only `git -C ... status` are not forced. Merge
 detection (`worktree.merged`, deduped per landed head) runs at every step boundary
 and at turn end.

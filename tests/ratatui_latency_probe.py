@@ -16,20 +16,22 @@ class NativeProbe:
     def __init__(self, binary, trace_path=None, command=None):
         self.master, self.slave = pty.openpty()
         termios.tcsetwinsize(self.slave, (40,140))
-        self.output = bytearray()
+        self.output = b""
         self.actions = bytearray()
         self.stop = threading.Event()
         self.peak_rss_kib = 0
         command = command or [str(binary)]
         setup = "import os,fcntl,termios; os.setsid(); fcntl.ioctl(2,termios.TIOCSCTTY,0); os.execv("+repr(command[0])+","+repr(command)+")"
         env=dict(os.environ)
+        # No terminal emulator answers graphics capability probes in this PTY.
+        env["NEXUS_IMAGE_PROTOCOL"] = "halfblocks"
         if trace_path:
             env.update(NEXUS_TUI_TRACE="1",NEXUS_TUI_TRACE_FILE=str(trace_path))
         self.process=subprocess.Popen([sys.executable,"-c",setup],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.slave,env=env)
         def drain():
             while not self.stop.is_set():
                 if select.select([self.master],[],[],.05)[0]:
-                    try: self.output.extend(os.read(self.master,65536))
+                    try: self.output += os.read(self.master,65536)
                     except OSError: return
         self.thread=threading.Thread(target=drain,daemon=True);self.thread.start()
 
@@ -144,3 +146,46 @@ def live_benchmark(count, output):
     finally:
         probe.close()
     return {"native":trace.read_text() if trace.exists() else "No trace", "python":Path(str(trace)+".python").read_text() if Path(str(trace)+".python").exists() else "No Python trace"}
+
+
+def scenario_benchmark(scenario, output):
+    """Measure Enter visibility or promotion/cancellation through the real bridge.
+
+    Single samples, not p95. Promotion originates at the facade; terminal traces
+    separately measure event-to-frame, so reply time is never labelled visibility.
+    """
+    trace = Path(output) / f"scenario-{scenario}.log"
+    probe = NativeProbe(None, trace, command=[sys.executable,
+        "tests/ratatui_live_latency_fixture.py", "--history", "0", "--scenario", scenario])
+    result = {"scenario": scenario}
+    try:
+        deadline = time.monotonic() + 20
+        if scenario in {"idle", "worktree"}:
+            while b"READY_FOR_ENTER" not in probe.output and time.monotonic() < deadline:
+                time.sleep(.005)
+            assert b"READY_FOR_ENTER" in probe.output, bytes(probe.output[-2000:])
+            time.sleep(1)
+            probe.keys(b"UNIQUE_ENTER_MESSAGE")
+            time.sleep(.2)
+            probe.output = b""  # exclude the composer draft echo
+            began = time.perf_counter()
+            probe.keys(b"\r")
+            while b"UNIQUE_ENTER_MESSAGE" not in probe.output and time.monotonic() < deadline:
+                time.sleep(.002)
+            result["enter_to_text_ms"] = (time.perf_counter() - began) * 1000
+            assert b"UNIQUE_ENTER_MESSAGE" in probe.output
+            time.sleep(1)
+        else:
+            while b"CANCELLATION_IDLE_MS" not in probe.output and time.monotonic() < deadline:
+                time.sleep(.005)
+            import re
+            text = probe.output.decode("utf-8", "replace")
+            for key in ("PROMOTION_REPLY_MS", "CANCELLATION_IDLE_MS"):
+                match = re.search(key + r" ([0-9.]+)", text)
+                assert match, text[-2000:]
+                result[key.lower()] = float(match[1])
+        trace.with_suffix(".ansi").write_bytes(probe.output)
+    finally:
+        probe.close()
+    result["trace"] = trace.read_text()
+    return result

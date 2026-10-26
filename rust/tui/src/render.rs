@@ -400,6 +400,8 @@ impl QueueFlash {
 }
 #[derive(Default)]
 pub struct Cache {
+    pub rail_offset: usize,
+    rail_active: String,
     mermaid_generation: u64,
     pub disclosure: crate::disclosure::Disclosure,
     pub settings_nav_focus: bool,
@@ -1210,6 +1212,8 @@ impl Cache {
 }
 #[derive(Default, Clone, Copy)]
 pub struct Regions {
+    pub back_rail: Rect,
+    pub tabs_rail: Rect,
     pub transcript: Rect,
     pub composer: Rect,
     pub details: Rect,
@@ -1777,7 +1781,7 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
         return 0;
     }
     if !s.agent_page.is_empty() {
-        return 3;
+        return area.height.min(7);
     }
     let width = regions(area, s, 0, false).composer.width.saturating_sub(9);
     let mut displayed = Editor::default();
@@ -1807,9 +1811,33 @@ pub const TOP_LINE_MIN_HEIGHT: u16 = 24;
 pub fn sidebar_available(area: Rect, s: &Snapshot) -> u16 {
     area.width - crate::details_sidebar::width_for(s, area.width)
 }
+pub fn tabs_rail_visible(s: &Snapshot, width: u16) -> bool {
+    s.tabs_vertical
+        && s.agent_page.is_empty()
+        && width >= 78
+        && width.saturating_sub(22 + crate::details_sidebar::width_for(s, width.saturating_sub(22)))
+            >= 56
+}
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
     // The Sessions dashboard draws its own header on row 0 and takes the width the details
     // sidebar leaves.
+    let back_rail = if !s.agent_page.is_empty() && area.width >= 26 {
+        Rect::new(area.x, area.y, 2, area.height)
+    } else {
+        Rect::default()
+    };
+    let tabs_rail = if tabs_rail_visible(s, area.width) {
+        Rect::new(area.x, area.y, 22, area.height)
+    } else {
+        Rect::default()
+    };
+    let offset = back_rail.width + tabs_rail.width;
+    let area = Rect::new(
+        area.x + offset,
+        area.y,
+        area.width.saturating_sub(offset),
+        area.height,
+    );
     let dash = s.dashboard.is_some();
     // The details sidebar's width is the stored preference (24..=60, default 40), bounded by
     // the room the conversation needs (`details_sidebar::width_for`).
@@ -1852,8 +1880,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     } else {
         2
     };
-    let strip =
-        u16::from(!dash && s.agent_page.is_empty() && !s.manager.active && composer_height > 0);
+    let strip = u16::from(!dash && !s.manager.active && composer_height > 0);
     let foot = u16::from(composer_height > 3);
     let fixed = 1 + bar + strip + composer_height;
     let spare = middle.height.saturating_sub(fixed + 1);
@@ -1898,6 +1925,8 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         }
     }
     Regions {
+        back_rail,
+        tabs_rail,
         tabs: center[1],
         project: center[6],
         manager_board: board_rect,
@@ -2154,7 +2183,67 @@ pub fn draw(
         r.sidebar = Rect::default();
     }
     if s.dashboard.is_none() {
-        draw_top_bar(frame, s, r.tabs, &p, spin);
+        if r.back_rail.width > 0 {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(p.panel)),
+                r.back_rail,
+            );
+            frame.render_widget(
+                Paragraph::new(if std::env::var_os("NEXUS_ASCII").is_some() {
+                    "<│"
+                } else {
+                    "←│"
+                })
+                .style(Style::default().fg(p.muted)),
+                Rect::new(r.back_rail.x, r.back_rail.y + r.back_rail.height / 2, 2, 1),
+            );
+        }
+        if r.tabs_rail.width > 0 {
+            let active = s
+                .tabs
+                .iter()
+                .find(|tab| tab.active)
+                .map(|tab| tab.id.as_str())
+                .unwrap_or("");
+            if cache.rail_active != active {
+                cache.rail_active = active.to_owned();
+                cache.rail_offset = rail_start(s, r.tabs_rail);
+            }
+            cache.rail_offset = cache.rail_offset.min(rail_max_start(s, r.tabs_rail));
+            frame.render_widget(
+                Block::default().style(Style::default().bg(p.panel)),
+                r.tabs_rail,
+            );
+            frame.render_widget(
+                Paragraph::new("Sessions            +").style(Style::default().fg(p.muted)),
+                Rect::new(r.tabs_rail.x, r.tabs_rail.y, 22, 1),
+            );
+            for (i, tab) in s
+                .tabs
+                .iter()
+                .enumerate()
+                .skip(cache.rail_offset)
+                .take(usize::from(r.tabs_rail.height.saturating_sub(1)))
+            {
+                let y = r.tabs_rail.y + 1 + (i - cache.rail_offset) as u16;
+                let label = format!(
+                    "{} {} ×",
+                    if tab.active { "●" } else { "○" },
+                    crate::transcript::truncate(&tab.title, 17)
+                );
+                frame.render_widget(
+                    Paragraph::new(label).style(Style::default().fg(p.text).bg(if tab.active {
+                        p.element
+                    } else {
+                        p.panel
+                    })),
+                    Rect::new(r.tabs_rail.x, y, 22, 1),
+                );
+            }
+            draw_top_bar(frame, s, r.tabs, &p, spin);
+        } else {
+            draw_top_bar(frame, s, r.tabs, &p, spin);
+        }
         draw_project_strip(frame, s, r.project, &p);
         if r.manager_board.height > 0 {
             manager::draw_board(frame, s, r.manager_board, &p, cache.manager_focus);
@@ -2517,10 +2606,10 @@ pub fn draw(
         };
         if !s.agent_page.is_empty() {
             frame.render_widget(
-                Paragraph::new("Sub agent · read-only · Esc or ↑ returns to the parent")
+                Paragraph::new(child_composer_hint(box_area.width.saturating_sub(4)))
                     .style(Style::default().fg(p.muted).bg(cp.panel))
                     .block(Block::default().padding(ratatui::widgets::Padding::new(2, 2, 1, 0))),
-                r.composer,
+                box_area,
             );
         } else {
             frame.render_widget(
@@ -7305,5 +7394,56 @@ mod thinking_shimmer_tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, "Thinking…");
         assert_eq!(spans[0].style.fg, None);
+    }
+}
+
+/// Keep the active tab visible in the bounded rail; shared by painting and clicks.
+pub fn rail_start(s: &Snapshot, area: Rect) -> usize {
+    s.tabs
+        .iter()
+        .position(|tab| tab.active)
+        .unwrap_or(0)
+        .saturating_sub(usize::from(area.height.saturating_sub(2)))
+}
+
+pub fn rail_max_start(s: &Snapshot, area: Rect) -> usize {
+    s.tabs
+        .len()
+        .saturating_sub(usize::from(area.height.saturating_sub(1)))
+}
+
+fn child_composer_hint(width: u16) -> &'static str {
+    if width >= 53 {
+        "Sub agent · read-only · Esc or ↑ returns to the parent"
+    } else if width >= 25 {
+        "Read-only · Esc/↑ back"
+    } else {
+        "Esc: back"
+    }
+}
+
+#[cfg(test)]
+mod rail_fit_tests {
+    use super::*;
+    #[test]
+    fn vertical_tabs_fit_and_narrow_fallback_share_header_hits() {
+        let mut s = Snapshot::default();
+        s.tabs_vertical = true;
+        for width in [40, 77, 78, 100, 140] {
+            let r = regions(Rect::new(0, 0, width, 40), &s, 7, false);
+            assert_eq!(r.tabs_rail.width > 0, tabs_rail_visible(&s, width));
+            if r.tabs_rail.width > 0 {
+                assert!(r.transcript.width >= 56);
+            }
+        }
+        s.agent_page = "child".into();
+        assert!(!tabs_rail_visible(&s, 140));
+        assert_eq!(
+            composer_height(Rect::new(0, 0, 140, 40), &Editor::default(), &s),
+            7
+        );
+        let r = regions(Rect::new(0, 0, 140, 40), &s, 7, false);
+        assert_eq!(r.back_rail.width, 2);
+        assert!(r.transcript.x >= 2);
     }
 }

@@ -1,6 +1,6 @@
 # Plan 17: Toggle to show session tabs vertically on the left (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 10,
+Status: implemented and offline/PTY verified; pixel/contrast acceptance remains open (2026-10-26). Source: root `TODO.md` item 10,
 quoted unchanged:
 
 > - a toggle to show tabs as vertical on the left sidebar(new)
@@ -101,3 +101,35 @@ client), not all sessions (that is the Sessions selector).
 
 - Q1. A leader shortcut for the toggle? (e.g. `Ctrl+X h`; check it is free at implementation time.)
 - Q2. Should the rail width be draggable like the old docked sidebar? Default: fixed width.
+
+### Fit follow-up
+
+Top-header drawing and mouse/hover hit-testing now depend on actual rail fit.
+The rail also accounts for details-panel width before requiring 56 conversation
+columns. Added width-boundary and child-page exclusion geometry coverage. Full
+Rust suite passes. Overflow wheel behavior and native capture acceptance remain
+outstanding; this plan is not archived.
+
+### Finisher native acceptance and remaining gap
+
+Native PTY verifies vertical-tab open/close/new and child back dismissal. A broader
+run exposes existing test expectation disagreement in test_ratatui_pty_sessions.py:114
+(path-before-branch versus current branch-before-path). It was not weakened.
+Overflow wheel remains unfinished: main.rs only checks tabs_rail for clicks;
+wheel dispatch still routes to transcript/panel. Plan stays in planning, not archived.
+
+### Overflow implementation follow-up
+
+Implemented rail-local wheel routing and a bounded cached viewport shared by
+rendering and mouse selection. Active-tab changes restore reveal behavior.
+`test_vertical_tab_overflow_wheel_and_click_share_viewport` passes against the
+freshly built native binary; existing back-rail/open/close/new PTY also passes.
+Full Rust suite: 712 + 60 passed, 3 ignored. Full sessions PTY: 3 passed,
+1 failed (existing path-before-branch assertion at line 114; another run hit an
+empty terminal capture earlier). Visual acceptance is still not verified, and
+this plan remains in planning rather than being falsely archived.
+
+Native captures at 40/140 columns in ignored `artifacts/planning-acceptance/tabs-*`
+were inspected: wide shows Sessions rail, both titles, close glyphs and +; narrow
+falls back to top tabs and has no Sessions rail. Both assert the active title.
+These are real terminal captures, not pixel/contrast approval.

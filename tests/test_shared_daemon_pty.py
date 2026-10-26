@@ -86,3 +86,43 @@ def test_native_picker_switches_projects_without_reconnecting(tmp_path, monkeypa
         app.key(b'\x11', .5)
     finally:
         app.close()
+
+
+def test_new_session_selector_stays_closed_after_full_native_restart(tmp_path, monkeypatch):
+    """Two native bridge launches share one temporary daemon and preference file."""
+    binary = terminal.ROOT / 'rust/tui/target/debug/nexus-ratatui'
+    if not binary.exists():
+        pytest.skip('native binary is unavailable')
+    child = CHILD.replace(
+        "await run(Client(UdsTransport(peer)), session='chat-a', workspace=a)",
+        """await run(Client(UdsTransport(peer)), session='chat-a', workspace=a)
+            print('FIRST_CLIENT_CLOSED', file=sys.stderr, flush=True)
+            peer = await UDSClient.connect(daemon.socket, focus=str(a), environ={})
+            await run(Client(UdsTransport(peer)), session='chat-a', workspace=a)
+            print('SECOND_CLIENT_CLOSED', file=sys.stderr, flush=True)""")
+    monkeypatch.setattr(terminal, 'BINARY', binary)
+    monkeypatch.setattr(terminal, 'CHILD', child)
+    app = terminal.App(tmp_path)
+    try:
+        app.wait_for('Answer from project-a')
+        app.key(b'\x02', .5)
+        app.wait_for('Sessions')
+        # Ctrl+N creates and switches, closing the selector durably.
+        app.key(b'\x0e', .8)
+        import json
+        import time
+        prefs = tmp_path / 'xdg/nexus/tui.json'
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if prefs.exists() and json.loads(prefs.read_text()).get('sidebar_open') is False:
+                break
+            time.sleep(.1)
+        assert json.loads(prefs.read_text())['sidebar_open'] is False
+        app.key(b'\x11', .8)
+        app.wait_for('Answer from project-a')
+        text = app.redraw(.7)
+        assert 'Projects   Sessions' not in text
+        assert json.loads(prefs.read_text())['sidebar_open'] is False
+        app.key(b'\x11', .5)
+    finally:
+        app.close()

@@ -24,6 +24,19 @@ def test_read_shows_numbered_excerpt_and_line_span():
     assert [r.text for r in view.rows] == ["1  one", "2  two", "3  three"]
 
 
+def test_shell_preview_bounds_input_and_uses_running_samples():
+    from nexus.ui_support.tool_signal import shell_preview
+    preview = shell_preview(_tool("shell", {"command": "one\ntwo\nthree"}, status="running",
+                                  progress=["first", "latest"]))
+    assert preview["input"] == ["$ one", "  two"]
+    assert preview["input_lines"] == 3 and preview["input_clipped"]
+    assert preview["output_tail"] == ["first", "latest"]
+    preview = shell_preview(_tool("bash", {"command": "echo ok"},
+                                  "job_id: x\nstatus: completed\nexit_code: 0\nstdout:\nok"))
+    assert preview["output_tail"] == ["ok"]
+    assert shell_preview(_tool("read")) is None
+
+
 def test_read_honours_offset_for_numbering():
     view = tool_signal(_tool("read", {"path": "a.py", "offset": 10}, "x\ny"))
     assert view.summary == "Read a.py (lines 10–11)"

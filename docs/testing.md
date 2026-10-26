@@ -302,3 +302,13 @@ checks shared-checkout preservation and writes without tool receipts. Native
 mode selection and saved-turn review run through the actual terminal in
 `tests/test_worktree_sessions_pty.py`; those tests require PTY and local Unix-socket
 access as well as the built native binary. No live provider is required.
+
+The offline native latency probe forces `NEXUS_IMAGE_PROTOCOL=halfblocks`: its
+PTY has no emulator to answer graphics capability queries. Without this override,
+startup can outlast the scripted stream and prevent graceful trace publication.
+This fixture choice does not change production graphics negotiation.
+
+`tests.ratatui_latency_probe.scenario_benchmark` (import with `PYTHONPATH=.:tests`)
+measures idle/worktree Enter visibility and scripted provider/shell cancellation
+through the real bridge. It returns single samples; repeat to compute percentiles.
+Its promotion reply and idle intervals are not promotion-frame visibility metrics.

@@ -1,6 +1,6 @@
 # Plan 15: The Sessions selector closes when a session is opened or `/new` starts one (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 8,
+Status: implemented and verified offline, including full native restart against a temporary daemon. Source: root `TODO.md` item 8,
 quoted unchanged:
 
 > - when a session is selected from the sessions modal, the modal should close.  /new
@@ -75,9 +75,9 @@ Make the host (Python bridge) the single owner of "closed", and drop the client-
 - PTY (`tests/test_ratatui_pty_sidebar.py`): open the selector, Enter on a row → selector gone;
   open, press `Ctrl+N` → selector gone; restart the client → selector closed.
 - Acceptance:
-  - [ ] Opening a session from the selector closes it and it stays closed after restart.
-  - [ ] `/new` (any entry point) never leaves the selector over the new session.
-  - [ ] A failed open leaves the selector and shows why.
+  - [x] Opening a session from the selector closes it and it stays closed after restart.
+  - [x] `/new` (any entry point) never leaves the selector over the new session.
+  - [x] A failed open leaves the selector and shows why.
 
 ## 5. Risks and open questions
 
@@ -88,3 +88,48 @@ Make the host (Python bridge) the single owner of "closed", and drop the client-
   Closing it is compatible; verify `tests/test_manager_show.py` still passes.
 - Documentation: update `docs/ratatui-parity.md` "Left sidebar" (`:2223-2297`) to say opening a
   session or starting a new one closes the selector.
+
+### Follow-up verification (2026-02-21)
+
+The `/new` helper now closes the selector after successful switch/bootstrap,
+not before attempting creation. A regression test checks that a failed switch
+never calls `close_selector`. Focused new-session tests pass. The wider actions,
+sidebar and workflows run reports 169 passed / 1 failed: the project-open test's
+sidebar stub lacks `enabled`, which existing `close_selector` requires. Native
+PTY acceptance remains unverified; this plan is not newly marked complete.
+
+Follow-up: the project-open test stub now includes `enabled=True`, matching the
+real sidebar interface. The project-open form no longer closes the selector a
+second time after `switch_project` has already closed it. The actions/sidebar/
+workflows/projection/responsiveness and native-sidebar run passed 266 tests and
+failed two existing picker PTY expectations (old directory suffix and editing
+without entering picker mode). Those picker failures remain open, not skipped.
+
+Restart-persistence coverage now flushes the closed selector preference and loads
+a fresh `Preferences` instance. Sidebar, Manager-show and native-sidebar PTY
+verification: 101 passed. Manager non-blocking behavior remains covered by the
+existing `test_manager_show.py` suite. Full new-session restart journey is still
+not separately verified.
+
+### Finisher restart acceptance
+
+Added `test_new_session_closure_survives_a_fresh_preferences_instance`: opens selector,
+issues `/new fresh`, verifies agent selection, flushes preferences, constructs a fresh
+Preferences instance and verifies closed state. This and all 54 sidebar tests pass.
+Manager suite was included in the 203 passing focused tests; manager remains non-blocking.
+
+### Acceptance continuation
+
+Fresh Preferences reload after `/new` and after open both pass. Added failure
+regression: a rejected switch leaves selector and persisted open preference
+unchanged and propagates the actionable error. Focused sidebar/native/Manager/
+notice run: 112 passed. This verifies restart preference persistence, not a
+manually restarted daemon/client journey; the latter remains unverified.
+
+### Full native restart acceptance
+
+`test_shared_daemon_pty.py::test_new_session_selector_stays_closed_after_full_native_restart`
+passes: real temporary daemon/UDS, open selector, Ctrl+N creates/switches and closes,
+quit native bridge, launch a second client against the same daemon/preferences,
+assert selector absent and persisted sidebar_open false. This closes the previous
+manual restart gap without credentials or touching the user's daemon.

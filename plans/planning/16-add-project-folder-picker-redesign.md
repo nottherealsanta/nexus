@@ -1,6 +1,6 @@
 # Plan 16: A better-looking "Add project" folder picker (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 9,
+Status: implemented and offline/PTY verified; pixel before/after review remains open (2026-10-26). Source: root `TODO.md` item 9,
 quoted unchanged:
 
 > - ![alt text](image.png) better way to render this
@@ -120,3 +120,36 @@ test in `tests/test_host_workspace_browse.py`. Without it, omit the marker.
 - Q1. Show a `git` marker (needs the host field)?
 - Q2. Type-to-filter in the list (vs. typing always editing the path)?
 - Q3. Should the modal be larger than the selector area (`sidebar::selector_area`) for long paths?
+
+### Native picker fixture follow-up
+
+The native sidebar PTY fixtures now explicitly enter `browser_open` mode, assert
+the redesigned `▸ src` directory presentation and `Open /nexus as a project`
+action, and exercise bracketed-paste path editing inside the picker. Combined
+sidebar / Manager-show / picker PTY run: 101 passed. Before/after visual capture
+review remains unverified; this plan is not archived on test results alone.
+
+### Finisher visual and boundary audit
+
+Both existing picker PTY tests passed in the focused run. Human before/after screenshot
+review was NOT performed; PTY textual capture assertions are not visual approval.
+No filesystem enumeration was added to Rust picker/sidebar code. Repository-wide Rust
+filesystem uses include pre-existing TTY, configuration and diagnostic logging paths;
+“no client filesystem access” here means no project-folder/session enumeration bypassing
+the host, not an assertion that the whole native process never opens a file.
+
+### Picker/native continuation
+
+All six native sidebar/picker tests pass in the 112-test focused run, including
+path editing/paste and directory presentation. Corrected the separate session
+strip PTY ordering to the documented basename → branch → full-path contract
+(docs/ratatui-parity.md, project strip). Capture helper now explicitly signals
+SIGWINCH to the native process group and waits for output, rather than assuming
+the setup wrapper's foreground TTY group propagates resize. No picker behavior
+or filesystem boundary changed. Screenshot comparison remains unverified.
+
+Native captures at 40/140 columns saved under ignored
+`artifacts/planning-acceptance/picker-*`; directory row asserted in each. Inspected
+terminal output contains path, primary action and directory section. ANSI-stripped
+text loses cursor-position spacing, so it is not reliable evidence of final border
+alignment; full pixel before/after review remains genuinely outstanding.

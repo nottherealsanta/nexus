@@ -232,6 +232,21 @@ impl Disclosure {
                         .and_then(|op| op["id"].as_str())
                         .is_none_or(|id| self.opened(id, false));
                 if open {
+                    if !self.verbose {
+                        shown.signal = source.signal.clone();
+                        shown.shell = source.shell.clone();
+                        shown.input_operation = source.input_operation.clone();
+                    }
+                    if self.verbose
+                        || source
+                            .output_operation
+                            .as_ref()
+                            .and_then(|op| op["id"].as_str())
+                            .is_some_and(|id| self.opened(id, false))
+                    {
+                        shown.signal.clear();
+                        shown.shell = None;
+                    }
                     if full || source.fold_lines == 0 {
                         shown.detail = source.local_detail.clone();
                     } else {

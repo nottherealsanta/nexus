@@ -647,3 +647,15 @@ The web app does not show it.
 `SessionResolve(include_retired=True)` explicitly permits tombstone lookup and
 returns `retired: true`; default resolution refuses purged names. Retired results
 are metadata only and cannot be opened.
+
+### Automatic return after landing
+
+After turn close and before archive, the runtime can return a clean landed
+worktree session to main (`worktrees.remove_after_landing`, enabled by default).
+The root change is durable with reason `landed`, and a model-visible notice
+explains the new working directory. Existing cleanup revalidates ownership,
+cleanliness (including ignored files and Git operations), occupants and merge
+state before removing only the checkout; branch and record are retained.
+Queued work, active shell jobs, other occupants and pending moves defer return.
+No permission rule is widened: existing canonical landing command handling stays
+unchanged; near-miss commands continue through normal permission checks.

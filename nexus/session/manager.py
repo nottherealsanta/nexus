@@ -212,6 +212,7 @@ class SessionManager:
         workspace_required: Callable[[Any], bool] | None = None,
         prepare_workspace: Callable[..., Any] | None = None,
         before_terminal: Callable[..., Any] | None = None,
+        before_archive: Callable[[str], Any] | None = None,
         manager_compaction: Callable[[], tuple[bool, float]] | None = None,
     ):
         if store is not None:
@@ -261,6 +262,7 @@ class SessionManager:
         #: (the runtime injects its shell-job check), so this layer imports nothing
         #: from ``tools``. A busy session is neither evicted nor archived.
         self._busy_check = busy_check
+        self._before_archive = before_archive
         #: ``(session_id, job_id) -> may it still run``: lets a reopened session
         #: close the ``shell`` jobs a dead process left behind (SHELL_PLAN P7).
         self._job_probe = job_probe
@@ -555,6 +557,8 @@ class SessionManager:
         self._refuse_manager(session_id, "archived")
         if self._has_pending_work(session_id):
             raise SessionBusy(f"Session {session_id!r} has running or pending work")
+        if self._before_archive is not None:
+            self._before_archive(session_id)
         lock = SessionLock(self.store.lock_path(session_id))
         with lock.exclusive(blocking=False):
             row = self.store.archive(session_id, reason)

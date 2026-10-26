@@ -41,7 +41,7 @@ pub fn with_inspect(operation: &Option<Value>, inspect: &Option<Value>) -> Optio
 
 /// Whether the row shows a body: relevant rows or full details.
 pub fn expanded(b: &Content) -> bool {
-    !b.signal.is_empty() || !b.detail.is_empty()
+    b.shell.is_some() || !b.signal.is_empty() || !b.detail.is_empty()
 }
 
 /// The body behind `lead`: the relevant rows, else the labelled details.
@@ -53,12 +53,113 @@ pub fn body(
     p: &Palette,
     op: &Option<Value>,
 ) {
+    if let Some(shell) = &b.shell {
+        shell_body(out, b, shell, lead, width, p, op);
+        return;
+    }
     if !b.signal.is_empty() {
         signal::rows(out, &b.signal, lead, width, p, op);
         return;
     }
     let rows_op = with_inspect(&b.output_operation, &b.inspect_operation).or_else(|| op.clone());
     details(out, &b.detail, lead, width, p, &rows_op);
+}
+
+/// A fixed two-row command and four-row tail, shared by standalone and grouped tools.
+fn shell_body(
+    out: &mut Rows,
+    b: &Content,
+    shell: &Value,
+    lead: &[Span<'static>],
+    width: usize,
+    p: &Palette,
+    op: &Option<Value>,
+) {
+    let room = width
+        .saturating_sub(lead.iter().map(|s| s.content.width()).sum())
+        .max(1);
+    let strings = |key: &str| -> Vec<&str> {
+        shell[key]
+            .as_array()
+            .map(|v| v.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default()
+    };
+    let mut input = Vec::new();
+    for text in strings("input") {
+        input.extend(super::wrap(&signal::styled("code", text, p), room));
+    }
+    let clipped = input.len() > 2 || shell["input_clipped"].as_bool().unwrap_or(false);
+    input.truncate(2);
+    let input_op = with_inspect(&b.input_operation, &b.inspect_operation).or_else(|| op.clone());
+    if clipped {
+        let count = shell["input_lines"].as_u64().unwrap_or(0);
+        let suffix = format!("… · {count} lines ▸ view");
+        let last = input.pop().unwrap_or_default();
+        let text: String = last.iter().map(|s| s.g.as_str()).collect();
+        let shown = format!(
+            "{}{}",
+            truncate(&text, room.saturating_sub(suffix.width())),
+            suffix
+        );
+        input.push(
+            super::wrap(&signal::styled("code", &truncate(&shown, room), p), room)
+                .pop()
+                .unwrap_or_default(),
+        );
+    }
+    while input.len() < 2 {
+        input.push(Vec::new());
+    }
+    for cells in input {
+        out.push((
+            super::line(lead.to_vec(), cells, None, Style::default()),
+            input_op.clone(),
+        ));
+    }
+    let mut tail = Vec::new();
+    for text in strings("output_tail") {
+        tail.extend(super::wrap(&signal::styled("shell_out", text, p), room));
+    }
+    let earlier = shell["output_lines"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(4);
+    let output_op = with_inspect(&b.output_operation, &b.inspect_operation).or_else(|| op.clone());
+    if earlier > 0 || tail.len() > 4 {
+        let label = if earlier > 0 {
+            format!("↑ {earlier} earlier lines ▸")
+        } else {
+            "↑ earlier wrapped rows ▸".into()
+        };
+        out.push((
+            super::line(
+                lead.to_vec(),
+                super::wrap(&signal::styled("clip", &truncate(&label, room), p), room)
+                    .pop()
+                    .unwrap_or_default(),
+                None,
+                Style::default(),
+            ),
+            output_op.clone(),
+        ));
+    }
+    if tail.is_empty() && b.status == "running" {
+        tail.extend(super::wrap(&signal::styled("out", "running…", p), room));
+    }
+    let start = tail.len().saturating_sub(4);
+    let mut visible = tail.into_iter().skip(start).collect::<Vec<_>>();
+    while visible.len() < 4 {
+        visible.push(Vec::new());
+    }
+    for cells in visible {
+        out.push((
+            super::line(lead.to_vec(), cells, None, Style::default()),
+            output_op.clone(),
+        ));
+    }
+    if let Some(failure) = shell["failure"].as_str().filter(|s| !s.is_empty()) {
+        signal::rows(out, &[("error".into(), failure.into())], lead, width, p, op);
+    }
 }
 
 /// The full labelled details (`tool_details`): `  Label: value` rows in a 12-column
@@ -266,5 +367,27 @@ mod tests {
             plain(&rows).join("\n").contains("Call ID: abc"),
             "full details fall back"
         );
+    }
+
+    #[test]
+    fn shell_window_has_fixed_rows_and_separate_targets() {
+        let b = Content {
+            status: "running".into(),
+            shell: Some(json!({"input":["$ one", "  two"], "input_lines":8,
+                "input_clipped":true, "output_tail":["a","b","c","d","e"], "output_lines":5})),
+            input_operation: Some(json!({"kind":"tool_input"})),
+            output_operation: Some(json!({"kind":"block_toggle"})),
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        body(&mut out, &b, &[], 60, &Palette::new(false), &None);
+        let lines = plain(&out);
+        assert_eq!(lines.len(), 7);
+        assert!(lines[1].contains("8 lines ▸ view"));
+        assert!(lines[2].contains("1 earlier lines"));
+        assert_eq!(lines[3], "b");
+        assert_eq!(lines[6], "e");
+        assert_eq!(out[1].1.as_ref().unwrap()["kind"], "tool_input");
+        assert_eq!(out[3].1.as_ref().unwrap()["kind"], "block_toggle");
     }
 }

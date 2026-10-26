@@ -21,6 +21,16 @@ POLICY = WorktreeMergePolicy(
     f'git -C "{MAIN}/" merge --ff-only {BRANCH}',
     f"git -C {MAIN} checkout main",
     f"git -C {MAIN} switch develop",
+    # The told two-step and its spellings: checkout-then-merge chains, the
+    # ``cd <main>`` form, ``--`` before the branch, ``--ff-only`` after it.
+    f"git -C {MAIN} checkout main && git -C {MAIN} merge --ff-only {BRANCH}",
+    f"git -C {MAIN} switch develop && git -C {MAIN} merge --ff-only {BRANCH}",
+    f"git -C {MAIN} merge --ff-only {BRANCH} && git -C {MAIN} checkout main",
+    f"cd {MAIN} && git merge --ff-only {BRANCH}",
+    f"cd {MAIN} && git checkout main && git merge --ff-only {BRANCH}",
+    f"cd {MAIN} && git checkout main && git checkout main && git merge --ff-only {BRANCH}",
+    f"git -C {MAIN} merge --ff-only -- {BRANCH}",
+    f"git -C {MAIN} merge {BRANCH} --ff-only",
 ])
 def test_exact_landing_forms_are_recognised(command):
     assert is_worktree_landing(command, POLICY)
@@ -31,17 +41,36 @@ def test_exact_landing_forms_are_recognised(command):
     f"git -C {MAIN} merge --ff-only {BRANCH} --no-verify",
     f"git -C {MAIN} merge --ff-only nexus/wt/other",
     f"git -C {MAIN} merge --ff-only main",
-    f"git -C {MAIN} merge --ff-only -- {BRANCH}",
+    f"git -C {MAIN} merge --ff-only -s ours {BRANCH}",
+    f"git -C {MAIN} merge --ff-only {BRANCH} {BRANCH}",
+    f"git -C {MAIN} merge --ff-only -{BRANCH}",
     f"git -C /elsewhere merge --ff-only {BRANCH}",
     f"git -C {MAIN}/sub merge --ff-only {BRANCH}",
     f"git -C {MAIN} merge --ff-only {BRANCH} && rm -rf /",
     f"git -C {MAIN} merge --ff-only {BRANCH}; echo x",
-    f"git -C {MAIN} merge --ff-only {BRANCH} | cat",
+    f"git -C {MAIN} checkout main; git -C {MAIN} merge --ff-only {BRANCH}",
+    f"git -C {MAIN} checkout main || git -C {MAIN} merge --ff-only {BRANCH}",
+    f"git -C {MAIN} checkout main | cat",
+    f"git -C {MAIN} checkout main && git -C {MAIN} merge --ff-only {BRANCH} && git status",
+    f"git -C {MAIN} checkout main && git -C {MAIN} merge --ff-only {BRANCH} && git -C {MAIN} merge --ff-only {BRANCH} && git status",
+    f"git -C {MAIN} merge --ff-only {BRANCH} && cd {MAIN} && git status",
+    f"cd {MAIN} && git merge --no-ff {BRANCH}",
+    f"cd /elsewhere && git merge --ff-only {BRANCH}",
+    f"cd {MAIN} && git -C /elsewhere merge --ff-only {BRANCH}",
+    f"cd {MAIN} && git merge --ff-only {BRANCH} && git status",
+    f"cd {MAIN} && cd {MAIN} && git merge --ff-only {BRANCH}",
+    f"cd {MAIN}; git merge --ff-only {BRANCH}",
+    f"cd {MAIN} && git status && git merge --ff-only {BRANCH}",
+    # A second checkout switch inside a ``cd`` chain is not the told form.
+    f"cd {MAIN} && git -C {MAIN} merge --ff-only {BRANCH}",
+    # A second checkout switch inside a ``cd`` chain is not the told form.
+    f"cd {MAIN} && git -C {MAIN} merge --ff-only {BRANCH}",
     f"git -C {MAIN} merge --ff-only {BRANCH} > out.txt",
+    f"git -C {MAIN} merge --ff-only {BRANCH} 2>&1",
+    f"git -C {MAIN} merge --ff-only {BRANCH} 2> err.txt",
     f"git -C {MAIN} merge --ff-only $(echo {BRANCH})",
     f"git -C {MAIN} merge --ff-only `echo {BRANCH}`",
     f"git -C {MAIN} merge --ff-only {BRANCH}\nrm x",
-    f"cd {MAIN} && git merge --ff-only {BRANCH}",
     f"GIT_DIR=/x git -C {MAIN} merge --ff-only {BRANCH}",
     f"git --git-dir=/x -C {MAIN} merge --ff-only {BRANCH}",
     f"git -c core.hooksPath=/x -C {MAIN} merge --ff-only {BRANCH}",
@@ -74,8 +103,15 @@ def test_landing_runs_without_asking_in_every_mode_but_variants_ask(mode):
     ok = engine.evaluate(_shell(f"git -C {MAIN} merge --ff-only {BRANCH}"), spec)
     assert ok.outcome is Outcome.ALLOW and ok.code == "worktree_merge"
     for command in (f"git -C {MAIN} merge --no-ff {BRANCH}", f"git -C {MAIN} merge --ff-only {BRANCH} && true",
-                    f"git -C {MAIN} merge --ff-only nexus/wt/unknown"):
+                    f"git -C {MAIN} merge --ff-only nexus/wt/unknown",
+                    f"cd {MAIN} && git merge --ff-only nexus/wt/unknown",
+                    f"cd {MAIN} && git status && git merge --ff-only {BRANCH}"):
         assert engine.evaluate(_shell(command), spec).code != "worktree_merge"
+    # The told spellings run without asking in every mode too.
+    for command in (f"git -C {MAIN} checkout main && git -C {MAIN} merge --ff-only {BRANCH}",
+                    f"cd {MAIN} && git merge --ff-only {BRANCH}"):
+        verdict = engine.evaluate(_shell(command), spec)
+        assert verdict.outcome is Outcome.ALLOW and verdict.code == "worktree_merge"
     if mode == "allow":
         # an allow mode still forces the ask for git writes elsewhere
         assert engine.evaluate(_shell(f"git -C {MAIN} merge --no-ff {BRANCH}"), spec).outcome is Outcome.ASK

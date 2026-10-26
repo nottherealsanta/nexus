@@ -185,6 +185,14 @@ expands the full group; another toggle explicitly collapses it even while live.
 Member toggles retain all labelled parameters, results, reasoning and diffs;
 `/verbose` reveals everything. Group identity follows its first durable member.
 
+Opened native shell tools reserve two command rows and four tail rows. Clipped input
+announces its line count and opens the complete control-escaped command in a **Shell input**
+modal; earlier output has a separate expansion target. Shell progress currently contains
+throttled last-line samples, not a lossless stdout stream: the preview follows those samples
+until the final result arrives, or shows `running…` before the first sample. Native drawing
+has focused unit and native PTY coverage for the input action, modal Escape dismissal,
+stable tail row positions, full-output expansion and verbose rendering.
+
 Closed member rows name the target, not the output: `Read path (lines 1–120)`
 (never the file's first line) and `Bash <command>` clipped to 40 display cells; the
 seconds end the row. An opened member is `┌ head  0.8s`, its relevant rows behind a
@@ -2558,3 +2566,55 @@ reads, and honors the context-preview preference. Missing recorded sections rema
 empty; this does not reconstruct context for older sessions. Existing bounded host
 capture/projection remains the source of truth; opaque attachment payloads are not
 rendered as context.
+
+### Notice classification (plan 13)
+
+Durable context notices render as labelled Context rows without dismissal. Other
+context.notice diagnostics render as Notice rows with a dismiss action. Client
+preferences persist the most recent 4096 dismissed identities (workspace/session/
+sequence); context and model history remain intact. Both rows wrap their full text
+and use ASCII borders. Native PTY validation of this treatment is not verified.
+
+The `/new` command persists the Sessions selector's closed state only after the
+new session has switched and bootstrapped successfully. A failed switch leaves
+the selector available for recovery.
+
+Selector persistence is covered by saving the closed preference after a session
+open and loading a fresh preferences instance. Native picker PTY fixtures enter
+`browser_open` mode explicitly: project browsing is distinct from the Projects
+list, and path editing belongs only to the picker.
+
+Transcript notice close controls use the existing column-specific chip hit-test:
+a three-cell target at the right edge shows `×` (`x` in ASCII mode). The title
+and body do not dismiss the notice. Context rows carry no dismiss operation.
+
+Vertical-tab header drawing and hit-testing use the rail's actual fit decision,
+not the saved preference alone. The rail yields to top tabs when reserving it
+(and the details panel) would leave less than 56 conversation columns. Child
+pages keep a read-only seven-row minimum composer, matching the empty root card.
+These geometry changes have Rust coverage; native visual review remains pending.
+
+### Finisher acceptance evidence (planning 11–18)
+
+The native PTY harness exercises child back-rail dismissal and vertical-tab open,
+close and new actions. `/new` selector closure is verified after flushing and loading
+fresh preferences, not merely in-memory. Rust notice hit-resolution tests separate
+body clicks, the × target and keyboard activation at widths 8/24/80. These automated
+checks are not a human before/after visual review; that review remains unverified.
+
+### Vertical-tab overflow viewport
+
+Wheel events over a fitted vertical tab rail scroll its bounded tab viewport by
+three rows, without scrolling the conversation. Click targets use that same
+viewport; changing the active tab reveals it again. Native PTY covers overflow
+scrolling in both directions and selection after scrolling. Human visual review
+remains outstanding.
+
+Focused informational notices support `x` and Delete to dismiss, in addition to
+the isolated close chip. These keys never dismiss model-visible context rows;
+Enter retains the row's context-menu behavior. Native PTY exercises both keys.
+
+Child pages suppress the header back arrow when the dedicated two-column rail is
+visible; sub-26-column fallback retains the header arrow. Escape/Up remain back
+navigation in both layouts. The read-only composer chooses a complete short back
+hint at narrow widths rather than clipping the long instruction.

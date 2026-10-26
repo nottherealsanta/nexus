@@ -1071,6 +1071,7 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     base: str = "current"
     auto_remove_clean: bool = False
+    remove_after_landing: bool = True
     max_worktrees: int = 16
     commit_max_files: int = 2000
     commit_max_file_mb: int = 50
@@ -1086,6 +1087,8 @@ class WorktreesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     submodules: Literal["none", "top", "recursive"] = "none"
 
     def __post_init__(self) -> None:
+        if type(self.remove_after_landing) is not bool:
+            raise ValueError("worktrees.remove_after_landing must be true or false")
         if type(self.auto_remove_clean) is not bool:
             raise ValueError("worktrees.auto_remove_clean must be true or false")
         if type(self.setup_shell) is not bool:

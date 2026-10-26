@@ -560,6 +560,7 @@ here, so add a row when you add a file.
 | `fold.py` | Delta accumulation, dedup, and log folding for the pure view reducer |
 | `model.py` | Renderable view-model types for the pure event reducer |
 | `reduce.py` | The pure, synchronous event reducer |
+| `notices.py` | Classifies durable context separately from dismissible client notices (plan 13) |
 
 ### `nexus/live/`
 

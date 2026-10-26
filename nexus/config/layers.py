@@ -433,7 +433,7 @@ def _reject_project_user_only_keys(doc: Mapping[str, Any], source: str) -> None:
         raise ConfigError(f"{source}: [daemon] may only be set in the user-level config")
     worktrees = doc.get("worktrees")
     if isinstance(worktrees, Mapping):
-        for key in ("max_worktrees", "auto_remove_clean"):
+        for key in ("max_worktrees", "auto_remove_clean", "remove_after_landing"):
             if key in worktrees:
                 raise ConfigError(
                     f"{source}: worktrees.{key} may only be set in the user-level "

@@ -1,8 +1,8 @@
 # Nexus Plan Status Review and Document Inventory
 
-> **Document Status:** Comprehensive review and inventory ledger as of 2026-10-23.  
-> **Source Documents Audited:** 48 Markdown files across `plans/` (this report is excluded from inventory counts to avoid self-reference).  
-> **Rule Adherence:** No existing plan files were edited or moved. All statuses are reported as assessments based on plan ledgers, committed source code, test execution logs, and working-tree audits.
+> **Document Status:** Updated plan-status review as of 2026-10-26.
+> **Source Documents Audited:** Relevant planning and done ledgers. Inventory counts below are historical and were not recalculated.
+> **Rule Adherence:** Status assessments use the current ledgers, cited tests, and working-tree evidence; pending acceptance gates are explicitly retained.
 
 ---
 

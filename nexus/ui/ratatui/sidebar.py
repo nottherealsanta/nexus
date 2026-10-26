@@ -312,6 +312,7 @@ class SidebarController:
         if (workspace, session) not in self._openable:
             raise ValueError("That session is no longer listed")
         await self.shell.switch_project(workspace, session)
+        await self.shell.close_selector()
 
     async def handle(self, action):
         """One validated ``{"type": "sidebar", "op": ...}`` action."""
@@ -373,6 +374,7 @@ class SidebarController:
             await self.close()
         elif op == "open_session":
             await self.open_session(action.get("workspace"), action.get("session"))
+            await self.shell.close_selector()
         else:
             raise ValueError("Unknown sidebar action")
 

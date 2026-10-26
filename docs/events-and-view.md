@@ -338,3 +338,12 @@ the newest five), and `tool_group.running_label` (the literal `Working` while a 
 runs). A group's `text` drops its nouns above five members.
 
 Checkpoint summaries retain `event.turn` as `CheckpointView.turn_id` so saved-turn actions use the durable saved record sequence rather than the display turn number. Empty turn IDs are omitted from serialized historical summaries.
+
+## Context notices and client dismissal
+
+`context.notice` diagnostics carry `model_visible`: explicit booleans take priority,
+with legacy kinds (tool-call nudge, subagent roster/reports, inbox and worktree
+move) inferred on replay. Classification does not change persisted events or model
+history. Native transcript notifications have a separate dismiss action; context
+rows never do. Dismissal is a bounded client preference keyed by workspace, session
+and durable sequence, survives restart, and never deletes a session record.

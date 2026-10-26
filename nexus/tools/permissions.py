@@ -1265,19 +1265,74 @@ class WorktreeMergePolicy:
 _LANDING_PUNCTUATION = frozenset("();<>|&")
 
 
+def _landing_dir_ok(directory: str, policy: WorktreeMergePolicy) -> bool:
+    """Whether ``directory`` names a main checkout the policy trusts.
+
+    ``normpath`` covers the canonical form; ``realpath(expanduser(...))`` covers
+    the ``~`` spelling a shell would expand before Git ever sees it. Both map
+    onto the same checkout, so accepting the spelling is truthful.
+    """
+    if not directory:
+        return False
+    if os.path.normpath(directory) in policy.mains:
+        return True
+    try:
+        return os.path.realpath(os.path.expanduser(directory)) in policy.mains
+    except Exception:  # noqa: BLE001 - an unresolvable path keeps the ask
+        return False
+
+
+def _landing_simple(tokens: list[str], policy: WorktreeMergePolicy) -> bool:
+    """Whether tokenised ``git`` is one accepted landing command."""
+    if len(tokens) < 5 or tokens[0] != "git" or tokens[1] != "-C":
+        return False
+    if not _landing_dir_ok(tokens[2], policy):
+        return False
+    try:
+        if tokens[3] == "merge":
+            rest = [token for token in tokens[4:] if token != "--"]
+            if len(rest) != 2 or "--ff-only" not in rest:
+                return False
+            branch = rest[1] if rest[0] == "--ff-only" else rest[0] if rest[1] == "--ff-only" else None
+            if branch is None:
+                return False
+            return not branch.startswith("-") and bool(policy.is_branch(branch))
+        if len(tokens) == 5 and tokens[3] in {"checkout", "switch"}:
+            base = tokens[4]
+            return not base.startswith("-") and bool(policy.is_base(base))
+    except Exception:  # noqa: BLE001 - a lookup failure keeps the ask
+        return False
+    return False
+
+
+def _landing_cd(tokens: list[str], policy: WorktreeMergePolicy) -> bool:
+    """Whether tokenised ``cd <main> && git ...`` is the told landing run there."""
+    if len(tokens) < 7 or tokens[0] != "cd" or tokens[2] != "&&" or tokens[3] != "git":
+        return False
+    if not _landing_dir_ok(tokens[1], policy):
+        return False
+    if tokens[4] == "-C":
+        return False  # a second checkout switch inside is not the told form
+    return _landing_simple(["git", "-C", tokens[1], *tokens[4:]], policy)
+
+
 def is_worktree_landing(command: object, policy: WorktreeMergePolicy | None) -> bool:
     """Whether ``command`` is exactly the merge the agent was told to run.
 
-    Parsed with a shell lexer, not matched on text. Accepted forms, as one simple
-    command each:
+    Parsed with a shell lexer, not matched on text. Accepted forms:
 
-    * ``git -C <main> merge --ff-only <worktree branch of this project>``;
-    * ``git -C <main> checkout|switch <base branch>``.
+    * ``git -C <main> merge --ff-only <worktree branch of this project>``
+      (``--`` before the branch and ``--ff-only`` after it are also accepted);
+    * ``git -C <main> checkout|switch <base branch>``;
+    * ``&&`` chains of such landings (checkout-then-merge is the told two-step,
+      at most three ``-C`` segments, or ``cd <main>`` plus at most two; §4);
+    * ``cd <main> && git merge --ff-only <branch>`` (and the checkout variant),
+      the spelling a shell reaches when the agent reuses its current directory.
 
-    Any other flag, extra word, ``cd``, chained command, redirect, pipe,
-    substitution, quote trick or unknown path or branch is not a landing, so the
-    forced ask applies. ``--ff-only`` can only move the base branch forward to a
-    commit that already contains it, so nothing on the base is lost.
+    Any other flag, extra word, ``;``, pipe, redirect, substitution, quote
+    trick or unknown path or branch is not a landing, so the forced ask
+    applies. ``--ff-only`` can only move the base branch forward to a commit
+    that already contains it, so nothing on the base is lost.
     """
     if policy is None or not isinstance(command, str) or not command.strip() or len(command) > 1024:
         return False
@@ -1290,23 +1345,43 @@ def is_worktree_landing(command: object, policy: WorktreeMergePolicy | None) -> 
         tokens = list(lexer)
     except ValueError:
         return False
-    if any(token and all(char in _LANDING_PUNCTUATION for char in token) for token in tokens):
+    if any(token and all(char in _LANDING_PUNCTUATION for char in token) for token in tokens
+           if token != "&&"):
         return False
-    if len(tokens) < 5 or tokens[0] != "git" or tokens[1] != "-C":
-        return False
-    directory = tokens[2]
-    if not directory or os.path.normpath(directory) not in policy.mains:
-        return False
-    try:
-        if len(tokens) == 6 and tokens[3] == "merge" and tokens[4] == "--ff-only":
-            branch = tokens[5]
-            return not branch.startswith("-") and bool(policy.is_branch(branch))
-        if len(tokens) == 5 and tokens[3] in {"checkout", "switch"}:
-            base = tokens[4]
-            return not base.startswith("-") and bool(policy.is_base(base))
-    except Exception:  # noqa: BLE001 - a lookup failure keeps the ask
-        return False
-    return False
+    if "&&" in tokens:
+        segments: list[list[str]] = [[]]
+        for token in tokens:
+            if token == "&&":
+                segments.append([])
+            else:
+                segments[-1].append(token)
+        if len(segments) > 4 or any(not segment for segment in segments):
+            return False
+        first, rest = segments[0], segments[1:]
+        if first and first[0] == "cd":
+            if len(first) != 2:
+                # ``cd`` with flags or extra words is not the told form.
+                return False
+            if len(segments) == 2:
+                return _landing_cd([*first, "&&", *segments[1]], policy)
+            # ``cd <main> &&`` followed by plain ``git`` landings: every segment
+            # after the cd must itself be a landing, at most two of them. A
+            # ``-C`` switch inside is redundant, not the told form, so only
+            # bare ``git checkout|switch|merge`` segments qualify here.
+            if len(segments) > 4:
+                return False
+            if not _landing_dir_ok(first[1], policy):
+                return False
+            bare = [segment for segment in rest if len(segment) >= 2 and segment[0] == "git" and segment[1] != "-C"]
+            return len(bare) == len(rest) and all(_landing_simple(["git", "-C", first[1], *segment[1:]], policy) for segment in bare)
+        if any(segment and segment[0] == "cd" for segment in rest):
+            return False
+        return bool(segments) and all(_landing_simple(segment, policy) for segment in segments)
+    if tokens and tokens[0] == "cd":
+        if tokens[1:2] == ["-C"]:
+            return False
+        return _landing_cd(tokens, policy)
+    return _landing_simple(tokens, policy)
 
 
 def _is_git_write_elsewhere(tool: str, key: str | None) -> bool:
@@ -1526,6 +1601,14 @@ class PermissionEngine:
             )
 
         if public_name in self._force_ask_tools or _is_git_write_elsewhere(public_name, key):
+            if is_worktree_landing(key, self._worktree_merge):
+                # ``cd <main> && git ...`` shapes reach the forced ask with the
+                # cd form, so the landing exemption is re-checked here too: the
+                # told landing never asks, anything else keeps the ask.
+                return self._verdict(
+                    call, spec, key, Outcome.ALLOW, None, "worktree_merge",
+                    "Landing a Nexus worktree branch with git merge --ff-only", suggestions,
+                )
             return self._ask_verdict(
                 call, spec, key, None, attended, suggestions
             )

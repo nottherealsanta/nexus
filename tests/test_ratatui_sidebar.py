@@ -569,6 +569,22 @@ async def test_the_sessions_tab_never_lists_the_manager(shell):
 
 
 @pytest.mark.asyncio
+async def test_open_session_and_toggle_close_the_sidebar_persistently(shell):
+    _fake_dashboard(shell, [_row("a", "/repo")])
+    await shell.sidebar.show("Sessions")
+    shell.sidebar._openable = {("/repo", "a")}
+    shell.switch_project = AsyncMock()
+    assert shell.sidebar.open and shell.preferences.values["sidebar_open"] is True
+    await shell.sidebar.handle({"op": "open_session", "workspace": "/repo", "session": "a"})
+    shell.switch_project.assert_awaited_once_with("/repo", "a")
+    assert shell.preferences.values["sidebar_open"] is False
+    assert not shell.sidebar.open
+    await shell.preferences.flush()
+    restarted = Preferences(shell.preferences.path)
+    assert restarted.values["sidebar_open"] is False
+
+
+@pytest.mark.asyncio
 async def test_sessions_close_operation_closes_the_sidebar(shell):
     _fake_dashboard(shell)
     await shell.sidebar.show("Sessions")
@@ -753,3 +769,32 @@ async def test_projects_prune_temporary_and_stale_recents_without_deleting(shell
     assert str(temporary) in {r["workspace"] for r in shell.sidebar.projects["rows"]}
     shell.sidebar._remember_project(str(temporary))
     assert str(temporary) not in shell.preferences.values["project_recent"]
+
+
+@pytest.mark.asyncio
+async def test_new_session_closure_survives_a_fresh_preferences_instance(shell):
+    _fake_dashboard(shell, [_row("a", "/repo")])
+    await shell.sidebar.show("Sessions")
+    shell.switch = AsyncMock()
+    shell.controller.agent_name = "Worker"
+    shell.controller.bootstrap = AsyncMock()
+    shell.client.select_agent = AsyncMock()
+    await shell.command("/new", ["fresh"])
+    shell.switch.assert_awaited_once_with("fresh")
+    shell.client.select_agent.assert_awaited_once_with("fresh", "Worker")
+    assert not shell.sidebar.open
+    await shell.preferences.flush()
+    restarted = Preferences(shell.preferences.path)
+    assert restarted.values["sidebar_open"] is False
+
+
+@pytest.mark.asyncio
+async def test_failed_session_open_keeps_selector_and_reports_error(shell):
+    _fake_dashboard(shell, [_row("a", "/repo")])
+    await shell.sidebar.show("Sessions")
+    shell.sidebar._openable = {("/repo", "a")}
+    shell.switch_project = AsyncMock(side_effect=RuntimeError("checkout unavailable"))
+    with pytest.raises(RuntimeError, match="checkout unavailable"):
+        await shell.sidebar.handle({"op": "open_session", "workspace": "/repo", "session": "a"})
+    assert shell.sidebar.open
+    assert shell.preferences.values["sidebar_open"] is True

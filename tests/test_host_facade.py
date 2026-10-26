@@ -1338,6 +1338,43 @@ async def test_facade_first_approval_from_two_views(tmp_path):
     await runtime.aclose()
 
 
+async def test_facade_pending_input_is_visible_before_slow_turn_start(tmp_path, monkeypatch):
+    """Durable waiting content must not depend on start hooks finishing (plan 18)."""
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    handle = runtime.session("s")
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = handle.start_turn
+
+    async def delayed_start(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(handle, "start_turn", delayed_start)
+    submission = asyncio.create_task(facade.enqueue("s", "waiting prompt", mode="queue"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5.0)
+        assert not submission.done()  # reply is held up, but durable state is not
+        view, _ = facade.state("s")
+        assert len(view.input_queue) == 1
+        pending = view.input_queue[0]
+        assert pending.content == [{"type": "text", "text": "waiting prompt"}]
+        assert pending.mode == "queue"
+        assert view.to_dict() == fold(handle.events).to_dict()
+        assert not any(event.type == "turn.started" for event in handle.events)
+        release.set()
+        queued_id, _ = await submission
+        assert queued_id == pending.queued_id
+        await facade.wait_idle(timeout=5.0)
+        assert not facade.state("s")[0].input_queue
+    finally:
+        release.set()
+        await asyncio.gather(submission, return_exceptions=True)
+        await runtime.aclose()
+
+
 async def test_facade_enqueue_runs_at_the_next_turn_boundary(tmp_path):
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok"), text_response("two")))
     facade = HostFacade(runtime)

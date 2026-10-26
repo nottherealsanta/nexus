@@ -307,6 +307,11 @@ class ShellActions:
 
         self.usage_task = asyncio.create_task(refresh())
 
+    async def close_selector(self):
+        sidebar = getattr(self, "sidebar", None)
+        if sidebar is not None and sidebar.enabled:
+            await sidebar.close()
+
     async def switch_project(self, workspace, session="", *, create=False):
         """Open ``session`` (or create a fresh one) through the shared daemon.
 
@@ -319,6 +324,7 @@ class ShellActions:
         # ``switch`` and the helpers below never re-enter this method, so the lock cannot self-deadlock.
         async with self._switch_lock:
             await self._switch_project(workspace, session, create=create)
+            await self.close_selector()
 
     async def _switch_project(self, workspace, session, *, create=False):
         if self.attachment_draft_key is None:
@@ -728,12 +734,17 @@ class ShellActions:
             if args:
                 raise ValueError("Usage: /close")
             await self.close_tab(self.workspace, session)
+        elif name == "/tabs":
+            if argument not in ("vertical", "top"):
+                raise ValueError("Usage: /tabs vertical|top")
+            self.preferences.set("tabs_vertical", argument == "vertical")
         elif name == "/new":
             session_id = argument or uuid.uuid4().hex[:12]
             agent = self.controller.agent_name
             await self.switch(session_id)
             await self.client.select_agent(session_id, agent)
             await self.controller.bootstrap()
+            await self.close_selector()
         elif name in {"/session", "/sessions"}:
             if argument:
                 rows = await self.client.list_sessions()

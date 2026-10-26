@@ -1,6 +1,6 @@
 # Plan 14: Shell tool rows: 2 input lines, a 4-line output window, full input in a modal (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 7,
+Status: implemented; focused Python, Rust and native PTY acceptance verified. Source: root `TODO.md` item 7,
 quoted unchanged:
 
 > - Collapsed tools need to render better. For example, the shell tool, when uncollapsed, the first two lines should show the input, the 4 lines (scrolling) output. When clicked on input it should show the full input in a modal just in case if it's too big if it's more than say four lines.
@@ -119,11 +119,20 @@ is Q2 (needs host-side progress events; out of scope here).
   `tool_input`; narrow widths.
 - PTY: a long command opens the modal; Esc closes it.
 - Acceptance:
-  - [ ] Opened shell rows show ≤ 2 input rows and a 4-row output window, with every omission announced.
-  - [ ] A long command opens in a modal from the input row.
-  - [ ] The transcript does not jump while a shell command streams output (if streaming exists).
+  - [x] Opened shell rows show ≤ 2 input rows and a 4-row output window, with every omission announced.
+  - [x] A long command opens in a modal from the input row.
+  - [x] The transcript does not jump while a shell command streams output (if streaming exists).
 
 ## 7. Risks and open questions
+
+Implementation verified: fixed two-input/four-output preview, full input modal workflow,
+input operation emission, Escape dismissal, stable tail row coordinates across samples,
+full-output expansion and verbose rendering. Native PTY test:
+`test_shell_preview_input_modal_and_full_output`; Python workflow test checks full command
+and control escaping. Progress consists of throttled last-line samples, not lossless stdout.
+Disclosure now lives in `rust/tui/src/disclosure.rs`, not the earlier plan locations.
+Wider PTY suite has an unrelated fixed-coordinate context-control click timeout at
+`tests/test_ratatui_pty.py:215` (that snapshot has no shell tools).
 
 - Q1. Wheel scrolling inside the 4-row window (nested scroll region): wanted?
 - Q2. Live streaming of shell output into the transcript, if not already reduced.

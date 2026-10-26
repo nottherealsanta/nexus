@@ -629,6 +629,15 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
                 self.shell.collapsed_turns.remove(operation["id"])
             else:
                 self.shell.collapsed_turns.add(operation["id"])
+        elif kind == "tool_input":
+            tool = find_tool(self.active_view, operation["call_id"])
+            if tool is None:
+                self.shell.notice = "Tool is no longer available"
+            else:
+                args = tool.input if isinstance(tool.input, dict) else {}
+                command = str(args.get("command") or args.get("cmd") or "")
+                count = len(command.split("\n")) if command else 0
+                self.shell.show("Shell input", f"{count} lines · {len(command)} characters\n\n{escape_controls(command)}")
         elif kind in {"tool_page", "tool_details"}:
             from ...ui_support.tool_details import styled_lines, tool_detail_sections
             tool = find_tool(self.active_view, operation["id"])
@@ -671,8 +680,9 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
             self.shell.manager_board_collapsed = not self.shell.manager_board_collapsed
         elif kind == "session_open":
             # The dashboard stays up until the switch succeeds, so a failed open leaves it (and the
-            # error toast) in place; `switch` hides it.
+            # error toast) in place; `switch` hides it. A successful open closes the selector.
             await self.shell.switch_project(operation["workspace"], operation["id"])
+            await self.shell.close_selector()
         elif kind == "session_archive":
             dashboard = getattr(self, "dashboard", None)
             if dashboard is not None and dashboard.visible:
@@ -881,7 +891,6 @@ class Workflows(TierPages, SpeakPages, WorktreePages):
             self.stack.clear()
             self.shell.panel_title = ""
             self.shell.panel_revision += 1
-            await self.shell.sidebar.close()
         elif target["kind"] == "skills_install_form":
             if not body.strip():
                 raise ValueError("Enter a source such as owner/repo")

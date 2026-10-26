@@ -231,6 +231,9 @@ def _link_agent_to_call(
     return replace(state, turns=turns) if changed else state
 
 def _diagnostic(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    if event.type == "context.notice":
+        from .notices import model_visible
+        data = {**data, "model_visible": model_visible(data)}
     entry = DiagnosticView(
         type=event.type,
         seq=event.seq,

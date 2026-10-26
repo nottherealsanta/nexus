@@ -72,12 +72,18 @@ files or run other git write commands in the main checkout" stays; the
 required, so an installed `nexus` without `merge` is never a reason to stop. The earlier session-name entry points
 here for how a named worktree is landed.
 
-The user always approves: a shell command that runs a Git write subcommand
-(merge, commit, reset, checkout, rebase, ...) with `-C`, `--git-dir` or
-`--work-tree` options, or after a `cd`, is a built-in forced ask in the
-permission engine (`_is_git_write_elsewhere` in `tools/permissions.py`; every
-mode, despite allow rules and grants; deny rules still win), so auto mode cannot
-skip it. The engine does not know the main checkout path, so the rule is
+The user always approves, with one narrow exception for the agent's own landing:
+a shell command that runs a Git write subcommand (merge, commit, reset,
+checkout, switch, rebase, ...) with `-C`, `--git-dir` or `--work-tree` options,
+or after a `cd`, is a built-in forced ask in the permission engine
+(`_is_git_write_elsewhere` in `tools/permissions.py`; every mode, despite allow
+rules and grants; deny rules still win), so auto mode cannot skip it. The
+exception is the parsed landing (`is_worktree_landing`): `git -C <main>
+merge --ff-only <session branch>` and `git -C <main> checkout|switch <base>`,
+also as told `&&` chains or `cd <main> && git …` spellings, never ask, because
+`--ff-only` only moves the base forward to a commit that already contains it
+(see [tools.md](tools.md#permissions-permissionspy)). The engine does not know the main
+checkout path when no policy is installed, so without one the rule stays
 conservative and a false positive only asks. Plain `git merge main` or `git
 status` in the worktree is not forced. Not verified: behavior on an unattended
 daemon with `on_unattended = "allow"`, which allows the command like any forced
@@ -1726,6 +1732,13 @@ turn raise an info toast with an `Open` action, and a blocked move carries the s
 Implemented offline only (Python/Rust unit tests, PTY for the toggle, board and draft
 retention); not verified against real Codex or GPT Live, no screenshot review.
 
+### Agent landing versus explicit Integrate confirmation (plans 11–18)
+
+Retain the user's explicit Integrate preview confirmation. It authorizes the
+selected integration against a state-bound token; the agent's narrowly parsed
+own-worktree fast-forward landing exemption is a distinct permission path.
+Skipping confirmation is not required to remove agent landing prompts and would
+unnecessarily broaden this change's safety scope.
 ## iOS uses the existing gateway presentation stream
 
 The iOS session client consumes the gateway's existing snapshot plus SSE `ops`

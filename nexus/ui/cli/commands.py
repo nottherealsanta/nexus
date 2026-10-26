@@ -66,6 +66,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/export", "Export this session", "[json|markdown|jsonl]"),
     CommandSpec("/help", "Show this help"),
     CommandSpec("/hotkeys", "Show keyboard shortcuts"),
+    CommandSpec("/tabs", "Session tabs: vertical or top (native TUI)"),
     CommandSpec("/notifications", "Show recent notifications (native TUI)"),
     CommandSpec("/exit", "Leave the chat", aliases=("/quit",)),
     CommandSpec("/worktrees", "List the project's worktrees; move this session, integrate or remove one"),

@@ -531,3 +531,61 @@ def test_settings_native_focus_reorder_and_loading_guard():
         stop.set(); thread.join(timeout=1)
         process.stdin.close(); process.stdout.close()
         os.close(master); os.close(slave)
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_shell_preview_input_modal_and_full_output():
+    from ratatui_latency_probe import NativeProbe
+    from ratatui_screen import Screen
+    probe = NativeProbe(BINARY)
+    operation = {"kind": "tool_input", "call_id": "shell-preview"}
+    block = {"id": "shell-preview", "kind": "tool", "text": "Bash preview",
+             "local_ui": True, "local_open": True,
+             "operation": {"kind": "block_toggle", "id": "shell-preview:detail"},
+             "input_operation": operation,
+             "output_operation": {"kind": "block_toggle", "id": "shell-preview:output"},
+             "fold_lines": 2, "local_detail": "  Command: full command\nResult:\nEARLY IMPORTANT OUTPUT",
+             "shell": {"input": ["$ first command", "  second command"], "input_lines": 8,
+                       "input_clipped": True, "output_tail": ["tail one", "tail two", "tail three", "tail four"],
+                       "output_lines": 20}}
+
+    def screen():
+        current = Screen(40, 140)
+        current.feed(bytes(probe.output))
+        return current.text()
+
+    def send(revision, **extra):
+        probe.send({"schema": 3, "revision": revision, "generation": 1, "status": "idle",
+                    "blocks": [block], "sessions_sidebar": False, "details_sidebar": False, **extra})
+        time.sleep(.25)
+
+    try:
+        send(1, reset=True)
+        deadline = time.monotonic() + 8
+        while "8 lines ▸ view" not in screen() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert "8 lines ▸ view" in screen(), screen()
+        assert "tail four" in screen() and "EARLY IMPORTANT OUTPUT" not in screen()
+        row = _screen_row(probe, "tail four")
+        block["shell"]["output_tail"] = ["tail two", "tail three", "tail four", "tail five"]
+        block["shell"]["output_lines"] = 21
+        send(2)
+        assert _screen_row(probe, "tail five") == row
+        _click_row(probe, "8 lines", double=True)
+        time.sleep(.15)
+        actions = [a for a in probe.read_actions() if a.get("type") == "operation"]
+        assert actions and actions[-1]["operation"]["kind"] == "tool_input", actions
+        send(3, panel_title="Shell input", panel_layout="modal",
+             panel_lines=["8 lines · 100 characters", "FULL COMMAND LAST LINE"])
+        assert "FULL COMMAND LAST LINE" in screen()
+        probe.keys(b"\x1b")
+        time.sleep(.2)
+        assert any(a.get("type") == "dismiss" for a in probe.read_actions())
+        send(4, panel_title="", panel_lines=[])
+        _click_row(probe, "earlier lines", double=True)
+        time.sleep(.2)
+        assert "EARLY IMPORTANT OUTPUT" in screen(), screen()
+        send(5, transcript_verbose=True)
+        assert "EARLY IMPORTANT OUTPUT" in screen(), screen()
+    finally:
+        probe.close()

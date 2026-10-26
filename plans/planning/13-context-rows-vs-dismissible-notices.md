@@ -1,6 +1,6 @@
 # Plan 13: Separate "what the agent sees" from dismissible notices (Ratatui)
 
-Status: proposed (2026-10-25). Nothing in this plan is implemented. Source: root `TODO.md` item 6,
+Status: implemented and offline/PTY verified; human visual acceptance remains open (2026-10-26). Source: root `TODO.md` item 6,
 quoted unchanged:
 
 > - "Notice" needs to be better. We need to classify that there are two things that will be on the screen. One is we are showing the user one-to-one mapping of the context of the agent. Second one, things like notice should appear in a box, and there should be an X button to close them.
@@ -134,3 +134,57 @@ implementing; if it does, the context row and the notice row are double-drawn).
 - Risk: a user may close an error-ish notice ("Worktree action failed") and miss it later; the same
   information is in the Logs drawer and the details sidebar, so it is not lost (state that in the
   docs).
+
+## Implementation progress
+
+Implemented classification/replay, Context vs Notice transcript components, and
+bounded persistent client dismissal. Regression tests cover explicit/legacy
+classification, replay stability, preference reload and projection filtering.
+Remaining before archive: native PTY visual validation, keyboard/close-target
+review, ASCII/narrow visual fixtures, and complete audit of all notice producers.
+This plan remains in planning; it is not claimed complete.
+
+### Close-target follow-up
+
+Replaced `[dismiss]` and the whole-header operation with an isolated right-edge
+three-cell `×` target (`x` in ASCII mode), using existing chip geometry. Added
+Rust tests at widths 8, 24 and 80 for target bounds, null default operation,
+body inertness and context non-dismissability: 2 passed. Native click/keyboard
+acceptance and complete producer audit remain unverified.
+
+### Finisher producer audit and native resolver check
+
+`rg 'context.notice|_NOTICE_EVENT' nexus --glob '*.py'` audited actual emitters:
+- `session/session.py`: tool_call_nudge and changed subagent_roster are model context;
+  baseline roster and shell_wake_paused are diagnostics (no message means no timeline row).
+- `worktree_sessions.py`: worktree_move explicitly model-visible; worktree informational
+  notices are dismissible. Move rows also have their own durable view representation.
+- `agents/session_subagents.py`: subagent_merged/kept/conflict notices are dismissible
+  informational merge reports, not injected context.
+- `runtime.py`: session_root_cwd diagnostic is dismissible informational context.
+- `view/notices.py` legacy fallback also preserves subagent_reports and external_inbox as
+  model context; explicit model_visible metadata takes precedence.
+Consumers/contracts: view/reduce.py, events.py, and ui/ratatui/prototype.py. Runtime's
+subscription list is not a producer. No producer changed in this follow-up.
+Rust resolver regression covers body, isolated ×, outside bounds and keyboard fallback
+at widths 8/24/80; keyboard fallback is context menu, not dismissal.
+Visual review remains NOT VERIFIED: no human before/after capture comparison performed.
+
+### Keyboard acceptance continuation
+
+Implemented focused-notice `x` and Delete through a notice-only chip resolver;
+context rows cannot resolve a dismiss action. Native PTY parametrization passes
+for both keys, alongside replay/classification/persistence tests. Existing producer
+audit above remains applicable: no emitters changed. Focused Python run including
+sidebar, notice classification, native sessions/picker and Manager: 112 passed.
+Full Rust: 712 + 60 passed, 3 ignored. Human visual review remains outstanding;
+this plan is not archived as visually accepted.
+
+Producer audit complete for current Python emitters: session nudge/changed roster
+and worktree model notice explicitly mark model_visible; baseline roster and wake
+pause have no timeline message; worktree lifecycle, subagent merge status and
+runtime cwd diagnostics remain informational. Legacy fallback covers prior model
+context kinds. No producer modifications were required. Native 40/140-column
+captures assert both full context text and isolated ×; inspected labels distinguish
+Notice from Context. Artifacts: `artifacts/planning-acceptance/notice-*` (ignored).
+Not a pixel/contrast or complete ASCII screenshot approval.

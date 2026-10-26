@@ -77,7 +77,14 @@ class Terminal:
         self.screen.clear()
         self.rows += 1
         termios.tcsetwinsize(self.slave, (self.rows, self.cols))
-        time.sleep(.5)
+        # The setup process owns the controlling terminal; explicitly notify the
+        # native child too instead of relying on the foreground process group.
+        import signal
+        os.killpg(self.process.pid, signal.SIGWINCH)
+        deadline = time.monotonic() + 3
+        while not self.screen and time.monotonic() < deadline:
+            time.sleep(.02)
+        time.sleep(.1)
 
     def text(self):
         raw = bytes(self.screen).decode("utf-8", "replace")
@@ -111,7 +118,8 @@ def test_there_is_no_sessions_sidebar_and_the_top_bar_opens_the_dashboard():
         # expected in the top bar, but should not reappear in the removed sidebar.
         assert "SESSIONS" not in text and "Filter sessions" not in text
         assert "Fix token refresh" in text and "▤" in text and "▥" in text and "1/2" not in text, "top bar"
-        assert text.index("~/w") < text.index("main"), "path comes before the branch"
+        # Project strip contract: basename, branch, full workspace path.
+        assert text.index("main") < text.index("~/w"), "branch comes before the full path"
         click(t, 113, 2)  # inside the session-list icon's padded hit target
         assert t.action() == {"type": "command", "text": "/sessions"}
         t.key(b"\x02")  # Ctrl+B is the dashboard too
@@ -141,5 +149,82 @@ def test_ownership_tree_shortcut_and_read_only_node_menu():
         assert "interrupted" in t.text()
         t.key(b"\x1b[B\r")
         assert t.action() == {"type": "operation", "operation": child, "generation": 2}
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_child_back_rail_and_vertical_tab_actions():
+    t = Terminal(30, 140)
+    try:
+        t.send(agent_page="child", title="Child task", sessions_sidebar=True,
+               tabs=SESSIONS[:2], tabs_vertical=True, generation=1)
+        time.sleep(.4)
+        click(t, 1, 10)
+        assert t.action() == {"type": "dismiss", "text": ""}
+        t.send(agent_page="", title="Root task", sessions_sidebar=False,
+               tabs=SESSIONS[:2], tabs_vertical=True, generation=2)
+        time.sleep(.4)
+        click(t, 5, 3)
+        assert t.action() == {"type": "session_open", "workspace": "/w", "text": "s2"}
+        click(t, 22, 3)
+        assert t.action() == {"type": "tab_close", "workspace": "/w", "text": "s2"}
+        click(t, 5, 1)
+        assert t.action() == {"type": "command", "text": "/new"}
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_vertical_tab_overflow_wheel_and_click_share_viewport():
+    t = Terminal(30, 140)
+    try:
+        tabs = [dict(SESSIONS[0], id=f"s{i}", title=f"Tab {i}", active=i == 0)
+                for i in range(40)]
+        t.send(sessions_sidebar=False, tabs=tabs, tabs_vertical=True, generation=1)
+        time.sleep(.4)
+        # Wheel over the rail must move its viewport, not the conversation.
+        t.key(b"\x1b[<65;5;3M")
+        time.sleep(.2)
+        click(t, 5, 2)
+        assert t.action() == {"type": "session_open", "workspace": "/w", "text": "s3"}
+        t.key(b"\x1b[<64;5;3M")
+        time.sleep(.2)
+        click(t, 5, 2)
+        assert t.action() == {"type": "session_open", "workspace": "/w", "text": "s0"}
+    finally:
+        t.close()
+
+
+@pytest.mark.parametrize("key", [b"x", b"\x1b[3~"])
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_focused_notice_keyboard_dismissal(key):
+    t = Terminal(30, 140)
+    try:
+        t.send(blocks=[{"kind": "notice", "id": "notice-1", "title": "Information",
+                        "text": "Checkout kept", "operation": {"kind": "dismiss_notice", "id": "s:1"}}],
+               generation=1)
+        time.sleep(.4)
+        t.key(b"\t")
+        t.key(key)
+        assert t.action() == {"type": "operation", "operation": {"kind": "dismiss_notice", "id": "s:1"}, "generation": 1}
+    finally:
+        t.close()
+
+
+@pytest.mark.parametrize("columns", [24, 40, 140])
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_child_has_one_back_affordance_and_complete_narrow_hint(columns):
+    t = Terminal(30, columns)
+    try:
+        t.send(agent_page="child", title="Child task", generation=1)
+        time.sleep(1.5)
+        t.redraw()
+        text = t.text()
+        assert text.count("←") == 1
+        assert ("Esc: back" if columns == 24 else "Esc/↑ back" if columns == 40
+                else "Esc or ↑ returns to the parent") in text
+        t.key(b"\x1b")
+        assert t.action() == {"type": "dismiss", "text": ""}
     finally:
         t.close()

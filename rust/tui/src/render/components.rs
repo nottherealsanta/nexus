@@ -199,7 +199,7 @@ impl Hover {
             }
             if r.tabs.contains(point) && y == r.tabs.y {
                 let col = usize::from(x - r.tabs.x);
-                return super::top_cells(s, r.tabs)
+                return super::top_cells(s, r.tabs, r.tabs_rail.width > 0)
                     .into_iter()
                     .position(|cell| col >= cell.start && col < cell.end)
                     .map(|i| format!("tab:{i}"));
@@ -294,7 +294,10 @@ impl Hover {
         }
         let p = Palette::new(s.theme == "nexus-light");
         let now = Instant::now();
-        for (i, cell) in super::top_cells(s, r.tabs).iter().enumerate() {
+        for (i, cell) in super::top_cells(s, r.tabs, r.tabs_rail.width > 0)
+            .iter()
+            .enumerate()
+        {
             let amount = self.amount(&format!("tab:{i}"), now);
             if amount <= 0.0 {
                 continue;
@@ -403,7 +406,7 @@ mod tests {
             tabs: Rect::new(0, 0, 100, 2),
             ..Default::default()
         };
-        let cells = super::super::top_cells(&s, r.tabs);
+        let cells = super::super::top_cells(&s, r.tabs, r.tabs_rail.width > 0);
         let mut hover = Hover::default();
         let pointer = Some((cells[0].start as u16, 0));
         hover.update_surfaces(&s, &r, "", 0, false, None, false, now);

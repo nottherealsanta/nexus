@@ -42,15 +42,17 @@ def opened(columns, **fields):
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
 def test_the_selector_draws_path_and_directory_entries_over_the_conversation():
-    t = opened(140)
+    t = opened(140, projects={**PROJECTS, "browser_open": True, "browser_path": "/nexus",
+                              "browser_rows": [{"name": "src", "kind": "dir", "path": "/nexus/src"},
+                                               {"name": "readme.txt", "kind": "file", "path": "/nexus/readme.txt"}]})
     try:
         text = t.text()
         for label in ("Projects", "Sessions"):
             assert label in text, f"{label} tab missing:\n{text}"
         # Files and Git live in the details drawer now, not the left sidebar.
         assert "Files" not in text and "Git" not in text, text
-        assert "/nexus" in text and "src /" in text and "readme.txt" in text
-        assert "Open this folder" in text
+        assert "/nexus" in text and "▸ src" in text and "readme.txt" in text
+        assert "Open /nexus as a project" in text
         assert "Fix token refresh" in text, "the conversation is still there"
         # The selector is a centered overlay beneath the top bar (not a docked column): the
         # session title in the top bar is painted before its tabs.
@@ -126,7 +128,7 @@ def test_the_selector_still_fits_a_narrow_terminal_as_an_overlay():
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
 def test_project_path_editing_and_bracketed_paste_use_sidebar_protocol():
-    t = opened(140, projects={"loaded": True, "browser_path": "/repo", "browser_rows": []})
+    t = opened(140, projects={"loaded": True, "browser_open": True, "browser_path": "/repo", "browser_rows": []})
     try:
         # Focus the selector, then edit its path rather than the composer.
         mouse(t, 0, 30, 5)
