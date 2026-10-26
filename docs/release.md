@@ -442,6 +442,16 @@ default) so `-lasound` resolves to the shared library. Re-running the existing
 `v0.5.2` tag via `workflow_dispatch` uses the workflow from `main`, so this fix
 applies without retagging.
 
+musllinux x86_64 wheels are not built: the default dictation runtime
+(torch/constriction) publishes no musl wheels, and Python dependency markers
+cannot distinguish musl from glibc, so the repaired-wheel install test on that
+leg could never resolve them. This blocked the 0.7.0/0.7.1/0.7.2 publishes
+(the musl x86_64 leg failed, so the publish job never ran) and is why 0.7.x
+needed a re-publish. `native-wheels.yml` sets `CIBW_SKIP: "*-musllinux_x86_64"`;
+musllinux aarch64, manylinux, and macOS wheels still build, and `install.sh`
+rejects musllinux x86_64 with a diagnostic, so no supported user needs that
+wheel. (This is distinct from the v0.5.2 `crt-static` failure above.)
+
 The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it.
 Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
 the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.88 on
