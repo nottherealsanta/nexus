@@ -382,10 +382,14 @@ class _ClientConnection:
                 raise
             if isinstance(command, p.ProjectReload):
                 replacement = await projects.acquire(identity, self.environment, self.client_name)
-                if self.focus is None or host is self.focus:
+                if self.client_name == "control":
+                    projects.release(replacement)
+                elif self.focus is None or host is self.focus:
                     self.focus = replacement
                 else:
                     projects.release(replacement)
+            elif host is self.focus:
+                self.focus = None
             return p.ProjectFocusResult(project_ref(identity))
         if isinstance(command, p.WebLaunch):
             return p.WebLaunchResult(url=await self.daemon.web_launch(self.focus))

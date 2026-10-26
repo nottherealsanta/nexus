@@ -82,7 +82,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 
 There are no worktree modes. Every session starts in the main checkout and the
 agent decides when to create, list, move between and leave worktrees
-([plan](../plans/planning/agent-managed-worktrees.md)). `[worktrees] sessions`,
+([plan](../plans/done/agent-managed-worktrees.md)). `[worktrees] sessions`,
 `[worktrees] checkpoints` and the machine-local `worktree-mode.json` were removed
 without a compatibility path: `[worktrees]` rejects unknown keys, so a config file
 that still sets `sessions` or `checkpoints` fails to load until the key is deleted.

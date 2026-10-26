@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from nexus.config import Config
-from nexus.config.schema import ConfigV2, ModelSection
+from nexus.config.schema import ConfigV2, ModelSection, VoiceSection
 from nexus.host import protocol as p
 from nexus.host.daemon import Daemon, default_socket_path
 from nexus.host.transports import ProtocolError, ResultFrame
@@ -22,7 +22,8 @@ async def shared(tmp_path):
     def factory(workspace, **kwargs):
         made.append((workspace, kwargs['environ']))
         config = Config(model='scripted/m', version=2,
-                        v2=ConfigV2(model=ModelSection(default='scripted/m')))
+                        v2=ConfigV2(model=ModelSection(default='scripted/m'),
+                                    voice=VoiceSection(enabled=False)))
         return Runtime(workspace, config=config, providers={'scripted': ScriptedProvider(
             *[text_response('ok') for _ in range(10)])}, **kwargs)
     # macOS Unix socket paths must stay short.
@@ -183,7 +184,10 @@ async def test_unload_reload_and_control_status_do_not_capture_another_environme
         loaded = await control.call(p.ProjectReload())
         assert isinstance(loaded, p.ProjectFocusResult), loaded
         assert made[-1][1] == {'MARKER': 'new'}
-        assert (await control.call(p.ProjectUnload())).project.key == key
+        assert daemon.projects.hosts[key].references == 0
+        unloaded = await control.call(p.ProjectUnload())
+        assert isinstance(unloaded, p.ProjectFocusResult), unloaded
+        assert unloaded.project.key == key
         assert not daemon.projects.hosts
         assert (await control.call(p.Health())).projects == []
     finally:

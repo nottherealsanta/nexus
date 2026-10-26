@@ -1117,11 +1117,15 @@ mod tests {
             "{open}"
         );
         // A later raster fence after Unicode art keeps its own original source.
-        let both = lines(
-            &format!("```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\n{MINDMAP}\n```"),
-            &Palette::new(false),
-            80,
-        );
+        // Raster rendering is asynchronous on a shared single worker, so a
+        // parallel test can evict the primed image between the wait above and
+        // this render; re-prime and re-render once, like the `paint` helper.
+        let doc = format!("```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\n{MINDMAP}\n```");
+        let mut both = lines(&doc, &Palette::new(false), 80);
+        if !both.iter().any(|row| row.image.is_some()) {
+            crate::mermaid_image::tests::wait_raster(MINDMAP, 80);
+            both = lines(&doc, &Palette::new(false), 80);
+        }
         let text = both.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("◇ mermaid"), "{text}");
         assert!(both.iter().any(|row| row.image.is_some()));

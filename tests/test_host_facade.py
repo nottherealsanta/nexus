@@ -444,7 +444,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.Shutdown(reason="bye"),
     ]
     commands.extend([p.ProjectFocus(project="/a"), p.ProjectOpen(path="/a"), p.ProjectList(),
-                     p.ProjectUnload(), p.ProjectReload()])
+                     p.ProjectDirectoryList(path="/a"), p.ProjectUnload(), p.ProjectReload()])
     assert {type(command) for command in commands} == set(p.COMMANDS)
     for command in commands:
         assert p.decode_command(p.encode_command(command)) == command
