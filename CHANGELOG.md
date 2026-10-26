@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.7.2](https://github.com/nottherealsanta/nexus/compare/v0.7.0...v0.7.2) (2026-10-26)
+
+
+### Features
+
+* add mermaid guidance to build prompt ([c95c12d](https://github.com/nottherealsanta/nexus/commit/c95c12dd53556bb9b937d63a9387827af3575cfe))
+* add native project switching ([9c5d444](https://github.com/nottherealsanta/nexus/commit/9c5d4447efb1ba0a49682d2ffcf5a7a5062acab7))
+* add opt-in clean worktree auto-removal ([c55af40](https://github.com/nottherealsanta/nexus/commit/c55af409d9e01bf52462ec19d8361f538389935d))
+* add persistent code-mode kernel infrastructure ([18395bb](https://github.com/nottherealsanta/nexus/commit/18395bb6bf459ff52cd37a09982df3c6e1098bb8))
+* add plan for code mode as a persistent kernel ([f811410](https://github.com/nottherealsanta/nexus/commit/f811410eca8f944c2ac4b67f34b5a6471cad6b84))
+* automatically name session worktrees with random word pairs ([0251984](https://github.com/nottherealsanta/nexus/commit/02519845a4a515006e7819a9b1bc7c575e2df554))
+* browse project directories in TUI ([00bfa30](https://github.com/nottherealsanta/nexus/commit/00bfa309f023b283766c948f7d684ca3b4eb815e))
+* implement agent-managed worktrees ([11c652b](https://github.com/nottherealsanta/nexus/commit/11c652bb0e02ee6a1ac4efa66c811f8cb971a501))
+* implement agent-managed worktrees plan ([e667c59](https://github.com/nottherealsanta/nexus/commit/e667c59ea504692d252493e010d915ffb713c657))
+* improve worker continuation, context views, and TUI navigation ([262d87e](https://github.com/nottherealsanta/nexus/commit/262d87e3178ee6805556dfd5f9b8ff3ca9019447))
+* **manager:** implement automatic lazy compaction and machine memory isolation for Manager session ([9ed3fac](https://github.com/nottherealsanta/nexus/commit/9ed3fac6a3df4e7ff7709c139bc47c44b0f3b9fb))
+* **manager:** implement session launch autofocus and draft state handling ([9de32ce](https://github.com/nottherealsanta/nexus/commit/9de32cea2a7584a54e6c6ad61e24a70418710802))
+* nudge models after repeated tool calls ([dfae44e](https://github.com/nottherealsanta/nexus/commit/dfae44eb107043fdf4804bb06c9deb29118726de))
+* speed up adding project directories ([c7c2914](https://github.com/nottherealsanta/nexus/commit/c7c291492184045897cb68d070884d4ca64469e6))
+* strengthen agent guidance and adjust tool nudge ([1a399b9](https://github.com/nottherealsanta/nexus/commit/1a399b927da94fb686d27395f2f92d6e427b3d78))
+* **tools:** bundle optional task tools by category ([0a4eeb4](https://github.com/nottherealsanta/nexus/commit/0a4eeb4fea87231d9889b51f330060f0f5fcf409))
+* **tui:** render Mermaid diagrams in the terminal ([1cd3e51](https://github.com/nottherealsanta/nexus/commit/1cd3e5161cc8023363efa4f4437a7ef6467a99b5))
+* **tui:** restyle the sessions modal in the new design language ([13ee09d](https://github.com/nottherealsanta/nexus/commit/13ee09da5131bc2269273ee71eea10afc9d3d739))
+* **worktrees:** support squash merging sessions ([cb7b2a8](https://github.com/nottherealsanta/nexus/commit/cb7b2a8fdedef6eb49f44d9d8e22eebd1790a94b))
+
+
+### Bug fixes
+
+* clarify that no Nexus CLI merge command is required for landing sessions ([11a3b67](https://github.com/nottherealsanta/nexus/commit/11a3b67f925fd210802582440cbede8617633b57))
+* **context:** align context budgeting with configured limits ([6a4b2d9](https://github.com/nottherealsanta/nexus/commit/6a4b2d920a1173d9c08551a514938d8903464478))
+* enable all native Mermaid compiler families ([f2c62a2](https://github.com/nottherealsanta/nexus/commit/f2c62a27fe9331cdae492c6ffcd4ced64c3f62ca))
+* harden voice capture and persist code-mode kernels ([28811c6](https://github.com/nottherealsanta/nexus/commit/28811c6626842bbba51fdfb56a009e72d6f8454e))
+* ignore legacy session worktree records ([3faf67d](https://github.com/nottherealsanta/nexus/commit/3faf67ddea2b17e9afdc8f937832bd827cfb6421))
+* limit orchestrator to one subagent ([e972fd8](https://github.com/nottherealsanta/nexus/commit/e972fd8297fd491061334250cf2dcdbbf5a5c478))
+* make TUI image previews visible across terminals ([6498071](https://github.com/nottherealsanta/nexus/commit/64980716a001d084786d107d83e554f8ed9066ca))
+* **permissions:** require confirmation for nexus merge ([6b7e4e4](https://github.com/nottherealsanta/nexus/commit/6b7e4e4dfd38153f6e105b8a8b616e5ce39ae30f))
+* prepare release 0.7.2 ([020fe30](https://github.com/nottherealsanta/nexus/commit/020fe30596bcc9c495ca601344b12ea6fa8eda36))
+* preserve Ratatui image previews across monochrome and redraws ([71f30cb](https://github.com/nottherealsanta/nexus/commit/71f30cb43f3ade088998e7f24882ccbf4e7185b7))
+* refresh Ratatui top bar on tab switch ([b96c511](https://github.com/nottherealsanta/nexus/commit/b96c511b5f4f00c91bba0801da7fb8e7c9660dd0))
+* restore native copy command clipboard support ([2b0af03](https://github.com/nottherealsanta/nexus/commit/2b0af0361808fe626cb830c32771193a90e17870))
+* **sessions:** drop the worktree root notice from the timeline ([b44ecd4](https://github.com/nottherealsanta/nexus/commit/b44ecd49b904b8b49746ce7c798c086d4ac4e220))
+* **todos:** add note for auto deletion of worktree after session completion ([e2052ac](https://github.com/nottherealsanta/nexus/commit/e2052ac58f547e1c11debdfaa4341feeea14cb95))
+* **tui:** handle subagent follow-ups and settings navigation ([38a02da](https://github.com/nottherealsanta/nexus/commit/38a02da6891fef59c141d381c97474d14656e692))
+* **view:** link subagent_continue calls and order continued runs ([48a8489](https://github.com/nottherealsanta/nexus/commit/48a84898060ca271d6dd1c1171c0d23b600d45c2))
+
 ## [0.7.0](https://github.com/nottherealsanta/nexus/compare/v0.6.1...v0.7.0) (2026-10-23)
 
 
