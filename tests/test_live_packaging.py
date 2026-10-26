@@ -1,5 +1,6 @@
 """Offline packaging contract for GPT Live: no builds, only file inspection."""
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -107,3 +108,19 @@ def test_native_toolchain_pin_matches_the_crate_msrv():
     ]
     rust_version = max(versions, key=lambda value: tuple(map(int, value.split("."))))
     assert f"{rust_version}.0" in _workflow()
+
+
+def test_release_publish_pins_python_for_uv_build_and_tests():
+    # constriction has cp313/cp314-only wheels; newest-Python resolution chose cp315.
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = workflow.split("\n  publish:\n", 1)[1]
+    setup = re.search(
+        r"      - uses: astral-sh/setup-uv@[^\n]+\n(.*?)(?=      - )",
+        publish,
+        re.DOTALL,
+    )
+    assert setup is not None
+    assert re.search(r'(?m)^        with:\n(?:          [^\n]*\n)*?'
+                     r'          python-version: [\"\']3\.13[\"\']$', setup.group(1))
+    assert publish.index(setup.group(0)) < publish.index("uv build --sdist")
+    assert publish.index(setup.group(0)) < publish.index("uv run --with pytest")
