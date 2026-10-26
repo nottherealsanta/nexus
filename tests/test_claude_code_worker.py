@@ -257,7 +257,18 @@ async def test_hook_loss_is_never_success(tmp_path, workspace, fake):
     directory, exe = fake(mode="hookloss")
     cancel = SimpleNamespace(cancelled=False)
     task = asyncio.create_task(run(tmp_path, workspace, exe, cancel=cancel))
-    await asyncio.sleep(1.5)
+    # Wait until the fake has written its partial answer, then give the worker's
+    # tailer a moment to ingest it before cancelling. A fixed sleep alone is not
+    # deterministic here: under parallel CI load the 1.5s window sometimes closed
+    # before the reader saw the line, leaving only "cancelled" as the result text.
+    for _ in range(500):
+        if task.done():
+            break
+        if any("answer but no hook" in p.read_text(errors="ignore")
+               for p in directory.glob("transcripts/*.jsonl")):
+            break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.5)  # let the streaming reader ingest the line
     assert not task.done()  # a missing Stop hook is never success
     cancel.cancelled = True
     result, events = await asyncio.wait_for(task, 10)

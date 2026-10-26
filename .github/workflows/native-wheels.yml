@@ -33,6 +33,13 @@ jobs:
         env:
           CIBW_BUILD: 'cp313-* cp314-*'
           CIBW_ARCHS: native
+          # Do not build musllinux x86_64 wheels: torch/constriction (the default
+          # dictation runtime) publish no musl wheels, so the repaired-wheel
+          # install test can never resolve them there -- Python markers cannot
+          # tell musl from glibc (this blocked the 0.7.x publishes). install.sh
+          # rejects musl x86_64 with a diagnostic, so no supported user needs
+          # this wheel. musllinux aarch64, manylinux and macOS still build.
+          CIBW_SKIP: "*-musllinux_x86_64"
           # nexus-live's default `audio` feature (cpal -> alsa-sys) needs ALSA headers and
           # pkg-config on Linux: apk on musllinux, dnf/yum on manylinux. Opus is the
           # pure-Rust unsafe-libopus crate, so no libopus/CMake is installed.

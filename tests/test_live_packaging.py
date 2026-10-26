@@ -1,5 +1,6 @@
 """Offline packaging contract for GPT Live: no builds, only file inspection."""
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -68,6 +69,19 @@ def test_wheel_ci_installs_alsa_and_pkgconfig_for_both_linux_libcs():
     assert "unsafe-libopus" in manifest
 
 
+def test_wheel_ci_skips_musllinux_x86_64_but_keeps_musl_aarch64():
+    # torch/constriction (the default dictation runtime) publish no musl
+    # wheels, and Python markers cannot tell musl from glibc, so the musllinux
+    # x86_64 leg could never install the repaired wheel and blocked the 0.7.x
+    # publishes. musllinux aarch64 must still build -- musl coverage comes
+    # from that leg and the apk ALSA step above.
+    workflow = _workflow()
+    assert "*-musllinux_x86_64" in workflow
+    assert "musllinux" in workflow.replace("*-musllinux_x86_64", "")
+    for needle in ("alsa-lib-dev", "alsa-lib-devel", "apk add", "pkg"):
+        assert needle in workflow
+
+
 def test_cargo_lock_keeps_uuid_within_the_crate_msrv():
     # Regression: the locked uuid 1.28 needs Rust 1.89, but CI and the crate use 1.88.
     # The optional bin was then silently skipped and the wheel shipped without the helper.
@@ -94,3 +108,19 @@ def test_native_toolchain_pin_matches_the_crate_msrv():
     ]
     rust_version = max(versions, key=lambda value: tuple(map(int, value.split("."))))
     assert f"{rust_version}.0" in _workflow()
+
+
+def test_release_publish_pins_python_for_uv_build_and_tests():
+    # constriction has cp313/cp314-only wheels; newest-Python resolution chose cp315.
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = workflow.split("\n  publish:\n", 1)[1]
+    setup = re.search(
+        r"      - uses: astral-sh/setup-uv@[^\n]+\n(.*?)(?=      - )",
+        publish,
+        re.DOTALL,
+    )
+    assert setup is not None
+    assert re.search(r'(?m)^        with:\n(?:          [^\n]*\n)*?'
+                     r'          python-version: [\"\']3\.13[\"\']$', setup.group(1))
+    assert publish.index(setup.group(0)) < publish.index("uv build --sdist")
+    assert publish.index(setup.group(0)) < publish.index("uv run --with pytest")
