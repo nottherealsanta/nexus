@@ -286,6 +286,10 @@ binary under a pseudo-terminal with a scripted host, sends keystrokes and mouse-
 sequences, and asserts on the emulated screen. Use it for anything where the host's snapshot and
 the client's operations must agree; hand-built snapshots (`test_ratatui_pty_*.py`) cannot catch
 that. Build `rust/tui` first (`cargo build`); the tests skip without the binary.
+Mermaid raster tests wait on the real worker (`wait_raster`) and re-render once
+rather than assuming a primed cache entry survives: rastering runs on a shared
+single background worker with a bounded cache, so a parallel test can evict an
+entry between the wait and the render.
 
 
 ### Session worktree acceptance
