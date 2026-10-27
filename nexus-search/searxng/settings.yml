@@ -1,0 +1,11 @@
+use_default_settings: true
+search:
+  formats:
+    - html
+    - json
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  public_instance: false
+  limiter: false
+  secret_key: "override-with-SEARXNG_SECRET"

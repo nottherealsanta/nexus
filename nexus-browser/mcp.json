@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "browser-use": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["--from", "browser-use[cli]", "browser-use", "--mcp"]
+    }
+  }
+}

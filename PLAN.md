@@ -20,7 +20,7 @@ Branch `nexus10` (an orphan branch, checked out as a worktree at
    the same provider is lossless (reasoning `encrypted_content`, item ids). Other
    providers use the normalized fields.
 3. **Task tools vs. control.** Tools act on the workspace: read, bash, edit,
-   write, and code (planned) to script them. Changing Nexus itself (which session, workspace or worktree, which
+   write, and code to script them. Changing Nexus itself (which session, workspace or worktree, which
    model, forking, subagents) is a separate control plane in a `nexus`
    namespace. Those are commands with their own event type and permissions. The
    user can run them directly, and the agent gets them only when granted. A
@@ -31,6 +31,19 @@ Branch `nexus10` (an orphan branch, checked out as a worktree at
    with old Nexus (`~/.nexus`), which still runs from its own checkout.
 6. **uv only.** `uv sync`, `uv run`, `uv add`. Python is pinned in
    `.python-version` and dependencies are locked in `uv.lock`.
+7. **One timeline.** The timeline the user sees and the context the agent sees
+   stay as close as possible. Every item the model gets (system prompt, messages, tool
+   results, notices, context insertions, handoffs) is shown to the user in
+   order. A child launch appears in its parent’s context line; opening it shows
+   the child’s own context line. Activity indicators (running, waiting, done)
+   may update without becoming model context. Execution details are labelled
+   separately from what the model received. Presenting context well is a core
+   idea of Nexus.
+8. **Append-only context.** Context already sent to a provider is never
+   edited: it is cached, and a change invalidates the cache. A session's system
+   prompt is fixed when the session starts. Later changes (a new directory, a
+   switched setting) go forward as new items. Actions that will invalidate the
+   cache anyway (switching model or agent) warn first.
 
 ## Layout
 
@@ -39,6 +52,7 @@ root holds only plans and docs.
 
 ```
 docs/             how the code works; start at docs/README.md
+INTERFACE_PLAN.md the TUI and NSH interface spec (both clients)
 nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`, command `nexus`
   pyproject.toml, uv.lock, .python-version
   nexus/
@@ -54,8 +68,8 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
         store.py    ~/.nexus10/auth.json (0600, atomic, flock)
         device.py   RFC 8628 device flow (copilot, grok)
         codex.py, copilot.py, grok.py, opencode.py
-    tools/          read, bash, edit (replacement or apply_patch), write
-    kernels.py      (planned) Monty kernels for the `code` tool, owned by the daemon
+    tools/          read, bash, edit (replacement or apply_patch), write, code; web_search/web_fetch planned
+    kernels.py      Monty kernels for the `code` tool, owned by the daemon
     agents.py       agent files: frontmatter + prompt + mode; builtin, global, project
     builtin_agents/ orchestrate, build, quick, scout, plan (.md) + NOTICE
     loop.py         the agent loop (no storage; yields MessageAdded)
@@ -69,6 +83,8 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     client.py       HTTP client (used by the CLI)
     cli.py          local commands + daemon-client commands
   tests/
+nexus-search/     Local SearXNG container configuration: Docker and Apple container
+nexus-browser/    Default browser-use MCP configuration and setup (upstream server)
 nexus-tui/        Ratatui terminal client (Rust). Not started
 nexus-nsh/        NSH client: browser, desktop, iOS. Not started
 ```
@@ -219,7 +235,7 @@ Verified: offline tests (event paging, type filter, cascade delete, page
 headers). Playwright screenshots in light and dark mode and at 390 px, with no
 console errors and no horizontal overflow.
 
-### Step 8: the `code` tool, Monty kernels (in progress)
+### Step 8: the `code` tool, Monty kernels (built and offline-tested 2026-10-27; review and commit pending)
 
 A task tool, `code`, runs Python cells in a persistent **kernel**. Inside a cell,
 the agent's task tools are async functions (`await bash(command="pytest -q")`,
@@ -242,7 +258,7 @@ as in old Nexus (`~/repos/nexus/nexus/tools/codemode/`,
 - **Lifetime.** A kernel lasts until the daemon stops or it is deleted
   (`DELETE /api/kernel/{id}`). It is not tied to a session's lifetime.
 
-**Planned design**
+**Design**
 - **Tool.** `code {code, kernel_id?, timeout_s?}`. A task tool, granted through
   an agent's `tools` like the others, and included when `tools` is omitted.
 - **Tools inside the sandbox.** Inside a cell: the *calling* agent's task tools,
@@ -289,8 +305,32 @@ as in old Nexus (`~/repos/nexus/nexus/tools/codemode/`,
 | State after an error, and after a feed timeout (`while True`) | kept (`x` still 41) |
 | `print` capture | `print_callback` gets `('stdout', 'hello\nworld\n')` |
 
-Not verified yet: Linux, worker crash recovery, memory-limit behavior,
-cold-start latency, and many kernels at once.
+Implemented in `nexus/kernels.py` and `tools/code.py`, with the kernel API and
+inspector list/nested calls. Eight live kernels maximum; 64 nested calls per
+cell; last 100 cells of metadata (omissions announced), with durable session
+events retaining history. Variable previews track assigned names because Monty
+has no `globals()`/`dir()`; the listing is approximate (200 names maximum).
+
+**Lifecycle decision from implementation tests:** ordinary Python errors keep
+state, but cancelling `feed_run` closes the checkout. Active-cell timeout,
+interrupt, worker crash and resource-limit errors therefore discard the kernel
+and announce state loss; the next default call starts a fresh one. Timing out
+while queued leaves the active kernel intact. No checkpoint recovery in v1.
+
+Verified offline with real Monty workers: persistence and cross-session sharing,
+parallel host calls, nested approvals and durable events, caller directory and
+tool restrictions (including saved host-function references), ordinary errors,
+host timeout, cancellation, queued timeout, memory limit, live-kernel cap,
+sandbox OS denial, clipping, API inspection/delete and session-independent
+lifetime. Not verified: Linux, actual worker crash, cold-start latency, and
+visual browser QA for the inspector additions.
+
+Verified live on Codex (`gpt-6.1-terra`): orchestrate wrote `shared_probe` in
+cell 1, a build child read and changed it in cell 2 without receiving its
+contents in the prompt, and the parent asserted the changes in cell 3. All
+three cells used the same kernel id. Orchestrate now explicitly grants `code`.
+Repeat with `artifacts/shared_kernel_smoke.txt`; captured proof is in
+`artifacts/shared_kernel_live_proof.json`.
 
 **Not planned for version 1:**
 - Kernel snapshots and restore after a daemon restart (old Nexus had signed
@@ -299,21 +339,403 @@ cold-start latency, and many kernels at once.
 - MCP tools inside the kernel.
 - The `code_start`/`code_attach` handshake.
 
-### Step 9: control plane
+**Step 8 follow-ups (do before committing Step 8).** The Step 8 changes reached
+the worktree from a background writer whose output was not seen during this
+session (an interrupted earlier response). Review them as new code:
+- `nexus/kernels.py`, `nexus/tools/code.py` and `tests/test_kernels.py`.
+- The kernel routes in `server.py`.
+- The `code` wiring in `runtime._agent`.
+- The kernel list and nested `code.call` view in `inspector/index.html`.
+- The doc changes in `docs/tools.md`, `docs/api.md`, `docs/inspector.md`,
+  `docs/stream-events.md` and `docs/daemon.md`.
 
-The rest of the `nexus` namespace: workspace, worktree, fork, move. Commands
+Then:
+- Live-check a `code` cell on Codex: a gathered `read` and `bash`, and a child
+  session reusing the parent's kernel.
+- Re-run the inspector screenshots (`artifacts/`) for the kernel view.
+
+### Step 9: programmatic tool descriptions and per-session tool switches (implemented and verified 2026-10-27; commit pending)
+
+**Goal.** What the model is told about tools must match the tools it has. A
+session can be started with tools switched off, and then nothing in its system
+prompt or tool list mentions them. The `session` tool's guidance, its list of
+child agents, comes from the agent files actually loaded, so a user can add
+agents or change an agent's `mode` (for example, make `build` child-only) and
+new sessions pick up the changes (see the session snapshot decision below).
+
+**Built (uncommitted; 60 offline tests pass, lint clean)**
+- **Tool guidance.** `Tool.guidance` (`tools/base.py`) holds one or two
+  sentences per tool for the system prompt. read, bash, edit, write and code
+  have it; the `session` tool builds its own (`runtime._session_tool`).
+- **Rendering.** `agents.render_prompt()` replaces `{{tools}}` in an agent's
+  body with a `# Tools` section listing only the session's tools, then adds the
+  environment block (workspace, date). A body without `{{tools}}` gets the
+  section appended. With no tools, it says so.
+- **Built-in prompts.** All five are rewritten with `{{tools}}`, and none names a
+  tool outside it. `orchestrate.md` no longer lists child agents; that list
+  lives in the `session` tool's guidance.
+- **Session guidance (current implementation).** Currently rebuilt every turn
+  from the loaded child-capable agents. This is superseded by the session
+  snapshot decision in Step 10: rebuild at new-session creation, not each turn.
+- **Default agent.** A new root session uses `build` unless the agent files make
+  it child-only. Then it uses the first agent allowed as a root
+  (`runtime.create_session`).
+- **Per-session tool switches.**
+  - Sessions have `disabled_tools` (SQLite column, JSON list, migrated).
+  - The API takes it on `POST /api/session` and `PATCH /api/session/{id}`.
+    Unknown names are rejected with the known list.
+  - Disabled tools are filtered out of the tool list, the prompt, and the tools
+    callable inside `code` cells. `session` can be disabled too.
+  - Session JSON now reports `tools` (what the next turn offers) and
+    `disabled_tools`.
+  - Child sessions inherit the parent's `disabled_tools`.
+- **CLI.** `nexus run|chat --disable bash,write` (`''` turns all back on), `/tools`
+  in chat, and switched-off tools shown in the session line.
+
+**Completion checks (2026-10-27)**
+- Added prompt rendering and built-in tool-agnostic body tests, API create/patch
+  validation and round trips, persisted switches and pre-switch schema migration,
+  empty-tool sessions, disabled direct and nested calls, child inheritance,
+  dynamic child guidance/enum and root-agent fallback tests.
+- Fixed user-created children to inherit `disabled_tools` when omitted, just as
+  agent-created children do. An explicit list on user creation overrides it.
+- Inspector session headers show available and disabled tools, including “none”.
+- Updated agents, tools, API, daemon, inspector and development docs.
+- Full offline suite: 60 tests passing; Ruff and `git diff --check` clean.
+- Fresh daemon live check: Codex `gpt-6.1-terra` replied OK to
+  `run --disable bash`; its API context omitted bash's schema and guidance
+  (`ses_1a17bebc9d554301e81`). A temporary project's child-only `build`
+  defaulted its root to orchestrate, retaining build in the session enum and
+  generated guidance (`ses_1a17bec0f117f12e64b`).
+
+**Remaining delivery work.** Step 8 and Step 9 still share an uncommitted
+worktree. Complete Step 8's review and inspector screenshot follow-ups above,
+then commit Step 8 and Step 9 as separate Conventional Commits and push
+`nexus10`. No commits or push were made during Step 9 completion.
+
+### Step 10: control plane
+
+The rest of the `nexus` namespace: workspace, worktree, move. Commands
 with their own events, exposed as API endpoints. Model and agent switching
 already exist (`POST /api/session/{id}/model`, `/agent`).
 
-### Step 10: event log follow-ups
+**Frozen system prompt (do first).** Today `runtime._agent` re-renders the
+system prompt every turn, with the workspace path and today's date, so a date
+rollover or a directory change rewrites the cached prefix. Render it once when
+the session starts (or when its draft is confirmed), store it with the
+session, and replay it unchanged. Changes go forward as context items
+(Principle 8). An agent switch is the one deliberate exception, and it warns.
+
+**Session snapshots.** On creation of every session (root or child), check the
+agent-definition files for additions, modifications and deletions and reload
+changed definitions instead of trusting cached file contents. Resolve that
+session's agent, granted tools and child-agent guidance once. Include only
+available tools' schemas and descriptions in its rendered system prompt;
+unavailable tools must not be described. Persist the resolved snapshot so later
+turns and daemon restarts do not silently reload it. New children get a fresh
+snapshot at their own creation, rather than inheriting stale agent definitions.
+Existing sessions do not change because an agent file was edited. Explicit
+mid-session agent/tool changes remain deliberate control actions, recorded in
+context. Changes affect only subsequent calls. A running provider/tool call
+keeps the configuration it started with. Snapshot the effective configuration
+when dispatching each call; never mutate it underneath running work. Record
+changes before the first subsequent call that uses them. Directory changes wait
+for active tools to finish before applying. Agent changes are the deliberate
+prompt-replacement exception and warn first; tool/MCP changes append guidance
+and update subsequent request schemas without rewriting the frozen prompt.
+
+**Instruction file.** Load `AGENTS.md` directly from the session's current
+`directory`, for both roots and children. Do not search ancestor directories or
+apply nested-directory discovery. Show its path and actual content in the
+starting context. If the session directory changes, load the destination's
+`AGENTS.md` and announce the new directory and instructions as forward context,
+without rewriting the previously sent prompt. Define absence explicitly in the
+context transition. Agent-definition files and this instruction file serve
+different purposes; changing directory does not silently replace the selected
+agent definition.
+
+**`ask` tool (before workspace controls).** A task tool for questions to the user:
+one or more questions, options (single or multi-select), free text and optional
+previews. No timeout: wait until answered or the turn is interrupted, then
+report cancellation in the result. Events: `question.asked` / `question.replied`.
+Questions remain separate from approvals in Core; the interface combines them
+as waiting for input. Implement this Core contract here before workspace controls and
+before the interface's question component.
+
+**Workspace edits need no approval.** Editing inside the session's directory
+is allowed by default, with no permission-mode setting for that behavior.
+Remove the existing approval requirement for in-directory `edit` and `write`
+(including patches and nested calls). This does not remove path confinement or
+the enforced read-before-edit invariant. Command execution outside that boundary
+needs a separate explicit contract; unrestricted bash cannot guarantee it.
+
+**Workspace controls: load on demand.** An always-available control tool,
+`expose_workspace_tools`, lets the agent request the tools for working
+in a different place. This is tool discovery/activation, not a user permission
+request, and it does not move the session itself. Ordinary sessions start with
+only this entry point; the detailed workspace controls are absent from their tool
+schemas and system prompt until requested.
+
+Its result appends the newly available tool definitions and guidance to the
+context. Core also adds their executable schemas to the next provider request;
+printing definitions alone does not make tools callable. Activation is persisted
+per session, idempotent, visible in the timeline and survives daemon restart.
+Do not rewrite the frozen system prompt. New children activate independently.
+
+Expose exactly two tools after activation:
+- **`change_session_directory {directory}`.** Move this session to an existing,
+  validated directory. It does not create a worktree or move files.
+- **`worktree {action: list|create|delete, ...}`.** List, create or delete Git
+  worktrees. Creating a worktree returns its path; it does not change the
+  session directory. The agent can then call `change_session_directory`.
+
+These are control-plane operations with API endpoints and events; users can
+also invoke them through client commands. No `worktrees: off|ask` setting and
+no required `ask` question precede activation or moving. `ask` remains the
+independent tool for actual questions.
+
+**Directory transition.** A successful `change_session_directory` result names
+the old and new absolute paths and branch when applicable, loads the destination
+`AGENTS.md`, and explains that subsequent task tools resolve from the new path.
+Earlier prompts and paths stay unchanged. A direct user/API move inserts the
+same announcement before the next model call. Apply changes at a tool-safe
+boundary so running calls cannot unexpectedly switch directory. While the
+current directory differs from the frozen prompt's directory, bash results show
+`cwd:` and path-taking tools report absolute paths. Clients update Files, git
+status, headers and worktree grouping from the directory-change event.
+Children created afterwards inherit the new directory; existing children keep
+their own. File-read observations remain keyed by resolved file identity, so a
+read at an old path never authorizes editing a different file at the new path.
+
+**Worktree lifecycle.** Validate repository and target paths. Creation leaves
+uncommitted changes in the original checkout. Deletion refuses dirty worktrees
+and paths used by any session or active operation; do not force-remove them.
+Leaving means changing the session directory first. Merge/integrate remains a
+separate future operation. Worktree list/create/delete each have control events;
+deletion and session deletion must not silently remove one another's state.
+
+**Also in this step (from INTERFACE_PLAN.md):** export (Markdown transcript,
+JSON of messages and events), archive/unarchive, and delete (already
+cascades). No fork or revert: a session only moves forward.
+
+### Step 11: event log follow-ups
 
 Retention and size limits for the `event` table, resuming the live stream from
 an event id, and showing a crashed turn's partial state.
 
-### Step 11: clients
+**Reconnect contract.** Durable cursors survive daemon restarts (or explicitly
+identify a changed log generation). Catch-up and live subscription share an
+atomic boundary: no lost events between them. Replayed events have stable ids
+and clients deduplicate them. Define retention expiry with an explicit
+cursor-expired response that requires a fresh snapshot and cursor. Snapshots
+include a watermark so subsequent events can be applied without races.
+Filtered streams naturally skip unrelated global sequence numbers: a numeric
+gap alone is not evidence of loss. Overflow, expired cursors or an explicit
+continuity failure trigger resync. Reconnect restores pending questions,
+approvals, queues, partial turns and session lists as well as visible text.
+
+**Mutation contract.** Client request ids make retried prompts and other
+mutations idempotent, with a defined deduplication lifetime and replayed
+response. Concurrent clients get deterministic conflicts: approval/question
+answers resolve once; stale queue edits and settings updates use revisions.
+Document ordering of steer, queued prompts, setting changes and interrupts.
+Verify disconnect during send, catch-up/live races, filtered streams, restart,
+retention expiry and competing clients.
+
+**Manual continuation (`/continue`).** A CLI chat/slash and client command backed
+by a Core endpoint resumes model generation from the session's existing context.
+Send that context as it stands to the selected LLM provider; do not append a
+synthetic user message saying "continue", rewrite history or retry an old tool
+call. Useful after a provider/network failure or an interrupted turn. Reject
+while a turn is still running. The resumed model request and subsequent events
+are recorded normally, with an explicit continuation link to the interrupted
+turn/attempt so the UI can show what happened.
+
+Completed tools and their saved results stay in context and are not re-executed
+by continuation. Before offering continuation, interruption/restart recovery
+must leave a provider-valid context: persist partial output where replayable,
+close dangling tool calls with explicit interrupted/unknown-outcome results,
+and announce any unreplayable partial output. Never claim a tool did not run
+when its side effects are uncertain; do not automatically rerun such calls.
+Recovery records are visible context added when interruption is reconciled;
+`/continue` itself then sends the reconciled context unchanged. Test provider
+failure before output, mid-text, mid-tool arguments, and after tool execution
+but before a result is durably saved. Automatic retry policy is separate and
+is not implied by this command; manual continuation is the initial recovery path.
+
+### Step 11a: web tools, search service, skills and MCP
+
+Planned, before the clients. Reference old Nexus deliberately; do not import its
+configuration/state model or read `~/.nexus`. All new state uses `$NEXUS10_HOME`.
+
+**Web tools.** Add `web_search` and `web_fetch` as task tools in Core, with the
+same guidance, per-session switches, events, clipping and caller restrictions as
+other task tools. They are callable from `code` when granted to the caller.
+Reference `../nexus/nexus/tools/builtin/websearch.py`, `webfetch.py`,
+`_html_markdown.py` and the shared `../nexus/nexus/net/` implementation.
+- `web_search {query, limit?, page?}` uses the local SearXNG service; return
+  bounded titles, URLs, snippets and available source/date metadata. Do not
+  automatically fetch result links. Preserve the reference's deduplication,
+  deadlines, cancellation and explicit untrusted-data labels.
+- `web_fetch {url, timeout_s?, offset?, limit?}` fetches HTTP(S) text/HTML and
+  returns bounded Markdown with source/final URL and line windows. Report
+  unsupported binary content and HTTP/network errors clearly. Preserve URL,
+  DNS and redirect validation, byte/time limits and announced clipping. The
+  fixed local search endpoint is a separate exception from public URL fetching.
+- Retain full outputs as bounded artifacts separately from model-visible text.
+  Choose limits and document schema differences before porting code. Add offline
+  fixture tests for search normalization, HTML conversion, redirects, blocked
+  destinations, limits, errors, timeout and cancellation, plus a local service
+  smoke check. Update `docs/tools.md` and provider/context docs with the code.
+
+**`nexus-search/`.** Own the SearXNG settings and deployment documentation here,
+referencing `../nexus/websearch/`. Include Docker Compose and Apple `container`
+start/stop/log/health instructions, a private generated secret and a configurable
+image version (pin a tested version before release). Use
+`http://127.0.0.1:18765/search` by default, with JSON search enabled. No daemon
+or client should silently start/install a container engine. Missing service is
+an actionable tool error. Track config, never generated secrets or runtime data.
+
+**Skills.** First-class Core support, not only an interface placeholder.
+Reference `../nexus/nexus/skills/` and `tools/builtin/skill.py`.
+- Discover built-in, `$NEXUS10_HOME/skills/` and session-directory
+  `.agents/skills/` definitions; later roots override earlier ones. Parse
+  `SKILL.md` frontmatter and report malformed, duplicate or shadowed entries.
+- Check for file changes at every new root/child session and persist a stable
+  snapshot. Initially render only enabled skill names/descriptions and source
+  paths. A skill-loading task tool appends the selected instructions to context;
+  label every loaded resource and every clip. Record activation durably.
+- Skills do not silently grant tools or control capabilities. Enforce session
+  restrictions for scripts/resources and nested calls. Resolve relative
+  resources against the skill directory. Define how an explicit directory change
+  refreshes project skills as forward context without rewriting the snapshot.
+- Expose list/detail/source/diagnostics and session enable/disable through the
+  API. Settings and session drafts consume these endpoints. Test precedence,
+  reload at session creation, stable existing sessions and visible activation.
+
+**MCP.** First-class Core client support, referencing `../nexus/nexus/mcp/`
+(client, bridge, manager) and `../nexus/examples/mcp.json`.
+- Configure built-in/default, global and project servers through Core; support
+  local stdio and remote Streamable HTTP. Secrets come from environment/private
+  configuration and are redacted from events, exports and connection diagnostics.
+- Core owns connections, tool discovery, cancellation, timeouts, health and
+  shutdown. Namespace tools by server to avoid collisions; bridge schemas and
+  text/image results into the ordinary tool/context/event pipeline. Support
+  resource listing/reading and explicit prompt loading as visible context.
+- Only enabled, agent-allowed MCP tools enter a session's definitions/guidance.
+  Record the actual schema snapshot used for each request. Changes/disconnects
+  must be announced; never silently rewrite earlier context. A failed server
+  must not break unrelated tools. Define session isolation for stateful servers,
+  especially browser tabs/profiles, and preserve caller restrictions in `code`.
+- API: server list/configuration, connection status, connect/disconnect/retry,
+  tools/resources/prompts and session selection. Tests use a fixture MCP server
+  for both transports, failures, tool collisions, cancellation, snapshots,
+  secret redaction and restart recovery.
+
+**`nexus-browser/`: default MCP.** Ship browser-use as the default configured
+MCP server, enabled for new sessions subject to agent tool restrictions. This
+folder contains upstream launch configuration and setup documentation, not a
+custom browser automation implementation. Use the upstream local stdio server;
+start lazily when needed and show an actionable setup error if unavailable.
+Pin the tested browser-use release when implementing the integration. Document
+browser installation and any credentials required by optional LLM-backed tools;
+do not assume Nexus subscription sign-ins provide those API credentials.
+Verify discovery, navigation, page state and screenshots with real browser-use.
+
+### Step 12a: core for the interface
+
+Core features the clients need before they can match
+[INTERFACE_PLAN.md](INTERFACE_PLAN.md). Each is an API addition with events,
+documented in `docs/api.md`.
+
+- **Steer and queue.** While a turn runs, `prompt` with `mode: "steer"` adds the
+  message before the next model call (after the current tool results), and
+  `mode: "queue"` holds it for the next turn. Queued messages can be listed,
+  edited and removed. Today a prompt while busy is a 409.
+- **One-turn sessions.** A session kind that makes exactly one model call with
+  no tools and ends, linked to its parent and hidden from default lists.
+  Used for: the **title** (from the first user message, on a cheap model) and
+  **`/btw`** (the parent's context up to its last completed tool call plus the
+  user's question, so the cached prefix is reused; the answer never enters
+  the parent's context).
+- **Compaction as handoff.** No in-place compaction. At the configured context-use threshold, or
+  on `/compact`, the session writes a handoff summary as its last turn and a
+  new root session of the same agent starts from that summary, linked by
+  `continued_from`. Both timelines preserve what their model saw. The automatic
+  threshold defaults to **80% of the model context window**, editable as a
+  numeric percentage in Settings (not a fixed set of presets). Define usable
+  numeric bounds, token estimation and output/tool-result reserves. Trigger
+  before the next request would exceed the threshold; preserve enough room to
+  summarize. Define oversized-request and summary-failure recovery, handling of
+  active children and queued messages, and settings carried to the successor.
+- **Session drafts.** Create a session as a draft that returns its starting
+  context as labelled sections (system prompt, instruction files such as
+  `AGENTS.md`, tools, skills, MCP) with token counts, and accepts edits
+  (switches, agent, model, prompt override) before the first message freezes
+  it.
+- **Archive, search.** `archived` on sessions; search over session titles and
+  user message text only (an SQLite FTS5 index of exactly those fields).
+- **Files and git.** List a project directory (lazy, one level, gitignore
+  aware), read and write a file (confined to the project), git status and
+  per-file diff of a session's directory.
+- **Attachments and images.** Files and images on user messages, in both
+  dialects (no images today). Store uploaded assets and full tool outputs as
+  durable artifacts with stable ids and upload/download APIs. Enforce explicit
+  per-artifact and aggregate size limits (choose defaults before implementation)
+  and reject oversize uploads clearly. Record exactly which bytes or clipped
+  representation reached the model; fetching full output never silently adds
+  it to context. Define retention, export and deletion with owning sessions,
+  including references shared by children and handoff successors.
+- **Enforced read-before-edit.** Track each session's observed file revision
+  and read range when file content actually enters its model context. Before
+  editing, overwriting, deleting or moving an existing file, reject an absent
+  or stale observation and require a fresh read. A child's read does not count
+  for its parent; a read retained only inside a `code` kernel does not count
+  as model-visible content. Define range coverage for partial/clipped reads.
+  Use content revisions, not timestamps alone, and check again at commit time;
+  serialize Nexus writers and detect external changes. Validate every affected
+  file before a multi-file patch writes anything. New-file creation must refuse
+  an unexpectedly existing destination. Apply this to direct and nested tools;
+  editor/API writes carry their own observed revision and reject stale saves.
+  **Enforcement prerequisite:** unrestricted `bash` can bypass tool checks by
+  writing files directly; choose a filesystem enforcement mechanism or restrict
+  write-capable command execution before claiming this invariant is guaranteed.
+- **Version handshake.** `/api/info` reports an API version (major.minor).
+  Clients halt on a different major. Together with Step 11's stream resume,
+  clients can reconnect and resync.
+- **Settings over the API.** Sign-in (browser and device flows), sign-out and
+  provider status; defaults (model, effort, agent, tools). Workspace edits
+  do not have a configurable approval mode.
+- **Transcription (maybe).** Only if dictation uses a provider endpoint rather
+  than the platform recognizer (decide with the dictation design).
+
+### Release gate: 0.10.0
+
+Before release, explicitly check off:
+- Required scope: reviewed Steps 8–9, frozen context/control decisions, durable
+  reconnect and restart recovery, interface Core contracts, and both clients'
+  agreed first-release flows. Mark any deferred features explicitly.
+- SQLite migrations tested from supported earlier schemas, with backup and
+  failed-migration recovery; no access to old `~/.nexus` state.
+- Restart/crash recovery preserves partial context, closes dangling tool calls,
+  cancels pending waits visibly, and reports lost kernel state.
+- Publish the supported OS/architecture and client capability matrix; run the
+  core suite, real Monty workers and client smoke checks on each supported
+  platform. Complete outstanding provider sign-in and inspector visual checks.
+- Verify search/fetch, Docker and Apple container instructions, skills loading
+  and the default browser-use MCP lifecycle.
+- Verify context visibility, size limits, read-before-edit enforcement,
+  multi-client/reconnect behavior and automatic handoff end to end.
+- Keyboard-only navigation, focus restoration, streaming scroll anchoring and
+  jump-to-latest verified in narrow and wide client layouts.
+
+### Step 12: clients
 
 Ratatui TUI (`nexus-tui/`) first, then NSH (`nexus-nsh/`), both on the HTTP
-API. Both show the wire view, the session tree and kernels.
+API and both built to one spec: [INTERFACE_PLAN.md](INTERFACE_PLAN.md) (layout,
+sidebars, new-session view, timeline, tool and child-session rendering,
+waiting-for-input, composer, palette, alerts, connection, settings). Both
+show the wire view, the session tree and kernels.
 
 ## Changes from old Nexus (ledger)
 
@@ -333,12 +755,43 @@ API. Both show the wire view, the session tree and kernels.
 | Agent definitions mixed into config and code | One Markdown file per agent (frontmatter + prompt) | Readable, editable, per project |
 | One general agent that also spawns helpers | `orchestrate` (delegates) vs `build` (does the work); children are `build`, `quick`, `scout`, `plan` | Clear roles; the orchestrator's context stays clean |
 | Subagents run inside a tool call | Child sessions with `launched_by`, `parent_id`, `parent_call_id` | A child's work is a full, visible, resumable session |
-| Four kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`), one kernel per agent | One `code` tool; kernels owned by the daemon, shared by id across sessions (planned) | Simpler to use; a session tree works in one kernel |
+| Four kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`), one kernel per agent | One `code` tool; kernels owned by the daemon, shared by id across sessions | Simpler to use; a session tree works in one kernel |
+| Cancelling a cell could restore a signed checkpoint | Forced cancellation discards the kernel in v1 | Monty closes the checkout; checkpoint recovery is deferred |
 | Live events only; messages in the log | Every session event stored (`event` table) | The inspector can show any past session down to the wire |
+| Agent prompts name their tools in prose | `{{tools}}` placeholder filled from the session's actual tools (`Tool.guidance`) | A switched-off tool is never described to the model |
+| Fixed list of child agents in the orchestrator's prompt | The `session` guidance is snapshotted from freshly checked agent files at each new session (planned, Step 10) | New sessions pick up agent changes without rewriting existing prompts |
+| Worktree tool, effectively mandatory | On-demand workspace controls: change session directory and worktree list/create/delete (planned, Step 10) | Keep ordinary sessions small; activate workspace controls when needed |
+| Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
+| System prompt rendered per turn | Rendered once at session start and replayed unchanged (planned, Step 10) | A stable cached prefix |
+| Workspace edits require approval unless allowed | In-directory edits require no approval and have no setting (planned, Step 10); stale or unread files are still rejected | Editing authorization and read freshness are separate |
+| Web tools named `websearch` / `webfetch`, deployment in `websearch/` | `web_search` / `web_fetch`, deployment in `nexus-search/` (planned, Step 11a) | Explicit names and self-contained service setup |
+| Extension system and MCP integrations in old Core | Focused skills/MCP support and upstream browser-use default in `nexus-browser/` (planned, Step 11a) | Carry over needed capabilities deliberately |
+| Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
+
+## Implementation sequence
+
+Work one reviewed increment at a time:
+1. Review and finish the existing Step 8–9 implementation, including pending
+   kernel/inspector checks. Commit code only after review and validation.
+2. Persist session snapshots and load session-directory `AGENTS.md` (Step 10).
+3. Add `ask`, approval-free workspace edits and read freshness checks; resolve
+   the unrestricted-bash enforcement boundary before claiming full enforcement.
+4. Add on-demand workspace controls and directory/worktree operations.
+5. Durable events, restart recovery, idempotent requests and `/continue`.
+6. Bring artifact storage forward from Step 12a before web/MCP image results.
+7. Web tools, skills, MCP and remaining interface Core endpoints.
+
+Each increment updates matching docs and this plan, runs focused tests plus the
+required suite/lint, and supplies a concrete diff and verification for review.
+Do not start the next increment until the current review is complete.
 
 ## Known gaps
 
-- No retries, no context limit or compaction.
+- Step 8 (`code`) and Step 9 (tool switches) are uncommitted. Step 8 arrived from
+  a background writer and needs review before it is committed (see Step 8 follow-ups).
+- No retries, no context limit or compaction (planned as handoff, Step 12a).
+- The system prompt is re-rendered every turn (workspace, today's date), so a
+  date rollover changes the cached prefix (fix planned, Step 10).
 - The `event` table grows without limit (every token delta is a row); no retention yet.
 - Sign-in is only the local `nexus login`, not yet an API endpoint.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
