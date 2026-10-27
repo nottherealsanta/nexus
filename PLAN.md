@@ -68,7 +68,7 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
         store.py    ~/.nexus10/auth.json (0600, atomic, flock)
         device.py   RFC 8628 device flow (copilot, grok)
         codex.py, copilot.py, grok.py, opencode.py
-    tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, code; web_search/web_fetch planned
+    tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, ask, code; web_search/web_fetch planned
     kernels.py      Monty kernels for the `code` tool, owned by the daemon
     bash_jobs.py    background bash jobs, owned by the daemon
     snapshot.py     stored session configuration, tool schemas and AGENTS.md
@@ -592,13 +592,82 @@ sent prompt. Absence is explicit in the context transition. Agent definitions
 and this instruction file serve different purposes; changing directory does not
 silently replace the selected agent definition.
 
-**`ask` tool (before workspace controls).** A task tool for questions to the user:
-one or more questions, options (single or multi-select), free text and optional
-previews. No timeout: wait until answered or the turn is interrupted, then
-report cancellation in the result. Events: `question.asked` / `question.replied`.
-Questions remain separate from approvals in Core; the interface combines them
-as waiting for input. Implement this Core contract here before workspace controls and
-before the interface's question component.
+**`ask` tool (before workspace controls, done 2026-10-27).** A task tool for
+questions to the user: one or more questions, options (single or multi-select),
+free text and optional previews. No timeout: wait until answered or the turn is
+interrupted, then report cancellation in the result. Events: `question.asked` /
+`question.replied`. Questions remain separate from approvals in Core; the
+interface combines them as waiting for input. Implemented in this increment;
+see the detailed record below before the workspace controls work.
+
+**`ask` tool implementation (done 2026-10-27; delivered for review).**
+- **Contract** (`nexus/questions.py`, `nexus/tools/ask.py`). `ask
+  {questions: [...]}` takes 1-5 questions with stable IDs (`[A-Za-z0-9_.:-]`,
+  1-64 characters, unique per request), non-empty text (≤ 2,000 characters),
+  up to 10 options (`id`, `label` ≤ 100, optional `preview` ≤ 1,000), `multiple`
+  and `allow_free_text`. No options means free text; with options free text is
+  off unless allowed. A reply is a complete `{answers: [{question_id, selected?,
+  text?}]}`; every question once, free text ≤ 2,000 characters. Unknown
+  question/option IDs, duplicates, missing answers, invalid selection counts,
+  disallowed text and malformed types are rejected before a pending request is
+  created (tool arguments → tool error) or before a wait resolves (API → 400).
+- **Waiting** (`Runtime.ask_user`). Validation happens first; only then is a
+  `qst_…` request stored and `question.asked` published with session id, tool
+  call id and the normalized questions. `ask` never asks for approval and is
+  auto-approved. Its result is one JSON object keyed by question id with selected
+  ids, labels and free text, so the tool result enters context exactly once.
+- **API.** `GET /api/question`, `GET /api/session/{id}/question`, and
+  `POST /api/session/{id}/question/{qid}` `{answers}` → 204; 400 invalid, 404
+  unknown question/session, 409 already resolved, 401 without the token. A
+  resolved request is tombstoned (bounded), so duplicate, conflicting or late
+  replies cannot emit a second event or result.
+- **Cancellation.** Interrupt, session/project deletion, daemon shutdown and a
+  cancelled/timed-out enclosing `code` cell close pending questions and publish
+  `question.replied` with `outcome: "cancelled"` and a reason. The wait future is
+  cancelled; a late answer cannot resume work (409 while the session exists, 404
+  once it is deleted). Interrupted tool
+  calls now get an accurate result: a call that started says its result is
+  unknown and it may have changed the workspace; only an unstarted call says it
+  ran before the tool started. Completed results not yet appended are preserved.
+- **Snapshots and trees.** `ask` is in `DEFAULT_TOOLS` (after `write`), so an
+  agent that omits `tools` gets it and explicit lists/switches control it.
+  Definitions and guidance come from the frozen snapshot; a stored snapshot from
+  before `ask` stays without it. Child questions carry the child session id and
+  appear on the parent's descendant event stream. Inside `code`, the nested ask
+  uses the nested call id and the caller's restrictions; control tools are never
+  exposed.
+- **CLI and inspector.** The CLI renders questions, options (with previews) and
+  collects selections or free text, then submits through Core. Permission
+  prompts stay distinct. Ctrl-C/EOF abandons the prompt, stops the reader and
+  interrupts the turn; the daemon closes the question. The inspector shows every
+  `question.asked` with options, its answer or cancellation and live pending
+  status, including questions nested in `code`.
+- **Verified offline** with scripted providers and temporary homes/workspaces:
+  free text, single-select, multi-select and multiple questions; mixed
+  selections plus text; malformed requests and every invalid-answer class;
+  pending-list and reply endpoints including 401/404; duplicate, conflicting and
+  late replies; turn interrupt; session and project deletion; shutdown cleanup;
+  child attribution and tree membership; disabled `ask`, explicit agent lists and
+  stable pre-`ask` snapshots; nested code questions and cell-timeout cleanup; and
+  the result appearing in context exactly once. Full suite after delivery review: 123 tests; Ruff and
+  `git diff --check` clean. No live provider run was performed.
+- **Limits.** Pending questions are in memory (a daemon crash loses them with the
+  turn) and there is no standalone "cancel this question" endpoint; cancellation
+  comes from the turn/cell/session lifecycle. The inspector reads questions from
+  the event log and pending endpoint, not a waiting-card UI; its script was
+  syntax-checked, not visually re-run in a browser this increment. The CLI asks a
+  second, optional text prompt when a selection question also allows free text;
+  the API accepts both in one reply.
+
+**Ask delivery review.** Independently reran the suite and lint. Fixed generic
+clipping of valid structured answers (which could truncate JSON), a cancelled
+future accepting a reply before waiter cleanup, and CLI input blocking the SSE
+consumer. One serialized CLI input queue now handles questions/approvals while
+events continue; resolved questions dismiss their reader. Stdin reading is
+cancellable without background threads, including pipes, and does not prefetch
+later lines. Four regressions cover large escaped answers, cancellation/reply
+ordering, external resolution while typing and pipe-reader cancellation. No
+live provider or new browser visual run was performed in this review.
 
 **Workspace edits need no approval.** Editing inside the session's directory
 is allowed by default, with no permission-mode setting for that behavior.

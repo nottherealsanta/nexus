@@ -102,7 +102,8 @@ const TOKEN = params.get("token") || "";
 const LEVELS = [["conversation", "Conversation"], ["steps", "Steps"], ["requests", "Requests"], ["raw", "Raw"]];
 const MAX_EVENTS = 50000, PAGE = 5000, RAW_ROWS = 1500, PREVIEW = 180, OUTPUT_LINES = 60;
 const S = { sessions: [], projects: [], sel: params.get("session") || null, level: params.get("level") || "conversation",
-            session: null, messages: [], events: [], eventsMore: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS };
+            session: null, messages: [], events: [], eventsMore: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS,
+            pendingQuestions: [] };
 
 // -- tiny DOM helpers ---------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -212,14 +213,15 @@ async function select(id) {
   S.sel = id; S.context = null; S.rawShown = RAW_ROWS; setHash(); renderSidebar();
   const main = document.getElementById("main");
   main.replaceChildren(h("div", { class: "empty" }, "Loading…"));
-  const [session, messages] = await Promise.all([api(`/api/session/${id}`), api(`/api/session/${id}/message`)]);
+  const [session, messages, pendingQuestions] = await Promise.all([
+    api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`)]);
   const events = []; let after = 0, more = true;
   while (more && events.length < MAX_EVENTS) {
     const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
     events.push(...page.events); more = page.more; after = events.length ? events[events.length - 1].id : 0;
   }
   if (S.sel !== id) return;
-  Object.assign(S, { session, messages, events, eventsMore: more });
+  Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions });
   render();
 }
 
@@ -261,9 +263,38 @@ function render() {
 function viewConversation() {
   if (!S.messages.length) return h("div", { class: "empty" }, "No messages yet.");
   const childByCall = new Map(S.sessions.filter((c) => c.parent_id === S.session.id && c.parent_call_id).map((c) => [c.parent_call_id, c]));
-  return h("div", {}, S.messages.map((m) => h("div", { class: "msg " + m.role },
+  return h("div", {}, questionsView(), S.messages.map((m) => h("div", { class: "msg " + m.role },
     h("div", { class: "who" }, h("b", {}, m.role), `  #${m.seq} · ${time(m.created)}`),
     m.parts.map((p) => h("div", { class: "part" }, partView(p, childByCall), jsonBlock("part JSON (with raw wire item)", p))))));
+}
+
+// Questions asked by the `ask` tool (including questions nested in a code cell), with
+// their reply or cancellation and whether Core still considers the request pending.
+function questionsView() {
+  const asked = S.events.filter((e) => e.type === "question.asked");
+  if (!asked.length) return null;
+  const replies = new Map(S.events.filter((e) => e.type === "question.replied").map((e) => [e.data.id, e.data]));
+  const pending = new Set((S.pendingQuestions || []).map((q) => q.id));
+  return h("div", { class: "card" },
+    h("div", { class: "section" }, `Questions (${asked.length})`),
+    asked.map((e) => {
+      const reply = replies.get(e.data.id), isPending = !reply && pending.has(e.data.id);
+      const status = reply ? (reply.outcome === "answered" ? "answered" : "cancelled") : (isPending ? "pending" : "no reply recorded");
+      const answers = new Map((reply && reply.answers ? reply.answers : []).map((a) => [a.question_id, a]));
+      return h("div", { class: "part" },
+        h("div", {}, h("span", { class: "label" }, "question"), h("span", { class: "mono" }, e.data.id),
+          " · call ", h("span", { class: "mono" }, e.data.call_id || "–"),
+          " · ", h("span", { class: isPending ? "warn" : (status === "cancelled" ? "err" : "okc") }, status),
+          reply && reply.outcome === "cancelled" ? ` · ${reply.reason || "no answer"}` : ""),
+        e.data.questions.map((q) => h("div", { class: "part" },
+          h("div", { class: "text" }, q.question),
+          q.options.map((o) => h("div", { class: "note" }, `• ${o.label} `, h("span", { class: "mono" }, `(${o.id})`),
+            o.preview ? h("span", {}, " — ", o.preview) : null)),
+          answers.has(q.id) ? h("div", { class: "okc" },
+            `selected: ${answers.get(q.id).selected.join(", ") || "none"}`,
+            answers.get(q.id).text ? ` · text: ${answers.get(q.id).text}` : "") : null)),
+        jsonBlock("question request", e.data));
+    }));
 }
 function partView(p, childByCall) {
   if (p.type === "text") return h("div", { class: "text" }, p.text || h("span", { class: "note" }, "(empty text)"));
@@ -438,13 +469,16 @@ function live() {
     if (S.session && e.session_id === S.session.id) {
       S.events.push(e);
       if (e.type === "message.added") S.messages.push(e.data);
+      if (e.type === "question.asked" || e.type === "question.replied") {
+        api(`/api/session/${S.session.id}/question`).then((qs) => { S.pendingQuestions = qs; renderSoon(); }).catch(() => {});
+      }
       if (e.type === "session.updated" || e.type === "session.status") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
       S.context = null;
       renderSoon();
     }
   };
   for (const type of ["message.added", "session.created", "session.updated", "session.snapshot", "session.deleted", "session.status", "session.error", "session.notified",
-    "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
+    "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "question.asked", "question.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
     "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
     source.addEventListener(type, handle);
   }

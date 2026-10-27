@@ -1,8 +1,8 @@
 # Daemon, projects and sessions
 
 Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
-daemon owns projects, sessions, turns, Monty kernels, background bash jobs and
-tool approvals, and exposes them over
+daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
+tool approvals and pending questions, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
 ## Lifecycle (`nexus/daemon.py`)
@@ -99,13 +99,23 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `reconstructed` and its system prompt says this is not the exact historical
   prompt; after that it is stored and stable.
   `GET /api/session/{id}/snapshot` shows the full snapshot.
-- **Approval.** read, `bash_output`, `bash_kill` and the outer code call never ask; code delegates
+- **Approval.** read, `bash_output`, `bash_kill`, `ask` and the outer code call never ask; code delegates
   approval to its nested task calls. bash (including background), edit and write ask unless the session
   is `allow`. The turn waits on `permission.asked` until a client replies, or
   the turn is interrupted.
-- **Interrupt.** Cancels the turn task. A tool call left without a result gets
-  an error result, so the conversation stays valid. `session.error` is published
-  with `kind: "interrupted"`.
+- **Questions.** `ask` publishes `question.asked` and waits with no daemon-side
+  timeout. A client lists them (`GET /api/session/{id}/question` or
+  `GET /api/question`) and replies with a complete answer set
+  (`POST …/question/{qid}`). Questions are not approvals; an answer is data.
+  Interrupting the turn, deleting its session/project, shutting down, or ending
+  the enclosing code cell publishes `question.replied` with
+  `outcome: "cancelled"`. A late answer gets 409 (404 once the session is
+  deleted) and cannot resume the work.
+  Each request resolves once ([tools.md](tools.md#ask)).
+- **Interrupt.** Cancels the turn task and its descendants. A tool call left
+  without a result gets an error result, so the conversation stays valid: "while
+  this tool was running; its result is unknown" when it started, or "before this
+  tool ran" otherwise. `session.error` is published with `kind: "interrupted"`.
 - **Failures.** Provider, sign-in and request errors end the turn with
   `session.error`. Saved messages stay as they are.
 - **Sign-ins.** One sign-in object per provider for the daemon's lifetime, so
@@ -126,9 +136,12 @@ nexus project list | open [PATH]
 The CLI subscribes to `/api/event?session=…` before it posts the prompt, and
 renders events (a child's under a `── child … ──` header) until every session in
 the tree is idle. `nexus session list` shows the tree. It answers `permission.asked`
-with a y/N prompt. Ctrl-C during a turn sends `/interrupt`. `--yes` sets the
-session's permission to `allow`. In chat, `/model provider/model` changes the
-session's model and `/context` prints the next request body.
+with a y/N prompt. For `question.asked` it shows each question and its options,
+collects the answers and submits them; Ctrl-C, EOF or an interrupted turn
+abandons the prompt without submitting, and the daemon closes the question.
+Ctrl-C during a turn sends `/interrupt`. `--yes` sets the session's permission
+to `allow`. In chat, `/model provider/model` changes the session's model and
+`/context` prints the next request body.
 
 ## Not verified / not yet
 
@@ -152,3 +165,20 @@ They run in the starting session's directory, are scoped to its tree for the
 tools, and outlive turns and code cells. Deleting a session or project kills its
 jobs; daemon shutdown kills every job. Limits, output retention and the finish
 notice are in [tools.md](tools.md#background-bash-jobs).
+
+## Questions
+
+The runtime keeps pending `ask` requests in memory, keyed by `qst_…`, with the
+session id, the tool call id (including a nested `code` call's synthetic id) and
+the validated questions. They are not approvals: answers never allow a tool call.
+Interrupt, session/project deletion, daemon shutdown and a cancelled code cell
+close them with an explicit cancellation event. The tool waits with no timeout
+of its own. A daemon crash loses pending requests along with the running turn.
+Contract, limits and endpoints: [tools.md](tools.md#ask),
+[api.md](api.md#endpoints).
+
+
+CLI input is serialized across questions and approvals while the SSE consumer
+keeps running. A question resolved or cancelled by another client dismisses its
+input reader. Cancellable stdin reads use file descriptors without abandoned
+input threads, including piped input; later lines are not prefetched.

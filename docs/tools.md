@@ -1,10 +1,11 @@
 # Tools
 
-`nexus/tools/` holds the five task tools and the two companion tools for
-background bash. They act on the workspace. Changing Nexus itself (session,
+`nexus/tools/` holds the six task tools and the two companion tools for
+background bash. They act on the workspace, except `ask`, which asks the user a
+question and returns the answer as data. Changing Nexus itself (session,
 workspace, worktree, model) is never a tool (PLAN.md, "Task tools vs. control").
 
-`DEFAULT_TOOLS = (read, bash, edit, write, code)`.
+`DEFAULT_TOOLS = (read, bash, edit, write, ask, code)`.
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
 disabled individually), because a background command needs a way to be read and
 stopped. Agents may also name a job tool explicitly; disabling `bash` removes
@@ -17,6 +18,7 @@ tool is available. `ToolContext` holds the `workspace` path.
 | --- | --- |
 | `tools/base.py` | `Tool`, `ToolContext`, `ToolError`, `resolve()`, `clip()` |
 | `tools/read.py`, `bash.py`, `edit.py`, `write.py` | Workspace tools |
+| `tools/ask.py`, `questions.py` | `ask` spec and the validated question/reply contract |
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
 | `bash_jobs.py` | Daemon-owned background bash jobs |
 
@@ -37,11 +39,11 @@ sees, never silent.
 **Errors.** `ToolError` text goes back to the model as an error result. See
 [loop.md](loop.md#tool-execution) for the other exceptions the loop catches.
 
-**Approval.** Tools do not ask. The loop calls an `approve` callback before each
-call ([loop.md](loop.md#approval)). The daemon auto-approves `read`,
-`bash_output`, `bash_kill` and the outer `code` call; `bash` (including
-`background`), `edit` and `write` ask unless the session's permission is `allow`
-(`--yes`).
+**Approval.** Tools do not ask for permission. The loop calls an `approve` callback before each
+call ([loop.md](loop.md#approval)). The daemon auto-approves `read`, `bash_output`,
+`bash_kill`, `ask` and the outer `code` call; `bash` (including `background`),
+`edit` and `write` ask unless the session's permission is `allow` (`--yes`).
+`ask` is not an approval: its answers are data for the model, never a grant.
 
 **Session snapshot.** Each session stores the descriptions, JSON schemas and
 guidance of the tools it was created with ([agents.md](agents.md#session-snapshots)).
@@ -217,6 +219,96 @@ Create a file or replace its whole content.
 
 Result: `created <path> (N lines, B bytes)` or `overwrote <path> (...)`. The
 description tells the model to prefer `edit` for existing files.
+
+## ask
+
+`ask {questions: [...]}` asks the user one or more questions and waits for the
+answers. It is a task tool, not a control tool and not an approval.
+
+```jsonc
+// arguments
+{"questions": [
+  {"id": "db", "question": "Which database?",
+   "options": [
+     {"id": "pg", "label": "PostgreSQL", "preview": "Version 16 and extensions"},
+     {"id": "lite", "label": "SQLite"}
+   ],
+   "multiple": false,
+   "allow_free_text": false},
+  {"id": "notes", "question": "Anything else?"}   // no options: free text
+]}
+
+// reply submitted through Core
+{"answers": [
+  {"question_id": "db", "selected": ["pg"]},
+  {"question_id": "notes", "text": "Keep migrations small."}
+]}
+```
+
+The `ask` tool's `parameters` is the question JSON Schema. The reply is one
+object; every question appears exactly once:
+
+```jsonc
+{"type": "object", "additionalProperties": false, "required": ["answers"],
+ "properties": {"answers": {"type": "array", "minItems": 1, "items": {
+   "type": "object", "additionalProperties": false, "required": ["question_id"],
+   "properties": {"question_id": {"type": "string"},
+                  "selected": {"type": "array", "items": {"type": "string"}},
+                  "text": {"type": "string", "maxLength": 2000}}}}}}
+```
+
+| Question field | Meaning |
+| --- | --- |
+| `id` (required) | Stable within the request: 1-64 characters `[A-Za-z0-9_.:-]`, starting with a letter or digit. Duplicates are rejected. |
+| `question` (required) | Non-empty text, at most 2,000 characters. |
+| `options` | Up to 10 `{id, label, preview?}` entries; option IDs are unique within the question, labels are at most 100 characters and previews 1,000. Omit or use `[]` for free text. |
+| `multiple` | Boolean, default `false`. `true` allows several selected option IDs and requires options. |
+| `allow_free_text` | Boolean. Default `true` only when there are no options. With options, `true` lets the answer include a free-text note in addition to selections. |
+
+Limits are 5 questions per call and 2,000 characters per answer text. Tool
+arguments are validated completely before a pending request exists; a malformed
+request is an ordinary tool error, so the model can correct itself.
+
+Every question must be answered. `selected` holds option IDs (single-select
+allows at most one; multi-select at least one unless free text is also allowed),
+and `text` is the free-text answer. Unknown question or option IDs, duplicate or
+missing answers, invalid selection counts, text where none is allowed and
+oversized values are rejected before the wait resolves.
+
+The wait has no tool-specific timeout: it ends with an answer, or with
+cancellation when the turn is interrupted, its session or project is deleted, the
+daemon shuts down, or the enclosing `code` cell times out or is cancelled. A
+cancelled question publishes `question.replied` with `outcome: "cancelled"` and a
+reason; a late answer cannot resume the work (409 while the session exists, 404
+once it is deleted). Each request resolves exactly once, so duplicate or
+conflicting replies create no second result or event. Recent resolutions are
+remembered in a bounded tombstone set; an id older than that gets 404 and still
+changes nothing.
+
+The model-visible result is one JSON object keyed by question id. Its size is
+bounded by the question/answer limits; generic text clipping is not applied to
+this structured result, so valid answers remain complete, parseable JSON:
+
+```json
+{"db": {"selected": ["pg"], "labels": ["PostgreSQL"], "text": null}}
+```
+
+It is subject to the shared 30,000-character clip as a defensive backstop; the
+validated limits keep a normal reply well below it.
+
+`question.asked`/`question.replied` are stored session events and are attributed
+to the asking session and tool call. Endpoints:
+`GET /api/question`, `GET /api/session/{id}/question`, and
+`POST /api/session/{id}/question/{qid}` ([api.md](api.md#endpoints)). The CLI
+shows the questions, collects answers and submits them; the inspector shows the
+request, reply or cancellation, and pending status. Child questions belong to the
+child session and appear on its parent's descendant event stream.
+
+Granted like any task tool: `ask` is in `DEFAULT_TOOLS`, so an agent that omits
+`tools` gets it, while an explicit list or a session switch controls it. A session
+snapshot stored before `ask` existed does not gain it. Inside `code`, `ask` is
+available only when the caller has it, and questions it creates are attributed to
+the nested call id.
 
 ## code
 

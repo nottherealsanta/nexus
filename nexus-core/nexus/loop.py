@@ -63,7 +63,7 @@ def default_instructions(workspace: Path) -> str:
         f"Workspace: {workspace}\n"
         f"Today: {datetime.now().astimezone().date().isoformat()}\n"
         "Tools: read (files, directories), bash (commands run in the workspace), "
-        "edit (exact replacement or apply_patch), write (whole files). "
+        "edit (exact replacement or apply_patch), write (whole files), ask (questions to the user). "
         "Read before you edit. Keep answers short and say what you changed."
     )
 

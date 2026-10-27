@@ -76,5 +76,5 @@ def test_render_prompt_uses_actual_tools(tmp_path, body):
 def test_builtin_bodies_do_not_describe_tools():
     for agent in agents.load(None).agents.values():
         assert "{{tools}}" in agent.prompt
-        for name in ("read", "bash", "bash_output", "bash_kill", "edit", "write", "code", "session"):
+        for name in ("read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "session"):
             assert f"`{name}`" not in agent.prompt

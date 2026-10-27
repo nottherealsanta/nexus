@@ -25,8 +25,8 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `messages` | Earlier history (copied) |
 | `conversation_id` | Default is a new `uuid4().hex`; used for prompt caching and session headers |
 
-`default_instructions` states the workspace path, today's date and the four
-tools, and tells the model to read before it edits and keep answers short.
+`default_instructions` states the workspace path, today's date and the tools,
+and tells the model to read before it edits and keep answers short.
 
 `agent.messages` is the history (a list of `Message`). `agent.request()` builds the
 `Request` the next step would send; `provider.body(agent.request())` is the exact
@@ -94,12 +94,12 @@ call that has a known tool and valid arguments, including `read`. The loop has n
 policy of its own: `None` approves everything.
 
 The daemon's callback (`Runtime._approve`, see [daemon.md](daemon.md#turns))
-approves `read`, `bash_output`, `bash_kill` and the outer `code` call silently;
-nested code calls go through the same approval callback. For the other tools
-(including background `bash`) it approves when the session's permission is
+approves `read`, `bash_output`, `bash_kill`, `ask` and the outer `code` call
+silently; nested code calls go through the same approval callback. For the other
+tools (including background `bash`) it approves when the session's permission is
 `allow`; otherwise it publishes `permission.asked` and waits for a client's
 reply. The CLI answers with `allow <tool>? [y/N]`; `--yes` sets the session to
-`allow`.
+`allow`. `ask` has its own `question.asked` wait, not an approval.
 
 ## Stop reasons
 

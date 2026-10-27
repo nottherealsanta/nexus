@@ -20,7 +20,8 @@ Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-versio
 nexus/
   llmhub/            types, sse, responses, chat, providers, catalog, hub
   llmhub/auth/       store, device, codex, copilot, grok, opencode, errors
-  tools/             base, read, bash, edit, write, code
+  tools/             base, read, bash, edit, write, ask, code
+  questions.py       the ask contract: schema, bounds, validation, result text
   snapshot.py        serializable session configuration and instruction-file records
   agents.py          agent files: parse, load (builtin, global, project)
   builtin_agents/    orchestrate, build, quick, scout, plan (.md) + NOTICE
@@ -31,7 +32,7 @@ nexus/
   bus.py             in-process event bus (seq-numbered, bounded per subscriber)
   kernels.py         daemon-owned persistent Monty kernels
   bash_jobs.py       daemon-owned background bash jobs
-  runtime.py         projects, sessions, turns, approvals, interrupts
+  runtime.py         projects, sessions, turns, approvals, questions, interrupts
   server.py          the HTTP API (Starlette) — docs/api.md
   daemon.py          serve, start, stop, discovery via daemon.json — docs/daemon.md
   inspector/         index.html: the session inspector page — docs/inspector.md
@@ -81,6 +82,7 @@ request body; `/exit` and `/quit` leave.
 | `test_chat.py` | Chat dialect: request body, reasoning fields, event parsing |
 | `test_catalog.py` | models.dev filtering and `ModelInfo` |
 | `test_tools.py` | read, bash, edit (replacement and patch), write |
+| `test_ask.py` | ask contract and validation, pending/reply API, cancellation, snapshots, nested code questions |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

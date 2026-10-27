@@ -17,9 +17,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import io
 import json
+import os
+import re
+import select
 import signal
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Any, TextIO
@@ -131,6 +136,12 @@ class Renderer:
             self._print(f"{RED}{data['message']}{RESET}")
             if data.get("body"):
                 self._print(f"{DIM}{data['body']}{RESET}")
+        elif kind == "question.replied":
+            self._break()
+            if data.get("outcome") == "answered":
+                self._print(f"{DIM}question answered{RESET}")
+            else:
+                self._print(f"{YELLOW}question cancelled: {data.get('reason') or 'no answer'}{RESET}")
         elif kind == "bus.overflow":
             self._break()
             self._print(f"{RED}event stream overflowed after event {data['dropped_after']}; reconnect to continue{RESET}")
@@ -164,9 +175,31 @@ async def _open_session(client: Client, args: argparse.Namespace) -> dict[str, A
 
 async def _send(client: Client, session_id: str, text: str, renderer: Renderer) -> None:
     """Prompt, then render the events of this session and its child sessions until
-    the whole tree is idle. Ctrl-C interrupts the turn (and its children)."""
+    the whole tree is idle. Ctrl-C interrupts the turn (and its children) and
+    abandons a question prompt without submitting an answer."""
     loop = asyncio.get_running_loop()
-    interrupt = lambda: asyncio.ensure_future(client.call("POST", f"/api/session/{session_id}/interrupt"))
+    answering = threading.Event()
+    input_readers: dict[str, threading.Event] = {}
+    input_queue: asyncio.Queue[tuple[str, str, dict[str, Any], threading.Event]] = asyncio.Queue()
+
+    async def answer_requests() -> None:
+        # Keep consuming SSE while one stdin reader serves queued questions.
+        while True:
+            kind, sid, request, cancelled = await input_queue.get()
+            if not cancelled.is_set():
+                if kind == "question":
+                    await _question(client, sid, request, renderer, cancelled)
+                else:
+                    await _ask(client, sid, request, renderer, cancelled)
+
+    input_task = asyncio.create_task(answer_requests())
+
+    def interrupt() -> None:
+        answering.set()
+        for cancelled in input_readers.values():
+            cancelled.set()
+        asyncio.ensure_future(client.call("POST", f"/api/session/{session_id}/interrupt"))
+
     loop.add_signal_handler(signal.SIGINT, interrupt)
     busy: set[str] = set()
     labels: dict[str, str] = {}
@@ -185,9 +218,18 @@ async def _send(client: Client, session_id: str, text: str, renderer: Renderer) 
                     header = labels.get(sid, sid) if sid != session_id else "back to the parent session"
                     print(f"{CYAN}── {header} ──{RESET}")
                     current = sid
-                if event["type"] == "permission.asked":
-                    await _ask(client, sid, event["data"], renderer)
+                if event["type"] in ("permission.asked", "question.asked"):
+                    cancelled = threading.Event()
+                    if answering.is_set():
+                        cancelled.set()
+                    input_readers[event["data"]["id"]] = cancelled
+                    input_queue.put_nowait(("question" if event["type"] == "question.asked" else "permission",
+                                            sid, event["data"], cancelled))
                     continue
+                if event["type"] in ("question.replied", "permission.replied"):
+                    cancelled = input_readers.pop(event["data"]["id"], None)
+                    if cancelled is not None:
+                        cancelled.set()
                 if event["type"] == "session.notified":
                     renderer._break()
                     print(f"{CYAN}↩ child {event['data']['from']} finished; its answer goes to the parent{RESET}")
@@ -199,14 +241,139 @@ async def _send(client: Client, session_id: str, text: str, renderer: Renderer) 
                         renderer._break()
                         return
     finally:
+        for cancelled in input_readers.values():
+            cancelled.set()
+        input_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await input_task
         loop.remove_signal_handler(signal.SIGINT)
 
 
-async def _ask(client: Client, session_id: str, request: dict[str, Any], renderer: Renderer) -> None:
+async def _read_answer(prompt: str, cancelled: threading.Event) -> str | None:
+    """Cancellable stdin read without a background thread that can steal later input."""
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    if isinstance(sys.stdin, io.StringIO):
+        line = sys.stdin.readline() if not cancelled.is_set() else ""
+        return line.rstrip("\r\n") if line else None
+    try:
+        fd = sys.stdin.fileno()
+        pending = bytearray()
+        while not cancelled.is_set():
+            ready, _, _ = select.select([fd], [], [], 0)
+            if not ready:
+                await asyncio.sleep(0.02)
+                continue
+            chunk = os.read(fd, 1)
+            if not chunk or chunk == b"\n":
+                if not chunk and not pending:
+                    return None
+                return pending.decode(sys.stdin.encoding or "utf-8", "replace").rstrip("\r")
+            pending.extend(chunk)
+        return None
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _option_tokens(line: str, question: dict[str, Any]) -> list[str] | None:
+    """The option ids named by `line` (numbers or ids), or None when it is not a selection."""
+    options = question["options"]
+    by_number = {str(i + 1): option["id"] for i, option in enumerate(options)}
+    by_id = {option["id"]: option["id"] for option in options}
+    tokens = [token for token in re.split(r"[,\s]+", line) if token]
+    chosen: list[str] = []
+    for token in tokens:
+        option_id = by_number.get(token) or by_id.get(token)
+        if option_id is None:
+            return None
+        if option_id not in chosen:
+            chosen.append(option_id)
+    return chosen
+
+
+async def _question(client: Client, session_id: str, request: dict[str, Any], renderer: Renderer,
+                    cancelled: threading.Event) -> None:
+    """Show one `question.asked` request and submit the answers through Core."""
     renderer._break()
-    answer = await asyncio.to_thread(input, f"  {YELLOW}allow {request['tool']}? [y/N] {RESET}")
+    renderer._print(f"{BOLD}? The agent asks{RESET} {DIM}{request['id']} · call {request.get('call_id') or '-'}{RESET}")
+    answers: list[dict[str, Any]] = []
+    for question in request["questions"]:
+        options = question["options"]
+        how_many = "one or more" if question["multiple"] else "one"
+        free = " or leave blank for free text" if question["allow_free_text"] else ""
+        while True:
+            renderer._print(f"{BOLD}  {question['question']}{RESET}")
+            for i, option in enumerate(options, 1):
+                renderer._print(f"    {i}. {option['label']} {DIM}(id {option['id']}){RESET}")
+                if option.get("preview"):
+                    for line in str(option["preview"]).split("\n"):
+                        renderer._print(f"       {DIM}{line}{RESET}")
+            selected: list[str] = []
+            text: str | None = None
+            if options:
+                prompt = f"  select {how_many} (numbers or ids, comma-separated){free} > "
+                line = await _read_answer(prompt, cancelled)
+                if line is None:
+                    if not cancelled.is_set():
+                        await _abandon_question(client, session_id, renderer)
+                    return
+                line = line.strip()
+                if line:
+                    selected = _option_tokens(line, question) or []
+                    if not selected:
+                        if question["allow_free_text"]:
+                            text = line
+                        else:
+                            renderer._print(f"{RED}  choose an option or its id{RESET}")
+                            continue
+                    elif not question["multiple"] and len(selected) > 1:
+                        renderer._print(f"{RED}  this question is single-select{RESET}")
+                        continue
+                elif not question["allow_free_text"]:
+                    renderer._print(f"{RED}  an option is required{RESET}")
+                    continue
+            if question["allow_free_text"]:
+                note = await _read_answer("  text (optional) > " if options else "  answer > ", cancelled)
+                if note is None:
+                    if not cancelled.is_set():
+                        await _abandon_question(client, session_id, renderer)
+                    return
+                if note.strip():
+                    text = note.strip()
+            if not selected and not text:
+                renderer._print(f"{RED}  an answer is required{RESET}")
+                continue
+            answers.append({"question_id": question["id"], "selected": selected, "text": text})
+            break
+    if cancelled.is_set():
+        return
+    try:
+        await client.call("POST", f"/api/session/{session_id}/question/{request['id']}", {"answers": answers})
+    except ApiError as exc:
+        renderer._print(f"{RED}answer rejected: {exc}{RESET}")
+        if exc.status == 400:  # the CLI could not produce an acceptable answer; do not leave the ask pending
+            await _abandon_question(client, session_id, renderer)
+
+
+async def _abandon_question(client: Client, session_id: str, renderer: Renderer) -> None:
+    renderer._print(f"{YELLOW}no answer submitted; interrupting the turn{RESET}")
+    await client.call("POST", f"/api/session/{session_id}/interrupt")
+
+
+async def _ask(client: Client, session_id: str, request: dict[str, Any], renderer: Renderer,
+               cancelled: threading.Event) -> None:
+    renderer._break()
+    answer = await _read_answer(f"  {YELLOW}allow {request['tool']}? [y/N] {RESET}", cancelled)
+    if cancelled.is_set():
+        return
+    if answer is None:
+        await _abandon_question(client, session_id, renderer)
+        return
     reply = "allow" if answer.strip().lower() in ("y", "yes") else "deny"
-    await client.call("POST", f"/api/session/{session_id}/permission/{request['id']}", {"reply": reply})
+    try:
+        await client.call("POST", f"/api/session/{session_id}/permission/{request['id']}", {"reply": reply})
+    except ApiError as exc:
+        renderer._print(f"{RED}approval rejected: {exc}{RESET}")
 
 
 async def _run(args: argparse.Namespace, renderer: Renderer) -> None:
@@ -230,7 +397,10 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
                 print(f"{DIM}{'›' if message['role'] == 'user' else ' '} {text[:200]}{RESET}")
         while True:
             try:
-                text = (await asyncio.to_thread(input, f"{BOLD}› {RESET}")).strip()
+                line = await _read_answer(f"{BOLD}› {RESET}", threading.Event())
+                if line is None:
+                    return
+                text = line.strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return

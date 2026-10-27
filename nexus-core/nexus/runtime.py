@@ -10,6 +10,7 @@ is published on the bus:
 | `session.status` | `{"status": "busy" | "idle"}` around each turn |
 | `message.added` | a message was saved (user, assistant, tool) |
 | `permission.asked` / `permission.replied` | a tool call waits for approval |
+| `question.asked` / `question.replied` | the `ask` tool waits for user answers; `replied` also carries cancellation |
 | `session.error` | a turn failed (provider, auth or tool-loop error) |
 | everything else | the loop and stream events, unchanged (`wire_request`, `text_delta`, `tool_start`, …) |
 
@@ -42,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from . import questions as question_contract
 from . import snapshot as snapshots
 from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
@@ -50,18 +52,24 @@ from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
 from .llmhub.types import Message, ProviderError, Text, ToolCall, ToolResult, ToolSpec
-from .loop import MAX_STEPS, Agent, MessageAdded
+from .loop import MAX_STEPS, Agent, MessageAdded, ToolEnd, ToolStart
+from .questions import PendingQuestion, QuestionError
 from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code"}
+AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask"}
 CHILD_RESULT_CHARS = 30_000
 TITLE_CHARS = 60
+MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
 
 
 class Busy(Exception):
+    pass
+
+
+class Conflict(Exception):
     pass
 
 
@@ -86,6 +94,8 @@ class Runtime:
         self.default_model = default_model
         self.turns: dict[str, asyncio.Task[None]] = {}
         self.approvals: dict[str, tuple[str, asyncio.Future[bool], dict[str, Any]]] = {}  # id -> (session, future, request)
+        self.questions: dict[str, PendingQuestion] = {}  # qst id -> pending question request
+        self.resolved_questions: dict[str, str] = {}  # qst id -> "answered" | "cancelled" (bounded tombstones)
         self.inboxes: dict[str, list[str]] = {}  # session id -> notices waiting for its next model call
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
@@ -124,8 +134,10 @@ class Runtime:
     async def delete_project(self, project_id: str) -> None:
         sessions = self.store.sessions(project_id)
         for session in sessions:
-            await self.interrupt(session.id)
-        await self.jobs.cancel_for({session.id for session in sessions})
+            await self.interrupt(session.id, reason="the session's project was deleted")
+        ids = {session.id for session in sessions}
+        self.close_questions(ids, "the session's project was deleted")
+        await self.jobs.cancel_for(ids)
         if not self.store.delete_project(project_id):
             raise NotFound(f"no project {project_id}")
         self.bus.publish("project.deleted", {"id": project_id})
@@ -463,8 +475,9 @@ class Runtime:
         return session
 
     async def delete_session(self, session_id: str) -> None:
-        await self.interrupt(session_id)  # also interrupts descendants, which the delete cascades to
+        await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
         ids = {session_id, *(child.id for child in self.store.descendants(session_id))}
+        self.close_questions(ids, "the session was deleted")
         await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
         if not self.store.delete_session(session_id):
             raise NotFound(f"no session {session_id}")
@@ -577,8 +590,15 @@ class Runtime:
         async def run_session(args: dict[str, Any], ctx: ToolContext) -> str:
             return await self._launch(session.id, args, ctx.call_id)
 
+        async def run_ask(args: dict[str, Any], ctx: ToolContext) -> str:
+            try:
+                questions = question_contract.normalize_request(args)
+            except QuestionError as exc:
+                raise ToolError(str(exc)) from exc
+            return await self.ask_user(session.id, ctx.call_id, questions)
+
         bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
-                 "session": run_session}
+                 "session": run_session, "ask": run_ask}
 
         def stored_tool(name: str) -> Tool:
             definition = definitions[name]
@@ -697,17 +717,26 @@ class Runtime:
         self.turns[session_id] = asyncio.create_task(self._run(session_id, text))
 
     async def _run(self, session_id: str, text: str) -> None:
+        started: set[str] = set()
+        finished: dict[str, ToolResult] = {}
         try:
             agent = self._agent(self.session(session_id))
             async for event in agent.turn(text):
                 if isinstance(event, MessageAdded):
+                    if event.message.role == "assistant":
+                        started.clear()
+                        finished.clear()
                     stored = self.store.append_message(session_id, event.message)
                     self.bus.publish("message.added", message_json(stored), session_id=session_id)
                 else:
+                    if isinstance(event, ToolStart):
+                        started.add(event.call.id)
+                    elif isinstance(event, ToolEnd):
+                        finished[event.call.id] = event.result
                     data = to_json(event)
                     self.bus.publish(data["type"], data, session_id=session_id)
         except asyncio.CancelledError:
-            self._close_dangling_calls(session_id)
+            self._close_dangling_calls(session_id, started, finished)
             self._fail(session_id, {"kind": "interrupted", "message": "interrupted by the user"})
         except ProviderError as exc:
             self._fail(session_id, {"kind": "provider", "message": str(exc), "status": exc.status, "body": exc.body})
@@ -719,6 +748,7 @@ class Runtime:
                 if sid == session_id:
                     future.cancel()
                     self.approvals.pop(approval_id, None)
+            self.close_questions({session_id}, "the turn ended without an answer")
             leftover = self.inboxes.pop(session_id, [])
             self._deliver(session_id)  # before idle, so the tree is never all idle while a parent is about to wake
             if leftover and self.store.session(session_id) is not None:
@@ -730,19 +760,37 @@ class Runtime:
         self.errors[session_id] = error["message"]
         self.bus.publish("session.error", error, session_id=session_id)
 
-    def _close_dangling_calls(self, session_id: str) -> None:
+    def _close_dangling_calls(self, session_id: str, started: set[str],
+                              finished: dict[str, ToolResult]) -> None:
         messages = self.store.messages(session_id)
         if not messages or messages[-1].message.role != "assistant":
             return
         calls = [p for p in messages[-1].message.parts if isinstance(p, ToolCall)]
-        if calls:
-            results = tuple(ToolResult(c.id, "interrupted by the user before this tool ran", is_error=True) for c in calls)
-            stored = self.store.append_message(session_id, Message("tool", results))
-            self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        if not calls:
+            return
+        results: list[ToolResult] = []
+        for call in calls:
+            if call.id in finished:
+                results.append(finished[call.id])
+            elif call.id in started:
+                results.append(ToolResult(
+                    call.id,
+                    "interrupted by the user while this tool was running; its result is unknown and it may have "
+                    "changed the workspace",
+                    is_error=True,
+                ))
+            else:
+                results.append(ToolResult(call.id, "interrupted by the user before this tool ran", is_error=True))
+        stored = self.store.append_message(session_id, Message("tool", tuple(results)))
+        self.bus.publish("message.added", message_json(stored), session_id=session_id)
 
-    async def interrupt(self, session_id: str) -> bool:
+    async def interrupt(self, session_id: str, *, reason: str = "the turn was interrupted") -> bool:
         stopped = False
-        for child in self.store.descendants(session_id):
+        descendants = self.store.descendants(session_id)
+        # Closing a pending question before cancelling its turn publishes one cancellation outcome,
+        # so a reply racing with the interrupt cannot also resolve it.
+        self.close_questions({session_id, *(child.id for child in descendants)}, reason)
+        for child in descendants:
             self.notify.pop(child.id, None)  # an interrupted parent is not woken by its children
             stopped = await self._cancel(child.id) or stopped
         return await self._cancel(session_id) or stopped
@@ -784,8 +832,93 @@ class Runtime:
             entry[1].set_result(allow)
         self.bus.publish("permission.replied", {"id": approval_id, "allow": allow}, session_id=session_id)
 
+    # -- questions -------------------------------------------------------------
+
+    async def ask_user(self, session_id: str, call_id: str | None,
+                       questions: list[dict[str, Any]]) -> str:
+        """Publish `question.asked`, wait for a validated answer, and return the model-visible result.
+
+        No timeout of its own: the wait ends with an answer or with cancellation
+        (an interrupted turn, a deleted session/project, or a code cell ending).
+        """
+        request = PendingQuestion(
+            id=new_id("qst"), session_id=session_id, call_id=call_id, questions=questions,
+            created=question_contract.now(), future=asyncio.get_running_loop().create_future(),
+        )
+        self.questions[request.id] = request
+        self.bus.publish("question.asked", question_contract.asked_event(request), session_id=session_id)
+        try:
+            answers = await request.future
+        except asyncio.CancelledError:
+            self._close_question(request, "the turn or code cell was interrupted")
+            raise
+        # The validated question/answer limits bound this structured result. Generic
+        # text clipping would corrupt JSON and silently discard a valid answer.
+        return question_contract.result_text(questions, answers)
+
+    def pending_questions(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Pending question requests, for one session or every session."""
+        return [
+            request.json()
+            for request in self.questions.values()
+            if session_id is None or request.session_id == session_id
+        ]
+
+    def reply_question(self, session_id: str, question_id: str, answers: Any) -> None:
+        """Validate and resolve one question request exactly once."""
+        request = self.questions.get(question_id)
+        if request is None:
+            if question_id in self.resolved_questions:
+                raise Conflict(
+                    f"question {question_id} is already {self.resolved_questions[question_id]}; "
+                    "a question request resolves once"
+                )
+            raise NotFound(f"no pending question {question_id}")
+        if request.session_id != session_id:
+            raise NotFound(f"no pending question {question_id}")
+        if request.future.cancelled():
+            self._close_question(request, "the turn or code cell was interrupted")
+            raise Conflict(f"question {question_id} is already cancelled")
+        validated = question_contract.validate_answers(request.questions, answers)
+        request.closed = True
+        self.questions.pop(question_id, None)
+        self._remember_question(question_id, "answered")
+        self.bus.publish(
+            "question.replied",
+            question_contract.replied_event(request, outcome="answered", answers=validated),
+            session_id=session_id,
+        )
+        if not request.future.done():
+            request.future.set_result(validated)
+
+    def _close_question(self, request: PendingQuestion, reason: str) -> None:
+        if request.closed:
+            return
+        request.closed = True
+        self.questions.pop(request.id, None)
+        self._remember_question(request.id, "cancelled")
+        self.bus.publish(
+            "question.replied",
+            question_contract.replied_event(request, outcome="cancelled", reason=reason),
+            session_id=request.session_id,
+        )
+        if not request.future.done():
+            request.future.cancel()
+
+    def close_questions(self, session_ids: set[str] | None, reason: str) -> None:
+        """Close pending questions (all of them when `session_ids` is None) with an explicit outcome."""
+        for request in list(self.questions.values()):
+            if session_ids is None or request.session_id in session_ids:
+                self._close_question(request, reason)
+
+    def _remember_question(self, question_id: str, outcome: str) -> None:
+        self.resolved_questions[question_id] = outcome
+        while len(self.resolved_questions) > MAX_RESOLVED_QUESTIONS:
+            self.resolved_questions.pop(next(iter(self.resolved_questions)))
+
     async def shutdown(self) -> None:
         for session_id in list(self.turns):
-            await self.interrupt(session_id)
+            await self.interrupt(session_id, reason="the daemon is shutting down")
+        self.close_questions(None, "the daemon is shutting down")
         await self.jobs.shutdown()
         await self.kernels.shutdown()

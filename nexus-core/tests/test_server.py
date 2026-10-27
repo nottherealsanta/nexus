@@ -98,7 +98,7 @@ async def test_prompt_asks_permission_and_saves_messages(setup):
     assert messages[1]["parts"][0] == {"type": "tool_call", "id": "c1", "name": "write", "arguments": '{"path": "x.txt", "content": "hi"}', "origin": None, "raw": None}
     assert (await client.get(f"/api/session/{session['id']}")).json()["title"] == "make x.txt"
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "bash_output", "bash_kill", "edit", "write", "code"])
+    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code"])
     assert context["instructions"].startswith("You are an AI agent running in Nexus") and "# Environment" in context["instructions"]
 
 
@@ -171,6 +171,9 @@ async def test_inspector_page_is_static_and_locked_down(setup):
     assert response.status_code == 200 and "Session Inspector" in response.text
     assert TOKEN not in response.text
     assert "connect-src 'self'" in response.headers["content-security-policy"]
+    # Questions are rendered from the stored events and the pending endpoint.
+    assert "question.asked" in response.text and "question.replied" in response.text
+    assert "/api/session/${id}/question" in response.text
 
 
 async def test_code_nested_approval_kernel_api_and_session_independent_lifetime(setup):
@@ -273,7 +276,7 @@ async def test_disabled_tools_roundtrip_and_context(setup):
         'directory': str(workspace), 'disabled_tools': ['bash', 'write', 'bash']})).json()
     sid = session['id']
     assert session['disabled_tools'] == ['bash', 'write']
-    assert session['tools'] == ['read', 'edit', 'code']
+    assert session['tools'] == ['read', 'edit', 'ask', 'code']
     assert rt.store.session(sid).disabled() == {'bash', 'write'}
     context = (await client.get(f'/api/session/{sid}/context')).json()
     assert context['tools'] == session['tools']

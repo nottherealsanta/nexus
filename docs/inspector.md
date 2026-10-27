@@ -32,7 +32,7 @@ content-security policy: no external scripts, styles or connections.
 
 | Level | Shows | Source |
 | --- | --- | --- |
-| 1 Conversation | Saved messages: user and assistant text, reasoning summaries (with the size of the encrypted state), tool calls with each argument labelled, tool results with line and character counts. A `session` tool call links to the child it started. Every part has its JSON, including the provider's raw wire item. | `/api/session/{id}/message` |
+| 1 Conversation | Saved messages: user and assistant text, reasoning summaries (with the size of the encrypted state), tool calls with each argument labelled, tool results with line and character counts. A `session` tool call links to the child it started. A Questions card shows each `ask` request (including nested in `code`), its options, answer or cancellation, and live pending status. Every part has its JSON, including the provider's raw wire item. | `/api/session/{id}/message`, `/api/session/{id}/question`, stored `question.asked` / `question.replied` |
 | 2 Steps | One row per model call, grouped by turn: model, input item count, tools offered, HTTP status, time to first byte, total time, tokens in (cached) and out (reasoning), stop reason, and each tool run with its result and duration. | stored events |
 | 3 Requests | A snapshot card (origin, agent source and fingerprint, instruction-file status, child catalog), the next request (what the model would see now), then every sent request as labelled sections: redacted headers, parameters, instructions (including the `# Instructions file` section), each input item (preview, expandable to JSON), and tools (name, description, schema). Response headers too. | `/api/session/{id}/context`, the session's snapshot summary, stored `wire_request` / `wire_response` |
 | 4 Raw | Every stored event in order, with the time offset, type and a clipped preview; click a row for its full JSON. You can filter by type or content, and token deltas and provider SSE events are hidden by default (one checkbox). Also the messages and session record as stored. | `/api/session/{id}/event` |
@@ -52,6 +52,8 @@ per session.
 - Text is shown as plain text. Markdown is not rendered.
 - Live updates re-render the open session when its events arrive. Events of a
   child show in the child's own page.
+- The Questions card (Step 10) was added after the Playwright checks above and
+  was script-syntax-checked, not re-run in a browser.
 - Checked with Playwright (Chromium) in light and dark mode and at 390 px
   width. Not checked in Safari or Firefox.
 
@@ -88,3 +90,13 @@ code, duration, output counts and the retained output. The list refreshes on
 `bash.started` and `bash.finished`. Jobs are retained until the job limit
 evicts the oldest finished one, so a job's output stays inspectable after it
 finishes; the durable event log still has the finish tail after eviction.
+
+## Questions
+
+The Questions card in Conversation lists each `ask` request from the stored
+event log: every question text and option (with its label, id and preview), the
+validated answer or the cancellation reason, and the asking tool call id (a
+nested `code` question shows the synthetic nested id). Pending status comes from
+`GET /api/session/{id}/question` and refreshes on `question.asked` and
+`question.replied`. Questions asked by a child appear on the child's page, as
+the inspector shows a session's own events. Schema: [tools.md](tools.md#ask).

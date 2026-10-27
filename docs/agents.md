@@ -147,7 +147,7 @@ The session JSON reports the result and where it came from: `model` and
 (`/model default` in chat) returns to the agent's choice.
 
 Approval is a session setting (`permission`), not an agent setting: read,
-`bash_output` and `bash_kill` (and the outer `code` call) never ask; bash
+`bash_output`, `bash_kill` and `ask` (and the outer `code` call) never ask; bash
 (including background), edit and write ask unless the session is `allow`,
 including calls made from inside a code cell.
 
@@ -164,10 +164,12 @@ API: `GET /api/agent?directory=…`, `GET /api/agent/{name}`,
 `POST /api/session {agent}`, `POST /api/session/{id}/agent {agent}`
 ([api.md](api.md)).
 
-The default task tools include `code`. An explicit `tools` list must include it
-to enable cells. Inside code, only that caller's other task tools are exposed,
-with the caller's directory and approval policy; control tools are excluded.
-Session trees share a default kernel. See [tools.md](tools.md#code).
+The default task tools include `ask` and `code`. An explicit `tools` list must
+include them to enable questions or cells. Inside code, only that caller's other
+task tools are exposed, with the caller's directory and approval policy; control
+tools are excluded. Session trees share a default kernel. See
+[tools.md](tools.md#ask) and [tools.md](tools.md#code). A question is not an
+approval and never grants a tool.
 
 ## Tool guidance and session switches
 

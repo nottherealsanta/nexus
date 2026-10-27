@@ -42,7 +42,7 @@ change as the code.
 | Sign-in, `auth.json`, token refresh | [docs/auth.md](docs/auth.md) |
 | models.dev catalog, `provider/model` refs, default model | [docs/models.md](docs/models.md) |
 | Conversation types, stream events, loop events, JSON codec | [docs/stream-events.md](docs/stream-events.md) |
-| read, bash, edit, write | [docs/tools.md](docs/tools.md) |
+| read, bash, edit, write, ask, code | [docs/tools.md](docs/tools.md) |
 | The agent loop and approval | [docs/loop.md](docs/loop.md) |
 | uv, tests, ruff, repo layout | [docs/development.md](docs/development.md) |
 | Agent files (frontmatter + prompt) | [docs/agents.md](docs/agents.md) |

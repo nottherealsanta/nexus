@@ -137,6 +137,21 @@ evicted. A finish also enters the session as a notice message, so the model sees
 it without polling. Killed jobs also finish; a job killed for session/project
 deletion or daemon shutdown is silent.
 
+## Questions
+
+`question.asked` carries one pending request: id, session id, tool call id, the
+validated questions (ids, text, options with labels/previews, `multiple` and
+`allow_free_text`), and its creation time. It is stored in the asking session's
+event log; a question asked from inside `code` uses the nested call id.
+
+`question.replied` is the single resolution event. With `outcome: "answered"` it
+carries the validated answers in question order. With `outcome: "cancelled"` it
+carries an empty `answers` list and a `reason` (interrupted turn, deleted
+session/project, daemon shutdown, or cancelled code cell). There is never a
+second reply event: a duplicate or late API reply gets 409. The tool's result
+then enters the conversation once, as an ordinary `tool` message. Schema and
+limits: [tools.md](tools.md#ask); endpoints: [api.md](api.md#endpoints).
+
 ## Code cells
 
 The runtime publishes `code.call` for each finished nested task call: kernel id,

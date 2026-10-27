@@ -54,6 +54,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
 | POST | `/api/session/{id}/permission/{pid}` | `{reply: "allow" or "deny"}` | 204 |
+| GET | `/api/question` | | every pending `ask` question request |
+| GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
+| POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
 | GET | `/api/event` | `?session=` (that session and its descendants) | server-sent events (below) |
 | GET | `/inspector` | | the session inspector page ([inspector.md](inspector.md)); static, no token needed to load it |
 
@@ -68,12 +71,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom
  "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
- "tools": ["read", "edit", "write", "code"], "disabled_tools": ["bash"],
+ "tools": ["read", "edit", "write", "ask", "code"], "disabled_tools": ["bash"],
  "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…,
  "snapshot": {"version": 1, "origin": "created", "created": 1793…,
               "agent": {"name": "build", "source": "project", "path": "…/build.md", "fingerprint": "sha256:…"},
               "instructions": {"path": "…/AGENTS.md", "status": "loaded", "bytes": 123, "sha256": "sha256:…"},
-              "granted_tools": ["read", "bash", "edit", "write", "code"],
+              "granted_tools": ["read", "bash", "edit", "write", "ask", "code"],
               "child_agents": [{"name": "scout", "description": "…", "mode": "subagent", "source": "builtin",
                                 "path": "…/scout.md", "fingerprint": "sha256:…"}]}}
 
@@ -87,11 +90,30 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 
 // Pending approval (also the data of permission.asked)
 {"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"}}
+
+// Pending question (also the data of question.asked)
+{"id": "qst_…", "session_id": "ses_…", "call_id": "call_…", "created": 1793…,
+ "questions": [{"id": "db", "question": "Which database?",
+                "options": [{"id": "pg", "label": "PostgreSQL", "preview": "…"}],
+                "multiple": false, "allow_free_text": false}]}
+
+// Answer item (POST …/question/{qid})
+{"question_id": "db", "selected": ["pg"], "text": null}
 ```
 
-`permission` is `ask` (bash, edit and write wait for a reply; read, `bash_output`
-and `bash_kill` never ask) or `allow` (nothing asks). `status` is `busy` while a
-turn runs.
+Questions are separate from approvals: an answer is data for the model, never a
+permission grant. Every question in a request must be answered exactly once.
+Unknown question or option IDs, duplicate or missing answers, invalid
+selection counts and text where the question does not allow it get 400 and leave
+the request pending. A second reply to a resolved request (including after
+cancellation) gets 409, with no second event or tool result; a bounded set of
+recent resolutions is remembered, so a much older id gets 404 instead. Questions
+live in memory and have no daemon-side timeout; they end with an answer or with
+cancellation. Shapes and limits: [tools.md](tools.md#ask).
+
+`permission` is `ask` (bash, edit and write wait for a reply; read, `bash_output`,
+`bash_kill`, `ask` and the outer `code` call never ask) or `allow` (nothing asks).
+`status` is `busy` while a turn runs.
 
 ## Event stream
 
@@ -124,6 +146,8 @@ log with `?after=<last event id>`.
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
 | `permission.replied` | `{id, allow}` |
+| `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
+| `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.error` | `{kind: "provider" or "auth" or "request" or "interrupted", message, status?, body?}` |
 | `bus.overflow` | `{dropped_after}` |
@@ -143,8 +167,9 @@ model sees is hidden from clients.
    → (`permission.asked` → client replies) → `tool_end` → `message.added`
    (tool) → `step_start` … → `turn_end` → `session.status idle`.
 4. `POST …/interrupt` at any point cancels. A tool call left without a result
-   gets an error result ("interrupted by the user"), so the next request stays
-   valid.
+   gets an error result ("interrupted while running" or "before it ran"), so the
+   next request stays valid. A pending question is closed with
+   `question.replied`/`outcome: "cancelled"`; its answer can no longer arrive.
 
 ```sh
 TOKEN=$(jq -r .token ~/.nexus10/daemon.json)
@@ -161,6 +186,11 @@ pairing for remote clients.
 
 Kernel execution and metadata limits: [tools.md](tools.md#code). `code.call` and
 `code.cell` are stored session events; `kernel.deleted` announces kernel removal.
+
+Question requests are in memory like approvals. They are not restored after a
+daemon crash or restart; an active turn does not survive either (Step 11 defines
+reconnect and resync). Their schema, limits and cancellation behavior are in
+[tools.md](tools.md#ask).
 
 Background bash jobs: `bash.started` and `bash.finished` are stored session
 events (the finish event carries a clipped output tail). A finish also adds a

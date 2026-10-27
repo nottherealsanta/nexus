@@ -31,6 +31,9 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/snapshot | the full frozen session snapshot |
 | GET | /api/session/{id}/permission | pending tool approvals |
 | POST | /api/session/{id}/permission/{pid} | `{reply: "allow" | "deny"}` → 204 |
+| GET | /api/question | every pending `ask` question request |
+| GET | /api/session/{id}/question | pending questions for that session |
+| POST | /api/session/{id}/question/{qid} | `{answers: [...]}` → 204; 400 invalid, 404 unknown, 409 already resolved |
 | GET | /inspector | the session inspector page (static; it reads the API with the token from its URL fragment) |
 | GET | /api/event | server-sent events; `?session=` filters to that session and its descendants |
 """
@@ -55,7 +58,7 @@ from .llmhub import catalog
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
 from .paths import home
-from .runtime import Busy, NotFound, Runtime, message_json, project_json
+from .runtime import Busy, Conflict, NotFound, Runtime, message_json, project_json
 from .store import Store
 from .tools import ToolError
 
@@ -96,6 +99,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             except NotFound as exc:
                 return _error(404, str(exc))
             except Busy as exc:
+                return _error(409, str(exc))
+            except Conflict as exc:
                 return _error(409, str(exc))
             except (ValueError, KeyError, TypeError) as exc:
                 return _error(400, str(exc))
@@ -238,6 +243,21 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         runtime.reply(p(request, "id"), p(request, "pid"), reply == "allow")
         return Response(status_code=204)
 
+    async def questions(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)
+        return JSONResponse(runtime.pending_questions(sid))
+
+    async def all_questions(request: Request) -> Response:
+        return JSONResponse(runtime.pending_questions())
+
+    async def question_reply(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)
+        body = await _body(request)
+        runtime.reply_question(sid, p(request, "qid"), body.get("answers"))
+        return Response(status_code=204)
+
     async def kernels(request: Request) -> Response:
         return JSONResponse([k.json() for k in runtime.kernels.items.values()])
 
@@ -286,6 +306,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     routes = [
         Route("/inspector", inspector),
         Route("/api/info", route(info)),
+        Route("/api/question", route(all_questions)),
         Route("/api/bash", route(bash_jobs)),
         Route("/api/bash/{id}", route(bash_job), methods=["GET", "DELETE"]),
         Route("/api/kernel", route(kernels)),
@@ -311,6 +332,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/snapshot", route(snapshot)),
         Route("/api/session/{id}/permission", route(permissions)),
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
+        Route("/api/session/{id}/question", route(questions)),
+        Route("/api/session/{id}/question/{qid}", route(question_reply), methods=["POST"]),
         Route("/api/event", route(events)),
     ]
 
