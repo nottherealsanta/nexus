@@ -55,10 +55,11 @@ from .codec import message_to_json, to_json
 from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
-from .llmhub.types import Message, ProviderError, Text, ToolCall, ToolResult, ToolSpec
-from .loop import MAX_STEPS, Agent, MessageAdded, ToolEnd, ToolStart
+from .llmhub.types import Done, Message, PartDone, ProviderError, Text, ToolCall, ToolResult, ToolSpec
+from .loop import MAX_STEPS, Agent, MessageAdded, StepStart, ToolEnd, ToolStart
 from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
+from .recovery import Recovery
 from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
@@ -112,6 +113,12 @@ class Runtime:
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
         bus.attach(store)  # every published event is durable before any subscriber sees it
+        self.recovered: list[dict[str, Any]] = []
+
+    def recover(self) -> list[dict[str, Any]]:
+        """Reconcile turns a crash left unfinished. Runs before the daemon serves requests."""
+        self.recovered = Recovery(self).run()
+        return self.recovered
 
     # -- projects ------------------------------------------------------------
 
@@ -531,7 +538,7 @@ class Runtime:
                 self.inboxes.setdefault(session_id, []).append(notice)
             else:
                 stored = self.store.append_message(session_id, Message("user", (Text(notice),)))
-                self.bus.publish("message.added", message_json(stored), session_id=session_id)
+                self._publish_message(session_id, stored)
         self.bus.publish("session.updated", self.session_json(session), session_id=session_id)
         return session
 
@@ -543,7 +550,13 @@ class Runtime:
             self.inboxes.setdefault(session_id, []).append(text)
             return
         stored = self.store.append_message(session_id, Message("user", (Text(text),)))
-        self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        self._publish_message(session_id, stored)
+
+    def _publish_message(self, session_id: str, stored: StoredMessage) -> None:
+        """Announce a saved message once; keep its durable event id for recovery."""
+        event = self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        if event.get("id") is not None:
+            self.store.link_message_event(stored.id, event["id"])
 
     def _notify(self, session_id: str, text: str) -> None:
         """Deliver an automatic notice without waking an archived session.
@@ -558,7 +571,7 @@ class Runtime:
             return
         if session.archived:
             stored = self.store.append_message(session_id, Message("user", (Text(text),)))
-            self.bus.publish("message.added", message_json(stored), session_id=session_id)
+            self._publish_message(session_id, stored)
         elif session_id in self.turns:
             self.inboxes.setdefault(session_id, []).append(text)
         else:
@@ -1116,13 +1129,18 @@ class Runtime:
         if session.title == "New session":
             self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS])
         self.errors.pop(session_id, None)
+        turn = self.store.start_turn(session_id)  # durable before the task exists
         # Published here, not in the task, so a session is never seen idle between being prompted and running.
         self.bus.publish("session.status", {"status": "busy"}, session_id=session_id)
-        self.turns[session_id] = asyncio.create_task(self._run(session_id, text))
+        self.turns[session_id] = asyncio.create_task(self._run(session_id, text, turn["id"]))
 
-    async def _run(self, session_id: str, text: str) -> None:
+    async def _run(self, session_id: str, text: str, turn_id: str) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
+        active_request: str | None = None
+        request_parts: list[dict[str, Any]] = []
+        step = 0
+        closed = False
         try:
             agent = self._agent(self.session(session_id))
             async for event in agent.turn(text):
@@ -1130,24 +1148,69 @@ class Runtime:
                     if event.message.role == "assistant":
                         started.clear()
                         finished.clear()
-                    stored = self.store.append_message(session_id, event.message)
+                        stored = self.store.save_assistant_message(
+                            session_id, event.message, turn_id=turn_id, request_id=active_request)
+                        active_request = None
+                        request_parts = []
+                    elif event.message.role == "tool":
+                        stored = self.store.save_tool_message(session_id, event.message, turn_id=turn_id)
+                    else:
+                        stored = self.store.append_message(session_id, event.message)
                     self._commit_file_reads(session_id, event.message)
-                    self.bus.publish("message.added", message_json(stored), session_id=session_id)
+                    self._publish_message(session_id, stored)
                 else:
-                    if isinstance(event, ToolStart):
+                    if isinstance(event, StepStart):
+                        step = event.step
+                        active_request = self.store.start_request(turn_id, session_id, event.step)["id"]
+                        request_parts = []
+                    elif isinstance(event, PartDone):
+                        request_parts.append(to_json(event.part))
+                    elif isinstance(event, Done):
+                        if active_request is not None:
+                            self.store.finish_request(
+                                active_request, stop=event.stop, response_id=event.response_id,
+                                parts=request_parts)
+                    elif isinstance(event, ToolStart):
                         started.add(event.call.id)
+                        self.store.mark_tool_started(turn_id, session_id, event.call)
                     elif isinstance(event, ToolEnd):
                         finished[event.call.id] = event.result
+                        self.store.mark_tool_finished(
+                            turn_id, session_id, event.call, event.result,
+                            self._pending_observation_data(session_id, event.call.id))
                     data = to_json(event)
                     self.bus.publish(data["type"], data, session_id=session_id)
+            self.store.finish_turn(turn_id, "completed", steps=step)
+            closed = True
         except asyncio.CancelledError:
-            self._close_dangling_calls(session_id, started, finished)
-            self._fail(session_id, {"kind": "interrupted", "message": "interrupted by the user"})
+            if active_request is not None:
+                self.store.interrupt_request(active_request, reason="interrupted by the user")
+            self._close_dangling_calls(session_id, started, finished, turn_id)
+            error = {"kind": "interrupted", "message": "interrupted by the user"}
+            self._fail(session_id, error)
+            self.store.finish_turn(turn_id, "interrupted", steps=step, error=error)
+            closed = True
         except ProviderError as exc:
-            self._fail(session_id, {"kind": "provider", "message": str(exc), "status": exc.status, "body": exc.body})
+            error = {"kind": "provider", "message": str(exc), "status": exc.status, "body": exc.body}
+            if active_request is not None:
+                self.store.fail_request(active_request, error)
+            self._fail(session_id, error)
+            self.store.finish_turn(turn_id, "failed", steps=step, error=error)
+            closed = True
         except (AuthError, CredentialError, ValueError) as exc:
-            self._fail(session_id, {"kind": "auth" if not isinstance(exc, ValueError) else "request", "message": str(exc)})
+            error = {"kind": "auth" if not isinstance(exc, ValueError) else "request", "message": str(exc)}
+            if active_request is not None:
+                self.store.fail_request(active_request, error)
+            self._fail(session_id, error)
+            self.store.finish_turn(turn_id, "failed", steps=step, error=error)
+            closed = True
         finally:
+            if not closed:  # an unexpected failure still closes the durable turn visibly
+                if active_request is not None:
+                    self.store.interrupt_request(active_request, reason="the turn ended without a recorded outcome")
+                self.store.finish_turn(
+                    turn_id, "interrupted", steps=step,
+                    error={"kind": "internal", "message": "the turn ended without a recorded outcome"})
             self.pending_reads.pop(session_id, None)
             self.turns.pop(session_id, None)
             # A move queued during the turn lands here if no later call boundary did.
@@ -1162,11 +1225,19 @@ class Runtime:
             if leftover and self.store.session(session_id) is not None:
                 self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
             else:
-                self.bus.publish("session.status", {"status": "idle"}, session_id=session_id)
+                self.bus.publish("session.status", {"status": "idle", "turn_id": turn_id}, session_id=session_id)
+            if closed:
+                self.store.set_turn_recovery(turn_id, "none")
 
     def _fail(self, session_id: str, error: dict[str, Any]) -> None:
         self.errors[session_id] = error["message"]
         self.bus.publish("session.error", error, session_id=session_id)
+
+    def _pending_observation_data(self, session_id: str, call_id: str) -> list[dict[str, Any]]:
+        """Observations from one read call, kept with its result for crash recovery."""
+        return [observation.json() | {"path": observation.path}
+                for observation in self.pending_reads.get(session_id, [])
+                if observation.call_id == call_id]
 
     def _commit_file_reads(self, session_id: str, message: Message) -> None:
         if message.role != "tool":
@@ -1176,7 +1247,7 @@ class Runtime:
         guard.commit_reads(calls)
 
     def _close_dangling_calls(self, session_id: str, started: set[str],
-                              finished: dict[str, ToolResult]) -> None:
+                              finished: dict[str, ToolResult], turn_id: str) -> None:
         messages = self.store.messages(session_id)
         if not messages or messages[-1].message.role != "assistant":
             return
@@ -1197,9 +1268,9 @@ class Runtime:
             else:
                 results.append(ToolResult(call.id, "interrupted by the user before this tool ran", is_error=True))
         message = Message("tool", tuple(results))
-        stored = self.store.append_message(session_id, message)
+        stored = self.store.save_tool_message(session_id, message, turn_id=turn_id)
         self._commit_file_reads(session_id, message)
-        self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        self._publish_message(session_id, stored)
 
     async def interrupt(self, session_id: str, *, reason: str = "the turn was interrupted") -> bool:
         stopped = False
@@ -1245,9 +1316,11 @@ class Runtime:
         entry = self.approvals.get(approval_id)
         if entry is None or entry[0] != session_id:
             raise NotFound(f"no pending permission {approval_id}")
+        self.bus.publish("permission.replied", {"id": approval_id, "session_id": session_id,
+                                                "outcome": "allowed" if allow else "denied", "allow": allow},
+                         session_id=session_id)
         if not entry[1].done():
             entry[1].set_result(allow)
-        self.bus.publish("permission.replied", {"id": approval_id, "allow": allow}, session_id=session_id)
 
     # -- questions -------------------------------------------------------------
 

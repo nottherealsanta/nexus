@@ -3,7 +3,7 @@
 Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
 daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
 tool approvals, pending questions, workspace control operations, session
-archiving and pending directory moves, and exposes them over
+archiving, pending directory moves and startup recovery, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
 ## Lifecycle (`nexus/daemon.py`)
@@ -56,15 +56,19 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
 - **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
-  `session`, `session_snapshot`, `message`, `event`, `file_observation` and
-  `log`. `session_snapshot` is
+  `session`, `session_snapshot`, `message`, `event`, `file_observation`, `turn`,
+  `turn_request`, `turn_tool` and `log`. `session_snapshot` is
   the JSON configuration frozen for one session; `event` is the durable event
   log, in publish order (see [Durable event log](#durable-event-log)); `log`
   holds that database's log generation and retention floor;
-  `file_observation` holds each session's read observations (see below).
+  `file_observation` holds each session's read observations (see below);
+  `turn`, `turn_request` and `turn_tool` are the durable execution lifecycle
+  ([Crash recovery](#crash-recovery)). A `message` row also records the id of the
+  `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
-  sessions, snapshots, observations and session events. Archiving only changes
-  one `archived` column on every session in the tree; it deletes nothing.
+  sessions, snapshots, observations, execution records and session events.
+  Archiving only changes one `archived` column on every session in the tree; it
+  deletes nothing.
 
 ## Durable event log
 
@@ -97,9 +101,10 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   event is not delivered and does not get an `id`. An event naming a session
   whose row is already gone is not delivered either; the tombstone covers it.
 - **Not yet.** No retention or compaction runs: the log grows without limit and
-  the floor stays 0. Turn recovery, retries and resuming in-memory approvals or
-  questions after a crash are separate (Step 11); a reconnect resumes the stream,
-  not interrupted work.
+  the floor stays 0. Retries, idempotent mutation requests and manual
+  continuation (`/continue`) are separate (Step 11); a reconnect resumes the
+  stream, not a turn. Startup recovery reconciles interrupted turns from the
+  durable log and execution records ([Crash recovery](#crash-recovery)).
 
 ## Session archiving
 
@@ -179,7 +184,9 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
 
 ## Turns
 
-- One turn per session at a time; a second prompt gets 409.
+- One turn per session at a time; a second prompt gets 409. A `turn` row is
+  written before its task starts, and each provider request and tool call
+  records its own durable lifecycle state ([Crash recovery](#crash-recovery)).
 - Each turn builds the loop's `Agent` from the session's stored snapshot
   (prompt, tools, steps), the live session settings (model, effort, permission,
   tool switches) and the saved messages. It does not reload agent files or
@@ -221,6 +228,106 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   OAuth access tokens are reused instead of refreshed every turn.
   `nexus login` writes `auth.json` and the daemon reads it on the next refresh.
 
+## Crash recovery
+
+`Runtime.recover()` (`nexus/recovery.py`) runs while the daemon is starting,
+before the app can accept a request. It never calls a provider and never runs a
+tool. A clean shutdown is not recovery: it interrupts turns normally and closes
+their records.
+
+**What counts as unfinished.** A turn is unfinished when its `turn` row is
+`running`, or its `recovery` marker is still `pending` from an interrupted
+recovery. Within it, the durable records distinguish:
+
+| record | meaning |
+| --- | --- |
+| no `turn_request` | the prompt was accepted before any provider request |
+| `turn_request` `started` | a provider request was sent and its stream never finished |
+| `turn_request` `completed`, `message_id` null | the response completed but its assistant message was not saved |
+| `turn_tool` `saved` | the call is in a saved assistant message and never started |
+| `turn_tool` `started` | the tool was about to run; its outcome is unknown unless a wait proves otherwise |
+| `turn_tool` `finished` | the result is durable but never entered conversation history |
+| `turn_tool` `inserted` | the result is in a saved tool message |
+| unanswered `permission.asked` / `question.asked` | a wait the restart lost |
+
+Busy state itself is in memory (`Runtime.turns`) and is not the recovery
+authority; the durable turn and request rows are.
+
+**What recovery does.**
+- If the loop's `turn_end` event is durable but the turn's closing record was
+  lost, it finishes the turn as `completed` instead: nothing was interrupted
+  from the model's point of view. It publishes the idle status and a
+  `turn.recovered` with `outcome: "completed"` (including any runtime losses it
+  can see), and appends no recovery notice.
+- Otherwise it marks the turn `interrupted` and its session idle. It publishes a
+  durable `session.status` `{"status": "idle", "reason": …, "turn_id": …}` once.
+- Restores a provider response that durably reached `Done` from its saved
+  `PartDone` parts, exactly as produced, including `origin` and `raw`. It never
+  requests the provider again.
+- Preserves durable tool results and inserts a missing tool message once. A
+  started call with no result says its outcome is unknown and the workspace may
+  have changed. A saved call in a recorded turn says it did not run. A started
+  call whose approval
+  was still pending, or was denied, also says it did not run. A pending `ask`
+  is reported as cancelled; an already answered question is restored from its
+  durable answer.
+- Publishes a cancellation outcome for every unanswered question
+  (`question.replied`, `outcome: "cancelled"`) and approval
+  (`permission.replied`, `outcome: "cancelled"`, `allow: false`). A later reply
+  cannot resume the work: an approval gets 404, and a question gets 409 while
+  its recovery tombstone is held (404 after a later restart).
+- Appends one new, clearly labelled `[Nexus recovery: interrupted turn]` user
+  message with the evidence: the request's partial-output summary, each call's
+  outcome, cancelled waits, and lost runtime state. It never edits earlier
+  context.
+- Publishes one `turn.recovered` event per recovered turn with the same
+  outcomes in structured form, stored in the session's log.
+
+**Partial output.** An interrupted stream is not a completed response. Its
+deltas, completed `part_done` items, `raw` data and `origin` stay in the event
+log for inspection, but they do not enter conversation history: doing so would
+present partial text, partial arguments or partial reasoning as a finished
+answer. Only a response whose `Done` is durable is replayable from the stored
+parts. The session's next request gets the normal history plus the recovery
+notice and any restored results.
+
+**Runtime losses.** Kernels and background bash jobs are in memory. When a
+recovered turn used code, its notice says kernels did not survive and that
+variable/cell state was not invented; `code.call` and `code.cell` events remain.
+A `bash.started` event without `bash.finished` is reported as a lost job record:
+retained output is gone and the command may still be running. Recovery never
+kills a process from a persisted pid, because a pid may have been reused;
+process supervision is not implemented.
+
+**Trees and archives.** Each session is recovered on its own. A parent is never
+woken and a child never resumes; an interrupted `wait: false` child produces no
+completion notice. Archive state is untouched, so an archived session stays
+archived and idle.
+
+**Repeatable.** Every step is idempotent: a message is inserted with the marker
+that records it, a tool message is inserted with the `inserted` states of its
+results, and recovery events are checked in the durable log before publication.
+A crash during recovery followed by another start therefore appends no duplicate
+result, notice, cancellation or completion event. New messages saved just before
+a crash but not announced are announced once; pre-recovery history is marked so
+it is never republished.
+The bus still commits an event before publishing it; the message row records the
+event id afterwards, and that link is what startup reconciles when it is
+missing. Older databases without the execution tables open
+normally. If such a session's last saved message ends in tool calls and it has no
+turn row, recovery treats it as a pre-upgrade interrupted turn: it creates one
+labelled legacy turn, closes the calls as **unknown** (it does not say they did
+not run and invents no result) and appends
+`[Nexus recovery: legacy interrupted turn]` once. A normal older conversation is
+untouched, and every stored message id and event id stays the same.
+
+**Not done here.** No automatic retries, no `/continue`, no idempotent client
+mutations and no retention. A background job that outlives an orderly turn and
+whose session had no interrupted turn is not reported individually after a
+restart; its record and retained output are simply gone. The same applies to a
+kernel from a session with no interrupted turn: nothing durable can prove it was
+live, so recovery does not invent a loss report.
+
 ## The CLI as a client (`nexus/cli.py`, `nexus/client.py`)
 
 ```sh
@@ -251,14 +358,19 @@ stops with an unarchive command.
 
 ## Not verified / not yet
 
-- **Crashes.** A daemon crash mid-turn loses the in-flight assistant message;
-  messages saved before it stay. A clean shutdown writes the closing events; a
-  crash can leave the last stored `session.status` as `busy` until a client
-  reloads `/api/session` (turn recovery is Step 11).
+- **Crashes.** Startup recovery reconciles turns a crash left unfinished
+  ([Crash recovery](#crash-recovery)): it marks them interrupted, restores
+  durable output and results, cancels waits and reports lost runtime state. It
+  does not retry them; a new prompt or manual continuation is separate and not
+  implemented. A crash during recovery is itself recoverable. The crash windows
+  are covered offline by reconstructed durable states and a subprocess restart
+  smoke test; no live provider stream was killed mid-flight.
 - **Turns after restart.** Turns are not resumed after a restart. Event streams
-  resume; in-memory approvals and questions do not.
+  resume; in-memory approvals and questions are cancelled visibly and cannot be
+  answered later.
 - **Retention.** The event log has no expiry or compaction yet; every cursor
-  stays resumable and the floor is 0.
+  stays resumable and the floor is 0. Turn, request and tool lifecycle rows also
+  have no retention; they are small but accumulate one turn at a time.
 - **Daemon version.** Nothing checks that a running daemon runs the same code
   as the client. Run `nexus daemon stop` after changing core.
 
@@ -267,7 +379,9 @@ stops with an unarchive command.
 `nexus/kernels.py` owns a lazy Monty pool and up to eight persistent kernels,
 shared by session tree or explicit id. They outlive sessions. Deleting a kernel
 stops it; daemon shutdown stops any running cell and closes every worker and the
-pool. See [tools.md](tools.md#code) for limits and cancellation behavior.
+pool. Kernels do not survive a daemon restart; startup recovery reports the loss
+when it reconciles a turn that used code, and never invents kernel state. See
+[tools.md](tools.md#code) for limits and cancellation behavior.
 
 ## Bash jobs
 
@@ -277,7 +391,10 @@ tools, and outlive turns and code cells. Deleting a session or project kills its
 jobs; daemon shutdown kills every job. Archiving does not; if the session is
 archived when the job finishes, `bash.finished` is still stored and its notice
 is saved as context without starting a turn. Limits, output retention and the
-finish notice are in [tools.md](tools.md#background-bash-jobs).
+finish notice are in [tools.md](tools.md#background-bash-jobs). Jobs do not
+survive a daemon restart. An unfinished `bash.started` is reported by startup
+recovery when it reconciles that session's turn: the retained output is lost and
+the command may still be running. Recovery does not kill it from a pid.
 
 ## Workspace controls
 
@@ -336,7 +453,12 @@ in [tools.md](tools.md#read-observations-and-freshness). A successful change
 drops the observations it invalidated. All Nexus file mutations in one daemon
 share an in-process asyncio lock (`Runtime.file_lock`), and the revision is
 checked again inside it before writing; a multi-file patch validates every file
-before writing any. This orders Nexus writers only: unrestricted `bash` and
+before writing any.
+Startup recovery restores an observation only for a completed `read` whose saved
+result it puts back into conversation history (and records its revision when the
+result was saved). A read whose result is unknown grants nothing, so recovery
+never authorizes an edit beyond content the model actually received.
+This orders Nexus writers only: unrestricted `bash` and
 external processes can still write without these checks, and an external writer
 can race the moment between the final check and the write.
 
@@ -347,7 +469,9 @@ session id, the tool call id (including a nested `code` call's synthetic id) and
 the validated questions. They are not approvals: answers never allow a tool call.
 Interrupt, session/project deletion, daemon shutdown and a cancelled code cell
 close them with an explicit cancellation event. The tool waits with no timeout
-of its own. A daemon crash loses pending requests along with the running turn.
+of its own. A daemon crash loses the in-memory wait, and startup recovery
+publishes an explicit cancellation (`question.replied`, `outcome: "cancelled"`)
+so a late answer gets 409 and cannot resume the turn.
 Contract, limits and endpoints: [tools.md](tools.md#ask),
 [api.md](api.md#endpoints).
 
@@ -356,3 +480,11 @@ CLI input is serialized across questions and approvals while the SSE consumer
 keeps running. A question resolved or cancelled by another client dismisses its
 input reader. Cancellable stdin reads use file descriptors without abandoned
 input threads, including piped input; later lines are not prefetched.
+
+
+Recovery delivery review: closing a turn leaves its recovery marker pending
+until normal final cleanup is announced. Final idle events carry the turn id,
+so startup closes a crash in that interval without duplicating the idle event.
+An approval reply is committed before releasing its waiting tool; a persistence
+failure leaves the tool waiting. The message-link migration adds its column and
+marks legacy rows in one explicit transaction.

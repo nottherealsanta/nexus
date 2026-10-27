@@ -179,10 +179,20 @@ event log; a question asked from inside `code` uses the nested call id.
 `question.replied` is the single resolution event. With `outcome: "answered"` it
 carries the validated answers in question order. With `outcome: "cancelled"` it
 carries an empty `answers` list and a `reason` (interrupted turn, deleted
-session/project, daemon shutdown, or cancelled code cell). There is never a
+session/project, daemon shutdown, or cancelled code cell). Startup recovery adds
+a cancellation for a question a daemon crash left pending. There is never a
 second reply event: a duplicate or late API reply gets 409. The tool's result
 then enters the conversation once, as an ordinary `tool` message. Schema and
 limits: [tools.md](tools.md#ask); endpoints: [api.md](api.md#endpoints).
+
+## Approvals
+
+`permission.asked` carries the pending request. `permission.replied` carries
+`id`, `allow` and, for every new reply, `outcome` (`allowed`, `denied` or
+`cancelled`) with `session_id`; a cancellation also has `reason`. Startup
+recovery publishes a cancellation for an approval the crash lost, with
+`allow: false`, so a client can close its waiting card. The old approval id no
+longer exists and a reply gets 404.
 
 ## Code cells
 
@@ -240,3 +250,28 @@ New sessions carry their snapshot summary in `session.created`; explicit updates
 appear in `session.updated` and model-visible forward notices. Notices received
 while a call is running are saved after its tool results, before the next model
 request, as ordinary `message.added` items.
+
+## Crash recovery
+
+A daemon restart reconciles turns it left unfinished ([daemon.md](daemon.md#crash-recovery)).
+Recovery publishes only durable, replayable facts:
+
+- `turn.recovered` once per turn: `outcome` (`interrupted`, or `completed`
+  when a durable `turn_end` proved the loop finished), the request state,
+  restored `assistant_message` and `tool_message` ids, each tool call's
+  classification, cancelled waits, lost runtime state, the diagnostic-only
+  partial-output counts and the notice message id.
+- `message.added` for a restored assistant message (parts that were completed
+  before the crash, with `origin` and `raw`), for the single tool message that
+  closes the calls, and for the new `[Nexus recovery: interrupted turn]` user
+  notice. Earlier messages are never rewritten.
+- `session.status` `/` idle with `reason` and `turn_id`, `question.replied`
+  cancellations and `permission.replied` cancellations.
+
+**Partial output.** Deltas, `part_done` items and `wire_event` records of an
+interrupted stream remain durable diagnostic history. They are not inserted as
+an assistant message: a cut-off response cannot be replayed without presenting
+partial text, arguments or reasoning as a complete answer, and recovery never
+completes or re-executes a tool call. Completed parts are restored only when the
+provider's `Done` was durable. An interrupted request's `turn_request` row is
+marked `interrupted`, which is distinct from a `completed` response.

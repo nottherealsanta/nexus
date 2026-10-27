@@ -53,7 +53,7 @@ EVENT_PAGE = 1000
 MEDIA_TYPES = {"markdown": "text/markdown; charset=utf-8", "json": "application/json; charset=utf-8"}
 EXTENSIONS = {"markdown": "md", "json": "json"}
 
-NOTICE_PREFIXES = ("[Nexus notice:", "[Notification:")
+NOTICE_PREFIXES = ("[Nexus notice:", "[Nexus recovery:", "[Notification:")
 
 
 class ExportOptions(ValueError):

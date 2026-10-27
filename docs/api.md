@@ -267,9 +267,10 @@ of every historical request. Each message shows its role, id and stored sequence
 summary; encrypted reasoning is labelled as present but unreadable and says it
 is replayed unchanged. Tool arguments and results are fenced; arguments are
 pretty-printed only when they are valid JSON (the JSON export keeps the stored
-text exactly). A user message that starts with `[Nexus notice:` or
-`[Notification:` is labelled a context notice. Child conversations stay in
-their own session sections, never inside the parent's messages.
+text exactly). A user message that starts with `[Nexus notice:`,
+`[Nexus recovery:` or `[Notification:` is labelled a context notice. Child
+conversations stay in their own session sections, never inside the parent's
+messages.
 
 No additional clipping is applied: existing clip notices are reproduced as
 stored. Fences are one backtick longer than any backtick run in the content, so
@@ -473,12 +474,13 @@ Deleting a project publishes one tombstone per deleted session, then
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |
 | `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
-| `session.status` | `{status: "busy" or "idle"}`, before and after each turn |
+| `session.status` | `{status: "busy" or "idle"}` before and after each turn; a recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
-| `permission.replied` | `{id, allow}` |
+| `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?}`; a cancellation has `allow: false` |
 | `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
+| `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |
@@ -491,6 +493,46 @@ Deleting a project publishes one tombstone per deleted session, then
 `wire_request` carries the exact request body and headers, with credentials
 redacted. `wire_event` carries every provider SSE event as received. Nothing the
 model sees is hidden from clients.
+
+## Crash recovery
+
+If the daemon crashes or is restarted while turns are running, the next startup
+reconciles them before it accepts a request ([daemon.md](daemon.md#crash-recovery)).
+Clients do not call a recovery endpoint; they resync and see the outcome in the
+durable log:
+
+- `session.status` `{"status": "idle", "reason": "the daemon restarted while the turn was running", "turn_id": "trn_…"}`
+  for each recovered session.
+- Ordinary `message.added` events for a restored assistant message (a response
+  that had completed), for the one tool message closing its calls, and for the
+  new `[Nexus recovery: interrupted turn]` user notice. The notice is new
+  context; earlier messages are unchanged.
+- `question.replied` with `outcome: "cancelled"` and `permission.replied` with
+  `outcome: "cancelled"` for every wait the restart lost. The old ids cannot
+  resume the turn: a question reply gets 409, an approval 404.
+- One `turn.recovered` per turn with `{turn_id, session_id, outcome,
+  reason, legacy, request, assistant_message, tool_message, tools, waits, losses,
+  partial_output, notice}`. `outcome` is `interrupted`, or `completed` when a
+  durable `turn_end` proved the loop finished before the crash (then `notice` is
+  null). `legacy` is true for a pre-execution-record session.
+  `partial_output` is `{"diagnostic_only": true, "counts": …, "parts": …,
+  "tool_calls": …}` for an interrupted stream, or null. `tools[].outcome`
+  is `restored`, `not_run`, `approval_pending`,
+  `approval_denied`, `approval_cancelled`, `question_answered`,
+  `question_cancelled`, `unknown`,
+  `unknown_code` or `legacy_unknown`; `losses` reports `{kernels, bash_jobs}`.
+
+Partial provider output (deltas and completed parts of an interrupted stream)
+stays in the event log but is **not** inserted into the conversation, because
+an interrupted response cannot be replayed without pretending it completed.
+A restored response comes from parts that were durable before the crash. A
+completed tool result is preserved and inserted; a started call with no result
+is labelled unknown and is never re-run. A session saved by an older version
+with a trailing tool call and no execution records gets a legacy
+`[Nexus recovery: legacy interrupted turn]` notice and unknown results; it is
+never claimed to have not run. Recovery itself is repeatable: a crash
+during recovery does not duplicate a result, notice, cancellation or
+`turn.recovered` event.
 
 ## A turn, end to end
 
@@ -520,10 +562,10 @@ Login over the API (sign-in is the local `nexus login`), files and diffs.
 Event retention and log compaction: the `event` table still grows without
 limit and the log floor stays 0. The cursor protocol already reports
 `history_unavailable` with the current head and floor, so retention can arrive
-without a client change. Turn recovery after a crash, automatic retries,
-idempotent mutations and `/continue` are also still open (Step 11); a reconnect
-resumes the **stream**, not an interrupted turn or in-memory approvals and
-questions.
+without a client change. Automatic retries, idempotent mutations and `/continue`
+are still open (Step 11). Turn recovery after a crash is implemented: startup
+marks interrupted turns and publishes their outcome in the log
+([Crash recovery](#crash-recovery)); it never resumes the turn itself.
 
 Worktree listing, creation and deletion exist, but merge/integration and branch
 cleanup are separate future operations. A session's directory can move anywhere
@@ -532,9 +574,11 @@ the user can reach: it is not confined to its project.
 Kernel execution and metadata limits: [tools.md](tools.md#code). `code.call` and
 `code.cell` are stored session events; `kernel.deleted` announces kernel removal.
 
-Question requests are in memory like approvals. They are not restored after a
-daemon crash or restart; an active turn does not survive either (Step 11 defines
-reconnect and resync). Their schema, limits and cancellation behavior are in
+Question requests are in memory like approvals, but their durable
+`question.asked` records let startup recovery close a lost wait with an explicit
+`question.replied`/`outcome: "cancelled"`. A turn does not survive a crash
+itself; recovery marks it interrupted and never resumes it (Step 11). Their
+schema, limits and cancellation behavior are in
 [tools.md](tools.md#ask).
 
 Background bash jobs: `bash.started` and `bash.finished` are stored session

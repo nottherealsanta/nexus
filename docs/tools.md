@@ -271,6 +271,10 @@ Read a text file with line numbers, or list a directory.
 * File bytes are decoded as UTF-8 with replacement.
 * A direct read records an observation for this session (above). A directory
   listing does not, and neither does a read inside a `code` cell.
+* Startup recovery restores a read's observation only when it puts that read's
+  saved result back into conversation history. A read whose result is unknown
+  grants no coverage, so recovery cannot authorize an edit from content the
+  model never received ([daemon.md](daemon.md#crash-recovery)).
 
 ## bash
 
@@ -484,12 +488,15 @@ oversized values are rejected before the wait resolves.
 The wait has no tool-specific timeout: it ends with an answer, or with
 cancellation when the turn is interrupted, its session or project is deleted, the
 daemon shuts down, or the enclosing `code` cell times out or is cancelled. A
-cancelled question publishes `question.replied` with `outcome: "cancelled"` and a
+daemon crash also closes it: startup recovery publishes `question.replied` with
+`outcome: "cancelled"`, so the old id cannot resume the turn. A cancelled
+question publishes `question.replied` with `outcome: "cancelled"` and a
 reason; a late answer cannot resume the work (409 while the session exists, 404
 once it is deleted). Each request resolves exactly once, so duplicate or
 conflicting replies create no second result or event. Recent resolutions are
 remembered in a bounded tombstone set; an id older than that gets 404 and still
-changes nothing.
+changes nothing. If the answer was durable before the crash, recovery restores
+that answer as the call's result instead of inventing a cancellation.
 
 The model-visible result is one JSON object keyed by question id. Its size is
 bounded by the question/answer limits; generic text clipping is not applied to
@@ -562,7 +569,10 @@ variables**, with a `kernel.deleted` notice; the next default call creates a new
 one. Monty cancellation closes its worker checkout. A timed-out queued cell
 leaves the active kernel alone. Daemon shutdown stops any running cell, then
 closes every worker and the pool. This is persistent notebook-style execution,
-with no state recovery after forced cancellation or restart.
+with no state recovery after forced cancellation or restart. A daemon crash
+loses every kernel; startup recovery says so for a recovered turn that used
+`code`, and preserves the durable `code.call`/`code.cell` evidence without
+claiming a successful call or recreating variables.
 
 `GET /api/kernel`, `GET /api/kernel/{id}` and `DELETE /api/kernel/{id}` inspect
 and delete kernels; deleting a busy kernel returns 409. Metadata retains the

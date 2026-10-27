@@ -117,4 +117,7 @@ calls continues the loop, since the tool-call check is what decides.
 
 No retries, no context limit or compaction. Saving and cancelling are the
 caller's job: the daemon saves each `MessageAdded` and cancels the turn task on
-interrupt ([daemon.md](daemon.md)).
+interrupt ([daemon.md](daemon.md)). The daemon also records the turn, each
+provider request and each tool call's lifecycle durably around this loop, so a
+crash can be reconciled from evidence rather than from memory
+([daemon.md](daemon.md#crash-recovery)); the loop itself stays storage-free.

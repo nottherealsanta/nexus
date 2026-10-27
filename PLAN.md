@@ -79,8 +79,10 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     loop.py         the agent loop (no storage; yields MessageAdded)
     codec.py        JSON for messages and events
     export.py       read-only Markdown/JSON exports from one SQLite snapshot
-    store.py        SQLite: projects, sessions (tree), messages, events
+    store.py        SQLite: projects, sessions (tree), messages, turn lifecycle, events
     bus.py          event bus
+    eventlog.py     durable event ids, cursors, replay-to-live stream
+    recovery.py     startup reconciliation of turns a crash left unfinished
     runtime.py      projects, sessions, turns, approvals, interrupts, child sessions
     server.py       the HTTP API (OpenCode-style /api/*)
     inspector/      the session inspector page (served at /inspector)
@@ -873,7 +875,8 @@ see the detailed record below before the workspace controls work.
   the result appearing in context exactly once. Full suite after delivery review: 123 tests; Ruff and
   `git diff --check` clean. No live provider run was performed.
 - **Limits.** Pending questions are in memory (a daemon crash loses them with the
-  turn) and there is no standalone "cancel this question" endpoint; cancellation
+  turn; startup recovery closes them with an explicit cancellation, Step 11) and
+  there is no standalone "cancel this question" endpoint; cancellation
   comes from the turn/cell/session lifecycle. The inspector reads questions from
   the event log and pending endpoint, not a waiting-card UI; its script was
   syntax-checked, not visually re-run in a browser this increment. The CLI asks a
@@ -997,12 +1000,13 @@ are done below.
 ### Step 11: event log follow-ups
 
 Retention and size limits for the `event` table, resuming the live stream from
-an event id, and showing a crashed turn's partial state.
+an event id, and durably recovering a crashed turn's partial state.
 
 **Durable event identity and reconnect-safe replay (done 2026-10-27; review
-pending).** The first half of Step 11: reconnect resumes the stream. It does not
-implement retention, turn recovery, retries, idempotent mutations, `/continue`
-or post-crash approval/question restore.
+pending).** The first half of Step 11: reconnect resumes the stream. That
+increment did not implement retention, turn recovery, retries, idempotent
+mutations, `/continue` or post-crash approval/question restore; turn recovery is
+the increment below.
 
 - **Identity.** The stored `event.id` is the durable event id: an autoincrement
   row id, never reused, stable across daemon restarts. A new `log` table holds
@@ -1072,13 +1076,91 @@ or post-crash approval/question restore.
   241 tests; Ruff and `git diff --check` clean. No live provider or browser run
   was performed; the inspector script was syntax-checked with `node --check`.
 - **Limitations.** No retention: the log grows without limit and the floor stays
-  0. Turn recovery, automatic retries, idempotent mutation requests, `/continue`
-  and restoring in-memory approvals/questions are still open. A daemon crash can
-  leave the last stored `session.status` at `busy` until a client reloads session
-  state (a clean shutdown writes idle). `bus.overflow.dropped_after` is the last
+  0. Automatic retries, idempotent mutation requests and `/continue` are still
+  open. Turn recovery is implemented below; a crash during it is repeatable.
+  `bus.overflow.dropped_after` is the last
   live event enqueued for that subscriber, which can be ahead of what it applied
   during replay; clients resume from their own cursor. Archive transitions
   remain root-log-only (existing limitation).
+
+**Durable turn recovery (done 2026-10-27; review pending).** The second half of
+Step 11: a restart reconciles turns a crash left unfinished. It does not
+implement automatic retries, `/continue`, mutation idempotency, retention, web
+tools, skills or MCP.
+
+- **Execution records.** Three tables, all cascading with the session. `turn`
+  (`id`, session, `status` running/completed/interrupted/failed, start/finish,
+  steps, `start_seq`, error, `recovery` none/pending/done, notice id, data) is
+  written before a prompt's task starts. `turn_request` records each provider
+  request (step, status started/completed/interrupted/failed, log watermark,
+  assistant message id, stop, response id, error and the completed `PartDone`
+  parts). `turn_tool` records each call as `saved` (in a saved assistant
+  message, never started), `started`, `finished` (result durable, not in
+  history) or `inserted` (in a saved tool message), with output, error and any
+  read observations. A `message.event_id` links a saved message to its
+  `message.added` event.
+- **Contract.** `Runtime.recover()` runs from `make_runtime` before the app can
+  accept a request. It marks unfinished turns interrupted (or completed when a
+  durable `turn_end` proves the loop finished), leaves sessions idle, and never
+  calls a provider or runs a tool. A response that durably
+  reached `Done` is restored exactly from its completed parts; an interrupted
+  stream is never turned into an assistant message. Durable tool results are
+  preserved and inserted once; started calls are unknown unless a pending or
+  denied approval proves they did not run; saved calls did not run. Pending
+  questions and approvals receive explicit cancellation outcomes, and old ids
+  cannot resume the work. Kernels and background jobs are reported lost, with
+  no PID-based killing. Parent and child sessions are recovered independently;
+  archive state is untouched.
+- **Partial output.** Deltas, completed `part_done` items and `wire_event`
+  records remain in the durable log for inspection, with `origin`/`raw`. They
+  are not replayable context: a cut-off response cannot be presented as
+  complete, and recovery never invents complete arguments or encrypted
+  reasoning. The new `[Nexus recovery: interrupted turn]` user message is
+  labelled, reports counts, classifications and losses, and is the only new
+  context besides restored results/messages.
+- **Transactions and repeatability.** An assistant message, its request link
+  and its calls' `saved` rows are one transaction; a tool message and its
+  results' `inserted` rows are one transaction; a notice and its turn marker
+  are one transaction. Each recovery event is checked in the durable log before
+  publication, and messages saved before a crash but not announced are
+  announced once. Recovery can itself be interrupted at any step and finishes
+  on the next start without duplicates. Older databases gain the tables on
+  open. A session whose saved context ends in tool calls and has no turn record
+  is treated as a legacy interrupted turn: one labelled turn is created and its
+  calls are closed as unknown (never "did not run" and never a fabricated
+  result); normal old conversations and all existing event ids are untouched.
+- **Events.** `turn.recovered` (structured outcome), a `session.status` idle
+  with `reason`/`turn_id`, `question.replied`/`permission.replied`
+  cancellations, and ordinary `message.added` events. `permission.replied`
+  now carries `outcome` (`allowed`/`denied`/`cancelled`) and `session_id`.
+  Existing event ids, log generation, deletion tombstones and archive behavior
+  are unchanged.
+- **Verified offline** (`tests/test_recovery.py`, scripted/no provider):
+  accepted-before-request; interrupted streaming with no fabricated message;
+  a completed response restored from parts; a durable `turn_end` recorded as
+  completed without a false interruption notice;
+  started-unknown, finished-preserved
+  and saved-unstarted calls; a mixed multi-call batch; pending approval and
+  question cancellation and late-reply refusal; an answered question restored
+  from its durable answer; nested `code` with lost kernel and orphan background
+  job; parent and child together without notification; archived and idle;
+  recovery interrupted at every named step then repeated; repeated startup with
+  no duplicate message or event; a message saved before its event announced
+  once; migration from the pre-increment schema with a
+  normal conversation left untouched; legacy dangling context labelled unknown
+  once; durable replay of `turn.recovered`; no provider or tool
+  call during recovery; and an isolated subprocess daemon kill/restart smoke
+  test with a temporary `NEXUS10_HOME` and workspace.
+- **Limitations.** No retry, `/continue` or idempotent mutations. A background
+  job that outlives an orderly turn and whose session had no interrupted turn
+  is not reported individually after a restart (its record and output are
+  gone). Kernels have no state recovery. There is no process supervision. A
+  crash between saving a read result and committing its observation can lose
+  the observation; recovery restores only observations recorded with the saved
+  result, never by reading the file again. The crash windows are reconstructed
+  deterministically from durable rows in tests, not by killing a live provider
+  stream; no live provider run was performed. Full suite after implementation:
+  275 tests; Ruff and `git diff --check` clean.
 
 **Reconnect contract.** Durable cursors survive daemon restarts (or explicitly
 identify a changed log generation). Catch-up and live subscription share an
@@ -1088,8 +1170,9 @@ cursor-expired response that requires a fresh snapshot and cursor. Snapshots
 include a watermark so subsequent events can be applied without races.
 Filtered streams naturally skip unrelated global sequence numbers: a numeric
 gap alone is not evidence of loss. Overflow, expired cursors or an explicit
-continuity failure trigger resync. Reconnect restores pending questions,
-approvals, queues, partial turns and session lists as well as visible text.
+continuity failure trigger resync. Reconnect restores queues and session lists
+as well as visible text; it restores pending questions and approvals only by
+showing their durable cancellation after a restart (no in-memory wait survives).
 
 **Mutation contract.** Client request ids make retried prompts and other
 mutations idempotent, with a defined deduplication lifetime and replayed
@@ -1331,6 +1414,9 @@ show the wire view, the session tree and kernels.
 | The SSE `id:` was the per-daemon `seq`, so every restart invalidated clients | Durable event row ids with a `log` generation and a `<generation>:<id>` cursor; `seq` is only a live counter (done 2026-10-27) | A resume cursor must survive restart and reject a replaced database |
 | Only session events were stored; project changes and deletions were live-only | Global lifecycle events and minimal `session.deleted` tombstones are stored and replayed; a session's own history still cascades (done 2026-10-27) | A reconnect must be able to rebuild project and session state |
 | A reconnecting client started a fresh live stream and had to catch up out of band | Atomic replay-to-live handoff: subscription and head boundary first, paged replay, overlap skipped, explicit resync codes and overflow (done 2026-10-27) | No lost or duplicated events across the connection boundary |
+| A crash left the last in-memory turn permanently busy, with no durable record of what ran | `turn`/`turn_request`/`turn_tool` records; startup recovery marks the turn interrupted, leaves the session idle and reconciles only durable evidence (done 2026-10-27) | Busy state was never durable, so recovery needs its own evidence |
+| An interrupted provider stream could be mistaken for a finished reply | Partial output stays diagnostic in the event log; only a response that durably reached `Done` is restored, and a recovery notice labels the rest (done 2026-10-27) | Never present partial text, arguments or reasoning as complete |
+| A crashed daemon silently dropped pending approvals and questions | Recovery publishes explicit `permission.replied`/`question.replied` cancellations; late ids cannot resume work (done 2026-10-27) | A vanished wait is not an answer |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1362,7 +1448,8 @@ Work one reviewed increment at a time:
 4b. Add Markdown/JSON session export over the API, with an explicit read
    boundary and CLI file handling — done 2026-10-27; see Step 10.
 5. Durable events and reconnect-safe replay — done 2026-10-27; see Step 11.
-   Restart recovery, idempotent requests and `/continue` remain.
+   Durable turn recovery — done 2026-10-27; see Step 11. Idempotent requests
+   and `/continue` remain.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
 
@@ -1375,19 +1462,29 @@ Do not start the next increment until the current review is complete.
 - Steps 8–9a are delivered as one reviewed baseline; see the delivery review
   for independently rerun checks and the remaining platform limitations.
 - Kernels have no checkpoint recovery; a timeout, interrupt, crash or resource
-  limit discards the kernel. Monty workers run inside the daemon with its
-  environment (a scrubbed helper process is planned before 0.10.0). Linux, a
-  forced worker crash and cold-start latency are unverified.
+  limit discards the kernel. Startup recovery reports the loss for a reconciled
+  turn and preserves nested evidence, but restores no variables or cells. Monty
+  workers run inside the daemon with its environment (a scrubbed helper process
+  is planned before 0.10.0). Linux, a forced worker crash and cold-start latency
+  are unverified.
 - Background bash jobs live in the daemon's memory. A normal shutdown kills
   them; a daemon crash can leave the command running with no job record, and
-  retained output is lost. There is no job supervisor or restart recovery yet.
-- A pending approval cancelled by an interrupted turn or a timed-out code cell
-  is removed without a `permission.replied` event; clients should treat a
-  disappeared approval as cancelled. This matches interrupted direct calls.
-- Step 11 recovery still treats an interrupted `code` call as an interrupted
-  plain tool call in the outer message stream; the durable `code.call` and
-  `code.cell` events record what actually ran.
-- No retries, no context limit or compaction (planned as handoff, Step 12a).
+  retained output is lost. Recovery reports an unfinished `bash.started` when it
+  reconciles that session's turn, but a job that outlives an orderly turn in a
+  session with no interrupted turn is not reported individually. Recovery never
+  kills a process from a stored pid (it may have been reused); there is no job
+  supervisor.
+- A pending approval cancelled by a normal turn interrupt or a timed-out code
+  cell is still removed without a `permission.replied` event; clients should
+  treat a disappeared approval as cancelled. Startup recovery is the exception:
+  it publishes an explicit cancellation, and `permission.replied` now carries
+  `outcome`.
+- Startup recovery closes an interrupted outer `code` call with an unknown
+  outcome, preserving the durable `code.call` and `code.cell` events and saying
+  the kernel was lost. It does not invent a successful call or recover kernel
+  state.
+- No retries, no `/continue`, no idempotent mutation requests and no context
+  limit or compaction (planned as handoff, Step 12a).
 - Explicit updates apply to subsequent model/tool calls. An active `code` cell
   retains the task-tool bindings it started with until that outer call finishes.
   Agent switches retain the initially loaded `AGENTS.md` section; a directory
@@ -1409,15 +1506,15 @@ Do not start the next increment until the current review is complete.
   artifacts to include yet and does not re-clip output.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
-- Reconnect resumes the event stream only. A crashed daemon can leave the last
-  stored `session.status` at `busy` (a clean shutdown writes idle), and pending
-  approvals/questions are in memory, so clients must reconcile with
-  `/api/session` after a restart. Turn recovery, automatic retries, idempotent
-  mutation requests and `/continue` remain open. Archive transitions are still
-  stored only in the root's log.
+- Reconnect resumes the event stream; startup recovery reconciles unfinished
+  turns before the daemon serves requests and publishes their idle status,
+  cancellations and `turn.recovered`. Automatic retries, idempotent mutation
+  requests and `/continue` remain open. Archive transitions are still stored
+  only in the root's log.
 - The `event` table grows without limit (every token delta is a row); no retention yet.
-  Reconnect uses durable ids and a log generation, but retention will have to raise
-  the floor and clients then get `history_unavailable` with a resync head.
+  Turn, request and tool lifecycle rows also have no retention. Reconnect uses
+  durable ids and a log generation, but retention will have to raise the floor
+  and clients then get `history_unavailable` with a resync head.
 - Sign-in is only the local `nexus login`, not yet an API endpoint.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
 - No cross-provider message conversion beyond text and tool calls; switching
@@ -1447,3 +1544,11 @@ to live/header behavior. Inspector replay now deduplicates HTTP-loaded events
 and messages independently, so a later event-page boundary cannot hide a message
 missing from an earlier message fetch. Added regression coverage including a
 Node-driven inspector load/replay race. Full reviewed suite: 244 tests.
+
+
+Startup recovery delivery review: closed turns remain pending until final
+cleanup, covering crashes between the closing record and idle publication;
+normal idle events carry turn ids for deduplication. Approval replies persist
+before releasing a tool. Message-link migration DDL and legacy markers are
+transactional. Added terminal-cleanup crash, approval-storage failure, and
+migration rollback regressions. Reviewed full suite: 279 tests.

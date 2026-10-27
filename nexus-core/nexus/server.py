@@ -529,4 +529,6 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
 
 def make_runtime(default_model: str, store: Store | None = None) -> Runtime:
-    return Runtime(store or Store(), Bus(), default_model)
+    runtime = Runtime(store or Store(), Bus(), default_model)
+    runtime.recover()  # finish before the app can accept a request
+    return runtime

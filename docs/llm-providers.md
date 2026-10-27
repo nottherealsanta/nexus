@@ -246,6 +246,24 @@ Not redacted: the session header, `x-initiator`, and grok's `x-xai-token-auth`,
 `x-grok-client-version`, `x-grok-client-identifier` (constant client identity,
 not secrets).
 
+## Partial responses and replay
+
+A provider stream that ends without `Done` is incomplete, and the adapter also
+raises for some cut-offs ([Errors](#errors)). Whatever arrived is still emitted:
+`WireEvent` for every SSE frame, `TextDelta`/`ReasoningDelta`,
+`ToolCallStarted`/`ToolArgsDelta`, and `PartDone` for items the provider
+finished. The daemon stores those events as diagnostic history.
+
+Replay uses conversation parts, not deltas. An interrupted response therefore
+never becomes an assistant message: there is no honest way to turn partial
+deltas or partial arguments into a complete item, and reasoning encryption (for
+codex) only exists in a finished reasoning item's `raw`. A response that reached
+`Done` has complete `PartDone` items, and startup recovery restores exactly
+those, with their `origin` and `raw`, without another provider call. A tool call
+in restored parts is closed as "did not run" unless there is durable evidence it
+started. Partial output stays inspectable in the event log and is clearly
+labelled in the recovery notice ([daemon.md](daemon.md#crash-recovery)).
+
 ## Errors
 
 All failures are `ProviderError(message, status=None, body=None)`. Messages carry

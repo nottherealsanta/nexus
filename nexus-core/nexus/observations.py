@@ -146,6 +146,26 @@ class FileGuard:
                 self._merge_read(observation)
                 self.pending.remove(observation)
 
+    def restore(self, observations: Iterable[dict[str, Any]]) -> None:
+        """Merge observations captured with a result recovery is putting back into context.
+
+        Recovery passes exactly the reads whose saved result it just inserted; it
+        never reads a file or derives coverage from current contents.
+        """
+        for data in observations:
+            if not isinstance(data, dict) or "path" not in data or "revision" not in data:
+                continue
+            self._merge_read(FileObservation(
+                path=str(data["path"]),
+                revision=str(data["revision"]),
+                lines=int(data.get("lines", 0)),
+                ranges=tuple((int(a), int(b)) for a, b in data.get("ranges", [])),
+                partial=tuple(int(n) for n in data.get("partial", [])),
+                clipped=bool(data.get("clipped", False)),
+                call_id=data.get("call_id"),
+                updated=float(data.get("updated", 0.0)),
+            ))
+
     def _merge_read(self, observed: FileObservation) -> FileObservation:
         current = self._load(observed.path)
         new_ranges = observed.ranges
