@@ -44,6 +44,10 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
 | POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's or default model | `Session` |
 | POST | `/api/session/{id}/agent` | `{agent}` | `Session` |
+| POST | `/api/session/{id}/workspace-tools` | | `Session`; activates the two on-demand workspace tools (idempotent) |
+| POST | `/api/session/{id}/directory` | `{directory}` | `Session` + `change`; 200 applied/unchanged, 202 pending while a turn runs |
+| GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
+| POST | `/api/session/{id}/worktrees` | `{action: "list" or "create" or "delete", path?, branch?, base?}` | the list, the created/reused worktree, or the deleted worktree |
 | POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy"}`; 409 while a turn runs |
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
@@ -71,14 +75,23 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom
  "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
- "tools": ["read", "edit", "write", "ask", "code"], "disabled_tools": ["bash"],
+ "tools": ["read", "edit", "write", "ask", "code", "expose_workspace_tools"], "disabled_tools": ["bash"],
+ "workspace": {"entry": true, "active": false},   // on-demand control state
+ "starting_directory": "/abs/path",               // frozen into the system prompt
+ "directory_changed": false, "directory_change": null,  // or {from, to, status: "pending", source}
  "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…,
- "snapshot": {"version": 1, "origin": "created", "created": 1793…,
+ "snapshot": {"version": 2, "origin": "created", "created": 1793…, "directory": "/abs/path",
               "agent": {"name": "build", "source": "project", "path": "…/build.md", "fingerprint": "sha256:…"},
               "instructions": {"path": "…/AGENTS.md", "status": "loaded", "bytes": 123, "sha256": "sha256:…"},
+              "current_instructions": {"path": "…/AGENTS.md", "status": "loaded", "bytes": 123, "sha256": "sha256:…"},
+              "workspace": {"entry": true, "active": false}, "directory_changes": 0,
               "granted_tools": ["read", "bash", "edit", "write", "ask", "code"],
               "child_agents": [{"name": "scout", "description": "…", "mode": "subagent", "source": "builtin",
                                 "path": "…/scout.md", "fingerprint": "sha256:…"}]}}
+
+// Worktree entry (in the worktree list)
+{"path": "/abs/wt", "head": "…", "branch": "feature", "bare": false, "detached": false,
+ "locked": null, "prunable": null, "main": false, "exists": true, "dirty": false, "changes": 0}
 
 // Agent (see agents.md)
 {"name": "plan", "description": "…", "source": "builtin", "path": "…/plan.md",
@@ -112,10 +125,38 @@ live in memory and have no daemon-side timeout; they end with an answer or with
 cancellation. Shapes and limits: [tools.md](tools.md#ask).
 
 `permission` is `ask` (bash waits for a reply; read, `bash_output`, `bash_kill`,
-`ask`, `edit`, `write` and the outer `code` call never ask) or `allow` (nothing
-asks). Session-directory edits are approval-free by fixed policy; see
-[tools.md](tools.md#read-observations-and-freshness). `status` is `busy` while a
-turn runs.
+`ask`, `edit`, `write`, the outer `code` call and workspace controls never ask)
+or `allow` (nothing asks). Session-directory edits are approval-free by fixed
+policy; see [tools.md](tools.md#read-observations-and-freshness). `status` is
+`busy` while a turn runs.
+
+### Workspace controls
+
+`POST /api/session/{id}/workspace-tools` activates `change_session_directory` and
+`worktree` (idempotent; also for sessions whose stored snapshot predates them)
+and returns the session. The activation is stored with the snapshot. A new
+session starts with only `expose_workspace_tools`, so `tools` reports it; older
+sessions do not gain it until this call.
+
+`POST /api/session/{id}/directory {directory}` validates an existing directory
+(absolute, or relative to the current session directory) and moves the session.
+Idle: **200** with `change.status: "applied"` (or
+`"unchanged"`), the same forward announcement a tool call produces, and a
+`session.directory_changed` event. Busy: **202** with
+`change.status: "pending"`; the move is applied at the next tool/model dispatch
+or when the turn ends. Session JSON shows the target in `directory_change` until
+then. A second pending request gets 409. Errors: 400 for a missing/empty path or
+a path that is not an existing directory, 404 for an unknown session.
+
+`GET /api/session/{id}/worktrees` and
+`POST /api/session/{id}/worktrees {action}` list, create/reuse or delete Git
+worktrees for the session directory's repository. `path` is absolute or relative
+to the main checkout. Create returns `path`, `branch`, `created`/`reused` and
+does not change `directory`. Delete refuses the main checkout, dirty, locked or
+missing worktrees, and paths used by a session, a project or a pending move; it
+never deletes a branch. 400 carries Git's or the validation message; 404 is an
+unknown session.
+Limits and intent: [tools.md](tools.md#workspace-control-tools-on-demand).
 
 ## Event stream
 
@@ -151,6 +192,10 @@ log with `?after=<last event id>`.
 | `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
+| `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
+| `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |
+| `worktree.listed` | `{repository, main, session_directory, worktrees: [...]}` |
+| `worktree.created` / `worktree.deleted` | `{path, branch, head, repository, main, session_directory}` |
 | `session.error` | `{kind: "provider" or "auth" or "request" or "interrupted", message, status?, body?}` |
 | `bus.overflow` | `{dropped_after}` |
 | loop and stream events | unchanged from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end` |
@@ -182,9 +227,12 @@ curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.
 ## Not yet
 
 Login over the API (sign-in is the local `nexus login`), files and diffs,
-forks, compaction, worktrees (a session's `directory` is the project path),
-resuming `/api/event` from a sequence number (use the stored log instead),
-pairing for remote clients.
+forks, compaction, resuming `/api/event` from a sequence number (use the stored
+log instead), pairing for remote clients.
+
+Worktree listing, creation and deletion exist, but merge/integration and branch
+cleanup are separate future operations. A session's directory can move anywhere
+the user can reach: it is not confined to its project.
 
 Kernel execution and metadata limits: [tools.md](tools.md#code). `code.call` and
 `code.cell` are stored session events; `kernel.deleted` announces kernel removal.
@@ -218,7 +266,14 @@ from the current files and appends `[Nexus notice: agent changed]`. A turn that
 is already running keeps the model, effort, agent, prompt and tools it started
 with.
 
+`disabled_tools` accepts task tools, `session`, and the three workspace control
+names. New sessions offer `expose_workspace_tools`; activating it adds
+`change_session_directory` and `worktree` to later request schemas and to the
+model-visible tool result, never to the frozen prompt. Activation persists with
+the snapshot, and a pending directory move is visible in `directory_change`.
+
 A session created before snapshots existed returns `snapshot.origin:
 "reconstructed"` after its first use and carries a visible snapshot note. It is
 not presented as the exact historical prompt; the reconstruction is stored once
-and stays stable.
+and stays stable. It also starts with `workspace: {entry: false, active: false}`;
+activate it explicitly if needed.

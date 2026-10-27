@@ -18,24 +18,25 @@ MAX_LINE_CHARS = 2000
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     path = resolve(ctx, args.get("path"))
+    display = str(path) if ctx.cwd_changed else args["path"]
     offset = int(args.get("offset") or 1)
     limit = int(args.get("limit") or DEFAULT_LIMIT)
     if offset < 1 or limit < 1:
         raise ToolError("offset and limit must be positive")
     if path.is_dir():
         entries = sorted(p.name + ("/" if p.is_dir() else "") for p in path.iterdir())
-        return clip(f"{args['path']} is a directory ({len(entries)} entries):\n" + "\n".join(entries))
+        return clip(f"{display} is a directory ({len(entries)} entries):\n" + "\n".join(entries))
     if not path.is_file():
-        raise ToolError(f"{args['path']} does not exist")
+        raise ToolError(f"{display} does not exist")
     data = path.read_bytes()
     if b"\x00" in data[:8192]:
-        raise ToolError(f"{args['path']} looks binary ({len(data)} bytes)")
+        raise ToolError(f"{display} looks binary ({len(data)} bytes)")
     lines = data.decode("utf-8", "replace").splitlines()
     if not lines:
         _record(ctx, path, data, lines=0, ranges=[], partial=[], clipped=False)
-        return f"{args['path']} is empty"
+        return f"{display} is empty"
     if offset > len(lines):
-        raise ToolError(f"offset {offset} is past the end of {args['path']} ({len(lines)} lines)")
+        raise ToolError(f"offset {offset} is past the end of {display} ({len(lines)} lines)")
     window = lines[offset - 1 : offset - 1 + limit]
     out = []
     partial: list[int] = []
@@ -52,7 +53,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     # reached the model. Reading smaller windows does.
     _record(ctx, path, data, lines=len(lines), ranges=[] if clipped else [(offset, end)],
             partial=partial, clipped=clipped)
-    return clip(body)
+    prefix = f"[path: {display}]\n" if ctx.cwd_changed else ""
+    return clip(prefix + body)
 
 
 def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: list[tuple[int, int]],

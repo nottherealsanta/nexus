@@ -163,6 +163,28 @@ caller's session event log. `kernel.deleted` announces deletion or forced state
 loss.
 
 
+## Workspace control events
+
+`session.workspace_tools` records that the on-demand workspace tools were
+activated: `{active: true, entry, tools}`. It is stored in the session's event
+log; the tool result (or the API notice) holds the definitions and guidance.
+
+`session.directory_changed` records an applied move: `from`, `to`, `branch`,
+`repository`, `worktree`, `source` (`tool` or `api`), `project_id`, the
+`frozen_directory` (the directory baked into the system prompt) and a bounded
+`instructions` record (path, status, bytes, sha256). The forward announcement is
+an ordinary stored message: the tool result for a model-driven move, or a user
+message added immediately (idle) or before the next model request (busy) for an
+API move. The event is published only when the move is applied, so a pending API
+move is visible first in session JSON's `directory_change`.
+
+`worktree.listed`, `worktree.created` and `worktree.deleted` are stored in the
+session that issued the control operation. They carry the repository, main
+checkout, operation result and (for listing) every registered worktree's path,
+branch, flags and working-tree state. Worktree operations never move the
+session, so clients update worktree/git views without changing the session
+directory.
+
 ## Session snapshots
 
 `session.snapshot` records one-time reconstruction of an older session's

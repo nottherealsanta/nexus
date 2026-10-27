@@ -32,6 +32,7 @@ class ToolContext:
     call_id: str | None = None  # the model's tool call id, for tools that record it
     files: FileGuard | None = None  # the session's read observations; None outside a session
     model_visible: bool = True  # False for calls retained inside a code kernel
+    cwd_changed: bool = False  # the session moved; report absolute paths and bash's cwd
 
 
 @dataclass(frozen=True, slots=True)

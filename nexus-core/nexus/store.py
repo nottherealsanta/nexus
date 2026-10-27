@@ -264,7 +264,10 @@ class Store:
         return [Session(**r) for r in rows]
 
     def update_session(self, session_id: str, **fields: Any) -> Session | None:
-        allowed = {k: v for k, v in fields.items() if k in ("title", "model", "permission", "effort", "agent") and v is not None}
+        allowed = {k: v for k, v in fields.items() if k in ("title", "model", "permission", "effort", "agent")
+                   and v is not None}
+        if fields.get("directory") is not None:
+            allowed["directory"] = str(Path(fields["directory"]).expanduser().resolve())
         if fields.get("effort") == "":
             allowed["effort"] = None  # "" clears it back to the agent's or provider's default
         if fields.get("disabled_tools") is not None:

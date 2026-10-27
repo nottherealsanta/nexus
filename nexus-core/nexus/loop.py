@@ -88,6 +88,7 @@ class Agent:
         inbox: Inbox | None = None,
         refresh: Callable[[Any], None] | None = None,
         files: FileGuard | None = None,
+        cwd_changed: bool = False,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -102,6 +103,7 @@ class Agent:
         self.inbox = inbox
         self.refresh = refresh
         self.files = files
+        self.cwd_changed = cwd_changed
 
     def request(self) -> Request:
         return Request(
@@ -160,7 +162,8 @@ class Agent:
         if self.approve is not None and not await self.approve(call, args):
             return ToolResult(call.id, "the user declined this tool call", is_error=True)
         try:
-            return ToolResult(call.id, await tool.run(args, ToolContext(self.workspace, call.id, files=self.files)))
+            return ToolResult(call.id, await tool.run(args, ToolContext(
+                self.workspace, call.id, files=self.files, cwd_changed=self.cwd_changed)))
         except ToolError as exc:
             return ToolResult(call.id, str(exc), is_error=True)
         except (OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:

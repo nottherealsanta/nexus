@@ -95,7 +95,7 @@ async def test_agent_changes_affect_new_sessions_only(env):
     first = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     before = await _context(client, first["id"])
     assert "Project build one." in before["instructions"]
-    assert [t["name"] for t in before["tools"]] == ["read"]
+    assert [t["name"] for t in before["tools"]] == ["read", "expose_workspace_tools"]
 
     _agent_file(files, "build", "Project build two.\n\n{{tools}}", description="Two", tools=["read", "write"])
     unchanged = await _context(client, first["id"])
@@ -105,7 +105,7 @@ async def test_agent_changes_affect_new_sessions_only(env):
     second = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     after = await _context(client, second["id"])
     assert "Project build two." in after["instructions"] and "Project build one." not in after["instructions"]
-    assert [t["name"] for t in after["tools"]] == ["read", "write"]
+    assert [t["name"] for t in after["tools"]] == ["read", "write", "expose_workspace_tools"]
 
     # A deleted override no longer applies to new sessions, but the existing session keeps its snapshot.
     (files / "build.md").unlink()
@@ -121,7 +121,7 @@ async def test_agent_changes_affect_new_sessions_only(env):
     await _idle(rt, first["id"])
     request = provider.requests[0]
     assert request.instructions == before["instructions"]
-    assert [t.name for t in request.tools] == ["read"]
+    assert [t.name for t in request.tools] == ["read", "expose_workspace_tools"]
     await rt.shutdown()
 
 

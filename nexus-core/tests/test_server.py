@@ -97,7 +97,7 @@ async def test_write_in_workspace_needs_no_permission_and_saves_messages(setup):
     assert messages[1]["parts"][0] == {"type": "tool_call", "id": "c1", "name": "write", "arguments": '{"path": "x.txt", "content": "hi"}', "origin": None, "raw": None}
     assert (await client.get(f"/api/session/{session['id']}")).json()["title"] == "make x.txt"
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code"])
+    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "expose_workspace_tools"])
     assert context["instructions"].startswith("You are an AI agent running in Nexus") and "# Environment" in context["instructions"]
 
 
@@ -132,7 +132,7 @@ async def test_project_agent_sets_prompt_tools_model_and_effort(setup):
     session = (await client.post("/api/session", json={"directory": str(workspace), "agent": "review"})).json()
     assert (session["model"], session["model_source"], session["effort"], session["effort_source"]) == ("scripted/big", "agent", "high", "agent")
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert (context["model"], context["tools"], context["effort"]) == ("big", ["read"], "high")
+    assert (context["model"], context["tools"], context["effort"]) == ("big", ["read", "expose_workspace_tools"], "high")
     instructions = context["instructions"]
     assert instructions.startswith("You review code.\n\n# Tools\nThese are the only tools in this session:\n- `read`: ")
     assert "`bash`" not in instructions and "`write`" not in instructions
@@ -278,7 +278,7 @@ async def test_disabled_tools_roundtrip_and_context(setup):
         'directory': str(workspace), 'disabled_tools': ['bash', 'write', 'bash']})).json()
     sid = session['id']
     assert session['disabled_tools'] == ['bash', 'write']
-    assert session['tools'] == ['read', 'edit', 'ask', 'code']
+    assert session['tools'] == ['read', 'edit', 'ask', 'code', 'expose_workspace_tools']
     assert rt.store.session(sid).disabled() == {'bash', 'write'}
     context = (await client.get(f'/api/session/{sid}/context')).json()
     assert context['tools'] == session['tools']
@@ -316,7 +316,7 @@ async def test_disabled_tool_cannot_run_inside_code(setup):
 
 async def test_no_tools_and_disabled_direct_call(setup):
     rt, client, provider, workspace = setup
-    names = ['read', 'bash', 'edit', 'write', 'code', 'session']
+    names = ['read', 'bash', 'edit', 'write', 'code', 'session', 'expose_workspace_tools']
     session = (await client.post('/api/session', json={
         'directory': str(workspace), 'agent': 'orchestrate', 'disabled_tools': names})).json()
     sid = session['id']

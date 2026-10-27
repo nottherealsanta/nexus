@@ -2,7 +2,8 @@
 
 Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
 daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
-tool approvals and pending questions, and exposes them over
+tool approvals, pending questions, workspace control operations and pending
+directory moves, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
 ## Lifecycle (`nexus/daemon.py`)
@@ -33,9 +34,14 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   after the folder by default.
 - **Session.** Belongs to one project and runs one agent ([agents.md](agents.md)).
   Each session has:
-  - `directory`: where tools run. It is the project path today, and will be a
-    worktree later. A worktree is a session property set from the control
-    plane, never a tool.
+  - `directory`: where tools run. It starts as the project path and can move to
+    another existing directory or a worktree through the control plane. Project
+    identity does not change. `starting_directory` is the directory frozen into
+    the system prompt; `directory_changed` says whether they differ.
+  - `workspace`: `{"entry": bool, "active": bool}`. A new session has the
+    `expose_workspace_tools` entry point; activating it makes the two detailed
+    controls available. `directory_change` is the pending move while a running
+    turn has not reached a safe boundary yet.
   - `agent`: default `build`.
   - `model`: `provider/model`, if the user chose one. Otherwise the agent's
     preference applies, then the daemon default.
@@ -101,12 +107,12 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `reconstructed` and its system prompt says this is not the exact historical
   prompt; after that it is stored and stable.
   `GET /api/session/{id}/snapshot` shows the full snapshot.
-- **Approval.** read, `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the
-  outer code call never ask; `edit` and `write` are approval-free inside the
-  session directory as fixed policy, and code delegates approval to its nested
-  task calls. bash (including background) still asks unless the session is
-  `allow`. The turn waits on `permission.asked` until a client replies, or
-  the turn is interrupted.
+- **Approval.** read, `bash_output`, `bash_kill`, `ask`, `edit`, `write`, the
+  outer code call and the workspace control tools never ask; `edit` and `write`
+  are approval-free inside the session directory as fixed policy, and code
+  delegates approval to its nested task calls. bash (including background) still
+  asks unless the session is `allow`. The turn waits on `permission.asked` until
+  a client replies, or the turn is interrupted.
 - **Questions.** `ask` publishes `question.asked` and waits with no daemon-side
   timeout. A client lists them (`GET /api/session/{id}/question` or
   `GET /api/question`) and replies with a complete answer set
@@ -169,6 +175,46 @@ They run in the starting session's directory, are scoped to its tree for the
 tools, and outlive turns and code cells. Deleting a session or project kills its
 jobs; daemon shutdown kills every job. Limits, output retention and the finish
 notice are in [tools.md](tools.md#background-bash-jobs).
+
+## Workspace controls
+
+The daemon owns the three workspace control tools (`nexus/workspace.py`): the
+`expose_workspace_tools` entry point, `change_session_directory`, and `worktree`.
+They are control-plane operations with API endpoints and stored events, not task
+tools. No permission mode, approval, or `ask` question gates them.
+
+- **Activation.** A new session's snapshot contains the entry point; the two
+  detailed tools are absent until it is called. Activation adds their definitions
+  to the snapshot and the model-visible result, and persists across restarts.
+  Older sessions keep their snapshot and are activated explicitly through the
+  API. The entry point is never available inside `code`.
+- **Directory moves.** A validated move is applied at a call boundary, never
+  inside a running tool call. While a turn runs, `POST …/directory` returns 202
+  with `directory_change.status: "pending"`; the move lands before the next
+  model or tool dispatch (or when the turn ends) and emits
+  `session.directory_changed`. Timing, pending behavior and the announcement are
+  in [tools.md](tools.md#change_session_directory-directory). The project is
+  unchanged; children created later inherit the new directory.
+- **Worktrees.** `GET`/`POST …/worktrees` list, create/reuse and delete. Create
+  and delete share one lock. Deletion refuses the main checkout, dirty/locked or
+  missing worktrees, and paths used by a session, a project or a pending move;
+  branches are kept. Subdirectories and daemon-owned background jobs count as
+  users too; reserved deletion paths block new users until removal finishes.
+  Git cancellation kills and reaps its process group before the lock is released.
+  See [tools.md](tools.md#worktree-action-path-branch-base).
+
+```sh
+nexus workspace expose --session ses_…
+nexus workspace directory ~/src/other --session ses_…
+nexus workspace list --session ses_…
+nexus workspace create ../wt-feature --branch feature --session ses_…
+nexus workspace delete ../wt-feature --session ses_…
+```
+
+The CLI resolves relative worktree and directory paths from the shell's working
+directory before calling the API; API and model-tool calls resolve a relative
+worktree path against the main checkout and a relative directory against the
+session's current directory.
 
 ## File observations
 

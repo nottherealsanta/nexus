@@ -47,6 +47,7 @@ def _occurrences(text: str, old: str, limit: int | None) -> list[int]:
 
 async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
     path = resolve(ctx, args.get("path"))
+    display = str(path) if ctx.cwd_changed else args["path"]
     old, new = args.get("old_string"), args.get("new_string")
     if not isinstance(old, str) or not isinstance(new, str) or not old:
         raise ToolError("old_string (non-empty) and new_string must be strings")
@@ -54,23 +55,23 @@ async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
         raise ToolError("old_string and new_string are identical")
     guard = ctx.files
     if guard is None:  # a bare tool context (unit use), not a Nexus session
-        return _replace_now(args["path"], path, old, new, args.get("replace_all"))
+        return _replace_now(display, path, old, new, args.get("replace_all"))
     async with guard.mutation():
         if not path.is_file():
-            raise ToolError(f"{args['path']} does not exist")
+            raise ToolError(f"{display} does not exist")
         text = path.read_text(newline="")
         count = text.count(old)
         if count == 0:
-            raise ToolError(f"old_string was not found in {args['path']}")
+            raise ToolError(f"old_string was not found in {display}")
         if count > 1 and not args.get("replace_all"):
-            raise ToolError(f"old_string occurs {count} times in {args['path']}; add context or set replace_all")
+            raise ToolError(f"old_string occurs {count} times in {display}; add context or set replace_all")
         replaced = count if args.get("replace_all") else 1
         positions = _occurrences(text, old, None if args.get("replace_all") else 1)
         affected = [_line_span(text, at, at + len(old)) for at in positions]
-        guard.require(args["path"], path, affected=affected)
+        guard.require(display, path, affected=affected)
         path.write_text(text.replace(old, new, replaced))
         guard.forget([path])
-        return f"edited {args['path']} ({replaced} replacement{'s' if replaced != 1 else ''})"
+        return f"edited {display} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 
 def _replace_now(display: str, path: Any, old: str, new: str, replace_all: Any) -> str:
@@ -256,45 +257,47 @@ def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
     summary: list[str] = []
     for op in ops:
         path = resolve(ctx, op.path)
+        shown = str(path) if ctx.cwd_changed else op.path
         if op.kind == "add":
             if path.exists():
-                raise ToolError(f"Add File {op.path}: already exists")
+                raise ToolError(f"Add File {shown}: already exists")
             writes[path] = "\n".join(op.lines) + "\n"
-            created[path] = op.path
-            summary.append(f"added {op.path} ({len(op.lines)} lines)")
+            created[path] = shown
+            summary.append(f"added {shown} ({len(op.lines)} lines)")
         elif op.kind == "delete":
             if not path.is_file():
-                raise ToolError(f"Delete File {op.path}: does not exist")
+                raise ToolError(f"Delete File {shown}: does not exist")
             if guard is not None:
-                guard.require(op.path, path, complete=True)
+                guard.require(shown, path, complete=True)
             writes[path] = None
             forget.add(path)
-            summary.append(f"deleted {op.path}")
+            summary.append(f"deleted {shown}")
         else:
             if not path.is_file():
-                raise ToolError(f"Update File {op.path}: does not exist")
-            updated, affected = _apply_hunks(op.path, path.read_text(newline=""), op.hunks)
+                raise ToolError(f"Update File {shown}: does not exist")
+            updated, affected = _apply_hunks(shown, path.read_text(newline=""), op.hunks)
             if op.move_to:
                 # Moving is a whole-file operation: it needs a complete observation.
                 if guard is not None:
-                    guard.require(op.path, path, complete=True)
+                    guard.require(shown, path, complete=True)
                 destination = resolve(ctx, op.move_to)
+                destination_shown = str(destination) if ctx.cwd_changed else op.move_to
                 if destination.exists():
-                    raise ToolError(f"Move to {op.move_to}: already exists")
+                    raise ToolError(f"Move to {destination_shown}: already exists")
                 writes[path] = None
                 writes[destination] = updated
-                created[destination] = op.move_to
+                created[destination] = destination_shown
                 forget.update({path, destination})
-                summary.append(f"updated {op.path} → {op.move_to} ({len(op.hunks)} hunks)")
+                summary.append(f"updated {shown} → {destination_shown} ({len(op.hunks)} hunks)")
             else:
                 if guard is not None:
                     if affected:
-                        guard.require(op.path, path, affected=affected)
+                        guard.require(shown, path, affected=affected)
                     else:  # a pure insertion into an empty file
-                        guard.require(op.path, path, complete=True)
+                        guard.require(shown, path, complete=True)
                 writes[path] = updated
                 forget.add(path)
-                summary.append(f"updated {op.path} ({len(op.hunks)} hunks)")
+                summary.append(f"updated {shown} ({len(op.hunks)} hunks)")
     for path, display in created.items():
         if path.exists():  # appeared while the rest of the patch was validated
             raise ToolError(f"Add File {display}: destination appeared while the patch was being validated")

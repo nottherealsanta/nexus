@@ -13,7 +13,8 @@ changes from old Nexus.
   receives is shown in order, and the UI shows nothing the model does not have.
   Presenting context well is a core idea of Nexus.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
-  (session, workspace, worktree, model) belong to the control plane, never a tool.
+  (session, workspace, worktree, model) belong to the control plane, never a task
+  tool; the model reaches control only through exposed control tools.
 - State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus`.
 - Update PLAN.md when a step lands or a decision changes.
 

@@ -9,7 +9,7 @@ yields events ([stream-events.md](stream-events.md)).
 ```python
 Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
       reasoning_effort=None, approve=None, max_steps=50, messages=None,
-      conversation_id=None)
+      conversation_id=None, files=None, cwd_changed=False)
 ```
 
 | Argument | Meaning |
@@ -24,6 +24,8 @@ Agent(provider, *, model, workspace, tools=DEFAULT_TOOLS, instructions=None,
 | `max_steps` | Step limit per turn, default `MAX_STEPS = 50` |
 | `messages` | Earlier history (copied) |
 | `conversation_id` | Default is a new `uuid4().hex`; used for prompt caching and session headers |
+| `files` | The session's read observations and mutation lock, passed to tools |
+| `cwd_changed` | The live directory differs from the one in the frozen prompt; tools report absolute paths |
 
 `default_instructions` states the workspace path, today's date and the tools,
 and tells the model to read before it edits and keep answers short.
@@ -58,10 +60,11 @@ sent as `false` on the wire). The next `turn()` call continues the same history.
 An optional synchronous `refresh(agent)` callback runs before each model and
 tool dispatch. The daemon rebinds current stored configuration there without
 reloading agent files or instruction files. An already-running call is unchanged.
-Pending notices are drained before model requests, after previous tool results,
-so stored context stays in the same order as the model's context. Active `code`
-cells retain their caller's task-tool bindings until that outer call finishes;
-control tools are never available inside cells.
+A directory change requested through the API is applied there, between calls,
+never inside one. Pending notices are drained before model requests, after
+previous tool results, so stored context stays in the same order as the model's
+context. Active `code` cells retain their caller's task-tool bindings until that
+outer call finishes; control tools are never available inside cells.
 
 ## Tool execution
 
@@ -94,14 +97,15 @@ call that has a known tool and valid arguments, including `read`. The loop has n
 policy of its own: `None` approves everything.
 
 The daemon's callback (`Runtime._approve`, see [daemon.md](daemon.md#turns))
-approves `read`, `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the
-outer `code` call silently; `edit` and `write` are approval-free inside the
-session directory by fixed policy (path confinement and read freshness still
-apply). Nested code calls go through the same approval callback. For the other
-tools (including background `bash`) it approves when the session's permission is
-`allow`; otherwise it publishes `permission.asked` and waits for a client's
-reply. The CLI answers with `allow <tool>? [y/N]`; `--yes` sets the session to
-`allow`. `ask` has its own `question.asked` wait, not an approval.
+approves `read`, `bash_output`, `bash_kill`, `ask`, `edit`, `write`, the outer
+`code` call and the workspace control tools silently; `edit` and `write` are
+approval-free inside the session directory by fixed policy (path confinement and
+read freshness still apply). Nested code calls go through the same approval
+callback. For the other tools (including background `bash`) it approves when the
+session's permission is `allow`; otherwise it publishes `permission.asked` and
+waits for a client's reply. The CLI answers with `allow <tool>? [y/N]`; `--yes`
+sets the session to `allow`. `ask` has its own `question.asked` wait, not an
+approval.
 
 ## Stop reasons
 

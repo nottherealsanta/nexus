@@ -53,7 +53,10 @@ MAX_FILE_BYTES = 256 * 1024
 _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 _FIELDS = {"description", "mode", "model", "effort", "tools", "control", "steps"}
 MODES = ("primary", "subagent", "all")
-CONTROL_TOOLS = ("session",)
+CONTROL_TOOLS = ("session",)  # the control tools an agent file may grant
+# Every control tool, whether granted by an agent or always available: none of these
+# is ever bound inside a `code` cell.
+NEXUS_CONTROL_TOOLS = ("session", "expose_workspace_tools", "change_session_directory", "worktree")
 
 
 @dataclass(frozen=True, slots=True)

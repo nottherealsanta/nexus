@@ -24,7 +24,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 INSTRUCTIONS_FILE = "AGENTS.md"
 INSTRUCTIONS_MAX_BYTES = 256 * 1024
 
@@ -162,10 +162,13 @@ def summary(snapshot: dict[str, Any]) -> dict[str, Any]:
     """The inspectable, bounded snapshot view returned with a session."""
     agent = snapshot["agent"]
     file = snapshot["instruction_file"]
+    workspace = snapshot.get("workspace") or {}
+    current_file = snapshot.get("current_instruction_file") or file
     data: dict[str, Any] = {
         "version": snapshot["version"],
         "origin": snapshot["origin"],
         "created": snapshot["created"],
+        "directory": snapshot["directory"],
         "agent": {
             "name": agent["name"],
             "source": agent["source"],
@@ -178,6 +181,17 @@ def summary(snapshot: dict[str, Any]) -> dict[str, Any]:
             "bytes": file["bytes"],
             "sha256": file["sha256"],
         },
+        "current_instructions": {
+            "path": current_file["path"],
+            "status": current_file["status"],
+            "bytes": current_file["bytes"],
+            "sha256": current_file["sha256"],
+        },
+        "workspace": {
+            "entry": bool(workspace.get("entry")),
+            "active": bool(workspace.get("activated")),
+        },
+        "directory_changes": len(snapshot.get("directory_changes") or []),
         "granted_tools": list(snapshot["granted_tools"]),
         "child_agents": snapshot["child_agents"],
     }

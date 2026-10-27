@@ -23,7 +23,9 @@ content-security policy: no external scripts, styles or connections.
   session was launched by an agent. A green dot means busy. It updates live from
   `/api/event`.
 - **Session header.** Every session field: id, agent, model and where it came
-  from, effort, permission, directory, who launched it (with a link to the parent
+  from, effort, permission, directory, starting directory (the one frozen into
+  the system prompt), workspace-control state (entry available, activation) and
+  any pending directory change, who launched it (with a link to the parent
   and the launching tool call), children (links), and how many messages and events
   are stored. It also shows the snapshot origin and creation time, the agent's
   source path and fingerprint, and the `AGENTS.md` path and status.
@@ -34,7 +36,7 @@ content-security policy: no external scripts, styles or connections.
 | --- | --- | --- |
 | 1 Conversation | Saved messages: user and assistant text, reasoning summaries (with the size of the encrypted state), tool calls with each argument labelled, tool results with line and character counts. A `session` tool call links to the child it started. A Questions card shows each `ask` request (including nested in `code`), its options, answer or cancellation, and live pending status. Every part has its JSON, including the provider's raw wire item. | `/api/session/{id}/message`, `/api/session/{id}/question`, stored `question.asked` / `question.replied` |
 | 2 Steps | One row per model call, grouped by turn: model, input item count, tools offered, HTTP status, time to first byte, total time, tokens in (cached) and out (reasoning), stop reason, and each tool run with its result and duration. | stored events |
-| 3 Requests | A snapshot card (origin, agent source and fingerprint, instruction-file status, child catalog), the next request (what the model would see now), then every sent request as labelled sections: redacted headers, parameters, instructions (including the `# Instructions file` section), each input item (preview, expandable to JSON), and tools (name, description, schema). Response headers too. | `/api/session/{id}/context`, the session's snapshot summary, stored `wire_request` / `wire_response` |
+| 3 Requests | A snapshot card (origin, agent source and fingerprint, instruction-file status, current instruction file after a move, workspace-control state, move count, child catalog), the next request (what the model would see now), then every sent request as labelled sections: redacted headers, parameters, instructions (including the `# Instructions file` section), each input item (preview, expandable to JSON), and tools (name, description, schema). Response headers too. | `/api/session/{id}/context`, the session's snapshot summary, stored `wire_request` / `wire_response` |
 | 4 Raw | Every stored event in order, with the time offset, type and a clipped preview; click a row for its full JSON. You can filter by type or content, and token deltas and provider SSE events are hidden by default (one checkbox). Also the messages and session record as stored. | `/api/session/{id}/event` |
 
 Clipping is always announced. Long tool output shows its first 60 lines, with
@@ -54,6 +56,8 @@ per session.
   child show in the child's own page.
 - The Questions card (Step 10) was added after the Playwright checks above and
   was script-syntax-checked, not re-run in a browser.
+- The workspace-control header fields, snapshot fields and live events were
+  added later and script-syntax-checked (`node --check`), not re-run visually.
 - Checked with Playwright (Chromium) in light and dark mode and at 390 px
   width. Not checked in Safari or Firefox.
 
@@ -81,6 +85,18 @@ document-level horizontal overflow. Screenshots:
 
 The session header lists the next turn's `tools` and saved `disabled_tools`,
 using “none” for an empty list.
+
+## Workspace controls
+
+The header and Requests card show the live directory, the starting directory
+frozen into the system prompt, whether the on-demand entry point is available and
+whether the two controls are active, and a pending API move. A move emits
+`session.directory_changed` and the announcement appears as an ordinary user
+message in Conversation; the destination `AGENTS.md` can be read there. Worktree
+operations appear in the event log (`worktree.listed`, `worktree.created`,
+`worktree.deleted`) with the repository, main checkout, paths and branches;
+they do not change the session directory. After activation, Requests shows the
+two new tool schemas while Instructions stays as it was frozen.
 
 ## Bash jobs
 

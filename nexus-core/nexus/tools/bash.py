@@ -66,7 +66,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
         _kill(proc)
         raise
     text = out.decode("utf-8", "replace")
-    return clip(f"[{status}]\n{text}" if text else f"[{status}, no output]")
+    prefix = f"[cwd: {ctx.workspace}]\n" if ctx.cwd_changed else ""
+    body = f"[{status}]\n{text}" if text else f"[{status}, no output]"
+    return clip(prefix + body)
 
 
 async def unbound_output(args: dict[str, Any], ctx: ToolContext) -> str:

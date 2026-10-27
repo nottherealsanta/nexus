@@ -21,6 +21,10 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET/PATCH/DELETE | /api/session/{id} | one session; PATCH `{agent?, title?, model?, permission?, effort?}` |
 | POST | /api/session/{id}/model | `{model}`; `""` returns to the agent's or default model |
 | POST | /api/session/{id}/agent | `{agent}` |
+| POST | /api/session/{id}/workspace-tools | activate the two workspace control tools (idempotent) |
+| POST | /api/session/{id}/directory | `{directory}`; 200 applied or 202 pending while a call runs |
+| GET | /api/session/{id}/worktrees | list the repository's worktrees with branch and working-tree state |
+| POST | /api/session/{id}/worktrees | `{action: "list" or "create" or "delete", path?, branch?, base?}` |
 | POST | /api/session/{id}/prompt | `{text}` → 202; 409 while a turn runs |
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
@@ -102,6 +106,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 return _error(409, str(exc))
             except Conflict as exc:
                 return _error(409, str(exc))
+            except ToolError as exc:
+                return _error(400, str(exc))
             except (ValueError, KeyError, TypeError) as exc:
                 return _error(400, str(exc))
         return wrapped
@@ -211,6 +217,33 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     async def session_agent(request: Request) -> Response:
         return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), agent=(await _body(request))["agent"])))
+
+    async def session_workspace_tools(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.activate_workspace_tools(sid, source="api")
+        return JSONResponse(runtime.session_json(runtime.session(sid)))
+
+    async def session_directory(request: Request) -> Response:
+        sid = p(request, "id")
+        body = await _body(request)
+        result = await runtime.change_directory(sid, body.get("directory"), source="api")
+        payload = runtime.session_json(runtime.session(sid)) | {"change": result}
+        return JSONResponse(payload, status_code=202 if result["status"] == "pending" else 200)
+
+    async def session_worktrees(request: Request) -> Response:
+        sid = p(request, "id")
+        if request.method == "GET":
+            return JSONResponse(await runtime.list_worktrees(sid))
+        body = await _body(request)
+        action = body.get("action")
+        if action == "list":
+            return JSONResponse(await runtime.list_worktrees(sid))
+        if action == "create":
+            return JSONResponse(await runtime.create_worktree(
+                sid, body.get("path"), body.get("branch"), body.get("base")))
+        if action == "delete":
+            return JSONResponse(await runtime.delete_worktree(sid, body.get("path")))
+        raise ValueError("action must be 'list', 'create' or 'delete'")
 
     async def prompt(request: Request) -> Response:
         body = await _body(request)
@@ -322,6 +355,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),
         Route("/api/session/{id}/agent", route(session_agent), methods=["POST"]),
+        Route("/api/session/{id}/workspace-tools", route(session_workspace_tools), methods=["POST"]),
+        Route("/api/session/{id}/directory", route(session_directory), methods=["POST"]),
+        Route("/api/session/{id}/worktrees", route(session_worktrees), methods=["GET", "POST"]),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),

@@ -83,7 +83,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
     assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.") and tool_output.endswith("42")
     # A child never gets the session tool, even when its agent lists it.
-    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code"]
+    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "bash_output", "bash_kill", "edit", "write", "ask", "code", "expose_workspace_tools"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
     assert tree["id"] == parent["id"] and [c["id"] for c in tree["children"]] == [child["id"]]
 

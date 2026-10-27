@@ -4,7 +4,7 @@ Local commands (no daemon): `login`, `logout`, `status`, `models`, `serve`,
 `daemon start|stop|status`.
 
 Daemon clients (they start the daemon if it is not running and talk to it over
-`/api/*`): `project`, `session`, `run`, `chat`. They render the daemon's event
+`/api/*`): `project`, `session`, `workspace`, `run`, `chat`. They render the daemon's event
 stream. Every tool call is shown with each argument labelled, every result with
 its size, and any clipping is announced. `--wire` also prints the exact
 request (credentials redacted) and every server-sent event from the provider;
@@ -142,6 +142,18 @@ class Renderer:
                 self._print(f"{DIM}question answered{RESET}")
             else:
                 self._print(f"{YELLOW}question cancelled: {data.get('reason') or 'no answer'}{RESET}")
+        elif kind == "session.workspace_tools":
+            self._break()
+            self._print(f"{CYAN}⌂ workspace control tools activated{RESET}")
+        elif kind == "session.directory_changed":
+            self._break()
+            branch = f" · branch {data['branch']}" if data.get("branch") else ""
+            self._print(f"{CYAN}⌂ directory {data['from']} → {data['to']}{branch}{RESET}")
+        elif kind in ("worktree.created", "worktree.deleted"):
+            self._break()
+            verb = "created" if kind == "worktree.created" else "deleted"
+            branch = f" on branch {data['branch']}" if data.get("branch") else ""
+            self._print(f"{CYAN}⌂ worktree {verb} {data['path']}{branch} (session directory unchanged){RESET}")
         elif kind == "bus.overflow":
             self._break()
             self._print(f"{RED}event stream overflowed after event {data['dropped_after']}; reconnect to continue{RESET}")
@@ -512,6 +524,74 @@ async def _session(args: argparse.Namespace) -> None:
         await client.close()
 
 
+async def _workspace(args: argparse.Namespace) -> None:
+    """Workspace controls through the API: activation, a directory move, worktrees."""
+    client = Client.connect()
+    try:
+        sid = args.session
+        if args.action == "expose":
+            session = await client.call("POST", f"/api/session/{sid}/workspace-tools", {})
+            if args.json:
+                print(json.dumps(session, indent=2))
+                return
+            state = session["workspace"]
+            print(f"{DIM}workspace tools {'active' if state['active'] else 'not active'} · "
+                  f"entry {'available' if state['entry'] else 'not available (older session)'}{RESET}")
+            print(f"{DIM}{', '.join(t for t in session['tools'] if t in ('change_session_directory', 'worktree', 'expose_workspace_tools')) or 'none'}{RESET}")
+            return
+        if args.action == "directory":
+            if not args.argument:
+                raise ValueError("workspace directory needs a path")
+            target = str(Path(args.argument).expanduser().resolve())
+            session = await client.call("POST", f"/api/session/{sid}/directory", {"directory": target})
+            change = session.get("change") or {}
+            if args.json:
+                print(json.dumps(session, indent=2))
+            elif change.get("status") == "pending":
+                print(f"{YELLOW}pending: {session['directory']} → {change.get('to')} "
+                      f"(applies at the next tool boundary or when the turn ends){RESET}")
+            elif change.get("status") == "unchanged":
+                print(f"{DIM}already in {session['directory']}{RESET}")
+            else:
+                branch = f" · branch {change['branch']}" if change.get("branch") else ""
+                print(f"{session['directory']}{branch}")
+            return
+        if args.action == "list":
+            data = await client.call("GET", f"/api/session/{sid}/worktrees")
+            if args.json:
+                print(json.dumps(data, indent=2))
+                return
+            print(f"{BOLD}{data['repository']}{RESET} {DIM}(main checkout){RESET}")
+            for item in data["worktrees"]:
+                flags = " main" if item["main"] else ""
+                if item.get("dirty"):
+                    state = f"{item['changes']} uncommitted"
+                elif item.get("dirty") is False:
+                    state = "clean"
+                else:
+                    state = "status unavailable"
+                print(f"  {item['path']}{flags}  {DIM}{item.get('branch') or 'no branch'} · {state}{RESET}")
+            return
+        if not args.argument:
+            raise ValueError(f"workspace {args.action} needs a worktree path")
+        body: dict[str, Any] = {"action": args.action, "path": str(Path(args.argument).expanduser().resolve())}
+        if args.branch:
+            body["branch"] = args.branch
+        if args.base:
+            body["base"] = args.base
+        data = await client.call("POST", f"/api/session/{sid}/worktrees", body)
+        if args.json:
+            print(json.dumps(data, indent=2))
+        elif args.action == "create":
+            verb = "reused" if data.get("reused") else "created"
+            print(f"{verb} {data['path']} on {data.get('branch') or 'no branch'} "
+                  f"{DIM}(session directory unchanged: {data['session_directory']}){RESET}")
+        else:
+            print(f"deleted {data['path']} {DIM}(branch {data.get('branch') or 'none'} kept){RESET}")
+    finally:
+        await client.close()
+
+
 # -- local commands ----------------------------------------------------------
 
 
@@ -603,6 +683,13 @@ def main(argv: list[str] | None = None) -> int:
     session.add_argument("--all", action="store_true", help="sessions of every project")
     session.add_argument("--workspace", default=".")
     session.add_argument("--no-open", action="store_true", help="inspector: print the URL instead of opening a browser")
+    workspace = sub.add_parser("workspace", help="workspace controls through the API: expose, directory, worktrees")
+    workspace.add_argument("action", choices=["expose", "directory", "list", "create", "delete"])
+    workspace.add_argument("argument", nargs="?", help="directory (directory) or worktree path (create/delete)")
+    workspace.add_argument("--session", required=True, help="the session to change")
+    workspace.add_argument("--branch", help="create: reuse or create this branch")
+    workspace.add_argument("--base", help="create: commit or branch to start a new branch from")
+    workspace.add_argument("--json", action="store_true", help="print the API JSON")
 
     for name in ("chat", "run"):
         cmd = sub.add_parser(name)
@@ -651,6 +738,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.action in ("show", "rm") and not args.id:
                 parser.error(f"session {args.action} needs an id")
             asyncio.run(_session(args))
+        elif args.command == "workspace":
+            asyncio.run(_workspace(args))
         else:
             with contextlib.ExitStack() as stack:
                 wire_file = stack.enter_context(open(args.wire_file, "a")) if args.wire_file else None

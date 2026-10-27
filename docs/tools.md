@@ -3,7 +3,10 @@
 `nexus/tools/` holds the six task tools and the two companion tools for
 background bash. They act on the workspace, except `ask`, which asks the user a
 question and returns the answer as data. Changing Nexus itself (session,
-workspace, worktree, model) is never a tool (PLAN.md, "Task tools vs. control").
+workspace, worktree, model) is never a task tool; it is the control plane
+(PLAN.md, "Task tools vs. control"). The workspace controls in this document are
+control tools: they are defined in `nexus/workspace.py`, executed by the daemon,
+and are not part of `DEFAULT_TOOLS` or `nexus/tools/`.
 
 `DEFAULT_TOOLS = (read, bash, edit, write, ask, code)`.
 `BASH_JOB_TOOLS = (bash_output, bash_kill)` is granted with `bash` (unless
@@ -23,6 +26,7 @@ guard and whether the result is model-visible.
 | `tools/code.py`, `kernels.py` | Code spec and daemon-owned Monty kernels |
 | `observations.py` | Per-session read observations and the read-before-edit guard |
 | `bash_jobs.py` | Daemon-owned background bash jobs |
+| `workspace.py`, `worktrees.py` | Workspace control tools, directory moves and Git worktree operations |
 
 ## Shared rules
 
@@ -43,12 +47,13 @@ sees, never silent.
 
 **Approval.** Tools do not ask for permission. The loop calls an `approve` callback before each
 call ([loop.md](loop.md#approval)). The daemon auto-approves `read`, `bash_output`,
-`bash_kill`, `ask`, `edit`, `write` and the outer `code` call; `edit` and `write`
+`bash_kill`, `ask`, `edit`, `write`, the outer `code` call and every workspace control
+tool; `edit` and `write`
 are approval-free inside the session directory by fixed policy, with no setting
 to change that. `bash` (including `background`) still asks unless the session's
 permission is `allow` (`--yes`). `ask` is not an approval: its answers are data
 for the model, never a grant. Path confinement and read freshness still apply to
-every in-directory edit.
+every in-directory edit. Activation and moving do not ask a question.
 
 **Read observations and freshness.** A direct `read` whose result enters the
 model's context records an observation for that session:
@@ -108,6 +113,137 @@ started with. Explicit updates are rebound before each subsequent model/tool
 call, including calls later in the same turn. Nested code cells see exactly the effective task tools, so a
 disabled tool is not callable there either.
 
+## Workspace control tools (on demand)
+
+Ordinary new sessions start with one lightweight control entry point,
+`expose_workspace_tools`. The detailed controls (`change_session_directory` and
+`worktree`) are absent from the request schemas and from the system prompt until
+the model asks for them. They are control tools, never task tools, and they
+never ask for approval or an `ask` question.
+
+| Tool | Arguments | Effect |
+| --- | --- | --- |
+| `expose_workspace_tools` | none | Activate the two tools below for this session |
+| `change_session_directory` | `directory` | Move where this session's tools run |
+| `worktree` | `action` (`list`/`create`/`delete`), `path?`, `branch?`, `base?` | List, create or delete Git worktrees |
+
+### Activation
+
+- **New sessions** get the entry point automatically, whether root or child,
+  unless `disabled_tools` contains it. An agent's `tools` list does not grant or
+  remove it. `expose_workspace_tools` is not in `DEFAULT_TOOLS`; it is added by
+  the session snapshot.
+- **Existing sessions** keep their stored snapshot and do not silently gain the
+  entry point or the two tools. `POST /api/session/{id}/workspace-tools`
+  activates them explicitly (also for a reconstructed old session).
+- The first call sets `workspace.activated` in the session snapshot, adds both
+  definitions to the stored tool definitions and returns both **descriptions,
+  JSON schemas and guidance** as its model-visible result. The next provider
+  request carries both schemas. Printing definitions alone would not make them
+  callable.
+- Activation is **idempotent**: a second call changes nothing and returns one
+  short sentence. It is persisted with the snapshot, so it survives turns and
+  daemon restarts.
+- Activation does **not** rewrite the frozen system prompt. The entry point's own
+  guidance is frozen there; the tool result is the forward guidance for the two
+  new tools.
+- Children activate independently. A parent's activation does not reach a child,
+  and a child's does not reach the parent.
+- `disabled_tools` can switch any of the three off individually. Activation
+  never re-enables a disabled tool.
+- The control tools are never bound inside `code`: a cell can call only the
+  caller's task tools. `session`, `expose_workspace_tools`,
+  `change_session_directory` and `worktree` are all excluded
+  (`agents.NEXUS_CONTROL_TOOLS`).
+
+### `change_session_directory {directory}`
+
+Moves the session to an **existing directory**. It does not create a worktree,
+create directories, or move files. Relative paths resolve from the current
+session directory; the result stores the resolved absolute path. A directory
+that is the current one is a successful no-op ("already works in …") with no
+event.
+
+A successful change:
+
+- persists the new resolved directory on the session; the project stays the same
+  (project identity is separate from where the session runs);
+- reads exactly `<new directory>/AGENTS.md` (no ancestor or nested search) and
+  includes its labelled `# Instructions file` section in the announcement, with
+  `Status: loaded`, `not found`, `unreadable` or `too large` and the error or
+  limit stated;
+- announces the previous and current absolute paths, the current branch and
+  repository when they exist, and says that later calls resolve from the new
+  directory;
+- leaves earlier messages, the frozen system prompt and the instructions file
+  recorded at session start unchanged (the snapshot keeps the starting
+  directory, the original instruction file, and the last 20 moves);
+- emits `session.directory_changed` with from/to, branch, repository/worktree,
+  instruction-file status and the frozen directory, then `session.updated`.
+
+**Timing.** The change is never applied inside a running tool call. A tool call
+keeps the `ToolContext.workspace` it started with. When the model calls
+`change_session_directory`, the validated move is queued and applied at the next
+tool/model dispatch boundary (or when the turn ends); the next direct and nested
+task calls then resolve from the new directory. A client request while a turn is
+running gets **202** with `directory_change.status: "pending"`; the pending
+target appears in session JSON. It is applied at the next boundary, or when the
+turn ends. A second pending request for the same session gets 409. While idle,
+the API applies the move immediately and returns **200**.
+
+A client-driven move inserts the same announcement as a user message: now if the
+session is idle, or before the next model request if a turn is running. A
+tool-driven move normally uses its tool result as the announcement. If applied
+at turn teardown without a saved result, Core adds forward context instead.
+Destination instructions are reread when a pending move applies; if they differ
+from a tool's earlier result, a forward notice carries the actual instructions.
+
+Children created after the move inherit the new directory; existing children
+keep theirs. File observations are keyed by resolved absolute path, so reading
+`a.txt` in the old directory never authorizes changing a different `a.txt` in
+the destination.
+
+**Reporting while moved.** While the live directory differs from the frozen
+prompt's starting directory, `bash` results begin with `[cwd: <directory>]`, and
+`read`, `edit` and `write` report resolved absolute paths in their results and
+errors. A file read also starts with `[path: <absolute path>]`. This keeps the
+difference visible without rewriting the cached prompt.
+
+### `worktree {action, path?, branch?, base?}`
+
+All operations use Git subprocesses with argument arrays (never an interpolated
+shell), against the repository of the session's current directory. Paths from
+Git's `worktree list --porcelain` decide what exists; a requested path is never
+trusted. Relative paths resolve against the main checkout's root.
+
+- **`list`** returns the repository, main checkout and each worktree's path,
+  head, branch, `main`/`detached`/`bare`/`locked`/`prunable` flags and
+  working-tree state (`dirty`, `changes`). It emits `worktree.listed`.
+- **`create`** creates a worktree at `path`, or returns an existing registered
+  one (`reused: true`). `branch` reuses that branch when it exists, otherwise
+  creates it; `base` is allowed only for a new branch and defaults to `HEAD`.
+  The worktree is created or reused and its path returned; **the session
+  directory does not change** — call `change_session_directory` to work there.
+  Uncommitted changes in the original checkout are untouched. A path that exists
+  but is not a registered worktree of this repository is refused, never reused
+  or replaced, and the parent directory must exist. Emits `worktree.created`.
+- **`delete`** removes a registered worktree with `git worktree remove` (no
+  `--force`). It refuses the main checkout, a bare, locked, missing/prunable or
+  dirty worktree, and a path used by any session (all projects), a project, or
+  targeted by a pending directory change. Change those sessions' directories or
+  remove those projects first. Branches are never deleted. Emits
+  `worktree.deleted`.
+- Create and delete run under one daemon lock, so conflicting operations are
+  serialized and delete revalidates the real state after waiting.
+- Git failures are reported with Git's own message. A session outside a Git
+  repository gets a clear error. Worktree tool calls never change the session.
+
+API and CLI: `GET`/`POST /api/session/{id}/worktrees`,
+`POST /api/session/{id}/directory`,
+`POST /api/session/{id}/workspace-tools`, and
+`nexus workspace expose|directory|list|create|delete --session …`
+([api.md](api.md#endpoints), [daemon.md](daemon.md#workspace-controls)).
+
 ## read
 
 Read a text file with line numbers, or list a directory.
@@ -127,6 +263,8 @@ Read a text file with line numbers, or list a directory.
 * Lines are `{number:>6}<TAB>{text}`. A line over 2000 characters is cut and ends
   with `[… line clipped at 2000 of N characters]`.
 * A footer `[lines A–B of N]` is added when the window is not the whole file.
+* After a directory move, the result starts with `[path: <absolute path>]` and
+  errors/listings use the absolute path ([tools.md](tools.md#workspace-control-tools-on-demand)).
 * The whole output is also subject to the 30,000-character clip. A clipped
   output establishes no freshness coverage: the clip and any clipped lines are
   recorded, but no line range from that call authorizes an edit.
@@ -451,3 +589,13 @@ three code results should show the same `krn_…` and successive cell numbers.
 The child computes 42 and sets `child_seen` to true. No files or bash are used
 for communication. This sequence was verified live against Codex; the evidence
 is in `artifacts/shared_kernel_live_proof.json`.
+
+
+Workspace-control delivery details: activation describes enabled tools only and
+labels switched-off tools unavailable. Worktree deletion includes users in
+subdirectories and daemon-owned background jobs; a deletion reservation blocks
+new session/project users and directory moves until removal finishes. An
+unavailable working-tree status is a refusal, not evidence of a clean tree.
+Git subprocess cancellation kills and reaps the process group before releasing
+the operation lock. Git's NUL-delimited worktree metadata preserves unusual path
+characters. External processes and other daemons remain outside these checks.

@@ -22,6 +22,8 @@ nexus/
   llmhub/auth/       store, device, codex, copilot, grok, opencode, errors
   tools/             base, read, bash, edit, write, ask, code
   observations.py    per-session read observations and the read-before-edit guard
+  workspace.py       control tools: expose, session-directory moves, worktree specs
+  worktrees.py       Git worktree list/create/delete through argument arrays
   questions.py       the ask contract: schema, bounds, validation, result text
   snapshot.py        serializable session configuration and instruction-file records
   agents.py          agent files: parse, load (builtin, global, project)
@@ -33,13 +35,13 @@ nexus/
   bus.py             in-process event bus (seq-numbered, bounded per subscriber)
   kernels.py         daemon-owned persistent Monty kernels
   bash_jobs.py       daemon-owned background bash jobs
-  runtime.py         projects, sessions, turns, approvals, questions, interrupts
+  runtime.py         projects, sessions, turns, approvals, questions, workspace controls, interrupts
   server.py          the HTTP API (Starlette) — docs/api.md
   daemon.py          serve, start, stop, discovery via daemon.json — docs/daemon.md
   inspector/         index.html: the session inspector page — docs/inspector.md
   client.py          HTTP client for the API, used by the CLI
   cli.py             local: login | logout | status | models | serve | daemon
-                     daemon clients: project | session | run | chat
+                     daemon clients: project | session | workspace | run | chat
 tests/               offline tests (test_server.py drives the API with a scripted provider)
 ```
 

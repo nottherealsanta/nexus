@@ -25,7 +25,7 @@ You review code. Point out bugs and risks; do not edit files.
 | `model` | `provider/model` | Used when the session has no model of its own. |
 | `effort` | string | Used when the session has no effort of its own. |
 | `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
-| `control` | list | Control tools: only `session` today, which starts child sessions. Never implied: omitting `tools` does not grant them. Ignored in child sessions. |
+| `control` | list | Control tools an agent may grant explicitly: only `session` today, which starts child sessions. Never implied: omitting `tools` does not grant it. Ignored in child sessions. The workspace controls are not granted here: new sessions always start with the `expose_workspace_tools` entry point (see below). |
 | `steps` | 1–500 | Max model calls per turn. |
 
 Any other key is an error, so a typo is never silently ignored.
@@ -60,13 +60,17 @@ The snapshot contains:
   steps, declared tools and control tools), its source (`builtin`, `global`,
   `project`), absolute path, file fingerprint (`sha256:…`) and prompt body;
 - the ordered tool list, with each enabled tool's request description, JSON
-  parameters and `guidance`; a switched-off tool has none of these;
+  parameters and `guidance`; a switched-off tool has none of these. A new
+  session's list ends with `expose_workspace_tools`; its workspace state
+  (`{"entry": true, "activated": false}`) is stored beside it;
 - the child-agent catalog (name, description, mode, source, path and
   fingerprint) used by the `session` tool's enum and guidance;
 - the rendered agent prompt and the final `system_prompt` sent as the provider's
   `instructions`, including the linked `AGENTS.md` section;
-- the instruction-file record (path, status, content, bytes and hash) and the
-  snapshot's origin (`created`, `agent-switch` or `reconstructed`).
+- the instruction-file record (path, status, content, bytes and hash), the
+  current instruction file after any directory changes, the bounded move
+  history, and the snapshot's origin (`created`, `agent-switch` or
+  `reconstructed`).
 
 Tool records are plain data. Execution is rebound by name through the tool
 registry (`nexus/tools/`) on every turn, so the daemon never stores Python
@@ -84,8 +88,10 @@ A session created before snapshots existed has no stored original prompt. On
 first use, the daemon reconstructs one from the current agent files and
 `AGENTS.md`, records `origin: "reconstructed"`, and puts a labelled
 `# Snapshot note` in the system prompt saying this is not a historical record.
-The reconstruction is stored once and is stable from then on. It also emits a
-`session.snapshot` event.
+The reconstruction is stored once and is stable from then on. It also records
+`workspace: {entry: false, activated: false}`, so an older session does not
+silently gain the on-demand workspace entry point; activate it explicitly if
+needed. It also emits a `session.snapshot` event.
 
 ## The instruction file
 
@@ -102,9 +108,9 @@ including the content. Nothing is omitted silently.
 
 Editing (or deleting) `AGENTS.md` affects new sessions only. Switching agents
 replaces the agent prompt and tool snapshot deliberately; the instruction file
-loaded for the session is retained. A directory change (a later control-plane
-step) will add the destination's instructions as forward context instead of
-rewriting this prompt.
+loaded for the session is retained. A directory change loads the destination's
+instructions as forward context and records them as the current instruction
+file, without rewriting this prompt ([tools.md](tools.md#change_session_directory-directory)).
 
 ## How a session uses its agent
 
@@ -117,9 +123,11 @@ otherwise the first loaded agent allowed as a root is used (normally
   instruction-file section. This is rendered once and frozen.
   `GET /api/session/{id}/context` shows the full text.
 - **tools** = the agent's `tools`, or all task tools, minus the session's
-  `disabled_tools`; explicitly granted control tools follow the same switch.
-  Disabled tools are absent from the stored definitions, the request schemas and
-  the system prompt's `# Tools` section.
+  `disabled_tools`; explicitly granted control tools follow the same switch. A
+  new session also gets the `expose_workspace_tools` entry point unless it is
+  switched off; activating it adds `change_session_directory` and `worktree`
+  for subsequent calls. Disabled tools are absent from the stored definitions,
+  the request schemas and the system prompt's `# Tools` section.
 - **model** = the session's model if the user set one, else the agent's frozen
   `model`, else the daemon's default. **effort** works the same way, ending
   with the provider's default.
@@ -198,6 +206,17 @@ definitions. The frozen system prompt is not rewritten: the daemon appends a
 names the tools now available (with their guidance), the tools switched off, and
 says the notice is authoritative where the frozen prompt mentions an old tool.
 Clearing a switch adds the tool's definition back and uses the same notice.
+
+Workspace controls are on demand. A new session's prompt and request contain
+only `expose_workspace_tools`; `change_session_directory` and `worktree` are
+absent. The model calls the entry point when it needs them, and the tool result
+contains both descriptions, schemas and guidance. Their executable schemas are
+added to the next request and persisted with the snapshot, so activation
+survives turns and restarts. Existing snapshots are not changed; activate an
+older session explicitly with `POST /api/session/{id}/workspace-tools` or
+`nexus workspace expose --session …`. Children activate independently. None of
+the workspace controls is callable inside `code`. See
+[tools.md](tools.md#workspace-control-tools-on-demand).
 
 Switching agents (`POST /api/session/{id}/agent`) is the deliberate prompt
 replacement: the agent prompt, tool definitions and child catalog are rebuilt

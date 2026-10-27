@@ -69,6 +69,8 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
         device.py   RFC 8628 device flow (copilot, grok)
         codex.py, copilot.py, grok.py, opencode.py
     tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, ask, code; web_search/web_fetch planned
+    workspace.py    workspace control tools: expose on demand, move directory, worktree specs
+    worktrees.py    Git worktree list/create/delete, through subprocess argument arrays
     kernels.py      Monty kernels for the `code` tool, owned by the daemon
     bash_jobs.py    background bash jobs, owned by the daemon
     snapshot.py     stored session configuration, tool schemas and AGENTS.md
@@ -565,7 +567,7 @@ stored with the session, and replayed unchanged. Later deliberate changes go
 forward as context items (Principle 8). An agent switch is the one deliberate
 prompt-replacement exception.
 
-**Session snapshots (done in the foundation above; remaining items below).** On
+**Session snapshots (done in the foundation above).** On
 creation of every session (root or child), agent files are loaded fresh,
 including additions, modifications and deletions. That session's agent, granted
 tools and child-agent catalog are resolved once. Only available tools' schemas
@@ -579,17 +581,91 @@ exception; tool/MCP changes append guidance and update later request schemas
 without rewriting the frozen prompt.
 
 **Remaining in this step:** warn before an agent switch (the API currently
-switches directly); record and apply directory changes at a tool-safe boundary,
-including the destination's `AGENTS.md` as forward context. Tool/MCP changes from later
-steps will reuse the same forward-guidance path. Approval-free workspace edits
-and read-before-edit enforcement are done above; workspace controls and
-directory/worktree operations remain.
+switches directly); export/archive are not started. Workspace controls,
+directory moves and worktree operations are done below.
 
-**Instruction file (done in the foundation above).** `AGENTS.md` is read directly
+**Workspace controls: on-demand exposure, directory moves and worktrees (done
+2026-10-27; review pending).** This increment implements
+`expose_workspace_tools`, `change_session_directory` and `worktree`; it does not
+start export/archive, event recovery, web tools, skills or MCP.
+
+- **On-demand exposure.** A new session's snapshot carries
+  `workspace: {entry: true, activated: false}`, so `expose_workspace_tools` is in
+  its request schemas and generated `# Tools` section. The two detailed tools are
+  absent from both. Calling the entry point adds both definitions (description,
+  JSON schema, guidance) to its model-visible result and to the stored snapshot,
+  so the next request offers them. Activation is idempotent, survives turns and
+  restarts, never rewrites the frozen prompt, and needs no approval or `ask`.
+  Children have their own state. None of the three is callable inside `code`.
+  Older snapshots are untouched; `POST /api/session/{id}/workspace-tools` (and
+  `nexus workspace expose`) activates them explicitly.
+- **Directory moves.** `change_session_directory {directory}` validates an
+  existing directory, persists its resolved path, reads exactly the destination
+  `AGENTS.md` and announces old/new paths, branch/repository, explicit
+  missing/unreadable/too-large status, and that later calls resolve from the new
+  path. Earlier messages, the frozen prompt, the original instruction file and
+  project identity stay unchanged; the snapshot records the current instruction
+  file and the last 20 moves. `session.directory_changed` carries from/to,
+  branch, repository/worktree, instruction status, source and the frozen
+  directory.
+- **Transition timing.** A running call keeps its `ToolContext`; a move is queued
+  and applied at the next model/tool dispatch boundary, or when the turn ends.
+  A client request while busy returns 202 with
+  `directory_change.status: "pending"` and the move is applied at that boundary;
+  a second pending request is 409. Idle client moves apply immediately (200) and
+  insert the same announcement as a user message. A tool-driven move's result is
+  its announcement. Children created afterwards inherit the directory; existing
+  children keep theirs.
+- **Observations.** They remain keyed by resolved absolute path, so an old
+  directory's read never authorizes a different file at the new path. While the
+  live directory differs from the frozen prompt's, bash results start with
+  `[cwd: …]` and path-taking tools report absolute paths.
+- **Worktrees.** `worktree {action, path?, branch?, base?}` uses Git subprocess
+  argument arrays (`nexus/worktrees.py`) and Git's own `worktree list
+  --porcelain` metadata. List returns repository, main checkout, paths, heads,
+  branches, flags and clean/dirty state. Create creates or reuses a validated
+  worktree and returns its path without changing the session directory; existing
+  non-worktree paths and missing parents are refused, and uncommitted changes in
+  the original checkout stay there. Delete uses `git worktree remove` without
+  `--force` and refuses the main checkout, bare/locked/missing or dirty
+  worktrees, and paths used by any session, project or pending move; branches
+  are never deleted. Create and delete share one lock and revalidate after
+  waiting, so conflicting operations serialize. Events: `worktree.listed`/`created`/
+  `deleted`.
+- **API and CLI.** Endpoints: `POST …/workspace-tools`, `POST …/directory`,
+  `GET`/`POST …/worktrees`; session JSON adds `workspace`,
+  `starting_directory`, `directory_changed` and `directory_change`, and the
+  snapshot summary adds workspace state, current instructions and move count.
+  CLI: `nexus workspace expose|directory|list|create|delete --session …`. The
+  inspector header and Requests card show the live/starting directory,
+  activation and pending changes, and the new events update live.
+- **Verified offline** with temporary homes, workspaces and real temporary Git
+  repositories: hidden tools before activation and callable schemas on the next
+  model call; idempotent activation and restart persistence; independent
+  parent/child activation; exclusion from `code`; running-call isolation and
+  rebinding later direct/nested calls; destination instructions loaded while the
+  frozen prompt/history stay intact; missing/unreadable/oversized instructions;
+  observations not transferring; new children inheriting and existing children
+  retaining directories; worktree list/create/reuse/delete; dirty, main,
+  in-use, invalid and occupied-path refusals; creation leaving the session
+  directory unchanged; branch preservation; missing Git; API authentication and
+  error responses; tool switches and agent switches after activation.
+  Full suite after delivery review: 174 tests; Ruff and `git diff --check` clean. No live provider run
+  was performed; the inspector changes were script-syntax-checked, not re-run
+  visually.
+- **Limitations.** A pending API move lives in memory (a daemon crash loses it
+  before it is applied). Worktree deletion protects session/project directories,
+  pending moves and daemon-owned background jobs, including subdirectories, but
+  cannot detect an arbitrary external process using the path. There is no merge/integrate operation and no worktree permission
+  setting. A directory move is not confined to the project; it accepts any
+  existing directory the user can reach.
+
+**Instruction file (done in the foundation above; directory transitions added
+above).** `AGENTS.md` is read directly
 from the session's `directory` for both roots and children; ancestors and nested
 directories are not searched. Its path and actual content are in the starting
-context. A directory change (remaining above) will load the destination's
-`AGENTS.md` and announce it as forward context without rewriting the previously
+context. A directory change loads the destination's
+`AGENTS.md` and announces it as forward context without rewriting the previously
 sent prompt. Absence is explicit in the context transition. Agent definitions
 and this instruction file serve different purposes; changing directory does not
 silently replace the selected agent definition.
@@ -660,6 +736,16 @@ see the detailed record below before the workspace controls work.
   syntax-checked, not visually re-run in a browser this increment. The CLI asks a
   second, optional text prompt when a selection question also allows free text;
   the API accepts both in one reply.
+
+**Workspace delivery review.** Independently reran suite and lint. Fixed
+worktree use checks for subdirectories and background jobs, reserved paths
+through asynchronous deletion to block new users, and killed/reaped Git process
+groups on cancellation. Worktree metadata now uses NUL delimiters (quoted,
+Unicode and newline-containing paths remain intact); Git top-level paths omit
+the output terminator. Activation describes only enabled tools. Pending moves
+reload destination instructions at application, and tool moves applied during
+teardown get a forward notice if no result carried it. Nine regression cases
+cover these changes, including rejecting replacement of an already pending move. No live provider or new browser visual run was performed.
 
 **Ask delivery review.** Independently reran the suite and lint. Fixed generic
 clipping of valid structured answers (which could truncate JSON), a cancelled
@@ -762,7 +848,8 @@ deletion and session deletion must not silently remove one another's state.
 
 **Also in this step (from INTERFACE_PLAN.md):** export (Markdown transcript,
 JSON of messages and events), archive/unarchive, and delete (already
-cascades). No fork or revert: a session only moves forward.
+cascades). No fork or revert: a session only moves forward. Export and
+archive are not started in this increment.
 
 ### Step 11: event log follow-ups
 
@@ -1010,7 +1097,10 @@ show the wire view, the session tree and kernels.
 | Agent files read again on every turn | Resolved once into a stored `session_snapshot`; later turns replay it | A cached prefix stays stable; edits cannot silently change an existing session |
 | No session instruction file | Exactly `<session.directory>/AGENTS.md`, labelled in the starting context with explicit absence/error/size status | Project instructions are visible to the model and inspector, without ancestor discovery |
 | Old sessions have no original prompt record | Lazy reconstruction marked `reconstructed`, with a visible note and a one-time `session.snapshot` event | Honest migration; stable afterwards |
-| Worktree tool, effectively mandatory | On-demand workspace controls: change session directory and worktree list/create/delete (planned, Step 10) | Keep ordinary sessions small; activate workspace controls when needed |
+| Worktree tool, effectively mandatory | On-demand workspace controls: activate change-session-directory and worktree list/create/delete when needed (done 2026-10-27) | Keep ordinary sessions small and separate task work from Nexus state |
+| A session always ran in its project path | A session can move to any existing directory; the project identity is unchanged and children inherit the move (done 2026-10-27) | Worktrees and sibling checkouts without pretending they are new projects |
+| A directory change rewrote context | The move is announced forward, the destination `AGENTS.md` is loaded then, and earlier prompts/messages stay byte-for-byte (done 2026-10-27) | A cached prefix stays stable |
+| Worktrees were created and removed by hand or without checks | Git argument arrays, real worktree metadata, dirty/main/in-use refusals and no branch deletion (done 2026-10-27) | Never destroy a checkout, a session's directory or an unrelated directory |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1034,7 +1124,9 @@ Work one reviewed increment at a time:
    `ask` and approval-free edits/read freshness are done; the bash boundary is
    documented, and full enforcement (sandbox or restricted commands) remains
    open.
-4. Add on-demand workspace controls and directory/worktree operations.
+4. Add on-demand workspace controls and directory/worktree operations — done
+   2026-10-27; see Step 10 (`expose_workspace_tools`,
+   `change_session_directory`, `worktree`, API and CLI).
 5. Durable events, restart recovery, idempotent requests and `/continue`.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
@@ -1063,8 +1155,14 @@ Do not start the next increment until the current review is complete.
 - No retries, no context limit or compaction (planned as handoff, Step 12a).
 - Explicit updates apply to subsequent model/tool calls. An active `code` cell
   retains the task-tool bindings it started with until that outer call finishes.
-  Agent switches retain the initially loaded `AGENTS.md` section. Directory
-  changes and destination instructions are still pending in Step 10.
+  Agent switches retain the initially loaded `AGENTS.md` section; a directory
+  change loads the destination's instructions as forward context instead of
+  rewriting the frozen prompt.
+- A client-requested directory move that is waiting for a running call lives in
+  memory: a daemon crash before the next boundary loses it. Worktree deletion
+  checks session directories and pending moves, not arbitrary `bash` or external
+  processes using the worktree. There is no merge/integrate or branch-cleanup
+  operation and no worktree permission setting.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
 - The `event` table grows without limit (every token delta is a row); no retention yet.

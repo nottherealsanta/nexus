@@ -11,6 +11,9 @@ is published on the bus:
 | `message.added` | a message was saved (user, assistant, tool) |
 | `permission.asked` / `permission.replied` | a tool call waits for approval |
 | `question.asked` / `question.replied` | the `ask` tool waits for user answers; `replied` also carries cancellation |
+| `session.workspace_tools` | the workspace control tools were activated for a session |
+| `session.directory_changed` | a session's working directory moved (with the destination instructions) |
+| `worktree.listed` / `worktree.created` / `worktree.deleted` | worktree control operations |
 | `session.error` | a turn failed (provider, auth or tool-loop error) |
 | everything else | the loop and stream events, unchanged (`wire_request`, `text_delta`, `tool_start`, …) |
 
@@ -45,6 +48,8 @@ from typing import Any
 from . import agents as agent_files
 from . import questions as question_contract
 from . import snapshot as snapshots
+from . import workspace as workspace_control
+from . import worktrees
 from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
 from .codec import message_to_json, to_json
@@ -60,7 +65,8 @@ from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask", "edit", "write"}
+AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask", "edit", "write",
+                 *workspace_control.CONTROL_NAMES}
 CHILD_RESULT_CHARS = 30_000
 TITLE_CHARS = 60
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
@@ -102,7 +108,10 @@ class Runtime:
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
         self.pending_reads: dict[str, list[FileObservation]] = {}
+        self.removing_worktrees: set[Path] = set()
+        self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
+        self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
         bus.sink = self._record
 
     def _record(self, event: dict[str, Any]) -> None:
@@ -117,6 +126,7 @@ class Runtime:
     # -- projects ------------------------------------------------------------
 
     def open_project(self, path: str, name: str | None = None) -> Project:
+        self._check_removing_worktree(Path(path).expanduser())
         project, created = self.store.project_for_path(path, name)
         if created:
             self.bus.publish("project.created", project_json(project))
@@ -140,6 +150,8 @@ class Runtime:
             await self.interrupt(session.id, reason="the session's project was deleted")
         ids = {session.id for session in sessions}
         self.close_questions(ids, "the session's project was deleted")
+        for sid in ids:
+            self.pending_directories.pop(sid, None)
         await self.jobs.cancel_for(ids)
         if not self.store.delete_project(project_id):
             raise NotFound(f"no project {project_id}")
@@ -150,6 +162,8 @@ class Runtime:
     def session_json(self, s: Session) -> dict[str, Any]:
         """`model`/`effort` are what the next turn uses; `*_source` says where they came from."""
         snapshot_info: dict[str, Any] | None = None
+        state: dict[str, Any] = {}
+        starting = s.directory
         try:
             snapshot = self.snapshot_for(s)
             agent = snapshot["agent"]
@@ -158,17 +172,25 @@ class Runtime:
             effort_source = "session" if s.effort else ("agent" if agent["effort"] else "provider")
             tools = self.effective_tool_names(snapshot, s)
             snapshot_info = snapshots.summary(snapshot)
+            starting = snapshot.get("directory", s.directory)
+            state = snapshot.get("workspace") or {}
         except ValueError as exc:
             snapshot_info = {"error": str(exc)}
             tools = []
             model, model_source = s.model or self.default_model, "session" if s.model else "default"
             effort, effort_source = s.effort, "session" if s.effort else "provider"
+        pending = self.pending_directories.get(s.id)
         return {
             "id": s.id, "project_id": s.project_id, "directory": s.directory, "title": s.title, "agent": s.agent,
             "parent_id": s.parent_id, "parent_call_id": s.parent_call_id, "launched_by": s.launched_by,
             "children": [c.id for c in self.store.children(s.id)],
             "model": model, "model_source": model_source, "effort": effort, "effort_source": effort_source,
             "tools": tools, "disabled_tools": sorted(s.disabled()), "snapshot": snapshot_info,
+            "workspace": {"entry": bool(state.get("entry")), "active": bool(state.get("activated"))},
+            "starting_directory": starting,
+            "directory_changed": str(Path(s.directory).resolve()) != starting,
+            "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
+                                  "source": pending["source"]} if pending else None),
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
             "created": s.created, "updated": s.updated,
         }
@@ -210,10 +232,25 @@ class Runtime:
         return names
 
     @staticmethod
+    def enabled_names(granted: list[str], control: list[str], disabled: set[str], child: bool,
+                      workspace: dict[str, Any] | None) -> list[str]:
+        """Every tool the next request offers: task tools, granted control tools and workspace controls."""
+        names = Runtime.enabled_tool_names(granted, control, disabled, child)
+        state = workspace or {}
+        if state.get("entry") and workspace_control.EXPOSE not in disabled:
+            names.append(workspace_control.EXPOSE)
+        if state.get("activated"):
+            for name in workspace_control.WORKSPACE_TOOLS:
+                if name not in disabled and name not in names:
+                    names.append(name)
+        return names
+
+    @staticmethod
     def effective_tool_names(snapshot: dict[str, Any], session: Session) -> list[str]:
         """Enabled tools in request order, from the snapshot's grants and the session's switches."""
-        return Runtime.enabled_tool_names(
-            snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None)
+        return Runtime.enabled_names(
+            snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None,
+            snapshot.get("workspace"))
 
     def _session_spec(self, child_agents: list[dict[str, Any]]) -> ToolSpec:
         return ToolSpec(
@@ -251,13 +288,17 @@ class Runtime:
                 "parameters": self._session_spec(child_agents).parameters,
                 "guidance": self._session_guidance(child_agents),
             }
+        if name in workspace_control.CONTROL_NAMES:
+            return workspace_control.definition(name)
         tool = registry[name]
         return snapshots.tool_record(tool)
 
     def _build_snapshot(self, *, directory: str, spec: agent_files.AgentDef, found: agent_files.AgentSet,
                         disabled: set[str], child: bool, origin: str = "created",
                         instruction_file: dict[str, Any] | None = None,
-                        notice: str | None = None) -> dict[str, Any]:
+                        current_instruction_file: dict[str, Any] | None = None,
+                        notice: str | None = None, workspace: dict[str, Any] | None = None,
+                        directory_changes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """Freeze one session's agent, prompt, tool schemas and child catalog."""
         registry = self._registry()
         granted = self.granted_tool_names(spec)
@@ -267,7 +308,8 @@ class Runtime:
                 f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join(registry)}"
             )
         child_agents = [snapshots.agent_summary(a) for a in found.allowed(child=True)]
-        names = self.enabled_tool_names(granted, list(spec.control), disabled, child)
+        state = dict(workspace) if workspace is not None else {"entry": True, "activated": False}
+        names = self.enabled_names(granted, list(spec.control), disabled, child, state)
         definitions = {n: self._definition(n, registry, child_agents) for n in names}
         if instruction_file is None:
             instruction_file = snapshots.read_instruction_file(directory)
@@ -284,8 +326,11 @@ class Runtime:
             "control": list(spec.control),
             "tools": names,
             "tool_definitions": definitions,
+            "workspace": state,
+            "directory_changes": list(directory_changes or []),
             "child_agents": child_agents,
             "instruction_file": instruction_file,
+            **({"current_instruction_file": current_instruction_file} if current_instruction_file else {}),
             "agent_prompt": agent_prompt,
             "system_prompt": snapshots.compose_prompt(agent_prompt, instruction_file, notice=notice),
         }
@@ -300,6 +345,8 @@ class Runtime:
         rebuilt = self._build_snapshot(
             directory=session.directory, spec=spec, found=found, disabled=session.disabled(),
             child=session.parent_id is not None, origin="reconstructed", notice=snapshots.RECONSTRUCTED_NOTE,
+            # Older sessions do not silently gain the on-demand workspace entry point.
+            workspace={"entry": False, "activated": False},
         )
         self.store.set_snapshot(session.id, rebuilt)
         self.bus.publish("session.snapshot", snapshots.summary(rebuilt), session_id=session.id)
@@ -375,6 +422,7 @@ class Runtime:
             agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else (fitting or [""])[0]
         spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
         directory = parent.directory if parent else project.path
+        self._check_removing_worktree(directory)
         snapshot = self._build_snapshot(
             directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
             child=parent is not None,
@@ -437,11 +485,12 @@ class Runtime:
         before_snapshot = self.snapshot_for(current) if tools_changed and new_agent is None else None
         before_enabled = set(self.effective_tool_names(before_snapshot, current)) if before_snapshot else set()
         if before_snapshot is not None and new_disabled is not None:
-            target = self.enabled_tool_names(
+            target = self.enabled_names(
                 before_snapshot["granted_tools"], before_snapshot["control"], set(new_disabled),
-                current.parent_id is not None)
+                current.parent_id is not None, before_snapshot.get("workspace"))
             registry = self._registry()
-            unknown_exec = [n for n in target if n not in registry and n not in ("code", "session")]
+            unknown_exec = [n for n in target if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
+                            and n != "code"]
             if unknown_exec:
                 raise ValueError(
                     f"session snapshot needs tools this Nexus build cannot execute: {', '.join(unknown_exec)}; "
@@ -450,11 +499,18 @@ class Runtime:
         rebuilt: dict[str, Any] | None = None
         if new_agent is not None and found is not None:
             previous = self.store.snapshot(session_id)
+            previous_workspace = previous.get("workspace") if previous else None
             rebuilt = self._build_snapshot(
                 directory=current.directory, spec=new_agent, found=found,
                 disabled=set(new_disabled) if new_disabled is not None else current.disabled(),
                 child=current.parent_id is not None, origin="agent-switch",
                 instruction_file=previous["instruction_file"] if previous else None,
+                current_instruction_file=previous.get("current_instruction_file") if previous else None,
+                # Workspace activation and directory moves are session state, not agent configuration.
+                # A session without stored workspace state is old: do not silently add the entry point.
+                workspace=previous_workspace if previous_workspace is not None
+                else {"entry": False, "activated": False},
+                directory_changes=(previous.get("directory_changes") if previous else None),
             )
         session = self.store.update_session(session_id, **fields)
         assert session is not None
@@ -477,10 +533,259 @@ class Runtime:
         self.bus.publish("session.updated", self.session_json(session), session_id=session_id)
         return session
 
+    # -- workspace controls ----------------------------------------------------
+
+    def _forward_notice(self, session_id: str, text: str) -> None:
+        """Add forward context now when idle, or before the next request when a call is running."""
+        if session_id in self.turns:
+            self.inboxes.setdefault(session_id, []).append(text)
+            return
+        stored = self.store.append_message(session_id, Message("user", (Text(text),)))
+        self.bus.publish("message.added", message_json(stored), session_id=session_id)
+
+    def activate_workspace_tools(self, session_id: str, *, source: str = "tool") -> str:
+        """Make `change_session_directory` and `worktree` available; idempotent per session."""
+        session = self.session(session_id)
+        snapshot = self.snapshot_for(session)
+        state = dict(snapshot.get("workspace") or {"entry": False, "activated": False})
+        if state.get("activated"):
+            return workspace_control.already_active_text(self.effective_tool_names(snapshot, session))
+        state["activated"] = True
+        snapshot["workspace"] = state
+        self._sync_tool_definitions(snapshot, session)
+        self.store.set_snapshot(session_id, snapshot)
+        text = workspace_control.activation_text(self.effective_tool_names(snapshot, session))
+        self.bus.publish(
+            "session.workspace_tools",
+            {"active": True, "entry": bool(state.get("entry")), "tools": list(workspace_control.WORKSPACE_TOOLS)},
+            session_id=session_id,
+        )
+        if source != "tool":  # a tool's own result is the forward guidance
+            self._forward_notice(session_id, text)
+        self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
+        return text
+
+    def _check_removing_worktree(self, directory: str | Path) -> None:
+        target = Path(directory).resolve()
+        if any(target.is_relative_to(root) for root in self.removing_worktrees):
+            raise ValueError(f"{target} is inside a worktree being deleted; wait for deletion to finish")
+
+    async def _describe_directory_change(self, session: Session, directory: Any, source: str) -> dict[str, Any] | None:
+        if not isinstance(directory, str) or not directory.strip():
+            raise ValueError("directory must be a non-empty string")
+        target = Path(directory).expanduser()
+        if not target.is_absolute():  # relative to where the session works now
+            target = Path(session.directory) / target
+        target = target.resolve()
+        self._check_removing_worktree(target)
+        if not target.is_dir():
+            raise ValueError(f"{target} is not an existing directory")
+        previous = str(Path(session.directory).resolve())
+        if str(target) == previous:
+            return None
+        git = await worktrees.git_state(target)
+        record = snapshots.read_instruction_file(target)
+        notice = workspace_control.directory_notice(
+            previous=previous, current=str(target), git=git,
+            instruction_section=snapshots.instruction_section(record), source=source,
+        )
+        return {
+            "from": previous, "to": str(target), "branch": (git or {}).get("branch"),
+            "repository": (git or {}).get("repository"), "worktree": (git or {}).get("worktree"),
+            "instruction_file": record, "notice": notice, "source": source,
+        }
+
+    async def change_directory(self, session_id: str, directory: Any, *, source: str = "tool") -> dict[str, Any]:
+        """Validate a move, then apply it now or at the next tool boundary.
+
+        A running tool call keeps the directory it started with (`ToolContext` is
+        frozen). The next `refresh` boundary applies a queued move, so later direct
+        and nested calls resolve from the new directory.
+        """
+        if source not in ("tool", "api"):
+            raise ValueError("source must be 'tool' or 'api'")
+        session = self.session(session_id)
+        change = await self._describe_directory_change(session, directory, source)
+        if change is None:
+            return {"status": "unchanged", "directory": session.directory,
+                    "notice": f"This session already works in {session.directory}; no change was made."}
+        self._check_removing_worktree(change["to"])
+        # Validation awaited Git: another move may have landed in the meantime.
+        change["from"] = self.session(session_id).directory
+        summary = {key: change[key] for key in ("from", "to", "branch")}
+        if session_id in self.turns:
+            if session_id in self.pending_directories:
+                raise Conflict("a directory change is already pending for this session")
+            self.pending_directories[session_id] = change
+            if source == "api":  # make the pending state visible immediately
+                self.bus.publish("session.updated", self.session_json(self.session(session_id)),
+                                 session_id=session_id)
+            return {"status": "pending", **summary, "notice": change["notice"]}
+        self._apply_directory_change(session_id, change)
+        return {"status": "applied", **summary, "notice": change["notice"]}
+
+    def _apply_pending_directory(self, session_id: str) -> None:
+        change = self.pending_directories.pop(session_id, None)
+        if change is not None and self.store.session(session_id) is not None:
+            self._apply_directory_change(session_id, change)
+
+    def _apply_directory_change(self, session_id: str, change: dict[str, Any]) -> None:
+        """Persist one validated move and publish its control event.
+
+        The frozen prompt's directory and instruction file stay as they were; the
+        destination's instruction file is recorded as the current one and, for a
+        client-driven move, announced as forward context.
+        """
+        session = self.store.session(session_id)
+        if session is None:
+            return
+        if not Path(change["to"]).is_dir():
+            # The destination vanished while a running call delayed the move.
+            self._forward_notice(session_id, (
+                "[Nexus notice: directory change not applied]\n"
+                f"The destination {change['to']} no longer exists; the session remains in {change['from']}."
+            ))
+            self.bus.publish("session.updated", self.session_json(self.session(session_id)),
+                             session_id=session_id)
+            return
+        self._check_removing_worktree(change["to"])
+        original_notice = change["notice"]
+        change["from"] = session.directory
+        change["instruction_file"] = snapshots.read_instruction_file(change["to"])
+        change["notice"] = workspace_control.directory_notice(
+            previous=session.directory, current=change["to"],
+            git={key: change.get(key) for key in ("branch", "repository", "worktree")}
+            if change.get("repository") else None,
+            instruction_section=snapshots.instruction_section(change["instruction_file"]), source=change["source"],
+        )
+        snapshot = self.snapshot_for(session)  # before the move, so an old session freezes the old directory
+        self.store.update_session(session_id, directory=change["to"])
+        session = self.session(session_id)
+        snapshot["workspace"] = dict(snapshot.get("workspace") or {"entry": False, "activated": False})
+        record = change["instruction_file"]
+        snapshot["current_instruction_file"] = record
+        changes = list(snapshot.get("directory_changes") or [])
+        changes.append({
+            "from": change["from"], "to": change["to"], "at": time.time(), "source": change["source"],
+            "instructions": {key: record[key] for key in ("path", "status", "bytes", "sha256")},
+        })
+        snapshot["directory_changes"] = changes[-20:]
+        self.store.set_snapshot(session_id, snapshot)
+        self.bus.publish("session.directory_changed", {
+            "from": change["from"], "to": change["to"], "branch": change["branch"],
+            "repository": change.get("repository"), "worktree": change.get("worktree"),
+            "source": change["source"], "project_id": session.project_id,
+            "frozen_directory": snapshot.get("directory"),
+            "instructions": {key: record[key] for key in ("path", "status", "bytes", "sha256")},
+        }, session_id=session_id)
+        if change["source"] == "api" or change["notice"] != original_notice:
+            self._forward_notice(session_id, change["notice"])
+        elif session_id not in self.turns:
+            # A tool move applied at turn teardown may have no saved result.
+            announced = any(isinstance(part, ToolResult) and part.output == change["notice"]
+                            for stored in self.store.messages(session_id) for part in stored.message.parts)
+            if not announced:
+                self._forward_notice(session_id, change["notice"])
+        self.bus.publish("session.updated", self.session_json(self.session(session_id)), session_id=session_id)
+
+    async def list_worktrees(self, session_id: str) -> dict[str, Any]:
+        session = self.session(session_id)
+        try:
+            data = await worktrees.listing(session.directory)
+        except worktrees.WorktreeError as exc:
+            raise ToolError(str(exc)) from exc
+        data = data | {"session_directory": session.directory}
+        self.bus.publish("worktree.listed", data, session_id=session_id)
+        return data
+
+    async def create_worktree(self, session_id: str, path: Any, branch: Any = None, base: Any = None) -> dict[str, Any]:
+        """Create or reuse a worktree; never changes the session directory."""
+        if not isinstance(path, str) or not path.strip():
+            raise ToolError("path must be a non-empty string")
+        for name, value in (("branch", branch), ("base", base)):
+            if value is not None and not isinstance(value, str):
+                raise ToolError(f"{name} must be a string")
+        async with self.worktree_lock:  # a create and a delete cannot interleave
+            session = self.session(session_id)
+            try:
+                data = await worktrees.create(session.directory, path, branch, base)
+            except worktrees.WorktreeError as exc:
+                raise ToolError(str(exc)) from exc
+            data["session_directory"] = session.directory
+            self.bus.publish("worktree.created", data, session_id=session_id)
+            return data
+
+    async def delete_worktree(self, session_id: str, path: Any) -> dict[str, Any]:
+        """Remove one clean worktree that no session or pending move is using."""
+        if not isinstance(path, str) or not path.strip():
+            raise ToolError("path must be a non-empty string")
+        async with self.worktree_lock:
+            session = self.session(session_id)
+            try:
+                listing = await worktrees.listing(session.directory)
+                target = worktrees.resolve_target(Path(listing["main"]), path)
+            except worktrees.WorktreeError as exc:
+                raise ToolError(str(exc)) from exc
+            entry = next((item for item in listing["worktrees"] if Path(item["path"]).resolve() == target), None)
+            if entry is None:
+                raise ToolError(f"{target} is not a registered worktree of {listing['main']}")
+            if entry["main"]:
+                raise ToolError(f"refusing to delete the main checkout {target}")
+            self.removing_worktrees.add(target)
+            try:
+                users = sorted(item.id for item in self.store.sessions()
+                               if Path(item.directory).resolve().is_relative_to(target))
+                if users:
+                    raise ToolError(
+                        f"refusing to delete worktree {target}: it is the directory of session(s) "
+                        f"{', '.join(users)}; change those sessions' directories first")
+                projects = sorted(item.id for item in self.store.projects() if Path(item.path).resolve().is_relative_to(target))
+                if projects:
+                    raise ToolError(
+                        f"refusing to delete worktree {target}: it is the path of project(s) "
+                        f"{', '.join(projects)}; remove those projects first")
+                pending = sorted(sid for sid, change in self.pending_directories.items()
+                                 if Path(change["to"]).resolve().is_relative_to(target))
+                if pending:
+                    raise ToolError(
+                        f"refusing to delete worktree {target}: a directory change for session(s) "
+                        f"{', '.join(pending)} is pending")
+                jobs = sorted(job.id for job in self.jobs.list()
+                              if job.finished is None and Path(job.directory).resolve().is_relative_to(target))
+                if jobs:
+                    raise ToolError(f"refusing to delete worktree {target}: running background job(s) {', '.join(jobs)}")
+                try:
+                    data = await worktrees.remove(session.directory, path)
+                except worktrees.WorktreeError as exc:
+                    raise ToolError(str(exc)) from exc
+                data["session_directory"] = session.directory
+                self.bus.publish("worktree.deleted", data, session_id=session_id)
+                return data
+            finally:
+                self.removing_worktrees.discard(target)
+
+    async def _worktree_tool(self, session_id: str, args: dict[str, Any]) -> str:
+        action = args.get("action")
+        if action == "list":
+            data = await self.list_worktrees(session_id)
+        elif action in ("create", "delete"):
+            path = args.get("path")
+            if not isinstance(path, str) or not path.strip():
+                raise ToolError(f"path is required for {action}")
+            if action == "create":
+                data = await self.create_worktree(session_id, path, args.get("branch"), args.get("base"))
+            else:
+                data = await self.delete_worktree(session_id, path)
+        else:
+            raise ToolError("action must be one of: list, create, delete")
+        return clip(workspace_control.worktree_text(action, data))
+
     async def delete_session(self, session_id: str) -> None:
         await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
         ids = {session_id, *(child.id for child in self.store.descendants(session_id))}
         self.close_questions(ids, "the session was deleted")
+        for sid in ids:
+            self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
         await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
         if not self.store.delete_session(session_id):
             raise NotFound(f"no session {session_id}")
@@ -497,7 +802,8 @@ class Runtime:
     def check_tool_names(names: Any) -> list[str]:
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
             raise ValueError("disabled_tools must be a list of tool names")
-        known = [t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
+        known = ([t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
+                 + list(workspace_control.CONTROL_NAMES))
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
@@ -544,8 +850,10 @@ class Runtime:
 
     def _refresh_call(self, active: Agent, session_id: str) -> None:
         """Rebind explicit changes at dispatch boundaries, never within a running call."""
+        self._apply_pending_directory(session_id)  # a queued move lands between calls, not inside one
         updated = self._agent(self.session(session_id), refresh=False)
-        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve", "files"):
+        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve",
+                     "files", "cwd_changed"):
             setattr(active, name, getattr(updated, name))
 
     def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
@@ -561,13 +869,16 @@ class Runtime:
                 "switch the agent or clear the tool switch that re-enabled them"
             )
         registry = self._registry()
-        missing_exec = [n for n in names if n not in registry and n not in ("code", "session")]
+        missing_exec = [n for n in names if n not in registry and n not in agent_files.NEXUS_CONTROL_TOOLS
+                        and n != "code"]
         if missing_exec:
             raise ValueError(
                 f"session snapshot needs tools this Nexus build cannot execute: {', '.join(missing_exec)}; "
                 "start a new session or switch the agent"
             )
         workspace = Path(session.directory)
+        starting = snapshot.get("directory", session.directory)
+        cwd_changed = str(workspace.resolve()) != starting
         root = self._root(session)
         files = FileGuard(self.store, session.id, self.file_lock, self.pending_reads.setdefault(session.id, []))
 
@@ -601,8 +912,30 @@ class Runtime:
                 raise ToolError(str(exc)) from exc
             return await self.ask_user(session.id, ctx.call_id, questions)
 
+        async def run_expose(args: dict[str, Any], ctx: ToolContext) -> str:
+            try:
+                return self.activate_workspace_tools(session.id, source="tool")
+            except NotFound as exc:  # the session was deleted while the call was queued
+                raise ToolError(str(exc)) from exc
+
+        async def run_change_directory(args: dict[str, Any], ctx: ToolContext) -> str:
+            try:
+                result = await self.change_directory(session.id, args.get("directory"), source="tool")
+            except (NotFound, Conflict) as exc:
+                raise ToolError(str(exc)) from exc
+            return result["notice"]
+
+        async def run_worktree(args: dict[str, Any], ctx: ToolContext) -> str:
+            try:
+                return await self._worktree_tool(session.id, args)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from exc
+
         bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
-                 "session": run_session, "ask": run_ask}
+                 "session": run_session, "ask": run_ask,
+                 workspace_control.EXPOSE: run_expose,
+                 workspace_control.CHANGE_DIRECTORY: run_change_directory,
+                 workspace_control.WORKTREE: run_worktree}
 
         def stored_tool(name: str) -> Tool:
             definition = definitions[name]
@@ -612,7 +945,7 @@ class Runtime:
 
         tools = [stored_tool(name) for name in names if name != "code"]
         if "code" in names:
-            task_tools = [t for t in tools if t.spec.name not in agent_files.CONTROL_TOOLS]
+            task_tools = [t for t in tools if t.spec.name not in agent_files.NEXUS_CONTROL_TOOLS]
             code_definition = definitions["code"]
 
             async def run_code(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -635,6 +968,7 @@ class Runtime:
             inbox=lambda: self.inboxes.pop(session.id, []),
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
             files=files,
+            cwd_changed=cwd_changed,
         )
 
     # -- child sessions --------------------------------------------------------
@@ -751,6 +1085,8 @@ class Runtime:
         finally:
             self.pending_reads.pop(session_id, None)
             self.turns.pop(session_id, None)
+            # A move queued during the turn lands here if no later call boundary did.
+            self._apply_pending_directory(session_id)
             for approval_id, (sid, future, _) in list(self.approvals.items()):
                 if sid == session_id:
                     future.cancel()

@@ -248,6 +248,9 @@ function render() {
       "agent source", s.snapshot && s.snapshot.agent ? h("span", {}, `${s.snapshot.agent.source} · `, h("span", { class: "mono" }, s.snapshot.agent.path), " · ", h("span", { class: "mono" }, s.snapshot.agent.fingerprint || "no fingerprint")) : "–",
       "instructions", s.snapshot && s.snapshot.instructions ? `${s.snapshot.instructions.status} · ${s.snapshot.instructions.path}` : "–",
       "directory", h("span", { class: "mono" }, s.directory),
+      "starting directory", h("span", { class: "mono" }, s.starting_directory || "–"),
+      "workspace tools", s.workspace ? `${s.workspace.active ? "active" : "not activated"} · entry ${s.workspace.entry ? "available" : "not available (older session)"}` : "–",
+      "directory change", s.directory_change ? `pending → ${s.directory_change.to}` : (s.directory_changed ? "moved; the frozen prompt keeps its starting path" : "none"),
       "launched by", s.launched_by === "agent" ? h("span", {}, "agent in ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id), ", tool call ", h("span", { class: "mono" }, s.parent_call_id)) :
         (s.parent_id ? h("span", {}, "user, as a child of ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id)) : "user"),
       "children", children.length ? h("span", {}, children.map((c, i) => [i ? ", " : "", h("a", { onclick: () => select(c.id) }, `${c.title} (${c.agent})`)])) : "none",
@@ -382,6 +385,9 @@ function viewRequests() {
          "agent source", meta.agent ? meta.agent.path : "–",
          "agent fingerprint", meta.agent ? meta.agent.fingerprint || "none" : "–",
          "instructions file", meta.instructions ? `${meta.instructions.status} · ${meta.instructions.path}` : "–",
+         "current instructions", meta.current_instructions ? `${meta.current_instructions.status} · ${meta.current_instructions.path}` : "–",
+         "workspace tools", meta.workspace ? `${meta.workspace.active ? "active" : "not activated"} · entry ${meta.workspace.entry ? "available" : "not available"}` : "–",
+         "directory moves", meta.directory_changes ?? 0,
          "child agents", meta.child_agents ? meta.child_agents.map((a) => a.name).join(", ") || "none" : "–"),
       meta.notice ? h("div", { class: "note" }, meta.notice) : null,
       jsonBlock("Snapshot summary", meta)));
@@ -472,12 +478,13 @@ function live() {
       if (e.type === "question.asked" || e.type === "question.replied") {
         api(`/api/session/${S.session.id}/question`).then((qs) => { S.pendingQuestions = qs; renderSoon(); }).catch(() => {});
       }
-      if (e.type === "session.updated" || e.type === "session.status") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
+      if (e.type === "session.updated" || e.type === "session.status" || e.type === "session.directory_changed" || e.type === "session.workspace_tools") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
       S.context = null;
       renderSoon();
     }
   };
   for (const type of ["message.added", "session.created", "session.updated", "session.snapshot", "session.deleted", "session.status", "session.error", "session.notified",
+    "session.workspace_tools", "session.directory_changed", "worktree.listed", "worktree.created", "worktree.deleted",
     "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "question.asked", "question.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
     "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
     source.addEventListener(type, handle);
