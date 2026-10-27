@@ -81,6 +81,13 @@ create table if not exists message (
   created real not null,
   unique (session_id, seq)
 );
+create table if not exists file_observation (
+  session_id text not null references session(id) on delete cascade,
+  path text not null,
+  data text not null,
+  updated real not null,
+  primary key (session_id, path)
+);
 """
 
 
@@ -271,6 +278,32 @@ class Store:
     def delete_session(self, session_id: str) -> bool:
         with self.db:
             return self.db.execute("delete from session where id = ?", (session_id,)).rowcount > 0
+
+    # -- file observations ---------------------------------------------------
+
+    def file_observation(self, session_id: str, path: str) -> dict[str, Any] | None:
+        row = self.db.execute(
+            "select data from file_observation where session_id = ? and path = ?", (session_id, path)
+        ).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def set_file_observation(self, session_id: str, path: str, data: dict[str, Any]) -> None:
+        now = time.time()
+        with self.db:
+            self.db.execute(
+                "insert into file_observation (session_id, path, data, updated) values (?, ?, ?, ?)"
+                " on conflict(session_id, path) do update set data = excluded.data, updated = excluded.updated",
+                (session_id, path, json.dumps(data), now),
+            )
+
+    def delete_file_observations(self, session_id: str, paths: list[str]) -> None:
+        if not paths:
+            return
+        with self.db:
+            self.db.executemany(
+                "delete from file_observation where session_id = ? and path = ?",
+                [(session_id, path) for path in paths],
+            )
 
     # -- events --------------------------------------------------------------
 

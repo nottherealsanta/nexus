@@ -12,9 +12,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..llmhub.types import ToolSpec
+
+if TYPE_CHECKING:
+    from ..observations import FileGuard
 
 MAX_OUTPUT_CHARS = 30_000
 
@@ -27,6 +30,8 @@ class ToolError(Exception):
 class ToolContext:
     workspace: Path
     call_id: str | None = None  # the model's tool call id, for tools that record it
+    files: FileGuard | None = None  # the session's read observations; None outside a session
+    model_visible: bool = True  # False for calls retained inside a code kernel
 
 
 @dataclass(frozen=True, slots=True)

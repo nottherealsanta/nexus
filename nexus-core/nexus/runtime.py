@@ -53,13 +53,14 @@ from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
 from .llmhub.types import Message, ProviderError, Text, ToolCall, ToolResult, ToolSpec
 from .loop import MAX_STEPS, Agent, MessageAdded, ToolEnd, ToolStart
+from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
 from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
 
-AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask"}
+AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code", "ask", "edit", "write"}
 CHILD_RESULT_CHARS = 30_000
 TITLE_CHARS = 60
 MAX_RESOLVED_QUESTIONS = 256  # tombstones so a late or duplicate reply gets 409, not a second event
@@ -100,6 +101,8 @@ class Runtime:
         self.notify: dict[str, str] = {}  # child id -> parent id, for children started with wait: false
         self.errors: dict[str, str] = {}  # session id -> how its last turn failed
         self._parents: dict[str, str | None] = {}  # session id -> parent id (never changes)
+        self.pending_reads: dict[str, list[FileObservation]] = {}
+        self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         bus.sink = self._record
 
     def _record(self, event: dict[str, Any]) -> None:
@@ -542,7 +545,7 @@ class Runtime:
     def _refresh_call(self, active: Agent, session_id: str) -> None:
         """Rebind explicit changes at dispatch boundaries, never within a running call."""
         updated = self._agent(self.session(session_id), refresh=False)
-        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve"):
+        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve", "files"):
             setattr(active, name, getattr(updated, name))
 
     def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
@@ -566,6 +569,7 @@ class Runtime:
             )
         workspace = Path(session.directory)
         root = self._root(session)
+        files = FileGuard(self.store, session.id, self.file_lock, self.pending_reads.setdefault(session.id, []))
 
         async def run_bash(args: dict[str, Any], ctx: ToolContext) -> str:
             background = args.get("background", False)
@@ -630,6 +634,7 @@ class Runtime:
             conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
+            files=files,
         )
 
     # -- child sessions --------------------------------------------------------
@@ -727,6 +732,7 @@ class Runtime:
                         started.clear()
                         finished.clear()
                     stored = self.store.append_message(session_id, event.message)
+                    self._commit_file_reads(session_id, event.message)
                     self.bus.publish("message.added", message_json(stored), session_id=session_id)
                 else:
                     if isinstance(event, ToolStart):
@@ -743,6 +749,7 @@ class Runtime:
         except (AuthError, CredentialError, ValueError) as exc:
             self._fail(session_id, {"kind": "auth" if not isinstance(exc, ValueError) else "request", "message": str(exc)})
         finally:
+            self.pending_reads.pop(session_id, None)
             self.turns.pop(session_id, None)
             for approval_id, (sid, future, _) in list(self.approvals.items()):
                 if sid == session_id:
@@ -759,6 +766,13 @@ class Runtime:
     def _fail(self, session_id: str, error: dict[str, Any]) -> None:
         self.errors[session_id] = error["message"]
         self.bus.publish("session.error", error, session_id=session_id)
+
+    def _commit_file_reads(self, session_id: str, message: Message) -> None:
+        if message.role != "tool":
+            return
+        calls = {p.call_id for p in message.parts if isinstance(p, ToolResult) and not p.is_error}
+        guard = FileGuard(self.store, session_id, self.file_lock, self.pending_reads.get(session_id, []))
+        guard.commit_reads(calls)
 
     def _close_dangling_calls(self, session_id: str, started: set[str],
                               finished: dict[str, ToolResult]) -> None:
@@ -781,7 +795,9 @@ class Runtime:
                 ))
             else:
                 results.append(ToolResult(call.id, "interrupted by the user before this tool ran", is_error=True))
-        stored = self.store.append_message(session_id, Message("tool", tuple(results)))
+        message = Message("tool", tuple(results))
+        stored = self.store.append_message(session_id, message)
+        self._commit_file_reads(session_id, message)
         self.bus.publish("message.added", message_json(stored), session_id=session_id)
 
     async def interrupt(self, session_id: str, *, reason: str = "the turn was interrupted") -> bool:

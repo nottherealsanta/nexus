@@ -147,9 +147,11 @@ The session JSON reports the result and where it came from: `model` and
 (`/model default` in chat) returns to the agent's choice.
 
 Approval is a session setting (`permission`), not an agent setting: read,
-`bash_output`, `bash_kill` and `ask` (and the outer `code` call) never ask; bash
-(including background), edit and write ask unless the session is `allow`,
-including calls made from inside a code cell.
+`bash_output`, `bash_kill`, `ask`, `edit`, `write` and the outer `code` call
+never ask. In-directory `edit` and `write` are approval-free by fixed policy,
+with path confinement and read freshness still enforced. bash (including
+background) still asks unless the session is `allow`. Nested code calls follow
+the same rules.
 
 ## Commands
 

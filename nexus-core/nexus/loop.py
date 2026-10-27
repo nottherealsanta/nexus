@@ -15,11 +15,14 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .llmhub import Provider
 from .llmhub.types import Done, Event, Message, Part, PartDone, Request, Text, ToolCall, ToolResult
 from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
+
+if TYPE_CHECKING:
+    from .observations import FileGuard
 
 MAX_STEPS = 50
 
@@ -84,6 +87,7 @@ class Agent:
         conversation_id: str | None = None,
         inbox: Inbox | None = None,
         refresh: Callable[[Any], None] | None = None,
+        files: FileGuard | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -97,6 +101,7 @@ class Agent:
         self.messages: list[Message] = list(messages or [])
         self.inbox = inbox
         self.refresh = refresh
+        self.files = files
 
     def request(self) -> Request:
         return Request(
@@ -155,7 +160,7 @@ class Agent:
         if self.approve is not None and not await self.approve(call, args):
             return ToolResult(call.id, "the user declined this tool call", is_error=True)
         try:
-            return ToolResult(call.id, await tool.run(args, ToolContext(self.workspace, call.id)))
+            return ToolResult(call.id, await tool.run(args, ToolContext(self.workspace, call.id, files=self.files)))
         except ToolError as exc:
             return ToolResult(call.id, str(exc), is_error=True)
         except (OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:

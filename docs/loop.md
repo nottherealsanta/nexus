@@ -94,8 +94,10 @@ call that has a known tool and valid arguments, including `read`. The loop has n
 policy of its own: `None` approves everything.
 
 The daemon's callback (`Runtime._approve`, see [daemon.md](daemon.md#turns))
-approves `read`, `bash_output`, `bash_kill`, `ask` and the outer `code` call
-silently; nested code calls go through the same approval callback. For the other
+approves `read`, `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the
+outer `code` call silently; `edit` and `write` are approval-free inside the
+session directory by fixed policy (path confinement and read freshness still
+apply). Nested code calls go through the same approval callback. For the other
 tools (including background `bash`) it approves when the session's permission is
 `allow`; otherwise it publishes `permission.asked` and waits for a client's
 reply. The CLI answers with `allow <tool>? [y/N]`; `--yes` sets the session to

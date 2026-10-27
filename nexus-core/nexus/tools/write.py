@@ -1,4 +1,10 @@
-"""`write`: create or overwrite a whole file."""
+"""`write`: create or overwrite a whole file.
+
+Creating a new file needs no prior read, but an existing destination is an
+overwrite: it needs a complete observation of the current revision from a
+direct `read` in this session. After a successful write the observation is
+dropped, so the next change needs a fresh read.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -12,11 +18,31 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     content = args.get("content")
     if not isinstance(content, str):
         raise ToolError("content must be a string")
-    existed = path.exists()
+    guard = ctx.files
+    if guard is None:  # a bare tool context (unit use), not a Nexus session
+        return _write(args["path"], path, content, path.exists())
+    async with guard.mutation():
+        existed = path.exists()
+        if existed:
+            guard.require(args["path"], path, complete=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not existed and path.exists():
+            raise ToolError(
+                f"{args['path']} appeared while it was being created; read it before overwriting it")
+        result = _write(args["path"], path, content, existed)
+        guard.forget([path])
+        return result
+
+
+def _write(display: str, path: Any, content: str, existed: bool) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    try:
+        with path.open("w" if existed else "x") as destination:
+            destination.write(content)
+    except FileExistsError as exc:
+        raise ToolError(f"{display} appeared while it was being created; read it before overwriting it") from exc
     lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
-    return f"{'overwrote' if existed else 'created'} {args['path']} ({lines} lines, {len(content.encode())} bytes)"
+    return f"{'overwrote' if existed else 'created'} {display} ({lines} lines, {len(content.encode())} bytes)"
 
 
 TOOL = Tool(
@@ -30,5 +56,5 @@ TOOL = Tool(
         },
     ),
     run,
-    guidance="Create a new file, or replace a file's entire contents.",
+    guidance="Create a new file, or replace a file's entire contents. An existing file must be read completely first.",
 )

@@ -70,7 +70,7 @@ async def test_projects_are_unique_by_path_and_own_sessions(setup):
     assert (await client.get("/api/session/ses_nope")).status_code == 404
 
 
-async def test_prompt_asks_permission_and_saves_messages(setup):
+async def test_write_in_workspace_needs_no_permission_and_saves_messages(setup):
     rt, client, provider, workspace = setup
     provider.replies = [[ToolCall("c1", "write", '{"path": "x.txt", "content": "hi"}')], [Text("done")]]
     session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
@@ -79,8 +79,6 @@ async def test_prompt_asks_permission_and_saves_messages(setup):
     async def collect():
         async for event in rt.bus.subscribe():
             events.append(event)
-            if event["type"] == "permission.asked":
-                await client.post(f"/api/session/{session['id']}/permission/{event['data']['id']}", json={"reply": "allow"})
             if event["type"] == "session.status" and event["data"]["status"] == "idle":
                 return
 
@@ -92,7 +90,8 @@ async def test_prompt_asks_permission_and_saves_messages(setup):
     assert (workspace / "x.txt").read_text() == "hi"
     types = [e["type"] for e in events]
     assert types[:2] == ["session.updated", "session.status"]  # title from the first prompt, then busy
-    assert "permission.asked" in types and "tool_end" in types and types[-1] == "session.status"
+    # Inside the session directory, write (and edit) never asks for approval.
+    assert "permission.asked" not in types and "tool_end" in types and types[-1] == "session.status"
     messages = (await client.get(f"/api/session/{session['id']}/message")).json()
     assert [m["role"] for m in messages] == ["user", "assistant", "tool", "assistant"]
     assert messages[1]["parts"][0] == {"type": "tool_call", "id": "c1", "name": "write", "arguments": '{"path": "x.txt", "content": "hi"}', "origin": None, "raw": None}
@@ -176,10 +175,10 @@ async def test_inspector_page_is_static_and_locked_down(setup):
     assert "/api/session/${id}/question" in response.text
 
 
-async def test_code_nested_approval_kernel_api_and_session_independent_lifetime(setup):
+async def test_code_nested_write_needs_no_approval_and_kernel_api(setup):
     rt, client, provider, workspace = setup
-    provider.replies = [[ToolCall("code1", "code", json.dumps({"code": 'x = 41\nawait write(path="x.txt", content="hi")\nx'}))],
-                        [Text("done")]]
+    code = 'await write(path="x.txt", content="hi")\nawait bash(command="sleep 0.5")\nx = 41\nx'
+    provider.replies = [[ToolCall("code1", "code", json.dumps({"code": code}))], [Text("done")]]
     session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     sid = session["id"]
     await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
@@ -188,15 +187,18 @@ async def test_code_nested_approval_kernel_api_and_session_independent_lifetime(
         if pending:
             break
         await asyncio.sleep(0.01)
-    assert len(pending) == 1 and pending[0]["tool"] == "write"
+    # The nested write needed no approval; the nested bash still asks.
+    assert len(pending) == 1 and pending[0]["tool"] == "bash"
+    assert (workspace / "x.txt").read_text() == "hi"
     kid = (await client.get("/api/kernel")).json()[0]["id"]
     assert (await client.delete(f"/api/kernel/{kid}")).status_code == 409
     await client.post(f"/api/session/{sid}/permission/{pending[0]['id']}", json={"reply": "allow"})
     await _wait_idle(rt, sid)
-    assert (workspace / "x.txt").read_text() == "hi"
     events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
-    call = next(e["data"] for e in events if e["type"] == "code.call")
-    assert call["parent_call_id"] == "code1" and call["output"].startswith("created")
+    assert [e["data"]["tool"] for e in events if e["type"] == "permission.asked"] == ["bash"]
+    calls = [e["data"] for e in events if e["type"] == "code.call"]
+    write_call = next(call for call in calls if call["tool"] == "write")
+    assert write_call["parent_call_id"] == "code1" and write_call["output"].startswith("created")
     details = (await client.get(f"/api/kernel/{kid}")).json()
     assert details["cell_count"] == 1 and details["variables"][0]["name"] == "x"
     await client.delete(f"/api/session/{sid}")
@@ -226,7 +228,7 @@ async def test_code_in_a_child_uses_the_child_approval_and_events(setup):
     rt, client, provider, workspace = setup
     parent = (await client.post("/api/session", json={"directory": str(workspace)})).json()
     child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()
-    provider.replies = [[ToolCall("cc1", "code", json.dumps({"code": 'await write(path="child.txt", content="kid")'}))],
+    provider.replies = [[ToolCall("cc1", "code", json.dumps({"code": 'await bash(command="printf kid > child.txt")'}))],
                         [Text("done")]]
     await client.post(f"/api/session/{child['id']}/prompt", json={"text": "go"})
     for _ in range(100):
@@ -235,7 +237,7 @@ async def test_code_in_a_child_uses_the_child_approval_and_events(setup):
             break
         await asyncio.sleep(0.01)
     [request] = pending
-    assert request["session_id"] == child["id"] and request["tool"] == "write"
+    assert request["session_id"] == child["id"] and request["tool"] == "bash"
     assert request["call_id"] == "cc1:1:1"
     assert not rt.pending_approvals(parent["id"])
     await client.post(f"/api/session/{child['id']}/permission/{request['id']}", json={"reply": "allow"})

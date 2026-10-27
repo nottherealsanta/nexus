@@ -48,11 +48,13 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
 - **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
-  `session`, `session_snapshot`, `message` and `event`. `session_snapshot` is
+  `session`, `session_snapshot`, `message`, `event` and `file_observation`.
+  `session_snapshot` is
   the JSON configuration frozen for one session; `event` holds every event of a
-  session, in order: the durable log behind the [inspector](inspector.md).
+  session, in order: the durable log behind the [inspector](inspector.md);
+  `file_observation` holds each session's read observations (see below).
   Deleting a project or session deletes everything under it, including its child
-  sessions and snapshots.
+  sessions, snapshots and observations.
 
 ## Session trees: who launched whom
 
@@ -99,9 +101,11 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `reconstructed` and its system prompt says this is not the exact historical
   prompt; after that it is stored and stable.
   `GET /api/session/{id}/snapshot` shows the full snapshot.
-- **Approval.** read, `bash_output`, `bash_kill`, `ask` and the outer code call never ask; code delegates
-  approval to its nested task calls. bash (including background), edit and write ask unless the session
-  is `allow`. The turn waits on `permission.asked` until a client replies, or
+- **Approval.** read, `bash_output`, `bash_kill`, `ask`, `edit`, `write` and the
+  outer code call never ask; `edit` and `write` are approval-free inside the
+  session directory as fixed policy, and code delegates approval to its nested
+  task calls. bash (including background) still asks unless the session is
+  `allow`. The turn waits on `permission.asked` until a client replies, or
   the turn is interrupted.
 - **Questions.** `ask` publishes `question.asked` and waits with no daemon-side
   timeout. A client lists them (`GET /api/session/{id}/question` or
@@ -165,6 +169,27 @@ They run in the starting session's directory, are scoped to its tree for the
 tools, and outlive turns and code cells. Deleting a session or project kills its
 jobs; daemon shutdown kills every job. Limits, output retention and the finish
 notice are in [tools.md](tools.md#background-bash-jobs).
+
+## File observations
+
+The runtime gives each session a `FileGuard` (`nexus/observations.py`) backed by
+the `file_observation` table. A direct `read` records the resolved path, content
+hash, line ranges, clipped lines and read call id; a read inside `code` records
+nothing because its output is retained by the kernel, and reads by another
+session belong to that session. Observations persist, so a restart does not
+forget what the model saw and never rebuilds an old observation from current
+file contents.
+
+`edit` and `write` (direct and nested) require a same-revision observation before
+changing an existing file. Local changes need the affected lines, while
+overwrite/delete/move need complete coverage; details and the clipping rules are
+in [tools.md](tools.md#read-observations-and-freshness). A successful change
+drops the observations it invalidated. All Nexus file mutations in one daemon
+share an in-process asyncio lock (`Runtime.file_lock`), and the revision is
+checked again inside it before writing; a multi-file patch validates every file
+before writing any. This orders Nexus writers only: unrestricted `bash` and
+external processes can still write without these checks, and an external writer
+can race the moment between the final check and the write.
 
 ## Questions
 

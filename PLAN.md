@@ -581,7 +581,9 @@ without rewriting the frozen prompt.
 **Remaining in this step:** warn before an agent switch (the API currently
 switches directly); record and apply directory changes at a tool-safe boundary,
 including the destination's `AGENTS.md` as forward context. Tool/MCP changes from later
-steps will reuse the same forward-guidance path.
+steps will reuse the same forward-guidance path. Approval-free workspace edits
+and read-before-edit enforcement are done above; workspace controls and
+directory/worktree operations remain.
 
 **Instruction file (done in the foundation above).** `AGENTS.md` is read directly
 from the session's `directory` for both roots and children; ancestors and nested
@@ -669,12 +671,49 @@ later lines. Four regressions cover large escaped answers, cancellation/reply
 ordering, external resolution while typing and pipe-reader cancellation. No
 live provider or new browser visual run was performed in this review.
 
-**Workspace edits need no approval.** Editing inside the session's directory
-is allowed by default, with no permission-mode setting for that behavior.
-Remove the existing approval requirement for in-directory `edit` and `write`
-(including patches and nested calls). This does not remove path confinement or
-the enforced read-before-edit invariant. Command execution outside that boundary
-needs a separate explicit contract; unrestricted bash cannot guarantee it.
+**Workspace edits need no approval (done 2026-10-27; review pending).** Editing
+inside the session's directory is allowed without approval, with no
+permission-mode setting for that behavior. `edit` and `write` (replacement,
+patch, and nested calls) are auto-approved in the daemon; bash approval is
+unchanged. Path confinement and read freshness still apply.
+
+**Enforced read-before-edit (done 2026-10-27; review pending).** Observations
+live in the `file_observation` table keyed by session and resolved absolute
+path: content `sha256` revision, total lines, model-visible line ranges, clipped
+lines, whole-output clipping and the read call id. They persist across restart
+and are never reconstructed from current contents. A direct, model-visible
+`read` records one; directory listings, another session's read and a read
+retained only inside a `code` kernel do not. Local replacement/hunk changes need
+coverage of the original affected lines; overwrite, delete and move need
+complete coverage; windows add up only within one revision. A clipped line is
+not covered, and a whole-output-clipped read establishes no coverage. New files
+need no read, but an existing `Add File` destination or an overwrite is refused.
+Successful changes drop the affected observations. Nexus mutations share one
+per-daemon asyncio lock, recheck the revision inside it immediately before
+writing, and a multi-file patch validates every file before writing any. This
+enforces the tool contract only: unrestricted `bash` and external processes can
+still write outside it, and the final check-to-write window is not protected
+against external writers. Full enforcement remains a prerequisite for claiming
+a filesystem invariant (see Known gaps).
+
+Verified offline with scripted providers, temporary homes/workspaces and real
+files: unread rejection and read-then-edit; external and other-session changes;
+identical timestamps with new content; partial and clipped windows; whole-output
+clipping; windows merging only within a revision; overwrite, delete, move and
+new-file collisions; a stale file rejecting an entire multi-file patch before
+any write; session isolation and restart; nested reads not authorizing and
+nested edits obeying the guard; approval-free edits under `permission: ask` with
+bash still asking. Full suite after delivery review: 143 tests; Ruff and
+`git diff --check` clean. No live provider run was performed.
+
+**File freshness delivery review.** Independently reran the suite and lint.
+Fixed repeated clipped reads incorrectly clearing the clipped-line marker;
+staged direct-read observations until successful results enter stored context,
+so a read cannot authorize an edit in the same provider tool batch. Preserved
+CRLF bytes during local replacements and aligned patch/replacement coverage
+with `read` for Unicode line separators. New-file creation uses exclusive opens.
+Four regression tests cover these cases. Final suite: 143 passing; Ruff and
+whitespace checks clean. No live provider run was performed.
 
 **Workspace controls: load on demand.** An always-available control tool,
 `expose_workspace_tools`, lets the agent request the tools for working
@@ -974,7 +1013,10 @@ show the wire view, the session tree and kernels.
 | Worktree tool, effectively mandatory | On-demand workspace controls: change session directory and worktree list/create/delete (planned, Step 10) | Keep ordinary sessions small; activate workspace controls when needed |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
-| Workspace edits require approval unless allowed | In-directory edits require no approval and have no setting (planned, Step 10); stale or unread files are still rejected | Editing authorization and read freshness are separate |
+| Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
+| Read before edit was prompt advice | Per-session observations persist hash, ranges and clipping; local changes need affected-line coverage and whole-file operations need complete same-revision coverage (done 2026-10-27) | Stale or unseen content cannot be changed through the file tools |
+| No mutation serialization for files | One per-daemon lock, revision recheck before write, whole-patch validation before any write (done 2026-10-27) | Nexus writers cannot interleave a check and a write |
+| Bash can write files with no tool checks | Documented enforcement boundary; full sandbox/restricted execution remains open (PLAN.md, Known gaps) | Do not claim a filesystem invariant the tool contract cannot guarantee |
 | Web tools named `websearch` / `webfetch`, deployment in `websearch/` | `web_search` / `web_fetch`, deployment in `nexus-search/` (planned, Step 11a) | Explicit names and self-contained service setup |
 | Extension system and MCP integrations in old Core | Focused skills/MCP support and upstream browser-use default in `nexus-browser/` (planned, Step 11a) | Carry over needed capabilities deliberately |
 | Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
@@ -989,6 +1031,9 @@ Work one reviewed increment at a time:
    foundation) — done 2026-10-27; see Step 10.
 3. Add `ask`, approval-free workspace edits and read freshness checks; resolve
    the unrestricted-bash enforcement boundary before claiming full enforcement.
+   `ask` and approval-free edits/read freshness are done; the bash boundary is
+   documented, and full enforcement (sandbox or restricted commands) remains
+   open.
 4. Add on-demand workspace controls and directory/worktree operations.
 5. Durable events, restart recovery, idempotent requests and `/continue`.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
@@ -1032,6 +1077,14 @@ Do not start the next increment until the current review is complete.
 - No images in either dialect yet.
 - Tool paths are confined to the workspace, but `bash` is not sandboxed, so
   "read-only" (`scout`) and "Markdown only" (`plan`) rest on their prompts.
+  Read-before-edit is enforced only for the `edit`/`write` tools: unrestricted
+  bash can write any file without an observation. There is also no in-process
+  control over external writers, so a file can change between the final hash
+  check and the write. Full enforcement needs a sandbox or restricted
+  write-capable command execution before the invariant can be guaranteed.
+- File observations persist per session and have no API view or pruning yet;
+  they are removed with their session and replaced when a newer revision is
+  read. An interrupted read that never produced a tool result is dropped.
 - Child sessions launched with `wait: false` are tested offline only.
 - `instructions` uses the Responses field. The current Codex CLI sends a
   developer message instead. Both work today; revisit if the backend changes.

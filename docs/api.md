@@ -111,9 +111,11 @@ recent resolutions is remembered, so a much older id gets 404 instead. Questions
 live in memory and have no daemon-side timeout; they end with an answer or with
 cancellation. Shapes and limits: [tools.md](tools.md#ask).
 
-`permission` is `ask` (bash, edit and write wait for a reply; read, `bash_output`,
-`bash_kill`, `ask` and the outer `code` call never ask) or `allow` (nothing asks).
-`status` is `busy` while a turn runs.
+`permission` is `ask` (bash waits for a reply; read, `bash_output`, `bash_kill`,
+`ask`, `edit`, `write` and the outer `code` call never ask) or `allow` (nothing
+asks). Session-directory edits are approval-free by fixed policy; see
+[tools.md](tools.md#read-observations-and-freshness). `status` is `busy` while a
+turn runs.
 
 ## Event stream
 

@@ -194,7 +194,10 @@ class Kernels:
                 raise ToolError(f"tool {name!r} is unavailable to the calling agent")
             if not await approve(call, arguments):
                 raise ToolError("the user declined this tool call")
-            return await tool.run(arguments, ToolContext(ctx.workspace, call.id))
+            # Retained inside the kernel, not shown to the model: a nested read
+            # records no observation, but nested edits still obey the guard.
+            return await tool.run(arguments, ToolContext(ctx.workspace, call.id, files=ctx.files,
+                                                         model_visible=False))
 
         async def dispatch(name: str, arguments: dict[str, Any]) -> str:
             if len(cell["calls"]) >= MAX_CALLS:

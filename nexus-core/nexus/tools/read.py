@@ -1,10 +1,16 @@
-"""`read`: a text file with line numbers, by line window."""
+"""`read`: a text file with line numbers, by line window.
+
+A direct, model-visible file read records an observation for this session: the
+content hash, total lines, the line window that entered context and any clipped
+lines. Directory listings are not file reads. A read inside a `code` kernel is
+retained by the kernel, not shown to the model, so it records nothing.
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from ..llmhub.types import ToolSpec
-from .base import Tool, ToolContext, ToolError, clip, resolve
+from .base import MAX_OUTPUT_CHARS, Tool, ToolContext, ToolError, clip, resolve
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
@@ -25,19 +31,36 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     if b"\x00" in data[:8192]:
         raise ToolError(f"{args['path']} looks binary ({len(data)} bytes)")
     lines = data.decode("utf-8", "replace").splitlines()
-    if lines and offset > len(lines):
+    if not lines:
+        _record(ctx, path, data, lines=0, ranges=[], partial=[], clipped=False)
+        return f"{args['path']} is empty"
+    if offset > len(lines):
         raise ToolError(f"offset {offset} is past the end of {args['path']} ({len(lines)} lines)")
     window = lines[offset - 1 : offset - 1 + limit]
     out = []
+    partial: list[int] = []
     for number, line in enumerate(window, start=offset):
         if len(line) > MAX_LINE_CHARS:
+            partial.append(number)
             line = line[:MAX_LINE_CHARS] + f" [… line clipped at {MAX_LINE_CHARS} of {len(line)} characters]"
         out.append(f"{number:>6}\t{line}")
     end = offset - 1 + len(window)
-    if not lines:
-        return f"{args['path']} is empty"
     footer = f"\n[lines {offset}–{end} of {len(lines)}]" if (offset > 1 or end < len(lines)) else ""
-    return clip("\n".join(out) + footer)
+    body = "\n".join(out) + footer
+    clipped = len(body) > MAX_OUTPUT_CHARS
+    # A clipped whole-output read establishes no coverage: the middle never
+    # reached the model. Reading smaller windows does.
+    _record(ctx, path, data, lines=len(lines), ranges=[] if clipped else [(offset, end)],
+            partial=partial, clipped=clipped)
+    return clip(body)
+
+
+def _record(ctx: ToolContext, path: Any, data: bytes, *, lines: int, ranges: list[tuple[int, int]],
+            partial: list[int], clipped: bool) -> None:
+    if ctx.files is None or not ctx.model_visible:
+        return
+    ctx.files.record_read(path, data, lines=lines, ranges=ranges, partial=partial,
+                          clipped=clipped, call_id=ctx.call_id)
 
 
 TOOL = Tool(

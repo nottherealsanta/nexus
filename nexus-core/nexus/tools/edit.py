@@ -25,24 +25,66 @@ MAX_PATCH_CHARS = 1_000_000
 # -- Replacement ------------------------------------------------------------
 
 
-def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
+def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
+    """The 1-based lines an original `text[start:end]` touches, matching read's line numbers."""
+    prefix = text[:start]
+    first = len(prefix.splitlines()) + (1 if start == 0 or prefix.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")) else 0)
+    last = len(text[:end].splitlines())
+    return max(1, first), max(1, last)
+
+
+def _occurrences(text: str, old: str, limit: int | None) -> list[int]:
+    found: list[int] = []
+    at = 0
+    while limit is None or len(found) < limit:
+        at = text.find(old, at)
+        if at < 0:
+            break
+        found.append(at)
+        at += len(old)
+    return found
+
+
+async def _replace(args: dict[str, Any], ctx: ToolContext) -> str:
     path = resolve(ctx, args.get("path"))
     old, new = args.get("old_string"), args.get("new_string")
     if not isinstance(old, str) or not isinstance(new, str) or not old:
         raise ToolError("old_string (non-empty) and new_string must be strings")
     if old == new:
         raise ToolError("old_string and new_string are identical")
+    guard = ctx.files
+    if guard is None:  # a bare tool context (unit use), not a Nexus session
+        return _replace_now(args["path"], path, old, new, args.get("replace_all"))
+    async with guard.mutation():
+        if not path.is_file():
+            raise ToolError(f"{args['path']} does not exist")
+        text = path.read_text(newline="")
+        count = text.count(old)
+        if count == 0:
+            raise ToolError(f"old_string was not found in {args['path']}")
+        if count > 1 and not args.get("replace_all"):
+            raise ToolError(f"old_string occurs {count} times in {args['path']}; add context or set replace_all")
+        replaced = count if args.get("replace_all") else 1
+        positions = _occurrences(text, old, None if args.get("replace_all") else 1)
+        affected = [_line_span(text, at, at + len(old)) for at in positions]
+        guard.require(args["path"], path, affected=affected)
+        path.write_text(text.replace(old, new, replaced))
+        guard.forget([path])
+        return f"edited {args['path']} ({replaced} replacement{'s' if replaced != 1 else ''})"
+
+
+def _replace_now(display: str, path: Any, old: str, new: str, replace_all: Any) -> str:
     if not path.is_file():
-        raise ToolError(f"{args['path']} does not exist")
-    text = path.read_text()
+        raise ToolError(f"{display} does not exist")
+    text = path.read_text(newline="")
     count = text.count(old)
     if count == 0:
-        raise ToolError(f"old_string was not found in {args['path']}")
-    if count > 1 and not args.get("replace_all"):
-        raise ToolError(f"old_string occurs {count} times in {args['path']}; add context or set replace_all")
-    replaced = count if args.get("replace_all") else 1
+        raise ToolError(f"old_string was not found in {display}")
+    if count > 1 and not replace_all:
+        raise ToolError(f"old_string occurs {count} times in {display}; add context or set replace_all")
+    replaced = count if replace_all else 1
     path.write_text(text.replace(old, new, replaced))
-    return f"edited {args['path']} ({replaced} replacement{'s' if replaced != 1 else ''})"
+    return f"edited {display} ({replaced} replacement{'s' if replaced != 1 else ''})"
 
 
 # -- Patch ------------------------------------------------------------------
@@ -140,17 +182,26 @@ def _find(lines: list[str], block: list[str], start: int) -> int:
     return -1
 
 
-def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> str:
+def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> tuple[str, list[tuple[int, int]]]:
+    """Apply hunks, also returning the original line spans they changed."""
     lines = text.split("\n")
     trailing_newline = text.endswith("\n")
     if trailing_newline:
         lines.pop()
+    original_lines = len(lines)
+    original_offsets = [0]
+    for original_line in lines:
+        original_offsets.append(original_offsets[-1] + len(original_line) + 1)
     cursor = 0
+    shift = 0
+    affected: list[tuple[int, int]] = []
     for number, hunk in enumerate(hunks, 1):
+        anchor_at = -1
         if hunk.anchor:
             at = _find(lines, [hunk.anchor], cursor)
             if at < 0:
                 raise ToolError(f"{path}: hunk {number}: anchor {hunk.anchor!r} not found")
+            anchor_at = at
             cursor = at + 1
         if not hunk.old:
             at = len(lines) if hunk.end_of_file or not hunk.anchor else cursor
@@ -162,16 +213,46 @@ def _apply_hunks(path: str, text: str, hunks: list[_Hunk]) -> str:
             at = _find(lines, hunk.old, cursor)
             if at < 0:
                 raise ToolError(f"{path}: hunk {number}: context not found:\n" + "\n".join(hunk.old[:8]))
+        original_at = at - shift
+        if hunk.old:
+            first, last = original_at + 1, original_at + len(hunk.old)
+            if first <= last and original_lines:
+                affected.append((max(1, first), min(original_lines, last)))
+        elif original_lines:
+            if hunk.end_of_file:
+                line = original_lines
+            elif hunk.anchor:
+                line = min(max(anchor_at - shift + 1, 1), original_lines)
+            else:
+                line = min(max(original_at + 1, 1), original_lines)
+            affected.append((line, line))
         lines[at : at + len(hunk.old)] = hunk.new
+        shift += len(hunk.new) - len(hunk.old)
         cursor = at + len(hunk.new)
-    return "\n".join(lines) + ("\n" if trailing_newline or not lines else "")
+    # Patch matching uses LF-delimited lines; read uses splitlines(), which also
+    # recognizes Unicode separators. Translate coverage back to read's numbering.
+    visible_spans = [
+        _line_span(text, original_offsets[first - 1], min(original_offsets[last], len(text)))
+        for first, last in affected if first <= last
+    ]
+    return "\n".join(lines) + ("\n" if trailing_newline or not lines else ""), visible_spans
 
 
-def _apply_patch(text: Any, ctx: ToolContext) -> str:
+async def _apply_patch(text: Any, ctx: ToolContext) -> str:
     if not isinstance(text, str):
         raise ToolError("patch must be a string")
     ops = parse_patch(text)
+    guard = ctx.files
+    if guard is None:  # a bare tool context (unit use), not a Nexus session
+        return _apply_patch_now(ops, ctx, None)
+    async with guard.mutation():
+        return _apply_patch_now(ops, ctx, guard)
+
+
+def _apply_patch_now(ops: list[_Op], ctx: ToolContext, guard: Any) -> str:
     writes: dict[Path, str | None] = {}  # None deletes
+    created: dict[Path, str] = {}
+    forget: set[Path] = set()
     summary: list[str] = []
     for op in ops:
         path = resolve(ctx, op.path)
@@ -179,39 +260,64 @@ def _apply_patch(text: Any, ctx: ToolContext) -> str:
             if path.exists():
                 raise ToolError(f"Add File {op.path}: already exists")
             writes[path] = "\n".join(op.lines) + "\n"
+            created[path] = op.path
             summary.append(f"added {op.path} ({len(op.lines)} lines)")
         elif op.kind == "delete":
             if not path.is_file():
                 raise ToolError(f"Delete File {op.path}: does not exist")
+            if guard is not None:
+                guard.require(op.path, path, complete=True)
             writes[path] = None
+            forget.add(path)
             summary.append(f"deleted {op.path}")
         else:
             if not path.is_file():
                 raise ToolError(f"Update File {op.path}: does not exist")
-            updated = _apply_hunks(op.path, path.read_text(), op.hunks)
+            updated, affected = _apply_hunks(op.path, path.read_text(newline=""), op.hunks)
             if op.move_to:
+                # Moving is a whole-file operation: it needs a complete observation.
+                if guard is not None:
+                    guard.require(op.path, path, complete=True)
                 destination = resolve(ctx, op.move_to)
                 if destination.exists():
                     raise ToolError(f"Move to {op.move_to}: already exists")
                 writes[path] = None
                 writes[destination] = updated
+                created[destination] = op.move_to
+                forget.update({path, destination})
                 summary.append(f"updated {op.path} → {op.move_to} ({len(op.hunks)} hunks)")
             else:
+                if guard is not None:
+                    if affected:
+                        guard.require(op.path, path, affected=affected)
+                    else:  # a pure insertion into an empty file
+                        guard.require(op.path, path, complete=True)
                 writes[path] = updated
+                forget.add(path)
                 summary.append(f"updated {op.path} ({len(op.hunks)} hunks)")
+    for path, display in created.items():
+        if path.exists():  # appeared while the rest of the patch was validated
+            raise ToolError(f"Add File {display}: destination appeared while the patch was being validated")
+    forget.update(created)
     for path, content in writes.items():
         if content is None:
             path.unlink()
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            if path in created:
+                with path.open("x") as destination:
+                    destination.write(content)
+            else:
+                path.write_text(content)
+    if guard is not None:
+        guard.forget(forget)
     return "\n".join(summary)
 
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> str:
     if "patch" in args and args["patch"] is not None:
-        return _apply_patch(args["patch"], ctx)
-    return _replace(args, ctx)
+        return await _apply_patch(args["patch"], ctx)
+    return await _replace(args, ctx)
 
 
 TOOL = Tool(
@@ -237,5 +343,7 @@ TOOL = Tool(
     ),
     run,
     guidance="Change existing files: an exact replacement (`old_string` must be unique unless `replace_all`), or an "
-             "apply_patch patch for several changes or files at once. Prefer it over rewriting whole files.",
+             "apply_patch patch for several changes or files at once. Prefer it over rewriting whole files. "
+             "The affected content must have been read in this session, and a change or external edit makes the "
+             "next change need a fresh read.",
 )
