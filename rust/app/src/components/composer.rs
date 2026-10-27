@@ -1,8 +1,8 @@
 //! Composer: draft input and Send. The draft is kept when a send fails; a send
 //! is never retried automatically.
 
-use nsh_base::theme;
-use nsh_core::ui::prelude::*;
+use nsh_base::{input, theme};
+use nsh_core::prelude::*;
 use serde_json::json;
 
 use crate::store::Store;

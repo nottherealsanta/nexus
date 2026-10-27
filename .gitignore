@@ -17,6 +17,7 @@ references/
 # Native prototype build output
 rust/tui/target/
 rust/live/target/
+rust/*/target/
 
 # Native iOS/Swift generated build and user data
 .DS_Store

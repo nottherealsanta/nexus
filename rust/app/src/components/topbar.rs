@@ -1,7 +1,7 @@
 //! Top bar: title, workspace, connection state, phase and model.
 
 use nsh_base::theme;
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 use crate::present::sessions::basename;
 use crate::present::timeline::{model_of, phase_of};

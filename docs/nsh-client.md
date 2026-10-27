@@ -12,6 +12,8 @@ this page covers only what exists.
   `rust/app` and replaces `nexus/ui/nsh/` with the output. That directory is
   build output and git-ignored. `scripts/nsh-app.sh run web` runs the NSH dev
   server. `NSH` overrides the binary; the fallback is `~/.local/bin/nsh`.
+  Use the NSH 0.3.0 CLI to match the app's `nsh-base`, `nsh-core` and platform
+  dependencies; update these together when upgrading NSH.
 - **Launch.** `nexus web` (`cli.py:_web`) sends `WebLaunch` over UDS; the daemon
   returns `http://127.0.0.1:<port>/w/<key>/#ticket=T` (the shape `gateway/upstream.py`
   parses) and the CLI rewrites it to `.../w/<key>/app/?ticket=T`, because NSH 0.2.0

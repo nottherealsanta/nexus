@@ -1,0 +1,11 @@
+{
+  "id": "dev.nexus.app",
+  "name": "Nexus",
+  "short_name": "Nexus",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": []
+}

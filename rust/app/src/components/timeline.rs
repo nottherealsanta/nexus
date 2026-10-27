@@ -1,7 +1,7 @@
 //! Conversation timeline: labelled rows from `present::timeline`.
 
 use nsh_base::theme;
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 use crate::present::timeline::{Row, RowKind, rows_from_view};
 use crate::store::Store;

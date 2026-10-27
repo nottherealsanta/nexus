@@ -1,7 +1,7 @@
 //! Left sidebar: new-session button and the session list.
 
 use nsh_base::theme;
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 
 use crate::present::sessions::SessionItem;
 use crate::store::Store;

@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
 use crate::api::{Api, ApiError};

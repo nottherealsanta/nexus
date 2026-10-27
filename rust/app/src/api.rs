@@ -7,7 +7,7 @@
 //! once; this module never retries.
 
 use nsh_core::platform::HttpRequest;
-use nsh_core::ui::prelude::*;
+use nsh_core::prelude::*;
 use serde_json::Value;
 
 use crate::platform::Launch;

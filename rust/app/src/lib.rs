@@ -13,8 +13,8 @@ pub mod platform;
 pub mod present;
 pub mod store;
 
-use nsh_base::{safe_area_view, theme};
-use nsh_core::ui::prelude::*;
+use nsh_base::theme;
+use nsh_core::prelude::*;
 
 use api::Api;
 use store::Store;
@@ -44,7 +44,7 @@ pub fn App() -> impl IntoElement {
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
         .child(
-            safe_area_view().flex_1().child(
+            view().p_safe_area().flex_1().child(
                 view().flex_1().child(components::topbar::topbar(store)).child(
                     view()
                         .flex_1()
