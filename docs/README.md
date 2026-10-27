@@ -12,7 +12,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [auth.md](auth.md) | Sign-in flows, `auth.json`, locking, refresh-token rotation |
 | [models.md](models.md) | models.dev catalog, cache, filters, `provider/model` refs, default model |
 | [stream-events.md](stream-events.md) | Conversation types, provider stream events, loop events, JSON codec |
-| [tools.md](tools.md) | read, bash, edit, write: parameters, bounds, confinement, approval |
+| [tools.md](tools.md) | read, bash (background jobs too), edit, write, code and kernels: parameters, bounds, confinement, approval |
 | [loop.md](loop.md) | The agent loop: steps, tool execution, errors, approval |
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, how a session uses them |

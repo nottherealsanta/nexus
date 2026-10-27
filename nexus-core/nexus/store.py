@@ -52,7 +52,8 @@ create table if not exists session (
   agent text not null default 'build',
   parent_id text references session(id) on delete cascade,
   parent_call_id text,
-  launched_by text not null default 'user'
+  launched_by text not null default 'user',
+  disabled_tools text not null default '[]'
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -103,6 +104,10 @@ class Session:
     parent_id: str | None = None  # the session this one was launched from
     parent_call_id: str | None = None  # the parent's tool call that launched it
     launched_by: str = "user"  # "user" | "agent"
+    disabled_tools: str = "[]"  # JSON list of tool names turned off for this session
+
+    def disabled(self) -> set[str]:
+        return set(json.loads(self.disabled_tools or "[]"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +138,8 @@ class Store:
             self.db.execute("alter table session add column parent_id text references session(id) on delete cascade")
             self.db.execute("alter table session add column parent_call_id text")
             self.db.execute("alter table session add column launched_by text not null default 'user'")
+        if "disabled_tools" not in columns:  # databases from before per-session tool switches
+            self.db.execute("alter table session add column disabled_tools text not null default '[]'")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
 
     def close(self) -> None:
@@ -174,17 +181,18 @@ class Store:
 
     def create_session(self, project: Project, *, title: str, agent: str, model: str = "", permission: str = "ask",
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
-                       launched_by: str = "user") -> Session:
+                       launched_by: str = "user", disabled_tools: list[str] | None = None) -> Session:
         now = time.time()
         directory = parent.directory if parent else project.path
+        disabled = json.dumps(sorted(set(disabled_tools or [])))
         session = Session(new_id("ses"), project.id, directory, title, model, permission, now, now, effort, agent,
-                          parent.id if parent else None, parent_call_id, launched_by)
+                          parent.id if parent else None, parent_call_id, launched_by, disabled)
         with self.db:
             self.db.execute(
                 "insert into session (id, project_id, directory, title, model, permission, created, updated, effort, agent,"
-                " parent_id, parent_call_id, launched_by) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " parent_id, parent_call_id, launched_by, disabled_tools) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session.id, session.project_id, directory, session.title, model, permission, now, now, effort, agent,
-                 session.parent_id, parent_call_id, launched_by),
+                 session.parent_id, parent_call_id, launched_by, disabled),
             )
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
         return session
@@ -228,6 +236,8 @@ class Store:
         allowed = {k: v for k, v in fields.items() if k in ("title", "model", "permission", "effort", "agent") and v is not None}
         if fields.get("effort") == "":
             allowed["effort"] = None  # "" clears it back to the agent's or provider's default
+        if fields.get("disabled_tools") is not None:
+            allowed["disabled_tools"] = json.dumps(sorted(set(fields["disabled_tools"])))
         if allowed:
             sets = ", ".join(f"{k} = ?" for k in allowed)
             with self.db:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -97,7 +98,7 @@ async def test_prompt_asks_permission_and_saves_messages(setup):
     assert messages[1]["parts"][0] == {"type": "tool_call", "id": "c1", "name": "write", "arguments": '{"path": "x.txt", "content": "hi"}', "origin": None, "raw": None}
     assert (await client.get(f"/api/session/{session['id']}")).json()["title"] == "make x.txt"
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
-    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "edit", "write"])
+    assert (context["model"], context["messages"], context["tools"]) == ("m", 4, ["read", "bash", "bash_output", "bash_kill", "edit", "write", "code"])
     assert context["instructions"].startswith("You are an AI agent running in Nexus") and "# Environment" in context["instructions"]
 
 
@@ -133,7 +134,9 @@ async def test_project_agent_sets_prompt_tools_model_and_effort(setup):
     assert (session["model"], session["model_source"], session["effort"], session["effort_source"]) == ("scripted/big", "agent", "high", "agent")
     context = (await client.get(f"/api/session/{session['id']}/context")).json()
     assert (context["model"], context["tools"], context["effort"]) == ("big", ["read"], "high")
-    assert context["instructions"].startswith("You review code.") and "Tools: read" in context["instructions"]
+    instructions = context["instructions"]
+    assert instructions.startswith("You review code.\n\n# Tools\nThese are the only tools in this session:\n- `read`: ")
+    assert "`bash`" not in instructions and "`write`" not in instructions
 
     session = (await client.post(f"/api/session/{session['id']}/model", json={"model": "scripted/small"})).json()
     assert (session["model"], session["model_source"]) == ("scripted/small", "session")
@@ -168,3 +171,275 @@ async def test_inspector_page_is_static_and_locked_down(setup):
     assert response.status_code == 200 and "Session Inspector" in response.text
     assert TOKEN not in response.text
     assert "connect-src 'self'" in response.headers["content-security-policy"]
+
+
+async def test_code_nested_approval_kernel_api_and_session_independent_lifetime(setup):
+    rt, client, provider, workspace = setup
+    provider.replies = [[ToolCall("code1", "code", json.dumps({"code": 'x = 41\nawait write(path="x.txt", content="hi")\nx'}))],
+                        [Text("done")]]
+    session = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    sid = session["id"]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "go"})
+    for _ in range(100):
+        pending = rt.pending_approvals(sid)
+        if pending:
+            break
+        await asyncio.sleep(0.01)
+    assert len(pending) == 1 and pending[0]["tool"] == "write"
+    kid = (await client.get("/api/kernel")).json()[0]["id"]
+    assert (await client.delete(f"/api/kernel/{kid}")).status_code == 409
+    await client.post(f"/api/session/{sid}/permission/{pending[0]['id']}", json={"reply": "allow"})
+    await _wait_idle(rt, sid)
+    assert (workspace / "x.txt").read_text() == "hi"
+    events = (await client.get(f"/api/session/{sid}/event")).json()["events"]
+    call = next(e["data"] for e in events if e["type"] == "code.call")
+    assert call["parent_call_id"] == "code1" and call["output"].startswith("created")
+    details = (await client.get(f"/api/kernel/{kid}")).json()
+    assert details["cell_count"] == 1 and details["variables"][0]["name"] == "x"
+    await client.delete(f"/api/session/{sid}")
+    assert (await client.get(f"/api/kernel/{kid}")).status_code == 200
+    assert (await client.delete(f"/api/kernel/{kid}")).status_code == 204
+    assert (await client.get(f"/api/kernel/{kid}")).status_code == 404
+    await rt.shutdown()
+
+
+async def test_code_child_shares_tree_kernel(setup):
+    rt, client, provider, workspace = setup
+    parent = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    provider.replies = [[ToolCall("c1", "code", '{"code": "x = 41"}')], [Text("ok")]]
+    await client.post(f"/api/session/{parent['id']}/prompt", json={"text": "set x"})
+    await _wait_idle(rt, parent["id"])
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()
+    provider.replies = [[ToolCall("c2", "code", '{"code": "x + 1"}')], [Text("42")]]
+    await client.post(f"/api/session/{child['id']}/prompt", json={"text": "read x"})
+    await _wait_idle(rt, child["id"])
+    [kernel] = (await client.get("/api/kernel")).json()
+    assert kernel["cell_count"] == 2 and kernel["cells"][1]["value"] == "42"
+    assert set(kernel["users"]) == {parent["id"], child["id"]}
+    await rt.shutdown()
+
+
+async def test_code_in_a_child_uses_the_child_approval_and_events(setup):
+    rt, client, provider, workspace = setup
+    parent = (await client.post("/api/session", json={"directory": str(workspace)})).json()
+    child = (await client.post("/api/session", json={"parent": parent["id"], "agent": "build"})).json()
+    provider.replies = [[ToolCall("cc1", "code", json.dumps({"code": 'await write(path="child.txt", content="kid")'}))],
+                        [Text("done")]]
+    await client.post(f"/api/session/{child['id']}/prompt", json={"text": "go"})
+    for _ in range(100):
+        pending = rt.pending_approvals(child["id"])
+        if pending:
+            break
+        await asyncio.sleep(0.01)
+    [request] = pending
+    assert request["session_id"] == child["id"] and request["tool"] == "write"
+    assert request["call_id"] == "cc1:1:1"
+    assert not rt.pending_approvals(parent["id"])
+    await client.post(f"/api/session/{child['id']}/permission/{request['id']}", json={"reply": "allow"})
+    await _wait_idle(rt, child["id"])
+    assert (workspace / "child.txt").read_text() == "kid"
+    events = (await client.get(f"/api/session/{child['id']}/event")).json()["events"]
+    call = next(e["data"] for e in events if e["type"] == "code.call")
+    cell = next(e["data"] for e in events if e["type"] == "code.cell")
+    assert call["parent_call_id"] == "cc1" and cell["session_id"] == child["id"]
+    [kernel] = (await client.get("/api/kernel")).json()
+    assert kernel["users"] == [child["id"]] and kernel["created_by"] == child["id"]
+    await rt.shutdown()
+
+
+async def test_saved_tool_reference_stops_working_when_the_session_disables_it(setup):
+    rt, client, provider, workspace = setup
+    session = (await client.post("/api/session", json={"directory": str(workspace), "permission": "allow"})).json()
+    sid = session["id"]
+    provider.replies = [[ToolCall("s1", "code", '{"code": "saved = write"}')], [Text("ok")]]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "save it"})
+    await _wait_idle(rt, sid)
+    await client.patch(f"/api/session/{sid}", json={"disabled_tools": ["write"]})
+    provider.replies = [[ToolCall("s2", "code", json.dumps({
+        "code": 'try:\n    await saved(path="forbidden", content="no")\nexcept RuntimeError as e:\n    print(e)'}))],
+        [Text("done")]]
+    await client.post(f"/api/session/{sid}/prompt", json={"text": "use it"})
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f"/api/session/{sid}/message")).json()
+    outputs = [p["output"] for m in messages for p in m["parts"] if p["type"] == "tool_result" and "kernel" in p["output"]]
+    assert ("unavailable" in outputs[-1] or "not defined" in outputs[-1]) and "write" in outputs[-1]
+    assert not (workspace / "forbidden").exists()
+    await rt.shutdown()
+
+
+async def test_disabled_tools_roundtrip_and_context(setup):
+    rt, client, _, workspace = setup
+    session = (await client.post('/api/session', json={
+        'directory': str(workspace), 'disabled_tools': ['bash', 'write', 'bash']})).json()
+    sid = session['id']
+    assert session['disabled_tools'] == ['bash', 'write']
+    assert session['tools'] == ['read', 'edit', 'code']
+    assert rt.store.session(sid).disabled() == {'bash', 'write'}
+    context = (await client.get(f'/api/session/{sid}/context')).json()
+    assert context['tools'] == session['tools']
+    assert '`bash`' not in context['instructions'] and '`write`' not in context['instructions']
+    patched = (await client.patch(f'/api/session/{sid}', json={'disabled_tools': []})).json()
+    assert patched['disabled_tools'] == [] and 'bash' in patched['tools']
+    assert (await client.get(f'/api/session/{sid}')).json()['tools'] == patched['tools']
+    one_off = (await client.patch(f'/api/session/{sid}', json={'disabled_tools': ['bash_output']})).json()
+    assert 'bash_output' not in one_off['tools'] and 'bash' in one_off['tools'] and 'bash_kill' in one_off['tools']
+    await client.patch(f'/api/session/{sid}', json={'disabled_tools': []})
+    for names in (['missing'], 'bash', [1]):
+        for method, url in ((client.post, '/api/session'), (client.patch, f'/api/session/{sid}')):
+            response = await method(url, json={'directory': str(workspace), 'disabled_tools': names})
+            assert response.status_code == 400
+            if names == ['missing']:
+                assert 'known:' in response.json()['error']
+
+
+async def test_disabled_tool_cannot_run_inside_code(setup):
+    rt, client, provider, workspace = setup
+    session = (await client.post('/api/session', json={
+        'directory': str(workspace), 'permission': 'allow', 'disabled_tools': ['write']})).json()
+    provider.replies = [[ToolCall('c1', 'code', json.dumps({'code': 'await write(path="forbidden", content="no")'}))],
+                        [Text('done')]]
+    try:
+        await client.post(f"/api/session/{session['id']}/prompt", json={'text': 'go'})
+        await _wait_idle(rt, session['id'])
+        messages = (await client.get(f"/api/session/{session['id']}/message")).json()
+        output = next(p['output'] for m in messages for p in m['parts'] if p['type'] == 'tool_result')
+        assert 'write' in output and 'Error' in output
+        assert not (workspace / 'forbidden').exists()
+    finally:
+        await rt.shutdown()
+
+
+async def test_no_tools_and_disabled_direct_call(setup):
+    rt, client, provider, workspace = setup
+    names = ['read', 'bash', 'edit', 'write', 'code', 'session']
+    session = (await client.post('/api/session', json={
+        'directory': str(workspace), 'agent': 'orchestrate', 'disabled_tools': names})).json()
+    sid = session['id']
+    assert session['tools'] == []
+    context = (await client.get(f'/api/session/{sid}/context')).json()
+    assert context['tools'] == [] and 'No tools are available' in context['instructions']
+    assert all(f'- `{name}`:' not in context['instructions'] for name in names)
+    provider.replies = [[ToolCall('c1', 'bash', '{"command": "touch forbidden"}')], [Text('done')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'go'})
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    result = next(p for m in messages for p in m['parts'] if p['type'] == 'tool_result')
+    assert result['is_error'] and not (workspace / 'forbidden').exists()
+    assert not rt.pending_approvals(sid)
+
+
+async def test_background_bash_notice_output_api_and_session_delete(setup):
+    rt, client, provider, workspace = setup
+    session = (await client.post('/api/session', json={'directory': str(workspace), 'permission': 'allow'})).json()
+    sid = session['id']
+    provider.replies = [
+        [ToolCall('b1', 'bash', json.dumps({'command': 'printf hello; sleep 0.3; printf world', 'background': True}))],
+        [Text('started')],
+        [Text('noticed')],
+    ]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'start one'})
+    await _wait_idle(rt, sid)
+    [job] = (await client.get('/api/bash')).json()
+    jid = job['id']
+    for _ in range(200):
+        current = (await client.get(f'/api/bash/{jid}')).json()
+        if current['status'] != 'running':
+            break
+        await asyncio.sleep(0.02)
+    assert current['status'] == 'done' and current['output'] == 'helloworld'
+
+    # The finish notice is context, and wakes an idle session.
+    for _ in range(200):
+        messages = (await client.get(f'/api/session/{sid}/message')).json()
+        if any('background bash' in (p.get('text') or '') for m in messages for p in m['parts']):
+            break
+        await asyncio.sleep(0.02)
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    notice = next(p['text'] for m in messages for p in m['parts'] if 'background bash' in (p.get('text') or ''))
+    assert jid in notice and 'helloworld' in notice
+
+    # bash_output is a task tool and reads the retained output.
+    provider.replies = [[ToolCall('o1', 'bash_output', json.dumps({'job_id': jid}))], [Text('read')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'read it'})
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    result = next(p['output'] for m in messages for p in m['parts'] if p['type'] == 'tool_result' and 'helloworld' in p['output'])
+    assert jid in result and 'done' in result
+
+    # Deleting the session stops its running job; the job record survives for inspection.
+    provider.replies = [[ToolCall('k1', 'bash', json.dumps({'command': 'sleep 5', 'background': True}))], [Text('started')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'start a long one'})
+    await _wait_idle(rt, sid)
+    [running] = [j for j in (await client.get('/api/bash')).json() if j['status'] == 'running']
+    await client.delete(f'/api/session/{sid}')
+    current = (await client.get(f"/api/bash/{running['id']}")).json()
+    assert current['status'] == 'killed'
+    await rt.shutdown()
+
+
+async def test_bash_kill_tool_stops_a_job(setup):
+    rt, client, provider, workspace = setup
+    session = (await client.post('/api/session', json={'directory': str(workspace), 'permission': 'allow'})).json()
+    sid = session['id']
+    provider.replies = [[ToolCall('b1', 'bash', json.dumps({'command': 'sleep 5', 'background': True}))], [Text('started')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'start a long one'})
+    await _wait_idle(rt, sid)
+    [job] = [j for j in (await client.get('/api/bash')).json() if j['status'] == 'running']
+    provider.replies = [[ToolCall('k1', 'bash_kill', json.dumps({'job_id': job['id']}))], [Text('killed')], [Text('noticed')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'stop it'})
+    await _wait_idle(rt, sid)
+    current = (await client.get(f"/api/bash/{job['id']}")).json()
+    assert current['status'] == 'killed'
+    for _ in range(100):
+        messages = (await client.get(f'/api/session/{sid}/message')).json()
+        if any('background bash killed' in (p.get('text') or '') for m in messages for p in m['parts']):
+            break
+        await asyncio.sleep(0.02)
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    outputs = [p['output'] for m in messages for p in m['parts'] if p['type'] == 'tool_result' and job['id'] in p['output']]
+    assert 'killed' in outputs[-1]
+    await rt.shutdown()
+
+
+async def test_code_cell_can_start_and_read_a_background_job(setup):
+    rt, client, provider, workspace = setup
+    session = (await client.post('/api/session', json={'directory': str(workspace), 'permission': 'allow'})).json()
+    sid = session['id']
+    code = ('import asyncio\n'
+            'started = await bash(command="printf out; sleep 0.2", background=True)\n'
+            'job_id = started.split()[3]\n'
+            'await asyncio.sleep(0.4)\n'
+            'await bash_output(job_id=job_id)\n')
+    provider.replies = [[ToolCall('j1', 'code', json.dumps({'code': code}))], [Text('done')], [Text('noticed')]]
+    await client.post(f'/api/session/{sid}/prompt', json={'text': 'go'})
+    await _wait_idle(rt, sid)
+    messages = (await client.get(f'/api/session/{sid}/message')).json()
+    result = next(p['output'] for m in messages for p in m['parts'] if p['type'] == 'tool_result' and 'job_' in p['output'])
+    assert 'out' in result and 'done' in result
+    [job] = (await client.get('/api/bash')).json()
+    assert job['status'] == 'done' and job['session_id'] == sid
+    await rt.shutdown()
+
+
+async def test_bash_job_tools_never_ask(setup):
+    rt, _, _, _ = setup
+    for name in ("bash_output", "bash_kill"):
+        assert await rt._approve("ses_missing", ToolCall("c", name, "{}"), {}) is True
+
+
+def test_disabled_tools_persist_and_migrate(tmp_path):
+    path = tmp_path / 'migration.db'
+    store = Store(path)
+    project, _ = store.project_for_path(str(tmp_path))
+    session = store.create_session(project, title='Persist', agent='build', disabled_tools=['bash'])
+    store.close()
+    store = Store(path)
+    assert store.session(session.id).disabled() == {'bash'}
+    # Simulate the immediately preceding schema, preserving an existing session.
+    store.db.execute('alter table session drop column disabled_tools')
+    store.close()
+    store = Store(path)
+    assert store.session(session.id).disabled() == set()
+    store.close()

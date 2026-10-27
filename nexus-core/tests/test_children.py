@@ -83,7 +83,7 @@ async def test_blocking_child_answers_the_parent_tool_call(env):
     tool_output = next(t for role, t in await _texts(client, parent["id"]) if role == "tool")
     assert tool_output.startswith(f"Child session {child['id']} (agent helper) finished.") and tool_output.endswith("42")
     # A child never gets the session tool, even when its agent lists it.
-    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "edit", "write"]
+    assert [t.name for t in providers["child"].requests[0].tools] == ["read", "bash", "bash_output", "bash_kill", "edit", "write", "code"]
     tree = (await client.get(f"/api/session/{child['id']}/tree")).json()
     assert tree["id"] == parent["id"] and [c["id"] for c in tree["children"]] == [child["id"]]
 
@@ -149,3 +149,35 @@ async def test_only_orchestrate_offers_the_tool_and_only_child_agents_are_listed
     bad_child = await client.post("/api/session", json={"parent": orchestrate.id, "agent": "orchestrate"})
     assert bad_child.status_code == 400 and "cannot run as a child" in bad_child.json()["error"]
     assert (await client.post(f"/api/session/{build['id']}/agent", json={"agent": "plan"})).status_code == 400
+
+
+async def test_dynamic_child_guidance_and_default_root(env):
+    rt, client, _, workspace = env
+    (workspace / '.agents/agents/build.md').write_text('---\ndescription: Custom builder\nmode: subagent\n---\nBuild things.')
+    parent = (await client.post('/api/session', json={'directory': str(workspace)})).json()
+    assert parent['agent'] == 'orchestrate'
+    assert 'build' not in [a.name for a in rt.agents(str(workspace)).allowed(child=False)]
+    tool = rt._session_tool(rt.session(parent['id']))
+    assert 'build' in tool.spec.parameters['properties']['agent']['enum']
+    assert '`helper`: Helps' in tool.guidance and '`build`: Custom builder' in tool.guidance
+    assert tool.guidance in rt._agent(rt.session(parent['id'])).instructions
+    patched = (await client.patch(f"/api/session/{parent['id']}", json={'disabled_tools': ['session']})).json()
+    assert 'session' not in patched['tools']
+    assert 'Child agents:' not in rt._agent(rt.session(parent['id'])).instructions
+    assert '- `session`:' not in rt._agent(rt.session(parent['id'])).instructions
+
+
+async def test_children_inherit_disabled_tools(env):
+    rt, client, providers, workspace = env
+    parent = (await client.post('/api/session', json={
+        'directory': str(workspace), 'agent': 'orchestrate', 'disabled_tools': ['bash', 'write']})).json()
+    user_child = (await client.post('/api/session', json={'parent': parent['id'], 'agent': 'helper'})).json()
+    assert user_child['disabled_tools'] == ['bash', 'write']
+    providers['parent'].replies = [[_call('c1', agent='helper', prompt='help')], [Text('done')]]
+    providers['child'].replies = [[Text('helped')]]
+    await client.post(f"/api/session/{parent['id']}/prompt", json={'text': 'go'})
+    await _idle(rt)
+    children = (await client.get(f"/api/session/{parent['id']}/children")).json()
+    assert len(children) == 2
+    assert all(c['disabled_tools'] == ['bash', 'write'] for c in children)
+    assert all('bash' not in c['tools'] and 'write' not in c['tools'] for c in children)

@@ -55,4 +55,6 @@ TOOL = Tool(
         },
     ),
     run,
+    guidance="Read a text file with line numbers (use `offset` and `limit` for large files), or list a directory. "
+             "Read a file before you change it.",
 )

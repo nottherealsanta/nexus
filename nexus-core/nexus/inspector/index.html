@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>Session Inspector</title>
 <style>
 :root {
@@ -45,6 +46,7 @@ main { overflow: auto; padding: 18px 26px 60px; }
 .head h2 { margin: 0 0 4px; font-size: 18px; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 10px 0 14px; font-size: 13px; }
 .kv > :nth-child(odd) { color: var(--muted); }
+.kv > :nth-child(even) { min-width: 0; overflow-wrap: anywhere; }
 .levels { display: flex; gap: 0; margin: 6px 0 16px; border: 1px solid var(--line); border-radius: var(--r-md); width: max-content; overflow: hidden; background: var(--panel); }
 .levels button { border: 0; border-radius: 0; padding: 6px 14px; border-right: 1px solid var(--line); background: transparent; }
 .levels button:last-child { border-right: 0; }
@@ -139,7 +141,54 @@ function setHash() {
 async function loadSidebar() {
   [S.projects, S.sessions] = await Promise.all([api("/api/project"), api("/api/session")]);
   renderSidebar();
+  await loadKernels();
+  await loadJobs();
 }
+async function loadJobs() {
+  let box = document.getElementById("jobs");
+  if (!box) { box = h("div", { id: "jobs", class: "project" }); document.getElementById("kernels").after(box); }
+  const jobs = await api("/api/bash");
+  box.replaceChildren(h("div", { class: "name" }, `Bash jobs (${jobs.length})`));
+  for (const j of jobs) {
+    box.append(h("a", { class: "srow", onclick: async () => {
+      const current = await api(`/api/bash/${j.id}`);
+      S.sel = null; S.session = null; setHash(); renderSidebar();
+      const parts = [
+        h("div", { class: "head" }, h("h2", {}, current.id),
+          kv("kv", "status", current.status, "command", h("span", { class: "mono" }, current.command),
+             "directory", h("span", { class: "mono" }, current.directory),
+             "session", h("span", { class: "mono" }, current.session_id),
+             "exit code", current.exit_code ?? "–", "timeout", current.timeout ? `${current.timeout}s` : "none",
+             "duration", `${current.duration_s.toFixed(1)} s`, "started", time(current.started),
+             "output", `${current.output_chars} chars${current.dropped_chars ? `, ${current.dropped_chars} dropped` : ""}`)),
+        h("pre", { class: "output" }, current.output || (current.status === "running" ? "(no output yet)" : "(no output)")),
+      ].filter(Boolean);
+      document.getElementById("main").replaceChildren(...parts);
+    } }, `${j.id} · ${j.status} · ${clip(j.command, 60)}`));
+  }
+}
+async function loadKernels() {
+  let box = document.getElementById("kernels");
+  if (!box) { box = h("div", { id: "kernels", class: "project" }); document.getElementById("tree").after(box); }
+  const kernels = await api("/api/kernel");
+  box.replaceChildren(h("div", { class: "name" }, `Kernels (${kernels.length})`));
+  for (const k of kernels) {
+    box.append(h("a", { class: "srow", onclick: async () => {
+      const current = await api(`/api/kernel/${k.id}`);
+      S.sel = null; S.session = null; setHash(); renderSidebar();
+      const parts = [
+        h("div", { class: "head" }, h("h2", {}, current.id),
+          kv("kv", "created by", current.created_by, "users", current.users.join(", "),
+             "cells", current.cell_count, "status", current.busy ? "busy" : "idle")),
+        jsonBlock("Variables (assigned names; up to 200, repr previews up to 200 characters)", current.variables, true),
+        current.cells_clipped ? h("div", { class: "note" }, `${current.cells_clipped} earlier cells omitted from kernel metadata; session event logs retain them.`) : null,
+        ...current.cells.map((c) => jsonBlock(`In [${c.number}] · ${c.session_id} · ${c.error || "ok"}`, c, true)),
+      ].filter(Boolean);
+      document.getElementById("main").replaceChildren(...parts);
+    } }, `${k.id} · ${k.cell_count} cells${k.busy ? " · busy" : ""}`));
+  }
+}
+
 function renderSidebar() {
   const tree = document.getElementById("tree");
   tree.replaceChildren();
@@ -191,6 +240,8 @@ function render() {
       "model", `${s.model}  (from ${s.model_source})`,
       "effort", s.effort ? `${s.effort}  (from ${s.effort_source})` : `provider default`,
       "permission", s.permission,
+      "tools", (s.tools || []).join(", ") || "none",
+      "disabled tools", (s.disabled_tools || []).join(", ") || "none",
       "directory", h("span", { class: "mono" }, s.directory),
       "launched by", s.launched_by === "agent" ? h("span", {}, "agent in ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id), ", tool call ", h("span", { class: "mono" }, s.parent_call_id)) :
         (s.parent_id ? h("span", {}, "user, as a child of ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id)) : "user"),
@@ -222,6 +273,8 @@ function partView(p, childByCall) {
     let args = null; try { args = JSON.parse(p.arguments || "{}"); } catch { /* shown raw below */ }
     const child = childByCall.get(p.id);
     return h("div", { class: "card tool" }, h("span", { class: "label" }, "tool call"), h("span", { class: "name" }, p.name), " ", h("span", { class: "note mono" }, p.id),
+      p.name === "code" ? h("div", {}, S.events.filter((e) => e.type === "code.call" && e.data.parent_call_id === p.id)
+        .map((e) => jsonBlock(`${e.data.kernel_id} · In [${e.data.cell}] · ${e.data.index}. ${e.data.tool} · ${e.data.error ? "error" : "ok"}`, e.data))) : null,
       child ? h("div", {}, "→ child session ", h("a", { onclick: () => select(child.id) }, `${child.title} (${child.agent})`)) : null,
       args && typeof args === "object" ? kv("args", ...Object.entries(args).flatMap(([k, v]) => [k, h("pre", {}, typeof v === "string" ? v : pretty(v))]))
         : h("div", { class: "err" }, "arguments are not a JSON object: ", h("pre", {}, p.arguments)));
@@ -363,6 +416,8 @@ function live() {
   const handle = (msg) => {
     const e = JSON.parse(msg.data);
     if (!e.type) return;
+    if (e.type === "code.cell" || e.type === "kernel.deleted") loadKernels();
+    if (e.type === "bash.started" || e.type === "bash.finished") loadJobs();
     if (e.type.startsWith("session.") || e.type.startsWith("project.")) { clearTimeout(sideTimer); sideTimer = setTimeout(loadSidebar, 200); }
     if (S.session && e.session_id === S.session.id) {
       S.events.push(e);
@@ -373,7 +428,7 @@ function live() {
     }
   };
   for (const type of ["message.added", "session.created", "session.updated", "session.deleted", "session.status", "session.error", "session.notified",
-    "permission.asked", "permission.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
+    "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
     "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
     source.addEventListener(type, handle);
   }

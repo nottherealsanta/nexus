@@ -20,6 +20,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 
 | Method | Path | Body / query | Returns |
 | --- | --- | --- | --- |
+| GET | `/api/bash` | | Background bash jobs (metadata: status, command, exit code, counts) |
+| GET | `/api/bash/{id}` | | One job with its retained output (404 if missing) |
+| DELETE | `/api/bash/{id}` | | 204; kills it (a finished job is unchanged) |
+| GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
+| GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
+| DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
 | GET | `/api/info` | | `{name, version, pid, home, url}` |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
@@ -32,9 +38,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | PATCH | `/api/project/{id}` | `{name}` | `Project` |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=` | `[Session]` |
-| POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
+| POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
 | GET | `/api/session/{id}` | | `Session` |
-| PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?}` (`""` clears model or effort) | `Session` |
+| PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?, disabled_tools?}` (`""` clears model or effort) | `Session` |
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
 | POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's or default model | `Session` |
 | POST | `/api/session/{id}/agent` | `{agent}` | `Session` |
@@ -61,6 +67,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "parent_id": null, "parent_call_id": null, "launched_by": "user", "children": ["ses_…"],  // who launched whom
  "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
+ "tools": ["read", "edit", "write", "code"], "disabled_tools": ["bash"],
  "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…}
 
 // Agent (see agents.md)
@@ -75,8 +82,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 {"id": "per_…", "session_id": "ses_…", "tool": "bash", "call_id": "call_…", "args": {"command": "ls"}}
 ```
 
-`permission` is `ask` (bash, edit and write wait for a reply; read never asks)
-or `allow` (nothing asks). `status` is `busy` while a turn runs.
+`permission` is `ask` (bash, edit and write wait for a reply; read, `bash_output`
+and `bash_kill` never ask) or `allow` (nothing asks). `status` is `busy` while a
+turn runs.
 
 ## Event stream
 
@@ -142,3 +150,18 @@ Login over the API (sign-in is the local `nexus login`), files and diffs,
 forks, compaction, worktrees (a session's `directory` is the project path),
 resuming `/api/event` from a sequence number (use the stored log instead),
 pairing for remote clients.
+
+Kernel execution and metadata limits: [tools.md](tools.md#code). `code.call` and
+`code.cell` are stored session events; `kernel.deleted` announces kernel removal.
+
+Background bash jobs: `bash.started` and `bash.finished` are stored session
+events (the finish event carries a clipped output tail). A finish also adds a
+notice to the starting session's context. Jobs are killed when their session or
+project is deleted, and on daemon shutdown. Limits and lifecycle:
+[tools.md](tools.md#background-bash-jobs).
+
+`disabled_tools` on session create or patch is a list of task/control tool names.
+Unknown names return 400 with the known names. An empty list re-enables all
+agent-granted tools. `tools` reports what the next turn offers after agent
+restrictions and switches. Children inherit switches when the field is omitted;
+an explicit list on user-created children overrides that inherited setting.

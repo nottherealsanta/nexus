@@ -236,4 +236,6 @@ TOOL = Tool(
         },
     ),
     run,
+    guidance="Change existing files: an exact replacement (`old_string` must be unique unless `replace_all`), or an "
+             "apply_patch patch for several changes or files at once. Prefer it over rewriting whole files.",
 )

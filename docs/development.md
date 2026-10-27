@@ -20,7 +20,7 @@ Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-versio
 nexus/
   llmhub/            types, sse, responses, chat, providers, catalog, hub
   llmhub/auth/       store, device, codex, copilot, grok, opencode, errors
-  tools/             base, read, bash, edit, write
+  tools/             base, read, bash, edit, write, code
   agents.py          agent files: parse, load (builtin, global, project)
   builtin_agents/    orchestrate, build, quick, scout, plan (.md) + NOTICE
   loop.py            the agent loop
@@ -28,6 +28,8 @@ nexus/
   paths.py           home(): $NEXUS10_HOME or ~/.nexus10
   store.py           SQLite: projects, sessions, messages (~/.nexus10/nexus.db)
   bus.py             in-process event bus (seq-numbered, bounded per subscriber)
+  kernels.py         daemon-owned persistent Monty kernels
+  bash_jobs.py       daemon-owned background bash jobs
   runtime.py         projects, sessions, turns, approvals, interrupts
   server.py          the HTTP API (Starlette) — docs/api.md
   daemon.py          serve, start, stop, discovery via daemon.json — docs/daemon.md
@@ -60,7 +62,7 @@ uv run nexus run "prompt" --model grok/grok-4.7 --yes --workspace .
 
 CLI flags for `chat` and `run`: `--model provider/model`, `--effort`,
 `--session ID`, `-c/--continue`, `--workspace` (default `.`), `--wire`,
-`--wire-file F.jsonl`, `--yes`. Model, effort and `--yes` (permission `allow`)
+`--wire-file F.jsonl`, `--yes`, `--disable bash,write` (empty string clears switches). Model, effort and `--yes` (permission `allow`)
 are saved on the session. After changing core code, run `nexus daemon stop` so the
 next command starts a daemon with the new code. With
 `--wire` the CLI prints the redacted request and every SSE event; `--wire-file`

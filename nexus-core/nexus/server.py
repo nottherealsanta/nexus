@@ -56,6 +56,7 @@ from .llmhub.providers import PROVIDERS
 from .paths import home
 from .runtime import Busy, NotFound, Runtime, message_json, project_json
 from .store import Store
+from .tools import ToolError
 
 VERSION = "0.10.0.dev0"
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
@@ -164,7 +165,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 target = runtime.project(body["project"]) if body.get("project") else runtime.open_project(body["directory"])
             session = runtime.create_session(target, title=body.get("title"), model=body.get("model"),
                                              permission=body.get("permission"), effort=body.get("effort"), agent=body.get("agent"),
-                                             parent=parent)
+                                             parent=parent, disabled_tools=body.get("disabled_tools"))
             return JSONResponse(runtime.session_json(session))
         if request.query_params.get("parent"):
             runtime.session(request.query_params["parent"])
@@ -178,7 +179,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         sid = p(request, "id")
         if request.method == "PATCH":
             body = await _body(request)
-            return JSONResponse(runtime.session_json(runtime.update_session(sid, **{k: body.get(k) for k in ("agent", "title", "model", "permission", "effort")})))
+            return JSONResponse(runtime.session_json(runtime.update_session(sid, **{k: body.get(k) for k in ("agent", "title", "model", "permission", "effort", "disabled_tools")})))
         if request.method == "DELETE":
             await runtime.delete_session(sid)
             return Response(status_code=204)
@@ -233,6 +234,34 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         runtime.reply(p(request, "id"), p(request, "pid"), reply == "allow")
         return Response(status_code=204)
 
+    async def kernels(request: Request) -> Response:
+        return JSONResponse([k.json() for k in runtime.kernels.items.values()])
+
+    async def bash_jobs(request: Request) -> Response:
+        return JSONResponse([job.json() for job in runtime.jobs.list()])
+
+    async def bash_job(request: Request) -> Response:
+        jid = p(request, "id")
+        if jid not in runtime.jobs.items:
+            raise NotFound(f"no bash job {jid}")
+        if request.method == "DELETE":
+            await runtime.jobs.kill(jid, root=None)
+            return Response(status_code=204)
+        return JSONResponse(runtime.jobs.get(jid).json(output=True))
+
+    async def kernel(request: Request) -> Response:
+        kid = p(request, "id")
+        if kid not in runtime.kernels.items:
+            raise NotFound(f"no kernel {kid}")
+        if request.method == "DELETE":
+            try:
+                await runtime.kernels.delete(kid)
+            except ToolError as exc:
+                raise Busy(str(exc)) from exc
+            runtime.bus.publish("kernel.deleted", {"id": kid})
+            return Response(status_code=204)
+        return JSONResponse(runtime.kernels.get(kid).json())
+
     async def events(request: Request) -> Response:
         only = request.query_params.get("session")
 
@@ -253,6 +282,10 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     routes = [
         Route("/inspector", inspector),
         Route("/api/info", route(info)),
+        Route("/api/bash", route(bash_jobs)),
+        Route("/api/bash/{id}", route(bash_job), methods=["GET", "DELETE"]),
+        Route("/api/kernel", route(kernels)),
+        Route("/api/kernel/{id}", route(kernel), methods=["GET", "DELETE"]),
         Route("/api/provider", route(providers)),
         Route("/api/model", route(models)),
         Route("/api/model/default", route(default_model)),

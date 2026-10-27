@@ -30,4 +30,5 @@ TOOL = Tool(
         },
     ),
     run,
+    guidance="Create a new file, or replace a file's entire contents.",
 )

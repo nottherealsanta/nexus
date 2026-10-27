@@ -126,3 +126,23 @@ Messages and parts round-trip exactly:
 * `part_from_json(data)` builds a part from its `type` tag; only the four part
   types decode. Each part's `raw` survives, so replay stays lossless after a
   round trip. Events encode one way only.
+
+## Bash jobs
+
+A background bash job (`bash` with `background: true`) publishes `bash.started`
+with its metadata, then `bash.finished` with status, exit code, duration, counts
+and a clipped output tail. Both are stored in the starting session's event log.
+The full retained output is available from `GET /api/bash/{id}` until the job is
+evicted. A finish also enters the session as a notice message, so the model sees
+it without polling. Killed jobs also finish; a job killed for session/project
+deletion or daemon shutdown is silent.
+
+## Code cells
+
+The runtime publishes `code.call` for each finished nested task call: kernel id,
+cell, index, parent code call id, tool, arguments, output and error (null on
+success). A call stopped by a timeout or interrupt has an error and empty
+output. `code.cell` records source, caller, stdout, value repr, duration and
+error for a finished cell (including an aborted one). Both are stored in the
+caller's session event log. `kernel.deleted` announces deletion or forced state
+loss.

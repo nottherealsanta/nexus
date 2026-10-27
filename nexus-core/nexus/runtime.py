@@ -39,16 +39,21 @@ from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
 from .codec import message_to_json, to_json
+from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
 from .llmhub.types import Message, ProviderError, Text, ToolCall, ToolResult, ToolSpec
 from .loop import MAX_STEPS, Agent, MessageAdded
 from .store import Project, Session, Store, StoredMessage, new_id
-from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
+from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
+from .tools import bash as bash_tool
+from .tools.base import clip
+from .tools.code import SPEC as CODE_SPEC
 
-AUTO_APPROVED = {"read", "session"}
+AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code"}
 CHILD_RESULT_CHARS = 30_000
 TITLE_CHARS = 60
 
@@ -71,6 +76,8 @@ def message_json(m: StoredMessage) -> dict[str, Any]:
 
 class Runtime:
     def __init__(self, store: Store, bus: Bus, default_model: str) -> None:
+        self.kernels = Kernels()
+        self.jobs = Jobs()
         self.store = store
         self.bus = bus
         self.default_model = default_model
@@ -112,8 +119,10 @@ class Runtime:
         return project  # type: ignore[return-value]
 
     async def delete_project(self, project_id: str) -> None:
-        for session in self.store.sessions(project_id):
+        sessions = self.store.sessions(project_id)
+        for session in sessions:
             await self.interrupt(session.id)
+        await self.jobs.cancel_for({session.id for session in sessions})
         if not self.store.delete_project(project_id):
             raise NotFound(f"no project {project_id}")
         self.bus.publish("project.deleted", {"id": project_id})
@@ -127,7 +136,9 @@ class Runtime:
             model, model_source = self.resolve_model(s, agent)
             effort = s.effort or agent.effort
             effort_source = "session" if s.effort else ("agent" if agent.effort else "provider")
+            tools = self.tool_names(s, agent)
         except ValueError:
+            tools = []
             model, model_source = s.model or self.default_model, "session" if s.model else "default"
             effort, effort_source = s.effort, "session" if s.effort else "provider"
         return {
@@ -135,6 +146,7 @@ class Runtime:
             "parent_id": s.parent_id, "parent_call_id": s.parent_call_id, "launched_by": s.launched_by,
             "children": [c.id for c in self.store.children(s.id)],
             "model": model, "model_source": model_source, "effort": effort, "effort_source": effort_source,
+            "tools": tools, "disabled_tools": sorted(s.disabled()),
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
             "created": s.created, "updated": s.updated,
         }
@@ -184,16 +196,26 @@ class Runtime:
 
     def create_session(self, project: Project, *, title: str | None, model: str | None, permission: str | None,
                        effort: str | None = None, agent: str | None = None, parent: Session | None = None,
-                       parent_call_id: str | None = None, launched_by: str = "user") -> Session:
+                       parent_call_id: str | None = None, launched_by: str = "user",
+                       disabled_tools: list[str] | None = None) -> Session:
         if permission not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
+        if disabled_tools is None and parent is not None:
+            disabled_tools = sorted(parent.disabled())
+        if disabled_tools is not None:
+            self.check_tool_names(disabled_tools)
         if model:
             provider_for(model)  # validates the provider name
-        agent = agent or agent_files.DEFAULT_AGENT
-        self.agents(project.path).get(agent, child=parent is not None)  # the agent's mode must fit
+        found = self.agents(project.path)
+        if not agent:
+            # `build` unless the user's agent files make it child-only; then the first agent allowed here.
+            fitting = [a.name for a in found.allowed(child=parent is not None)]
+            agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else (fitting or [""])[0]
+        found.get(agent, child=parent is not None)  # the agent's mode must fit
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "ask", effort=effort or None, parent=parent,
-                                            parent_call_id=parent_call_id, launched_by=launched_by)
+                                            parent_call_id=parent_call_id, launched_by=launched_by,
+                                            disabled_tools=disabled_tools)
         self.bus.publish("session.created", self.session_json(session), session_id=session.id)
         return session
 
@@ -203,6 +225,8 @@ class Runtime:
             raise ValueError("permission must be 'ask' or 'allow'")
         if fields.get("model"):
             provider_for(fields["model"])
+        if fields.get("disabled_tools") is not None:
+            self.check_tool_names(fields["disabled_tools"])
         if fields.get("agent") == "":
             raise ValueError("agent must not be empty")
         if fields.get("agent"):
@@ -214,6 +238,8 @@ class Runtime:
 
     async def delete_session(self, session_id: str) -> None:
         await self.interrupt(session_id)  # also interrupts descendants, which the delete cascades to
+        ids = {session_id, *(child.id for child in self.store.descendants(session_id))}
+        await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
         if not self.store.delete_session(session_id):
             raise NotFound(f"no session {session_id}")
         self.bus.publish("session.deleted", {"id": session_id}, session_id=session_id)
@@ -225,22 +251,133 @@ class Runtime:
 
     # -- turns ---------------------------------------------------------------
 
+    @staticmethod
+    def _has_session_tool(session: Session, spec: agent_files.AgentDef) -> bool:
+        return "session" in spec.control and session.parent_id is None and "session" not in session.disabled()
+
+    def _task_tool_names(self, session: Session, spec: agent_files.AgentDef) -> list[str]:
+        """The task tools this session offers, before the session control tool."""
+        names = list(spec.tools) if spec.tools is not None else [t.spec.name for t in DEFAULT_TOOLS]
+        names = [n for n in names if n not in session.disabled()]
+        if "bash" in names:
+            # Background jobs need their reader/killer; grant them with bash unless switched off individually.
+            at = names.index("bash") + 1
+            for tool in BASH_JOB_TOOLS:
+                name = tool.spec.name
+                if name not in names and name not in session.disabled():
+                    names.insert(at, name)
+                    at += 1
+        return names
+
+    def tool_names(self, session: Session, spec: agent_files.AgentDef) -> list[str]:
+        """The tools the session's next turn offers, in order."""
+        names = self._task_tool_names(session, spec)
+        return names + (["session"] if self._has_session_tool(session, spec) else [])
+
+    @staticmethod
+    def check_tool_names(names: Any) -> list[str]:
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise ValueError("disabled_tools must be a list of tool names")
+        known = [t.spec.name for t in DEFAULT_TOOLS + BASH_JOB_TOOLS] + list(agent_files.CONTROL_TOOLS)
+        unknown = [n for n in names if n not in known]
+        if unknown:
+            raise ValueError(f"unknown tools: {', '.join(unknown)}; known: {', '.join(known)}")
+        return names
+
+    def _root(self, session: Session) -> Session:
+        root = session
+        while root.parent_id:
+            root = self.session(root.parent_id)
+        return root
+
+    async def _start_job(self, session: Session, root: Session, args: dict[str, Any], ctx: ToolContext) -> str:
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise ToolError("command must be a non-empty string")
+        timeout = bash_tool.timeout_value(args.get("timeout"))
+        job = await self.jobs.start(session_id=session.id, root=root.id, command=command,
+                                    directory=ctx.workspace, timeout=timeout, on_finish=self._job_finished)
+        self.bus.publish("bash.started", job.json(), session_id=session.id)
+        return bash_tool.started(job)
+
+    def _job_finished(self, job: Job) -> None:
+        data = job.json() | {"output": clip(job.output, 30_000)}
+        self.bus.publish("bash.finished", data, session_id=job.session_id)
+        if self.store.session(job.session_id) is None:
+            return
+        notice = self._job_notice(job)
+        if job.session_id in self.turns:
+            self.inboxes.setdefault(job.session_id, []).append(notice)
+        else:
+            self.prompt(job.session_id, notice)
+
+    @staticmethod
+    def _job_notice(job: Job) -> str:
+        head = f"[Notification: background bash {job.status}]\njob {job.id} · {clip(repr(job.command), 500)}"
+        if job.exit_code is not None:
+            head += f" · exit code {job.exit_code}"
+        if job.dropped:
+            head += f" · {job.dropped} chars dropped"
+        output = job.output[-NOTICE_CHARS:]
+        if len(job.output) > len(output):
+            output = f"[… earlier output omitted …]\n{output}"
+        return f"{head}\n{output or '(no output)'}\nUse bash_output(job_id=\"{job.id}\") for the retained output."
+
     def _agent(self, session: Session) -> Agent:
         spec = self.agent_def(session)
         provider, model = provider_for(self.resolve_model(session, spec)[0])
-        available = {tool.spec.name: tool for tool in DEFAULT_TOOLS}
-        names = list(spec.tools) if spec.tools is not None else list(available)
+        available = {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS)}
+        names = self._task_tool_names(session, spec)
         unknown = [n for n in names if n not in available]
         if unknown:
             raise ValueError(f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join(available)}")
         workspace = Path(session.directory)
-        tools = [available[n] for n in names]
-        if "session" in spec.control and session.parent_id is None:
+        root = self._root(session)
+
+        async def run_bash(args: dict[str, Any], ctx: ToolContext) -> str:
+            background = args.get("background", False)
+            if not isinstance(background, bool):
+                raise ToolError("background must be a boolean")
+            if not background:
+                return await bash_tool.TOOL.run(args, ctx)
+            return await self._start_job(session, root, args, ctx)
+
+        async def run_bash_output(args: dict[str, Any], ctx: ToolContext) -> str:
+            job_id = args.get("job_id")
+            if not isinstance(job_id, str) or not job_id:
+                raise ToolError("job_id must be a non-empty string")
+            return bash_tool.report(self.jobs.get(job_id, root=root.id), args)
+
+        async def run_bash_kill(args: dict[str, Any], ctx: ToolContext) -> str:
+            job_id = args.get("job_id")
+            if not isinstance(job_id, str) or not job_id:
+                raise ToolError("job_id must be a non-empty string")
+            return bash_tool.killed(await self.jobs.kill(job_id, root=root.id))
+
+        bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill}
+
+        def bind(tool: Tool) -> Tool:
+            runner = bound.get(tool.spec.name)
+            return Tool(tool.spec, runner, tool.guidance) if runner else tool
+
+        tools = [bind(available[n]) for n in names]
+        if "code" in names:
+            task_tools = [t for t in tools if t.spec.name != "code"]
+
+            async def run_code(args: dict[str, Any], ctx: ToolContext) -> str:
+                return await self.kernels.run(
+                    args, root=root.id, caller=session.id, ctx=ctx, tools=task_tools,
+                    approve=lambda call, a: self._approve(session.id, call, a),
+                    publish=lambda kind, data: self.bus.publish(kind, data, session_id=session.id),
+                )
+
+            tools = [Tool(CODE_SPEC, run_code, available["code"].guidance) if t.spec.name == "code" else t for t in tools]
+        if self._has_session_tool(session, spec):
             tools.append(self._session_tool(session))
         return Agent(
             provider, model=model, workspace=workspace,
             tools=tuple(tools),
-            instructions=spec.prompt + agent_files.environment(workspace, [t.spec.name for t in tools]),
+            instructions=agent_files.render_prompt(spec, [(t.spec.name, t.guidance) for t in tools], workspace),
             reasoning_effort=session.effort or spec.effort, max_steps=spec.steps or MAX_STEPS,
             messages=[m.message for m in self.store.messages(session.id)],
             conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
@@ -250,8 +387,9 @@ class Runtime:
     # -- child sessions --------------------------------------------------------
 
     def _session_tool(self, parent: Session) -> Tool:
+        # Built from the agents loaded for this project each turn (builtin, global, project), filtered by mode,
+        # so a new agent file, or a mode change such as `build` made child-only, shows up here by itself.
         allowed = self.agents(self.project(parent.project_id).path).allowed(child=True)
-        listing = "\n".join(f"- {a.name}: {a.description}" for a in allowed)
 
         async def run(args: dict[str, Any], ctx: ToolContext) -> str:
             return await self._launch(parent.id, args, ctx.call_id)
@@ -259,11 +397,9 @@ class Runtime:
         return Tool(ToolSpec(
             name="session",
             description=(
-                "Start a child session: another agent works on a prompt in this same directory, in its own session the "
-                "user can open. The child does not see this conversation, so give it a complete prompt. "
-                "wait=true (default) returns the child's final answer. wait=false returns at once; the answer is "
-                "delivered to you as a message when the child finishes, so you can keep working meanwhile.\n"
-                f"Agents:\n{listing}"
+                "Start a child session running one of the agents listed in the system prompt's tools section, on a "
+                "complete prompt. wait=true (default) returns its answer; wait=false returns at once and the answer "
+                "arrives as a message when it finishes."
             ),
             parameters={
                 "type": "object",
@@ -275,7 +411,12 @@ class Runtime:
                 },
                 "required": ["agent", "prompt"],
             },
-        ), run)
+        ), run, guidance=(
+            "Start a child session: another agent works on a prompt in this directory, in a session the user can open. "
+            "It does not see this conversation, so give it a complete prompt. `wait=true` returns its answer; "
+            "`wait=false` lets you continue, and the answer arrives as a message when it finishes. Child agents:\n"
+            + "\n".join(f"  - `{a.name}`: {a.description}" for a in allowed)
+        ))
 
     async def _launch(self, parent_id: str, args: dict[str, Any], call_id: str | None) -> str:
         parent = self.session(parent_id)
@@ -287,7 +428,7 @@ class Runtime:
         try:
             child = self.create_session(
                 self.project(parent.project_id), title=args.get("title") or None, model=None, permission=parent.permission,
-                agent=str(args.get("agent") or ""), parent=parent, parent_call_id=call_id, launched_by="agent",
+                agent=str(args.get("agent") or ""), parent=parent, parent_call_id=call_id, launched_by="agent", disabled_tools=sorted(parent.disabled()),
             )
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
@@ -436,3 +577,5 @@ class Runtime:
     async def shutdown(self) -> None:
         for session_id in list(self.turns):
             await self.interrupt(session_id)
+        await self.jobs.shutdown()
+        await self.kernels.shutdown()

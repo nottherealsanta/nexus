@@ -26,8 +26,14 @@ three places, and a later one replaces an earlier one with the same name:
 3. project: `<project>/.agents/agents/*.md`
 
 A file that fails to parse is reported in `problems`; it is never silently
-skipped. The system prompt sent to the model is the body plus an environment
-block (`environment()`), so the whole prompt is visible in a session's context.
+skipped.
+
+The system prompt is built by `render_prompt()`: the body, with `{{tools}}`
+replaced by a tools section that describes only the tools this session has
+(each tool's `guidance`), plus an environment block. A body without
+`{{tools}}` gets the section appended. Agent bodies should not name tools
+outside that section, so turning a tool off removes every description of it.
+The whole prompt is visible in a session's context (`GET …/context`).
 """
 from __future__ import annotations
 
@@ -159,11 +165,23 @@ def load(project_path: str | None = None) -> AgentSet:
     return result
 
 
-def environment(workspace: Path, tools: list[str]) -> str:
-    """Facts appended to every agent's prompt."""
+TOOLS_PLACEHOLDER = "{{tools}}"
+
+
+def tools_section(tools: list[tuple[str, str]]) -> str:
+    """`# Tools` for exactly these (name, guidance) pairs."""
+    if not tools:
+        return "# Tools\nNo tools are available in this session. Answer from the conversation alone."
+    lines = ["# Tools", "These are the only tools in this session:"]
+    lines += [f"- `{name}`: {guidance}" if guidance else f"- `{name}`" for name, guidance in tools]
+    return "\n".join(lines)
+
+
+def render_prompt(agent: AgentDef, tools: list[tuple[str, str]], workspace: Path) -> str:
+    section = tools_section(tools)
+    body = agent.prompt.replace(TOOLS_PLACEHOLDER, section) if TOOLS_PLACEHOLDER in agent.prompt else f"{agent.prompt}\n\n{section}"
     return (
-        "\n\n# Environment\n"
+        f"{body}\n\n# Environment\n"
         f"Workspace: {workspace}\n"
-        f"Today: {datetime.now().astimezone().date().isoformat()}\n"
-        f"Tools: {', '.join(tools) if tools else 'none'}"
+        f"Today: {datetime.now().astimezone().date().isoformat()}"
     )

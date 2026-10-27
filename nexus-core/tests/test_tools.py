@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from nexus.tools import ToolContext, ToolError
@@ -26,6 +28,16 @@ async def test_paths_outside_workspace_are_refused(ctx):
 
 async def test_bash_reports_exit_code(ctx):
     assert (await bash({"command": "echo hi; exit 3"}, ctx)).startswith("[exit code 3]\nhi")
+
+
+async def test_cancelling_bash_kills_its_process_group(ctx):
+    task = asyncio.create_task(bash({"command": "sleep 2; touch late"}, ctx))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(2.2)
+    assert not (ctx.workspace / "late").exists()
 
 
 async def test_edit_replacement_must_be_unique(ctx):

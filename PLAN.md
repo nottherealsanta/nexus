@@ -68,8 +68,9 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
         store.py    ~/.nexus10/auth.json (0600, atomic, flock)
         device.py   RFC 8628 device flow (copilot, grok)
         codex.py, copilot.py, grok.py, opencode.py
-    tools/          read, bash, edit (replacement or apply_patch), write, code; web_search/web_fetch planned
+    tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, code; web_search/web_fetch planned
     kernels.py      Monty kernels for the `code` tool, owned by the daemon
+    bash_jobs.py    background bash jobs, owned by the daemon
     agents.py       agent files: frontmatter + prompt + mode; builtin, global, project
     builtin_agents/ orchestrate, build, quick, scout, plan (.md) + NOTICE
     loop.py         the agent loop (no storage; yields MessageAdded)
@@ -235,7 +236,7 @@ Verified: offline tests (event paging, type filter, cascade delete, page
 headers). Playwright screenshots in light and dark mode and at 390 px, with no
 console errors and no horizontal overflow.
 
-### Step 8: the `code` tool, Monty kernels (built and offline-tested 2026-10-27; review and commit pending)
+### Step 8: the `code` tool, Monty kernels (reviewed and live-verified 2026-10-27; delivery reviewed)
 
 A task tool, `code`, runs Python cells in a persistent **kernel**. Inside a cell,
 the agent's task tools are async functions (`await bash(command="pytest -q")`,
@@ -316,21 +317,26 @@ state, but cancelling `feed_run` closes the checkout. Active-cell timeout,
 interrupt, worker crash and resource-limit errors therefore discard the kernel
 and announce state loss; the next default call starts a fresh one. Timing out
 while queued leaves the active kernel intact. No checkpoint recovery in v1.
+A timeout or interrupt also cancels the cell's nested calls before the result
+is reported: a running command is killed and a pending approval is withdrawn,
+so nothing keeps changing the workspace after its cell is gone.
 
 Verified offline with real Monty workers: persistence and cross-session sharing,
-parallel host calls, nested approvals and durable events, caller directory and
-tool restrictions (including saved host-function references), ordinary errors,
-host timeout, cancellation, queued timeout, memory limit, live-kernel cap,
-sandbox OS denial, clipping, API inspection/delete and session-independent
-lifetime. Not verified: Linux, actual worker crash, cold-start latency, and
-visual browser QA for the inspector additions.
+parallel host calls (including read and bash in one cell), nested approvals and
+durable events, caller directory and tool restrictions (including saved
+host-function references), ordinary errors, host timeout, cancellation, queued
+timeout, memory limit, live-kernel cap, sandbox OS denial, clipping, API
+inspection/delete, session-independent lifetime, cancelled nested calls and
+commands, cancelled pending approvals, and shutdown with a running cell.
+Not verified: Linux, an actual worker crash, cold-start latency.
 
-Verified live on Codex (`gpt-6.1-terra`): orchestrate wrote `shared_probe` in
-cell 1, a build child read and changed it in cell 2 without receiving its
-contents in the prompt, and the parent asserted the changes in cell 3. All
-three cells used the same kernel id. Orchestrate now explicitly grants `code`.
-Repeat with `artifacts/shared_kernel_smoke.txt`; captured proof is in
-`artifacts/shared_kernel_live_proof.json`.
+Verified live on Codex (`gpt-6.1-terra`, 2026-10-27): orchestrate wrote
+`shared_probe` in cell 1, a build child read and changed it in cell 2 without
+receiving its contents in the prompt, and the parent asserted the changes in
+cell 3. All three cells used the same kernel id. Orchestrate now explicitly
+grants `code`. Repeat with `artifacts/shared_kernel_smoke.txt`; captured proof
+is in `artifacts/shared_kernel_live_proof.json` (this run used an isolated
+`$NEXUS10_HOME` and workspace, with a copy of the Codex sign-in).
 
 **Not planned for version 1:**
 - Kernel snapshots and restore after a daemon restart (old Nexus had signed
@@ -339,22 +345,42 @@ Repeat with `artifacts/shared_kernel_smoke.txt`; captured proof is in
 - MCP tools inside the kernel.
 - The `code_start`/`code_attach` handshake.
 
-**Step 8 follow-ups (do before committing Step 8).** The Step 8 changes reached
-the worktree from a background writer whose output was not seen during this
-session (an interrupted earlier response). Review them as new code:
-- `nexus/kernels.py`, `nexus/tools/code.py` and `tests/test_kernels.py`.
-- The kernel routes in `server.py`.
-- The `code` wiring in `runtime._agent`.
-- The kernel list and nested `code.call` view in `inspector/index.html`.
-- The doc changes in `docs/tools.md`, `docs/api.md`, `docs/inspector.md`,
-  `docs/stream-events.md` and `docs/daemon.md`.
+**Step 8 follow-ups: reviewed (2026-10-27).** The Step 8 changes had reached
+the worktree from a background writer. They were read as new code, and these
+defects were found and fixed:
+- **Nested calls outlived their cell.** Monty abandons the in-flight host call
+  when `feed_run` is cancelled. A `bash` command started by a timed-out cell
+  kept running (it created a file after the cell was reported) and published a
+  successful `code.call` afterwards. Cells now run nested calls as tracked
+  tasks, cancel and await them on every exit path, kill a cancelled command's
+  process group, and publish exactly one `code.call` per call, before
+  `code.cell`. A pending nested approval is cancelled with the cell.
+- **Shutdown could fail.** `Kernels.shutdown()` raised `ToolError` when a kernel
+  was busy and left the pool open. It now stops the running cell, closes each
+  worker exactly once and always closes the pool.
+- **Inspector kernel view printed a literal `null`** (a null child passed to
+  `replaceChildren`). It now renders only real nodes; the inspector also
+  declares an inline favicon so visual checks have no console 404.
+- **Docs structure:** the `code` paragraph in `docs/agents.md` sat under “Not
+  yet”. It moved above that heading.
 
-Then:
-- Live-check a `code` cell on Codex: a gathered `read` and `bash`, and a child
-  session reusing the parent's kernel.
-- Re-run the inspector screenshots (`artifacts/`) for the kernel view.
+Regression tests added: ordinary errors keep state; timeout stops a nested
+command, closes its call before the cell, and emits no late event; timeout
+cancels a pending nested approval; parallel read and bash in one cell; direct
+`bash` cancellation kills its process group; shutdown with a busy kernel; a
+child's nested approval and events belong to the child; a saved tool reference
+stops working when the session disables the tool.
 
-### Step 9: programmatic tool descriptions and per-session tool switches (implemented and verified 2026-10-27; commit pending)
+**Inspector visual QA (2026-10-27).** Playwright (headless Chromium) against a
+scripted daemon with one kernel: conversation nests three `code.call` records
+(parallel read and bash, plus a caught read error); the kernel list opens a
+detail view with variables and cells; light and dark mode; 390 px width. No
+console errors and no document-level overflow. Screenshots:
+`artifacts/inspector-kernels-{light,dark}.png`,
+`artifacts/inspector-kernel-{light,dark}.png`,
+`artifacts/inspector-kernels-narrow.png`, `artifacts/inspector-kernel-narrow.png`.
+
+### Step 9: programmatic tool descriptions and per-session tool switches (reviewed and verified 2026-10-27; delivery reviewed)
 
 **Goal.** What the model is told about tools must match the tools it has. A
 session can be started with tools switched off, and then nothing in its system
@@ -363,7 +389,7 @@ child agents, comes from the agent files actually loaded, so a user can add
 agents or change an agent's `mode` (for example, make `build` child-only) and
 new sessions pick up the changes (see the session snapshot decision below).
 
-**Built (uncommitted; 60 offline tests pass, lint clean)**
+**Built and reviewed (77 offline tests pass, lint and `git diff --check` clean)**
 - **Tool guidance.** `Tool.guidance` (`tools/base.py`) holds one or two
   sentences per tool for the system prompt. read, bash, edit, write and code
   have it; the `session` tool builds its own (`runtime._session_tool`).
@@ -408,10 +434,70 @@ new sessions pick up the changes (see the session snapshot decision below).
   defaulted its root to orchestrate, retaining build in the session enum and
   generated guidance (`ses_1a17bec0f117f12e64b`).
 
-**Remaining delivery work.** Step 8 and Step 9 still share an uncommitted
-worktree. Complete Step 8's review and inspector screenshot follow-ups above,
-then commit Step 8 and Step 9 as separate Conventional Commits and push
-`nexus10`. No commits or push were made during Step 9 completion.
+**Review (2026-10-27).** The Step 9 code was read with Step 8 as one pending
+diff; no functional Step 9 defect was found. The contracts were rechecked end
+to end: unknown names rejected, switches persisted and migrated, empty-tool
+prompts, `session` switched off, child inheritance and explicit overrides,
+dynamic child guidance, and disabled tools absent from schemas, guidance and
+nested code access. Added regression coverage for a saved tool reference that
+stops working after its session disables the tool, a child's nested approval and
+`code.call`/`code.cell` events belonging to the child, and parallel read + bash
+in one cell. Moved the `code` paragraph in `docs/agents.md` out of “Not yet”.
+Full suite: 74 tests passing (including Step 9a); lint and whitespace checks
+clean.
+
+**Delivery review.** Steps 8, 9 and 9a are delivered together as the reviewed
+baseline: their runtime, tools, API, inspector and tests now share interleaved
+changes. The reviewer independently reran the suite and lint, inspected the
+saved live proof and representative screenshots, and fixed three additional
+background-job defects: concurrent launches could exceed the live cap; an
+explicit timeout skipped descendants after the shell exited; decoding each pipe
+chunk separately corrupted split UTF-8 characters. Launch admission is now
+serialized with shutdown coordination, the timeout covers the group through
+output completion, and decoding is incremental. Three regression tests cover
+these cases. Final suite: 77 passing; Ruff and whitespace checks clean. Saved
+live/visual evidence was inspected, not regenerated during delivery review.
+
+### Step 9a: bash without a default timeout, background bash jobs (requested and implemented 2026-10-27; delivery reviewed)
+
+Requested while reviewing Steps 8–9. This is a distinct behavior change,
+delivered in their shared reviewed baseline (see delivery review above).
+
+- **No default time limit.** `bash {command, timeout?, background?}` waits until
+  the command exits unless the caller passes `timeout` (seconds). The 120 s
+  default and 600 s cap are gone. Cancelling the call (an interrupted turn or a
+  code cell's `timeout_s`) sends SIGKILL to the process group.
+- **Background mode.** `background: true` starts a daemon-owned job
+  (`nexus/bash_jobs.py`, id `job_…`) in the caller's directory and returns at
+  once. It survives the turn and the code cell. A finished job publishes
+  `bash.finished` and adds a bounded output notice to the starting session's
+  context — immediately (starting a turn) if idle, or before the next model call
+  if busy — like a `wait: false` child.
+- **Reading and stopping.** `bash_output {job_id, offset?, limit?}` reports
+  status, exit code, duration and paged output. `bash_kill {job_id}` kills the
+  group. Both are task tools granted with `bash` unless switched off
+  individually; they only see their own session tree's jobs.
+- **Limits.** 16 live jobs and 64 retained (running plus finished); the oldest
+  finished job is evicted first. 1,000,000 characters of output per job, with
+  dropped characters announced; 30,000 characters per read; 4,000-character
+  tail in the notice. Jobs do not survive a daemon restart.
+- **Lifecycle.** Interrupting a turn does not stop a background job. Deleting
+  its session or project does, silently; daemon shutdown kills every job.
+- **API and UI.** `GET /api/bash`, `GET /api/bash/{id}` and
+  `DELETE /api/bash/{id}`; the inspector lists jobs beside kernels and opens
+  their retained output. `bash.started`/`bash.finished` are durable session
+  events.
+- **Verification.** Offline with real processes: no default limit, optional
+  timeout, cancellation kills the group, start/finish/timeout/kill, output
+  ordering, tree scoping, session cancellation silence, finish notice in an
+  idle session, `bash_output`, `bash_kill`, API list/detail/delete, session
+  deletion killing its job, a code cell starting and reading a job, and the
+  inspector job view in light, dark and at 390 px with no console errors or
+  document overflow.
+- **Live check (Codex `gpt-6.1-terra`, isolated home/workspace).** The model
+  started `sleep 2; echo BACKGROUND_OK` with `background: true`, reported the
+  job id, and the finish notice woke the session to report `BACKGROUND_OK`.
+  Evidence: `artifacts/bash_job_live_proof.json`.
 
 ### Step 10: control plane
 
@@ -712,7 +798,7 @@ documented in `docs/api.md`.
 ### Release gate: 0.10.0
 
 Before release, explicitly check off:
-- Required scope: reviewed Steps 8–9, frozen context/control decisions, durable
+- Required scope: reviewed Steps 8–9 and 9a, frozen context/control decisions, durable
   reconnect and restart recovery, interface Core contracts, and both clients'
   agreed first-release flows. Mark any deferred features explicitly.
 - SQLite migrations tested from supported earlier schemas, with backup and
@@ -757,6 +843,7 @@ show the wire view, the session tree and kernels.
 | Subagents run inside a tool call | Child sessions with `launched_by`, `parent_id`, `parent_call_id` | A child's work is a full, visible, resumable session |
 | Four kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`), one kernel per agent | One `code` tool; kernels owned by the daemon, shared by id across sessions | Simpler to use; a session tree works in one kernel |
 | Cancelling a cell could restore a signed checkpoint | Forced cancellation discards the kernel in v1 | Monty closes the checkout; checkpoint recovery is deferred |
+| bash was synchronous with a fixed timeout | No default time limit (optional `timeout`), plus daemon-owned background jobs read with `bash_output`/`bash_kill` | A long command need not block a turn; its result arrives as a notice |
 | Live events only; messages in the log | Every session event stored (`event` table) | The inspector can show any past session down to the wire |
 | Agent prompts name their tools in prose | `{{tools}}` placeholder filled from the session's actual tools (`Tool.guidance`) | A switched-off tool is never described to the model |
 | Fixed list of child agents in the orchestrator's prompt | The `session` guidance is snapshotted from freshly checked agent files at each new session (planned, Step 10) | New sessions pick up agent changes without rewriting existing prompts |
@@ -771,8 +858,9 @@ show the wire view, the session tree and kernels.
 ## Implementation sequence
 
 Work one reviewed increment at a time:
-1. Review and finish the existing Step 8–9 implementation, including pending
-   kernel/inspector checks. Commit code only after review and validation.
+1. Steps 8–9 and the requested Step 9a are reviewed and verified, with the
+   reviewed diff prepared. Commit them as separate Conventional Commits and
+   push `nexus10`.
 2. Persist session snapshots and load session-directory `AGENTS.md` (Step 10).
 3. Add `ask`, approval-free workspace edits and read freshness checks; resolve
    the unrestricted-bash enforcement boundary before claiming full enforcement.
@@ -787,8 +875,21 @@ Do not start the next increment until the current review is complete.
 
 ## Known gaps
 
-- Step 8 (`code`) and Step 9 (tool switches) are uncommitted. Step 8 arrived from
-  a background writer and needs review before it is committed (see Step 8 follow-ups).
+- Steps 8–9a are delivered as one reviewed baseline; see the delivery review
+  for independently rerun checks and the remaining platform limitations.
+- Kernels have no checkpoint recovery; a timeout, interrupt, crash or resource
+  limit discards the kernel. Monty workers run inside the daemon with its
+  environment (a scrubbed helper process is planned before 0.10.0). Linux, a
+  forced worker crash and cold-start latency are unverified.
+- Background bash jobs live in the daemon's memory. A normal shutdown kills
+  them; a daemon crash can leave the command running with no job record, and
+  retained output is lost. There is no job supervisor or restart recovery yet.
+- A pending approval cancelled by an interrupted turn or a timed-out code cell
+  is removed without a `permission.replied` event; clients should treat a
+  disappeared approval as cancelled. This matches interrupted direct calls.
+- Step 11 recovery still treats an interrupted `code` call as an interrupted
+  plain tool call in the outer message stream; the durable `code.call` and
+  `code.cell` events record what actually ran.
 - No retries, no context limit or compaction (planned as handoff, Step 12a).
 - The system prompt is re-rendered every turn (workspace, today's date), so a
   date rollover changes the cached prefix (fix planned, Step 10).

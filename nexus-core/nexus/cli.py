@@ -155,6 +155,10 @@ async def _open_session(client: Client, args: argparse.Namespace) -> dict[str, A
         session = await client.call("PATCH", f"/api/session/{session['id']}", {"effort": args.effort})
     if args.yes and session["permission"] != "allow":
         session = await client.call("PATCH", f"/api/session/{session['id']}", {"permission": "allow"})
+    if args.disable is not None:
+        disabled = sorted({t.strip() for t in args.disable.split(",") if t.strip()})
+        if disabled != session["disabled_tools"]:
+            session = await client.call("PATCH", f"/api/session/{session['id']}", {"disabled_tools": disabled})
     return session
 
 
@@ -219,7 +223,7 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
     client = Client.connect()
     try:
         session = await _open_session(client, args)
-        print(f"{DIM}nexus · {_describe(session)} · {session['directory']} · session {session['id']}  (/context, /agent, /model, /exit){RESET}")
+        print(f"{DIM}nexus · {_describe(session)} · {session['directory']} · session {session['id']}  (/context, /tools, /agent, /model, /exit){RESET}")
         for message in await client.call("GET", f"/api/session/{session['id']}/message"):
             text = "".join(p.get("text", "") for p in message["parts"] if p["type"] == "text")
             if text and message["role"] in ("user", "assistant"):
@@ -243,6 +247,10 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
                     session = await client.call("POST", f"/api/session/{session['id']}/model", {"model": "" if ref == "default" else ref})
                 print(f"{DIM}{_describe(session)}  (/model default follows the agent){RESET}")
                 continue
+            if text == "/tools":
+                off = ", ".join(session["disabled_tools"]) or "none"
+                print(f"{DIM}tools: {', '.join(session['tools']) or 'none'} · switched off: {off}{RESET}")
+                continue
             if text.startswith("/agent"):
                 name = text.removeprefix("/agent").strip()
                 if name:
@@ -261,7 +269,8 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
 
 def _describe(session: dict[str, Any]) -> str:
     effort = f" effort {session['effort']} ({session['effort_source']})" if session["effort"] else ""
-    return f"agent {session['agent']} · {session['model']} ({session['model_source']}){effort}"
+    off = f" · off: {','.join(session['disabled_tools'])}" if session["disabled_tools"] else ""
+    return f"agent {session['agent']} · {session['model']} ({session['model_source']}){effort}{off}"
 
 
 async def _agent_list(client: Client, directory: str) -> None:
@@ -432,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd.add_argument("--agent", help="agent for the session (default: build; see `nexus agent`)")
         cmd.add_argument("--model", help="provider/model; overrides the agent's preference (see `nexus models`)")
         cmd.add_argument("--effort", help="reasoning effort for the session, e.g. low | high (see `nexus models`); '' clears it")
+        cmd.add_argument("--disable", metavar="TOOLS", help="comma-separated tools to switch off for the session, e.g. bash,write; '' turns all back on")
         cmd.add_argument("--session", help="continue this session id")
         cmd.add_argument("-c", "--continue", dest="cont", action="store_true", help="continue the project's latest session")
         cmd.add_argument("--workspace", default=".", help="the project directory")

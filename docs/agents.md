@@ -47,7 +47,7 @@ that fails to parse is listed under `problems` (`GET /api/agent`,
 
 | Agent | Mode | Tools | For |
 | --- | --- | --- | --- |
-| `orchestrate` | primary | read, bash + `session` | Breaks a task down, delegates it to child sessions, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
+| `orchestrate` | primary | read, bash, code + `session` | Breaks a task down, delegates it to child sessions, checks the results, reports. The only agent with the `session` tool. Its prompt says not to edit files. |
 | `build` (default) | all | all | The grunt work: writes and edits code, runs and checks it. Prompt adapted from OpenCode's GPT system prompt (MIT; see `builtin_agents/NOTICE`). |
 | `quick` | subagent | all (effort low, 20 steps) | Small self-contained tasks whose details the parent should not carry in its context. Returns only what the parent needs. |
 | `scout` | subagent | read, bash | Reads the material and returns a context brief: answer, relevant files with line ranges and quotes, how they fit, gotchas, what was checked, open questions. |
@@ -56,14 +56,19 @@ that fails to parse is listed under `problems` (`GET /api/agent`,
 So a root session runs `orchestrate` or `build`, and a child session runs
 `build`, `quick`, `scout` or `plan`. Prompts are advice: bash is not sandboxed,
 so "read-only" (`scout`) and "Markdown only" (`plan`) rest on the prompt.
+Granting `bash` also grants the `bash_output` and `bash_kill` companions for
+background jobs (the table lists only the frontmatter tools).
 
 ## How a session uses its agent
 
-A session has one `agent` (default `build`). On each turn:
+A session has one `agent`. The default is `build` when its mode allows a root;
+otherwise the first loaded agent allowed as a root is used (normally
+`orchestrate`). On each turn:
 
-- **instructions** = the agent's body + an environment block (workspace, date,
-  tool names). `GET /api/session/{id}/context` shows the full text.
-- **tools** = the agent's `tools`, or all of them.
+- **instructions** = the agent's body with `{{tools}}` replaced by guidance for
+  its actual tools, plus an environment block (workspace, date). `GET /api/session/{id}/context` shows the full text.
+- **tools** = the agent's `tools`, or all task tools, minus the session's
+  `disabled_tools`; explicitly granted control tools follow the same switch.
 - **model** = the session's model if the user set one, else the agent's
   `model`, else the daemon's default. **effort** works the same way, ending
   with the provider's default.
@@ -74,8 +79,10 @@ The session JSON reports the result and where it came from: `model` and
 `effort_source` (`session`, `agent` or `provider`). Setting the model to `""`
 (`/model default` in chat) returns to the agent's choice.
 
-Approval is a session setting (`permission`), not an agent setting: read never
-asks, and bash, edit and write ask unless the session is `allow`.
+Approval is a session setting (`permission`), not an agent setting: read,
+`bash_output` and `bash_kill` (and the outer `code` call) never ask; bash
+(including background), edit and write ask unless the session is `allow`,
+including calls made from inside a code cell.
 
 ## Commands
 
@@ -89,6 +96,31 @@ nexus chat                      # then: /agent plan, /agent (list), /model defau
 API: `GET /api/agent?directory=…`, `GET /api/agent/{name}`,
 `POST /api/session {agent}`, `POST /api/session/{id}/agent {agent}`
 ([api.md](api.md)).
+
+The default task tools include `code`. An explicit `tools` list must include it
+to enable cells. Inside code, only that caller's other task tools are exposed,
+with the caller's directory and approval policy; control tools are excluded.
+Session trees share a default kernel. See [tools.md](tools.md#code).
+
+## Tool guidance and session switches
+
+Put `{{tools}}` in the body where the generated `# Tools` section should appear.
+Without a placeholder, the section is appended. With no tools, it explicitly
+says none are available. Keep agent bodies tool-agnostic: naming tools elsewhere
+would leave stale advice when those tools are disabled. Custom bodies are not
+rewritten beyond the placeholder.
+
+The `session` tool's guidance and `agent` enum come from every loaded agent
+whose mode allows children, with its current description. Global and project
+overrides apply on the next turn, including changes to `build`'s mode.
+
+Use `nexus run|chat --disable bash,write` to save switches on a session;
+`--disable ''` clears them. In chat, `/tools` shows available and disabled tools.
+Disabled tools also disappear from the functions available inside code cells.
+
+`bash` brings `bash_output` and `bash_kill` with it, unless they are switched
+off individually, so a background command can always be read and stopped. They
+are task tools, not control tools; a child session sees its tree's jobs.
 
 ## Not yet
 

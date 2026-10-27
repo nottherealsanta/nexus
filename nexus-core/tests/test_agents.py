@@ -59,3 +59,22 @@ def test_bad_files_are_reported_not_skipped(tmp_path, monkeypatch, text, error):
 def test_unknown_agent_names_the_options():
     with pytest.raises(ValueError, match="available: build, orchestrate, plan, quick, scout"):
         agents.load(None).get("nope")
+
+
+@pytest.mark.parametrize("body", ["Before\n{{tools}}\nAfter", "No placeholder."])
+def test_render_prompt_uses_actual_tools(tmp_path, body):
+    from dataclasses import replace
+
+    agent = replace(agents.load(None).get("build"), prompt=body)
+    rendered = agents.render_prompt(agent, [("read", "Read files.")], tmp_path)
+    assert "{{tools}}" not in rendered and rendered.count("# Tools") == 1
+    assert "- `read`: Read files." in rendered and "`bash`" not in rendered
+    assert f"Workspace: {tmp_path}" in rendered
+    assert "No tools are available" in agents.render_prompt(agent, [], tmp_path)
+
+
+def test_builtin_bodies_do_not_describe_tools():
+    for agent in agents.load(None).agents.values():
+        assert "{{tools}}" in agent.prompt
+        for name in ("read", "bash", "bash_output", "bash_kill", "edit", "write", "code", "session"):
+            assert f"`{name}`" not in agent.prompt

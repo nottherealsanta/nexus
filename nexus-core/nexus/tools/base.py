@@ -1,7 +1,10 @@
 """Tool shape and the shared workspace path check.
 
-A tool is a `ToolSpec` (what the model sees) plus an async `run(args, ctx)`
-that returns text or raises `ToolError`. Every output is bounded, and any
+A tool is a `ToolSpec` (the schema and description sent with the request), its
+`guidance` (how to use it, for the system prompt's tools section) and an async
+`run(args, ctx)` that returns text or raises `ToolError`. Guidance is rendered
+only for the tools a session actually has, so a disabled tool is never
+described anywhere the model can see. Every output is bounded, and any
 clipping is stated in the output itself.
 """
 from __future__ import annotations
@@ -30,6 +33,7 @@ class ToolContext:
 class Tool:
     spec: ToolSpec
     run: Callable[[dict[str, Any], ToolContext], Awaitable[str]]
+    guidance: str = ""  # one or two sentences for the system prompt; see agents.render_prompt
 
 
 def resolve(ctx: ToolContext, path: Any) -> Path:

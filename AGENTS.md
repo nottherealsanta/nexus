@@ -8,6 +8,10 @@ changes from old Nexus.
   code from it deliberately, and add a ledger row in PLAN.md when you change a
   behavior. Its AGENTS.md and docs do not apply here.
 - Keep the context visible: wire events are never dropped, and clipping is announced.
+- One timeline: the "timeline" (or "context line"), which is what the user sees
+  as a session in the UIs, reflects the agent's context. Everything the model
+  receives is shown in order, and the UI shows nothing the model does not have.
+  Presenting context well is a core idea of Nexus.
 - Task tools (`nexus-core/nexus/tools/`) act on the workspace. Changes to Nexus state
   (session, workspace, worktree, model) belong to the control plane, never a tool.
 - State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus`.

@@ -1,7 +1,8 @@
 # Daemon, projects and sessions
 
 Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
-daemon owns projects, sessions, turns and tool approvals, and exposes them over
+daemon owns projects, sessions, turns, Monty kernels, background bash jobs and
+tool approvals, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
 ## Lifecycle (`nexus/daemon.py`)
@@ -63,7 +64,8 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   `build`), and a child only `subagent`/`all` agents. Creating a session or
   switching its agent with the wrong mode returns 400.
 - **The child.** It runs in the parent's directory with the parent's
-  permission, and its own agent, model and messages.
+  permission and `disabled_tools`, and its own agent, model and messages.
+  User-created children may explicitly override the inherited switches.
 - **`wait: true` (default).** The tool returns the child's final answer, or its
   error.
 - **`wait: false`.** The tool returns at once. When the child finishes, its
@@ -81,7 +83,8 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   from it (prompt, tools, model, effort, steps) and the saved messages. It runs in
   `session.directory` with the session's model, using the session id as the
   prompt-cache key.
-- **Approval.** read never asks. bash, edit and write ask unless the session
+- **Approval.** read, `bash_output`, `bash_kill` and the outer code call never ask; code delegates
+  approval to its nested task calls. bash (including background), edit and write ask unless the session
   is `allow`. The turn waits on `permission.asked` until a client replies, or
   the turn is interrupted.
 - **Interrupt.** Cancels the turn task. A tool call left without a result gets
@@ -118,3 +121,18 @@ session's model and `/context` prints the next request body.
 - **Turns after restart.** Turns are not resumed after a restart.
 - **Daemon version.** Nothing checks that a running daemon runs the same code
   as the client. Run `nexus daemon stop` after changing core.
+
+## Kernels
+
+`nexus/kernels.py` owns a lazy Monty pool and up to eight persistent kernels,
+shared by session tree or explicit id. They outlive sessions. Deleting a kernel
+stops it; daemon shutdown stops any running cell and closes every worker and the
+pool. See [tools.md](tools.md#code) for limits and cancellation behavior.
+
+## Bash jobs
+
+`nexus/bash_jobs.py` owns background commands started with `bash background=true`.
+They run in the starting session's directory, are scoped to its tree for the
+tools, and outlive turns and code cells. Deleting a session or project kills its
+jobs; daemon shutdown kills every job. Limits, output retention and the finish
+notice are in [tools.md](tools.md#background-bash-jobs).

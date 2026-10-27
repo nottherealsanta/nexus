@@ -50,3 +50,37 @@ per session.
   child show in the child's own page.
 - Checked with Playwright (Chromium) in light and dark mode and at 390 px
   width. Not checked in Safari or Firefox.
+
+## Code and kernels
+
+The sidebar also lists live kernels. Opening one shows its creator, users,
+cell count, assigned-variable previews and retained cells (last 100; omissions
+announced). Conversation nests expandable `code.call` records beneath their
+parent `code` call, including intermediate output the model did not request.
+Code events also appear in Raw. The list updates after cells and deletions.
+
+Verified with Playwright (Chromium, headless) against a scripted daemon: a
+parallel `read` + `bash` cell with three nested calls (one caught error), a
+finished background bash job with retained output, the kernel and job lists and
+detail views, light and dark mode, and 390 px width. No console errors and no
+document-level horizontal overflow. Screenshots:
+`artifacts/inspector-kernels-light.png`,
+`artifacts/inspector-kernels-dark.png`,
+`artifacts/inspector-kernel-light.png`,
+`artifacts/inspector-kernel-dark.png`,
+`artifacts/inspector-kernels-narrow.png`,
+`artifacts/inspector-kernel-narrow.png`,
+`artifacts/inspector-job-light.png`,
+`artifacts/inspector-job-dark.png` and `artifacts/inspector-job-narrow.png`.
+
+The session header lists the next turn's `tools` and saved `disabled_tools`,
+using “none” for an empty list.
+
+## Bash jobs
+
+The sidebar lists background bash jobs, running and finished, with their status
+and command. Opening one shows the command, directory, session, status, exit
+code, duration, output counts and the retained output. The list refreshes on
+`bash.started` and `bash.finished`. Jobs are retained until the job limit
+evicts the oldest finished one, so a job's output stays inspectable after it
+finishes; the durable event log still has the finish tail after eviction.
