@@ -27,7 +27,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
-| GET | `/api/info` | | `{name, version, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
+| GET | `/api/info` | | `{name, version, api_version: {major, minor}, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
 | GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
@@ -68,6 +68,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
 | GET | `/api/event` | `?session=` (that session and its descendants), `?cursor=<generation>:<id>` (or `Last-Event-ID`) | server-sent events (below) |
+| GET | `/api/info` (handshake) | | `api_version` is `{major, minor}`. A client sends nothing past `/api/info` when the major differs; a newer minor only adds fields, so older clients keep working and say what they lack |
 | GET | `/inspector` | | the session inspector page ([inspector.md](inspector.md)); static, no token needed to load it |
 
 ### Objects

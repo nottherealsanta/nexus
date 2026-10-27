@@ -79,6 +79,10 @@ from .store import Store
 from .tools import ToolError
 
 VERSION = "0.10.0.dev0"
+# The HTTP API contract clients check before sending anything else. A change
+# that a client written for an older major cannot survive is a new major; new
+# fields and endpoints are a minor bump.
+API_VERSION = {"major": 1, "minor": 0}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -324,7 +328,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         generation = runtime.store.log_generation()
         head = runtime.store.log_head()
         return JSONResponse({
-            "name": "nexus", "version": VERSION, "pid": os.getpid(), "home": str(home()), "url": url,
+            "name": "nexus", "version": VERSION, "api_version": API_VERSION,
+            "pid": os.getpid(), "home": str(home()), "url": url,
             "log": {"generation": generation, "head": head, "head_cursor": format_cursor(generation, head),
                     "floor": runtime.store.log_floor(),
                     "floor_cursor": format_cursor(generation, runtime.store.log_floor())},
