@@ -185,6 +185,22 @@ branch, flags and working-tree state. Worktree operations never move the
 session, so clients update worktree/git views without changing the session
 directory.
 
+## Archive events
+
+`session.archived` and `session.unarchived` mark a whole root tree's transition.
+Data: `{root, sessions: [ids], archived}`. The event is stored in the root
+session's event log; `sessions` includes the root and every descendant. An
+unchanged repeat publishes nothing. Session JSON carries `archived` separately
+from `status` (`busy`/`idle`).
+
+Automatic notices respect archive state. A background job finishing publishes
+`bash.finished` as usual. If the target session is archived, its notice is
+saved as an ordinary user message (`message.added`) instead of starting a turn;
+the provider is not called. The stored notice is part of the context the model
+receives when the user unarchives and resumes. A `wait: false` child cannot run
+under an archived tree (archive refuses a busy descendant), but the same notice
+path applies to any automatic notification.
+
 ## Session snapshots
 
 `session.snapshot` records one-time reconstruction of an older session's

@@ -20,15 +20,19 @@ content-security policy: no external scripts, styles or connections.
 
 - **Sidebar.** Projects with their path, and each project's sessions as a tree
   (who launched whom). Each row shows the title, agent, model and whether the
-  session was launched by an agent. A green dot means busy. It updates live from
-  `/api/event`.
+  session was launched by an agent. A green dot means busy; an `archived` pill
+  marks an archived tree, separately from busy/idle. The sidebar always loads
+  archived sessions (`?archived=include`), so their history stays reachable. It
+  updates live from `/api/event`, including `session.archived` and
+  `session.unarchived`.
 - **Session header.** Every session field: id, agent, model and where it came
-  from, effort, permission, directory, starting directory (the one frozen into
-  the system prompt), workspace-control state (entry available, activation) and
-  any pending directory change, who launched it (with a link to the parent
-  and the launching tool call), children (links), and how many messages and events
-  are stored. It also shows the snapshot origin and creation time, the agent's
-  source path and fingerprint, and the `AGENTS.md` path and status.
+  from, effort, permission, archive state, directory, starting directory (the
+  one frozen into the system prompt), workspace-control state (entry available,
+  activation) and any pending directory change, who launched it (with a link to
+  the parent and the launching tool call), children (links), and how many
+  messages and events are stored. It also shows the snapshot origin and creation
+  time, the agent's source path and fingerprint, and the `AGENTS.md` path and
+  status.
 
 ## Levels (keys 1–4)
 
@@ -58,6 +62,9 @@ per session.
   was script-syntax-checked, not re-run in a browser.
 - The workspace-control header fields, snapshot fields and live events were
   added later and script-syntax-checked (`node --check`), not re-run visually.
+- Archive state is shown as a separate `archived` field and sidebar pill; it
+  does not replace busy/idle. The archive view was script-syntax-checked, not
+  re-run visually.
 - Checked with Playwright (Chromium) in light and dark mode and at 390 px
   width. Not checked in Safari or Firefox.
 

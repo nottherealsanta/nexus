@@ -2,8 +2,8 @@
 
 Nexus Core runs as one background daemon per Nexus home (`~/.nexus10`). The
 daemon owns projects, sessions, turns, Monty kernels, background bash jobs,
-tool approvals, pending questions, workspace control operations and pending
-directory moves, and exposes them over
+tool approvals, pending questions, workspace control operations, session
+archiving and pending directory moves, and exposes them over
 the [HTTP API](api.md). Clients never read Nexus state files.
 
 ## Lifecycle (`nexus/daemon.py`)
@@ -48,6 +48,8 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   - `permission`: `ask` or `allow`.
   - `effort`: reasoning effort, or none for the provider's default.
   - `title`: set from the first prompt.
+  - `archived`: whether this session's whole tree is archived. Archive state is
+    separate from busy/idle `status`; see [Session archiving](#session-archiving).
   - `snapshot`: the frozen agent, prompt, tool definitions, child catalog and
     instruction file resolved at creation ([agents.md](agents.md#session-snapshots)).
 - **Messages.** Append-only rows in session order, saved as each one is
@@ -60,7 +62,31 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   session, in order: the durable log behind the [inspector](inspector.md);
   `file_observation` holds each session's read observations (see below).
   Deleting a project or session deletes everything under it, including its child
-  sessions, snapshots and observations.
+  sessions, snapshots and observations. Archiving only changes one `archived`
+  column on every session in the tree; it deletes nothing.
+
+## Session archiving
+
+`POST /api/session/{id}/archive` and `/unarchive` act on the whole root tree,
+in one SQLite transaction, and are idempotent. A child-only request is a 400
+that names the root; clients and the CLI use the root. A transition publishes
+one `session.archived` or `session.unarchived` event (stored in the root's event
+log) with the tree ids; repeating the same state publishes nothing.
+
+- **Refusals.** A root or any descendant running a turn, or waiting for an
+  approval or question, gives 409 and is left alone. Archiving never interrupts
+  or stops anything, and never removes a worktree, branch or background job.
+- **While archived.** Messages, events, snapshots, file observations,
+  directories and tree relationships stay readable. A prompt gets 409 with the
+  unarchive command, and a new child in the tree gets 409, until the root is
+  unarchived. Unarchive does not start a turn.
+- **Notifications.** A background job may still finish. Its durable event is
+  published as usual, and its model-visible notice is saved as a context
+  message without calling the provider. The notice is there when the user
+  unarchives and resumes.
+- **Lists.** `GET /api/session` excludes archived trees by default;
+  `?archived=only` returns archived trees and `?archived=include` returns both.
+  Explicit session, tree, message, event and snapshot reads ignore the filter.
 
 ## Session trees: who launched whom
 
@@ -140,6 +166,8 @@ nexus run -c "and now the docs"     # continue the project's latest session
 nexus chat --session ses_…          # continue a given session
 nexus chat --wire                   # also print every request and provider event
 nexus session list [--all] | show ID | rm ID
+nexus session archive ID | unarchive ID
+nexus session list --archived-only | --include-archived
 nexus project list | open [PATH]
 ```
 
@@ -151,7 +179,9 @@ collects the answers and submits them; Ctrl-C, EOF or an interrupted turn
 abandons the prompt without submitting, and the daemon closes the question.
 Ctrl-C during a turn sends `/interrupt`. `--yes` sets the session's permission
 to `allow`. In chat, `/model provider/model` changes the session's model and
-`/context` prints the next request body.
+`/context` prints the next request body. `-c`/`--continue` skips archived
+sessions when choosing the project's latest; `--session` with an archived id
+stops with an unarchive command.
 
 ## Not verified / not yet
 
@@ -173,8 +203,10 @@ pool. See [tools.md](tools.md#code) for limits and cancellation behavior.
 `nexus/bash_jobs.py` owns background commands started with `bash background=true`.
 They run in the starting session's directory, are scoped to its tree for the
 tools, and outlive turns and code cells. Deleting a session or project kills its
-jobs; daemon shutdown kills every job. Limits, output retention and the finish
-notice are in [tools.md](tools.md#background-bash-jobs).
+jobs; daemon shutdown kills every job. Archiving does not; if the session is
+archived when the job finishes, `bash.finished` is still stored and its notice
+is saved as context without starting a turn. Limits, output retention and the
+finish notice are in [tools.md](tools.md#background-bash-jobs).
 
 ## Workspace controls
 

@@ -16,9 +16,11 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/project | all projects |
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
-| GET | /api/session | `?project=`, `?directory=` or `?parent=` |
+| GET | /api/session | `?project=`, `?directory=` or `?parent=`; `?archived=` exclude/only/include |
 | POST | /api/session | `{project? or directory? or parent?, agent?, title?, model?, permission?, effort?}` |
 | GET/PATCH/DELETE | /api/session/{id} | one session; PATCH `{agent?, title?, model?, permission?, effort?}` |
+| POST | /api/session/{id}/archive | archive the whole root tree (child ids get 400) |
+| POST | /api/session/{id}/unarchive | unarchive the whole root tree |
 | POST | /api/session/{id}/model | `{model}`; `""` returns to the agent's or default model |
 | POST | /api/session/{id}/agent | `{agent}` |
 | POST | /api/session/{id}/workspace-tools | activate the two workspace control tools (idempotent) |
@@ -88,6 +90,14 @@ async def _body(request: Request) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError("request body must be a JSON object")
     return data
+
+
+def _archive_filter(request: Request) -> str:
+    """`?archived=exclude` (default), `only` or `include` for session lists."""
+    mode = request.query_params.get("archived") or "exclude"
+    if mode not in ("exclude", "only", "include"):
+        raise ValueError("archived must be 'exclude', 'only' or 'include'")
+    return mode
 
 
 def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
@@ -179,13 +189,15 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                                              permission=body.get("permission"), effort=body.get("effort"), agent=body.get("agent"),
                                              parent=parent, disabled_tools=body.get("disabled_tools"))
             return JSONResponse(runtime.session_json(session))
+        archived = _archive_filter(request)
         if request.query_params.get("parent"):
             runtime.session(request.query_params["parent"])
-            return JSONResponse([runtime.session_json(s) for s in runtime.store.children(request.query_params["parent"])])
+            return JSONResponse([runtime.session_json(s) for s in runtime.store.children(
+                request.query_params["parent"], archived=archived)])
         project_id = request.query_params.get("project")
         if request.query_params.get("directory"):
             project_id = runtime.open_project(request.query_params["directory"]).id
-        return JSONResponse([runtime.session_json(s) for s in runtime.store.sessions(project_id)])
+        return JSONResponse([runtime.session_json(s) for s in runtime.store.sessions(project_id, archived=archived)])
 
     async def session(request: Request) -> Response:
         sid = p(request, "id")
@@ -222,6 +234,14 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         sid = p(request, "id")
         runtime.activate_workspace_tools(sid, source="api")
         return JSONResponse(runtime.session_json(runtime.session(sid)))
+
+    async def session_archive(request: Request) -> Response:
+        sid = p(request, "id")
+        return JSONResponse(runtime.session_json(runtime.archive_session(sid, archived=True)))
+
+    async def session_unarchive(request: Request) -> Response:
+        sid = p(request, "id")
+        return JSONResponse(runtime.session_json(runtime.archive_session(sid, archived=False)))
 
     async def session_directory(request: Request) -> Response:
         sid = p(request, "id")
@@ -356,6 +376,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),
         Route("/api/session/{id}/agent", route(session_agent), methods=["POST"]),
         Route("/api/session/{id}/workspace-tools", route(session_workspace_tools), methods=["POST"]),
+        Route("/api/session/{id}/archive", route(session_archive), methods=["POST"]),
+        Route("/api/session/{id}/unarchive", route(session_unarchive), methods=["POST"]),
         Route("/api/session/{id}/directory", route(session_directory), methods=["POST"]),
         Route("/api/session/{id}/worktrees", route(session_worktrees), methods=["GET", "POST"]),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),

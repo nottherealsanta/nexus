@@ -192,6 +192,7 @@ class Runtime:
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
+            "archived": bool(s.archived),
             "created": s.created, "updated": s.updated,
         }
 
@@ -409,6 +410,15 @@ class Runtime:
                        disabled_tools: list[str] | None = None) -> Session:
         if permission not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
+        if parent is not None:
+            # A caller may hold an immutable Session fetched before archiving.
+            parent = self.session(parent.id)
+        if parent is not None and parent.archived:
+            root = self._root(parent)
+            raise Conflict(
+                f"session {parent.id} is archived; unarchive its root tree (session {root.id}) "
+                "before creating a child session"
+            )
         if disabled_tools is None and parent is not None:
             disabled_tools = sorted(parent.disabled())
         if disabled_tools is not None:
@@ -542,6 +552,25 @@ class Runtime:
             return
         stored = self.store.append_message(session_id, Message("user", (Text(text),)))
         self.bus.publish("message.added", message_json(stored), session_id=session_id)
+
+    def _notify(self, session_id: str, text: str) -> None:
+        """Deliver an automatic notice without waking an archived session.
+
+        Busy: before the next model call. Idle: start a turn (the existing
+        behavior). Archived: save the model-visible notice as context but do not
+        call the provider; it is present when the user later unarchives and
+        resumes.
+        """
+        session = self.store.session(session_id)
+        if session is None:
+            return
+        if session.archived:
+            stored = self.store.append_message(session_id, Message("user", (Text(text),)))
+            self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        elif session_id in self.turns:
+            self.inboxes.setdefault(session_id, []).append(text)
+        else:
+            self.prompt(session_id, text)
 
     def activate_workspace_tools(self, session_id: str, *, source: str = "tool") -> str:
         """Make `change_session_directory` and `worktree` available; idempotent per session."""
@@ -791,6 +820,37 @@ class Runtime:
             raise NotFound(f"no session {session_id}")
         self.bus.publish("session.deleted", {"id": session_id}, session_id=session_id)
 
+    def archive_session(self, session_id: str, *, archived: bool) -> Session:
+        """Archive or unarchive one whole root tree, atomically and idempotently.
+
+        Nothing is interrupted: a running turn (or a pending question/approval)
+        anywhere in the tree refuses the operation. Data, directories, worktrees,
+        snapshots and background jobs are untouched; archive state is one column.
+        """
+        session = self.session(session_id)
+        if session.parent_id is not None:
+            root = self._root(session)
+            raise ValueError(
+                f"session {session_id} is a child session; archive and unarchive operate on a whole tree: "
+                f"use its root session {root.id}"
+            )
+        ids = self.store.tree_ids(session_id)
+        busy = next((sid for sid in ids
+                     if sid in self.turns or self.pending_approvals(sid) or self.pending_questions(sid)), None)
+        if busy is not None:
+            raise Conflict(
+                f"cannot {'archive' if archived else 'unarchive'} session tree {session_id}: session {busy} "
+                "is running a turn or waiting for the user; interrupt it first"
+            )
+        ids, changed = self.store.set_tree_archived(session_id, archived)
+        if changed:
+            self.bus.publish(
+                "session.archived" if archived else "session.unarchived",
+                {"root": session_id, "sessions": ids, "archived": archived},
+                session_id=session_id,
+            )
+        return self.session(session_id)
+
     def context(self, session_id: str) -> dict[str, Any]:
         """The request body the next turn would send, with no new user message."""
         agent = self._agent(self.session(session_id))
@@ -830,11 +890,7 @@ class Runtime:
         self.bus.publish("bash.finished", data, session_id=job.session_id)
         if self.store.session(job.session_id) is None:
             return
-        notice = self._job_notice(job)
-        if job.session_id in self.turns:
-            self.inboxes.setdefault(job.session_id, []).append(notice)
-        else:
-            self.prompt(job.session_id, notice)
+        self._notify(job.session_id, self._job_notice(job))
 
     @staticmethod
     def _job_notice(job: Job) -> str:
@@ -999,7 +1055,7 @@ class Runtime:
                 agent=agent, parent=parent, parent_call_id=call_id, launched_by="agent",
                 disabled_tools=sorted(parent.disabled()),
             )
-        except ValueError as exc:
+        except (ValueError, Conflict) as exc:
             raise ToolError(str(exc)) from exc
         wait = args.get("wait", True) is not False
         if not wait:
@@ -1037,13 +1093,16 @@ class Runtime:
             return
         notice = f"[Notification: child session finished]\n{self._child_report(child_id)}"
         self.bus.publish("session.notified", {"from": child_id, "text": notice}, session_id=parent_id)
-        if parent_id in self.turns:
-            self.inboxes.setdefault(parent_id, []).append(notice)
-        else:
-            self.prompt(parent_id, notice)
+        self._notify(parent_id, notice)
 
     def prompt(self, session_id: str, text: str) -> None:
         session = self.session(session_id)
+        if session.archived:
+            root = self._root(session)
+            raise Conflict(
+                f"session {session_id} is archived; unarchive its root tree (session {root.id}) before starting a turn "
+                f"(nexus session unarchive {root.id} or POST /api/session/{root.id}/unarchive)"
+            )
         if session_id in self.turns:
             raise Busy(f"session {session_id} is already running a turn")
         if not text.strip():

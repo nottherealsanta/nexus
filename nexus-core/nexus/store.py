@@ -56,7 +56,8 @@ create table if not exists session (
   parent_id text references session(id) on delete cascade,
   parent_call_id text,
   launched_by text not null default 'user',
-  disabled_tools text not null default '[]'
+  disabled_tools text not null default '[]',
+  archived integer not null default 0
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -95,6 +96,14 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{int(time.time() * 1000):x}{secrets.token_hex(4)}"
 
 
+def _archive_clause(mode: str) -> str:
+    """SQL for a session-list archive filter (`exclude`, `only` or `include`)."""
+    try:
+        return {"exclude": " and archived = 0", "only": " and archived = 1", "include": ""}[mode]
+    except KeyError as exc:
+        raise ValueError("archived must be 'exclude', 'only' or 'include'") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Project:
     id: str
@@ -120,6 +129,7 @@ class Session:
     parent_call_id: str | None = None  # the parent's tool call that launched it
     launched_by: str = "user"  # "user" | "agent"
     disabled_tools: str = "[]"  # JSON list of tool names turned off for this session
+    archived: int = 0  # 0/1; archive/unarchive applies to the whole tree
 
     def disabled(self) -> set[str]:
         return set(json.loads(self.disabled_tools or "[]"))
@@ -155,6 +165,8 @@ class Store:
             self.db.execute("alter table session add column launched_by text not null default 'user'")
         if "disabled_tools" not in columns:  # databases from before per-session tool switches
             self.db.execute("alter table session add column disabled_tools text not null default '[]'")
+        if "archived" not in columns:  # databases from before session archiving: existing sessions stay live
+            self.db.execute("alter table session add column archived integer not null default 0")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
 
     def close(self) -> None:
@@ -228,20 +240,60 @@ class Store:
                 (session_id, json.dumps(snapshot), time.time()),
             )
 
-    def sessions(self, project_id: str | None = None) -> list[Session]:
+    def sessions(self, project_id: str | None = None, *, archived: str = "include") -> list[Session]:
+        """Sessions of one project or all, filtered by archive state.
+
+        `archived` is `include` (the storage default, all sessions), `exclude` or
+        `only`. The HTTP API applies `exclude` by default. Archive state is
+        stored on every session of a tree, so filtering rows filters trees.
+        """
+        clause = _archive_clause(archived)
         if project_id:
-            rows = self.db.execute("select * from session where project_id = ? order by updated desc", (project_id,))
+            rows = self.db.execute(
+                f"select * from session where project_id = ?{clause} order by updated desc", (project_id,))
         else:
-            rows = self.db.execute("select * from session order by updated desc")
+            rows = self.db.execute(f"select * from session where 1{clause} order by updated desc")
         return [Session(**r) for r in rows]
 
     def session(self, session_id: str) -> Session | None:
         row = self.db.execute("select * from session where id = ?", (session_id,)).fetchone()
         return Session(**row) if row else None
 
-    def children(self, session_id: str) -> list[Session]:
-        rows = self.db.execute("select * from session where parent_id = ? order by created", (session_id,))
+    def children(self, session_id: str, *, archived: str = "include") -> list[Session]:
+        clause = _archive_clause(archived)
+        rows = self.db.execute(
+            f"select * from session where parent_id = ?{clause} order by created", (session_id,))
         return [Session(**r) for r in rows]
+
+    def tree_ids(self, session_id: str) -> list[str]:
+        """The session and all of its descendants, root first."""
+        rows = self.db.execute(
+            "with recursive tree(id, depth) as (select id, 0 from session where id = ?"
+            " union all select s.id, tree.depth + 1 from session s join tree on s.parent_id = tree.id)"
+            " select id from tree order by depth, id",
+            (session_id,),
+        )
+        return [r["id"] for r in rows]
+
+    def set_tree_archived(self, session_id: str, archived: bool) -> tuple[list[str], bool]:
+        """Atomically set archive state for `session_id`'s whole tree.
+
+        Returns (tree ids, changed). Repeating the same state changes nothing and
+        reports `changed: False`, so callers can avoid duplicate transition events.
+        """
+        ids = self.tree_ids(session_id)
+        if not ids:
+            return [], False
+        marks = ", ".join("?" * len(ids))
+        with self.db:
+            rows = self.db.execute(f"select id, archived from session where id in ({marks})", ids).fetchall()
+            changed = any(bool(row["archived"]) != archived for row in rows)
+            if changed:
+                self.db.execute(
+                    f"update session set archived = ? where id in ({marks})",
+                    (1 if archived else 0, *ids),
+                )
+        return ids, changed
 
     def ancestors(self, session_id: str) -> list[str]:
         """Ids from the parent up to the root (empty for a root session)."""

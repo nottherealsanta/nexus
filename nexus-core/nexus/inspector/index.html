@@ -140,7 +140,7 @@ function setHash() {
 
 // -- sidebar --------------------------------------------------------------------
 async function loadSidebar() {
-  [S.projects, S.sessions] = await Promise.all([api("/api/project"), api("/api/session")]);
+  [S.projects, S.sessions] = await Promise.all([api("/api/project"), api("/api/session?archived=include")]);
   renderSidebar();
   await loadKernels();
   await loadJobs();
@@ -197,7 +197,8 @@ function renderSidebar() {
   for (const s of S.sessions) { const k = s.parent_id || ""; if (!byParent.has(k)) byParent.set(k, []); byParent.get(k).push(s); }
   const row = (s) => h("div", {},
     h("a", { class: "srow" + (s.id === S.sel ? " sel" : ""), onclick: () => select(s.id) },
-      h("span", { class: "t" }, h("span", { class: "dot" + (s.status === "busy" ? " busy" : "") }), s.title),
+      h("span", { class: "t" }, h("span", { class: "dot" + (s.status === "busy" ? " busy" : "") }), s.title,
+        s.archived ? h("span", { class: "pill" }, "archived") : null),
       h("span", { class: "m" }, `${s.agent} · ${s.model}${s.launched_by === "agent" ? " · launched by agent" : ""}`)),
     (byParent.get(s.id) || []).length ? h("div", { class: "kids" }, byParent.get(s.id).sort((a, b) => a.created - b.created).map(row)) : null);
   for (const p of S.projects) {
@@ -242,6 +243,7 @@ function render() {
       "model", `${s.model}  (from ${s.model_source})`,
       "effort", s.effort ? `${s.effort}  (from ${s.effort_source})` : `provider default`,
       "permission", s.permission,
+      "archive state", s.archived ? h("span", { class: "warn" }, "archived (readable; unarchive before running)") : "active",
       "tools", (s.tools || []).join(", ") || "none",
       "disabled tools", (s.disabled_tools || []).join(", ") || "none",
       "snapshot", s.snapshot && !s.snapshot.error ? `${s.snapshot.origin} · ${time(s.snapshot.created)}` : (s.snapshot ? h("span", { class: "err" }, s.snapshot.error) : "–"),
@@ -472,6 +474,9 @@ function live() {
     if (e.type === "code.cell" || e.type === "kernel.deleted") loadKernels();
     if (e.type === "bash.started" || e.type === "bash.finished") loadJobs();
     if (e.type.startsWith("session.") || e.type.startsWith("project.")) { clearTimeout(sideTimer); sideTimer = setTimeout(loadSidebar, 200); }
+    if ((e.type === "session.archived" || e.type === "session.unarchived") && S.sel) {
+      api(`/api/session/${S.sel}`).then((s) => { S.session = s; renderSoon(); }).catch(() => {});
+    }
     if (S.session && e.session_id === S.session.id) {
       S.events.push(e);
       if (e.type === "message.added") S.messages.push(e.data);
@@ -484,7 +489,7 @@ function live() {
     }
   };
   for (const type of ["message.added", "session.created", "session.updated", "session.snapshot", "session.deleted", "session.status", "session.error", "session.notified",
-    "session.workspace_tools", "session.directory_changed", "worktree.listed", "worktree.created", "worktree.deleted",
+    "session.workspace_tools", "session.directory_changed", "session.archived", "session.unarchived", "worktree.listed", "worktree.created", "worktree.deleted",
     "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "question.asked", "question.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
     "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
     source.addEventListener(type, handle);

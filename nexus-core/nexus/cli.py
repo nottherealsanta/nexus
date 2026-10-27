@@ -5,7 +5,8 @@ Local commands (no daemon): `login`, `logout`, `status`, `models`, `serve`,
 
 Daemon clients (they start the daemon if it is not running and talk to it over
 `/api/*`): `project`, `session`, `workspace`, `run`, `chat`. They render the daemon's event
-stream. Every tool call is shown with each argument labelled, every result with
+stream. `session` can archive/unarchive a whole tree and filter lists by archive
+state. Every tool call is shown with each argument labelled, every result with
 its size, and any clipping is announced. `--wire` also prints the exact
 request (credentials redacted) and every server-sent event from the provider;
 `--wire-file` appends the same as JSONL. In chat, `/context` prints the request
@@ -165,9 +166,17 @@ class Renderer:
 async def _open_session(client: Client, args: argparse.Namespace) -> dict[str, Any]:
     if args.session:
         session = await client.call("GET", f"/api/session/{args.session}")
+        if session["archived"]:
+            root = session
+            while root.get("parent_id"):
+                root = await client.call("GET", f"/api/session/{root['parent_id']}")
+            raise ValueError(
+                f"session {args.session} is archived; unarchive its root tree first: "
+                f"nexus session unarchive {root['id']}")
     else:
         project = await client.call("POST", "/api/project", {"path": str(Path(args.workspace).resolve())})
-        existing = await client.call("GET", "/api/session", project=project["id"]) if getattr(args, "cont", False) else []
+        existing = (await client.call("GET", "/api/session", project=project["id"], archived="exclude")
+                    if getattr(args, "cont", False) else [])
         session = existing[0] if existing else await client.call(
             "POST", "/api/session", {"project": project["id"], "model": args.model, "effort": args.effort, "agent": args.agent})
     if args.agent and session["agent"] != args.agent:
@@ -499,14 +508,16 @@ async def _session(args: argparse.Namespace) -> None:
     try:
         if args.action == "list":
             project = None if args.all else (await client.call("POST", "/api/project", {"path": str(Path(args.workspace).resolve())}))["id"]
-            found = await client.call("GET", "/api/session", project=project)
+            archived = "only" if args.archived_only else ("include" if args.include_archived else "exclude")
+            found = await client.call("GET", "/api/session", project=project, archived=archived)
             kids: dict[str | None, list[dict[str, Any]]] = {}
             for s in found:
                 kids.setdefault(s["parent_id"], []).append(s)
 
             def show(s: dict[str, Any], depth: int) -> None:
                 who = "" if s["launched_by"] == "user" else f" {DIM}(launched by agent, call {s['parent_call_id']}){RESET}"
-                print(f"{'  ' * depth}{'└ ' if depth else ''}{s['id']}  {s['status']:<4}  {s['agent']:<8} {s['model']:<28} {s['title']}{who}")
+                archived_mark = f" {YELLOW}[archived]{RESET}" if s["archived"] else ""
+                print(f"{'  ' * depth}{'└ ' if depth else ''}{s['id']}  {s['status']:<4}  {s['agent']:<8} {s['model']:<28} {s['title']}{who}{archived_mark}")
                 for child in sorted(kids.get(s["id"], []), key=lambda c: c["created"]):
                     show(child, depth + 1)
             for s in kids.get(None, []):
@@ -520,6 +531,10 @@ async def _session(args: argparse.Namespace) -> None:
         elif args.action == "rm":
             await client.call("DELETE", f"/api/session/{args.id}")
             print(f"deleted {args.id}")
+        else:  # archive | unarchive
+            session = await client.call("POST", f"/api/session/{args.id}/{args.action}")
+            state = "archived" if session["archived"] else "unarchived"
+            print(f"{state} {session['id']} (whole tree)")
     finally:
         await client.close()
 
@@ -678,9 +693,12 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("name", nargs="?")
     agent.add_argument("--workspace", default=".")
     session = sub.add_parser("session", aliases=["sessions"], help="sessions of the current project; `sessions inspector` opens the web inspector")
-    session.add_argument("action", choices=["list", "show", "rm", "inspector"])
+    session.add_argument("action", choices=["list", "show", "rm", "archive", "unarchive", "inspector"])
     session.add_argument("id", nargs="?")
     session.add_argument("--all", action="store_true", help="sessions of every project")
+    archive_filter = session.add_mutually_exclusive_group()
+    archive_filter.add_argument("--archived-only", action="store_true", help="list only archived trees")
+    archive_filter.add_argument("--include-archived", action="store_true", help="include archived and unarchived trees")
     session.add_argument("--workspace", default=".")
     session.add_argument("--no-open", action="store_true", help="inspector: print the URL instead of opening a browser")
     workspace = sub.add_parser("workspace", help="workspace controls through the API: expose, directory, worktrees")
@@ -735,7 +753,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_open:
                 webbrowser.open(url)
         elif args.command in ("session", "sessions"):
-            if args.action in ("show", "rm") and not args.id:
+            if args.action in ("show", "rm", "archive", "unarchive") and not args.id:
                 parser.error(f"session {args.action} needs an id")
             asyncio.run(_session(args))
         elif args.command == "workspace":

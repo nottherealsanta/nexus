@@ -18,7 +18,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
 | [inspector.md](inspector.md) | The session inspector web page: four levels of detail down to raw events |
 | [api.md](api.md) | The HTTP API every surface speaks, and its event stream |
-| [daemon.md](daemon.md) | The daemon, projects, sessions, turns, approvals, questions, the CLI as a client |
+| [daemon.md](daemon.md) | The daemon, projects, sessions, turns, approvals, questions, session archiving, the CLI as a client |
 
 ## Find it by task
 
@@ -43,5 +43,6 @@ doc and the code disagree, the code wins: fix the doc.
 | Session snapshots, frozen prompts, `AGENTS.md` | [agents.md](agents.md#session-snapshots), [agents.md](agents.md#the-instruction-file) |
 | Seeing what happened in a session, down to the wire | [inspector.md](inspector.md) |
 | Child sessions, who launched whom | [daemon.md](daemon.md#session-trees-who-launched-whom) |
+| Archiving a session tree, list filters, notices while archived | [daemon.md](daemon.md#session-archiving), [api.md](api.md#archive-and-session-lists) |
 | An endpoint, the event stream, a new client | [api.md](api.md) |
 | Starting or finding the daemon, projects, sessions, storage, interrupts | [daemon.md](daemon.md) |

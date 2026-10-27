@@ -114,12 +114,14 @@ Core work (PLAN.md Step 10).
 ### Archive and delete
 
 - **Archive** hides a session tree from the default list. Nothing is removed;
-  it can be unarchived and resumed. Archiving a busy session is refused until
-  it is idle or interrupted.
+  it can be unarchived and resumed. Archiving a busy session (or any descendant)
+  is refused until it is idle or interrupted.
 - **Delete** removes the session, its whole subtree, its one-turn sessions and
   its stored events. It asks for confirmation through the unified alert
   (naming how many child sessions go with it). There is no undo.
-- Worktree cleanup when a session in a worktree is archived or deleted: TBD.
+- Worktree cleanup when a session in a worktree is archived or deleted: archiving
+  never touches a worktree; delete removes only the session record and its
+  history. Deleting a worktree stays an explicit control operation.
 
 ### Files
 
@@ -606,7 +608,7 @@ raw events inline.
 
 Tracked in PLAN.md. In short: session drafts and starting context; frozen
 system prompt; `ask` tool and question events; steer and queue; one-turn
-sessions (title, btw); handoff instead of compaction; on-demand directory and worktree tools; archive, delete, search index; files, file read/write and
+sessions (title, btw); handoff instead of compaction; on-demand directory and worktree tools; archive (done), delete, search index; files, file read/write and
 git status endpoints; attachments and images in both dialects; transcription
 (maybe); API version in `/api/info`; stream resume; sign-in and settings over
 the API; skills and MCP (including default browser-use); web search/fetch;

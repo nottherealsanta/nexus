@@ -581,8 +581,8 @@ exception; tool/MCP changes append guidance and update later request schemas
 without rewriting the frozen prompt.
 
 **Remaining in this step:** warn before an agent switch (the API currently
-switches directly); export/archive are not started. Workspace controls,
-directory moves and worktree operations are done below.
+switches directly); export is not started. Archive is done below. Workspace
+controls, directory moves and worktree operations are done below.
 
 **Workspace controls: on-demand exposure, directory moves and worktrees (done
 2026-10-27; review pending).** This increment implements
@@ -659,6 +659,63 @@ start export/archive, event recovery, web tools, skills or MCP.
   cannot detect an arbitrary external process using the path. There is no merge/integrate operation and no worktree permission
   setting. A directory move is not confined to the project; it accepts any
   existing directory the user can reach.
+
+**Session-tree archiving (done 2026-10-27; delivery reviewed).** This increment
+implements `archive`/`unarchive` for a whole root tree. It does not start export,
+event recovery, web tools, skills or MCP.
+
+- **Storage.** `session.archived` (`0`/`1`, not null) is added by migration; an
+  existing database opens with every session unarchived. Every session of a root
+  tree carries the same state. `Store.set_tree_archived` updates the root and all
+  descendants in one SQLite transaction and reports whether anything changed.
+  Archive state is distinct from `status` and changes no message, event,
+  snapshot, file observation, directory, worktree, branch or background job.
+- **Lifecycle.** `POST /api/session/{id}/archive` and `/unarchive` take the root
+  id and are idempotent; a child id gets 400 naming the root. A root or
+  descendant running a turn, waiting for an approval or waiting for an `ask`
+  answer gets 409 and is not interrupted. A prompt on an archived session gets
+  409 with the unarchive command; creating a child under it gets 409. Unarchive
+  restores availability without starting a turn. Archived sessions remain fully
+  readable through explicit session, tree, children, message, event and snapshot
+  reads.
+- **Lists and CLI.** `GET /api/session` adds `?archived=exclude` (default),
+  `only` or `include`, applying to project, directory and parent lists. CLI:
+  `nexus session archive|unarchive ID`, `session list --archived-only` and
+  `--include-archived`; `--all` still means every project. `-c`/`--continue`
+  skips archived sessions, and an explicit archived `--session` exits with an
+  unarchive command.
+- **Events and notifications.** One `session.archived`/`session.unarchived`
+  event names the root, the tree ids and the new state; it is stored in the
+  root's log. Repeating an unchanged operation publishes nothing. A background
+  job that finishes while its session is archived still publishes
+  `bash.finished` and saves the model-visible notice as a user message, without
+  calling the provider; the notice is present after unarchive.
+  The inspector loads archived sessions, shows an `archived` pill and header
+  field separately from busy/idle, and refreshes on the transition events.
+- **Verified offline** with isolated homes, scripted providers, temporary
+  workspaces and real Git repositories: migration and restart persistence;
+  whole-tree atomic archive/unarchive; idempotency and one transition event;
+  busy-root and busy-descendant refusals; approval and question waits; child-only
+  rejection; default/only/include filters; explicit reads; prompt and child
+  creation refusals; unarchive without a turn; background completion notice
+  without a provider call; continuation selection; preserved files, worktree,
+  branch, snapshots and observations; API 401/400/404/409 responses. Full suite:
+  190 tests after delivery review; Ruff and `git diff --check` clean. No live provider run was
+  performed; the inspector changes were script-syntax-checked, not re-run
+  visually.
+- **Limitations.** The transition event is stored in the root's log, so a client
+  subscribed only to a descendant's event stream does not receive it (global and
+  root-tree subscribers do). Archive state has no timestamp, bulk project
+  operation or automatic worktree cleanup: archiving deliberately never removes
+  a worktree. Background jobs still finish and are not restarted by unarchive.
+
+**Archive delivery review.** Independently reran suite and lint. Child creation
+now reloads a cached parent before checking archive state, so an old Session
+object cannot bypass the refusal. Added tests for this, arbitrary-depth busy
+checks, whole-tree state changes and retained notices in archived descendants.
+Final suite: 190 passing; Ruff and whitespace checks clean. No new live provider
+or browser visual run was performed. Root-only transition delivery remains the
+documented limitation for descendant-only subscribers.
 
 **Instruction file (done in the foundation above; directory transitions added
 above).** `AGENTS.md` is read directly
@@ -848,8 +905,8 @@ deletion and session deletion must not silently remove one another's state.
 
 **Also in this step (from INTERFACE_PLAN.md):** export (Markdown transcript,
 JSON of messages and events), archive/unarchive, and delete (already
-cascades). No fork or revert: a session only moves forward. Export and
-archive are not started in this increment.
+cascades). No fork or revert: a session only moves forward. Archive is done
+below; export is not started in this increment.
 
 ### Step 11: event log follow-ups
 
@@ -1006,8 +1063,9 @@ documented in `docs/api.md`.
   `AGENTS.md`, tools, skills, MCP) with token counts, and accepts edits
   (switches, agent, model, prompt override) before the first message freezes
   it.
-- **Archive, search.** `archived` on sessions; search over session titles and
-  user message text only (an SQLite FTS5 index of exactly those fields).
+- **Archive, search.** `archived` on sessions is done (Step 10). Search over
+  session titles and user message text only (an SQLite FTS5 index of exactly
+  those fields) remains.
 - **Files and git.** List a project directory (lazy, one level, gitignore
   aware), read and write a file (confined to the project), git status and
   per-file diff of a session's directory.
@@ -1101,6 +1159,7 @@ show the wire view, the session tree and kernels.
 | A session always ran in its project path | A session can move to any existing directory; the project identity is unchanged and children inherit the move (done 2026-10-27) | Worktrees and sibling checkouts without pretending they are new projects |
 | A directory change rewrote context | The move is announced forward, the destination `AGENTS.md` is loaded then, and earlier prompts/messages stay byte-for-byte (done 2026-10-27) | A cached prefix stays stable |
 | Worktrees were created and removed by hand or without checks | Git argument arrays, real worktree metadata, dirty/main/in-use refusals and no branch deletion (done 2026-10-27) | Never destroy a checkout, a session's directory or an unrelated directory |
+| Sessions had no archive state | `archived` on every session of a root tree; one atomic idempotent transition, default/only/include list filters, and notices that do not wake an archived tree (done 2026-10-27) | Hide finished work without deleting it, stopping jobs or losing context |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1127,6 +1186,8 @@ Work one reviewed increment at a time:
 4. Add on-demand workspace controls and directory/worktree operations — done
    2026-10-27; see Step 10 (`expose_workspace_tools`,
    `change_session_directory`, `worktree`, API and CLI).
+4a. Add session-tree archive/unarchive, list filters, CLI commands and archived
+   notification handling — done 2026-10-27; see Step 10.
 5. Durable events, restart recovery, idempotent requests and `/continue`.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
@@ -1163,6 +1224,10 @@ Do not start the next increment until the current review is complete.
   checks session directories and pending moves, not arbitrary `bash` or external
   processes using the worktree. There is no merge/integrate or branch-cleanup
   operation and no worktree permission setting.
+- Archive transitions are stored in the root session's event log only; a client
+  subscribed solely to a descendant stream does not see the root's transition.
+  Archive has no bulk/project operation, timestamp or worktree cleanup (by
+  design archiving never deletes one), and background jobs keep running.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
 - The `event` table grows without limit (every token delta is a row); no retention yet.

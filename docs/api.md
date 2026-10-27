@@ -37,11 +37,13 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/project/{id}` | | `Project` |
 | PATCH | `/api/project/{id}` | `{name}` | `Project` |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
-| GET | `/api/session` | `?project=`, `?directory=` or `?parent=` | `[Session]` |
+| GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
 | POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
 | GET | `/api/session/{id}` | | `Session` |
 | PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?, disabled_tools?}` (`""` clears model or effort) | `Session` |
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
+| POST | `/api/session/{id}/archive` | | `Session` for the whole root tree; idempotent |
+| POST | `/api/session/{id}/unarchive` | | `Session` for the whole root tree; idempotent |
 | POST | `/api/session/{id}/model` | `{model}`; `""` returns to the agent's or default model | `Session` |
 | POST | `/api/session/{id}/agent` | `{agent}` | `Session` |
 | POST | `/api/session/{id}/workspace-tools` | | `Session`; activates the two on-demand workspace tools (idempotent) |
@@ -80,6 +82,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "starting_directory": "/abs/path",               // frozen into the system prompt
  "directory_changed": false, "directory_change": null,  // or {from, to, status: "pending", source}
  "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…,
+ "archived": false,                                // archive is separate from busy/idle status
  "snapshot": {"version": 2, "origin": "created", "created": 1793…, "directory": "/abs/path",
               "agent": {"name": "build", "source": "project", "path": "…/build.md", "fingerprint": "sha256:…"},
               "instructions": {"path": "…/AGENTS.md", "status": "loaded", "bytes": 123, "sha256": "sha256:…"},
@@ -129,6 +132,38 @@ cancellation. Shapes and limits: [tools.md](tools.md#ask).
 or `allow` (nothing asks). Session-directory edits are approval-free by fixed
 policy; see [tools.md](tools.md#read-observations-and-freshness). `status` is
 `busy` while a turn runs.
+
+### Archive and session lists
+
+Archive state is per root tree: `POST …/archive` and `POST …/unarchive` apply
+to the named root and every descendant in one transaction and are idempotent.
+A child-only request gets 400 naming its root; the operation must start from
+the root. The response is the root `Session` with `archived` set. Repeating an
+operation that changes nothing returns 200 with no transition event.
+
+`GET /api/session` filters by `archived`:
+
+| Value | Returns |
+| --- | --- |
+| `exclude` (default, or omitted) | unarchived sessions only; archived trees are hidden |
+| `only` | archived sessions only |
+| `include` | every archived and unarchived session |
+
+The filter applies to `?project=`, `?directory=` and `?parent=` lists; for
+`?parent=` it filters the direct children. Any other value is 400. Explicit
+`GET …/session/{id}`, `…/tree`, `…/children`, `…/message`, `…/event` and
+`…/snapshot` ignore archive state, so an archived session stays readable and
+inspectable.
+
+Archiving is refused with 409 while the root or any descendant is running a
+turn or waiting for an approval or question; nothing is interrupted. Archived
+sessions refuse a prompt (409, naming the unarchive command) and refuse a new
+child in the tree (409) until unarchived. Unarchive restores availability but
+does not start a turn. Archive state never deletes messages, events, snapshots,
+file observations, directories, worktrees or branches, and it does not stop a
+background bash job. A background job's finish notice is stored as context but
+does not wake an archived session; it is present when the user later unarchives
+and resumes.
 
 ### Workspace controls
 
@@ -185,6 +220,7 @@ log with `?after=<last event id>`.
 | `session.created` / `session.updated` | `Session` |
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}` |
+| `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
 | `session.status` | `{status: "busy" or "idle"}`, before and after each turn |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
