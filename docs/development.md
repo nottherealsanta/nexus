@@ -7,12 +7,16 @@ PLAN.md           the plan, principles, ledger of changes from old Nexus
 AGENTS.md         instructions for agents; points to docs/
 docs/             this documentation
 nexus-core/       Python (uv): everything that is not a UI
-nexus-tui/        placeholder for the Rust Ratatui client
-nexus-nsh/        placeholder for the NSH client
+nexus-tui/        Rust Ratatui client (its README has build, run and test steps)
+nexus-nsh/        NSH web/desktop client (TSX; its README has build and test steps)
+interface/        shared command manifest, theme and capability matrix for both clients
 ```
 
-`nexus-tui/` and `nexus-nsh/` hold no code yet. Clients will speak only the
-HTTP API ([api.md](api.md)).
+The clients speak only the HTTP API ([api.md](api.md)). They never read SQLite,
+provider credentials or Nexus state files; only the local bootstrap discovers and
+starts the daemon. Both build from `interface/manifest.toml` and
+`interface/theme.toml`; check edits with `python3 interface/check_manifest.py` and
+`python3 interface/check_theme.py`.
 
 Inside `nexus-core/` (a uv project: `pyproject.toml`, `uv.lock`, `.python-version`):
 

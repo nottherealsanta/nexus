@@ -92,8 +92,8 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
   tests/
 nexus-search/     Local SearXNG container configuration: Docker and Apple container
 nexus-browser/    Default browser-use MCP configuration and setup (upstream server)
-nexus-tui/        Ratatui terminal client (Rust). Not started
-nexus-nsh/        NSH client: browser, desktop, iOS. Not started
+nexus-tui/        Ratatui terminal client (Rust): shell, timeline, commands (README)
+nexus-nsh/        NSH client (TSX): browser + desktop, same interface (README)
 ```
 
 Nexus Core runs as a daemon and exposes everything over HTTP (`docs/api.md`).
@@ -1739,11 +1739,248 @@ Before release, explicitly check off:
 
 ### Step 12: clients
 
-Ratatui TUI (`nexus-tui/`) first, then NSH (`nexus-nsh/`), both on the HTTP
-API and both built to one spec: [INTERFACE_PLAN.md](INTERFACE_PLAN.md) (layout,
-sidebars, new-session view, timeline, tool and child-session rendering,
-waiting-for-input, composer, palette, alerts, connection, settings). Both
-show the wire view, the session tree and kernels.
+Build the Ratatui TUI (`nexus-tui/`) first, then the shared NSH web and desktop
+app (`nexus-nsh/`); adapt the same app to iOS after the desktop interaction is
+stable. Both speak only the Core HTTP API. [INTERFACE_PLAN.md](INTERFACE_PLAN.md)
+is the shared product specification; this section is the implementation order.
+
+Progress (2026-10-27, current increment):
+12.1 is delivered as `interface/` (`capability-matrix.md`,
+`reference-inventory.md`, `manifest.toml` + `check_manifest.py`). 12.2 is
+delivered through item 3 (`theme.toml`, `check_theme.py`, the "Design language"
+section; gallery captures are partial). 12.3 is complete and 12.4 is largely
+delivered in `nexus-tui/`: supervisor and state, both sidebars and drawers, the
+palette/settings/alerts shell, the waiting card and composer, and the timeline
+(starting context, turns and footers, folding, reasoning, Markdown, tool rows
+with diffs/output/raw, child cards, notices, diagnostics). Selecting a session
+loads all messages, retained diagnostics and the snapshot (paged to the end,
+keeping the newest 20,000 events and announcing retention, the cap or a failed
+page; live messages are merged, and every resync reloads it); model/effort/agent
+pickers, export, directory change, copy actions, turn navigation and inspector
+links are wired. The TUI has 113 tests, `cargo clippy --all-targets -D warnings`
+passes and `cargo fmt --check` is clean.
+
+12.5 is partial: `nexus-nsh/` has the same shell and timeline against a real
+Core through its host proxy, with the same timeline, catalog pickers for
+model/effort/agent and export, built from the shared manifest/theme; its 13 browser
+interaction tests pass (`nsh test --target web`), the host proxy's hardening
+tests pass (`npm run test:host`), `nsh check` is clean, and the
+packaged app builds. `e2e/` captures 390x844, 1024x768 and 1440x900 in dark and
+light.
+
+Core: `/api/info` now reports `api_version: {major, minor}` (clients halt on a
+major mismatch). The remaining matrix gaps still need Step 12a decisions
+(approval choices beyond allow/deny, message paging, durable usage totals, write
+previous content, interrupt-cancel event for approvals, agent `mode` over HTTP,
+catalog refresh over HTTP, project-level worktree list). Still client work for
+12.4: Files/editor and Git (also blocked on Core file endpoints), worktree UI,
+settings editing beyond theme, and search; steer/queue, btw, handoff, one-turn
+sessions, attachments, dictation, skills/MCP and sign-in over the API remain
+Core or later increments.
+
+**Design brief.** Use `../nexus` as the primary TUI reference: a recognizably
+similar working environment, substantially more polished. Give Nexus a coherent
+design language across terminal, browser and desktop. This is substantial design
+work with its own review milestones, not a final theme pass. Web and desktop
+follow the TUI's information architecture, terminology, settings order and
+control locations as closely as possible. They may show more information and
+richer previews inside the same structure. Additional information must come from
+Core and be labelled as context or inspection; never invent model context.
+
+#### 12.1 — Audit references and freeze the shared interface map
+
+1. Read all of `INTERFACE_PLAN.md` and the matching Core API, event, tool and
+   inspector docs. Make a capability matrix: API ready, Core work required,
+   client work required, or explicitly deferred. Required flows blocked by
+   Steps 11, 11a or 12a need a Core increment, not client-owned Nexus state.
+2. Inspect the old TUI deliberately: `../nexus/rust/tui/src/render/` (chrome,
+   context, sessions, dialogs and feedback), `sidebar.rs`, `details_sidebar.rs`,
+   `settings_page/`, `markdown.rs`, `editor.rs`, `../nexus/rust/widgets/src/`
+   (theme, geometry, focus, controls and glyphs), and
+   `../nexus/docs/ratatui-parity.md`. Use its screenshots and runnable app for
+   visual comparison when available. Record what to retain, improve and omit.
+   Old Nexus's AGENTS.md, host bridge, configuration and state model do not
+   apply; never read `~/.nexus`. Copy code deliberately with attribution and a
+   ledger entry for changed behavior.
+3. Freeze a screen map and command/settings manifest shared by both builds:
+   stable IDs, labels, order, placement, keybindings, enabled conditions and
+   unavailable reasons. Share data and fixtures; choose shared Rust logic only
+   where it actually reduces duplication. Do not couple the renderers.
+4. Fix navigation anchors in both clients: left sidebar toggle at the leading
+   edge of the workspace header, session title/breadcrumbs in the centre,
+   right sidebar toggle at the trailing edge. Keep both toggles available when
+   their sidebar is closed. Left tabs are Sessions, Files, Projects in that
+   order; Settings stays at the bottom of the left sidebar and in the palette.
+   Narrow layouts turn sidebars into drawers while retaining those anchors.
+5. Settings order is Appearance → Providers → Models → Agents → Tools → Skills
+   → MCP → Context → Dictation → Keybindings → Notifications → About. Within
+   each section, shared settings retain the same relative order. Client-only
+   rows, such as NSH font size, are labelled and inserted in the appropriate
+   section, not used to reorganize it. Unavailable sections explain why.
+
+Completion: a reference inventory, capability matrix and shared navigation map;
+a user can describe an action's location once for all clients.
+
+#### 12.2 — Establish the Nexus design language
+
+1. Extend `INTERFACE_PLAN.md` with design tokens, component anatomy and state
+   examples before building full screens. Establish quiet neutral surfaces,
+   readable primary text, restrained accent use, consistent spacing and clear
+   hierarchy. Use colour plus labels/glyphs for status. Context notices,
+   user text, agent text and execution diagnostics need distinguishable roles.
+2. Define shared semantic tokens: canvas, panel, raised surface, primary and
+   secondary text, border, accent, focus, selection, success, warning, error,
+   additions and deletions. Supply light/dark themes and a monochrome terminal
+   mapping. Define terminal cell spacing and NSH pixel/typography scales from
+   the same hierarchy; do not mechanically translate every cell to pixels.
+3. Specify header, session row, context section, turn header/footer, tool row,
+   child card, composer, waiting card, settings row, dialog, banner and toast.
+   Include default, focused, selected, hovered, pressed, disabled, loading,
+   error and empty states. Align labels, counts, status marks and key hints.
+4. Build a fixture-driven component gallery in the real renderers. Use the
+   same sample session for cross-client comparisons. Review composition first:
+   full workspace, starting context, streaming turn, tool expansion, child
+   navigation, waiting input, settings and disconnected state. Then refine
+   typography, padding, borders, truncation, colour and micro-interaction.
+5. Capture light/dark at terminal 80×24, 120×36 and 160×48, NSH 390×844,
+   1024×768 and 1440×900. Treat these as initial review sizes, not fixed
+   breakpoints. Add short-height, text-scaling, Unicode and long-label cases.
+   Keep a visible issue list and iterate until hierarchy and interaction feel
+   consistent. Screenshot coverage alone is not visual acceptance.
+
+Completion: a reviewed design language and representative real UI screens;
+no collection of independently styled panels or unfinished placeholder states.
+
+#### 12.3 — Build the TUI shell and API client
+
+1. Scaffold an independent Rust project with pinned dependencies and documented
+   build/run commands. Use Ratatui and a terminal input backend; separate API
+   transport, event reduction, view state, layout, rendering and actions.
+2. Implement Core discovery/auth, version handshake, durable SSE cursors,
+   snapshot resync, keyed mutations and revision conflicts using Step 11's
+   contracts. Clients never read SQLite, provider credentials or session files.
+   Only the local bootstrap may discover/start Core through its documented
+   mechanism. Distinguish starting, connecting, live, reconnecting, offline,
+   authentication failure and incompatible API states.
+3. Build the header, both sidebars, centre view, composer, palette, settings
+   navigation and unified alerts. Keep focus explicit; overlays restore their
+   trigger's focus and scroll position. Use common geometry for drawing and
+   hit-testing. Resize without stale hit targets or losing the draft.
+4. Establish mouse and keyboard parity; define shortcut precedence so text
+   editing, dialogs, back navigation and interrupt do not compete for Esc.
+   Handle terminal restoration on errors, suspend/resume, bracketed paste,
+   Unicode display widths, ASCII glyph fallbacks, NO_COLOR and reduced motion.
+
+Completion: a usable keyboard-first shell against a fixture daemon and real
+Core, with reliable connection state, navigation and terminal cleanup.
+
+#### 12.4 — Deliver the TUI's complete session flows
+
+1. Implement project/session selection, worktree grouping, search, rename,
+   archive/unarchive, export and confirmed deletion. Preserve the selected row,
+   filters and position across updates. Clearly distinguish loading, empty,
+   filtered-empty and failed states.
+2. Implement draft starting-context inspection and configuration, then the
+   ordered timeline: all model-visible context, streamed replies, reasoning,
+   tool arguments/results, notices, child launches and handoff links. Keep wire
+   and retry diagnostics explicitly separate. Folding never removes context.
+3. Implement tool-specific expansion, nested `code` calls, kernel inspection,
+   background job evidence, clipping labels and full-artifact retrieval. A UI
+   preview limit must never be confused with a model-context limit.
+4. Implement the multiline composer, paste and attachments, slash completion,
+   steer/queue, explicit continue and handoff against their Core endpoints.
+   Add the unified waiting card for root/child questions and approvals; expose
+   only supported actions, with explanations for unavailable ones.
+5. Add child breadcrumbs/back navigation, files/editor with stale-save
+   protection, Git status/diff, settings, provider sign-in, skills/MCP controls,
+   notifications and inspector/wire links. Retain the initial right sidebar's
+   Session info and Git status scope; extra future sections require a spec change.
+6. Verify scroll anchors while streaming, expanding tools and loading history.
+   Follow only at the bottom; jump-to-latest restores following. Preserve
+   positions per session and restore the parent at its child card.
+
+Completion: run the agreed first-release journeys entirely in the TUI. Any
+missing capability is explicitly deferred in the matrix, not represented by a
+button that appears to work. Review and polish this reference before NSH parity.
+
+#### 12.5 — Validate NSH and build web/desktop from the same interface
+
+Read these upstream docs before choosing implementation details (reviewed
+2026-10-27; recheck against the pinned version when building):
+[getting started](https://nsh.dev/docs/getting-started/),
+[Rust](https://nsh.dev/docs/rust/),
+[design](https://nsh.dev/docs/design-guides/),
+[web](https://nsh.dev/docs/web/),
+[macOS](https://nsh.dev/docs/macos/),
+[networking](https://nsh.dev/docs/networking/),
+[components](https://nsh.dev/elements/) and
+[testing](https://nsh.dev/docs/testing-and-trace/).
+
+1. Pin a tested NSH release/revision and record platform requirements. Spike
+   authenticated streaming SSE, cancellation, clipboard, input/IME, virtualized
+   variable-height content, Markdown, editor/diff and accessibility in a browser
+   and an actual desktop window. Choose Rust, TSX or a mixed app from evidence:
+   current networking docs distinguish Rust whole-response fetch from TSX
+   streaming responses. Prove a supported streaming path on both targets before
+   committing to an all-Rust transport. Record gaps and supported fallbacks.
+2. Build one NSH app for web and desktop, using NSH base components for focus,
+   menus, dialogs, tabs and panels, styled with the Nexus tokens. NSH's web
+   backend uses HTML/CSS; macOS uses native AppKit views. Keep platform adapters
+   narrow: window chrome, native menus, clipboard, notifications, file pickers
+   and keyboard conventions. Do not build a separate web information architecture.
+3. Implement the TUI shell and journeys in the same order using the shared
+   manifest and fixtures. Preserve sidebar-toggle locations, section order,
+   waiting-card position, command names and child navigation. Native menus and
+   browser shortcuts may provide additional entry points to the same commands.
+4. Use graphical space for readable typography, inline images, richer metadata,
+   hover detail, selectable text, resizable panels and wide split diffs. Keep
+   summaries and primary actions in their familiar places. Additional details
+   belong in existing expansions or inspection panels; they must not move a
+   common action or introduce a competing settings taxonomy.
+5. Resolve browser hosting and connection behavior explicitly: same-origin
+   serving or documented Core origin policy, bearer-token acquisition/refresh,
+   HTTPS/mixed-content restrictions, and authenticated SSE transport. A browser
+   cannot read `daemon.json` or spawn the daemon. Offer the supported connection
+   flow and actionable startup instructions; do not silently broaden Core's
+   loopback binding or introduce a device-registration workflow.
+6. Test the packaged web app and native desktop bundle against Core. Establish
+   macOS first and list other desktop targets as verified or deferred; upstream
+   platform support alone does not establish Nexus support. Keep iOS on the
+   same navigation hierarchy, with drawers, safe areas and software-keyboard
+   handling; decide remote Core access/deployment before claiming mobile ready.
+
+Completion: browser and desktop run the same product with the TUI's navigation
+and semantics, richer presentation, and documented platform capabilities.
+
+#### 12.6 — Cross-client polish, parity and release checks
+
+1. Run the same scenario fixtures across clients: first run/sign-in; starting
+   context; normal and long streaming turns; nested tools; child questions;
+   denial/cancellation; directory change; queued input; archive/export; stale
+   file save; handoff; disconnect/restart/resync; expired history and conflicts.
+   Compare command IDs, settings order, placement, context order and outcomes.
+2. Add focused reducer/transport tests, Ratatui buffer and PTY interaction tests,
+   and NSH headless interaction tests. Exercise real terminal/browser/native
+   window input as well: automated snapshots do not establish IME, clipboard,
+   selection, accessibility or visual polish. Reuse event fixtures, not Core
+   business logic. Record exact commands with the chosen toolchain.
+3. Check keyboard-only operation, visible focus, restoration, readable contrast,
+   reduced motion, screen-reader labels on NSH, large text and narrow layouts.
+   Resize during streaming, a dialog and a pending answer. Background activity
+   must not steal focus or scroll position.
+4. Measure a large timeline and session list on named hardware: startup,
+   first usable frame, input latency during streaming, scroll smoothness, idle
+   CPU and memory. Set budgets from the initial spike and track regressions.
+   Virtualize/paginate without hiding context or losing selection/anchors.
+5. Perform side-by-side visual review of TUI, web and desktop in light/dark,
+   including errors and empty states. Close design issues through repeated
+   real-app captures. Publish the capability matrix, packaging/run instructions,
+   deliberate deferrals and verification evidence. Update this plan, the shared
+   interface spec and current implementation docs as each increment lands.
+
+Step 12 is complete when the agreed flows work across the supported clients,
+navigation transfers directly between them, and the design and real interaction
+checks pass. Feature presence alone does not satisfy the polish requirement.
 
 ## Changes from old Nexus (ledger)
 
