@@ -21,6 +21,15 @@ from pty_cleanup import kill_group
 BINARY = Path(__file__).resolve().parents[1] / "rust/tui/target/debug/nexus-ratatui"
 
 
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_native_message_is_visible_while_turn_start_is_delayed(tmp_path):
+    """A one-second startup delay must not delay the submitted user card."""
+    from ratatui_latency_probe import scenario_benchmark
+
+    result = scenario_benchmark("slow-start", tmp_path)
+    assert result["enter_to_text_ms"] < 200, result["enter_to_text_ms"]
+
+
 def _screen_row(probe, text):
     from ratatui_screen import Screen
     screen = Screen(40, 140)

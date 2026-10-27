@@ -972,6 +972,30 @@ def _queue_lines(view, slot_wait=None):
     return [escape_controls(row) for row in rows]
 
 
+def _starting_input_blocks(view, slot_wait=None):
+    """Show the durable head input while turn startup has not consumed it yet.
+
+    The queue controls omit this input because it is already starting. Keep its
+    user card visible instead, with the same identity as the consumed message.
+    """
+    queue = view.input_queue
+    if not queue or len(_waiting_inputs(view, slot_wait)) == len(queue):
+        return []
+    from ...view.model import MessageView
+    from ...view.reduce import _user_blocks
+    from ...ui_support.timeline import _clock, submitted_attachment_summary
+
+    item = queue[0]
+    message = MessageView(role="user", blocks=_user_blocks(item.content))
+    prompt, chips = submitted_attachment_summary(message)
+    first, _, rest = _user_prompt(prompt).partition("\n")
+    return _safe_blocks([{
+        "id": f"message:input:{item.queued_id}:user", "kind": "user",
+        "title": first, "text": rest, "chips": chips, "gap": 1,
+        "status": "starting", "sent_at": _clock(item.sent_ts),
+    }])
+
+
 
 
 def _queue_items(view, slot_wait=None):
@@ -1309,6 +1333,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         blocks.extend(turn_blocks)
     cards_before(float("inf"))
     notices_before(float("inf"))
+    if not on_agent_page:
+        blocks.extend(_starting_input_blocks(view, slot_wait))
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
     from ...ui_support.timeline import agent_state_label
     for agent in () if on_agent_page else view.agents.values():
@@ -1558,7 +1584,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         elif not _scheduled:
             stream_turn = False
         if event is not False and event is not None:
-            immediate = event.type in {"permission.requested", "permission.resolved", "question.requested", "question.answered", "question.resolved", "tool.requested", "turn.completed", "turn.failed"}
+            immediate = event.type in {
+                "permission.requested", "permission.resolved", "question.requested", "question.answered",
+                "question.resolved", "tool.requested", "turn.completed", "turn.failed", "turn.started",
+                "input.queued", "input.started", "input.consumed", "input.dropped", "input.mode_changed", "input.moved",
+            }
         if not immediate and event is not None:
             if event is not False and event is not None:
                 controller.ingest(event)

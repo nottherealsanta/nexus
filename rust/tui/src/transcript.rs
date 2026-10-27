@@ -318,6 +318,8 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         tags.push("subagent report".to_string());
     } else if b.status == "followup" {
         tags.push("from root".to_string());
+    } else if b.status == "starting" {
+        tags.push("starting…".to_string());
     }
     if b.number > 0 {
         tags.push(format!("#{}", b.number));
@@ -1337,6 +1339,19 @@ mod tests {
         rows.iter()
             .map(|row| row.iter().map(|c| c.g.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn starting_user_card_discloses_that_the_turn_has_not_started() {
+        let card = Content {
+            kind: "user".into(),
+            title: "New message".into(),
+            status: "starting".into(),
+            ..Default::default()
+        };
+        let rows = build(&card, 80, &Palette::new(false));
+        let text = rows.iter().map(|(line, _)| line.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("New message") && text.contains("starting…"), "{text}");
     }
 
     #[test]

@@ -781,6 +781,46 @@ def test_idle_send_never_projects_as_a_queued_or_steer_item():
     assert [i["id"] for i in _queue_items(_running_view([item(1)]))] == ["id1"]
 
 
+def test_starting_input_card_survives_startup_and_becomes_the_consumed_card():
+    from nexus.events import Event
+    from nexus.view import apply, fold
+
+    events = [Event(type="input.queued", seq=1, session="s", data={
+        "queued_id": "q1", "mode": "steer", "content": [
+            {"type": "text", "text": "fix this\nsecond line"},
+            {"type": "text", "text": "\n\nAttachment: document 1 · notes.txt\n\nEvidence"},
+        ]}), Event(type="turn.started", seq=2, session="s", turn="t1", data={})]
+    view = initial_state("s")
+
+    def cards(state):
+        return [b for b in project(SimpleNamespace(view=state, session="s"), 1)["blocks"] if b["kind"] == "user"]
+
+    for event in events:
+        view = apply(view, event)
+        pending, = cards(view)
+        assert pending["title"] == "fix this" and pending["text"] == "second line"
+        assert pending["status"] == "starting"
+        assert pending["chips"] == ["document 1 · notes.txt · 8 B"]
+    consumed = Event(type="input.consumed", seq=3, session="s", turn="t1",
+                     data={"queued_id": "q1", "turn": "t1"})
+    view = apply(view, consumed)
+    final, = cards(view)
+    assert final["id"] == pending["id"]
+    assert final["title"] == pending["title"] and final["chips"] == pending["chips"]
+    assert final.get("status") != "starting"
+    assert cards(fold([*events, consumed])) == cards(view)
+
+
+def test_starting_input_is_not_duplicated_for_busy_or_slot_waiting_sessions():
+    from nexus.ui.ratatui.prototype import _starting_input_blocks
+    from nexus.view.model import QueuedInputView
+
+    item = QueuedInputView(queued_id="q", content=[{"type": "text", "text": "pending"}])
+    assert not _starting_input_blocks(_running_view([item]))
+    idle = SimpleNamespace(input_queue=[item], phase="idle", active_turn=None)
+    assert not _starting_input_blocks(idle, {"waiting": 1})
+
+
 def test_session_parked_on_the_global_turn_cap_keeps_its_head_entry():
     """Idle + slot wait: nothing started, so the head is a waiting message, not the turn's own input."""
     from types import SimpleNamespace

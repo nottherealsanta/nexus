@@ -41,6 +41,14 @@ async def main(count, scenario="stream"):
         provider._scripts=[[MessageStart(), *[tick for _ in range(60)], MessageStop("end_turn")]]
         facade=HostFacade(runtime)
         handle=runtime.session(SESSION_ID)
+        if scenario == "slow-start":
+            original_start = handle.start_turn
+
+            async def delayed_start(*args, **kwargs):
+                await asyncio.sleep(1)
+                return await original_start(*args, **kwargs)
+
+            handle.start_turn = delayed_start
         if scenario != "stream":
             from nexus.model.providers.scripted import Wait, text_response, tool_response
             if scenario == "shell":
@@ -68,7 +76,7 @@ async def main(count, scenario="stream"):
                 handle.append_event(Event(type=original.type,data=data,turn=f"history-{index}"))
         async def start():
             await asyncio.sleep(float(os.environ.get("NEXUS_LIVE_SETTLE", "1")))
-            if scenario in {"idle", "worktree"}:
+            if scenario in {"idle", "worktree", "slow-start"}:
                 print("READY_FOR_ENTER", file=sys.stderr, flush=True)
                 return
             if scenario in {"interrupt", "shell"}:
@@ -97,6 +105,6 @@ async def main(count, scenario="stream"):
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser();parser.add_argument("--history",type=int,default=10)
-    parser.add_argument("--scenario", choices=["stream", "idle", "worktree", "interrupt", "shell"], default="stream")
+    parser.add_argument("--scenario", choices=["stream", "idle", "worktree", "slow-start", "interrupt", "shell"], default="stream")
     args = parser.parse_args()
     asyncio.run(main(args.history, args.scenario))

@@ -160,7 +160,7 @@ def scenario_benchmark(scenario, output):
     result = {"scenario": scenario}
     try:
         deadline = time.monotonic() + 20
-        if scenario in {"idle", "worktree"}:
+        if scenario in {"idle", "worktree", "slow-start"}:
             while b"READY_FOR_ENTER" not in probe.output and time.monotonic() < deadline:
                 time.sleep(.005)
             assert b"READY_FOR_ENTER" in probe.output, bytes(probe.output[-2000:])

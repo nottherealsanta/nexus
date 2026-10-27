@@ -37,7 +37,15 @@ async def fixture():
     process = await asyncio.create_subprocess_exec(str(binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     snapshot = project(controller, 1, shell=shell)
     state = os.environ.get("NEXUS_RATATUI_STATE", "")
-    if state == "local_disclosure":
+    if state == "starting":
+        from nexus.view.model import QueuedInputView
+
+        controller.view.input_queue = [QueuedInputView(
+            queued_id="starting-preview", mode="steer", content=[
+                {"type": "text", "text": "Fix the delay before a sent message appears.\nThis message is already saved while the turn starts."},
+            ])]
+        snapshot = project(controller, 1, shell=shell, literal=False)
+    elif state == "local_disclosure":
         shell.local_transcript = True
         snapshot = project(controller, 1, shell=shell, literal=False)
     elif state.startswith("redesign-"):

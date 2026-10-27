@@ -103,6 +103,7 @@ def main():
         browser = playwright.chromium.launch()
         try:
             captures = (("ratatui", "tests/ratatui_browser_demo.py", ""),
+                                         ("ratatui-starting", "tests/ratatui_browser_demo.py", "starting"),
                                          ("ratatui-permission", "tests/ratatui_browser_demo.py", "permission"),
                                          ("ratatui-picker", "tests/ratatui_browser_demo.py", "picker"),
                                          ("ratatui-panel", "tests/ratatui_browser_demo.py", "panel"), ("ratatui-light", "tests/ratatui_browser_demo.py", "light"), ("ratatui-diff", "tests/ratatui_browser_demo.py", "diff"), ("ratatui-tool", "tests/ratatui_browser_demo.py", "tool"), ("ratatui-settings", "tests/ratatui_browser_demo.py", "settings"),

@@ -1,6 +1,13 @@
 # Plan 18: Remove the delay before a new message (and a steer→interrupt promotion) shows up
 
-Status: implemented measurement fixtures, acceptance incomplete. Idle Enter→prompt p95 is 78.944 ms; first worktree prompt p95 is 135.465 ms, above the 100 ms target. Interrupt marker frame correlation remains missing, and **the end-to-end cause is not yet confirmed**. No production host scheduling change was justified. Source: root
+Status: starting-message visibility fixed; broader acceptance incomplete. The native
+projection now shows the durable head input as a `starting…` user card while
+admission waits, preserving its consumed-message identity. Queue lifecycle events
+flush immediately. With turn startup delayed by one second, a local real-host PTY
+sample improved from 1178.613 ms with the starting card disabled to 62.652 ms with
+it enabled. This is a controlled single-sample comparison, not p95 or daemon-socket
+coverage. Interrupt marker frame correlation remains missing. No production host
+scheduling change was needed. Source: root
 `TODO.md` item 11, quoted unchanged:
 
 > - new messages takes a second to show up ( remove the lag ) (same for steer to interupt promotion )
