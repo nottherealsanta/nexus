@@ -102,6 +102,7 @@ name = "nexus10"
 version = "0.10.0.dev0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "httpx" },
     { name = "pydantic-monty" },
     { name = "pyyaml" },
@@ -118,6 +119,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.15.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-monty", specifier = "==1.1.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },

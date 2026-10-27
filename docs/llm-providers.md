@@ -238,8 +238,8 @@ with the finish reason as `detail`. Usage maps `prompt_tokens`,
 
 `redact_headers` (in `responses.py`, used by both dialects) replaces the value
 with `***` for these header names, compared case-insensitively:
-`authorization`, `chatgpt-account-id`, `x-openai-internal-codex-residency`,
-`x-api-key`. It is applied to the request headers in `WireRequest` and to the
+`authorization`, `proxy-authorization`, `cookie`, `set-cookie`,
+`chatgpt-account-id`, `x-openai-internal-codex-residency`, `x-api-key`. It is applied to the request headers in `WireRequest` and to the
 response headers in `WireResponse`. The real headers are used for the HTTP call.
 
 Not redacted: the session header, `x-initiator`, and grok's `x-xai-token-auth`,

@@ -35,6 +35,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/tree | the whole tree containing it, from its root, nested |
 | GET | /api/session/{id}/context | the request body the next turn would send |
 | GET | /api/session/{id}/snapshot | the full frozen session snapshot |
+| GET | /api/session/{id}/export | `?format=markdown or json&scope=session or tree`: a read-only export of one session or its descendants |
 | GET | /api/session/{id}/permission | pending tool approvals |
 | POST | /api/session/{id}/permission/{pid} | `{reply: "allow" | "deny"}` → 204 |
 | GET | /api/question | every pending `ask` question request |
@@ -45,19 +46,23 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+from anyio import CancelScope
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from . import export
 from .bus import Bus
 from .codec import to_json
 from .llmhub import catalog
@@ -98,6 +103,50 @@ def _archive_filter(request: Request) -> str:
     if mode not in ("exclude", "only", "include"):
         raise ValueError("archived must be 'exclude', 'only' or 'include'")
     return mode
+
+
+_EXHAUSTED = object()
+
+
+def _next_chunk(iterator: Iterator[str]) -> Any:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _EXHAUSTED
+
+
+async def _stream_export(iterator: Iterator[str]) -> AsyncIterator[str]:
+    """Run the synchronous export generator off the event loop and always close it."""
+    try:
+        while True:
+            pending = asyncio.create_task(run_in_threadpool(_next_chunk, iterator))
+            try:
+                chunk = await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                # Do not close a generator/SQLite view while its worker is still
+                # executing the current chunk.
+                with CancelScope(shield=True), suppress(Exception):
+                    await asyncio.shield(pending)
+                raise
+            if chunk is _EXHAUSTED:
+                break
+            yield chunk
+    finally:
+        iterator.close()
+
+
+class ExportResponse(StreamingResponse):
+    """Release the read transaction even when sending response headers fails."""
+
+    def __init__(self, *args: Any, view: export.ExportView, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.export_view = view
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.export_view.close()
 
 
 def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
@@ -285,6 +334,28 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def snapshot(request: Request) -> Response:
         return JSONResponse(runtime.snapshot_json(p(request, "id")))
 
+    async def session_export(request: Request) -> Response:
+        sid = p(request, "id")
+        runtime.session(sid)  # 404 before opening the read-only view
+        format_, scope = export.check_options(
+            request.query_params.get("format"), request.query_params.get("scope"))
+        try:
+            view = export.ExportView(runtime.store.path, sid, scope, running=set(runtime.turns))
+        except KeyError as exc:
+            raise NotFound(str(exc)) from exc
+        chunks = export.stream(view, format_)
+        name = export.filename(sid, scope, format_, view.boundary.generated)
+        return ExportResponse(
+            _stream_export(chunks), view=view,
+            media_type=export.MEDIA_TYPES[format_],
+            headers={
+                "content-disposition": f'attachment; filename="{name}"',
+                "cache-control": "no-store",
+                "x-nexus-export-format-version": str(export.FORMAT_VERSION),
+                "x-nexus-export-boundary": f"event:{view.boundary.event_id};seq:{view.boundary.seq}",
+            },
+        )
+
     async def permissions(request: Request) -> Response:
         runtime.session(p(request, "id"))
         return JSONResponse(runtime.pending_approvals(p(request, "id")))
@@ -388,6 +459,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),
         Route("/api/session/{id}/snapshot", route(snapshot)),
+        Route("/api/session/{id}/export", route(session_export)),
         Route("/api/session/{id}/permission", route(permissions)),
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
         Route("/api/session/{id}/question", route(questions)),

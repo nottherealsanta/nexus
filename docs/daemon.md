@@ -88,6 +88,33 @@ log) with the tree ids; repeating the same state publishes nothing.
   `?archived=only` returns archived trees and `?archived=include` returns both.
   Explicit session, tree, message, event and snapshot reads ignore the filter.
 
+## Session export
+
+`nexus session export ID` is an API client for `GET /api/session/{id}/export`
+([api.md](api.md#session-export)). It writes a Markdown transcript or a
+structured JSON document for the selected session (`--scope session`, the
+default) or that session and its descendants (`--scope tree`). It never reads
+SQLite and never calls a provider. `--format` is required.
+
+```sh
+nexus session export ses_… --format markdown --output transcript.md
+nexus session export ses_… --format json --scope tree --output session.json
+nexus session export ses_… --format markdown            # stdout (or --output -)
+```
+
+- **Files.** An existing destination is refused unless `--force` is passed. The
+  download goes to a temporary `.part` file in the same directory and is
+  published only after the complete response (exclusive hard link without
+  `--force`, atomic replacement with it); a failure removes it and leaves any
+  earlier destination untouched. Without `--output` (or with `-`) the export is
+  written to stdout.
+- **Archived trees.** They export as they are and are not unarchived.
+- **Running trees.** The daemon captures one read boundary and labels the
+  session's durable partial state; the turn continues. The CLI does not wait for
+  or interrupt it.
+- **Large logs.** The daemon pages the stored event log internally and streams
+  the response; the CLI does not use the `/event` page limit.
+
 ## Session trees: who launched whom
 
 Each session records `launched_by` (`user` or `agent`), `parent_id` and
@@ -168,6 +195,8 @@ nexus chat --wire                   # also print every request and provider even
 nexus session list [--all] | show ID | rm ID
 nexus session archive ID | unarchive ID
 nexus session list --archived-only | --include-archived
+nexus session export ID --format markdown --output transcript.md
+nexus session export ID --format json --scope tree --output session.json
 nexus project list | open [PATH]
 ```
 

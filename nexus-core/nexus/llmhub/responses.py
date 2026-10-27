@@ -41,7 +41,8 @@ from .types import (
     WireResponse,
 )
 
-REDACTED_HEADERS = {"authorization", "chatgpt-account-id", "x-openai-internal-codex-residency", "x-api-key"}
+REDACTED_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "chatgpt-account-id",
+                    "x-openai-internal-codex-residency", "x-api-key"}
 ERROR_BODY_CHARS = 4_000
 CACHE_KEY_MAX = 64
 

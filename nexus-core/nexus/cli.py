@@ -5,8 +5,9 @@ Local commands (no daemon): `login`, `logout`, `status`, `models`, `serve`,
 
 Daemon clients (they start the daemon if it is not running and talk to it over
 `/api/*`): `project`, `session`, `workspace`, `run`, `chat`. They render the daemon's event
-stream. `session` can archive/unarchive a whole tree and filter lists by archive
-state. Every tool call is shown with each argument labelled, every result with
+stream. `session` can archive/unarchive a whole tree, filter lists by archive
+state and export a session or tree as Markdown or JSON. Every tool call is shown
+with each argument labelled, every result with
 its size, and any clipping is announced. `--wire` also prints the exact
 request (credentials redacted) and every server-sent event from the provider;
 `--wire-file` appends the same as JSONL. In chat, `/context` prints the request
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import codecs
 import contextlib
 import io
 import json
@@ -25,6 +27,7 @@ import re
 import select
 import signal
 import sys
+import tempfile
 import threading
 import webbrowser
 from pathlib import Path
@@ -531,12 +534,79 @@ async def _session(args: argparse.Namespace) -> None:
         elif args.action == "rm":
             await client.call("DELETE", f"/api/session/{args.id}")
             print(f"deleted {args.id}")
+        elif args.action == "export":
+            await _export(client, args)
         else:  # archive | unarchive
             session = await client.call("POST", f"/api/session/{args.id}/{args.action}")
             state = "archived" if session["archived"] else "unarchived"
             print(f"{state} {session['id']} (whole tree)")
     finally:
         await client.close()
+
+
+async def _export(client: Client, args: argparse.Namespace) -> None:
+    """Download an export through the API, atomically when writing a file.
+
+    The file is written to a temporary name in the destination directory and
+    renamed only after the whole response succeeded, so a failed or interrupted
+    download never leaves a partial file that looks like a finished export.
+    """
+    if not args.format:
+        raise ValueError("session export needs --format markdown or json")
+    target = Path(args.output).expanduser() if args.output and args.output != "-" else None
+    if target is not None:
+        if target.is_dir():
+            raise ValueError(f"{target} is a directory")
+        if (target.exists() or target.is_symlink()) and not args.force:
+            raise ValueError(f"{target} already exists; pass --force to overwrite it")
+        if not target.parent.is_dir():
+            raise ValueError(f"directory does not exist: {target.parent}")
+    temp: Path | None = None
+    handle = None
+    written = 0
+    try:
+        if target is not None:
+            fd, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".part", dir=target.parent)
+            temp = Path(name)
+            handle = os.fdopen(fd, "wb")
+        async with client.download(
+            f"/api/session/{args.id}/export", format=args.format, scope=args.scope
+        ) as response:
+            if handle is None:
+                decoder = codecs.getincrementaldecoder("utf-8")("replace")
+                async for chunk in response.aiter_bytes():
+                    written += len(chunk)
+                    sys.stdout.write(decoder.decode(chunk))
+                sys.stdout.write(decoder.decode(b"", final=True))
+                sys.stdout.flush()
+            else:
+                async for chunk in response.aiter_bytes():
+                    written += len(chunk)
+                    handle.write(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+                handle.close()
+                handle = None
+        if temp is not None and target is not None:
+            if not args.force and (target.exists() or target.is_symlink()):
+                raise ValueError(f"{target} appeared while exporting; pass --force to overwrite it")
+            if args.force:
+                os.replace(temp, target)
+            else:
+                # Same-directory hard linking publishes atomically without ever
+                # replacing a destination that appears after the final check.
+                try:
+                    os.link(temp, target)
+                except FileExistsError as exc:
+                    raise ValueError(f"{target} appeared while exporting; pass --force to overwrite it") from exc
+                temp.unlink()
+            temp = None
+            print(f"exported {args.id} ({args.scope}, {args.format}, {written} bytes) to {target}")
+    finally:
+        if handle is not None:
+            handle.close()
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 async def _workspace(args: argparse.Namespace) -> None:
@@ -693,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("name", nargs="?")
     agent.add_argument("--workspace", default=".")
     session = sub.add_parser("session", aliases=["sessions"], help="sessions of the current project; `sessions inspector` opens the web inspector")
-    session.add_argument("action", choices=["list", "show", "rm", "archive", "unarchive", "inspector"])
+    session.add_argument("action", choices=["list", "show", "rm", "export", "archive", "unarchive", "inspector"])
     session.add_argument("id", nargs="?")
     session.add_argument("--all", action="store_true", help="sessions of every project")
     archive_filter = session.add_mutually_exclusive_group()
@@ -701,6 +771,11 @@ def main(argv: list[str] | None = None) -> int:
     archive_filter.add_argument("--include-archived", action="store_true", help="include archived and unarchived trees")
     session.add_argument("--workspace", default=".")
     session.add_argument("--no-open", action="store_true", help="inspector: print the URL instead of opening a browser")
+    session.add_argument("--format", choices=["markdown", "json"], help="export: markdown transcript or structured JSON")
+    session.add_argument("--scope", choices=["session", "tree"], default="session",
+                         help="export: just this session (default), or it and its descendants")
+    session.add_argument("--output", "-o", help="export: write here instead of stdout; '-' means stdout")
+    session.add_argument("--force", action="store_true", help="export: overwrite an existing output file")
     workspace = sub.add_parser("workspace", help="workspace controls through the API: expose, directory, worktrees")
     workspace.add_argument("action", choices=["expose", "directory", "list", "create", "delete"])
     workspace.add_argument("argument", nargs="?", help="directory (directory) or worktree path (create/delete)")
@@ -753,7 +828,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_open:
                 webbrowser.open(url)
         elif args.command in ("session", "sessions"):
-            if args.action in ("show", "rm", "archive", "unarchive") and not args.id:
+            if args.action in ("show", "rm", "export", "archive", "unarchive") and not args.id:
                 parser.error(f"session {args.action} needs an id")
             asyncio.run(_session(args))
         elif args.command == "workspace":

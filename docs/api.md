@@ -58,6 +58,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | GET | `/api/session/{id}/context` | | the provider request body the next turn would send |
 | GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
+| GET | `/api/session/{id}/export` | `?format=markdown\|json&scope=session\|tree` | a read-only Markdown transcript or JSON document; see [Session export](#session-export) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
 | POST | `/api/session/{id}/permission/{pid}` | `{reply: "allow" or "deny"}` | 204 |
 | GET | `/api/question` | | every pending `ask` question request |
@@ -193,6 +194,150 @@ never deletes a branch. 400 carries Git's or the validation message; 404 is an
 unknown session.
 Limits and intent: [tools.md](tools.md#workspace-control-tools-on-demand).
 
+### Session export
+
+`GET /api/session/{id}/export` returns a read-only export of one session or its
+descendants. It is an ordinary authenticated API call: the CLI uses it, and no
+client reads SQLite.
+
+| Query | Values | Meaning |
+| --- | --- | --- |
+| `format` | `markdown`, `json` | Required. |
+| `scope` | `session` (default), `tree` | `session` exports the selected session only. `tree` exports the selected session and all of its descendants (never its ancestors or siblings), so exporting a child includes that child's own subtree. |
+
+Responses:
+
+| Format | `content-type` | Filename |
+| --- | --- | --- |
+| `markdown` | `text/markdown; charset=utf-8` | `nexus-<session id>-<scope>-<UTC timestamp>.md` |
+| `json` | `application/json; charset=utf-8` | `nexus-<session id>-<scope>-<UTC timestamp>.json` |
+
+The filename is sent as `content-disposition: attachment; filename="…"`.
+`x-nexus-export-format-version` is `1`; `x-nexus-export-boundary` reports
+`event:<event id>;seq:<bus seq>` for the read boundary. A missing or unknown
+`format` and an unknown `scope` are 400, an unknown session is 404, and a
+missing or wrong token is 401.
+
+Archived sessions export normally and are not unarchived; an archive state is
+the same before and after the export. There is no export without a session.
+
+#### Read-only contract and boundary
+
+One export opens its own SQLite connection in read-only mode and reads
+everything inside one transaction. Session rows, snapshots, messages and events
+therefore come from one coherent database view even while turns keep writing;
+the watermark (`boundary.event_id`, `boundary.seq`, per-session counts and the
+newest `session.updated`) names that view. The read transaction is held while
+the response streams. Writes after the boundary are not in the export, which is
+why a running session's export is labelled durable partial state.
+
+An export never calls a provider, starts or interrupts a turn, activates a tool,
+writes a notice or event, reconstructs a missing snapshot, or reads a workspace
+file or a credential. A running session exports what is durably stored at the
+boundary; it is not interrupted or waited for. The JSON event log may contain
+stream deltas that had not yet been saved as a message.
+
+Events are read in pages of 1,000 by event row id until a short page; this is
+not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
+parameter. Both formats stream. A large log is complete, and the export does not
+silently omit records.
+
+Only top-level transport `headers` on `wire_request` and `wire_response` events
+are passed through provider header redaction (`authorization`,
+`proxy-authorization`, `cookie`, `set-cookie`, `chatgpt-account-id`,
+`x-openai-internal-codex-residency`, `x-api-key` become `***`). This applies to
+transport metadata only; message text and tool arguments/results are preserved
+as stored, with no text-pattern redaction.
+
+#### Markdown
+
+A readable transcript. It starts with the export metadata and a tree outline,
+then one section per session, in order: the session's fields (agent, model,
+effort, directory, parent/child relationships, archive state, snapshot origin
+and instruction-file status), a snapshot note, the stored snapshot's full
+system prompt and tool definitions, and the stored messages in order. Snapshot
+instructions are labelled as the current stored snapshot, not a reconstruction
+of every historical request. Each message shows its role, id and stored sequence; parts are labelled
+`Text`, `Reasoning`, `Tool call` and `Tool result`. Reasoning shows the readable
+summary; encrypted reasoning is labelled as present but unreadable and says it
+is replayed unchanged. Tool arguments and results are fenced; arguments are
+pretty-printed only when they are valid JSON (the JSON export keeps the stored
+text exactly). A user message that starts with `[Nexus notice:` or
+`[Notification:` is labelled a context notice. Child conversations stay in
+their own session sections, never inside the parent's messages.
+
+No additional clipping is applied: existing clip notices are reproduced as
+stored. Fences are one backtick longer than any backtick run in the content, so
+content containing code fences stays valid. The Markdown export does not include
+the wire event log; use JSON for that. An empty session says no messages were
+stored. A session without a stored snapshot says so and does not reconstruct
+one.
+
+#### JSON (format version 1)
+
+```jsonc
+{
+  "format": "nexus.session-export",
+  "format_version": 1,
+  "generated": 1793…, "generated_at": "2026-10-27T12:34:56+00:00",
+  "scope": "tree", "root": "ses_…", "session_count": 2,
+  "state": {"running": false, "running_sessions": [], "durable_partial": false,
+            "note": "…"},                       // running/partial explanation
+  "boundary": {"event_id": 4200, "seq": 9000, "session_updated": 1793…,
+               "counts": {"ses_…": {"messages": 4, "events": 88}}, "note": "…"},
+  "sessions": [{
+    "session": {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path",
+                "title": "…", "model": null, "permission": "ask", "effort": null,
+                "agent": "build", "parent_id": null, "parent_call_id": null,
+                "launched_by": "user", "disabled_tools": [], "archived": false,
+                "created": 1793…, "updated": 1793…},   // model/effort null = not chosen
+    "tree": {"depth": 0, "in_export": true, "parent_in_export": false,
+             "children": ["ses_…"], "children_in_export": ["ses_…"]},
+    "snapshot": { …full stored session_snapshot, or null… },
+    "snapshot_origin": "created", "snapshot_created": 1793…,
+    "snapshot_notice": "Recorded when the session was created…",
+    "state": {"running": false, "durable_partial": false},
+    "counts": {"messages": 4, "events": 88},
+    "messages": [{"id": "msg_…", "session_id": "ses_…", "seq": 1, "created": 1793…,
+                  "role": "user", "parts": [{"type": "text", "text": "…",
+                                             "origin": null, "raw": null}]}],
+    "events": [{"id": 42, "seq": 42, "time": 1793…, "type": "text_delta",
+                "session_id": "ses_…", "data": {…}}]
+  }]
+}
+```
+
+Records keep the API shapes: `messages` is the `/message` list (ids, per-session
+`seq`, parts with `origin` and `raw`), and `events` is the stored log (event row
+`id`, bus `seq`, time, type, session id, data) in order and complete for the
+boundary. `tree.children` lists every direct child; `children_in_export` lists
+the ones included by the scope. `snapshot` is the full stored snapshot or
+`null`.
+
+The snapshot provenance is labelled, never inferred. `origin: "created"` was
+recorded when the session was created: its frozen agent prompt is the starting
+one, later explicit changes are recorded forward in the messages, and an agent
+switch replaces the snapshot. `origin: "agent-switch"` is the configuration
+rebuilt when the agent was switched, and its notice says it is not the session's
+original historical prompt. `origin: "reconstructed"` carries the reconstruction
+note. A session with no stored snapshot gets `snapshot: null` and a notice that
+the original prompt is unknown and was not reconstructed for the export.
+
+CLI:
+
+```sh
+nexus session export ID --format markdown --output transcript.md
+nexus session export ID --format json --scope tree --output session.json
+nexus session export ID --format markdown                 # stdout
+nexus session export ID --format json --scope tree -o -  # stdout ('-' too)
+```
+
+Omitting `--output` (or `-`) writes to stdout. An existing file is refused
+unless `--force` is passed. The CLI downloads through the API to a temporary
+`.part` file in the destination directory and publishes it only after the whole
+response succeeded (exclusive hard link, or atomic replacement with `--force`); a failed download removes the temporary file and leaves an
+earlier destination untouched. See [daemon.md](daemon.md#session-export).
+
 ## Event stream
 
 `GET /api/event` is `text/event-stream`. The first event is
@@ -263,8 +408,8 @@ curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.
 ## Not yet
 
 Login over the API (sign-in is the local `nexus login`), files and diffs,
-forks, compaction, resuming `/api/event` from a sequence number (use the stored
-log instead), pairing for remote clients.
+compaction and resuming `/api/event` from a sequence number (use the stored
+log instead).
 
 Worktree listing, creation and deletion exist, but merge/integration and branch
 cleanup are separate future operations. A session's directory can move anywhere
@@ -298,9 +443,8 @@ outgoing request all use the stored snapshot; they agree on `model`,
 `instructions` and `tools` at any point where the message history is unchanged. A tool switch changes later request schemas
 and appends a `[Nexus notice: tool availability changed]` user message; the
 frozen system prompt is not rewritten. An agent switch rebuilds the snapshot
-from the current files and appends `[Nexus notice: agent changed]`. A turn that
-is already running keeps the model, effort, agent, prompt and tools it started
-with.
+from the current files and appends `[Nexus notice: agent changed]`. An already-running call keeps its configuration; explicit changes apply to
+subsequent model/tool calls, including within the same turn.
 
 `disabled_tools` accepts task tools, `session`, and the three workspace control
 names. New sessions offer `expose_workspace_tools`; activating it adds

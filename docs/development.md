@@ -31,6 +31,7 @@ nexus/
   loop.py            the agent loop
   codec.py           JSON encoding of messages and events
   paths.py           home(): $NEXUS10_HOME or ~/.nexus10
+  export.py          read-only session/tree exports: Markdown and JSON
   store.py           SQLite: projects, sessions, messages, observations (~/.nexus10/nexus.db)
   bus.py             in-process event bus (seq-numbered, bounded per subscriber)
   kernels.py         daemon-owned persistent Monty kernels

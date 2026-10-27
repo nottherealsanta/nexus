@@ -78,6 +78,7 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     builtin_agents/ orchestrate, build, quick, scout, plan (.md) + NOTICE
     loop.py         the agent loop (no storage; yields MessageAdded)
     codec.py        JSON for messages and events
+    export.py       read-only Markdown/JSON exports from one SQLite snapshot
     store.py        SQLite: projects, sessions (tree), messages, events
     bus.py          event bus
     runtime.py      projects, sessions, turns, approvals, interrupts, child sessions
@@ -581,7 +582,7 @@ exception; tool/MCP changes append guidance and update later request schemas
 without rewriting the frozen prompt.
 
 **Remaining in this step:** warn before an agent switch (the API currently
-switches directly); export is not started. Archive is done below. Workspace
+switches directly). Export and archive are done below. Workspace
 controls, directory moves and worktree operations are done below.
 
 **Workspace controls: on-demand exposure, directory moves and worktrees (done
@@ -716,6 +717,91 @@ checks, whole-tree state changes and retained notices in archived descendants.
 Final suite: 190 passing; Ruff and whitespace checks clean. No new live provider
 or browser visual run was performed. Root-only transition delivery remains the
 documented limitation for descendant-only subscribers.
+
+**Session export (done 2026-10-27; delivery reviewed).** This increment implements
+Markdown and JSON export; it does not start event recovery, web tools, skills or
+MCP.
+
+- **API.** `GET /api/session/{id}/export?format=markdown|json&scope=session|tree`.
+  `format` is required; `scope` defaults to `session`. `tree` means the selected
+  session and its descendants, never ancestors or siblings. Markdown is
+  `text/markdown; charset=utf-8`; JSON is `application/json; charset=utf-8`.
+  Both send `content-disposition: attachment` with
+  `nexus-<id>-<scope>-<UTC>.<md|json>`, `x-nexus-export-format-version: 1` and
+  an `x-nexus-export-boundary: event:<id>;seq:<seq>` header. Missing/unknown
+  format or scope is 400, an unknown session 404, and the token is required.
+  Archived sessions export as they are and are not unarchived.
+- **Markdown.** A transcript: export metadata, tree outline, then one section
+  per session with its fields, parent/child links, archive state, snapshot
+  origin and instruction-file status, followed by the stored snapshot prompt and
+  tool definitions. Messages keep stored order and ids;
+  parts are labelled text, readable reasoning, tool call (arguments) and tool
+  result. Encrypted reasoning is labelled present but unreadable and replayed.
+  `[Nexus notice: …]` / `[Notification: …]` user messages are labelled context
+  notices. Child conversations stay in their own sections. Existing clipping
+  notices are reproduced; no extra clipping is applied. Fences are longer than
+  any backtick run in the content.
+- **JSON.** `nexus.session-export`, `format_version: 1`. The document carries
+  scope, root, generation time, state, boundary and a `sessions` list. Each
+  session has its stored metadata, tree links/depth, messages (the `/message`
+  shape: ids, per-session seq, parts with `origin` and `raw`), every stored
+  event in order, full stored snapshot (or `null`), snapshot origin/created,
+  a snapshot notice, per-session counts and its own running state. Snapshot
+  provenance is labelled: `created`, `agent-switch` (explicitly not the
+  original historical prompt), `reconstructed` (the existing note), or missing
+  (explicitly not reconstructed).
+- **Boundary.** The export opens its own SQLite read-only connection and reads
+  all records in one transaction; the watermark is the highest event row id,
+  highest bus seq, newest selected `session.updated` and per-session counts.
+  Writes after the boundary are excluded. A running session is labelled
+  `durable_partial` with its running ids; export neither waits for nor
+  interrupts it. Events are read in 1,000-row pages by `id > after` until a
+  short page, not at the `/event` 5,000-event API cap; both formats stream.
+- **Read-only.** Export never calls a provider, starts a turn, activates a
+  tool, appends a notice or event, reconstructs a missing snapshot, reads a
+  referenced workspace file or reads a credential. Wire transport headers
+  are passed through the provider header redaction; message and tool
+  text are preserved verbatim, with no text-pattern redaction.
+- **CLI.** `nexus session export ID --format markdown|json [--scope session|tree]
+  [--output FILE] [--force]`. Without `--output` (or with `-`) it writes stdout.
+  An existing file is refused unless `--force` is given. The download goes to a
+  temporary `.part` file in the destination directory and is published only after
+  the complete response (exclusive hard link, or replacement with `--force`); a failure removes it and leaves an earlier destination
+  untouched. The CLI is an API client and never reads SQLite.
+- **Verified offline** with scripted providers, temporary homes/workspaces and
+  direct store fixtures: both formats and headers; session and tree scopes;
+  nested children kept in separate contexts; archived export without
+  unarchiving; empty sessions; a missing snapshot labeled and left
+  unreconstructed with no snapshot or event written; a running turn's durable
+  partial output while it stayed alive; tool calls/results, reasoning, encrypted
+  reasoning, raw parts and notices; fences and unusual Unicode; 5,010 events
+  (more than one API page) complete and ordered; a read transaction that
+  ignores a later commit while a fresh view sees it; repeated-export ordering
+  and watermark stability; transport-header redaction with text preserved; no
+  provider calls or database mutations; 401/400/404 responses; and CLI file
+  creation, overwrite refusal, `--force`, stdout and failure cleanup. Full
+  suite after delivery review: 213 tests; Ruff and `git diff --check` clean. No live provider or
+  browser run was performed.
+- **Limitations.** Export does not take the daemon's writer lock: it holds one
+  WAL read snapshot for the duration of streaming, so a very large export keeps
+  the WAL from checkpointing until it finishes (writers continue).
+  Markdown omits wire events (JSON has the complete log) and intentionally does
+  not re-clip output. The JSON document can be much larger than the stored
+  database slice because events are included in full. There are no artifact or
+  attachment records to export yet. The boundary labels stored state; it does
+  not imply that interrupted or unfinished work was complete.
+
+**Export delivery review.** Independently reran suite and lint. Non-forced CLI
+publication now uses an exclusive hard link, eliminating the check/replace
+race. Redaction applies only to actual wire transport headers, preserving tool
+arguments and request bodies; cookie/proxy credential headers are now redacted
+by the shared provider helper too. Markdown includes stored snapshot prompts
+and schemas and does not claim unsent notices were already received. Response
+teardown closes the read view even before the first chunk, and cancellation
+waits for a worker before closing its generator/connection. Event pages iterate
+rows without materializing all payloads. Six regressions cover these cases.
+Final suite: 213 passing; Ruff and whitespace checks clean. No additional live
+provider or browser run was performed.
 
 **Instruction file (done in the foundation above; directory transitions added
 above).** `AGENTS.md` is read directly
@@ -905,8 +991,8 @@ deletion and session deletion must not silently remove one another's state.
 
 **Also in this step (from INTERFACE_PLAN.md):** export (Markdown transcript,
 JSON of messages and events), archive/unarchive, and delete (already
-cascades). No fork or revert: a session only moves forward. Archive is done
-below; export is not started in this increment.
+cascades). No fork or revert: a session only moves forward. Archive and export
+are done below.
 
 ### Step 11: event log follow-ups
 
@@ -1160,6 +1246,7 @@ show the wire view, the session tree and kernels.
 | A directory change rewrote context | The move is announced forward, the destination `AGENTS.md` is loaded then, and earlier prompts/messages stay byte-for-byte (done 2026-10-27) | A cached prefix stays stable |
 | Worktrees were created and removed by hand or without checks | Git argument arrays, real worktree metadata, dirty/main/in-use refusals and no branch deletion (done 2026-10-27) | Never destroy a checkout, a session's directory or an unrelated directory |
 | Sessions had no archive state | `archived` on every session of a root tree; one atomic idempotent transition, default/only/include list filters, and notices that do not wake an archived tree (done 2026-10-27) | Hide finished work without deleting it, stopping jobs or losing context |
+| Session history was inspectable but not portable | `GET /api/session/{id}/export` (Markdown transcript or versioned JSON with snapshots, messages and the complete event log), scoped to one session or its descendants, read from one SQLite read boundary (done 2026-10-27) | Take the context out without a provider call, a mutation or a silent truncation |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1188,6 +1275,8 @@ Work one reviewed increment at a time:
    `change_session_directory`, `worktree`, API and CLI).
 4a. Add session-tree archive/unarchive, list filters, CLI commands and archived
    notification handling — done 2026-10-27; see Step 10.
+4b. Add Markdown/JSON session export over the API, with an explicit read
+   boundary and CLI file handling — done 2026-10-27; see Step 10.
 5. Durable events, restart recovery, idempotent requests and `/continue`.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
@@ -1228,6 +1317,11 @@ Do not start the next increment until the current review is complete.
   subscribed solely to a descendant stream does not see the root's transition.
   Archive has no bulk/project operation, timestamp or worktree cleanup (by
   design archiving never deletes one), and background jobs keep running.
+- A session export holds one SQLite read snapshot (WAL) while streaming, so a
+  very large export delays checkpointing until it finishes; writers are not
+  blocked. Markdown omits wire events, and the JSON document (with every event)
+  can be much larger than the messages alone. Export has no attachments or
+  artifacts to include yet and does not re-clip output.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
 - The `event` table grows without limit (every token delta is a row); no retention yet.

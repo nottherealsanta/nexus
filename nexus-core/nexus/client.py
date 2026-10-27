@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -42,6 +43,20 @@ class Client:
                 message = response.text
             raise ApiError(response.status_code, message)
         return response.json() if response.content else None
+
+    @asynccontextmanager
+    async def download(self, path: str, **params: Any) -> AsyncIterator[httpx.Response]:
+        """Stream a response body; an HTTP error is raised before any bytes are used."""
+        request = self.http.stream("GET", path, params={k: v for k, v in params.items() if v is not None})
+        async with request as response:
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", "replace")
+                try:
+                    message = json.loads(body).get("error", body)
+                except (ValueError, AttributeError):
+                    message = body
+                raise ApiError(response.status_code, message)
+            yield response
 
     async def events(self, session_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
         """Server-sent events as dicts; the first is `server.connected`."""

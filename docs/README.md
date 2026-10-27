@@ -44,5 +44,6 @@ doc and the code disagree, the code wins: fix the doc.
 | Seeing what happened in a session, down to the wire | [inspector.md](inspector.md) |
 | Child sessions, who launched whom | [daemon.md](daemon.md#session-trees-who-launched-whom) |
 | Archiving a session tree, list filters, notices while archived | [daemon.md](daemon.md#session-archiving), [api.md](api.md#archive-and-session-lists) |
+| Exporting a transcript or a structured session/tree document | [api.md](api.md#session-export), [daemon.md](daemon.md#session-export) |
 | An endpoint, the event stream, a new client | [api.md](api.md) |
 | Starting or finding the daemon, projects, sessions, storage, interrupts | [daemon.md](daemon.md) |
