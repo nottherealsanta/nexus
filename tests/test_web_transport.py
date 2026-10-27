@@ -255,7 +255,10 @@ async def test_browser_ticket_cookie_csrf_and_snapshot(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_static_app_and_deep_link_are_same_origin_hardened():
+async def test_static_app_and_deep_link_are_same_origin_hardened(tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text("<title>Nexus NSH</title>")
+    (tmp_path / "engine.wasm").write_bytes(b"\0asm")
+    monkeypatch.setattr(web_module, "WEB_ROOT", tmp_path)
     server = await HTTPSSEServer(_Facade()).start()
     try:
         status, headers, body = await _request(server.port, "GET", "/s/session-1")
@@ -270,8 +273,8 @@ async def test_static_app_and_deep_link_are_same_origin_hardened():
         assert status == 200 and b"Nexus" in body
         status, _, _ = await _request(server.port, "GET", "/s/session-1/a/../../etc/passwd")
         assert status != 200  # not an app route: falls through to the authenticated API
-        status, headers, body = await _request(server.port, "GET", "/styles/tokens.css")
-        assert status == 200 and b"--" in body
+        status, headers, body = await _request(server.port, "GET", "/engine.wasm")
+        assert status == 200 and body == b"\0asm"
         assert headers["cache-control"] == "no-cache"
         status, _, _ = await _request(server.port, "GET", "/styles/../../etc/passwd")
         assert status == 404
@@ -391,5 +394,17 @@ async def test_peer_http_rejects_oversized_serialized_result(monkeypatch):
             body=p.encode_command(p.SessionExport(session="demo")),
         )
         assert status == 413 and b"command result too large" in payload
+    finally:
+        await server.aclose()
+
+
+@pytest.mark.asyncio
+async def test_nsh_missing_build_has_no_legacy_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_module, "WEB_ROOT", tmp_path)
+    server = await HTTPSSEServer(_Facade()).start()
+    try:
+        status, _, body = await _request(server.port, "GET", "/")
+        assert status == 503
+        assert b"package_nsh_web.py" in body
     finally:
         await server.aclose()

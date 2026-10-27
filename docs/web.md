@@ -1,3 +1,39 @@
+# NSH browser client
+
+`nexus web` now serves the work-in-progress NSH Rust replacement in `rust/app`,
+with protocol and labelled rendering helpers in `rust/client-core`. It is not
+at TUI parity; the remaining desktop and web acceptance is tracked in
+[nsh-parity.md](nsh-parity.md). The old browser assets are no longer served.
+Missing packages return HTTP 503 with a build instruction.
+
+Build before creating a wheel (NSH 0.3.0, the wasm Rust target, and matching wasm-bindgen CLI required):
+
+```sh
+NSH=/Users/santa/.local/bin/nsh python scripts/package_nsh_web.py
+```
+
+The script packages actual NSH WASM into `nexus/ui/nsh_web`; setuptools includes
+that directory. Generated binaries are ignored, not checked in. The minimal
+client redeems the fragment ticket, removes it from history, uses HttpOnly
+cookies and CSRF for commands, lists sessions, opens/creates a typed session ID,
+reads snapshots with SSE refresh, sends and stops turns. All projection fields
+are labelled, including tool parameters/results. Advanced legacy UI features
+are not yet ported. A deterministic Chromium integration check (`python tests/playwright_nsh_check.py`)
+uses the real HTTP auth/command/SSE routes and a fake facade. It verifies actual
+WASM startup, ticket removal, create/open, send, named `view` SSE refresh, tool
+parameters/results, stop preserving queued work, active-session isolation while
+editing another ID, and HTTP-200 `ErrorResult` handling. Real-provider turns and
+native desktop remain unverified.
+
+The edited session ID is not the active session: only a successful open changes
+the send/stop target. The host resolves human names to logical IDs, so the client
+uses the returned summary ID. Host-shaped human names that do not exist may be
+rejected rather than created; use a fresh logical ID for creation. SSE notices
+are coalesced in a capacity-one channel; each notice refreshes a complete snapshot
+rather than applying JSON-Pointer operations. Late snapshots are generation-guarded.
+All fields, including empty/null tool fields, are shown as labelled text paths,
+not raw JSON; this is intentionally a basic inspector, not rich transcript parity.
+
 # Web app (`nexus web`)
 
 > **To be deprecated.** No new features are added or ported here unless explicitly

@@ -32,6 +32,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Add a CLI subcommand or a chat slash command | [cli.md](cli.md) | `nexus/cli.py`, `nexus/ui/cli/` |
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
 | Work on `nexus chat` (Ratatui) | [ratatui-parity.md](ratatui-parity.md) | `nexus/ui/ratatui/`, `rust/tui/` |
+| Bring NSH native desktop and web to full TUI parity | [nsh-parity.md](nsh-parity.md) | `rust/app/`, `rust/client-core/` |
 | Build or run the GPUI desktop client | [desktop.md](desktop.md) | `nexus/ui/desktop/`, `rust/desktop/` |
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |

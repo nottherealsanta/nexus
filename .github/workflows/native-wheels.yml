@@ -11,7 +11,34 @@ on:
 permissions:
   contents: read
 jobs:
+  nsh-web:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.13'
+      - name: Install pinned NSH web toolchain
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup default 1.97.0
+          rustup target add wasm32-unknown-unknown
+          curl -fsSL https://nsh.dev/install.sh -o /tmp/install-nsh.sh
+          NSH_VERSION=v0.3.0 sh /tmp/install-nsh.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Build required NSH browser assets
+        run: uv run --no-project python scripts/package_nsh_web.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsh-web-assets
+          path: nexus/ui/nsh_web/
+          if-no-files-found: error
   wheels:
+    needs: nsh-web
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +55,10 @@ jobs:
       - name: Pin Rust 1.97 on macOS (Linux installs it inside the build container)
         if: runner.os == 'macOS'
         run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: nsh-web-assets
+          path: nexus/ui/nsh_web
       - name: Build and install platform wheels
         run: uvx --from cibuildwheel==3.1.4 cibuildwheel --output-dir wheelhouse
         env:
@@ -58,6 +89,7 @@ jobs:
           # `optional` setuptools-rust bin, so only this step notices a skipped build) and
           # import the native surface without loading an obsolete terminal toolkit.
           CIBW_TEST_COMMAND: >-
+            python -c "from pathlib import Path; import nexus.ui; root=Path(nexus.ui.__file__).parent/'nsh_web'; assert (root/'index.html').is_file(); assert any(p.read_bytes().startswith(bytes([0,97,115,109])) for p in root.glob('*.wasm')), 'NSH WASM missing from installed wheel'; assert list(root.glob('*.js'))" &&
             nexus-ratatui --version &&
             nexus-live --version &&
             python -c "import sys; import nexus.ui.ratatui.prototype as p, nexus.ui.ratatui.run as r; assert 'textual' not in sys.modules, 'native import pulled in textual'; print(r.binary_path())" &&

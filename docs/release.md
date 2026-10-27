@@ -459,3 +459,35 @@ The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it
 Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
 the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.88 on
 macOS arm64; a Rust 1.88 build has not been reproduced).
+
+## Required NSH browser package
+
+Published wheels **and the sdist** include the real NSH WASM package. The reusable
+`native-wheels` workflow builds it once on `macos-15` (not on every Linux container
+or unsupported Intel NSH host), uploads `nsh-web-assets`, and every wheel job
+requires/downloads that artifact before cibuildwheel. The publish job downloads
+the same artifact before `uv build --sdist`. An installed-wheel check requires
+`index.html`, JavaScript and a WASM module with the actual WASM magic bytes;
+missing browser assets therefore fail release rather than silently shipping.
+
+Local release builds need Rust, the wasm target, NSH **0.3.0**, and wasm-bindgen
+CLI **0.2.129** (matching the reviewed Cargo lock):
+
+```sh
+rustup target add wasm32-unknown-unknown
+curl -fsSL https://nsh.dev/install.sh -o /tmp/install-nsh.sh
+NSH_VERSION=v0.3.0 sh /tmp/install-nsh.sh
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+python scripts/package_nsh_web.py
+uv build
+```
+
+Commit `rust/app/Cargo.lock` with dependency changes. The packaging script checks
+it with `cargo metadata --locked` and seeds NSH's generated runner workspace lock
+from it; NSH adds runner packages, while preserving locked application dependency
+versions. Keep generated `.nsh/`, `target/` and browser artifacts out of Git.
+The Rust source, manifests, locks and built browser assets travel in the sdist.
+A source checkout without the generated package returns HTTP 503 with the build
+command; installed releases must never depend on that recovery path.
+The GitHub-hosted release workflow itself has not been run locally.
