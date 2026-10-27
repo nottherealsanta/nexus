@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Inspector</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --sunken: #f0f0ed; --line: #e2e2dd; --text: #1d1d1b; --muted: #6b6b66;
+  --accent: #2f6fde; --ok: #1f8a4c; --warn: #b26b00; --err: #c8372d; --wire: #6b4fc7;
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "Monaspace Argon", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141413; --panel: #1c1c1a; --sunken: #232321; --line: #33332f; --text: #ecebe6; --muted: #9a9993;
+          --accent: #6ea0ff; --ok: #4cc27f; --warn: #e0a13a; --err: #ff6b5e; --wire: #a98cff; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: grid; grid-template-columns: 320px 1fr; }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+input[type=search] { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 4px 8px; width: 260px; }
+aside { border-right: 1px solid var(--line); overflow: auto; padding: 14px 10px; background: var(--panel); }
+aside h1 { font-size: 15px; margin: 0 6px 2px; }
+aside .sub { color: var(--muted); font-size: 12px; margin: 0 6px 14px; }
+.project { margin-bottom: 14px; }
+.project > .name { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 6px 4px; }
+.project > .path { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 0 6px 6px; overflow-wrap: anywhere; }
+.srow { display: block; padding: 5px 8px; border-radius: var(--r-sm); color: var(--text); }
+.srow:hover { background: var(--sunken); text-decoration: none; }
+.srow.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.srow .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .m { display: block; font-size: 11.5px; color: var(--muted); }
+.kids { margin-left: 14px; border-left: 1px solid var(--line); padding-left: 4px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--line); vertical-align: 1px; }
+.dot.busy { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+main { overflow: auto; padding: 18px 26px 60px; }
+.empty { color: var(--muted); padding: 40px 0; }
+.head h2 { margin: 0 0 4px; font-size: 18px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 10px 0 14px; font-size: 13px; }
+.kv > :nth-child(odd) { color: var(--muted); }
+.levels { display: flex; gap: 0; margin: 6px 0 16px; border: 1px solid var(--line); border-radius: var(--r-md); width: max-content; overflow: hidden; background: var(--panel); }
+.levels button { border: 0; border-radius: 0; padding: 6px 14px; border-right: 1px solid var(--line); background: transparent; }
+.levels button:last-child { border-right: 0; }
+.levels button.on { background: var(--accent); color: #fff; }
+.levels .k { opacity: .6; margin-right: 6px; font-family: var(--mono); font-size: 11px; }
+.note { color: var(--muted); font-size: 12.5px; margin: 6px 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; margin: 8px 0; }
+.msg { margin: 14px 0; }
+.msg > .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.msg > .who b { color: var(--text); text-transform: capitalize; }
+.part { margin: 6px 0; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.user .text { background: var(--sunken); border-radius: var(--r-md); padding: 8px 12px; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-right: 8px; }
+.tool .name { font-weight: 600; font-family: var(--mono); }
+.args { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin-top: 6px; }
+.args > :nth-child(odd) { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.err { color: var(--err); }
+.okc { color: var(--ok); }
+.warn { color: var(--warn); }
+details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; }
+details > summary::before { content: "▸ "; }
+details[open] > summary::before { content: "▾ "; }
+details > pre, details > div { margin-top: 6px; }
+.json { background: var(--sunken); border-radius: var(--r-sm); padding: 8px 10px; max-height: 520px; overflow: auto; }
+.output { background: var(--sunken); border-radius: var(--r-sm); padding: 8px 10px; margin-top: 6px; max-height: 420px; overflow: auto; }
+.turn { margin: 18px 0 6px; font-weight: 600; }
+.turn .q { font-weight: 400; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.ev { cursor: pointer; }
+tr.ev:hover td { background: var(--sunken); }
+.type { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.type.wire { color: var(--wire); }
+.preview { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.pill { display: inline-block; font-size: 11px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+.section { margin: 16px 0 6px; font-weight: 600; font-size: 13px; }
+@media (max-width: 760px) { body { grid-template-columns: 1fr; } aside { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); } main { padding: 16px; } }
+</style>
+</head>
+<body>
+<aside id="side"><h1>Session Inspector</h1><div class="sub" id="conn">connecting…</div><div id="tree"></div></aside>
+<main id="main"><div class="empty">Pick a session on the left.</div></main>
+<script>
+"use strict";
+// Nexus session inspector. Reads only the daemon API (/api/*); the token comes from the URL fragment (#token=…),
+// which browsers never send to the server. All text from sessions is inserted as text, never as HTML.
+const params = new URLSearchParams(location.hash.slice(1));
+const TOKEN = params.get("token") || "";
+const LEVELS = [["conversation", "Conversation"], ["steps", "Steps"], ["requests", "Requests"], ["raw", "Raw"]];
+const MAX_EVENTS = 50000, PAGE = 5000, RAW_ROWS = 1500, PREVIEW = 180, OUTPUT_LINES = 60;
+const S = { sessions: [], projects: [], sel: params.get("session") || null, level: params.get("level") || "conversation",
+            session: null, messages: [], events: [], eventsMore: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS };
+
+// -- tiny DOM helpers ---------------------------------------------------------
+function h(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v; else if (k.startsWith("on")) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) node.append(kid instanceof Node ? kid : String(kid));
+  return node;
+}
+const pretty = (v) => JSON.stringify(v, null, 2);
+// A label/value grid; every cell is an element so the two-column grid lines up.
+const kv = (cls, ...pairs) => h("div", { class: cls }, pairs.map((x) => x instanceof Node ? x : h("span", {}, x)));
+const compact = (v) => typeof v === "string" ? v : JSON.stringify(v);
+const clip = (s, n) => s.length > n ? s.slice(0, n) + ` … [+${s.length - n} chars]` : s;
+const time = (t) => t ? new Date(t * 1000).toLocaleString() : "";
+const ms = (a, b) => (a && b) ? `${Math.round((b - a) * 1000)} ms` : "–";
+const jsonBlock = (summary, value, open) => h("details", { open: open || null }, h("summary", {}, summary), h("pre", { class: "json" }, pretty(value)));
+const isWire = (t) => t.startsWith("wire_");
+const isDelta = (t) => t.endsWith("_delta") || (t === "wire_event");
+
+async function api(path) {
+  const r = await fetch(path, { headers: { authorization: `Bearer ${TOKEN}` } });
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+function setHash() {
+  const p = new URLSearchParams({ token: TOKEN });
+  if (S.sel) p.set("session", S.sel);
+  p.set("level", S.level);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+// -- sidebar --------------------------------------------------------------------
+async function loadSidebar() {
+  [S.projects, S.sessions] = await Promise.all([api("/api/project"), api("/api/session")]);
+  renderSidebar();
+}
+function renderSidebar() {
+  const tree = document.getElementById("tree");
+  tree.replaceChildren();
+  const byParent = new Map();
+  for (const s of S.sessions) { const k = s.parent_id || ""; if (!byParent.has(k)) byParent.set(k, []); byParent.get(k).push(s); }
+  const row = (s) => h("div", {},
+    h("a", { class: "srow" + (s.id === S.sel ? " sel" : ""), onclick: () => select(s.id) },
+      h("span", { class: "t" }, h("span", { class: "dot" + (s.status === "busy" ? " busy" : "") }), s.title),
+      h("span", { class: "m" }, `${s.agent} · ${s.model}${s.launched_by === "agent" ? " · launched by agent" : ""}`)),
+    (byParent.get(s.id) || []).length ? h("div", { class: "kids" }, byParent.get(s.id).sort((a, b) => a.created - b.created).map(row)) : null);
+  for (const p of S.projects) {
+    const roots = (byParent.get("") || []).filter((s) => s.project_id === p.id);
+    if (!roots.length) continue;
+    tree.append(h("div", { class: "project" }, h("div", { class: "name" }, p.name), h("div", { class: "path" }, p.path), roots.map(row)));
+  }
+  if (!S.sessions.length) tree.append(h("div", { class: "note" }, "No sessions yet. Run `nexus run \"…\"`."));
+}
+
+// -- loading a session --------------------------------------------------------------
+async function select(id) {
+  S.sel = id; S.context = null; S.rawShown = RAW_ROWS; setHash(); renderSidebar();
+  const main = document.getElementById("main");
+  main.replaceChildren(h("div", { class: "empty" }, "Loading…"));
+  const [session, messages] = await Promise.all([api(`/api/session/${id}`), api(`/api/session/${id}/message`)]);
+  const events = []; let after = 0, more = true;
+  while (more && events.length < MAX_EVENTS) {
+    const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
+    events.push(...page.events); more = page.more; after = events.length ? events[events.length - 1].id : 0;
+  }
+  if (S.sel !== id) return;
+  Object.assign(S, { session, messages, events, eventsMore: more });
+  render();
+}
+
+// -- rendering ---------------------------------------------------------------------------
+let renderTimer = null;
+function renderSoon() { clearTimeout(renderTimer); renderTimer = setTimeout(render, 150); }
+
+function render() {
+  const s = S.session, main = document.getElementById("main");
+  if (!s) return;
+  const children = S.sessions.filter((c) => c.parent_id === s.id);
+  const counts = {}; for (const e of S.events) counts[e.type] = (counts[e.type] || 0) + 1;
+  const head = h("div", { class: "head" },
+    h("h2", {}, h("span", { class: "dot" + (s.status === "busy" ? " busy" : "") }), s.title),
+    kv("kv",
+      "id", h("span", { class: "mono" }, s.id),
+      "agent", s.agent,
+      "model", `${s.model}  (from ${s.model_source})`,
+      "effort", s.effort ? `${s.effort}  (from ${s.effort_source})` : `provider default`,
+      "permission", s.permission,
+      "directory", h("span", { class: "mono" }, s.directory),
+      "launched by", s.launched_by === "agent" ? h("span", {}, "agent in ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id), ", tool call ", h("span", { class: "mono" }, s.parent_call_id)) :
+        (s.parent_id ? h("span", {}, "user, as a child of ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id)) : "user"),
+      "children", children.length ? h("span", {}, children.map((c, i) => [i ? ", " : "", h("a", { onclick: () => select(c.id) }, `${c.title} (${c.agent})`)])) : "none",
+      "created", time(s.created),
+      "recorded", `${S.messages.length} messages · ${S.events.length} events${S.eventsMore ? ` (first ${S.events.length} loaded)` : ""}`));
+  const levels = h("div", { class: "levels" }, LEVELS.map(([key, label], i) =>
+    h("button", { class: S.level === key ? "on" : "", onclick: () => { S.level = key; setHash(); render(); } }, h("span", { class: "k" }, i + 1), label)));
+  const body = { conversation: viewConversation, steps: viewSteps, requests: viewRequests, raw: viewRaw }[S.level]();
+  main.replaceChildren(head, levels, body);
+}
+
+// Level 1: the conversation as saved messages.
+function viewConversation() {
+  if (!S.messages.length) return h("div", { class: "empty" }, "No messages yet.");
+  const childByCall = new Map(S.sessions.filter((c) => c.parent_id === S.session.id && c.parent_call_id).map((c) => [c.parent_call_id, c]));
+  return h("div", {}, S.messages.map((m) => h("div", { class: "msg " + m.role },
+    h("div", { class: "who" }, h("b", {}, m.role), `  #${m.seq} · ${time(m.created)}`),
+    m.parts.map((p) => h("div", { class: "part" }, partView(p, childByCall), jsonBlock("part JSON (with raw wire item)", p))))));
+}
+function partView(p, childByCall) {
+  if (p.type === "text") return h("div", { class: "text" }, p.text || h("span", { class: "note" }, "(empty text)"));
+  if (p.type === "reasoning") {
+    const enc = p.raw && p.raw.encrypted_content;
+    return h("details", { class: "card" }, h("summary", {}, `Reasoning${p.origin ? " · " + p.origin : ""}${enc ? ` · encrypted state ${enc.length} chars` : ""}`),
+      h("div", { class: "text" }, p.summary || "(no visible summary)"));
+  }
+  if (p.type === "tool_call") {
+    let args = null; try { args = JSON.parse(p.arguments || "{}"); } catch { /* shown raw below */ }
+    const child = childByCall.get(p.id);
+    return h("div", { class: "card tool" }, h("span", { class: "label" }, "tool call"), h("span", { class: "name" }, p.name), " ", h("span", { class: "note mono" }, p.id),
+      child ? h("div", {}, "→ child session ", h("a", { onclick: () => select(child.id) }, `${child.title} (${child.agent})`)) : null,
+      args && typeof args === "object" ? kv("args", ...Object.entries(args).flatMap(([k, v]) => [k, h("pre", {}, typeof v === "string" ? v : pretty(v))]))
+        : h("div", { class: "err" }, "arguments are not a JSON object: ", h("pre", {}, p.arguments)));
+  }
+  if (p.type === "tool_result") {
+    const lines = (p.output || "").split("\n");
+    return h("div", { class: "card" }, h("span", { class: "label" }, "tool result"), h("span", { class: p.is_error ? "err" : "okc" }, p.is_error ? "error" : "ok"),
+      " ", h("span", { class: "note mono" }, `${p.call_id} · ${lines.length} lines · ${(p.output || "").length} chars`),
+      h("pre", { class: "output" }, lines.slice(0, OUTPUT_LINES).join("\n")),
+      lines.length > OUTPUT_LINES ? h("details", {}, h("summary", {}, `${lines.length - OUTPUT_LINES} more lines (display clipped; the model saw all of them)`), h("pre", { class: "output" }, lines.slice(OUTPUT_LINES).join("\n"))) : null);
+  }
+  return h("pre", {}, pretty(p));
+}
+
+// Turns and steps, derived from the stored event log.
+function steps() {
+  const turns = []; let turn = null, step = null;
+  for (const e of S.events) {
+    if (e.type === "message.added" && e.data.role === "user" && (!step || step.done || !turn)) {
+      const text = e.data.parts.map((p) => p.text || "").join("");
+      turn = { prompt: text, steps: [] }; turns.push(turn); step = null;
+    }
+    if (e.type === "step_start") { if (!turn) { turn = { prompt: "(before the event log)", steps: [] }; turns.push(turn); } step = { n: e.data.step, start: e.time, events: [], tools: [] }; turn.steps.push(step); }
+    if (!step) continue;
+    step.events.push(e);
+    if (e.type === "wire_request") { step.request = e.data; step.reqTime = e.time; }
+    else if (e.type === "wire_response") step.response = e.data;
+    else if (e.type === "wire_event" && !step.firstByte) step.firstByte = e.time;
+    else if (e.type === "usage") step.usage = e.data;
+    else if (e.type === "done") { step.done = e.data; step.doneTime = e.time; }
+    else if (e.type === "tool_start") step.tools.push({ start: e.data, t0: e.time });
+    else if (e.type === "tool_end") { const t = step.tools.find((x) => x.start.call.id === e.data.call.id); if (t) { t.end = e.data; t.t1 = e.time; } }
+    else if (e.type === "session.error") step.error = e.data;
+  }
+  return turns;
+}
+const noEvents = () => h("div", { class: "note" }, "No stored events for this session. Sessions from before the event log only have their messages (see Conversation and Raw).");
+
+// Level 2: each model call, with timing, usage and tool runs.
+function viewSteps() {
+  const turns = steps();
+  if (!turns.length) return noEvents();
+  return h("div", {}, turns.map((t, ti) => h("div", {},
+    h("div", { class: "turn" }, `Turn ${ti + 1} `, h("span", { class: "q" }, clip(t.prompt, 160))),
+    h("table", {}, h("thead", {}, h("tr", {}, ["step", "model", "input items", "tools offered", "HTTP", "first byte", "total", "tokens in (cached)", "out (reasoning)", "stop", "tools run"].map((c) => h("th", {}, c)))),
+      h("tbody", {}, t.steps.map((s) => {
+        const b = (s.request && s.request.body) || {}, u = s.usage || {};
+        const items = (b.input || b.messages || []).length;
+        return h("tr", {},
+          h("td", { class: "num" }, s.n), h("td", { class: "mono" }, b.model || "?"), h("td", { class: "num" }, items), h("td", { class: "num" }, (b.tools || []).length),
+          h("td", { class: s.response && s.response.status >= 400 ? "err" : "" }, s.response ? s.response.status : "–"),
+          h("td", { class: "num" }, ms(s.reqTime, s.firstByte)), h("td", { class: "num" }, ms(s.reqTime, s.doneTime)),
+          h("td", { class: "num" }, u.input_tokens != null ? `${u.input_tokens} (${u.cached_input_tokens})` : "–"),
+          h("td", { class: "num" }, u.output_tokens != null ? `${u.output_tokens} (${u.reasoning_tokens})` : "–"),
+          h("td", { class: s.error ? "err" : "" }, s.error ? `${s.error.kind}: ${s.error.message}` : (s.done ? s.done.stop : "running…")),
+          h("td", {}, s.tools.map((x) => h("div", {}, h("span", { class: "mono" }, x.start.call.name), " ",
+            x.end ? h("span", { class: x.end.result.is_error ? "err" : "okc" }, x.end.result.is_error ? "error" : "ok") : h("span", { class: "warn" }, "running"),
+            " ", h("span", { class: "note" }, ms(x.t0, x.t1))))));
+      }))))));
+}
+
+// Level 3: every request body, as labelled sections.
+function viewRequests() {
+  const box = h("div", {});
+  const next = h("div", { class: "card" }, h("div", { class: "section" }, "Next request (what the model would see now)"));
+  box.append(next);
+  if (S.context) next.append(requestBody(S.context));
+  else { next.append(h("div", { class: "note" }, "Loading…")); api(`/api/session/${S.session.id}/context`).then((c) => { S.context = c; render(); }).catch((e) => next.append(h("div", { class: "err" }, String(e)))); }
+  const turns = steps();
+  if (!turns.length) { box.append(noEvents()); return box; }
+  turns.forEach((t, ti) => t.steps.forEach((s) => {
+    if (!s.request) return;
+    box.append(h("details", { class: "card" }, h("summary", {}, `Turn ${ti + 1} · step ${s.n} · ${s.request.method} ${s.request.url}`),
+      h("div", { class: "section" }, "Headers (credentials redacted)"),
+      h("table", {}, h("tbody", {}, Object.entries(s.request.headers).map(([k, v]) => h("tr", {}, h("td", { class: "mono" }, k), h("td", { class: "mono" }, v))))),
+      requestBody(s.request.body),
+      s.response ? jsonBlock(`Response: HTTP ${s.response.status} · headers`, s.response.headers) : null));
+  }));
+  return box;
+}
+function requestBody(body) {
+  const { instructions, input, messages, tools, ...rest } = body;
+  const items = input || messages || [];
+  const system = instructions ?? (messages && messages[0] && messages[0].role === "system" ? messages[0].content : null);
+  return h("div", {},
+    h("div", { class: "section" }, "Parameters"),
+    h("table", {}, h("tbody", {}, Object.entries(rest).map(([k, v]) => h("tr", {}, h("td", { class: "mono" }, k), h("td", { class: "mono" }, compact(v)))))),
+    system != null ? h("div", {}, h("div", { class: "section" }, "Instructions"), h("pre", { class: "output" }, system)) : null,
+    h("div", { class: "section" }, `Input: ${items.length} items`),
+    h("table", {}, h("tbody", {}, items.map((it, i) => h("tr", {}, h("td", { class: "num" }, i),
+      h("td", { class: "mono" }, it.type || it.role, it.role && it.type ? ` · ${it.role}` : ""),
+      h("td", {}, h("details", {}, h("summary", { class: "preview" }, clip(previewItem(it), PREVIEW)), h("pre", { class: "json" }, pretty(it)))))))),
+    h("div", { class: "section" }, `Tools: ${(tools || []).length}`),
+    (tools || []).map((t) => { const f = t.function || t; return h("details", {}, h("summary", {}, h("span", { class: "mono" }, f.name), " — ", clip(f.description || "", 140)), h("pre", { class: "json" }, pretty(t))); }));
+}
+function previewItem(it) {
+  if (it.type === "function_call" || it.tool_calls) return `${it.name || it.tool_calls.map((c) => c.function.name).join(", ")}(${it.arguments || ""})`;
+  if (it.type === "function_call_output" || it.role === "tool") return compact(it.output ?? it.content);
+  if (it.type === "reasoning") return `reasoning · ${(it.summary || []).map((s) => s.text).join(" ")} · encrypted ${(it.encrypted_content || "").length} chars`;
+  if (Array.isArray(it.content)) return it.content.map((c) => c.text || c.type).join(" ");
+  return compact(it.content ?? it);
+}
+
+// Level 4: every stored event as received, plus the messages as stored.
+function viewRaw() {
+  const want = S.rawFilter.toLowerCase();
+  const rows = S.events.filter((e) => (!S.hideDeltas || !isDelta(e.type)) && (!want || e.type.toLowerCase().includes(want) || compact(e.data).toLowerCase().includes(want)));
+  const t0 = S.events.length ? S.events[0].time : 0;
+  const shown = rows.slice(0, S.rawShown);
+  const tbody = h("tbody", {});
+  for (const e of shown) {
+    const detail = h("tr", { hidden: "" }, h("td", { colspan: "4" }, h("pre", { class: "json" }, pretty(e))));
+    tbody.append(h("tr", { class: "ev", onclick: () => detail.toggleAttribute("hidden") },
+      h("td", { class: "num mono" }, e.id ?? `live ${e.seq}`), h("td", { class: "num mono" }, `+${(e.time - t0).toFixed(3)}s`),
+      h("td", { class: "type" + (isWire(e.type) ? " wire" : "") }, e.type, e.type === "wire_event" ? ` · ${e.data.name}` : ""),
+      h("td", { class: "preview" }, clip(compact(e.data), PREVIEW))), detail);
+  }
+  const search = h("input", { type: "search", placeholder: "filter by type or content", value: S.rawFilter });
+  search.addEventListener("input", () => { S.rawFilter = search.value; S.rawShown = RAW_ROWS; render(); document.querySelector("input[type=search]").focus(); });
+  const deltas = h("input", { type: "checkbox", checked: S.hideDeltas ? "" : null, onchange: (ev) => { S.hideDeltas = ev.target.checked; render(); } });
+  return h("div", {},
+    h("div", { class: "toolbar" }, search, h("label", {}, deltas, " hide token deltas and provider SSE events"),
+      h("span", { class: "note" }, `${rows.length} of ${S.events.length} events match${shown.length < rows.length ? `, showing the first ${shown.length}` : ""}. Click a row for the full JSON.`)),
+    S.events.length ? h("table", {}, h("thead", {}, h("tr", {}, ["id", "time", "type", "data"].map((c) => h("th", {}, c)))), tbody) : noEvents(),
+    shown.length < rows.length ? h("button", { onclick: () => { S.rawShown += RAW_ROWS; render(); } }, `show ${Math.min(RAW_ROWS, rows.length - shown.length)} more`) : null,
+    h("div", { class: "section" }, "Stored messages"),
+    jsonBlock(`${S.messages.length} messages as stored (parts include each provider's raw wire item)`, S.messages),
+    jsonBlock("Session record", S.session));
+}
+
+// -- live updates -------------------------------------------------------------------------
+let sideTimer = null;
+function live() {
+  const conn = document.getElementById("conn");
+  const source = new EventSource(`/api/event?token=${encodeURIComponent(TOKEN)}`);
+  source.onopen = () => { conn.textContent = "live · " + location.host; };
+  source.onerror = () => { conn.textContent = "disconnected; retrying…"; };
+  source.onmessage = () => {};
+  const handle = (msg) => {
+    const e = JSON.parse(msg.data);
+    if (!e.type) return;
+    if (e.type.startsWith("session.") || e.type.startsWith("project.")) { clearTimeout(sideTimer); sideTimer = setTimeout(loadSidebar, 200); }
+    if (S.session && e.session_id === S.session.id) {
+      S.events.push(e);
+      if (e.type === "message.added") S.messages.push(e.data);
+      if (e.type === "session.updated" || e.type === "session.status") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
+      S.context = null;
+      renderSoon();
+    }
+  };
+  for (const type of ["message.added", "session.created", "session.updated", "session.deleted", "session.status", "session.error", "session.notified",
+    "permission.asked", "permission.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
+    "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
+    source.addEventListener(type, handle);
+  }
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.tagName === "INPUT") return;
+  const i = Number(ev.key) - 1;
+  if (LEVELS[i] && S.session) { S.level = LEVELS[i][0]; setHash(); render(); }
+});
+
+(async () => {
+  if (!TOKEN) { document.getElementById("main").replaceChildren(h("div", { class: "empty" }, "No token. Open this page with `nexus sessions inspector`.")); return; }
+  try { await loadSidebar(); } catch (e) { document.getElementById("main").replaceChildren(h("div", { class: "empty err" }, String(e))); return; }
+  live();
+  if (S.sel) select(S.sel);
+})();
+</script>
+</body>
+</html>

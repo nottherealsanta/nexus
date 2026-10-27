@@ -1,0 +1,5 @@
+build.md is adapted from OpenCode (https://github.com/anomalyco/opencode, MIT),
+packages/core/src/plugin/system-prompt/gpt.txt and anthropic.txt at commit
+362e000b61f9687f0ac97cbd3d6213a03ef70e7e. Changes: product name, tool guidance
+for Nexus's four tools, the commentary-channel and delegation sections removed,
+the code-comments section added.
