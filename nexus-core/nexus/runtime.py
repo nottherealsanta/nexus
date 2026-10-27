@@ -5,8 +5,8 @@ is published on the bus:
 
 | event | when |
 | --- | --- |
-| `project.created` / `project.updated` / `project.deleted` | project changes |
-| `session.created` / `session.updated` / `session.deleted` | session changes |
+| `project.created` / `project.updated` / `project.deleted` | project changes (global log entries) |
+| `session.created` / `session.updated` / `session.deleted` | session changes; `deleted` is a minimal global tombstone |
 | `session.status` | `{"status": "busy" | "idle"}` around each turn |
 | `message.added` | a message was saved (user, assistant, tool) |
 | `permission.asked` / `permission.replied` | a tool call waits for approval |
@@ -40,7 +40,6 @@ new parent turn if it is idle (`session.notified`).
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -112,16 +111,7 @@ class Runtime:
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
-        bus.sink = self._record
-
-    def _record(self, event: dict[str, Any]) -> None:
-        """Store every event that belongs to a session (the durable event log)."""
-        if event["session_id"] is None or event["type"] == "session.deleted":
-            return
-        try:
-            self.store.append_event(event)
-        except sqlite3.IntegrityError:
-            pass  # the session was deleted while the event was in flight
+        bus.attach(store)  # every published event is durable before any subscriber sees it
 
     # -- projects ------------------------------------------------------------
 
@@ -153,8 +143,10 @@ class Runtime:
         for sid in ids:
             self.pending_directories.pop(sid, None)
         await self.jobs.cancel_for(ids)
+        sessions = self.store.sessions(project_id)  # anything created while awaiting is deleted too
         if not self.store.delete_project(project_id):
             raise NotFound(f"no project {project_id}")
+        self._publish_tombstones(sessions)
         self.bus.publish("project.deleted", {"id": project_id})
 
     # -- sessions ------------------------------------------------------------
@@ -811,14 +803,28 @@ class Runtime:
 
     async def delete_session(self, session_id: str) -> None:
         await self.interrupt(session_id, reason="the session was deleted")  # also interrupts descendants
-        ids = {session_id, *(child.id for child in self.store.descendants(session_id))}
+        descendants = self.store.descendants(session_id)
+        ids = {session_id, *(child.id for child in descendants)}
         self.close_questions(ids, "the session was deleted")
         for sid in ids:
             self.pending_directories.pop(sid, None)  # a queued move must not apply to a deleted session
         await self.jobs.cancel_for(ids)  # a background command must not outlive the session that started it
         if not self.store.delete_session(session_id):
             raise NotFound(f"no session {session_id}")
-        self.bus.publish("session.deleted", {"id": session_id}, session_id=session_id)
+        self._publish_tombstones(descendants, session_id)
+
+    def _publish_tombstones(self, sessions: list[Session], root_id: str | None = None) -> None:
+        """Publish one minimal, global deletion record per deleted session.
+
+        The session rows (and their event logs) are already gone. The tombstones
+        carry only the id, survive the deletion, and are global so a filtered
+        stream cannot miss them for lack of a session row. The root goes first:
+        a client filtering its tree can drop the whole subtree at once.
+        """
+        ordered = sorted(sessions, key=lambda s: (s.created, s.id))
+        ids = ([root_id] if root_id is not None else []) + [s.id for s in ordered if s.id != root_id]
+        for sid in ids:
+            self.bus.publish("session.deleted", {"id": sid})
 
     def archive_session(self, session_id: str, *, archived: bool) -> Session:
         """Archive or unarchive one whole root tree, atomically and idempotently.

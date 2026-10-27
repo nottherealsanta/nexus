@@ -86,6 +86,7 @@ def _inline(value: Any) -> str:
 @dataclass(frozen=True, slots=True)
 class Boundary:
     generated: float
+    generation: str
     event_id: int
     seq: int
     session_updated: float
@@ -156,6 +157,10 @@ class ExportView:
 
     def _boundary(self) -> Boundary:
         event = self.db.execute("select coalesce(max(id), 0) as id, coalesce(max(seq), 0) as seq from event").fetchone()
+        try:
+            log = self.db.execute("select generation from log where id = 1").fetchone()
+        except sqlite3.OperationalError:  # a database written before the log table; export stays read-only
+            log = None
         counts: dict[str, dict[str, int]] = {}
         for row in self.sessions:
             counts[row["id"]] = {
@@ -168,6 +173,7 @@ class ExportView:
             }
         return Boundary(
             generated=time.time(),
+            generation=log["generation"] if log else "",
             event_id=event["id"],
             seq=event["seq"],
             session_updated=max((row["updated"] for row in self.sessions), default=0.0),
@@ -308,13 +314,15 @@ class ExportView:
             "session_count": len(self.sessions),
             "state": self.state(),
             "boundary": {
+                "log_generation": self.boundary.generation,
                 "event_id": self.boundary.event_id,
                 "seq": self.boundary.seq,
                 "session_updated": self.boundary.session_updated,
                 "counts": self.boundary.counts,
                 "note": (
                     "All records were read inside one SQLite read transaction. Writes after this "
-                    "boundary are not in this export."
+                    "boundary are not in this export. `seq` is the publishing daemon's counter; "
+                    "`event_id` is durable, and a resume cursor is `<log_generation>:<event_id>`."
                 ),
             },
         }

@@ -48,6 +48,25 @@ the rest one click away. Previews say how many characters were cut. The Raw
 table shows 1500 rows at a time ("show more"). Up to 50 000 events are loaded
 per session.
 
+## Connection and resync
+
+The page holds one fetch-based `/api/event` stream (not `EventSource`, so it can
+read explicit continuity failures). It starts live at the server's head and
+keeps each event's durable cursor. After a dropped connection it reconnects with
+`?cursor=`, so the missed range is replayed from the stored log with stable
+ordering. Events are deduplicated by their durable id; an event that arrives
+while a session is loading is buffered until loading finishes. Loaded event rows
+and messages are deduplicated independently by their own ids: the separate HTTP
+reads can have different boundaries. Only stream delivery advances the cursor.
+
+An explicit cursor failure (400/409/410: malformed, another log generation,
+ahead of the log, or history below the floor) and `bus.overflow` trigger a full
+resync instead of a silent fresh start: the sidebar, kernels, background jobs
+and the open session are reloaded, and the stream restarts at the new head. The
+sidebar line shows live / catching up / reconnecting / resyncing. If the open
+session is deleted while the page is live, its view closes with an explicit
+note. Reconnecting never resubmits a prompt or re-runs a turn.
+
 ## Limits
 
 - Sessions from before the event log have messages only. Levels 2 and 3 show a
@@ -59,8 +78,7 @@ per session.
 - Live updates re-render the open session when its events arrive. Events of a
   child show in the child's own page.
 - The Questions card (Step 10) was added after the Playwright checks above and
-  was script-syntax-checked, not re-run in a browser.
-- The workspace-control header fields, snapshot fields and live events were
+  was script-syntax-checked, not re-run in a browser.- The workspace-control header fields, snapshot fields and live events were
   added later and script-syntax-checked (`node --check`), not re-run visually.
 - Archive state is shown as a separate `archived` field and sidebar pill; it
   does not replace busy/idle. The archive view was script-syntax-checked, not

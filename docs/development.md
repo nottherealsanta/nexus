@@ -32,8 +32,9 @@ nexus/
   codec.py           JSON encoding of messages and events
   paths.py           home(): $NEXUS10_HOME or ~/.nexus10
   export.py          read-only session/tree exports: Markdown and JSON
-  store.py           SQLite: projects, sessions, messages, observations (~/.nexus10/nexus.db)
-  bus.py             in-process event bus (seq-numbered, bounded per subscriber)
+  store.py           SQLite: projects, sessions, messages, observations, durable event log (~/.nexus10/nexus.db)
+  bus.py             in-process event bus; persists before publishing, bounded per subscriber
+  eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
   kernels.py         daemon-owned persistent Monty kernels
   bash_jobs.py       daemon-owned background bash jobs
   runtime.py         projects, sessions, turns, approvals, questions, workspace controls, interrupts
@@ -87,6 +88,7 @@ request body; `/exit` and `/quit` leave.
 | `test_catalog.py` | models.dev filtering and `ModelInfo` |
 | `test_tools.py` | read, bash, edit (replacement and patch), write |
 | `test_ask.py` | ask contract and validation, pending/reply API, cancellation, snapshots, nested code questions |
+| `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, migration, HTTP framing via raw ASGI |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

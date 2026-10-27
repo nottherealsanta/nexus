@@ -999,6 +999,87 @@ are done below.
 Retention and size limits for the `event` table, resuming the live stream from
 an event id, and showing a crashed turn's partial state.
 
+**Durable event identity and reconnect-safe replay (done 2026-10-27; review
+pending).** The first half of Step 11: reconnect resumes the stream. It does not
+implement retention, turn recovery, retries, idempotent mutations, `/continue`
+or post-crash approval/question restore.
+
+- **Identity.** The stored `event.id` is the durable event id: an autoincrement
+  row id, never reused, stable across daemon restarts. A new `log` table holds
+  one `generation` (`log_<hex>`) for the database, created on first open and
+  kept afterwards; a new/deleted/replaced database gets a new generation, a copy
+  keeps it. A cursor is `<generation>:<id>` and ordering is ascending id. The bus
+  `seq` is only the current daemon's counter and is documented as **not** a
+  cursor. `/api/info` reports `log.{generation,head,head_cursor,floor}`.
+- **Migration.** An older database is migrated in place on open: the `event`
+  table is rebuilt with a nullable `session_id` (for globals), every row id and
+  the autoincrement sequence are preserved, and the `log` row is created. Stored
+  event paging (`?after=`) and export ids keep working unchanged.
+- **Persist before publish.** `Bus.publish` commits through the attached store
+  before enqueuing to any subscriber and stamps the durable `id`. A storage error
+  propagates — no subscriber sees an event that cannot be replayed. An event
+  whose session row is already gone is not stored or delivered; its deletion
+  event covers it.
+- **Global lifecycle and deletion.** `project.created/updated/deleted` are now
+  stored with `session_id: null`, as are `session.deleted` tombstones
+  (`{"id": …}` only). Deleting a session publishes one tombstone per deleted
+  session (root first), deleting a project publishes one per session before
+  `project.deleted`. Messages, events, snapshots and observations still cascade
+  with the session; the tombstone carries only the id needed to synchronize.
+- **Atomic replay boundary.** `GET /api/event` accepts `?cursor=` or
+  `Last-Event-ID` (the query wins). The server validates the cursor, registers
+  the live subscription and reads the durable head as one lock-protected step,
+  then replays `(cursor, head]` in 500-row pages, then continues live while
+  skipping ids at or below the head. Events published during catch-up are queued,
+  so they are delivered exactly once at the handoff and in order. No catch-up cap
+  yet.
+- **Filtering.** Session streams include the selected session, descendants and
+  global events. Membership is maintained from `session.created` (parent_id) and
+  the deletion tombstones, not only from live relationships, so descendants
+  created during replay are included and deleted subtrees stop matching. Numeric
+  gaps are documented as normal.
+- **Failures.** Malformed cursor → 400 `invalid_cursor`; another generation →
+  409 `cursor_generation`; ahead of head → 409 `cursor_ahead`; below the floor →
+  410 `history_unavailable` (floor is 0 until retention). Every one carries
+  `resync: true` plus generation/head/head_cursor/floor/floor_cursor. Slow
+  subscribers get one `bus.overflow` frame (not stored, no id) with
+  `dropped_after`, `generation` and `head`, then the stream ends.
+- **Clients.** `Client.events(cursor=…)` sends `Last-Event-ID`, yields durable
+  ids/cursors and raises `ResyncRequired` (status, code, generation, head,
+  head_cursor, floor) for 400/409/410. The inspector uses a fetch-based stream
+  instead of `EventSource`: it resumes from its cursor, deduplicates by durable
+  id, buffers events during a session load, and resyncs explicitly on cursor
+  failures or overflow. Reconnecting never resubmits a prompt.
+- **Exports.** The JSON boundary adds `log_generation`; the response adds
+  `x-nexus-log-generation`; the existing `event:<id>;seq:<seq>` header is
+  unchanged.
+- **Verified offline** (`tests/test_eventlog.py`, scripted/no provider): restart
+  preserving ids and generation while `seq` resets; a replaced database
+  rejecting the old generation; commit-before-delivery; publication during
+  replay and at the live handoff delivered once; 5,010-event paged replay;
+  filtered streams with legitimate gaps; descendant creation/deletion during a
+  live stream plus filter membership from recorded creates/tombstones; global
+  lifecycle and tombstone durability; malformed, foreign,
+  future and below-floor cursors; query/header precedence; overflow at the bus
+  and stream; a persistence failure that publishes nothing; disconnect cleanup;
+  the raw ASGI framing of `server.connected` and durable `id:` lines; stored
+  paging and export ids; and migrating the previous event schema. A real
+  `nexus serve` in an isolated home was also exercised with curl: `server.connected`
+  and durable `id:` frames, a live `project.updated` published during the stream,
+  a restart that kept the generation and head and resumed from the saved cursor
+  with a continuing id (while `seq` restarted), and a replaced database returning
+  409 `cursor_generation` with the resync head. Full suite:
+  241 tests; Ruff and `git diff --check` clean. No live provider or browser run
+  was performed; the inspector script was syntax-checked with `node --check`.
+- **Limitations.** No retention: the log grows without limit and the floor stays
+  0. Turn recovery, automatic retries, idempotent mutation requests, `/continue`
+  and restoring in-memory approvals/questions are still open. A daemon crash can
+  leave the last stored `session.status` at `busy` until a client reloads session
+  state (a clean shutdown writes idle). `bus.overflow.dropped_after` is the last
+  live event enqueued for that subscriber, which can be ahead of what it applied
+  during replay; clients resume from their own cursor. Archive transitions
+  remain root-log-only (existing limitation).
+
 **Reconnect contract.** Durable cursors survive daemon restarts (or explicitly
 identify a changed log generation). Catch-up and live subscription share an
 atomic boundary: no lost events between them. Replayed events have stable ids
@@ -1247,6 +1328,9 @@ show the wire view, the session tree and kernels.
 | Worktrees were created and removed by hand or without checks | Git argument arrays, real worktree metadata, dirty/main/in-use refusals and no branch deletion (done 2026-10-27) | Never destroy a checkout, a session's directory or an unrelated directory |
 | Sessions had no archive state | `archived` on every session of a root tree; one atomic idempotent transition, default/only/include list filters, and notices that do not wake an archived tree (done 2026-10-27) | Hide finished work without deleting it, stopping jobs or losing context |
 | Session history was inspectable but not portable | `GET /api/session/{id}/export` (Markdown transcript or versioned JSON with snapshots, messages and the complete event log), scoped to one session or its descendants, read from one SQLite read boundary (done 2026-10-27) | Take the context out without a provider call, a mutation or a silent truncation |
+| The SSE `id:` was the per-daemon `seq`, so every restart invalidated clients | Durable event row ids with a `log` generation and a `<generation>:<id>` cursor; `seq` is only a live counter (done 2026-10-27) | A resume cursor must survive restart and reject a replaced database |
+| Only session events were stored; project changes and deletions were live-only | Global lifecycle events and minimal `session.deleted` tombstones are stored and replayed; a session's own history still cascades (done 2026-10-27) | A reconnect must be able to rebuild project and session state |
+| A reconnecting client started a fresh live stream and had to catch up out of band | Atomic replay-to-live handoff: subscription and head boundary first, paged replay, overlap skipped, explicit resync codes and overflow (done 2026-10-27) | No lost or duplicated events across the connection boundary |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1277,7 +1361,8 @@ Work one reviewed increment at a time:
    notification handling — done 2026-10-27; see Step 10.
 4b. Add Markdown/JSON session export over the API, with an explicit read
    boundary and CLI file handling — done 2026-10-27; see Step 10.
-5. Durable events, restart recovery, idempotent requests and `/continue`.
+5. Durable events and reconnect-safe replay — done 2026-10-27; see Step 11.
+   Restart recovery, idempotent requests and `/continue` remain.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
 
@@ -1324,7 +1409,15 @@ Do not start the next increment until the current review is complete.
   artifacts to include yet and does not re-clip output.
 - Sessions from before snapshots existed are reconstructed once and marked
   `reconstructed`; the note is visible, but the original prompt is unknowable.
+- Reconnect resumes the event stream only. A crashed daemon can leave the last
+  stored `session.status` at `busy` (a clean shutdown writes idle), and pending
+  approvals/questions are in memory, so clients must reconcile with
+  `/api/session` after a restart. Turn recovery, automatic retries, idempotent
+  mutation requests and `/continue` remain open. Archive transitions are still
+  stored only in the root's log.
 - The `event` table grows without limit (every token delta is a row); no retention yet.
+  Reconnect uses durable ids and a log generation, but retention will have to raise
+  the floor and clients then get `history_unavailable` with a resync head.
 - Sign-in is only the local `nexus login`, not yet an API endpoint.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
 - No cross-provider message conversion beyond text and tool calls; switching
@@ -1345,3 +1438,12 @@ Do not start the next increment until the current review is complete.
 - Child sessions launched with `wait: false` are tested offline only.
 - `instructions` uses the Responses field. The current Codex CLI sends a
   developer message instead. Both work today; revisit if the backend changes.
+
+
+Delivery review of durable event replay: preserved the old AUTOINCREMENT high
+watermark even when its highest rows were deleted; included migration DDL in an
+explicit transaction; rejected explicitly empty cursors instead of falling back
+to live/header behavior. Inspector replay now deduplicates HTTP-loaded events
+and messages independently, so a later event-page boundary cannot hide a message
+missing from an earlier message fetch. Added regression coverage including a
+Node-driven inspector load/replay race. Full reviewed suite: 244 tests.

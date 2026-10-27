@@ -14,11 +14,13 @@ descendants.
 
 `session_snapshot` stores the JSON configuration a session froze at creation:
 the agent, rendered prompt, tool descriptions/guidance, child catalog and the
-session's `AGENTS.md` record (`nexus/snapshot.py`). `event` keeps every bus event
-that belongs to a session (deltas, wire requests and SSE events included), in
-order, so the inspector can show any past session down to the raw wire traffic.
-Rows are deleted with their session. Messages are append-only rows in session
-order.
+session's `AGENTS.md` record (`nexus/snapshot.py`). `event` is the durable event
+log: every published event, in publish order, so the inspector can show any past
+session down to the raw wire traffic and a client can reconnect from a cursor.
+Session events are deleted with their session; global events (`session_id` null:
+projects and `session.deleted` tombstones) are not. `log` holds this database's
+log generation and retention floor (`nexus/eventlog.py`). Messages are
+append-only rows in session order.
 """
 from __future__ import annotations
 
@@ -61,13 +63,19 @@ create table if not exists session (
 );
 create table if not exists event (
   id integer primary key autoincrement,
-  session_id text not null references session(id) on delete cascade,
+  session_id text references session(id) on delete cascade,
   seq integer not null,
   time real not null,
   type text not null,
   data text not null
 );
 create index if not exists event_session on event(session_id, id);
+create table if not exists log (
+  id integer primary key check (id = 1),
+  generation text not null,
+  created real not null,
+  floor integer not null default 0
+);
 create table if not exists session_snapshot (
   session_id text primary key references session(id) on delete cascade,
   data text not null,
@@ -94,6 +102,11 @@ create table if not exists file_observation (
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{int(time.time() * 1000):x}{secrets.token_hex(4)}"
+
+
+def new_generation() -> str:
+    """A fresh identifier for one database's event log."""
+    return f"log_{secrets.token_hex(8)}"
 
 
 def _archive_clause(mode: str) -> str:
@@ -168,6 +181,55 @@ class Store:
         if "archived" not in columns:  # databases from before session archiving: existing sessions stay live
             self.db.execute("alter table session add column archived integer not null default 0")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
+        self._migrate_event_log()
+        self._generation = self._ensure_log()
+
+    def _migrate_event_log(self) -> None:
+        """Make session_id nullable so global lifecycle events and tombstones can be logged.
+
+        The event table is rebuilt in place, preserving every row id (a cursor must
+        keep working after an upgrade) and the autoincrement sequence.
+        """
+        columns = {r["name"]: r for r in self.db.execute("pragma table_info(event)")}
+        if not columns["session_id"]["notnull"]:
+            return
+        sequence = self.db.execute("select seq from sqlite_sequence where name = 'event'").fetchone()
+        previous_highest = sequence[0] if sequence else 0
+        self.db.execute("pragma foreign_keys = off")
+        try:
+            with self.db:
+                self.db.execute("begin immediate")  # include DDL in the rollback boundary
+                self.db.execute("drop index if exists event_session")
+                self.db.execute("alter table event rename to event_old")
+                self.db.execute(
+                    "create table event ("
+                    " id integer primary key autoincrement,"
+                    " session_id text references session(id) on delete cascade,"
+                    " seq integer not null, time real not null, type text not null, data text not null)"
+                )
+                self.db.execute(
+                    "insert into event (id, session_id, seq, time, type, data)"
+                    " select id, session_id, seq, time, type, data from event_old"
+                )
+                self.db.execute("drop table event_old")
+                self.db.execute("create index if not exists event_session on event(session_id, id)")
+                highest = max(previous_highest, self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0])
+                if self.db.execute("select seq from sqlite_sequence where name = 'event'").fetchone() is None:
+                    self.db.execute("insert into sqlite_sequence (name, seq) values ('event', ?)", (highest,))
+                else:
+                    self.db.execute("update sqlite_sequence set seq = ? where name = 'event'", (highest,))
+        finally:
+            self.db.execute("pragma foreign_keys = on")
+
+    def _ensure_log(self) -> str:
+        """This database's log generation; created once and kept across restarts."""
+        row = self.db.execute("select generation from log where id = 1").fetchone()
+        if row is None:
+            with self.db:
+                self.db.execute("insert into log (id, generation, created, floor) values (1, ?, ?, 0)",
+                                (new_generation(), time.time()))
+            row = self.db.execute("select generation from log where id = 1").fetchone()
+        return row["generation"]
 
     def close(self) -> None:
         self.db.close()
@@ -275,6 +337,16 @@ class Store:
         )
         return [r["id"] for r in rows]
 
+    def tree_members(self, session_id: str) -> list[tuple[str, str | None]]:
+        """`(id, parent_id)` for the session and its descendants (for stream filtering)."""
+        rows = self.db.execute(
+            "with recursive tree(id, parent_id) as (select id, parent_id from session where id = ?"
+            " union all select s.id, s.parent_id from session s join tree on s.parent_id = tree.id)"
+            " select id, parent_id from tree",
+            (session_id,),
+        )
+        return [(r["id"], r["parent_id"]) for r in rows]
+
     def set_tree_archived(self, session_id: str, archived: bool) -> tuple[list[str], bool]:
         """Atomically set archive state for `session_id`'s whole tree.
 
@@ -362,12 +434,51 @@ class Store:
 
     # -- events --------------------------------------------------------------
 
-    def append_event(self, event: dict[str, Any]) -> None:
-        with self.db:
-            self.db.execute(
-                "insert into event (session_id, seq, time, type, data) values (?, ?, ?, ?, ?)",
-                (event["session_id"], event["seq"], event["time"], event["type"], json.dumps(event["data"])),
-            )
+    def append_event(self, event: dict[str, Any]) -> int | None:
+        """Commit one event and return its durable id.
+
+        Returns `None` when the event names a session that no longer exists: its
+        history was deleted with the session, so there is nothing to resume from.
+        Any other storage failure is raised; the caller must not publish an event
+        that was not stored.
+        """
+        try:
+            with self.db:
+                row = self.db.execute(
+                    "insert into event (session_id, seq, time, type, data) values (?, ?, ?, ?, ?)",
+                    (event["session_id"], event["seq"], event["time"], event["type"], json.dumps(event["data"])),
+                )
+                return row.lastrowid
+        except sqlite3.IntegrityError:
+            session_id = event["session_id"]
+            if session_id is not None and self.db.execute(
+                "select 1 from session where id = ?", (session_id,)
+            ).fetchone() is None:
+                return None
+            raise
+
+    def replay(self, after: int, upto: int, limit: int) -> list[dict[str, Any]]:
+        """Stored events with `after < id <= upto`, in order, at most `limit`."""
+        rows = self.db.execute(
+            "select * from event where id > ? and id <= ? order by id limit ?", (after, upto, limit))
+        return [self._event_row(r) for r in rows]
+
+    @staticmethod
+    def _event_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {"id": row["id"], "seq": row["seq"], "time": row["time"], "type": row["type"],
+                "session_id": row["session_id"], "data": json.loads(row["data"])}
+
+    def log_generation(self) -> str:
+        return self._generation
+
+    def log_head(self) -> int:
+        """The highest durable event id, or 0 for an empty log."""
+        return self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0]
+
+    def log_floor(self) -> int:
+        """The lowest event id still retained. No retention runs yet, so this is 0."""
+        row = self.db.execute("select floor from log where id = 1").fetchone()
+        return row["floor"] if row else 0
 
     def events(self, session_id: str, *, after: int = 0, limit: int = 1000, types: list[str] | None = None) -> list[dict[str, Any]]:
         sql = "select * from event where session_id = ? and id > ?"
@@ -376,8 +487,7 @@ class Store:
             sql += f" and type in ({', '.join('?' * len(types))})"
             params += types
         rows = self.db.execute(sql + " order by id limit ?", (*params, limit))
-        return [{"id": r["id"], "seq": r["seq"], "time": r["time"], "type": r["type"], "session_id": r["session_id"],
-                 "data": json.loads(r["data"])} for r in rows]
+        return [self._event_row(r) for r in rows]
 
     def event_counts(self, session_id: str) -> dict[str, int]:
         rows = self.db.execute("select type, count(*) n from event where session_id = ? group by type", (session_id,))

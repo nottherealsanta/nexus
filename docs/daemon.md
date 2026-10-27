@@ -56,14 +56,50 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
 - **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
-  `session`, `session_snapshot`, `message`, `event` and `file_observation`.
-  `session_snapshot` is
-  the JSON configuration frozen for one session; `event` holds every event of a
-  session, in order: the durable log behind the [inspector](inspector.md);
+  `session`, `session_snapshot`, `message`, `event`, `file_observation` and
+  `log`. `session_snapshot` is
+  the JSON configuration frozen for one session; `event` is the durable event
+  log, in publish order (see [Durable event log](#durable-event-log)); `log`
+  holds that database's log generation and retention floor;
   `file_observation` holds each session's read observations (see below).
   Deleting a project or session deletes everything under it, including its child
-  sessions, snapshots and observations. Archiving only changes one `archived`
-  column on every session in the tree; it deletes nothing.
+  sessions, snapshots, observations and session events. Archiving only changes
+  one `archived` column on every session in the tree; it deletes nothing.
+
+## Durable event log
+
+`nexus/bus.py` commits every published event to `event` before any subscriber
+receives it, and gives it its durable row `id`. `nexus/eventlog.py` turns that
+id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
+
+- **Generation.** `log.generation` (`log_<hex>`) identifies this database's log.
+  It is created on the first open of a database and kept across restarts. A new,
+  deleted or replaced database gets a new generation; a copy keeps it. `/api/info`
+  reports it with the current head and the retention floor.
+- **Ordering and ids.** `event.id` is a never-reused autoincrement row id, so
+  ordering is publish order and ids survive restarts. The bus `seq` is only the
+  current daemon's counter and is not a cursor. An old database is migrated in
+  place on open: the event table is rebuilt to allow `session_id: null` while
+  every row id is preserved (and the autoincrement sequence continues).
+- **Globals and deletion.** Session events are deleted with their session. Global
+  events are stored with `session_id: null`: project create/update/delete and a
+  minimal `session.deleted` tombstone (`{"id": "ses_…"}`). Deleting a session or
+  project publishes one tombstone per deleted session, so a reconnecting client
+  cannot miss a deletion that no longer has a session row. Statistics, messages,
+  snapshots and observations still disappear with the session.
+- **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
+  the live subscription and reads the head atomically, replays the stored log up
+  to that head in pages, then continues live while skipping the overlap. Cursor
+  errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
+  JSON responses with the current head, not a silent "start now". The full
+  contract, filtering and overflow are in [api.md](api.md#event-stream).
+- **Failures.** A storage error from the log propagates out of `publish`; the
+  event is not delivered and does not get an `id`. An event naming a session
+  whose row is already gone is not delivered either; the tombstone covers it.
+- **Not yet.** No retention or compaction runs: the log grows without limit and
+  the floor stays 0. Turn recovery, retries and resuming in-memory approvals or
+  questions after a crash are separate (Step 11); a reconnect resumes the stream,
+  not interrupted work.
 
 ## Session archiving
 
@@ -202,7 +238,8 @@ nexus project list | open [PATH]
 
 The CLI subscribes to `/api/event?session=…` before it posts the prompt, and
 renders events (a child's under a `── child … ──` header) until every session in
-the tree is idle. `nexus session list` shows the tree. It answers `permission.asked`
+the tree is idle. The Python client (`Client.events`) understands durable ids
+and can resume from a cursor; the CLI's turn view does not reconnect by itself. `nexus session list` shows the tree. It answers `permission.asked`
 with a y/N prompt. For `question.asked` it shows each question and its options,
 collects the answers and submits them; Ctrl-C, EOF or an interrupted turn
 abandons the prompt without submitting, and the daemon closes the question.
@@ -215,8 +252,13 @@ stops with an unarchive command.
 ## Not verified / not yet
 
 - **Crashes.** A daemon crash mid-turn loses the in-flight assistant message;
-  messages saved before it stay.
-- **Turns after restart.** Turns are not resumed after a restart.
+  messages saved before it stay. A clean shutdown writes the closing events; a
+  crash can leave the last stored `session.status` as `busy` until a client
+  reloads `/api/session` (turn recovery is Step 11).
+- **Turns after restart.** Turns are not resumed after a restart. Event streams
+  resume; in-memory approvals and questions do not.
+- **Retention.** The event log has no expiry or compaction yet; every cursor
+  stays resumable and the floor is 0.
 - **Daemon version.** Nothing checks that a running daemon runs the same code
   as the client. Run `nexus daemon stop` after changing core.
 

@@ -104,6 +104,10 @@ const MAX_EVENTS = 50000, PAGE = 5000, RAW_ROWS = 1500, PREVIEW = 180, OUTPUT_LI
 const S = { sessions: [], projects: [], sel: params.get("session") || null, level: params.get("level") || "conversation",
             session: null, messages: [], events: [], eventsMore: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS,
             pendingQuestions: [] };
+// The live stream resumes from a durable cursor (see docs/api.md). `lastId` deduplicates
+// replay/live overlap; `pending` holds events that arrive while a session load is in flight.
+const live = { cursor: null, generation: null, head: null, lastId: 0, loading: false, pending: [],
+               retry: 500, timer: null, abort: null };
 
 // -- tiny DOM helpers ---------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -210,20 +214,35 @@ function renderSidebar() {
 }
 
 // -- loading a session --------------------------------------------------------------
+let loadSeq = 0;
 async function select(id) {
+  const token = ++loadSeq;
   S.sel = id; S.context = null; S.rawShown = RAW_ROWS; setHash(); renderSidebar();
+  live.loading = true;
   const main = document.getElementById("main");
   main.replaceChildren(h("div", { class: "empty" }, "Loading…"));
-  const [session, messages, pendingQuestions] = await Promise.all([
-    api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`)]);
-  const events = []; let after = 0, more = true;
-  while (more && events.length < MAX_EVENTS) {
-    const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
-    events.push(...page.events); more = page.more; after = events.length ? events[events.length - 1].id : 0;
+  try {
+    const [session, messages, pendingQuestions] = await Promise.all([
+      api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`)]);
+    const events = []; let after = 0, more = true;
+    while (more && events.length < MAX_EVENTS) {
+      const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
+      events.push(...page.events); more = page.more; after = events.length ? events[events.length - 1].id : 0;
+    }
+    if (token !== loadSeq || S.sel !== id) return;
+    Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions });
+    // HTTP resources have independent boundaries. Only stream delivery advances lastId;
+    // deduplicate loaded events and messages separately when replay reaches them.
+    render();
+  } catch (error) {
+    if (token === loadSeq && S.sel === id) main.replaceChildren(h("div", { class: "empty err" }, String(error)));
+  } finally {
+    if (token === loadSeq) { live.loading = false; flushPending(); }
   }
-  if (S.sel !== id) return;
-  Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions });
-  render();
+}
+function flushPending() {
+  const pending = live.pending.splice(0);
+  for (const event of pending) applyEvent(event);
 }
 
 // -- rendering ---------------------------------------------------------------------------
@@ -443,7 +462,7 @@ function viewRaw() {
   for (const e of shown) {
     const detail = h("tr", { hidden: "" }, h("td", { colspan: "4" }, h("pre", { class: "json" }, pretty(e))));
     tbody.append(h("tr", { class: "ev", onclick: () => detail.toggleAttribute("hidden") },
-      h("td", { class: "num mono" }, e.id ?? `live ${e.seq}`), h("td", { class: "num mono" }, `+${(e.time - t0).toFixed(3)}s`),
+      h("td", { class: "num mono" }, e.id != null ? e.id : "live"), h("td", { class: "num mono" }, `+${(e.time - t0).toFixed(3)}s`),
       h("td", { class: "type" + (isWire(e.type) ? " wire" : "") }, e.type, e.type === "wire_event" ? ` · ${e.data.name}` : ""),
       h("td", { class: "preview" }, clip(compact(e.data), PREVIEW))), detail);
   }
@@ -461,38 +480,151 @@ function viewRaw() {
 }
 
 // -- live updates -------------------------------------------------------------------------
+// One fetch-based SSE connection: the URL carries the last cursor, so a reconnect replays
+// the durable log from exactly there. Explicit continuity failures (invalid or replaced
+// cursor) and overflow end in a full resync instead of silently starting "now".
 let sideTimer = null;
-function live() {
+const isLifecycle = (type) => type.startsWith("session.") || type.startsWith("project.") ||
+  type.startsWith("bash.") || type === "kernel.deleted";
+
+function scheduleReconnect(reason) {
+  const seconds = Math.max(1, Math.round(live.retry / 1000));
+  document.getElementById("conn").textContent = `${reason}; reconnecting in ${seconds}s…`;
+  clearTimeout(live.timer);
+  live.timer = setTimeout(connect, live.retry);
+  live.retry = Math.min(live.retry * 2, 10000);
+}
+
+async function resync(reason) {
+  if (live.abort) live.abort.abort();
   const conn = document.getElementById("conn");
-  const source = new EventSource(`/api/event?token=${encodeURIComponent(TOKEN)}`);
-  source.onopen = () => { conn.textContent = "live · " + location.host; };
-  source.onerror = () => { conn.textContent = "disconnected; retrying…"; };
-  source.onmessage = () => {};
-  const handle = (msg) => {
-    const e = JSON.parse(msg.data);
-    if (!e.type) return;
-    if (e.type === "code.cell" || e.type === "kernel.deleted") loadKernels();
-    if (e.type === "bash.started" || e.type === "bash.finished") loadJobs();
-    if (e.type.startsWith("session.") || e.type.startsWith("project.")) { clearTimeout(sideTimer); sideTimer = setTimeout(loadSidebar, 200); }
-    if ((e.type === "session.archived" || e.type === "session.unarchived") && S.sel) {
-      api(`/api/session/${S.sel}`).then((s) => { S.session = s; renderSoon(); }).catch(() => {});
-    }
-    if (S.session && e.session_id === S.session.id) {
-      S.events.push(e);
-      if (e.type === "message.added") S.messages.push(e.data);
-      if (e.type === "question.asked" || e.type === "question.replied") {
-        api(`/api/session/${S.session.id}/question`).then((qs) => { S.pendingQuestions = qs; renderSoon(); }).catch(() => {});
+  conn.textContent = `resyncing (${reason})…`;
+  live.cursor = null; live.lastId = 0; live.pending = [];
+  // Read the head before reloading, then resume from that watermark: replay trades a few
+  // duplicate ids (deduplicated below) for a guarantee that nothing in between is lost.
+  let resume = null;
+  try {
+    const info = await api("/api/info");
+    if (info.log) { live.generation = info.log.generation; resume = info.log.head_cursor; }
+  } catch (error) { /* no watermark: start live */ }
+  try {
+    await loadSidebar();
+    if (S.sel) await select(S.sel);
+  } catch (error) {
+    conn.textContent = `resync failed: ${error}`;
+  }
+  live.cursor = resume;
+  live.retry = 500;
+  clearTimeout(live.timer);
+  live.timer = setTimeout(connect, 0);
+}
+
+async function connect() {
+  clearTimeout(live.timer);
+  if (live.abort) live.abort.abort();  // one live connection at a time
+  const controller = new AbortController();
+  live.abort = controller;
+  const url = new URL("/api/event", location.origin);
+  url.searchParams.set("token", TOKEN);
+  if (live.cursor) url.searchParams.set("cursor", live.cursor);  // the query cursor wins over Last-Event-ID
+  let response;
+  try {
+    response = await fetch(url, { headers: { authorization: `Bearer ${TOKEN}` }, cache: "no-store", signal: controller.signal });
+  } catch (error) {
+    if (!controller.signal.aborted) scheduleReconnect("connection failed");
+    return;
+  }
+  if (!response.ok) {
+    let payload = {};
+    try { payload = await response.json(); } catch (error) { /* not JSON */ }
+    if (payload && payload.resync) { await resync(`${payload.code || "cursor"}: ${payload.error || response.status}`); return; }
+    scheduleReconnect(`stream error HTTP ${response.status}`);
+    return;
+  }
+  document.getElementById("conn").textContent = live.cursor ? "catching up…" : `live · ${location.host}`;
+  live.retry = 500;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) >= 0) {
+        handleFrame(buffer.slice(0, cut));
+        buffer = buffer.slice(cut + 2);
       }
-      if (e.type === "session.updated" || e.type === "session.status" || e.type === "session.directory_changed" || e.type === "session.workspace_tools") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
-      S.context = null;
-      renderSoon();
     }
-  };
-  for (const type of ["message.added", "session.created", "session.updated", "session.snapshot", "session.deleted", "session.status", "session.error", "session.notified",
-    "session.workspace_tools", "session.directory_changed", "session.archived", "session.unarchived", "worktree.listed", "worktree.created", "worktree.deleted",
-    "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "question.asked", "question.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
-    "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
-    source.addEventListener(type, handle);
+  } catch (error) {
+    if (controller.signal.aborted) return;
+  }
+  if (!controller.signal.aborted) scheduleReconnect("disconnected");
+}
+
+function handleFrame(frame) {
+  let name = "message";
+  const data = [];
+  for (const line of frame.split("\n")) {
+    if (!line || line.startsWith(":")) continue;
+    const at = line.indexOf(":");
+    const field = at < 0 ? line : line.slice(0, at);
+    let value = at < 0 ? "" : line.slice(at + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") name = value; else if (field === "data") data.push(value);
+  }
+  let payload;
+  try { payload = JSON.parse(data.join("\n")); } catch (error) { return; }
+  if (name === "server.connected") {
+    live.generation = payload.generation || null;
+    live.head = payload.head ?? null;
+    if (!live.cursor) {
+      // A start-now connection: the boundary is this head, so nothing below it will arrive.
+      if (payload.head_cursor) live.cursor = payload.head_cursor;
+      if (payload.head != null) live.lastId = payload.head;
+    }
+    document.getElementById("conn").textContent = `live · ${location.host}`;
+    return;
+  }
+  const event = payload && payload.type ? payload : { type: name, ...payload };
+  if (event.type === "bus.overflow") {
+    resync(`the live stream fell behind after event ${event.data && event.data.dropped_after != null ? event.data.dropped_after : "?"}`);
+    return;
+  }
+  if (live.loading) live.pending.push(event); else applyEvent(event);
+}
+
+function applyEvent(e) {
+  if (!e || !e.type) return;
+  if (e.id != null) {
+    if (e.id <= live.lastId && !isLifecycle(e.type)) return;  // replay/live overlap
+    if (e.id > live.lastId) {
+      live.lastId = e.id;
+      if (e.cursor) live.cursor = e.cursor;
+      else if (live.generation) live.cursor = `${live.generation}:${e.id}`;
+    }
+  }
+  if (e.type === "code.cell" || e.type === "kernel.deleted") loadKernels();
+  if (e.type === "bash.started" || e.type === "bash.finished") loadJobs();
+  if (e.type.startsWith("session.") || e.type.startsWith("project.")) { clearTimeout(sideTimer); sideTimer = setTimeout(loadSidebar, 200); }
+  if (e.type === "session.deleted" && e.data && e.data.id === S.sel) {
+    S.sel = null; S.session = null; S.events = []; S.messages = []; setHash(); renderSidebar();
+    document.getElementById("main").replaceChildren(h("div", { class: "empty" }, `Session ${e.data.id} was deleted; its history is gone.`));
+    return;
+  }
+  if ((e.type === "session.archived" || e.type === "session.unarchived") && S.sel) {
+    api(`/api/session/${S.sel}`).then((s) => { S.session = s; renderSoon(); }).catch(() => {});
+  }
+  if (S.session && e.session_id === S.session.id) {
+    if (!S.events.some((stored) => stored.id === e.id)) S.events.push(e);
+    if (e.type === "message.added" && !S.messages.some((stored) => stored.id === e.data.id)) S.messages.push(e.data);
+    if (e.type === "question.asked" || e.type === "question.replied") {
+      api(`/api/session/${S.session.id}/question`).then((qs) => { S.pendingQuestions = qs; renderSoon(); }).catch(() => {});
+    }
+    if (e.type === "session.updated" || e.type === "session.status" || e.type === "session.directory_changed" || e.type === "session.workspace_tools") api(`/api/session/${S.session.id}`).then((s) => { S.session = s; renderSoon(); });
+    S.context = null;
+    renderSoon();
   }
 }
 
@@ -504,9 +636,17 @@ document.addEventListener("keydown", (ev) => {
 
 (async () => {
   if (!TOKEN) { document.getElementById("main").replaceChildren(h("div", { class: "empty" }, "No token. Open this page with `nexus sessions inspector`.")); return; }
+  // Watermark first: load state, then resume the stream from the head read before the load,
+  // so an event published during loading is replayed and deduplicated rather than missed.
+  let resume = null;
+  try {
+    const info = await api("/api/info");
+    if (info.log) { live.generation = info.log.generation; resume = info.log.head_cursor; }
+  } catch (error) { /* start live without a watermark */ }
   try { await loadSidebar(); } catch (e) { document.getElementById("main").replaceChildren(h("div", { class: "empty err" }, String(e))); return; }
-  live();
-  if (S.sel) select(S.sel);
+  if (S.sel) await select(S.sel); else { live.loading = false; flushPending(); }
+  live.cursor = resume;
+  connect();
 })();
 </script>
 </body>

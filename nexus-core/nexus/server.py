@@ -7,7 +7,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 
 | method | path | what |
 | --- | --- | --- |
-| GET | /api/info | daemon identity: version, pid, home, url |
+| GET | /api/info | daemon identity: version, pid, home, url, log generation and head |
 | GET | /api/provider | the provider table, with `connected` |
 | GET | /api/model | models of connected providers (models.dev); `?provider=` |
 | GET | /api/model/default | the default `provider/model` |
@@ -42,7 +42,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/question | pending questions for that session |
 | POST | /api/session/{id}/question/{qid} | `{answers: [...]}` → 204; 400 invalid, 404 unknown, 409 already resolved |
 | GET | /inspector | the session inspector page (static; it reads the API with the token from its URL fragment) |
-| GET | /api/event | server-sent events; `?session=` filters to that session and its descendants |
+| GET | /api/event | server-sent events; `?session=` filters to that session and its descendants; `?cursor=` or `Last-Event-ID` replays from a durable cursor |
 """
 from __future__ import annotations
 
@@ -65,6 +65,7 @@ from starlette.routing import Route
 from . import export
 from .bus import Bus
 from .codec import to_json
+from .eventlog import CursorError, Stream, format_cursor, parse_cursor
 from .llmhub import catalog
 from .llmhub.hub import connected
 from .llmhub.providers import PROVIDERS
@@ -149,6 +150,30 @@ class ExportResponse(StreamingResponse):
             self.export_view.close()
 
 
+class EventStreamResponse(StreamingResponse):
+    """Close the live subscription even if the response body never starts."""
+
+    def __init__(self, *args: Any, stream: Stream, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.stream = stream
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.stream.close()
+
+
+def sse(event: dict[str, Any]) -> str:
+    """One SSE frame. Events without a durable id (stream control) carry no `id:` line."""
+    lines = []
+    if event.get("id") is not None:
+        lines.append(f"id: {event.get('cursor') or event['id']}")
+    lines.append(f"event: {event['type']}")
+    lines.append(f"data: {json.dumps(event)}")
+    return "\n".join(lines) + "\n\n"
+
+
 def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     def route(handler: Handler) -> Handler:
         async def wrapped(request: Request) -> Response:
@@ -165,6 +190,10 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 return _error(409, str(exc))
             except Conflict as exc:
                 return _error(409, str(exc))
+            except CursorError as exc:
+                payload = exc.payload(runtime.store)
+                return JSONResponse(payload, status_code=exc.status,
+                                    headers={"x-nexus-log-generation": payload["generation"]})
             except ToolError as exc:
                 return _error(400, str(exc))
             except (ValueError, KeyError, TypeError) as exc:
@@ -174,7 +203,13 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     p = lambda request, name: request.path_params[name]
 
     async def info(request: Request) -> Response:
-        return JSONResponse({"name": "nexus", "version": VERSION, "pid": os.getpid(), "home": str(home()), "url": url})
+        generation = runtime.store.log_generation()
+        head = runtime.store.log_head()
+        return JSONResponse({
+            "name": "nexus", "version": VERSION, "pid": os.getpid(), "home": str(home()), "url": url,
+            "log": {"generation": generation, "head": head, "head_cursor": format_cursor(generation, head),
+                    "floor": runtime.store.log_floor()},
+        })
 
     async def providers(request: Request) -> Response:
         live = set(connected())
@@ -353,6 +388,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 "cache-control": "no-store",
                 "x-nexus-export-format-version": str(export.FORMAT_VERSION),
                 "x-nexus-export-boundary": f"event:{view.boundary.event_id};seq:{view.boundary.seq}",
+                "x-nexus-log-generation": view.boundary.generation,
             },
         )
 
@@ -411,16 +447,33 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse(runtime.kernels.get(kid).json())
 
     async def events(request: Request) -> Response:
-        only = request.query_params.get("session")
+        only = request.query_params.get("session") or None
+        if only is not None:
+            runtime.session(only)  # an unknown filter cannot be followed; the client must resync
+        store = runtime.store
+        generation = store.log_generation()
+        # An explicit query cursor wins over an automatic `Last-Event-ID`, so a client can
+        # always decide where to resume from a script or a stored position.
+        supplied = request.query_params.get("cursor") if "cursor" in request.query_params else request.headers.get("last-event-id")
+        after = parse_cursor(supplied, generation=generation, head=store.log_head(), floor=store.log_floor()) \
+            if supplied is not None else None
+        stream = Stream.open(store, runtime.bus, after=after, session_id=only)
+        connected = {
+            "version": VERSION, "generation": stream.generation, "head": stream.head,
+            "head_cursor": format_cursor(stream.generation, stream.head),
+            "resumed_from": after, "session": only, "floor": store.log_floor(),
+        }
 
-        async def stream() -> AsyncIterator[str]:
-            yield f"event: server.connected\ndata: {json.dumps({'version': VERSION})}\n\n"
-            async for event in runtime.bus.subscribe():
-                if only and event["session_id"] is not None and not runtime.in_tree(event["session_id"], only):
-                    continue
-                yield f"id: {event['seq']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        async def body() -> AsyncIterator[str]:
+            yield f"event: server.connected\ndata: {json.dumps(connected)}\n\n"
+            async for event in stream.events():
+                yield sse(event)
 
-        return StreamingResponse(stream(), media_type="text/event-stream", headers={"cache-control": "no-cache"})
+        return EventStreamResponse(
+            body(), stream=stream, media_type="text/event-stream",
+            headers={"cache-control": "no-cache", "x-nexus-log-generation": stream.generation,
+                     "x-accel-buffering": "no"},
+        )
 
     async def inspector(request: Request) -> Response:
         # No data in the page itself, so no token needed to load it; every API call it makes needs the token.

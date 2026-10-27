@@ -160,7 +160,9 @@ class Renderer:
             self._print(f"{CYAN}⌂ worktree {verb} {data['path']}{branch} (session directory unchanged){RESET}")
         elif kind == "bus.overflow":
             self._break()
-            self._print(f"{RED}event stream overflowed after event {data['dropped_after']}; reconnect to continue{RESET}")
+            after = data.get("dropped_after")
+            where = f" after event {after}" if after is not None else ""
+            self._print(f"{RED}event stream overflowed{where}; reconnect from the last applied cursor to catch up{RESET}")
 
 
 # -- daemon client flows -----------------------------------------------------

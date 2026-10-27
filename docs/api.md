@@ -13,8 +13,9 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
   `~/.nexus10/daemon.json` (mode 0600). `GET /api/event` also accepts
   `?token=` for browser `EventSource`. A missing or wrong token gets 401.
 - **Bodies.** JSON objects, at most 1 MiB.
-- **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id)
-  or 409 (a turn is already running).
+- **Errors.** `{"error": "..."}` with 400 (bad input), 401, 404 (unknown id),
+  409 (a turn is already running) or 410 (history no longer retained; see
+  [Event stream](#event-stream)).
 
 ## Endpoints
 
@@ -26,7 +27,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
-| GET | `/api/info` | | `{name, version, pid, home, url}` |
+| GET | `/api/info` | | `{name, version, pid, home, url, log: {generation, head, head_cursor, floor}}` |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
@@ -64,7 +65,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/question` | | every pending `ask` question request |
 | GET | `/api/session/{id}/question` | | pending questions for that session (empty list when none) |
 | POST | `/api/session/{id}/question/{qid}` | `{answers: [{question_id, selected?, text?}, …]}` | 204; 400 invalid answer, 404 unknown question or session, 409 already resolved |
-| GET | `/api/event` | `?session=` (that session and its descendants) | server-sent events (below) |
+| GET | `/api/event` | `?session=` (that session and its descendants), `?cursor=<generation>:<id>` (or `Last-Event-ID`) | server-sent events (below) |
 | GET | `/inspector` | | the session inspector page ([inspector.md](inspector.md)); static, no token needed to load it |
 
 ### Objects
@@ -214,7 +215,8 @@ Responses:
 
 The filename is sent as `content-disposition: attachment; filename="…"`.
 `x-nexus-export-format-version` is `1`; `x-nexus-export-boundary` reports
-`event:<event id>;seq:<bus seq>` for the read boundary. A missing or unknown
+`event:<event id>;seq:<bus seq>` for the read boundary and
+`x-nexus-log-generation` names the log those ids belong to. A missing or unknown
 `format` and an unknown `scope` are 400, an unknown session is 404, and a
 missing or wrong token is 401.
 
@@ -226,8 +228,11 @@ the same before and after the export. There is no export without a session.
 One export opens its own SQLite connection in read-only mode and reads
 everything inside one transaction. Session rows, snapshots, messages and events
 therefore come from one coherent database view even while turns keep writing;
-the watermark (`boundary.event_id`, `boundary.seq`, per-session counts and the
-newest `session.updated`) names that view. The read transaction is held while
+the watermark (`boundary.log_generation`, `boundary.event_id`, `boundary.seq`,
+per-session counts and the newest `session.updated`) names that view. `event_id`
+is the durable boundary (a resume cursor is `<log_generation>:<event_id>`);
+`seq` is the publishing daemon's counter and is informational only. The read
+transaction is held while
 the response streams. Writes after the boundary are not in the export, which is
 why a running session's export is labelled durable partial state.
 
@@ -283,7 +288,7 @@ one.
   "scope": "tree", "root": "ses_…", "session_count": 2,
   "state": {"running": false, "running_sessions": [], "durable_partial": false,
             "note": "…"},                       // running/partial explanation
-  "boundary": {"event_id": 4200, "seq": 9000, "session_updated": 1793…,
+  "boundary": {"log_generation": "log_…", "event_id": 4200, "seq": 9000, "session_updated": 1793…,
                "counts": {"ses_…": {"messages": 4, "events": 88}}, "note": "…"},
   "sessions": [{
     "session": {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path",
@@ -308,11 +313,11 @@ one.
 ```
 
 Records keep the API shapes: `messages` is the `/message` list (ids, per-session
-`seq`, parts with `origin` and `raw`), and `events` is the stored log (event row
-`id`, bus `seq`, time, type, session id, data) in order and complete for the
-boundary. `tree.children` lists every direct child; `children_in_export` lists
-the ones included by the scope. `snapshot` is the full stored snapshot or
-`null`.
+`seq`, parts with `origin` and `raw`), and `events` is the stored log (durable
+event row `id`, publishing daemon's `seq`, time, type, session id, data) in order
+and complete for the boundary. `tree.children` lists every direct child;
+`children_in_export` lists the ones included by the scope. `snapshot` is the full
+stored snapshot or `null`.
 
 The snapshot provenance is labelled, never inferred. `origin: "created"` was
 recorded when the session was created: its frozen agent prompt is the starting
@@ -338,33 +343,135 @@ unless `--force` is passed. The CLI downloads through the API to a temporary
 response succeeded (exclusive hard link, or atomic replacement with `--force`); a failed download removes the temporary file and leaves an
 earlier destination untouched. See [daemon.md](daemon.md#session-export).
 
+`GET /api/session/{id}/event` reads one session's stored log by durable row id
+(`?after=<event id>`); global events are not part of a session's log.
+
+`GET /api/session/{id}/export` adds `x-nexus-log-generation` next to the boundary
+headers, and the JSON `boundary` carries `log_generation` beside `event_id` and
+`seq` (see [Session export](#session-export)).
+
 ## Event stream
 
-`GET /api/event` is `text/event-stream`. The first event is
-`server.connected`. Each later event is:
+`GET /api/event` is `text/event-stream`. The first frame is `server.connected`;
+it has no `id:` line:
 
 ```
-id: 42
+event: server.connected
+data: {"version": "0.10.0.dev0", "generation": "log_1a2b3c4d5e6f7a8b", "head": 4200,
+       "head_cursor": "log_1a2b3c4d5e6f7a8b:4200", "resumed_from": null,
+       "session": null, "floor": 0}
+```
+
+Every later frame is one durable log row (the one exception, `bus.overflow`, is
+stream control and described below), and the SSE `id:` line is its cursor:
+
+```
+id: log_1a2b3c4d5e6f7a8b:4201
 event: text_delta
-data: {"seq": 42, "time": 1793…, "type": "text_delta", "session_id": "ses_…", "data": {"type": "text_delta", "text": "Hel"}}
+data: {"id": 4201, "cursor": "log_1a2b3c4d5e6f7a8b:4201", "seq": 77, "time": 1793…,
+       "type": "text_delta", "session_id": "ses_…", "data": {"type": "text_delta", "text": "Hel"}}
 ```
 
-`seq` increases by one per event across the whole daemon, so a gap means
-something was missed. With `?session=`, only events of that session and its
-descendants, plus global events (`session_id: null`), are sent. A subscriber
-more than 10 000 events behind gets `bus.overflow` and is disconnected.
+| Field | Meaning |
+| --- | --- |
+| `id` | The durable row id in this database's event log. Stable across daemon restarts. |
+| `cursor` | `<log generation>:<event id>`. Ordering is ascending event id. |
+| `generation` | Identifies this database's log. In `/api/info` as `log.generation`. A new or replaced database has a new generation; a copied database keeps the same one. |
+| `seq` | The publishing daemon's own counter. It restarts at 1 on every daemon start. **Not** a cursor; after a replayed range it can jump backwards. |
+| `head`, `head_cursor`, `floor` | The durable head and retention floor at the moment of the request (`/api/info` reports the same). |
 
-Every event that belongs to a session is also stored (`GET
-/api/session/{id}/event`). A client that reconnects catches up from the stored
-log with `?after=<last event id>`.
+`generation`, `head`, `head_cursor` and `floor` are stream/info metadata, not
+fields of every event; each event carries `id`, `cursor`, `seq`, `time`, `type`,
+`session_id` and `data`.
+
+Events are committed before subscribers receive them; a storage failure raises
+instead of publishing an event that could not be replayed. A session event whose
+session row is already gone is not published (the deletion tombstone covers it).
+
+### Resume, replay and cursors
+
+Pass the cursor of the last event applied as `?cursor=<generation>:<id>`, or as
+the `Last-Event-ID` header (a browser `EventSource` sends it automatically after
+the `id:` lines above). If both are present the **query parameter wins**. The
+stream resumes strictly after that id.
+
+The cursor is validated before the stream opens:
+
+| Situation | Status | `code` |
+| --- | --- | --- |
+| Malformed cursor text | 400 | `invalid_cursor` |
+| Cursor from another log generation | 409 | `cursor_generation` |
+| Cursor ahead of the log head | 409 | `cursor_ahead` |
+| Cursor older than the retained floor | 410 | `history_unavailable` |
+| `?session=` names an unknown session | 404 | — |
+
+Those responses are ordinary JSON (not a stream) and carry an actionable resync:
+
+```json
+{"error": "…", "code": "cursor_generation", "resync": true,
+ "generation": "log_…", "head": 4200, "head_cursor": "log_…:4200",
+ "floor": 0, "floor_cursor": "log_…:0"}
+```
+
+Reload state from `GET /api/project` and `GET /api/session` (and the session's
+events if needed), then resume from `head_cursor`; omitting the cursor means
+"start live at the boundary". A cursor error is never silently turned into
+"start now". This increment does not expire history, so `floor` is 0 and
+`history_unavailable` is already defined for retention that is not implemented
+yet.
+
+The replay-to-live boundary is atomic. The server registers the live
+subscription, reads the durable head as the same step, and then pages the stored
+log up to that head (500 rows per page). Events published during catch-up are
+already queued for the live phase; events at or below the head are skipped on the
+live side. So a publication during replay is delivered exactly once, at the
+handoff, in order. No `limit` is applied to catch-up: the whole history from the
+cursor is streamed.
+
+`bus.overflow` is stream control, not a log event: it has no `id:` line and is
+not stored.
+
+```
+event: bus.overflow
+data: {"type": "bus.overflow", "time": …, "session_id": null, "id": null,
+       "data": {"dropped_after": 4210, "generation": "log_…", "head": 4300}}
+```
+
+A subscriber more than 10 000 events behind is cut off after this frame.
+`dropped_after` is the last live event enqueued for that subscriber (not
+necessarily the last one the client applied); reconnect from your own last
+applied cursor, or resync.
+
+### Filtering and gaps
+
+With `?session=`, only events of that session, its descendants, and global events
+(`session_id: null`) are sent. Ids are global, so a filtered stream naturally
+skips unrelated numbers: **a gap alone is not evidence of loss**. Only
+`bus.overflow`, a cursor/resync response, or a subscriber ending without either
+means continuity was broken.
+
+Membership is maintained from the log itself. A `session.created` replayed or
+received during the stream adds a descendant whose `parent_id` is already in the
+tree; a `session.deleted` tombstone removes that session and its cached
+descendants. Filtering therefore never depends on a relationship that a deletion
+removed. Deleting the selected session leaves the stream open for global events;
+a client should reload that tree when it sees the tombstone.
+
+Global events are stored with `session_id: null`: `project.created`,
+`project.updated`, `project.deleted`, and the minimal `session.deleted`
+tombstone (`{"id": "ses_…"}`) so a reconnect cannot miss them for lack of a
+session row. Deleting a session still deletes its messages, events, snapshots and
+observations; the tombstone contains only the id needed for synchronization.
+Deleting a project publishes one tombstone per deleted session, then
+`project.deleted`.
 
 | Type | Data |
 | --- | --- |
-| `project.created` / `project.updated` | `Project` |
-| `project.deleted` | `{id}` |
-| `session.created` / `session.updated` | `Session` |
+| `project.created` / `project.updated` | `Project`; global, stored |
+| `project.deleted` | `{id}`; global, stored |
+| `session.created` / `session.updated` | `Session`, stored in that session's log |
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
-| `session.deleted` | `{id}` |
+| `session.deleted` | `{id}`: a global tombstone stored without the session's history |
 | `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
 | `session.status` | `{status: "busy" or "idle"}`, before and after each turn |
 | `message.added` | `Message`, once it is saved |
@@ -378,7 +485,7 @@ log with `?after=<last event id>`.
 | `worktree.listed` | `{repository, main, session_directory, worktrees: [...]}` |
 | `worktree.created` / `worktree.deleted` | `{path, branch, head, repository, main, session_directory}` |
 | `session.error` | `{kind: "provider" or "auth" or "request" or "interrupted", message, status?, body?}` |
-| `bus.overflow` | `{dropped_after}` |
+| `bus.overflow` | `{dropped_after, generation, head}`: stream control, never stored; resume from your cursor or resync |
 | loop and stream events | unchanged from [stream-events.md](stream-events.md): `wire_request`, `wire_response`, `wire_event`, `text_delta`, `reasoning_delta`, `tool_call_started`, `tool_args_delta`, `part_done`, `usage`, `done`, `step_start`, `tool_start`, `tool_end`, `turn_end` |
 
 `wire_request` carries the exact request body and headers, with credentials
@@ -387,7 +494,8 @@ model sees is hidden from clients.
 
 ## A turn, end to end
 
-1. Subscribe: `GET /api/event?session=ses_…` and wait for `server.connected`.
+1. Subscribe: `GET /api/event?session=ses_…` (with `?cursor=` / `Last-Event-ID`
+   when reconnecting) and wait for `server.connected`.
 2. `POST /api/session/ses_…/prompt {"text": "…"}` → 202.
 3. Events: `session.status busy` → `message.added` (user) → `step_start` →
    `wire_request` → `wire_event`… with `text_delta`/`tool_call_started`… →
@@ -407,9 +515,15 @@ curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.
 
 ## Not yet
 
-Login over the API (sign-in is the local `nexus login`), files and diffs,
-compaction and resuming `/api/event` from a sequence number (use the stored
-log instead).
+Login over the API (sign-in is the local `nexus login`), files and diffs.
+
+Event retention and log compaction: the `event` table still grows without
+limit and the log floor stays 0. The cursor protocol already reports
+`history_unavailable` with the current head and floor, so retention can arrive
+without a client change. Turn recovery after a crash, automatic retries,
+idempotent mutations and `/continue` are also still open (Step 11); a reconnect
+resumes the **stream**, not an interrupted turn or in-memory approvals and
+questions.
 
 Worktree listing, creation and deletion exist, but merge/integration and branch
 cleanup are separate future operations. A session's directory can move anywhere

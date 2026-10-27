@@ -4,6 +4,38 @@ Everything a provider returns is normalized into the types in
 `nexus/llmhub/types.py`. The agent loop adds its own events ([loop.md](loop.md)).
 All types are frozen dataclasses with `slots`.
 
+## Durable event identity
+
+Every event the daemon publishes is stored in the `event` table **before** any
+subscriber sees it, and its row `id` is flushed into the event as the durable
+`id`. `nexus/bus.py` does that; `nexus/eventlog.py` owns the cursor and replay
+contract:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Durable row id in this database's event log; never reused, stable across restarts. |
+| `seq` | The publishing daemon's counter (`1, 2, 3…`). Restarts with the daemon and is **not** a cursor. |
+| `time` | Wall-clock publish time. |
+| `type` | Event name (`text_delta`, `message.added`, `session.created`, …). |
+| `session_id` | The owning session, or `null` for a global event. |
+| `data` | The event payload. |
+| `cursor` | On the SSE stream only: `<log generation>:<id>`. |
+
+The `log` table holds one generation (`log_<hex>`) for the database. A new,
+deleted or replaced database gets a new generation; a copy keeps the same one,
+because it is the same log. A client resumes with `cursor`, and the server
+rejects a cursor from another generation, ahead of the head, malformed, or
+older than the log floor with an actionable resync response. Filtered streams
+skip unrelated ids, so a numeric gap is normal and is not evidence of loss.
+
+Session events are deleted with their session. Global lifecycle events are
+stored with `session_id: null` and survive: `project.created`,
+`project.updated`, `project.deleted`, and a minimal `session.deleted` tombstone
+(`{"id": "ses_…"}`). A deleted session's messages, events, snapshots and
+observations are gone; the tombstone is only what a client needs to drop it.
+`bus.overflow` is stream control, is never stored, and has no durable id.
+Details and response codes: [api.md](api.md#event-stream).
+
 ## Conversation
 
 A conversation is a list of `Message`s made of ordered parts.
@@ -192,7 +224,6 @@ Data: `{root, sessions: [ids], archived}`. The event is stored in the root
 session's event log; `sessions` includes the root and every descendant. An
 unchanged repeat publishes nothing. Session JSON carries `archived` separately
 from `status` (`busy`/`idle`).
-
 Automatic notices respect archive state. A background job finishing publishes
 `bash.finished` as usual. If the target session is archived, its notice is
 saved as an ordinary user message (`message.added`) instead of starting a turn;
