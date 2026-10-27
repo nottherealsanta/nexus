@@ -1320,7 +1320,7 @@ pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     let mut out = AboveLayout::default();
     if status_visible(s) {
         out.status = take(&mut y).map(|row| {
-            let inset = row.width.min(1);
+            let inset = row.width.min(2);
             Rect::new(row.x + inset, row.y, row.width - inset, row.height)
         });
     }
