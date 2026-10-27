@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.8.0](https://github.com/nottherealsanta/nexus/compare/v0.7.2...v0.8.0) (2026-10-27)
+
+
+### Features
+
+* improve iOS gateway session experience ([01fec6a](https://github.com/nottherealsanta/nexus/commit/01fec6a83452cb68eb3bebbc224c1617890a43ec))
+* improve native navigation and worktree lifecycle ([4883a23](https://github.com/nottherealsanta/nexus/commit/4883a23a60038407cccf39139bc020f0c91d178a))
+* merge NSH web replacement ([cebce3d](https://github.com/nottherealsanta/nexus/commit/cebce3d92c472f017e82571fe5e995066a1f1282))
+* merge project explorer sidebar improvements ([f7c92f7](https://github.com/nottherealsanta/nexus/commit/f7c92f74eb725cbe66b452ff54b24d984aecec28))
+* Refactor agent orchestration and improve UI for subagent interactions ([ed3e4ce](https://github.com/nottherealsanta/nexus/commit/ed3e4ce6f132c48a91ecff6acf71e3220ac44fe7))
+* replace web and GPUI desktop clients with the NSH client ([8c4da14](https://github.com/nottherealsanta/nexus/commit/8c4da1487475dcde234ab43232d742930a175136))
+* show a starting card while a ratatui turn begins ([56b2cd3](https://github.com/nottherealsanta/nexus/commit/56b2cd31025e0c8c83d9aef7568d3f51e3aad1d3))
+* update TODO items with implementation status and add new subagent design plans ([409e640](https://github.com/nottherealsanta/nexus/commit/409e6404f51f8d63aecf40f7837bacf5433c8135))
+
+
+### Bug fixes
+
+* align animated status row ([8a983e3](https://github.com/nottherealsanta/nexus/commit/8a983e39ebbfe5a97274f3fc7a79c932fd3e20a6))
+* align web sidebar and use descriptive session titles ([bb68921](https://github.com/nottherealsanta/nexus/commit/bb68921aabe0a5a29c7ed366bd8112da95bc1019))
+* **ci:** pin the release publish job to Python 3.13 ([388b42b](https://github.com/nottherealsanta/nexus/commit/388b42b15bd31de59e6eb6f41b48263e2bbb350a))
+* **ci:** pin the release publish job to Python 3.13 ([#96](https://github.com/nottherealsanta/nexus/issues/96)) ([90b4894](https://github.com/nottherealsanta/nexus/commit/90b48943195b4db39cb91a93f0477cf80aded5c6))
+* **ci:** skip musllinux x86_64 wheels so releases can publish ([4dcd1be](https://github.com/nottherealsanta/nexus/commit/4dcd1be76a93705ca61c960ff11bd6ba30a1066c))
+* **ci:** skip musllinux x86_64 wheels so releases can publish ([#94](https://github.com/nottherealsanta/nexus/issues/94)) ([16be999](https://github.com/nottherealsanta/nexus/commit/16be999e3673b7c385105de053c32027f5f748da))
+* merge animated status dots ([8b20292](https://github.com/nottherealsanta/nexus/commit/8b20292e719d9cd7e7f02c8c91be4cee08d95d4f))
+
 ## [0.7.2](https://github.com/nottherealsanta/nexus/compare/v0.7.0...v0.7.2) (2026-10-26)
 
 
