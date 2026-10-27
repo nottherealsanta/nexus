@@ -1,0 +1,11 @@
+{
+  "name": "Nexus",
+  "id": "dev.nexus10.nsh",
+  "version": "0.10.0",
+  "build": 1,
+  "appearance": "system",
+  "theme": "gen/theme.json",
+  "capabilities": {
+    "network": { "hosts": ["127.0.0.1", "localhost"] }
+  }
+}
