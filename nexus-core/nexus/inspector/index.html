@@ -102,7 +102,7 @@ const TOKEN = params.get("token") || "";
 const LEVELS = [["conversation", "Conversation"], ["steps", "Steps"], ["requests", "Requests"], ["raw", "Raw"]];
 const MAX_EVENTS = 50000, PAGE = 5000, RAW_ROWS = 1500, PREVIEW = 180, OUTPUT_LINES = 60;
 const S = { sessions: [], projects: [], sel: params.get("session") || null, level: params.get("level") || "conversation",
-            session: null, messages: [], events: [], eventsMore: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS,
+            session: null, messages: [], events: [], eventsMore: false, eventFloor: 0, eventHistoryTruncated: false, context: null, rawFilter: "", hideDeltas: true, rawShown: RAW_ROWS,
             pendingQuestions: [] };
 // The live stream resumes from a durable cursor (see docs/api.md). `lastId` deduplicates
 // replay/live overlap; `pending` holds events that arrive while a session load is in flight.
@@ -224,13 +224,15 @@ async function select(id) {
   try {
     const [session, messages, pendingQuestions] = await Promise.all([
       api(`/api/session/${id}`), api(`/api/session/${id}/message`), api(`/api/session/${id}/question`)]);
-    const events = []; let after = 0, more = true;
+    const events = []; let after = 0, more = true, floor = 0, truncated = false;
     while (more && events.length < MAX_EVENTS) {
       const page = await api(`/api/session/${id}/event?after=${after}&limit=${PAGE}`);
       events.push(...page.events); more = page.more; after = events.length ? events[events.length - 1].id : 0;
+      floor = page.floor || 0; truncated = Boolean(page.history_truncated);
     }
     if (token !== loadSeq || S.sel !== id) return;
-    Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions });
+    Object.assign(S, { session, messages, events, eventsMore: more, pendingQuestions, eventFloor: floor,
+      eventHistoryTruncated: truncated });
     // HTTP resources have independent boundaries. Only stream delivery advances lastId;
     // deduplicate loaded events and messages separately when replay reaches them.
     render();
@@ -470,6 +472,8 @@ function viewRaw() {
   search.addEventListener("input", () => { S.rawFilter = search.value; S.rawShown = RAW_ROWS; render(); document.querySelector("input[type=search]").focus(); });
   const deltas = h("input", { type: "checkbox", checked: S.hideDeltas ? "" : null, onchange: (ev) => { S.hideDeltas = ev.target.checked; render(); } });
   return h("div", {},
+    S.eventHistoryTruncated ? h("div", { class: "note warn" },
+      `Earlier diagnostic events expired at the retention floor (event ${S.eventFloor}). Messages and snapshots above are complete; the wire log before this boundary is not retained.`) : null,
     h("div", { class: "toolbar" }, search, h("label", {}, deltas, " hide token deltas and provider SSE events"),
       h("span", { class: "note" }, `${rows.length} of ${S.events.length} events match${shown.length < rows.length ? `, showing the first ${shown.length}` : ""}. Click a row for the full JSON.`)),
     S.events.length ? h("table", {}, h("thead", {}, h("tr", {}, ["id", "time", "type", "data"].map((c) => h("th", {}, c)))), tbody) : noEvents(),

@@ -796,6 +796,7 @@ def test_migration_from_the_current_schema_keeps_history(tmp_path):
     message_ids = [m.id for m in crash.store.messages(session.id)]
     event_ids = [e["id"] for e in crash.store.events(session.id, limit=5000)]
     # Simulate the schema before this increment.
+    crash.store.db.execute("drop table turn_attempt")
     crash.store.db.execute("drop table turn_tool")
     crash.store.db.execute("drop table turn_request")
     crash.store.db.execute("drop table turn")

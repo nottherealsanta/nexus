@@ -266,17 +266,21 @@ labelled in the recovery notice ([daemon.md](daemon.md#crash-recovery)).
 
 ## Errors
 
-All failures are `ProviderError(message, status=None, body=None)`. Messages carry
-no credentials.
+All failures are `ProviderError(message, status=None, body=None, phase=…,
+retry_after=None)`. Messages carry no credentials. `phase` says where a failure
+happened: `transport` (connect/read), `response` (an HTTP status), or `stream`
+(an error event, or a stream that ended before completion). The agent loop
+retries only a `transport` or `response` failure with status `None`, `429`,
+`502`, `503` or `504`, and only before any response stream event was received.
 
 | Case | Result |
 | --- | --- |
-| HTTP status >= 400 | `"{name}: HTTP {status}"`, with `status` and `body` (response text, first 4000 characters) |
-| `httpx.HTTPError` while connecting or streaming | `"{name}: network error: {ExceptionName}"` |
-| Responses `error` or `response.failed` event | `"{name}: stream error {code}: {message}"`, message cut to 4000 characters |
+| HTTP status >= 400 | `"{name}: HTTP {status}"`, with `status`, `body` (response text, first 4000 characters), `phase: "response"` and a bounded `retry_after` when the header is valid |
+| `httpx.HTTPError` while connecting or streaming | `"{name}: network error: {ExceptionName}"`, `phase: "transport"` |
+| Responses `error` or `response.failed` event | `"{name}: stream error {code}: {message}"`, message cut to 4000 characters, `phase: "stream"` |
 | Chat chunk with an `error` object | Same format |
-| Responses stream ends without `Done` | `"{name}: stream ended before response.completed"` |
-| Chat stream ends with neither `[DONE]` nor a `finish_reason` | `"{name}: stream ended before a finish_reason or [DONE]; the reply may be cut off"` |
+| Responses stream ends without `Done` | `"{name}: stream ended before response.completed"`, `phase: "stream"` |
+| Chat stream ends with neither `[DONE]` nor a `finish_reason` | `"{name}: stream ended before a finish_reason or [DONE]; the reply may be cut off"`, `phase: "stream"` |
 
 Auth failures (`AuthError`, `CredentialError`) are raised while building
 headers, before `WireRequest` is yielded ([auth.md](auth.md)).

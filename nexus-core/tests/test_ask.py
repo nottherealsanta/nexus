@@ -658,7 +658,7 @@ async def test_cli_consumes_resolution_while_waiting_for_input(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        async def call(self, method, path, body=None):
+        async def call(self, method, path, body=None, **kwargs):
             self.calls.append(path)
 
         async def events(self, session_id):

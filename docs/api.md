@@ -27,7 +27,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/kernel` | | Live kernels, metadata, retained cells and variable previews |
 | GET | `/api/kernel/{id}` | | One kernel (404 if missing) |
 | DELETE | `/api/kernel/{id}` | | 204; 409 while busy |
-| GET | `/api/info` | | `{name, version, pid, home, url, log: {generation, head, head_cursor, floor}}` |
+| GET | `/api/info` | | `{name, version, pid, home, url, log: {generation, head, head_cursor, floor, floor_cursor}, retention, retry, idempotency}` |
+| GET | `/api/snapshot` | `?session=`, `?message_limit=` | projects, sessions, running turns, pending waits, optional bounded session view and an event watermark |
 | GET | `/api/provider` | | `[{id, label, dialect, base_url, catalog, default_model, connected, verified}]` |
 | GET | `/api/model` | `?provider=` | `{source, models: [ModelInfo + ref]}` for connected providers |
 | GET | `/api/model/default` | | `{model}` |
@@ -36,12 +37,12 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/project` | | `[Project]`, most recently used first |
 | POST | `/api/project` | `{path, name?}` | the project at `path`, created if new |
 | GET | `/api/project/{id}` | | `Project` |
-| PATCH | `/api/project/{id}` | `{name}` | `Project` |
+| PATCH | `/api/project/{id}` | `{name, expected_revision?}` or `If-Match` | `Project`; a stale revision is 409 |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
 | POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
 | GET | `/api/session/{id}` | | `Session` |
-| PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?, disabled_tools?}` (`""` clears model or effort) | `Session` |
+| PATCH | `/api/session/{id}` | `{agent?, title?, model?, permission?, effort?, disabled_tools?, expected_revision?}` (`""` clears model or effort; `If-Match` also accepted) | `Session`; a stale revision is 409 |
 | DELETE | `/api/session/{id}` | | 204; interrupts a running turn first |
 | POST | `/api/session/{id}/archive` | | `Session` for the whole root tree; idempotent |
 | POST | `/api/session/{id}/unarchive` | | `Session` for the whole root tree; idempotent |
@@ -51,11 +52,11 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | POST | `/api/session/{id}/directory` | `{directory}` | `Session` + `change`; 200 applied/unchanged, 202 pending while a turn runs |
 | GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
 | POST | `/api/session/{id}/worktrees` | `{action: "list" or "create" or "delete", path?, branch?, base?}` | the list, the created/reused worktree, or the deleted worktree |
-| POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy"}`; 409 while a turn runs |
+| POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy", turn_id, origin, idempotency_key?}`; 409 while a turn runs |
 | POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
-| GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more}`: the stored event log |
+| GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more, floor, head, generation, history_truncated}`: the retained stored event log |
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | GET | `/api/session/{id}/context` | | the provider request body the next turn would send |
@@ -73,7 +74,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 
 ```jsonc
 // Project
-{"id": "prj_…", "path": "/abs/path", "name": "repo", "created": 1793…, "updated": 1793…}
+{"id": "prj_…", "path": "/abs/path", "name": "repo", "created": 1793…, "updated": 1793…,
+ "revision": 1}
 
 // Session
 {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path", "title": "…", "agent": "build",
@@ -84,7 +86,8 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "workspace": {"entry": true, "active": false},   // on-demand control state
  "starting_directory": "/abs/path",               // frozen into the system prompt
  "directory_changed": false, "directory_change": null,  // or {from, to, status: "pending", source}
- "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…,
+ "permission": "ask", "status": "idle", "revision": 1,  // revision increments on mutation
+ "created": 1793…, "updated": 1793…,
  "archived": false,                                // archive is separate from busy/idle status
  "snapshot": {"version": 2, "origin": "created", "created": 1793…, "directory": "/abs/path",
               "agent": {"name": "build", "source": "project", "path": "…/build.md", "fingerprint": "sha256:…"},
@@ -260,9 +263,172 @@ Continuation announces itself in the durable `session.status` `busy` event:
 reconciled?}`. The matching idle event carries the same `turn_id` and `origin`,
 and startup recovery's `turn.recovered` carries `origin` and `continuation` too.
 This is execution/API metadata; it is not an extra model-visible user message.
-Clients must not repeat the POST after an ambiguous network failure: the turn may
-have started, so inspect the session or event log before retrying. Automatic
-retries and idempotent mutation request ids remain separate work.
+After an ambiguous network failure, retry only with the same retained
+`Idempotency-Key` (see below). Without a key, inspect the session or event log
+before taking another action: the turn may already have started.
+
+### Mutations, retries, continuation and reconnect
+
+These four actions are separate and never substitute for one another:
+
+| Action | Owner | What is retried/replayed | Durable evidence | It never… |
+| --- | --- | --- | --- | --- |
+| Client retry of the same mutation | client + `mutation` journal | One keyed HTTP request, replayed with the original status/body | `mutation` row: key, fingerprint, operation, target, accepted, turn/resource, status/body, expiry | Creates a second turn or repeats an event |
+| Provider request retry inside a turn | agent loop + `turn_attempt` | Only a pre-stream transport/429/502/503/504 failure, bounded by policy | `turn_request`, `turn_attempt`, `retry_scheduled/started/exhausted` events | Runs a tool again, appends the user message, or continues after the first stream event |
+| Event-stream reconnect | client cursor + `Stream` | Replay of durable events after the last applied cursor | Event row id, log generation, floor/head, per-subscriber overflow | Resubmits a prompt or answers a wait |
+| Manual continuation | `POST …/continue` | Nothing automatically; one explicit new turn | `turn.data.origin/continuation`, `session.status` busy/idle provenance | Retries a failed request, answers a question/approval, or resumes a recovered turn |
+
+Timeouts and budgets belong to these owners: the client owns its own transport
+timeout (and keyed transport retries), the retry policy owns pre-stream provider
+attempts, the event stream owns queue/backpressure, and manual continuation has
+no automatic retry. A question or approval is resolved only by its explicit
+reply (or an explicit cancellation); a reconnect or continuation never answers
+one.
+
+#### Idempotency-Key
+
+Every mutating request may carry `Idempotency-Key`. The key is 1–128 characters
+from `A-Z a-z 0-9 . _ : -`. It is scoped to this daemon's database and log
+generation. The fingerprint is `sha256` of the method, normalized target and
+canonical JSON body plus the normalized `If-Match` revision precondition;
+credentials are not included.
+
+| Situation | Result |
+| --- | --- |
+| New key | Prompt/continue atomically journal acceptance with the turn; other mutations journal intent before running and the returned result afterwards |
+| Same key, same fingerprint, after acceptance | The original status and body are replayed with `Idempotent-Replayed: true`; no work runs again |
+| Same key, different payload/target | **409** `{"code": "idempotency_key_reused", …}`; nothing changes |
+| Concurrent identical requests | They share one acceptance and one result; only one turn/resource is created |
+| Key for a target deleted after acceptance | The stored result is replayed before the target is looked up; the target is not recreated |
+| Rejected prompt/continue (4xx) | Not journaled; the key may be retried after the conflict clears (for example, prompt while busy) |
+| Other keyed mutation returns 4xx | The returned failure is journaled; use a new action/key after correcting the request |
+| Crash before an ordinary mutation's response was journaled | **409** `mutation_outcome_unknown`; inspect the target, never blindly repeat the effect |
+| Unknown/absent key | Current single-attempt behavior; a lost response is ambiguous |
+
+The deduplication lifetime is **seven days after terminal resolution**
+(`NEXUS10_MUTATION_RETENTION_DAYS`). Prompt and continue journal their
+acceptance **in the same SQLite transaction as the turn**, so a crash cannot
+leave a turn without a replay record or a record without a turn. Unresolved
+entries never expire. When a keyed turn finishes (normally or through startup
+recovery), its entry becomes resolved and starts the lifetime. After expiry the
+key must not be retried automatically. Retained response bodies are bounded at
+64 KiB; a larger accepted response replays as a bounded accepted record that
+names the operation, target, resource and turn, and says to inspect the
+resource. Other mutation helpers commit their changes independently of the response
+journal. Their durable intent prevents automatic repetition in that crash window;
+startup resolves it to a stable, expiring 409 `mutation_outcome_unknown`. This is
+not an exactly-once guarantee for external side effects.
+
+Prompt/continue acceptance responses include `idempotency_key`. A replayed
+prompt/continue returns the original `turn_id` even if that turn has since
+finished or been interrupted; it never schedules work.
+
+#### Revisions
+
+`Project` and `Session` carry a monotonic `revision`. Reads report it.
+`PATCH /api/project/{id}` and `PATCH /api/session/{id}` (and
+`POST …/model`, `POST …/agent`) accept `If-Match: <revision>` or
+`expected_revision` in the JSON body. A stale value is **409**
+`{"code": "revision_conflict", "revision": <current>, "current_revision": <current>, "resource": …}`
+before any change. A keyed update is replayed from its journal before the
+revision is rechecked, so a retry returns the original accepted result; fetch the resource separately
+for its current state. It does not apply the old update again.
+Archive/unarchive, directory moves, title/history, agent/tool switches and
+model/effort changes increment the session revision. The workspace snapshot and
+message history remain the authoritative context.
+
+#### Mutation route matrix
+
+`Keyed` means the route accepts `Idempotency-Key` and replays an accepted
+response. `Revision` means it accepts an expected revision. `Crash` is the
+durable reconciliation for a lost HTTP response.
+
+| Route | Keyed | Revision | Crash / replay behavior |
+| --- | --- | --- | --- |
+| `POST /api/project` | yes | — | A replayed create returns the same project id; deletion later does not recreate it |
+| `PATCH /api/project/{id}` | yes | `If-Match` / `expected_revision` | Replay returns the original project; stale revision 409 |
+| `DELETE /api/project/{id}` | yes | — | Replay is 204 even though the project and sessions are gone |
+| `POST /api/session` | yes | — | Replay returns the same session; a child is not created twice |
+| `PATCH /api/session/{id}` | yes | `If-Match` / `expected_revision` | Replay before recheck; stale revision 409 |
+| `DELETE /api/session/{id}` | yes | — | Replay is 204; tombstones already recorded |
+| `POST …/archive`, `…/unarchive` | yes | — | Replay is the original transition; repeating an unchanged state publishes nothing |
+| `POST …/model`, `…/agent` | yes | yes | Replay is the original session; the new snapshot/notice is not rebuilt |
+| `POST …/workspace-tools` | yes | — | Activation is idempotent; replay returns the activated session |
+| `POST …/directory` | yes | — | Replay returns the original applied/pending result and does not move twice |
+| `POST …/worktrees` | yes (journal only) | — | SQLite intent/evidence only. Git create/delete is an external effect: a crash leaves a pending intent that becomes **409** `mutation_outcome_unknown` (and expires after the retention lifetime). Inspect the repository; never blindly repeat a failed create/delete |
+| `POST …/prompt` | yes | — | Acceptance + turn journal are atomic. A crash before the task starts is recovered as an interrupted turn, and replay returns the original `turn_id` |
+| `POST …/continue` | yes | — | Same as prompt; replay returns the original continuation provenance |
+| `POST …/interrupt` | yes | — | Replay is 204; it never resumes or answers a wait |
+| `POST …/permission/{pid}` | yes | — | A resolved approval replays its 204; distinct contradictory replies still conflict |
+| `POST …/question/{qid}` | yes | — | A resolved question replays its 204; a different answer without the same key is 409/404 |
+| `DELETE /api/kernel/{id}`, `/api/bash/{id}` | yes | — | A replayed delete is 204; runtime resources are not required to still exist |
+
+Except for atomic prompt/continue acceptance, all keyed routes persist intent
+before execution and their response afterwards. The ordinary replay outcomes in
+the table require a recorded response; a crash in between produces
+`mutation_outcome_unknown`, including for creates, deletes and wait replies.
+Git operations are also external effects and cannot be made transactional with
+SQLite. An unknown outcome is never rerun blindly. Mutations without a key keep the old single-attempt semantics; clients
+must not assume an unkeyed POST is safe to retry.
+
+**Ordering.** Durable acceptance order is the order of the `mutation` rows and
+events; a keyed replay never reorders work. Synchronous resource updates
+(project/session settings, model/agent switches, tool switches, archive) apply
+immediately and serialize in the daemon's event loop; a stale expected revision
+is rejected before anything changes. A directory move requested while a call is
+running is queued and applied at the next model/tool dispatch boundary (or turn
+end), never inside the running call. An interrupt cancels the active turn and
+its descendants; it never answers a pending question or approval. New prompts
+while busy are **409** until Step 12a adds steer/queue, whose insertion point is
+after outstanding tool results and before the next model call (steer) or the
+next turn (queue).
+
+#### Bounded provider retries
+
+A provider request is retried within its agent step only when the failure
+happens **before any response stream event** and is a transport error, `429`,
+`502`, `503` or `504`. Authentication, validation, cancellation, persistence
+and unknown errors are terminal. An HTTP `Retry-After` is honored when it fits
+the remaining budget; otherwise the retry stops and reports it.
+
+Defaults (`NEXUS_RETRY_MAX_ATTEMPTS`, `NEXUS_RETRY_BASE_DELAY`,
+`NEXUS_RETRY_MAX_WAIT`, `NEXUS_RETRY_MAX_ELAPSED`): 3 attempts total,
+exponential backoff with jitter from 1 s, at most 30 s per wait and 60 s of
+retry time per step. Each attempt is recorded in `turn_attempt` and visible as
+`retry_scheduled` / `retry_started` / `retry_exhausted` events with the attempt
+number, delay, status, provider message and `Retry-After`. Once a stream event
+arrives, failure is terminal; its partial output stays diagnostic. No retry
+ever re-runs a tool, an outer `code` cell, a background command, approval or
+question, and a daemon restart never resumes a pending retry. A settings change
+waits for the next logical request; `self.request()` is unchanged across a
+retry, so a retried attempt cannot silently change contents.
+
+#### Consistent snapshot
+
+`GET /api/snapshot?session=<id>&message_limit=<1..1000>` returns state at one
+watermark:
+
+```jsonc
+{
+  "watermark": {"generation": "log_…", "head": 4200, "floor": 0, "head_cursor": "log_…:4200"},
+  "projects": [Project], "sessions": [raw session rows],
+  "running": [turn], "approvals": [pending approval], "questions": [pending question],
+  "selected": {"session_id": "ses_…", "messages": [Message], "messages_limit": 200,
+               "messages_more": false, "oldest_seq": 1}
+}
+```
+
+The watermark is read in the same SQLite read transaction as the lists and the
+bounded selected-session view. Apply events strictly after `head`; do not infer
+loss from gaps in a filtered stream. If a cursor returns `history_unavailable`,
+`cursor_generation`, `cursor_ahead` or overflow, fetch this snapshot, discard
+stale pending waits, and resubscribe after `watermark.head_cursor`. Pending
+questions/approvals are current in-memory waits only; the durable cancellation
+events from a restart dismiss old waits. If the selected session was deleted
+while a client was away, `GET /api/snapshot?session=` is 404; the Python client
+retries the snapshot globally and emits `client.resync` with
+`data.snapshot.deleted_session`, so the session view can close. A snapshot read
+never mutates state, starts a turn or answers a wait.
 
 ### Session export
 
@@ -284,8 +450,9 @@ Responses:
 
 The filename is sent as `content-disposition: attachment; filename="…"`.
 `x-nexus-export-format-version` is `1`; `x-nexus-export-boundary` reports
-`event:<event id>;seq:<bus seq>` for the read boundary and
-`x-nexus-log-generation` names the log those ids belong to. A missing or unknown
+`event:<event id>;seq:<bus seq>` for the read boundary,
+`x-nexus-log-generation` names the log those ids belong to, and
+`x-nexus-log-floor` is the retention floor at the boundary. A missing or unknown
 `format` and an unknown `scope` are 400, an unknown session is 404, and a
 missing or wrong token is 401.
 
@@ -313,8 +480,11 @@ stream deltas that had not yet been saved as a message.
 
 Events are read in pages of 1,000 by event row id until a short page; this is
 not the `/event` endpoint's 5,000-event page cap, and there is no `limit` query
-parameter. Both formats stream. A large log is complete, and the export does not
-silently omit records.
+parameter. Both formats stream. The export includes every event **retained at
+the boundary**; when retention has moved the floor, `boundary.history_truncated`
+is true, `boundary.floor` names the expired boundary, and the Markdown header
+says so. Messages and snapshots are not affected by event expiry, and the export
+never claims an expired wire event was present.
 
 Only top-level transport `headers` on `wire_request` and `wire_response` events
 are passed through provider header redaction (`authorization`,
@@ -358,7 +528,8 @@ one.
   "scope": "tree", "root": "ses_…", "session_count": 2,
   "state": {"running": false, "running_sessions": [], "durable_partial": false,
             "note": "…"},                       // running/partial explanation
-  "boundary": {"log_generation": "log_…", "event_id": 4200, "seq": 9000, "session_updated": 1793…,
+  "boundary": {"log_generation": "log_…", "event_id": 4200, "seq": 9000, "floor": 0,
+               "history_truncated": false, "session_updated": 1793…,
                "counts": {"ses_…": {"messages": 4, "events": 88}}, "note": "…"},
   "sessions": [{
     "session": {"id": "ses_…", "project_id": "prj_…", "directory": "/abs/path",
@@ -385,7 +556,7 @@ one.
 Records keep the API shapes: `messages` is the `/message` list (ids, per-session
 `seq`, parts with `origin` and `raw`), and `events` is the stored log (durable
 event row `id`, publishing daemon's `seq`, time, type, session id, data) in order
-and complete for the boundary. `tree.children` lists every direct child;
+and retained at the boundary. `tree.children` lists every direct child;
 `children_in_export` lists the ones included by the scope. `snapshot` is the full
 stored snapshot or `null`.
 
@@ -483,12 +654,17 @@ Those responses are ordinary JSON (not a stream) and carry an actionable resync:
  "floor": 0, "floor_cursor": "log_…:0"}
 ```
 
-Reload state from `GET /api/project` and `GET /api/session` (and the session's
-events if needed), then resume from `head_cursor`; omitting the cursor means
+Reload state from `GET /api/snapshot` (or `GET /api/project` and
+`GET /api/session`), then resume from `head_cursor`; omitting the cursor means
 "start live at the boundary". A cursor error is never silently turned into
-"start now". This increment does not expire history, so `floor` is 0 and
-`history_unavailable` is already defined for retention that is not implemented
-yet.
+"start now".
+
+Retention removes only a contiguous prefix of the log and moves `floor` to the
+last removed event id. A cursor **at** the floor can resume (the next event is
+`floor + 1`); a cursor below it gets 410 `history_unavailable` with the current
+head and floor. The durable head high-water mark survives even when every
+retained row was removed, so ids are never reused. A session's messages,
+snapshots and conversation stay independent of diagnostic event expiry.
 
 The replay-to-live boundary is atomic. The server registers the live
 subscription, reads the durable head as the same step, and then pages the stored
@@ -550,6 +726,8 @@ Deleting a project publishes one tombstone per deleted session, then
 | `question.asked` | pending question request (`id`, `session_id`, `call_id`, `questions`, `created`) |
 | `question.replied` | `{id, session_id, call_id, outcome: "answered" or "cancelled", answers, reason?}` |
 | `turn.recovered` | a turn a daemon restart interrupted: its outcome, restored messages, tool classifications, cancelled waits and lost runtime state (see [Crash recovery](#crash-recovery)) |
+| `retry_scheduled` / `retry_started` / `retry_exhausted` | one provider retry transition: `{attempt, next_attempt?, attempt_id, delay?, reason, status?, retry_after?, max_attempts}` |
+| `log.retention` | a global retention pass: `{at, events: {removed, floor, head, protected, pinned}, turns, mutations, settings}` |
 | `session.notified` | `{from, text}`: a `wait: false` child finished, and its answer goes to this (parent) session |
 | `session.workspace_tools` | `{active, entry, tools}`: the on-demand workspace controls were activated |
 | `session.directory_changed` | `{from, to, branch, repository, worktree, source, project_id, frozen_directory, instructions}` |
@@ -632,14 +810,14 @@ curl -H "authorization: Bearer $TOKEN" -X POST -d '{"path":"."}' http://127.0.0.
 
 Login over the API (sign-in is the local `nexus login`), files and diffs.
 
-Event retention and log compaction: the `event` table still grows without
-limit and the log floor stays 0. The cursor protocol already reports
-`history_unavailable` with the current head and floor, so retention can arrive
-without a client change. Automatic retries and idempotent mutation requests are
-still open (Step 11). Manual continuation is implemented
-([Manual continuation](#manual-continuation)). Turn recovery after a crash is
-implemented: startup marks interrupted turns and publishes their outcome in the
-log ([Crash recovery](#crash-recovery)); it never resumes the turn itself.
+Retention, idempotent mutation keys, bounded provider retries, the consistent
+snapshot and client reconnect/resync are implemented ([Mutations, retries,
+continuation and reconnect](#mutations-retries-continuation-and-reconnect)).
+Steer and queued prompts remain Step 12a; a prompt while busy is still 409.
+Automatic continuation after a crash is still not performed: recovery closes the
+turn and manual continuation is an explicit request. External Git effects are
+not transactional; an ambiguous worktree operation must be inspected rather
+than repeated.
 
 Worktree listing, creation and deletion exist, but merge/integration and branch
 cleanup are separate future operations. A session's directory can move anywhere

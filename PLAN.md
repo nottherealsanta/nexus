@@ -997,13 +997,13 @@ JSON of messages and events), archive/unarchive, and delete (already
 cascades). No fork or revert: a session only moves forward. Archive and export
 are done below.
 
-### Step 11: event log follow-ups
+### Step 11: event log follow-ups (done 2026-10-27; delivery reviewed)
 
 Retention and size limits for the `event` table, resuming the live stream from
 an event id, and durably recovering a crashed turn's partial state.
 
-**Durable event identity and reconnect-safe replay (done 2026-10-27; review
-pending).** The first half of Step 11: reconnect resumes the stream. That
+**Durable event identity and reconnect-safe replay (done 2026-10-27; delivery
+reviewed).** The first half of Step 11: reconnect resumes the stream. That
 increment did not implement retention, turn recovery, retries, idempotent
 mutations, `/continue` or post-crash approval/question restore; turn recovery is
 the increment below.
@@ -1084,7 +1084,7 @@ the increment below.
   during replay; clients resume from their own cursor. Archive transitions
   remain root-log-only (existing limitation).
 
-**Durable turn recovery (done 2026-10-27; review pending).** The second half of
+**Durable turn recovery (done 2026-10-27; delivery reviewed).** The second half of
 Step 11: a restart reconciles turns a crash left unfinished. It does not
 implement automatic retries, mutation idempotency, retention, web tools, skills
 or MCP. Manual continuation is the increment below.
@@ -1184,7 +1184,7 @@ Document ordering of steer, queued prompts, setting changes and interrupts.
 Verify disconnect during send, catch-up/live races, filtered streams, restart,
 retention expiry and competing clients.
 
-**Manual continuation (`/continue`) (done 2026-10-27; review pending).** The
+**Manual continuation (`/continue`) (done 2026-10-27; delivery reviewed).** The
 third part of Step 11: an explicit client action resumes generation from the
 stored context. It does not implement automatic retries, mutation idempotency,
 retention, web tools, skills or MCP.
@@ -1252,6 +1252,323 @@ retention, web tools, skills or MCP.
   ambiguous client result by design; clients inspect the session rather than
   repeating the POST. The reconciliation notice is user-visible context added
   only when repair is needed; a normal continuation adds none.
+
+#### Step 11 follow-ups: implementation and delivery record
+
+This records the execution plan for the completed follow-ups to Step 11. Durable replay,
+startup recovery and manual continuation are implemented and delivery-reviewed;
+keep their existing tests and contracts. The instructions below are now
+implemented (2026-10-27); the completion record follows 11.7. Steer/queue
+implementation stays in Step 12a; artifact storage follows Step 11.
+
+**11.1 — Freeze the failure and ordering contracts. (done 2026-10-27).**
+
+The reviewed contract table and supported-route matrix are published in
+[`docs/api.md`](docs/api.md#mutations-retries-continuation-and-reconnect).
+
+1. Read `docs/api.md`, `docs/daemon.md`, `docs/loop.md`,
+   `docs/llm-providers.md` and `docs/stream-events.md`. Trace `server.py` →
+   `runtime.py` → `loop.py`, and `store.py`, `bus.py`, `eventlog.py`,
+   `recovery.py`, `continuation.py`, `client.py` and the CLI input/event loop.
+   Run the existing suite and lint as a baseline.
+2. Add a contract table to this section before coding: distinguish a client
+   retry of the same mutation, a provider request retry within one turn,
+   event-stream reconnect, and explicit manual continuation. Identify which
+   operation owns each timeout, retry budget and durable record. None of these
+   actions implicitly answers a question or approval, or restarts a recovered
+   turn.
+3. Inventory every mutating HTTP route. For each, specify request-id support,
+   revision checks, response replay, deletion behavior and crash reconciliation.
+   Start implementation with prompt/continue, then cover the rest; publish the
+   supported-route table so clients never assume an unsupported POST is safe.
+4. Specify the order of accepted mutations, settings changes, directory moves,
+   interrupts and turn cleanup. Use durable acceptance order and explicit safe
+   application boundaries. Document the future insertion points for steer and
+   queue without implementing those Step 12a features.
+
+Completion: a reviewed contract and route matrix with concrete status codes,
+request/response examples, retry limits and expiry rules; no ambiguous promise
+of exactly-once external side effects.
+
+**11.2 — Add durable mutation request IDs, beginning with prompt/continue. (done 2026-10-27).**
+
+1. Define one bounded `Idempotency-Key` header, scoped to the local API and log
+   generation. Fingerprint the method, normalized target and validated semantic
+   body; do not include credentials. Choose and document the key syntax, maximum
+   length and deduplication lifetime before migration. A proposed initial
+   lifetime is seven days after terminal resolution; unresolved entries do not
+   expire. Expired keys are no longer safe to retry automatically.
+2. Add a migration for a mutation journal: key, fingerprint, operation, target,
+   accepted time, state, result/resource/turn link, terminal status/body and
+   expiry. Bound retained response sizes. The same key with a different
+   fingerprint returns 409; concurrent identical requests share one acceptance
+   and the same result, never two turns. Resolve a known key before looking up
+   a target that its original request may have deleted.
+3. For prompt and continue, atomically record acceptance, the turn and enough
+   input to reconcile a crash before scheduling its task. Link the request to
+   exactly one turn. Replay the original acceptance and turn id even when that
+   turn has since finished or been interrupted; a replay never schedules work.
+   A crash after acceptance and before task creation is recovered visibly,
+   rather than leaving an unresolvable pending journal entry.
+4. Preserve existing clients initially: requests without a key retain the
+   current single-attempt behavior. Add keyed requests to `Client` and CLI;
+   generate the key once per user action and retain it across transport retries.
+   Return the key and stable operation/turn link in acceptance metadata, never
+   as an extra model-visible user message.
+5. Test concurrent duplicates; changed payloads; response loss before/after
+   commit; crash before task creation; restart and replay; a completed turn;
+   archive/delete races; and transactional migration rollback. Assert one user
+   message, one turn and no duplicated provider/tool execution.
+
+Completion: losing a prompt/continue HTTP response can be resolved with the
+same key and cannot create a second turn.
+
+**11.3 — Cover remaining mutations and competing clients. (done 2026-10-27).**
+
+1. Extend the journal to session/project creation, updates/deletion, archive,
+   workspace controls, interrupts and question/approval replies, according to
+   the route matrix. Preserve bounded tombstones for deleted targets and
+   resolved waits through the deduplication lifetime. Distinct contradictory
+   replies still conflict; replaying the same accepted reply emits no event and
+   releases no tool twice.
+2. Add monotonic revisions to mutable project/session configuration and expose
+   them in reads and events. Define an expected-revision precondition for
+   updates; reject stale updates with 409 and the current revision before any
+   change. Serialize competing mutations at the owning resource boundary;
+   settings and pending directory changes apply at the documented call boundary.
+   Retried keyed updates replay their result before rechecking the revision.
+3. Treat Git operations and other external effects separately from SQLite:
+   persist intent before execution and durable evidence afterwards. On a crash,
+   reconcile only from verifiable evidence; otherwise return a stable unknown
+   outcome and require inspection. Never blindly repeat an ambiguous worktree
+   create/delete. The journal does not make external side effects transactional.
+4. Test two clients changing settings, duplicate/conflicting answers, deletion
+   during execution, interrupt versus cleanup, and crashes around each external
+   effect. Verify event ordering and unchanged historical context.
+
+Completion: all mutation routes have an implemented, documented replay/conflict
+policy, including explicit unknown outcomes for ambiguous external effects.
+
+**11.4 — Add bounded, visible provider retries. (done 2026-10-27).**
+
+1. Inspect provider errors and preserve structured retry information (HTTP
+   status, retry-after and transport phase), with redacted diagnostics. Choose
+   a shared policy rather than provider-name branches. Proposed defaults:
+   three attempts total, exponential backoff with jitter starting at one second,
+   at most 30 seconds per wait and 60 seconds total elapsed retry time.
+2. Automatically retry only explicitly transient failures before any response
+   stream event has been received: connection failures, 429 and selected
+   502/503/504 responses. Honor a valid Retry-After within the remaining budget;
+   if it exceeds the budget, stop and report it. Authentication, validation,
+   cancellation, persistence failure and unknown errors are terminal. A
+   pre-stream retry can still duplicate provider computation/billing; document
+   that limit rather than claiming provider-side exactly-once behavior.
+3. Persist each attempt under its turn/step with an attempt id and outcome.
+   Keep every wire request, response and SSE event, and publish retry
+   scheduled/started/exhausted events with reasons and delay. These are labelled
+   execution diagnostics, not invented conversation messages. An attempt does
+   not consume another agent step or append the user's message again.
+4. Once any stream event arrives, stop on failure and retain partial output as
+   diagnostic-only evidence; use existing recovery/manual continuation contracts.
+   Never automatically rerun a tool, outer `code` call, background command,
+   approval or question. A daemon restart never resumes a pending retry.
+5. Make backoff interruptible; deletion and shutdown cancel it promptly. Specify
+   whether a settings change cancels/rebuilds a retry or waits for the next
+   logical request, so the retried request cannot silently change contents.
+6. Test classifications, exact budgets and Retry-After using a fake clock;
+   interruption during backoff; attempt persistence; stream failure after its
+   first event; and a completed tool followed by a provider failure. Assert no
+   tool replay, duplicate message or hidden wire attempt.
+
+Completion: transient pre-stream failures retry within a fixed budget, visibly;
+partial streams and tool side effects are never automatically replayed.
+
+**11.5 — Reconnect clients and add a consistent resync snapshot. (done 2026-10-27).**
+
+1. Extend the Python client and CLI to retain the last applied durable cursor,
+   reconnect with bounded backoff, and deduplicate by generation/event id.
+   Advance the cursor only after applying an event. A reconnect never resends
+   a prompt; only the mutation policy can retry its keyed HTTP request.
+2. Add a consistent API snapshot plus watermark for the client state needed to
+   rebuild project/session lists, selected session context, running turns and
+   pending questions/approvals. Read durable state in one SQLite snapshot and
+   coordinate live wait/status capture with runtime mutation boundaries. Use a
+   bounded selected-session view and pagination contract for large histories.
+   Apply subsequent events strictly after that watermark.
+3. Handle overflow, generation mismatch, cursor-ahead and history-unavailable
+   by fetching that snapshot and resubscribing; never infer loss from numeric
+   gaps in a filtered stream. Restore waiting UI only from current pending
+   requests; restart cancellation events dismiss old waits. Resync must not
+   duplicate a CLI reader or submit a stale answer.
+4. Test disconnect during send, before/after applying an event, during replay,
+   and while answering a question; catch-up/live races, descendant creation,
+   archive/deletion, restart and replacement of the database. Include an
+   inspector resync check so both existing clients obey the same contract.
+
+Completion: a client can reconnect or rebuild its view without missing context,
+duplicating input or starting a turn.
+
+**11.6 — Implement retention without destroying recovery evidence. (done 2026-10-27).**
+
+1. Audit every event-log dependency in recovery, continuation, exports,
+   inspector filtering and mutation reconciliation. Move required evidence
+   into durable lifecycle records or pin it before deleting events. An idle
+   session can still have a dangling call or live background job; idle alone
+   is not proof that its events are disposable.
+2. Choose configurable age and logical-byte budgets, maintenance cadence and
+   batch size before coding; document defaults and the difference between
+   retained payload bytes, SQLite file size and WAL size. Do not promise a hard
+   disk ceiling when active recovery evidence must be retained. Report pressure
+   and pinned evidence explicitly, without silently dropping incoming events.
+3. Prune only a contiguous global prefix and advance the floor atomically.
+   Define floor as the last removed event id: cursor == floor can resume;
+   cursor < floor returns 410 `history_unavailable`. Preserve generation and a
+   durable head high-water mark even when every retained row is deleted;
+   `max(event.id)` alone is no longer sufficient. Never reuse ids.
+4. Coordinate pruning with paged replay: pin the replay range for a bounded
+   period or terminate it with an explicit resync outcome before removing
+   unread rows. Do not allow paging to silently skip a deleted interval.
+   Preserve descendant membership/tombstone information needed for filtering.
+5. Retain messages, snapshots and model context independently of diagnostic
+   event expiry. Inspector, per-session event endpoints and exports must state
+   that earlier events expired, with the retained boundary; remove claims of
+   complete wire history when retention has removed it. Full JSON exports still
+   use one read boundary and include all events retained at that boundary.
+6. Define separate retention for terminal turn/request/tool rows and mutation
+   journal entries. Keep evidence needed for dangling calls, recovery and the
+   deduplication lifetime; remove linked records in dependency order. Pruning
+   never changes a provider-valid conversation or permits an old key to be
+   retried automatically after its guarantee expires.
+7. Test exact floor boundaries, empty retained logs, restart/high-water marks,
+   pruning during replay/export, pinned recovery evidence, historical filtering,
+   expiry of request keys and crash/rollback during pruning. Exercise a large
+   fixture to verify bounded batches and that ordinary turns remain responsive.
+
+Completion: retention has explicit limits and observable exceptions, expired
+history forces resync, and no recovery or continuation decision loses evidence.
+
+**11.7 — Verify and deliver Step 11. (done 2026-10-27).**
+
+1. Run focused regressions for each increment, then from `nexus-core/` run
+   `uv run pytest -q` and `uv run ruff check nexus tests`; run
+   `git diff --check` at the repository root. Add tests for contracts and crash
+   boundaries, not mirrors of helper implementations.
+2. Run an isolated daemon/client smoke scenario with a temporary
+   `NEXUS10_HOME` and workspace: submit a keyed prompt, lose its response,
+   reconnect, interrupt/restart, inspect recovery, continue explicitly, expire
+   history and resync. Use scripted providers for deterministic faults. Record
+   any separate live-provider or browser verification honestly.
+3. Update `docs/api.md`, `docs/daemon.md`, `docs/loop.md`, provider/event docs,
+   inspector docs and `docs/development.md` as their behavior changes. Add a
+   ledger row when behavior deliberately differs from old Nexus. Mark each
+   increment done only with its verification and remaining limitations.
+4. Reconcile stale Step 11 review labels and Known gaps against actual delivery
+   evidence. Keep kernel isolation, process supervision, artifacts, steer/queue
+   and automatic context handoff in their own planned increments.
+
+**Step 11 remaining work delivered (2026-10-27).** All seven increments are
+implemented and reviewed together with the existing replay, recovery and
+continuation contracts. This is not an automatic-retry or exactly-once claim for
+external side effects.
+
+- **Contracts (11.1).** `docs/api.md` now has the four-action table (client
+  mutation retry, provider retry, reconnect, manual continuation) with owner,
+  budget and durable record; the supported mutation route matrix with replay,
+  revision and crash behavior; and explicit insertion points for Step 12a steer
+  and queue (a prompt while busy remains 409). No action implicitly answers a
+  question/approval or restarts a recovered turn.
+- **Mutation journal (11.2–11.3).** `mutation` stores key, fingerprint,
+  operation, target, acceptance, state, status/body, turn/resource and expiry.
+  `Idempotency-Key` is 1–128 characters, scoped to the local API and log
+  generation; the fingerprint covers method, target, canonical body and revision
+  preconditions, never credentials. Same key/body replays the original response (including after the
+  target was deleted); a changed payload is 409 `idempotency_key_reused`;
+  concurrent identical requests share one acceptance. Prompt and continue write
+  the journal row in the same transaction as the `turn`, so a crash leaves both
+  or neither; replay returns the original turn id and schedules nothing. A
+  pre-acceptance failure (such as busy) is not journaled, so the key can be used
+  after the conflict clears. Accepted responses are bounded at 64 KiB; larger
+  results replay as a bounded record that points at the resource.
+- **Revisions (11.3).** Projects and sessions have a monotonic `revision` in
+  reads and updates. `If-Match` or `expected_revision` rejects stale updates with
+  409 `revision_conflict` before any change; keyed updates replay before that
+  check. Git worktree create/delete persists a pending intent before execution;
+  a crash turns it into **409** `mutation_outcome_unknown` (stable and expiring),
+  never a blind repeat. External effects are still not transactional.
+- **Provider retries (11.4).** Only pre-stream transport, 429, 502, 503 and 504
+  failures retry, within a shared policy (3 attempts, jittered backoff from 1 s,
+  30 s per wait, 60 s per step; environment-tunable). `Retry-After` is honored
+  when affordable. Each attempt is a `turn_attempt` row and a
+  `retry_scheduled`/`retry_started`/`retry_exhausted` event. Auth, validation,
+  cancellation, persistence, unknown and post-stream failures are terminal.
+  Partial streams, tools, code cells, background commands, approvals and
+  questions are never replayed. A restart does not resume a pending retry; the
+  request body is unchanged across attempts.
+- **Client reconnect and snapshot (11.5).** `GET /api/snapshot` reads projects,
+  sessions, running turns, pending waits and an optional bounded selected-session
+  message view at one watermark, with the head read in the same SQLite read
+  transaction. `Client.watch` advances its cursor only after an event is
+  consumed, reconnects with bounded backoff, deduplicates by durable id, and on
+  cursor failure or overflow fetches the snapshot and resyncs after its head.
+  The CLI uses `watch`; it never resubmits a prompt on reconnect. Prompt and
+  continue POSTs carry one idempotency key per user action and reuse it for the
+  client's own transport retries. The inspector's fetch stream already reloads
+  state on cursor failures/overflow and now names an expired event boundary.
+- **Retention (11.6).** `nexus/retention.py` removes only a contiguous global
+  prefix (default 14 days and 256 MiB of payload, hourly), advances `log.floor`
+  atomically, and preserves a head high-water mark so ids are never reused. A
+  cursor at the floor resumes; below it gets 410 `history_unavailable`. Prefix
+  each maintenance pass removes at most 5,000 events in one transaction. In-flight
+  replay ranges are pinned; unfinished turns/requests, open waits and
+  live jobs protect their sessions' events. Messages, snapshots and model
+  context are retained independently. Terminal turns keep 200 recent rows per
+  session plus recovery evidence; mutation entries expire seven days after
+  terminal resolution. A global `log.retention` event reports each pass. The
+  inspector shows the retained boundary rather than claiming a complete wire
+  history.
+- **Verification (11.7).** Focused regressions cover keyed prompt/continue
+  replay, changed payloads, a crash before task creation, deletion replay,
+  revision conflicts, retry classification/budgets/Retry-After/attempt
+  persistence/no tool replay, snapshot watermark/pending state, reconnect
+  deduplication/resync, exact floor boundaries, head high-water marks, pins,
+  protected recovery evidence, byte budgets and lifecycle pruning. See
+  `tests/test_mutations.py`, `test_retry.py`, `test_retention.py` and
+  `test_client_snapshot.py` (including concurrent identical keys, an interrupted
+  retry backoff, external-effect unknown outcomes and bounded large pruning). The
+  full suite after delivery review (345 tests) and lint are clean. No live provider
+  run, browser visual run or real container/network fault was performed for
+  this increment; the daemon smoke used an isolated `$NEXUS10_HOME` and scripted
+  or no-provider paths.
+
+**Remaining limitations.** An ambiguous external Git effect is not reversible
+and is reported unknown. Provider retries can duplicate provider-side
+computation/billing; they are not provider-exactly-once. A keyed continuation's original acceptance can be replayed safely. Ordinary
+mutations persist intent first; if a crash loses their returned result, replay
+reports `mutation_outcome_unknown` and requires inspection. Retention protects evidence it can
+identify durably; an arbitrary external process's use of old events is outside
+that contract. Steer/queue, session drafts, artifacts, skills/MCP and automatic
+compaction remain later steps.
+
+Step 11 is complete when keyed mutation replay, concurrency conflicts, bounded
+provider retry, client reconnect/resync and retention are implemented and
+reviewed together with the existing replay/recovery/continuation guarantees.
+
+**Step 11 delivery review (2026-10-27).** Independently reran the full suite
+and lint. Fixed ordinary mutations' response-journal crash window by recording
+intent before execution; an unrecorded result now replays as a stable unknown
+outcome instead of repeating a create/delete or wait reply. Fingerprints include
+revision preconditions, and per-key locks retain queued waiters safely. Fixed
+byte-budget pruning to retain the newest fitting suffix independently of age,
+limited each event deletion transaction to 5,000 rows, protected dangling tool
+and retained mutation evidence, and released replay pins at the live boundary.
+Client overflow now forces snapshot resync; reconnect preserves the initial head,
+exhausts repeated empty streams, closes old transports, and refreshes rotated
+credentials only for locally discovered daemons. CLI resync restores only its
+selected tree's waits/status. Provider retries freeze their request across
+settings changes and recheck the elapsed budget after backoff. Regression
+coverage includes these crash, retention, reconnect and retry boundaries.
+Final suite: 345 passing, including the isolated daemon restart smoke; Ruff and
+whitespace checks clean. No live provider or browser visual run was performed.
 
 ### Step 11a: web tools, search service, skills and MCP
 
@@ -1460,7 +1777,7 @@ show the wire view, the session tree and kernels.
 | A directory change rewrote context | The move is announced forward, the destination `AGENTS.md` is loaded then, and earlier prompts/messages stay byte-for-byte (done 2026-10-27) | A cached prefix stays stable |
 | Worktrees were created and removed by hand or without checks | Git argument arrays, real worktree metadata, dirty/main/in-use refusals and no branch deletion (done 2026-10-27) | Never destroy a checkout, a session's directory or an unrelated directory |
 | Sessions had no archive state | `archived` on every session of a root tree; one atomic idempotent transition, default/only/include list filters, and notices that do not wake an archived tree (done 2026-10-27) | Hide finished work without deleting it, stopping jobs or losing context |
-| Session history was inspectable but not portable | `GET /api/session/{id}/export` (Markdown transcript or versioned JSON with snapshots, messages and the complete event log), scoped to one session or its descendants, read from one SQLite read boundary (done 2026-10-27) | Take the context out without a provider call, a mutation or a silent truncation |
+| Session history was inspectable but not portable | `GET /api/session/{id}/export` (Markdown transcript or versioned JSON with snapshots, messages and the retained event log), scoped to one session or its descendants, read from one SQLite read boundary (done 2026-10-27) | Take the context out without a provider call, a mutation or a silent truncation |
 | The SSE `id:` was the per-daemon `seq`, so every restart invalidated clients | Durable event row ids with a `log` generation and a `<generation>:<id>` cursor; `seq` is only a live counter (done 2026-10-27) | A resume cursor must survive restart and reject a replaced database |
 | Only session events were stored; project changes and deletions were live-only | Global lifecycle events and minimal `session.deleted` tombstones are stored and replayed; a session's own history still cascades (done 2026-10-27) | A reconnect must be able to rebuild project and session state |
 | A reconnecting client started a fresh live stream and had to catch up out of band | Atomic replay-to-live handoff: subscription and head boundary first, paged replay, overlap skipped, explicit resync codes and overflow (done 2026-10-27) | No lost or duplicated events across the connection boundary |
@@ -1476,6 +1793,11 @@ show the wire view, the session tree and kernels.
 | Bash can write files with no tool checks | Documented enforcement boundary; full sandbox/restricted execution remains open (PLAN.md, Known gaps) | Do not claim a filesystem invariant the tool contract cannot guarantee |
 | Web tools named `websearch` / `webfetch`, deployment in `websearch/` | `web_search` / `web_fetch`, deployment in `nexus-search/` (planned, Step 11a) | Explicit names and self-contained service setup |
 | Extension system and MCP integrations in old Core | Focused skills/MCP support and upstream browser-use default in `nexus-browser/` (planned, Step 11a) | Carry over needed capabilities deliberately |
+| A lost mutation response was ambiguous and a retry could create a second turn | `Idempotency-Key` mutation journal; prompt/continue acceptance and turn are one transaction; a replay returns the original result and schedules nothing (done 2026-10-27) | Clients can resolve a lost response without duplicating work |
+| Competing updates silently overwrote each other | Monotonic project/session `revision`, `If-Match`/`expected_revision`, and 409 `revision_conflict` before any change (done 2026-10-27) | Conflicts are deterministic and visible |
+| A transient provider failure ended the turn immediately | Bounded, visible pre-stream retries with attempt rows and events; no tool/partial replay (done 2026-10-27) | Survive transient faults without hiding attempts |
+| A reconnecting client had to catch up out of band | `/api/snapshot` watermark plus `Client.watch` reconnect/deduplicate/resync; CLI cursor advances only after applying (done 2026-10-27) | Rebuilding state is consistent and cannot resubmit a prompt |
+| The event log grew forever and the floor stayed 0 | Prefix retention with a durable head high-water mark, recovery/replay pins and an explicit `history_unavailable` boundary (done 2026-10-27) | Storage is bounded without losing recovery evidence |
 | Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
 
 ## Implementation sequence
@@ -1501,7 +1823,11 @@ Work one reviewed increment at a time:
 5. Durable events and reconnect-safe replay — done 2026-10-27; see Step 11.
    Durable turn recovery — done 2026-10-27; see Step 11. Manual continuation
    (`/api/session/{id}/continue`, `/continue`, `nexus session continue`) — done
-   2026-10-27; see Step 11. Automatic retries and idempotent requests remain.
+   2026-10-27; see Step 11. The ordered 11.1–11.7 increments — mutation request
+   IDs and conflicts, bounded provider retries, client reconnect/resync,
+   retention and integrated verification — are done 2026-10-27; see the
+   delivery record below Step 11. No live provider or browser run was performed
+   for this final increment.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
 
@@ -1526,18 +1852,19 @@ Do not start the next increment until the current review is complete.
   session with no interrupted turn is not reported individually. Recovery never
   kills a process from a stored pid (it may have been reused); there is no job
   supervisor.
-- A pending approval cancelled by a normal turn interrupt or a timed-out code
-  cell is still removed without a `permission.replied` event; clients should
-  treat a disappeared approval as cancelled. Startup recovery is the exception:
-  it publishes an explicit cancellation, and `permission.replied` now carries
-  `outcome`.
+- Approval cancellation now publishes `permission.replied` with an explicit
+  outcome during normal teardown, cell cancellation and startup recovery.
+  Questions and approvals remain distinct waits; none survives a restart.
 - Startup recovery closes an interrupted outer `code` call with an unknown
   outcome, preserving the durable `code.call` and `code.cell` events and saying
   the kernel was lost. It does not invent a successful call or recover kernel
   state.
-- No retries and no idempotent mutation requests; manual continuation is an
-  explicit client action and never repeats an ambiguous POST. There is no
-  context limit or compaction (planned as handoff, Step 12a).
+- A provider retry can duplicate provider-side computation/billing; it is
+  bounded and visible, not provider-side exactly-once. An ambiguous external Git
+  effect (worktree create/delete) is persisted only as intent/evidence and must
+  be inspected, never blindly repeated. Manual continuation is an explicit
+  client action and never repeats an ambiguous POST. There is no context limit
+  or compaction (planned as handoff, Step 12a).
 - Explicit updates apply to subsequent model/tool calls. An active `code` cell
   retains the task-tool bindings it started with until that outer call finishes.
   Agent switches retain the initially loaded `AGENTS.md` section; a directory
@@ -1562,12 +1889,16 @@ Do not start the next increment until the current review is complete.
 - Reconnect resumes the event stream; startup recovery reconciles unfinished
   turns before the daemon serves requests and publishes their idle status,
   cancellations and `turn.recovered`. Manual continuation after recovery is an
-  explicit request. Automatic retries and idempotent mutation requests remain
-  open. Archive transitions are still stored only in the root's log.
-- The `event` table grows without limit (every token delta is a row); no retention yet.
-  Turn, request and tool lifecycle rows also have no retention. Reconnect uses
-  durable ids and a log generation, but retention will have to raise the floor
-  and clients then get `history_unavailable` with a resync head.
+  explicit request. Keyed mutations replay safely and clients resync from
+  `/api/snapshot` on a cursor failure or overflow. Archive transitions are still
+  stored only in the root's log.
+- Event, turn lifecycle and mutation retention is bounded: a contiguous event
+  prefix expires by age/payload, while unfinished turns, open waits, live jobs
+  and in-flight replays pin their evidence. Messages, snapshots and model context
+  are independent of diagnostic expiry. A cursor below the floor gets
+  `history_unavailable` with a resync head. Expired keys are no longer safe to
+  retry automatically. A very large export still holds one WAL read snapshot
+  while streaming.
 - Sign-in is only the local `nexus login`, not yet an API endpoint.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.
 - No cross-provider message conversion beyond text and tool calls; switching

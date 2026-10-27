@@ -48,9 +48,14 @@ turn lifecycle.
 1. Append the user message unless `user_text` is `NO_USER_MESSAGE`, yield `MessageAdded`.
 2. For `step` in `1..max_steps`:
    1. Yield `StepStart(step)`.
-   2. Stream `provider.stream(request)`. Every event is yielded unchanged.
-      `PartDone` parts are collected; the last `Done.stop` is kept (default
-      `"other"`).
+   2. Stream `provider.stream(request)` through the bounded retry wrapper
+      (`nexus/retry.py`). Every event is yielded unchanged. A transient
+      pre-stream failure yields `RetryScheduled`, waits, then `RetryStarted`
+      and tries the frozen request again; settings changes wait for the next
+      logical request. No response stream event may have been
+      received yet. `RetryExhausted` says why no further attempt fits the
+      budget. `PartDone` parts are collected; the last `Done.stop` is kept
+      (default `"other"`).
    3. Append the assistant message made of the collected parts, yield `MessageAdded`.
    4. If there are no `ToolCall` parts, yield `TurnEnd(stop, step)` and return.
    5. Otherwise run the calls one by one, in order: yield `ToolStart(call, args)`,
@@ -122,7 +127,9 @@ calls continues the loop, since the tool-call check is what decides.
 
 ## Not covered (PLAN.md, known gaps)
 
-No retries, no context limit or compaction. Saving and cancelling are the
+No context limit or compaction. Provider retries are bounded and owned by the
+loop's wrapper (`nexus/retry.py`), not by storage: the daemon records attempts
+and publishes their events. Saving and cancelling are the
 caller's job: the daemon saves each `MessageAdded` and cancels the turn task on
 interrupt ([daemon.md](daemon.md)). The daemon also records the turn, each
 provider request and each tool call's lifecycle durably around this loop, so a

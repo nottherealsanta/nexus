@@ -116,6 +116,9 @@ async def test_interrupt_closes_a_waiting_tool_call(setup):
     messages = (await client.get(f"/api/session/{session['id']}/message")).json()
     assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
     assert messages[2]["parts"][0]["is_error"] is True
+    events = (await client.get(f"/api/session/{session['id']}/event")).json()["events"]
+    replies = [e["data"] for e in events if e["type"] == "permission.replied"]
+    assert len(replies) == 1 and replies[0]["outcome"] == "cancelled" and replies[0]["allow"] is False
 
 
 async def test_project_agent_sets_prompt_tools_model_and_effort(setup):

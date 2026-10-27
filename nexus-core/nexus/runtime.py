@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -57,10 +59,24 @@ from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
 from .llmhub.types import Done, Message, PartDone, ProviderError, Text, ToolCall, ToolResult, ToolSpec
-from .loop import MAX_STEPS, NO_USER_MESSAGE, Agent, MessageAdded, NoUserMessage, StepStart, ToolEnd, ToolStart
+from .loop import (
+    MAX_STEPS,
+    NO_USER_MESSAGE,
+    Agent,
+    MessageAdded,
+    NoUserMessage,
+    RetryExhausted,
+    RetryScheduled,
+    RetryStarted,
+    StepStart,
+    ToolEnd,
+    ToolStart,
+)
 from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
 from .recovery import Recovery, open_approvals
+from .retention import Retention
+from .retry import RetryPolicy
 from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
@@ -78,7 +94,20 @@ class Busy(Exception):
 
 
 class Conflict(Exception):
-    pass
+    def __init__(self, message: str, *, code: str | None = None, payload: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.payload = payload
+
+
+class RevisionConflict(Conflict):
+    """A mutation expected an older resource revision and changed nothing."""
+
+    def __init__(self, message: str, *, current: int, resource: str) -> None:
+        super().__init__(message, code="revision_conflict",
+                         payload={"revision": current, "current_revision": current, "resource": resource})
+        self.current = current
+        self.resource = resource
 
 
 class NotFound(Exception):
@@ -86,7 +115,8 @@ class NotFound(Exception):
 
 
 def project_json(p: Project) -> dict[str, Any]:
-    return {"id": p.id, "path": p.path, "name": p.name, "created": p.created, "updated": p.updated}
+    return {"id": p.id, "path": p.path, "name": p.name, "created": p.created, "updated": p.updated,
+            "revision": p.revision}
 
 
 def message_json(m: StoredMessage) -> dict[str, Any]:
@@ -113,13 +143,85 @@ class Runtime:
         self.pending_directories: dict[str, dict[str, Any]] = {}  # session id -> a validated, not-yet-applied move
         self.file_lock = asyncio.Lock()  # serializes Nexus file mutations for this daemon
         self.worktree_lock = asyncio.Lock()  # serializes create/delete so they cannot conflict
+        self._mutation_locks: dict[str, tuple[asyncio.Lock, int]] = {}  # same idempotency key shares one acceptance
+        self.retry_policy = RetryPolicy.from_env()
+        self.retention = Retention(self)
+        self.mutation_lifetime = self.retention.settings.mutation_lifetime
         bus.attach(store)  # every published event is durable before any subscriber sees it
         self.recovered: list[dict[str, Any]] = []
 
     def recover(self) -> list[dict[str, Any]]:
         """Reconcile turns a crash left unfinished. Runs before the daemon serves requests."""
         self.recovered = Recovery(self).run()
+        self.store.resolve_pending_mutations(lifetime=self.mutation_lifetime)
         return self.recovered
+
+    async def start_maintenance(self) -> None:
+        """Prune expired diagnostics in a background task; the first pass is synchronous."""
+        self.retention.run_once()
+        self.retention.start()
+
+    # -- idempotent mutations --------------------------------------------------
+
+    @asynccontextmanager
+    async def mutation_lock(self, key: str) -> AsyncIterator[None]:
+        # Count owners and waiters. An unlocked lock can still have a waiter
+        # scheduled to acquire it; eviction based on locked() alone races that
+        # handoff and can create two independent locks for the same key.
+        lock, users = self._mutation_locks.get(key, (asyncio.Lock(), 0))
+        self._mutation_locks[key] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            _, remaining = self._mutation_locks[key]
+            if remaining == 1:
+                self._mutation_locks.pop(key)
+            else:
+                self._mutation_locks[key] = (lock, remaining - 1)
+
+    def replay_mutation(self, key: str, fingerprint: str) -> dict[str, Any] | None:
+        """The stored acceptance for a key, or None; a different payload is a conflict."""
+        entry = self.store.mutation(key)
+        if entry is None:
+            return None
+        if entry["state"] == "resolved" and entry["expires"] is not None and entry["expires"] < time.time():
+            self.store.delete_mutation(key)  # the deduplication guarantee has expired
+            return None
+        if entry["fingerprint"] != fingerprint:
+            raise Conflict(
+                f"idempotency key {key!r} was already used for {entry['operation']} {entry['target']}; "
+                "reusing a key for a different request is refused",
+                code="idempotency_key_reused",
+                payload={"key": key, "operation": entry["operation"], "target": entry["target"]},
+            )
+        if entry["state"] == "pending":
+            raise Conflict(
+                f"keyed operation {entry['operation']} {entry['target']} has no recorded outcome; "
+                "inspect the target before retrying with a new key",
+                code="mutation_outcome_unknown",
+                payload={"key": key, "operation": entry["operation"], "target": entry["target"]},
+            )
+        return entry
+
+    def record_mutation(self, key: str, fingerprint: str, operation: str, target: str, *,
+                        status: int | None, body: Any, turn_id: str | None = None,
+                        resource: str | None = None) -> dict[str, Any]:
+        return self.store.record_mutation(
+            key, fingerprint, operation, target, status=status, body=body, turn_id=turn_id,
+            resource=resource, lifetime=self.mutation_lifetime)
+
+    def begin_external_mutation(self, key: str, fingerprint: str, operation: str, target: str,
+                                *, resource: str | None = None) -> dict[str, Any]:
+        return self.store.begin_mutation(key, fingerprint, operation, target, resource=resource)
+
+    def finish_external_mutation(self, key: str, *, status: int, body: Any,
+                                 resource: str | None = None) -> dict[str, Any]:
+        return self.store.finish_mutation(key, status=status, body=body, resource=resource,
+                                          lifetime=self.mutation_lifetime)
+
+    def discard_mutation(self, key: str) -> None:
+        self.store.discard_mutation(key)
 
     # -- projects ------------------------------------------------------------
 
@@ -136,11 +238,16 @@ class Runtime:
             raise NotFound(f"no project {project_id}")
         return project
 
-    def rename_project(self, project_id: str, name: str) -> Project:
+    def rename_project(self, project_id: str, name: str, *, expected_revision: int | None = None) -> Project:
         self.project(project_id)
-        project = self.store.update_project(project_id, name=name)
-        self.bus.publish("project.updated", project_json(project))  # type: ignore[arg-type]
-        return project  # type: ignore[return-value]
+        project = self.store.update_project(project_id, name=name, expected_revision=expected_revision)
+        if project is None:
+            latest = self.project(project_id)
+            raise RevisionConflict(
+                f"project {project_id} is at revision {latest.revision}, not {expected_revision}; read it again",
+                current=latest.revision, resource=project_id)
+        self.bus.publish("project.updated", project_json(project))
+        return project
 
     async def delete_project(self, project_id: str) -> None:
         sessions = self.store.sessions(project_id)
@@ -192,7 +299,7 @@ class Runtime:
             "directory_change": ({"from": pending["from"], "to": pending["to"], "status": "pending",
                                   "source": pending["source"]} if pending else None),
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
-            "archived": bool(s.archived),
+            "archived": bool(s.archived), "revision": s.revision,
             "created": s.created, "updated": s.updated,
         }
 
@@ -474,6 +581,7 @@ class Runtime:
 
     def update_session(self, session_id: str, **fields: Any) -> Session:
         current = self.session(session_id)
+        expected_revision = fields.pop("expected_revision", None)
         if fields.get("permission") not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
         if fields.get("model"):
@@ -482,6 +590,10 @@ class Runtime:
             self.check_tool_names(fields["disabled_tools"])
         if fields.get("agent") == "":
             raise ValueError("agent must not be empty")
+        if expected_revision is not None and expected_revision != current.revision:
+            raise RevisionConflict(
+                f"session {session_id} is at revision {current.revision}, not {expected_revision}; read it again",
+                current=current.revision, resource=session_id)
         new_agent: agent_files.AgentDef | None = None
         found: agent_files.AgentSet | None = None
         if fields.get("agent"):
@@ -522,8 +634,12 @@ class Runtime:
                 else {"entry": False, "activated": False},
                 directory_changes=(previous.get("directory_changes") if previous else None),
             )
-        session = self.store.update_session(session_id, **fields)
-        assert session is not None
+        session = self.store.update_session(session_id, expected_revision=expected_revision, **fields)
+        if session is None:
+            latest = self.session(session_id)
+            raise RevisionConflict(
+                f"session {session_id} is at revision {latest.revision}, not {expected_revision}; read it again",
+                current=latest.revision, resource=session_id)
         notice: str | None = None
         if rebuilt is not None:
             self.store.set_snapshot(session_id, rebuilt)
@@ -1045,6 +1161,7 @@ class Runtime:
             refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
             files=files,
             cwd_changed=cwd_changed,
+            retry_policy=self.retry_policy,
         )
 
     # -- child sessions --------------------------------------------------------
@@ -1126,19 +1243,21 @@ class Runtime:
             raise Busy(f"session {session.id} is already running a turn")
 
     def _begin_turn(self, session: Session, *, user_text: str | NoUserMessage, origin: str,
-                    continuation: dict[str, Any] | None = None) -> dict[str, Any]:
+                    continuation: dict[str, Any] | None = None,
+                    mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Record one turn durably, announce it, and start its task.
 
         Prompting and manual continuation share this path; the only difference is
         the explicit `NO_USER_MESSAGE` marker and the provenance carried in the
-        durable `turn.data`.
+        durable `turn.data`. A keyed request is written in the same transaction as
+        the turn, so a crash leaves either both or neither.
         """
         session_id = session.id
         self.errors.pop(session_id, None)
         data: dict[str, Any] = {"origin": origin}
         if continuation is not None:
             data["continuation"] = continuation
-        turn = self.store.start_turn(session_id, data=data)  # durable before the task exists
+        turn = self.store.start_turn(session_id, data=data, mutation=mutation)  # durable before the task exists
         status: dict[str, Any] = {"status": "busy", "turn_id": turn["id"], "origin": origin}
         if continuation is not None:
             status["continuation"] = continuation
@@ -1150,16 +1269,17 @@ class Runtime:
             self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation))
         return turn
 
-    def prompt(self, session_id: str, text: str) -> dict[str, Any]:
+    def prompt(self, session_id: str, text: str, *, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         session = self.session(session_id)
         self._check_turn_start(session)
         if not text.strip():
             raise ValueError("text must not be empty")
         if session.title == "New session":
             self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS])
-        return self._begin_turn(session, user_text=text, origin="prompt")
+        turn = self._begin_turn(session, user_text=text, origin="prompt", mutation=mutation)
+        return {"status": "busy", "turn_id": turn["id"], "origin": "prompt"}
 
-    def continue_session(self, session_id: str) -> dict[str, Any]:
+    def continue_session(self, session_id: str, *, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Start a normal turn from the stored context, with no new user message.
 
         This is an explicit client action. It refuses an empty conversation, an
@@ -1192,17 +1312,20 @@ class Runtime:
             link["reconciliation"] = reconciliation.json()
         else:
             link["reconciliation"] = None
-        turn = self._begin_turn(session, user_text=NO_USER_MESSAGE, origin="continuation", continuation=link)
-        return {
-            "status": "busy", "turn_id": turn["id"], "origin": "continuation",
-            "continuation": link, "reconciled": link.get("reconciliation"),
-        }
+        response = {"status": "busy", "origin": "continuation", "continuation": link,
+                    "reconciled": link.get("reconciliation")}
+        if mutation is not None:
+            mutation = {**mutation, "body": {**response, "idempotency_key": mutation["key"]}}
+        turn = self._begin_turn(session, user_text=NO_USER_MESSAGE, origin="continuation",
+                                continuation=link, mutation=mutation)
+        return {**response, "turn_id": turn["id"]}
 
     async def _run(self, session_id: str, user_text: str | NoUserMessage, turn_id: str, *,
                    origin: str = "prompt", continuation: dict[str, Any] | None = None) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
+        active_attempt: str | None = None
         request_parts: list[dict[str, Any]] = []
         step = 0
         closed = False
@@ -1216,6 +1339,7 @@ class Runtime:
                         stored = self.store.save_assistant_message(
                             session_id, event.message, turn_id=turn_id, request_id=active_request)
                         active_request = None
+                        active_attempt = None
                         request_parts = []
                     elif event.message.role == "tool":
                         stored = self.store.save_tool_message(session_id, event.message, turn_id=turn_id)
@@ -1227,6 +1351,9 @@ class Runtime:
                     if isinstance(event, StepStart):
                         step = event.step
                         active_request = self.store.start_request(turn_id, session_id, event.step)["id"]
+                        active_attempt = f"{active_request}:1"
+                        self.store.start_attempt(turn_id, session_id, active_request, active_attempt, 1)
+                        self.store.mark_attempt_started(active_attempt)
                         request_parts = []
                     elif isinstance(event, PartDone):
                         request_parts.append(to_json(event.part))
@@ -1235,6 +1362,8 @@ class Runtime:
                             self.store.finish_request(
                                 active_request, stop=event.stop, response_id=event.response_id,
                                 parts=request_parts)
+                        if active_attempt is not None:
+                            self.store.finish_attempt(active_attempt, "completed")
                     elif isinstance(event, ToolStart):
                         started.add(event.call.id)
                         self.store.mark_tool_started(turn_id, session_id, event.call)
@@ -1243,6 +1372,19 @@ class Runtime:
                         self.store.mark_tool_finished(
                             turn_id, session_id, event.call, event.result,
                             self._pending_observation_data(session_id, event.call.id))
+                    elif isinstance(event, RetryScheduled):
+                        if active_attempt is not None:
+                            self.store.finish_attempt(active_attempt, "failed", error=event.reason)
+                        active_attempt = event.attempt_id
+                        self.store.start_attempt(
+                            turn_id, session_id, active_request, event.attempt_id, event.next_attempt,
+                            delay=event.delay, error=event.reason)
+                    elif isinstance(event, RetryStarted):
+                        self.store.mark_attempt_started(event.attempt_id)
+                    elif isinstance(event, RetryExhausted):
+                        # The failed attempt is closed by the ProviderError handler;
+                        # `event.attempt_id` is only an event correlation id.
+                        pass
                     data = to_json(event)
                     self.bus.publish(data["type"], data, session_id=session_id)
             self.store.finish_turn(turn_id, "completed", steps=step)
@@ -1250,6 +1392,8 @@ class Runtime:
         except asyncio.CancelledError:
             if active_request is not None:
                 self.store.interrupt_request(active_request, reason="interrupted by the user")
+            if active_attempt is not None:
+                self.store.finish_attempt(active_attempt, "interrupted")
             self._close_dangling_calls(
                 session_id, started, finished, turn_id,
                 pending_approvals=self._pending_approval_calls(session_id))
@@ -1261,6 +1405,8 @@ class Runtime:
             error = {"kind": "provider", "message": str(exc), "status": exc.status, "body": exc.body}
             if active_request is not None:
                 self.store.fail_request(active_request, error)
+            if active_attempt is not None:
+                self.store.finish_attempt(active_attempt, "failed", error=str(exc))
             self._fail(session_id, error)
             self.store.finish_turn(turn_id, "failed", steps=step, error=error)
             closed = True
@@ -1268,6 +1414,8 @@ class Runtime:
             error = {"kind": "auth" if not isinstance(exc, ValueError) else "request", "message": str(exc)}
             if active_request is not None:
                 self.store.fail_request(active_request, error)
+            if active_attempt is not None:
+                self.store.finish_attempt(active_attempt, "failed", error=str(exc))
             self._fail(session_id, error)
             self.store.finish_turn(turn_id, "failed", steps=step, error=error)
             closed = True
@@ -1275,6 +1423,8 @@ class Runtime:
             if not closed:  # an unexpected failure still closes the durable turn visibly
                 if active_request is not None:
                     self.store.interrupt_request(active_request, reason="the turn ended without a recorded outcome")
+                if active_attempt is not None:
+                    self.store.finish_attempt(active_attempt, "failed", error="the turn ended without a recorded outcome")
                 self.store.finish_turn(
                     turn_id, "interrupted", steps=step,
                     error={"kind": "internal", "message": "the turn ended without a recorded outcome"})
@@ -1286,6 +1436,12 @@ class Runtime:
                 if sid == session_id:
                     future.cancel()
                     self.approvals.pop(approval_id, None)
+                    # Make a vanished wait explicit, so clients and retention do not
+                    # treat it as still pending forever.
+                    self.bus.publish("permission.replied", {
+                        "id": approval_id, "session_id": session_id, "allow": False,
+                        "outcome": "cancelled", "reason": "the turn ended before this approval was answered",
+                    }, session_id=session_id)
             self.close_questions({session_id}, "the turn ended without an answer")
             leftover = self.inboxes.pop(session_id, [])
             self._deliver(session_id)  # before idle, so the tree is never all idle while a parent is about to wake
@@ -1300,6 +1456,7 @@ class Runtime:
                 self.bus.publish("session.status", idle, session_id=session_id)
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
+            self.store.resolve_mutations_for_turn(turn_id, lifetime=self.mutation_lifetime)
 
     def _fail(self, session_id: str, error: dict[str, Any]) -> None:
         self.errors[session_id] = error["message"]
@@ -1327,7 +1484,7 @@ class Runtime:
         messages = self.store.messages(session_id)
         lifecycle = self.store.wait_lifecycle(session_id, since=messages[-1].created if messages else None)
         return {call_id for call_id, request in open_approvals(lifecycle).items()
-                if not request.get("replied")}
+                if not request.get("replied") or request.get("outcome") == "cancelled"}
 
     def _close_dangling_calls(self, session_id: str, started: set[str],
                               finished: dict[str, ToolResult], turn_id: str, *,
@@ -1398,7 +1555,15 @@ class Runtime:
         try:
             return await future
         finally:
-            self.approvals.pop(approval_id, None)
+            removed = self.approvals.pop(approval_id, None)
+            answered = future.done() and not future.cancelled()
+            if not future.done():
+                future.cancel()
+            if removed is not None and not answered:
+                self.bus.publish("permission.replied", {
+                    "id": approval_id, "session_id": session_id, "allow": False,
+                    "outcome": "cancelled", "reason": "the turn ended before this approval was answered",
+                }, session_id=session_id)
 
     def pending_approvals(self, session_id: str) -> list[dict[str, Any]]:
         return [request for sid, _, request in self.approvals.values() if sid == session_id]
@@ -1407,6 +1572,8 @@ class Runtime:
         entry = self.approvals.get(approval_id)
         if entry is None or entry[0] != session_id:
             raise NotFound(f"no pending permission {approval_id}")
+        if entry[1].done():
+            raise Conflict(f"permission {approval_id} was already resolved")
         self.bus.publish("permission.replied", {"id": approval_id, "session_id": session_id,
                                                 "outcome": "allowed" if allow else "denied", "allow": allow},
                          session_id=session_id)
@@ -1501,5 +1668,6 @@ class Runtime:
         for session_id in list(self.turns):
             await self.interrupt(session_id, reason="the daemon is shutting down")
         self.close_questions(None, "the daemon is shutting down")
+        await self.retention.stop()
         await self.jobs.shutdown()
         await self.kernels.shutdown()

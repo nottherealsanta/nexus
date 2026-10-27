@@ -172,6 +172,7 @@ class Recovery:
         self._publish_recovered(turn, summary)
         self._checkpoint("recovered_event")
         self.store.set_turn_recovery(turn_id, "done")
+        self.store.resolve_mutations_for_turn(turn_id, lifetime=self.runtime.mutation_lifetime)
         return summary
 
     # -- messages --------------------------------------------------------------
@@ -219,6 +220,7 @@ class Recovery:
         }
         self._publish_recovered(turn, summary)
         self.store.set_turn_recovery(turn["id"], "done")
+        self.store.resolve_mutations_for_turn(turn["id"], lifetime=self.runtime.mutation_lifetime)
         return summary
 
     def _durable_turn_end(self, session_id: str, requests: list[dict[str, Any]]) -> dict[str, Any] | None:

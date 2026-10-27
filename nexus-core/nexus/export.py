@@ -91,6 +91,8 @@ class Boundary:
     seq: int
     session_updated: float
     counts: dict[str, dict[str, int]]
+    floor: int = 0
+    history_truncated: bool = False
 
 
 class ExportView:
@@ -157,8 +159,13 @@ class ExportView:
 
     def _boundary(self) -> Boundary:
         event = self.db.execute("select coalesce(max(id), 0) as id, coalesce(max(seq), 0) as seq from event").fetchone()
+        floor = 0
+        high = event["id"]
         try:
-            log = self.db.execute("select generation from log where id = 1").fetchone()
+            log = self.db.execute("select generation, floor, head_high from log where id = 1").fetchone()
+            if log is not None:
+                floor = log["floor"]
+                high = max(high, log["head_high"])
         except sqlite3.OperationalError:  # a database written before the log table; export stays read-only
             log = None
         counts: dict[str, dict[str, int]] = {}
@@ -174,10 +181,12 @@ class ExportView:
         return Boundary(
             generated=time.time(),
             generation=log["generation"] if log else "",
-            event_id=event["id"],
+            event_id=high,
             seq=event["seq"],
             session_updated=max((row["updated"] for row in self.sessions), default=0.0),
             counts=counts,
+            floor=floor,
+            history_truncated=floor > 0,
         )
 
     def close(self) -> None:
@@ -317,12 +326,16 @@ class ExportView:
                 "log_generation": self.boundary.generation,
                 "event_id": self.boundary.event_id,
                 "seq": self.boundary.seq,
+                "floor": self.boundary.floor,
+                "history_truncated": self.boundary.history_truncated,
                 "session_updated": self.boundary.session_updated,
                 "counts": self.boundary.counts,
                 "note": (
                     "All records were read inside one SQLite read transaction. Writes after this "
                     "boundary are not in this export. `seq` is the publishing daemon's counter; "
-                    "`event_id` is durable, and a resume cursor is `<log_generation>:<event_id>`."
+                    "`event_id` is durable, and a resume cursor is `<log_generation>:<event_id>`. "
+                    "When `history_truncated` is true, diagnostic events at or below `floor` expired "
+                    "before this export; messages and snapshots remain complete."
                 ),
             },
         }
@@ -559,6 +572,9 @@ def markdown_export(view: ExportView) -> Iterator[str]:
         yield f"- State: durable partial state; running at the boundary: {running}\n"
     else:
         yield "- State: durable stored state at the boundary; no selected session was running\n"
+    if view.boundary.history_truncated:
+        yield (f"- Event retention: earlier diagnostic events expired at floor {view.boundary.floor}; "
+               "the JSON event log starts after that boundary. Messages and snapshots are complete.\n")
     yield (
         "\nThe export is read-only. A child session's conversation is its own context and appears in "
         "its own section, never inside its parent's messages. Provider stream deltas live in the JSON "

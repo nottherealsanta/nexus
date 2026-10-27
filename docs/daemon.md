@@ -57,14 +57,16 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   resumed session replays to its provider without loss.
 - **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
   `session`, `session_snapshot`, `message`, `event`, `file_observation`, `turn`,
-  `turn_request`, `turn_tool` and `log`. `session_snapshot` is
+  `turn_request`, `turn_tool`, `turn_attempt`, `mutation` and `log`.
+  `session_snapshot` is
   the JSON configuration frozen for one session; `event` is the durable event
   log, in publish order (see [Durable event log](#durable-event-log)); `log`
-  holds that database's log generation and retention floor;
-  `file_observation` holds each session's read observations (see below);
-  `turn`, `turn_request` and `turn_tool` are the durable execution lifecycle
-  ([Crash recovery](#crash-recovery)). A `message` row also records the id of the
-  `message.added` event that announced it.
+  holds that database's log generation, retention floor and head high-water
+  mark; `mutation` is the idempotency journal; `turn_attempt` records provider
+  retry attempts; `file_observation` holds each session's read observations (see
+  below); `turn`, `turn_request` and `turn_tool` are the durable execution
+  lifecycle ([Crash recovery](#crash-recovery)). A `message` row also records
+  the id of the `message.added` event that announced it.
   Deleting a project or session deletes everything under it, including its child
   sessions, snapshots, observations, execution records and session events.
   Archiving only changes one `archived` column on every session in the tree; it
@@ -97,14 +99,57 @@ id into a cursor, `<generation>:<id>`, and serves the reconnect stream.
   errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
   JSON responses with the current head, not a silent "start now". The full
   contract, filtering and overflow are in [api.md](api.md#event-stream).
+- **Retention.** `nexus/retention.py` removes only a contiguous prefix of old
+  diagnostic events and advances `log.floor`; the head high-water mark remains.
+  Events are pinned by an in-flight replay and protected by an unfinished
+  turn/request, an open wait or a live background job. Messages, snapshots and
+  model context never expire with the wire log. Defaults are 14 days and 256 MiB
+  of retained payload, checked hourly (`NEXUS10_EVENT_RETENTION_DAYS`,
+  `NEXUS10_EVENT_RETENTION_BYTES`, `NEXUS10_RETENTION_INTERVAL_SECONDS`).
+  A `log.retention` global event reports pruning or storage pressure. Each pass
+  removes at most 5,000 events in one transaction; later passes continue cleanup.
+  A replay releases its pin when catch-up reaches the live queue. Terminal turn/request/tool
+  rows are pruned after 30 days while keeping 200 turns per session; mutation
+  entries expire seven days after terminal resolution. Pressure is reported, not
+  silently resolved by dropping incoming events: `log.retention` carries the
+  removed count, batches, retained payload bytes and `over_budget` when the
+  protected evidence itself exceeds the budget.
+- **Reconnect.** `GET /api/event` accepts `?cursor=` or `Last-Event-ID`, registers
+  the live subscription and reads the head atomically, replays the stored log up
+  to that head in pages, then continues live while skipping the overlap. Cursor
+  errors (wrong generation, ahead, malformed, below the floor) are 400/409/410
+  JSON responses with the current head, not a silent "start now". The full
+  contract, filtering and overflow are in [api.md](api.md#event-stream). The
+  Python client reconnects with bounded backoff, deduplicates by durable id and
+  resyncs from `/api/snapshot` on a cursor failure or overflow. Locally discovered
+  clients refresh the daemon token on a restart; explicitly configured remote
+  clients keep their supplied credentials.
 - **Failures.** A storage error from the log propagates out of `publish`; the
   event is not delivered and does not get an `id`. An event naming a session
   whose row is already gone is not delivered either; the tombstone covers it.
-- **Not yet.** No retention or compaction runs: the log grows without limit and
-  the floor stays 0. Retries, idempotent mutation requests and manual
-  continuation (`/continue`) are separate (Step 11); a reconnect resumes the
-  stream, not a turn. Startup recovery reconciles interrupted turns from the
-  durable log and execution records ([Crash recovery](#crash-recovery)).
+
+## Mutations and provider retries
+
+A keyed mutation (`Idempotency-Key`) is journaled by fingerprint. Same key and
+same request replay the recorded status/body without work; a different payload
+is 409. Other routes persist intent before execution; a crash before their
+response is recorded becomes `mutation_outcome_unknown` rather than repeating
+the action. The journal includes revision preconditions in its fingerprint. Prompt and continue write their journal row in the same transaction as
+the turn, so a crash cannot separate acceptance from its replay record. Unkeyed
+requests keep single-attempt behavior. The full route matrix, status codes and
+snapshot contract are in
+[api.md](api.md#mutations-retries-continuation-and-reconnect).
+
+Project and session reads carry a monotonic `revision`; `PATCH` and model/agent
+updates accept `If-Match` or `expected_revision` and reject stale values with
+409 before changing anything. A keyed update replay happens before the revision
+recheck.
+
+Provider retries are bounded and pre-stream: transport, 429, 502/503/504 only,
+with jittered backoff. Each attempt is a `turn_attempt` row and a visible
+`retry_scheduled`/`retry_started`/`retry_exhausted` event. Partial streams and
+completed tools are never replayed automatically. `GET /api/info` reports the
+active policy.
 
 ## Session archiving
 
@@ -338,8 +383,10 @@ not run and invents no result) and appends
 `[Nexus recovery: legacy interrupted turn]` once. A normal older conversation is
 untouched, and every stored message id and event id stays the same.
 
-**Not done here.** No automatic retries, no `/continue`, no idempotent client
-mutations and no retention. A background job that outlives an orderly turn and
+**Not done here.** Recovery itself does not retry, continue a turn, answer a
+wait or replay a mutation; those are separate bounded actions
+([api.md](api.md#mutations-retries-continuation-and-reconnect)). Retention is
+described under [Durable event log](#durable-event-log). A background job that outlives an orderly turn and
 whose session had no interrupted turn is not reported individually after a
 restart; its record and retained output are simply gone. The same applies to a
 kernel from a session with no interrupted turn: nothing durable can prove it was
@@ -363,8 +410,12 @@ nexus project list | open [PATH]
 
 The CLI subscribes to `/api/event?session=…` before it posts a prompt or
 continuation, and renders events (a child's under a `── child … ──` header) until
-every session in the tree is idle. The Python client (`Client.events`) understands durable ids
-and can resume from a cursor; the CLI's turn view does not reconnect by itself. `nexus session list` shows the tree. It answers `permission.asked`
+every session in the tree is idle. It advances its durable cursor only after
+applying an event, reconnects with bounded backoff, deduplicates by event id and
+resyncs from `/api/snapshot` on `history_unavailable`, a cursor failure or
+overflow. Prompt and continue POSTs carry one idempotency key per user action
+(also reused across the client's transport retries); a reconnect never resends
+them. `nexus session list` shows the tree. It answers `permission.asked`
 with a y/N prompt. For `question.asked` it shows each question and its options,
 collects the answers and submits them; Ctrl-C, EOF or an interrupted turn
 abandons the prompt without submitting, and the daemon closes the question.
@@ -390,10 +441,16 @@ unarchive command.
   mid-flight.
 - **Turns after restart.** Turns are not resumed after a restart. Event streams
   resume; in-memory approvals and questions are cancelled visibly and cannot be
-  answered later. Manual continuation after recovery is explicit.
-- **Retention.** The event log has no expiry or compaction yet; every cursor
-  stays resumable and the floor is 0. Turn, request and tool lifecycle rows also
-  have no retention; they are small but accumulate one turn at a time.
+  answered later. Manual continuation after recovery is explicit. Startup
+  recovery finishes idempotently and also resolves any keyed acceptance it
+  closes.
+- **Retention.** Diagnostic events expire by age and payload size, and the floor
+  moves. Recovery and continuation evidence is pinned; lifecycle rows and
+  mutation entries have separate retention. See
+  [Durable event log](#durable-event-log).
+- **Retries and replay.** Provider attempts are bounded and visible; clients can
+  replay keyed mutations and reconnect from a durable cursor. An ambiguous
+  external Git effect is still unknown, not transactional.
 - **Daemon version.** Nothing checks that a running daemon runs the same code
   as the client. Run `nexus daemon stop` after changing core.
 

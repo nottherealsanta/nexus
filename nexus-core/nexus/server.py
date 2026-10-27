@@ -48,11 +48,14 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, suppress
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +82,10 @@ VERSION = "0.10.0.dev0"
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
+IDEMPOTENCY_MAX = 128
+_IDEMPOTENCY_KEY = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
+_MUTATING = frozenset({"POST", "PATCH", "DELETE"})
+_KEYED = ("/prompt", "/continue")
 
 Handler = Callable[[Request], Awaitable[Response]]
 
@@ -105,6 +112,57 @@ def _archive_filter(request: Request) -> str:
     if mode not in ("exclude", "only", "include"):
         raise ValueError("archived must be 'exclude', 'only' or 'include'")
     return mode
+
+
+def _idempotency_key(request: Request) -> str | None:
+    key = request.headers.get("idempotency-key")
+    if key is None:
+        return None
+    if not _IDEMPOTENCY_KEY.match(key):
+        raise ValueError(
+            "Idempotency-Key must be 1-128 characters from A-Z, a-z, 0-9, '.', '_', ':' or '-'")
+    return key
+
+
+def _fingerprint(request: Request, raw: bytes) -> str:
+    """Stable hash of method, target and semantic body; credentials are not included."""
+    try:
+        body: Any = json.loads(raw) if raw else None
+    except ValueError:
+        body = raw.decode("utf-8", "replace")
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    query = sorted(request.query_params.multi_items())
+    target = json.dumps([request.method, request.url.path, query, _expected_revision(request)], separators=(",", ":"))
+    return "sha256:" + hashlib.sha256((target + "\n" + canonical).encode("utf-8")).hexdigest()
+
+
+def _expected_revision(request: Request, body: dict[str, Any] | None = None) -> int | None:
+    raw: Any = request.headers.get("if-match")
+    if raw is None and body is not None:
+        raw = body.get("expected_revision")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text.startswith("W/"):
+        text = text[2:].strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        text = text[1:-1]
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ValueError("If-Match/expected_revision must be a positive integer revision") from exc
+    if value < 0:
+        raise ValueError("If-Match/expected_revision must be a positive integer revision")
+    return value
+
+
+def _json_payload(response: Response) -> Any:
+    if not response.body:
+        return None
+    try:
+        return json.loads(response.body)
+    except (ValueError, TypeError):
+        return None
 
 
 _EXHAUSTED = object()
@@ -177,12 +235,7 @@ def sse(event: dict[str, Any]) -> str:
 
 def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     def route(handler: Handler) -> Handler:
-        async def wrapped(request: Request) -> Response:
-            given = request.headers.get("authorization", "").removeprefix("Bearer ")
-            if request.url.path == "/api/event":
-                given = given or request.query_params.get("token", "")
-            if not hmac.compare_digest(given, token):
-                return _error(401, "missing or wrong token (see daemon.json)")
+        async def inner(request: Request) -> Response:
             try:
                 return await handler(request)
             except NotFound as exc:
@@ -190,7 +243,12 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             except Busy as exc:
                 return _error(409, str(exc))
             except Conflict as exc:
-                return _error(409, str(exc))
+                payload: dict[str, Any] = {"error": str(exc)}
+                if exc.code:
+                    payload["code"] = exc.code
+                if exc.payload:
+                    payload.update(exc.payload)
+                return JSONResponse(payload, status_code=409)
             except CursorError as exc:
                 payload = exc.payload(runtime.store)
                 return JSONResponse(payload, status_code=exc.status,
@@ -198,6 +256,65 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             except ToolError as exc:
                 return _error(400, str(exc))
             except (ValueError, KeyError, TypeError) as exc:
+                return _error(400, str(exc))
+
+        def replay(entry: dict[str, Any]) -> Response:
+            headers = {"idempotent-replayed": "true", "idempotency-key": entry["key"],
+                       "cache-control": "no-store"}
+            body = entry.get("body")
+            status = entry.get("status") or 200
+            if body is None:
+                return Response(status_code=status, headers=headers)
+            return JSONResponse(body, status_code=status, headers=headers)
+
+        async def wrapped(request: Request) -> Response:
+            given = request.headers.get("authorization", "").removeprefix("Bearer ")
+            if request.url.path == "/api/event":
+                given = given or request.query_params.get("token", "")
+            if not hmac.compare_digest(given, token):
+                return _error(401, "missing or wrong token (see daemon.json)")
+            try:
+                key = _idempotency_key(request)
+                if key is None or request.method not in _MUTATING:
+                    return await inner(request)
+                raw = await request.body()
+                if len(raw) > MAX_BODY_BYTES:
+                    raise ValueError("request body exceeds 1 MiB")
+                fingerprint = _fingerprint(request, raw)
+                async with runtime.mutation_lock(key):
+                    entry = runtime.replay_mutation(key, fingerprint)
+                    if entry is not None:
+                        return replay(entry)
+                    if request.url.path.endswith(_KEYED):
+                        request.state.mutation = {
+                            "key": key, "fingerprint": fingerprint,
+                            "operation": "prompt" if request.url.path.endswith("/prompt") else "continue",
+                            "target": request.url.path, "state": "accepted", "status": 202,
+                            "body": {"status": "busy", "idempotency_key": key},
+                        }
+                    keyed_turn = request.url.path.endswith(_KEYED)
+                    if not keyed_turn:
+                        # Intent must precede *every* mutation, including ordinary
+                        # SQLite changes whose helpers commit independently. A
+                        # crash in the response-journal gap is unknown, never a
+                        # license to repeat a create/delete or release a wait twice.
+                        runtime.begin_external_mutation(
+                            key, fingerprint, f"{request.method} {request.url.path}", request.url.path)
+                    response = await inner(request)
+                    if not keyed_turn:
+                        payload = _json_payload(response)
+                        resource = payload.get("id", payload.get("path")) if isinstance(payload, dict) else None
+                        runtime.finish_external_mutation(
+                            key, status=response.status_code, body=payload, resource=resource)
+                    return response
+            except Conflict as exc:
+                payload = {"error": str(exc)}
+                if exc.code:
+                    payload["code"] = exc.code
+                if exc.payload:
+                    payload.update(exc.payload)
+                return JSONResponse(payload, status_code=409)
+            except (ValueError, TypeError) as exc:
                 return _error(400, str(exc))
         return wrapped
 
@@ -209,7 +326,15 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse({
             "name": "nexus", "version": VERSION, "pid": os.getpid(), "home": str(home()), "url": url,
             "log": {"generation": generation, "head": head, "head_cursor": format_cursor(generation, head),
-                    "floor": runtime.store.log_floor()},
+                    "floor": runtime.store.log_floor(),
+                    "floor_cursor": format_cursor(generation, runtime.store.log_floor())},
+            "retention": asdict(runtime.retention.settings),
+            "retry": {"max_attempts": runtime.retry_policy.max_attempts,
+                      "base_delay": runtime.retry_policy.base_delay,
+                      "max_wait": runtime.retry_policy.max_wait,
+                      "max_elapsed": runtime.retry_policy.max_elapsed},
+            "idempotency": {"header": "Idempotency-Key", "max_length": IDEMPOTENCY_MAX,
+                            "lifetime_seconds": runtime.mutation_lifetime},
         })
 
     async def providers(request: Request) -> Response:
@@ -256,7 +381,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def project(request: Request) -> Response:
         pid = p(request, "id")
         if request.method == "PATCH":
-            return JSONResponse(project_json(runtime.rename_project(pid, (await _body(request))["name"])))
+            body = await _body(request)
+            return JSONResponse(project_json(runtime.rename_project(
+                pid, body["name"], expected_revision=_expected_revision(request, body))))
         if request.method == "DELETE":
             await runtime.delete_project(pid)
             return Response(status_code=204)
@@ -288,7 +415,11 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         sid = p(request, "id")
         if request.method == "PATCH":
             body = await _body(request)
-            return JSONResponse(runtime.session_json(runtime.update_session(sid, **{k: body.get(k) for k in ("agent", "title", "model", "permission", "effort", "disabled_tools")})))
+            fields = {k: body.get(k) for k in ("agent", "title", "model", "permission", "effort", "disabled_tools")}
+            expected = _expected_revision(request, body)
+            if expected is not None:
+                fields["expected_revision"] = expected
+            return JSONResponse(runtime.session_json(runtime.update_session(sid, **fields)))
         if request.method == "DELETE":
             await runtime.delete_session(sid)
             return Response(status_code=204)
@@ -300,7 +431,28 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         limit = min(int(request.query_params.get("limit") or 1000), 5000)
         types = [t for t in (request.query_params.get("type") or "").split(",") if t]
         rows = runtime.store.events(sid, after=int(request.query_params.get("after") or 0), limit=limit, types=types or None)
-        return JSONResponse({"events": rows, "counts": runtime.store.event_counts(sid), "more": len(rows) == limit})
+        return JSONResponse({"events": rows, "counts": runtime.store.event_counts(sid), "more": len(rows) == limit,
+                             "floor": runtime.store.log_floor(), "head": runtime.store.log_head(),
+                             "generation": runtime.store.log_generation(),
+                             "history_truncated": runtime.store.log_floor() > 0})
+
+    async def snapshot(request: Request) -> Response:
+        """A consistent view to rebuild client state, plus an event watermark.
+
+        Apply events strictly after `watermark.head`. A selected session gets its
+        last `message_limit` messages (default 200, at most 1,000); older history
+        is available through the message endpoint.
+        """
+        sid = request.query_params.get("session") or None
+        if sid is not None:
+            runtime.session(sid)
+        limit = max(1, min(int(request.query_params.get("message_limit") or 200), 1000))
+        data = runtime.store.state_snapshot(session_id=sid, message_limit=limit)
+        data["running"] = runtime.store.running_turns()
+        data["approvals"] = [request_ for sid_, _, request_ in runtime.approvals.values()]
+        data["questions"] = runtime.pending_questions()
+        return JSONResponse(data, headers={"x-nexus-log-generation": data["watermark"]["generation"],
+                                           "cache-control": "no-store"})
 
     async def children(request: Request) -> Response:
         runtime.session(p(request, "id"))
@@ -310,10 +462,20 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         return JSONResponse(runtime.tree(p(request, "id")))
 
     async def session_model(request: Request) -> Response:
-        return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), model=(await _body(request))["model"])))
+        body = await _body(request)
+        fields: dict[str, Any] = {"model": body["model"]}
+        expected = _expected_revision(request, body)
+        if expected is not None:
+            fields["expected_revision"] = expected
+        return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), **fields)))
 
     async def session_agent(request: Request) -> Response:
-        return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), agent=(await _body(request))["agent"])))
+        body = await _body(request)
+        fields: dict[str, Any] = {"agent": body["agent"]}
+        expected = _expected_revision(request, body)
+        if expected is not None:
+            fields["expected_revision"] = expected
+        return JSONResponse(runtime.session_json(runtime.update_session(p(request, "id"), **fields)))
 
     async def session_workspace_tools(request: Request) -> Response:
         sid = p(request, "id")
@@ -352,11 +514,18 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     async def prompt(request: Request) -> Response:
         body = await _body(request)
-        runtime.prompt(p(request, "id"), str(body["text"]))
-        return JSONResponse({"status": "busy"}, status_code=202)
+        mutation = getattr(request.state, "mutation", None)
+        result = runtime.prompt(p(request, "id"), str(body["text"]), mutation=mutation)
+        if mutation is not None:
+            result = {**result, "idempotency_key": mutation["key"]}
+        return JSONResponse(result, status_code=202)
 
     async def session_continue(request: Request) -> Response:
-        return JSONResponse(runtime.continue_session(p(request, "id")), status_code=202)
+        mutation = getattr(request.state, "mutation", None)
+        result = runtime.continue_session(p(request, "id"), mutation=mutation)
+        if mutation is not None:
+            result = {**result, "idempotency_key": mutation["key"]}
+        return JSONResponse(result, status_code=202)
 
     async def interrupt(request: Request) -> Response:
         runtime.session(p(request, "id"))
@@ -370,7 +539,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def context(request: Request) -> Response:
         return JSONResponse(runtime.context(p(request, "id")))
 
-    async def snapshot(request: Request) -> Response:
+    async def session_snapshot_json(request: Request) -> Response:
         return JSONResponse(runtime.snapshot_json(p(request, "id")))
 
     async def session_export(request: Request) -> Response:
@@ -393,6 +562,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
                 "x-nexus-export-format-version": str(export.FORMAT_VERSION),
                 "x-nexus-export-boundary": f"event:{view.boundary.event_id};seq:{view.boundary.seq}",
                 "x-nexus-log-generation": view.boundary.generation,
+                "x-nexus-log-floor": str(view.boundary.floor),
             },
         )
 
@@ -495,6 +665,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/provider", route(providers)),
         Route("/api/model", route(models)),
         Route("/api/model/default", route(default_model)),
+        Route("/api/snapshot", route(snapshot)),
         Route("/api/agent", route(agent_list)),
         Route("/api/agent/{name}", route(agent_one)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),
@@ -516,7 +687,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),
-        Route("/api/session/{id}/snapshot", route(snapshot)),
+        Route("/api/session/{id}/snapshot", route(session_snapshot_json)),
         Route("/api/session/{id}/export", route(session_export)),
         Route("/api/session/{id}/permission", route(permissions)),
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
@@ -527,6 +698,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
+        await runtime.start_maintenance()
         yield
         await runtime.shutdown()
 

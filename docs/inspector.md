@@ -39,9 +39,9 @@ content-security policy: no external scripts, styles or connections.
 | Level | Shows | Source |
 | --- | --- | --- |
 | 1 Conversation | Saved messages: user and assistant text, reasoning summaries (with the size of the encrypted state), tool calls with each argument labelled, tool results with line and character counts. A `session` tool call links to the child it started. A Questions card shows each `ask` request (including nested in `code`), its options, answer or cancellation, and live pending status. Every part has its JSON, including the provider's raw wire item. A `[Nexus recovery: interrupted turn]` notice appears as an ordinary user message. | `/api/session/{id}/message`, `/api/session/{id}/question`, stored `question.asked` / `question.replied` |
-| 2 Steps | One row per model call, grouped by turn: model, input item count, tools offered, HTTP status, time to first byte, total time, tokens in (cached) and out (reasoning), stop reason, and each tool run with its result and duration. | stored events |
+| 2 Steps | One row per model call, grouped by turn: model, input item count, tools offered, HTTP status, time to first byte, total time, tokens in (cached) and out (reasoning), stop reason, and each tool run with its result and duration. Provider retry attempts appear in the turn's events (`retry_scheduled`/`retry_started`/`retry_exhausted`). | stored events |
 | 3 Requests | A snapshot card (origin, agent source and fingerprint, instruction-file status, current instruction file after a move, workspace-control state, move count, child catalog), the next request (what the model would see now), then every sent request as labelled sections: redacted headers, parameters, instructions (including the `# Instructions file` section), each input item (preview, expandable to JSON), and tools (name, description, schema). Response headers too. | `/api/session/{id}/context`, the session's snapshot summary, stored `wire_request` / `wire_response` |
-| 4 Raw | Every stored event in order, with the time offset, type and a clipped preview; click a row for its full JSON. You can filter by type or content, and token deltas and provider SSE events are hidden by default (one checkbox). Also the messages and session record as stored. | `/api/session/{id}/event` |
+| 4 Raw | Every retained stored event in order, with the time offset, type and a clipped preview; click a row for its full JSON. You can filter by type or content, and token deltas and provider SSE events are hidden by default (one checkbox). Also the messages and session record as stored. When retention moved the floor, the view says earlier events expired and names the retained boundary; messages are not affected. | `/api/session/{id}/event` |
 
 Clipping is always announced. Long tool output shows its first 60 lines, with
 the rest one click away. Previews say how many characters were cut. The Raw
@@ -65,7 +65,10 @@ resync instead of a silent fresh start: the sidebar, kernels, background jobs
 and the open session are reloaded, and the stream restarts at the new head. The
 sidebar line shows live / catching up / reconnecting / resyncing. If the open
 session is deleted while the page is live, its view closes with an explicit
-note. Reconnecting never resubmits a prompt or re-runs a turn.
+note. Reconnecting never resubmits a prompt or re-runs a turn. The browser uses
+the same continuity rule as the Python client: cursor failures and overflow
+require a state reload, not a guess; numeric gaps within a filtered stream are
+normal.
 
 ## Limits
 

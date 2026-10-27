@@ -36,6 +36,12 @@ observations are gone; the tombstone is only what a client needs to drop it.
 `bus.overflow` is stream control, is never stored, and has no durable id.
 Details and response codes: [api.md](api.md#event-stream).
 
+**Retention.** Old diagnostic events are removed from a contiguous prefix and
+`floor` becomes the last removed id. The head high-water mark remains even when
+no rows are retained. A cursor at the floor may resume; below it the response is
+410 `history_unavailable`. Messages and snapshots are independent of event
+expiry. A `log.retention` global event reports each pass.
+
 ## Conversation
 
 A conversation is a list of `Message`s made of ordered parts.
@@ -113,6 +119,9 @@ iterator; they are not events.
 | `ToolStart` | `call`, `args` | Just before a tool call is checked, approved and run. `args` is `None` when the arguments are not a JSON object |
 | `ToolEnd` | `call`, `result` | After the call finished, was declined, or failed; `result.is_error` tells which |
 | `TurnEnd` | `stop`, `steps` | Last event of a turn. `stop` is the final `Done.stop`, or `"max_steps"` |
+| `RetryScheduled` | `attempt`, `next_attempt`, `attempt_id`, `delay`, `reason`, `status`, `retry_after`, `max_attempts` | A retryable pre-stream failure; the next attempt starts after `delay` seconds |
+| `RetryStarted` | `attempt`, `attempt_id` | The next provider attempt is starting |
+| `RetryExhausted` | `attempts`, `attempt_id`, `reason`, `status`, `retry_after`, `max_attempts` | No further attempt fits the policy or remaining budget; the `ProviderError` is raised next |
 
 One turn with one tool call:
 

@@ -37,6 +37,8 @@ import json
 import secrets
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,7 +53,8 @@ create table if not exists project (
   path text not null unique,
   name text not null,
   created real not null,
-  updated real not null
+  updated real not null,
+  revision integer not null default 1
 );
 create table if not exists session (
   id text primary key,
@@ -68,7 +71,8 @@ create table if not exists session (
   parent_call_id text,
   launched_by text not null default 'user',
   disabled_tools text not null default '[]',
-  archived integer not null default 0
+  archived integer not null default 0,
+  revision integer not null default 1
 );
 create table if not exists event (
   id integer primary key autoincrement,
@@ -83,8 +87,38 @@ create table if not exists log (
   id integer primary key check (id = 1),
   generation text not null,
   created real not null,
-  floor integer not null default 0
+  floor integer not null default 0,
+  head_high integer not null default 0
 );
+create table if not exists mutation (
+  key text primary key,
+  fingerprint text not null,
+  operation text not null,
+  target text not null,
+  accepted real not null,
+  state text not null,
+  status integer,
+  body text,
+  turn_id text,
+  resource text,
+  resolved real,
+  expires real
+);
+create index if not exists mutation_turn on mutation(turn_id);
+create index if not exists mutation_expiry on mutation(expires);
+create table if not exists turn_attempt (
+  id text primary key,
+  turn_id text not null references turn(id) on delete cascade,
+  request_id text references turn_request(id) on delete cascade,
+  session_id text not null references session(id) on delete cascade,
+  attempt integer not null,
+  status text not null,
+  delay real,
+  started real,
+  finished real,
+  error text
+);
+create index if not exists turn_attempt_request on turn_attempt(request_id, attempt);
 create table if not exists session_snapshot (
   session_id text primary key references session(id) on delete cascade,
   data text not null,
@@ -167,6 +201,9 @@ def new_generation() -> str:
     return f"log_{secrets.token_hex(8)}"
 
 
+MUTATION_BODY_MAX = 64 * 1024  # retained response bytes; larger results replay as a bounded accepted record
+
+
 def _archive_clause(mode: str) -> str:
     """SQL for a session-list archive filter (`exclude`, `only` or `include`)."""
     try:
@@ -182,6 +219,7 @@ class Project:
     name: str
     created: float
     updated: float
+    revision: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +239,7 @@ class Session:
     launched_by: str = "user"  # "user" | "agent"
     disabled_tools: str = "[]"  # JSON list of tool names turned off for this session
     archived: int = 0  # 0/1; archive/unarchive applies to the whole tree
+    revision: int = 1  # monotonic configuration revision (expected-revision preconditions)
 
     def disabled(self) -> set[str]:
         return set(json.loads(self.disabled_tools or "[]"))
@@ -224,6 +263,8 @@ class Store:
         self.db.execute("pragma journal_mode = wal")
         self.db.execute("pragma foreign_keys = on")
         self.db.execute("pragma synchronous = normal")  # WAL + normal: safe across crashes, fast per-event commits
+        self._pins: dict[int, tuple[int, int]] = {}
+        self._pin_seq = 0
         had_turn = self.db.execute(
             "select 1 from sqlite_master where type = 'table' and name = 'turn'").fetchone() is not None
         self.db.executescript(SCHEMA)
@@ -240,6 +281,11 @@ class Store:
             self.db.execute("alter table session add column disabled_tools text not null default '[]'")
         if "archived" not in columns:  # databases from before session archiving: existing sessions stay live
             self.db.execute("alter table session add column archived integer not null default 0")
+        if "revision" not in columns:  # databases from before expected-revision preconditions
+            self.db.execute("alter table session add column revision integer not null default 1")
+        project_columns = {r["name"] for r in self.db.execute("pragma table_info(project)")}
+        if "revision" not in project_columns:
+            self.db.execute("alter table project add column revision integer not null default 1")
         message_columns = {r["name"] for r in self.db.execute("pragma table_info(message)")}
         if "event_id" not in message_columns:  # databases from before recovery: old messages have no link
             with self.db:
@@ -302,11 +348,21 @@ class Store:
 
     def _ensure_log(self) -> str:
         """This database's log generation; created once and kept across restarts."""
+        columns = {r["name"] for r in self.db.execute("pragma table_info(log)")}
+        if columns and "head_high" not in columns:
+            self.db.execute("alter table log add column head_high integer not null default 0")
+        if columns:
+            with self.db:
+                self.db.execute(
+                    "update log set head_high = max(head_high, (select coalesce(max(id), 0) from event))"
+                    " where id = 1")
         row = self.db.execute("select generation from log where id = 1").fetchone()
         if row is None:
+            highest = self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0]
             with self.db:
-                self.db.execute("insert into log (id, generation, created, floor) values (1, ?, ?, 0)",
-                                (new_generation(), time.time()))
+                self.db.execute(
+                    "insert into log (id, generation, created, floor, head_high) values (1, ?, ?, 0, ?)",
+                    (new_generation(), time.time(), highest))
             row = self.db.execute("select generation from log where id = 1").fetchone()
         return row["generation"]
 
@@ -326,7 +382,8 @@ class Store:
         now = time.time()
         project = Project(new_id("prj"), resolved, name or Path(resolved).name or resolved, now, now)
         with self.db:
-            self.db.execute("insert into project values (?, ?, ?, ?, ?)", (project.id, project.path, project.name, now, now))
+            self.db.execute("insert into project (id, path, name, created, updated, revision) values (?, ?, ?, ?, ?, 1)",
+                            (project.id, project.path, project.name, now, now))
         return project, True
 
     def projects(self) -> list[Project]:
@@ -336,9 +393,18 @@ class Store:
         row = self.db.execute("select * from project where id = ?", (project_id,)).fetchone()
         return Project(**row) if row else None
 
-    def update_project(self, project_id: str, *, name: str) -> Project | None:
+    def update_project(self, project_id: str, *, name: str, expected_revision: int | None = None) -> Project | None:
         with self.db:
-            self.db.execute("update project set name = ?, updated = ? where id = ?", (name, time.time(), project_id))
+            if expected_revision is not None:
+                row = self.db.execute(
+                    "update project set name = ?, updated = ?, revision = revision + 1"
+                    " where id = ? and revision = ?", (name, time.time(), project_id, expected_revision))
+            else:
+                row = self.db.execute(
+                    "update project set name = ?, updated = ?, revision = revision + 1 where id = ?",
+                    (name, time.time(), project_id))
+            if row.rowcount == 0:
+                return None
         return self.project(project_id)
 
     def delete_project(self, project_id: str) -> bool:
@@ -441,7 +507,7 @@ class Store:
             changed = any(bool(row["archived"]) != archived for row in rows)
             if changed:
                 self.db.execute(
-                    f"update session set archived = ? where id in ({marks})",
+                    f"update session set archived = ?, revision = revision + 1 where id in ({marks})",
                     (1 if archived else 0, *ids),
                 )
         return ids, changed
@@ -467,6 +533,7 @@ class Store:
         return [Session(**r) for r in rows]
 
     def update_session(self, session_id: str, **fields: Any) -> Session | None:
+        expected_revision = fields.pop("expected_revision", None)
         allowed = {k: v for k, v in fields.items() if k in ("title", "model", "permission", "effort", "agent")
                    and v is not None}
         if fields.get("directory") is not None:
@@ -478,7 +545,17 @@ class Store:
         if allowed:
             sets = ", ".join(f"{k} = ?" for k in allowed)
             with self.db:
-                self.db.execute(f"update session set {sets}, updated = ? where id = ?", (*allowed.values(), time.time(), session_id))
+                if expected_revision is not None:
+                    changed = self.db.execute(
+                        f"update session set {sets}, updated = ?, revision = revision + 1"
+                        " where id = ? and revision = ?",
+                        (*allowed.values(), time.time(), session_id, expected_revision)).rowcount
+                else:
+                    changed = self.db.execute(
+                        f"update session set {sets}, updated = ?, revision = revision + 1 where id = ?",
+                        (*allowed.values(), time.time(), session_id)).rowcount
+                if not changed:
+                    return None
         return self.session(session_id)
 
     def delete_session(self, session_id: str) -> bool:
@@ -527,7 +604,9 @@ class Store:
                     "insert into event (session_id, seq, time, type, data) values (?, ?, ?, ?, ?)",
                     (event["session_id"], event["seq"], event["time"], event["type"], json.dumps(event["data"])),
                 )
-                return row.lastrowid
+                event_id = row.lastrowid
+                self.db.execute("update log set head_high = max(head_high, ?) where id = 1", (event_id,))
+                return event_id
         except sqlite3.IntegrityError:
             session_id = event["session_id"]
             if session_id is not None and self.db.execute(
@@ -551,13 +630,172 @@ class Store:
         return self._generation
 
     def log_head(self) -> int:
-        """The highest durable event id, or 0 for an empty log."""
-        return self.db.execute("select coalesce(max(id), 0) from event").fetchone()[0]
+        """The highest durable event id ever committed, even after retention removed it."""
+        row = self.db.execute("select max(head_high, (select coalesce(max(id), 0) from event)) from log where id = 1").fetchone()
+        return row[0] if row and row[0] is not None else 0
 
     def log_floor(self) -> int:
-        """The lowest event id still retained. No retention runs yet, so this is 0."""
+        """The last event id removed by retention; `0` means nothing was removed."""
         row = self.db.execute("select floor from log where id = 1").fetchone()
         return row["floor"] if row else 0
+
+    def protected_sessions(self) -> set[str]:
+        """Sessions whose events still carry recovery or lifecycle evidence.
+
+        An unfinished turn, an unfinished provider request, a live background job
+        started event with no finish, or an open wait all pin that session's log
+        out of retention. Idle alone is not proof that its events are disposable.
+        """
+        out: set[str] = {row["session_id"] for row in self.db.execute(
+            "select distinct session_id from turn_tool where state != 'inserted'")}
+        for row in self.db.execute(
+                "select distinct session_id from turn where status = 'running' or recovery = 'pending'"):
+            out.add(row["session_id"])
+        for row in self.db.execute(
+                "select distinct session_id from turn_request where status = 'started'"):
+            out.add(row["session_id"])
+        for row in self.db.execute(
+                "select distinct session_id from event where session_id is not null and type in"
+                " ('bash.started', 'permission.asked', 'question.asked')"):
+            session_id = row["session_id"]
+            if self._has_open_lifecycle(session_id):
+                out.add(session_id)
+        return out
+
+    def _has_open_lifecycle(self, session_id: str) -> bool:
+        started: set[str] = set()
+        finished: set[str] = set()
+        for row in self.db.execute(
+                "select type, json_extract(data, '$.id') as ident from event where session_id = ?"
+                " and type in ('bash.started', 'bash.finished') order by id", (session_id,)):
+            if not row["ident"]:
+                continue
+            (started.add if row["type"] == "bash.started" else finished.add)(row["ident"])
+        if started - finished:
+            return True
+        asked = {row["id"] for row in self.db.execute(
+            "select json_extract(data, '$.id') as id from event where session_id = ? and type in"
+            " ('permission.asked', 'question.asked')", (session_id,)) if row["id"]}
+        replied = {row["id"] for row in self.db.execute(
+            "select json_extract(data, '$.id') as id from event where session_id = ? and type in"
+            " ('permission.replied', 'question.replied')", (session_id,)) if row["id"]}
+        return bool(asked - replied)
+
+    def prune_turns(self, *, now: float, age_seconds: float, keep_per_session: int = 200) -> dict[str, int]:
+        """Remove old terminal execution rows, keeping recovery evidence and recent turns."""
+        cutoff = now - age_seconds
+        removed = 0
+        with self.db:
+            turns = self.db.execute(
+                "select id, session_id from turn where status != 'running' and recovery != 'pending'"
+                " and coalesce(finished, started) < ? order by started", (cutoff,)).fetchall()
+            keep: dict[str, int] = {}
+            for row in self.db.execute(
+                    "select id, session_id from turn where status != 'running' and recovery != 'pending'"
+                    " order by started desc"):
+                keep[row["session_id"]] = keep.get(row["session_id"], 0) + 1
+            protected = self.protected_sessions()
+            for row in turns:
+                if row["session_id"] in protected:
+                    continue
+                if self.db.execute(
+                        "select 1 from mutation where turn_id = ? and (expires is null or expires >= ?)",
+                        (row["id"], now)).fetchone():
+                    continue
+                if keep.get(row["session_id"], 0) <= keep_per_session:
+                    continue
+                removed += self.db.execute("delete from turn where id = ?", (row["id"],)).rowcount
+                keep[row["session_id"]] -= 1
+        return {"turns_removed": removed}
+
+    def pin_events(self, start: int, end: int) -> int:
+        """Keep events `start..end` alive for an in-flight replay or export.
+
+        Returns a pin token for `unpin_events`. Pins are in-process; a crash
+        discards them together with the replay that needed them.
+        """
+        token = self._pin_seq = getattr(self, "_pin_seq", 0) + 1
+        self._pins[token] = (start, end)
+        return token
+
+    def unpin_events(self, token: int) -> None:
+        self._pins.pop(token, None)
+
+    def _pinned_cutoff(self) -> int | None:
+        """The largest id retention may remove, or `None` when a pin blocks it."""
+        if not self._pins:
+            return None
+        return min(start for start, _ in self._pins.values()) - 1
+
+    def prune_events(self, *, now: float, age_seconds: float | None, byte_budget: int | None,
+                     protect_sessions: set[str] | None = None, batch_size: int = 5000) -> dict[str, Any]:
+        """Remove one contiguous prefix of old events and advance the floor.
+
+        Protection is conservative: events of a session with an unfinished turn
+        (or with a listed live job/wait) are never removed, and an in-flight
+        replay pins its range. Returns counts and the new floor; never removes
+        the durable head or reuses an id.
+        """
+        floor = self.log_floor()
+        head = self.log_head()
+        protecting = set(protect_sessions or ())
+        protected_cutoff: int | None = None
+        if protecting:
+            marks = ", ".join("?" * len(protecting))
+            row = self.db.execute(
+                f"select min(id) from event where session_id in ({marks})", tuple(protecting)).fetchone()
+            if row and row[0] is not None:
+                protected_cutoff = row[0] - 1
+        pinned = self._pinned_cutoff()
+        cutoff: int | None = None
+        if age_seconds is not None:
+            row = self.db.execute(
+                "select max(id) from event where id > ? and time < ?",
+                (floor, now - age_seconds)).fetchone()
+            if row and row[0] is not None:
+                cutoff = row[0]
+        if byte_budget is not None:
+            # Keep the newest suffix that fits. Size and age are independent
+            # expiry conditions: either can require removing an older prefix.
+            used = 0
+            for row in self.db.execute(
+                    "select id, length(cast(data as blob)) + length(cast(type as blob))"
+                    " from event where id > ? order by id desc", (floor,)):
+                used += row[1]
+                if used > byte_budget:
+                    cutoff = max(cutoff or floor, row[0])
+                    break
+        if cutoff is None:
+            return self._retention_pressure(floor, head, protecting, byte_budget)
+        cutoff = min(cutoff, head)
+        for limit in (protected_cutoff, pinned):
+            if limit is not None:
+                cutoff = min(cutoff, limit)
+        if cutoff <= floor:
+            return self._retention_pressure(floor, head, protecting, byte_budget)
+        # One bounded batch per maintenance pass; do not hold the event loop
+        # through an unbounded sequence of DELETE statements in one transaction.
+        rows = self.db.execute(
+            "select id from event where id > ? and id <= ? order by id limit ?",
+            (floor, cutoff, max(1, batch_size))).fetchall()
+        if rows:
+            cutoff = rows[-1]["id"]
+        with self.db:
+            removed = self.db.execute("delete from event where id > ? and id <= ?", (floor, cutoff)).rowcount
+            self.db.execute("update log set floor = ? where id = 1", (cutoff,))
+        retained_bytes = self.db.execute(
+            "select coalesce(sum(length(cast(data as blob)) + length(cast(type as blob))), 0) from event").fetchone()[0]
+        return {"removed": removed, "floor": cutoff, "head": head, "protected": sorted(protecting),
+                "pinned": bool(self._pins), "batches": 1,
+                "retained_bytes": retained_bytes,
+                "over_budget": (retained_bytes > byte_budget) if byte_budget is not None else False}
+
+    def _retention_pressure(self, floor: int, head: int, protecting: set[str], budget: int | None) -> dict[str, Any]:
+        used = self.db.execute(
+            "select coalesce(sum(length(cast(data as blob)) + length(cast(type as blob))), 0) from event").fetchone()[0]
+        return {"removed": 0, "floor": floor, "head": head, "protected": sorted(protecting),
+                "pinned": bool(self._pins), "batches": 0, "retained_bytes": used,
+                "over_budget": budget is not None and used > budget}
 
     def events(self, session_id: str, *, after: int = 0, limit: int = 1000, types: list[str] | None = None) -> list[dict[str, Any]]:
         sql = "select * from event where session_id = ? and id > ?"
@@ -636,15 +874,175 @@ class Store:
         ).fetchone()
         return row["id"] if row else None
 
+    # -- mutation journal ------------------------------------------------------
+
+    def mutation(self, key: str) -> dict[str, Any] | None:
+        """One accepted mutation by client key, including its replayed response."""
+        row = self.db.execute("select * from mutation where key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "key": row["key"], "fingerprint": row["fingerprint"], "operation": row["operation"],
+            "target": row["target"], "accepted": row["accepted"], "state": row["state"],
+            "status": row["status"], "body": json.loads(row["body"]) if row["body"] else None,
+            "turn_id": row["turn_id"], "resource": row["resource"], "resolved": row["resolved"],
+            "expires": row["expires"],
+        }
+
+    def _encode_body(self, mutation: dict[str, Any], body: Any) -> str | None:
+        encoded = None if body is None else json.dumps(body, separators=(",", ":"))
+        if encoded is not None and len(encoded) > MUTATION_BODY_MAX:
+            bounded = {
+                "replayed": True, "bounded": True, "key": mutation["key"],
+                "operation": mutation["operation"], "target": mutation["target"],
+                "note": "the original response exceeded the retained size; inspect the resource for its current state",
+                "resource": mutation.get("resource"), "turn_id": mutation.get("turn_id"),
+            }
+            if isinstance(body, dict) and "id" in body:
+                bounded["id"] = body["id"]
+            encoded = json.dumps(bounded)
+        return encoded
+
+    def _insert_mutation(self, mutation: dict[str, Any], *, now: float) -> None:
+        """Insert a journal row inside the caller's transaction."""
+        encoded = self._encode_body(mutation, mutation.get("body"))
+        resolved = mutation.get("resolved")
+        expires = mutation.get("expires")
+        self.db.execute(
+            "insert into mutation (key, fingerprint, operation, target, accepted, state, status, body,"
+            " turn_id, resource, resolved, expires) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (mutation["key"], mutation["fingerprint"], mutation["operation"], mutation["target"], now,
+             mutation.get("state") or "resolved", mutation.get("status"), encoded, mutation.get("turn_id"),
+             mutation.get("resource"), resolved, expires),
+        )
+
+    def begin_mutation(self, key: str, fingerprint: str, operation: str, target: str,
+                       *, resource: str | None = None) -> dict[str, Any]:
+        """Persist intent for a keyed external effect before it runs."""
+        now = time.time()
+        with self.db:
+            self._insert_mutation({
+                "key": key, "fingerprint": fingerprint, "operation": operation, "target": target,
+                "state": "pending", "status": None, "body": None, "resource": resource,
+            }, now=now)
+        entry = self.mutation(key)
+        assert entry is not None
+        return entry
+
+    def finish_mutation(self, key: str, *, status: int, body: Any = None, resource: str | None = None,
+                        lifetime: float = 7 * 24 * 3600) -> dict[str, Any]:
+        """Record durable evidence that a keyed external effect returned."""
+        now = time.time()
+        entry = self.mutation(key)
+        if entry is None:
+            raise KeyError(f"no pending mutation {key}")
+        encoded = self._encode_body(entry, body)
+        with self.db:
+            self.db.execute(
+                "update mutation set state = 'resolved', status = ?, body = ?, resource = coalesce(?, resource),"
+                " resolved = ?, expires = ? where key = ?",
+                (status, encoded, resource, now, now + lifetime, key))
+        finished = self.mutation(key)
+        assert finished is not None
+        return finished
+
+    def discard_mutation(self, key: str) -> None:
+        """Forget a pending intent whose request was refused before it took effect."""
+        with self.db:
+            self.db.execute("delete from mutation where key = ? and state = 'pending'", (key,))
+
+    def resolve_pending_mutations(self, *, lifetime: float = 7 * 24 * 3600,
+                                  now: float | None = None) -> int:
+        """Turn an interrupted external effect into a stable, expiring unknown outcome."""
+        moment = time.time() if now is None else now
+        body = json.dumps({
+            "error": "the daemon stopped before this operation's result was recorded; its outcome is unknown. "
+                     "Inspect the target before trying again.",
+            "code": "mutation_outcome_unknown", "replayed": True, "bounded": True,
+        })
+        with self.db:
+            return self.db.execute(
+                "update mutation set state = 'resolved', status = 409, body = ?, resolved = ?, expires = ?"
+                " where state = 'pending'",
+                (body, moment, moment + lifetime)).rowcount
+
+    def record_mutation(self, key: str, fingerprint: str, operation: str, target: str, *,
+                        status: int | None, body: Any = None, turn_id: str | None = None,
+                        resource: str | None = None, lifetime: float = 7 * 24 * 3600) -> dict[str, Any]:
+        """Record a completed mutation (keyed requests without their own transaction)."""
+        now = time.time()
+        with self.db:
+            self._insert_mutation({
+                "key": key, "fingerprint": fingerprint, "operation": operation, "target": target,
+                "state": "resolved", "status": status, "body": body, "turn_id": turn_id,
+                "resource": resource, "resolved": now, "expires": now + lifetime,
+            }, now=now)
+        entry = self.mutation(key)
+        assert entry is not None
+        return entry
+
+    def resolve_mutations_for_turn(self, turn_id: str, *, lifetime: float = 7 * 24 * 3600) -> int:
+        """Start the deduplication lifetime once a keyed turn reaches a terminal state."""
+        now = time.time()
+        with self.db:
+            return self.db.execute(
+                "update mutation set state = 'resolved', resolved = ?, expires = ?"
+                " where turn_id = ? and state != 'resolved'",
+                (now, now + lifetime, turn_id)).rowcount
+
+    def prune_mutations(self, now: float | None = None) -> int:
+        """Remove expired resolved entries; unresolved entries never expire."""
+        cutoff = time.time() if now is None else now
+        with self.db:
+            return self.db.execute(
+                "delete from mutation where state = 'resolved' and expires is not null and expires < ?",
+                (cutoff,)).rowcount
+
+    def delete_mutation(self, key: str) -> None:
+        with self.db:
+            self.db.execute("delete from mutation where key = ?", (key,))
+
+    # -- provider retry attempts ----------------------------------------------
+
+    def start_attempt(self, turn_id: str, session_id: str, request_id: str | None, attempt_id: str,
+                      attempt: int, *, delay: float | None = None, error: str | None = None) -> None:
+        with self.db:
+            self.db.execute(
+                "insert into turn_attempt (id, turn_id, request_id, session_id, attempt, status, delay,"
+                " started, error) values (?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)"
+                " on conflict(id) do update set delay = excluded.delay, error = excluded.error",
+                (attempt_id, turn_id, request_id, session_id, attempt, delay, time.time(), error),
+            )
+
+    def mark_attempt_started(self, attempt_id: str) -> None:
+        with self.db:
+            self.db.execute(
+                "update turn_attempt set status = 'started', started = ? where id = ?",
+                (time.time(), attempt_id))
+
+    def finish_attempt(self, attempt_id: str, status: str, *, error: str | None = None) -> None:
+        with self.db:
+            self.db.execute(
+                "update turn_attempt set status = ?, finished = ?, error = coalesce(?, error) where id = ?",
+                (status, time.time(), error, attempt_id))
+
+    def attempts_for_turn(self, turn_id: str) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            "select * from turn_attempt where turn_id = ? order by started, attempt, id", (turn_id,))
+        return [dict(row) for row in rows]
+
     # -- turn execution lifecycle ---------------------------------------------
 
     def start_turn(self, session_id: str, *, start_seq: int | None = None, started: float | None = None,
-                   data: dict[str, Any] | None = None) -> dict[str, Any]:
+                   data: dict[str, Any] | None = None, mutation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Record an accepted turn. The row is durable before the task starts.
 
         `start_seq` is the last message sequence before the turn; recovery uses it
         instead of a clock. The explicit form also creates a legacy turn for an
         older session whose saved context ends in an unfinished tool call.
+
+        `mutation` records an idempotent request acceptance in the same
+        transaction as the turn, so a crash cannot leave one without the other.
         """
         now = time.time()
         if start_seq is None:
@@ -660,6 +1058,14 @@ class Store:
                 " values (?, ?, 'running', ?, 0, ?, 'none', ?)",
                 (turn["id"], session_id, turn["started"], start_seq, json.dumps(turn["data"])),
             )
+            if mutation is not None:
+                mutation = dict(mutation)
+                body = mutation.get("body")
+                if isinstance(body, dict):
+                    mutation["body"] = {**body, "status": "busy", "turn_id": turn["id"],
+                                        "origin": turn["data"].get("origin")}
+                mutation.setdefault("resource", session_id)
+                self._insert_mutation({**mutation, "turn_id": turn["id"]}, now=now)
         return turn
 
     def legacy_dangling_sessions(self) -> list[tuple[str, StoredMessage]]:
@@ -707,6 +1113,10 @@ class Store:
         """Turns a restart must reconcile: still running, or recovery did not finish."""
         rows = self.db.execute(
             "select * from turn where status = 'running' or recovery = 'pending' order by started, id")
+        return [self._turn_row(row) for row in rows]
+
+    def running_turns(self) -> list[dict[str, Any]]:
+        rows = self.db.execute("select * from turn where status = 'running' order by started, id")
         return [self._turn_row(row) for row in rows]
 
     def turns_for_session(self, session_id: str) -> list[dict[str, Any]]:
@@ -999,6 +1409,55 @@ class Store:
                    "permission.asked": "approvals_asked", "permission.replied": "approvals_replied"}[row["type"]]
             out[key].append(data)
         return out
+
+    # -- consistent reads ------------------------------------------------------
+
+    @contextmanager
+    def read_transaction(self) -> Iterator[None]:
+        """Hold one SQLite read snapshot across several selects."""
+        if self.db.in_transaction:
+            yield
+            return
+        self.db.execute("begin")
+        try:
+            yield
+        finally:
+            self.db.execute("commit")
+
+    def state_snapshot(self, *, session_id: str | None = None, message_limit: int = 200) -> dict[str, Any]:
+        """Projects, sessions, pending state and an optional bounded session view at one log head."""
+        with self.read_transaction():
+            head = self.log_head()
+            floor = self.log_floor()
+            generation = self.log_generation()
+            projects = [dict(row) for row in self.db.execute("select * from project order by updated desc")]
+            sessions = [dict(row) for row in self.db.execute("select * from session order by updated desc")]
+            out: dict[str, Any] = {
+                "watermark": {"generation": generation, "head": head, "floor": floor,
+                              "head_cursor": f"{generation}:{head}"},
+                "projects": projects,
+                "sessions": sessions,
+                "selected": None,
+            }
+            if session_id is not None:
+                rows = self.db.execute(
+                    "select * from message where session_id = ? order by seq desc limit ?",
+                    (session_id, message_limit + 1)).fetchall()
+                more = len(rows) > message_limit
+                rows = list(reversed(rows[:message_limit]))
+                out["selected"] = {
+                    "session_id": session_id,
+                    "messages": [
+                        {"id": row["id"], "session_id": row["session_id"], "seq": row["seq"],
+                         "created": row["created"], "role": row["role"],
+                         "parts": json.loads(row["parts"])}
+                        for row in rows
+                    ],
+                    "messages_limit": message_limit,
+                    "messages_more": more,
+                    "oldest_seq": rows[0]["seq"] if rows else None,
+                }
+            return out
 
     def stream_summary(self, session_id: str, after: int) -> dict[str, Any]:
         """What one interrupted provider request left in the durable event log.

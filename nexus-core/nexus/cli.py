@@ -158,6 +158,18 @@ class Renderer:
             self._print(f"{RED}{data['message']}{RESET}")
             if data.get("body"):
                 self._print(f"{DIM}{data['body']}{RESET}")
+        elif kind == "retry_scheduled":
+            self._break()
+            status = f" · HTTP {data['status']}" if data.get("status") is not None else ""
+            self._print(f"{YELLOW}provider retry {data['next_attempt']}/{data['max_attempts']} "
+                        f"in {data['delay']:.1f}s{status}: {data['reason'][:200]}{RESET}")
+        elif kind == "retry_started":
+            self._break()
+            self._print(f"{CYAN}provider retry {data['attempt']} starting{RESET}")
+        elif kind == "retry_exhausted":
+            self._break()
+            self._print(f"{RED}provider retries exhausted after {data['attempts']} attempt(s): "
+                        f"{data['reason'][:200]}{RESET}")
         elif kind == "question.replied":
             self._break()
             if data.get("outcome") == "answered":
@@ -254,19 +266,59 @@ async def _stream_turn(client: Client, session_id: str, renderer: Renderer, star
     labels: dict[str, str] = {}
     current = session_id
     try:
-        async with contextlib.aclosing(client.events(session_id)) as events:
+        stream = client.watch(session_id) if hasattr(client, "watch") else client.events(session_id)
+        async with contextlib.aclosing(stream) as events:
             await anext(events)  # server.connected: subscribed before the turn starts
             try:
                 started = await start()
             except httpx.HTTPError as exc:
                 raise ValueError(
                     f"{label} request failed ({type(exc).__name__}); it may or may not have started. It was "
-                    "not repeated automatically; check the session or inspector before retrying."
+                    "not resubmitted as a new action; check the session or inspector before retrying."
                 ) from exc
             busy.add(session_id)
             target_turn = started.get("turn_id") if isinstance(started, dict) else None
             root_started = False
             async for event in events:
+                if event["type"] == "client.resync":
+                    snapshot = event["data"]["snapshot"]
+                    members = {session_id}
+                    sessions = snapshot.get("sessions", [])
+                    while True:
+                        descendants = {row["id"] for row in sessions if row.get("parent_id") in members}
+                        if descendants <= members:
+                            break
+                        members |= descendants
+                    busy = {row["session_id"] for row in snapshot.get("running", []) if row["session_id"] in members}
+                    approvals = [item for item in snapshot.get("approvals", []) if item["session_id"] in members]
+                    questions = [item for item in snapshot.get("questions", []) if item["session_id"] in members]
+                    root_started = True  # the snapshot supersedes the missed busy event
+                    pending = {item["id"] for item in approvals + questions}
+                    for wait_id, cancelled in list(input_readers.items()):
+                        if wait_id not in pending:  # cancelled while the stream was away
+                            cancelled.set()
+                            input_readers.pop(wait_id, None)
+                    for approve in approvals:
+                        if approve["id"] not in input_readers:
+                            cancelled = threading.Event()
+                            if answering.is_set():
+                                cancelled.set()
+                            input_readers[approve["id"]] = cancelled
+                            input_queue.put_nowait(("permission", approve["session_id"], approve, cancelled))
+                    for question in questions:
+                        if question["id"] not in input_readers:
+                            cancelled = threading.Event()
+                            if answering.is_set():
+                                cancelled.set()
+                            input_readers[question["id"]] = cancelled
+                            input_queue.put_nowait(("question", question["session_id"], question, cancelled))
+                    renderer._break()
+                    print(f"{YELLOW}event stream resynced ({event['data'].get('reason')}); "
+                          f"rebuilt state at event {snapshot['watermark']['head']}{RESET}")
+                    if not busy:
+                        renderer._break()
+                        return
+                    continue
                 sid = event.get("session_id") or session_id
                 if sid == session_id and event["type"] == "session.status" and not root_started:
                     if event["data"]["status"] == "busy" and (
@@ -314,17 +366,21 @@ async def _stream_turn(client: Client, session_id: str, renderer: Renderer, star
 
 async def _send(client: Client, session_id: str, text: str, renderer: Renderer) -> None:
     """Prompt, then render the events of this session and its children."""
+    key = Client.new_idempotency_key()
     await _stream_turn(
         client, session_id, renderer, label="prompt",
-        start=lambda: client.call("POST", f"/api/session/{session_id}/prompt", {"text": text}),
+        start=lambda: client.call("POST", f"/api/session/{session_id}/prompt", {"text": text},
+                                  idempotency_key=key),
     )
 
 
 async def _continue(client: Client, session_id: str, renderer: Renderer) -> None:
     """Continue from the stored context; the daemon adds no user message."""
+    key = Client.new_idempotency_key()
     await _stream_turn(
         client, session_id, renderer, label="continuation",
-        start=lambda: client.call("POST", f"/api/session/{session_id}/continue", {}),
+        start=lambda: client.call("POST", f"/api/session/{session_id}/continue", {},
+                                  idempotency_key=key),
     )
 
 

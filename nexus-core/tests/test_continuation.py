@@ -667,7 +667,7 @@ async def test_cli_subscribes_before_continue_and_never_repeats_an_ambiguous_pos
                 "status": "busy", "origin": "continuation"}}
             yield {"type": "session.status", "session_id": "ses", "data": {"status": "idle"}}
 
-        async def call(self, method, path, body=None):
+        async def call(self, method, path, body=None, **kwargs):
             assert self.subscribed, "the continuation POST happened before the event subscription"
             self.calls.append((method, path))
             if self.fail is not None:
@@ -680,7 +680,7 @@ async def test_cli_subscribes_before_continue_and_never_repeats_an_ambiguous_pos
     assert fake.calls == [("POST", "/api/session/ses/continue")]
 
     failing = Fake(httpx.ConnectError("connection reset"))
-    with pytest.raises(ValueError, match="not repeated automatically"):
+    with pytest.raises(ValueError, match="not resubmitted as a new action"):
         await asyncio.wait_for(cli._continue(failing, "ses", renderer), 2)
     assert failing.calls == [("POST", "/api/session/ses/continue")]
 

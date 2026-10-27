@@ -162,10 +162,18 @@ Event = (
 
 
 class ProviderError(Exception):
-    """A provider failure with a short, credential-free message."""
+    """A provider failure with a short, credential-free message.
 
-    def __init__(self, message: str, *, status: int | None = None, body: str | None = None) -> None:
+    `phase` says where the failure happened (`transport`, `response`, `stream`);
+    retries are allowed only before response stream events. `retry_after` is the
+    provider's requested wait in seconds, when it sent a valid one.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, body: str | None = None,
+                 phase: str = "stream", retry_after: float | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.body = body
+        self.phase = phase
+        self.retry_after = retry_after
 

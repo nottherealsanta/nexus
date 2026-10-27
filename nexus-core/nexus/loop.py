@@ -9,7 +9,9 @@ order.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -18,7 +20,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .llmhub import Provider
-from .llmhub.types import Done, Event, Message, Part, PartDone, Request, Text, ToolCall, ToolResult
+from .llmhub.types import (
+    Done,
+    Event,
+    Message,
+    Part,
+    PartDone,
+    ProviderError,
+    Request,
+    Text,
+    ToolCall,
+    ToolResult,
+    WireRequest,
+    WireResponse,
+)
+from .retry import RetryPolicy
 from .tools import DEFAULT_TOOLS, Tool, ToolContext, ToolError
 
 if TYPE_CHECKING:
@@ -67,7 +83,42 @@ class NoUserMessage:
 
 NO_USER_MESSAGE = NoUserMessage()
 
-LoopEvent = Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd
+
+@dataclass(frozen=True, slots=True)
+class RetryScheduled:
+    """A retryable pre-stream failure; the next attempt starts after `delay` seconds."""
+
+    attempt: int          # the failed attempt
+    next_attempt: int
+    attempt_id: str       # identifies the next attempt for durable recording
+    delay: float
+    reason: str
+    status: int | None = None
+    retry_after: float | None = None
+    max_attempts: int = 3
+
+
+@dataclass(frozen=True, slots=True)
+class RetryStarted:
+    """The next provider attempt is starting now."""
+
+    attempt: int
+    attempt_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetryExhausted:
+    """No further attempt fits the policy or budget."""
+
+    attempts: int
+    attempt_id: str
+    reason: str
+    status: int | None = None
+    retry_after: float | None = None
+    max_attempts: int = 3
+
+
+LoopEvent = Event | StepStart | ToolStart | ToolEnd | MessageAdded | TurnEnd | RetryScheduled | RetryStarted | RetryExhausted
 TurnInput = str | NoUserMessage
 Approve = Callable[[ToolCall, dict[str, Any]], Awaitable[bool]]
 Inbox = Callable[[], list[str]]  # notices to add (as a user message) before the next model call
@@ -102,6 +153,10 @@ class Agent:
         refresh: Callable[[Any], None] | None = None,
         files: FileGuard | None = None,
         cwd_changed: bool = False,
+        retry_policy: RetryPolicy | None = None,
+        retry_clock: Callable[[], float] = time.monotonic,
+        retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        retry_random: Callable[[], float] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -117,6 +172,10 @@ class Agent:
         self.refresh = refresh
         self.files = files
         self.cwd_changed = cwd_changed
+        self.retry_policy = retry_policy or RetryPolicy()
+        self._retry_clock = retry_clock
+        self._retry_sleep = retry_sleep
+        self._retry_random = retry_random
 
     def request(self) -> Request:
         return Request(
@@ -144,7 +203,7 @@ class Agent:
             yield StepStart(step)
             parts: list[Part] = []
             stop = "other"
-            async for event in self.provider.stream(self.request()):
+            async for event in self._stream_with_retry():
                 if isinstance(event, PartDone):
                     parts.append(event.part)
                 elif isinstance(event, Done):
@@ -166,6 +225,49 @@ class Agent:
                 yield ToolEnd(call, result)
             yield self._add(Message("tool", tuple(results)))
         yield TurnEnd("max_steps", self.max_steps)
+
+    async def _stream_with_retry(self) -> AsyncIterator[Event | RetryScheduled | RetryStarted | RetryExhausted]:
+        """One provider request, retried only before any response stream event.
+
+        Wire traffic is emitted for every attempt. A previous attempt's request is
+        visible in the event log even when it fails; the next attempt reuses the
+        exact request built for this step (`self.request()` is unchanged until the
+        assistant message is appended).
+        """
+        policy = self.retry_policy
+        request = self.request()  # freeze model, tools and context across backoff
+        started = self._retry_clock()
+        failed = 0
+        while True:
+            failed += 1
+            received = False
+            try:
+                async for event in self.provider.stream(request):
+                    if not isinstance(event, (WireRequest, WireResponse)):
+                        received = True
+                    yield event
+                return
+            except ProviderError as error:
+                remaining = policy.max_elapsed - (self._retry_clock() - started)
+                can_retry = not received and policy.retryable(error)
+                delay = policy.delay(
+                    failed, retry_after=error.retry_after, remaining=remaining, rng=self._retry_random) \
+                    if can_retry else None
+                if delay is None:
+                    if not received and policy.max_attempts > 1 and policy.retryable(error):
+                        yield RetryExhausted(failed, f"att_{uuid.uuid4().hex[:12]}", str(error),
+                                             error.status, error.retry_after, policy.max_attempts)
+                    raise
+                next_attempt = failed + 1
+                attempt_id = f"att_{uuid.uuid4().hex[:12]}"
+                yield RetryScheduled(failed, next_attempt, attempt_id, delay, str(error),
+                                     error.status, error.retry_after, policy.max_attempts)
+                await self._retry_sleep(delay)
+                if self._retry_clock() - started > policy.max_elapsed:
+                    yield RetryExhausted(failed, attempt_id, str(error),
+                                         error.status, error.retry_after, policy.max_attempts)
+                    raise
+                yield RetryStarted(next_attempt, attempt_id)
 
     async def _run(self, call: ToolCall, args: dict[str, Any] | None) -> ToolResult:
         tool = self.tools.get(call.name)

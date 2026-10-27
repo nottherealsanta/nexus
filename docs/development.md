@@ -32,9 +32,11 @@ nexus/
   codec.py           JSON encoding of messages and events
   paths.py           home(): $NEXUS10_HOME or ~/.nexus10
   export.py          read-only session/tree exports: Markdown and JSON
-  store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, durable event log (~/.nexus10/nexus.db)
+  store.py           SQLite: projects, sessions, messages, observations, turn lifecycle, mutation journal, durable event log (~/.nexus10/nexus.db)
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
+  retention.py       bounded event/lifecycle retention and the retention floor
+  retry.py           bounded, visible provider-request retry policy
   recovery.py        startup reconciliation of turns a crash left unfinished
   continuation.py    explicit manual continuation and provider-valid context reconciliation
   kernels.py         daemon-owned persistent Monty kernels
@@ -50,6 +52,21 @@ tests/               offline tests (test_server.py drives the API with a scripte
 ```
 
 State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus` (old Nexus).
+
+Tuning (all optional, read at daemon start):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NEXUS_RETRY_MAX_ATTEMPTS` | 3 | Total provider attempts per step, including the first |
+| `NEXUS_RETRY_BASE_DELAY` | 1.0 | Base backoff seconds |
+| `NEXUS_RETRY_MAX_WAIT` | 30.0 | Longest single backoff |
+| `NEXUS_RETRY_MAX_ELAPSED` | 60.0 | Retry budget per step |
+| `NEXUS10_EVENT_RETENTION_DAYS` | 14 | Diagnostic event age |
+| `NEXUS10_EVENT_RETENTION_BYTES` | 268435456 | Retained event payload budget (256 MiB) |
+| `NEXUS10_RETENTION_INTERVAL_SECONDS` | 3600 | Maintenance cadence |
+| `NEXUS10_TURN_RETENTION_DAYS` | 30 | Terminal turn lifecycle age |
+| `NEXUS10_KEEP_TURNS` | 200 | Recent turns kept per session |
+| `NEXUS10_MUTATION_RETENTION_DAYS` | 7 | Idempotency-key lifetime after resolution |
 
 ## Commands
 
@@ -99,6 +116,10 @@ posting, renders the turn (including questions and approvals), and accepts
 | `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, migration, HTTP framing via raw ASGI |
 | `test_recovery.py` | crash windows (accepted turn, interrupted stream, saved/started/finished/inserted tools, mixed batches, waits, code/kernels/jobs), parent/child and archive recovery, recovery interrupted at every step, repeated startup, migration, durable replay, no provider/tool calls, isolated subprocess restart |
 | `test_continuation.py` | manual continuation: exact first request with no synthetic user message, provider failure/interrupt/recovery, completed and unknown tools, new tool calls, settings and directory, busy/archived/empty/unknown errors, parent/child independence, provenance and crash-during-continuation recovery, reconciliation idempotency, CLI slash/standalone and subscription ordering |
+| `test_mutations.py` | keyed acceptance/replay, duplicate requests, crash-before-journal unknown outcomes, deleted targets and revision preconditions |
+| `test_retry.py` | pre-stream retry policy, attempt records, backoff cancellation, frozen requests and no tool replay |
+| `test_client_snapshot.py` | consistent snapshots, reconnect cursors, overflow/resync, rotated local tokens and CLI tree isolation |
+| `test_retention.py` | event age/byte limits, bounded deletion, floor/head persistence, replay pins, protected lifecycle evidence and export boundaries |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

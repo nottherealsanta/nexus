@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from .responses import CACHE_KEY_MAX, ERROR_BODY_CHARS, HeaderSource, redact_headers
+from .responses import CACHE_KEY_MAX, ERROR_BODY_CHARS, HeaderSource, redact_headers, retry_after_seconds
 from .sse import parse_sse
 from .types import (
     Done,
@@ -212,7 +212,9 @@ class ChatProvider:
                 yield WireResponse(response.status_code, redact_headers(dict(response.headers)))
                 if response.status_code >= 400:
                     raw = (await response.aread()).decode("utf-8", "replace")[:ERROR_BODY_CHARS]
-                    raise ProviderError(f"{self.name}: HTTP {response.status_code}", status=response.status_code, body=raw)
+                    raise ProviderError(f"{self.name}: HTTP {response.status_code}", status=response.status_code,
+                                        body=raw, phase="response",
+                                        retry_after=retry_after_seconds(response.headers.get("retry-after")))
                 async for name, text in parse_sse(response.aiter_lines()):
                     if text.strip() == "[DONE]":
                         yield WireEvent(name, "[DONE]")
@@ -226,11 +228,12 @@ class ChatProvider:
                     for event in events_for_chunk(data, state, origin=self.name):
                         yield event
         except httpx.HTTPError as exc:
-            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}") from exc
+            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}", phase="transport") from exc
         finally:
             if self._client is None:
                 await client.aclose()
         if not ended and state.finish is None:
-            raise ProviderError(f"{self.name}: stream ended before a finish_reason or [DONE]; the reply may be cut off")
+            raise ProviderError(f"{self.name}: stream ended before a finish_reason or [DONE]; the reply may be cut off",
+                                phase="stream")
         for event in finish(state, origin=self.name):
             yield event

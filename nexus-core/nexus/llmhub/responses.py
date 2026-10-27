@@ -13,8 +13,10 @@ so the item is dropped.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any, Protocol
 
 import httpx
@@ -112,6 +114,27 @@ def build_body(req: Request, *, origin: str, quirks: ResponsesQuirks) -> dict[st
 
 def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {k: ("***" if k.lower() in REDACTED_HEADERS else v) for k, v in headers.items()}
+
+
+def retry_after_seconds(value: str | None) -> float | None:
+    """A bounded Retry-After value (seconds or HTTP date), or None when unusable."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        seconds = float(text)
+    except ValueError:
+        from datetime import datetime
+        from email.utils import parsedate_to_datetime
+
+        try:
+            moment = parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        seconds = (moment - datetime.now(UTC)).total_seconds()
+    return max(0.0, min(seconds, 3600.0)) if math.isfinite(seconds) else None
 
 
 # -- Response ---------------------------------------------------------------
@@ -233,7 +256,9 @@ class ResponsesProvider:
                 yield WireResponse(response.status_code, redact_headers(dict(response.headers)))
                 if response.status_code >= 400:
                     raw = (await response.aread()).decode("utf-8", "replace")[:ERROR_BODY_CHARS]
-                    raise ProviderError(f"{self.name}: HTTP {response.status_code}", status=response.status_code, body=raw)
+                    raise ProviderError(f"{self.name}: HTTP {response.status_code}", status=response.status_code,
+                                        body=raw, phase="response",
+                                        retry_after=retry_after_seconds(response.headers.get("retry-after")))
                 async for name, text in parse_sse(response.aiter_lines()):
                     try:
                         data = json.loads(text)
@@ -244,9 +269,9 @@ class ResponsesProvider:
                         finished = finished or isinstance(event, Done)
                         yield event
         except httpx.HTTPError as exc:
-            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}") from exc
+            raise ProviderError(f"{self.name}: network error: {type(exc).__name__}", phase="transport") from exc
         finally:
             if self._client is None:
                 await client.aclose()
         if not finished:
-            raise ProviderError(f"{self.name}: stream ended before response.completed")
+            raise ProviderError(f"{self.name}: stream ended before response.completed", phase="stream")

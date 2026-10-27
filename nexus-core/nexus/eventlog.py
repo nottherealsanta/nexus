@@ -177,6 +177,7 @@ class Stream:
         self.replayed = 0
         self.replay_pages = 0
         self._closed = False
+        self._pin = store.pin_events(after + 1, subscription.head) if after < subscription.head else None
 
     @classmethod
     def open(cls, store: Store, bus: Bus, *, after: int | None = None, session_id: str | None = None) -> Stream:
@@ -189,6 +190,9 @@ class Stream:
         if not self._closed:
             self._closed = True
             self.subscription.close()
+            if self._pin is not None:
+                self.store.unpin_events(self._pin)
+                self._pin = None
 
     async def events(self) -> AsyncIterator[dict[str, Any]]:
         try:
@@ -205,6 +209,11 @@ class Stream:
                         self.replayed += 1
                         yield event
                 await asyncio.sleep(0)  # let a publisher commit; its event queues up for the live phase
+            # Catch-up no longer needs its range once the live queue owns the
+            # handoff. A long-lived live subscriber must not pin history forever.
+            if self._pin is not None:
+                self.store.unpin_events(self._pin)
+                self._pin = None
             while True:
                 event = await self.subscription.get()
                 if event is None:
