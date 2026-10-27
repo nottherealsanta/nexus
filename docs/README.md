@@ -15,7 +15,7 @@ doc and the code disagree, the code wins: fix the doc.
 | [tools.md](tools.md) | read, bash (background jobs too), edit, write, code and kernels: parameters, bounds, confinement, approval |
 | [loop.md](loop.md) | The agent loop: steps, tool execution, errors, approval |
 | [development.md](development.md) | uv, tests, ruff, repo layout, docs rules |
-| [agents.md](agents.md) | Agent files: frontmatter, where they load from, how a session uses them |
+| [agents.md](agents.md) | Agent files: frontmatter, where they load from, session snapshots and `AGENTS.md` |
 | [inspector.md](inspector.md) | The session inspector web page: four levels of detail down to raw events |
 | [api.md](api.md) | The HTTP API every surface speaks, and its event stream |
 | [daemon.md](daemon.md) | The daemon, projects, sessions, turns, approvals, the CLI as a client |
@@ -38,6 +38,7 @@ doc and the code disagree, the code wins: fix the doc.
 | Steps, max steps, approval callback, tool errors | [loop.md](loop.md) |
 | Running tests, lint, uv, repo layout | [development.md](development.md) |
 | Agents, their prompts, tools and preferred models | [agents.md](agents.md) |
+| Session snapshots, frozen prompts, `AGENTS.md` | [agents.md](agents.md#session-snapshots), [agents.md](agents.md#the-instruction-file) |
 | Seeing what happened in a session, down to the wire | [inspector.md](inspector.md) |
 | Child sessions, who launched whom | [daemon.md](daemon.md#session-trees-who-launched-whom) |
 | An endpoint, the event stream, a new client | [api.md](api.md) |

@@ -94,6 +94,13 @@ Fixed fields: `tool_choice: "auto"`, `parallel_tool_calls: false`, `store: false
 `reasoning.effort` is present only when the request has an effort. `store` is
 off, so the whole history is resent each request.
 
+`instructions` (Responses) and the first `system` message (Chat) carry the
+session's frozen starting context: the agent prompt with only its available
+tools, the environment block, and the labelled `# Instructions file` section
+read from the session directory. Later turns and daemon restarts replay it
+verbatim; file edits and date changes do not rewrite it
+([agents.md](agents.md#session-snapshots)).
+
 ### Responses (grok)
 
 The same body without `include` and `prompt_cache_key`. Replay is rebuilt, and

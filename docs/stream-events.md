@@ -146,3 +146,13 @@ output. `code.cell` records source, caller, stdout, value repr, duration and
 error for a finished cell (including an aborted one). Both are stored in the
 caller's session event log. `kernel.deleted` announces deletion or forced state
 loss.
+
+
+## Session snapshots
+
+`session.snapshot` records one-time reconstruction of an older session's
+configuration, with the snapshot summary and its explicit historical limitation.
+New sessions carry their snapshot summary in `session.created`; explicit updates
+appear in `session.updated` and model-visible forward notices. Notices received
+while a call is running are saved after its tool results, before the next model
+request, as ordinary `message.added` items.

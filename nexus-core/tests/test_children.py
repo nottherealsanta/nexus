@@ -163,8 +163,11 @@ async def test_dynamic_child_guidance_and_default_root(env):
     assert tool.guidance in rt._agent(rt.session(parent['id'])).instructions
     patched = (await client.patch(f"/api/session/{parent['id']}", json={'disabled_tools': ['session']})).json()
     assert 'session' not in patched['tools']
-    assert 'Child agents:' not in rt._agent(rt.session(parent['id'])).instructions
-    assert '- `session`:' not in rt._agent(rt.session(parent['id'])).instructions
+    # The starting prompt is frozen; the switch is forward guidance and a request-schema change instead.
+    assert 'Child agents:' in rt._agent(rt.session(parent['id'])).instructions
+    messages = (await client.get(f"/api/session/{parent['id']}/message")).json()
+    notice = next(p['text'] for m in messages for p in m['parts'] if 'tool availability changed' in (p.get('text') or ''))
+    assert '`session`' in notice and 'starting system prompt is frozen' in notice
 
 
 async def test_children_inherit_disabled_tools(env):

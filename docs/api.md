@@ -51,6 +51,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/children` | | `[Session]`, direct children |
 | GET | `/api/session/{id}/tree` | | the whole tree containing it, from its root: `Session` + nested `children` |
 | GET | `/api/session/{id}/context` | | the provider request body the next turn would send |
+| GET | `/api/session/{id}/snapshot` | | the full frozen session snapshot (agent, prompt, tools, instruction file, child catalog) |
 | GET | `/api/session/{id}/permission` | | pending approvals |
 | POST | `/api/session/{id}/permission/{pid}` | `{reply: "allow" or "deny"}` | 204 |
 | GET | `/api/event` | `?session=` (that session and its descendants) | server-sent events (below) |
@@ -68,7 +69,13 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
  "model": "codex/gpt-6.1-terra", "model_source": "default",   // session | agent | default
  "effort": "high", "effort_source": "agent",                    // session | agent | provider
  "tools": ["read", "edit", "write", "code"], "disabled_tools": ["bash"],
- "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…}
+ "permission": "ask", "status": "idle", "created": 1793…, "updated": 1793…,
+ "snapshot": {"version": 1, "origin": "created", "created": 1793…,
+              "agent": {"name": "build", "source": "project", "path": "…/build.md", "fingerprint": "sha256:…"},
+              "instructions": {"path": "…/AGENTS.md", "status": "loaded", "bytes": 123, "sha256": "sha256:…"},
+              "granted_tools": ["read", "bash", "edit", "write", "code"],
+              "child_agents": [{"name": "scout", "description": "…", "mode": "subagent", "source": "builtin",
+                                "path": "…/scout.md", "fingerprint": "sha256:…"}]}}
 
 // Agent (see agents.md)
 {"name": "plan", "description": "…", "source": "builtin", "path": "…/plan.md",
@@ -111,6 +118,7 @@ log with `?after=<last event id>`.
 | `project.created` / `project.updated` | `Project` |
 | `project.deleted` | `{id}` |
 | `session.created` / `session.updated` | `Session` |
+| `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}` |
 | `session.status` | `{status: "busy" or "idle"}`, before and after each turn |
 | `message.added` | `Message`, once it is saved |
@@ -165,3 +173,20 @@ Unknown names return 400 with the known names. An empty list re-enables all
 agent-granted tools. `tools` reports what the next turn offers after agent
 restrictions and switches. Children inherit switches when the field is omitted;
 an explicit list on user-created children overrides that inherited setting.
+
+A session freezes its agent file, rendered prompt, tool definitions and
+`AGENTS.md` at creation ([agents.md](agents.md#session-snapshots)). Agent-file
+and `AGENTS.md` edits therefore affect new sessions only.
+`GET /api/session/{id}/context`, `GET /api/session/{id}/snapshot` and the actual
+outgoing request all use the stored snapshot; they agree on `model`,
+`instructions` and `tools` at any point where the message history is unchanged. A tool switch changes later request schemas
+and appends a `[Nexus notice: tool availability changed]` user message; the
+frozen system prompt is not rewritten. An agent switch rebuilds the snapshot
+from the current files and appends `[Nexus notice: agent changed]`. A turn that
+is already running keeps the model, effort, agent, prompt and tools it started
+with.
+
+A session created before snapshots existed returns `snapshot.origin:
+"reconstructed"` after its first use and carries a visible snapshot note. It is
+not presented as the exact historical prompt; the reconstruction is stored once
+and stays stable.

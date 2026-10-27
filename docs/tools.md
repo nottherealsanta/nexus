@@ -43,6 +43,17 @@ call ([loop.md](loop.md#approval)). The daemon auto-approves `read`,
 `background`), `edit` and `write` ask unless the session's permission is `allow`
 (`--yes`).
 
+**Session snapshot.** Each session stores the descriptions, JSON schemas and
+guidance of the tools it was created with ([agents.md](agents.md#session-snapshots)).
+Execution is rebound by name through the registry on each turn. A tool disabled
+at creation is absent from the stored definitions, the provider request and the
+system prompt. A later switch removes or adds the definition for subsequent
+turns and appends a visible `[Nexus notice: tool availability changed]` message;
+the frozen system prompt is not rewritten, and a running call keeps the tools it
+started with. Explicit updates are rebound before each subsequent model/tool
+call, including calls later in the same turn. Nested code cells see exactly the effective task tools, so a
+disabled tool is not callable there either.
+
 ## read
 
 Read a text file with line numbers, or list a directory.

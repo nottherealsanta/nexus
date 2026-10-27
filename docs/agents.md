@@ -24,7 +24,7 @@ You review code. Point out bugs and risks; do not edit files.
 | `mode` | `primary`, `subagent`, `all` | Where the agent may run: `primary` only as a root session, `subagent` only as a child session, `all` both. Enforced when a session is created or its agent is changed. Default `all`. |
 | `model` | `provider/model` | Used when the session has no model of its own. |
 | `effort` | string | Used when the session has no effort of its own. |
-| `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name fails the turn with a clear error. |
+| `tools` | list of tool names | The only tools the model is offered. Omit it for every tool. An unknown name makes session creation fail with a clear error. |
 | `control` | list | Control tools: only `session` today, which starts child sessions. Never implied: omitting `tools` does not grant them. Ignored in child sessions. |
 | `steps` | 1–500 | Max model calls per turn. |
 
@@ -39,9 +39,91 @@ digits, `-` and `_`). A later source replaces an earlier one with the same name:
 2. **global:** `~/.nexus10/agents/*.md`
 3. **project:** `<project>/.agents/agents/*.md`
 
-Files are read again on every turn, so an edit applies to the next turn. A file
-that fails to parse is listed under `problems` (`GET /api/agent`,
-`nexus agent`) with the reason; it is never skipped silently.
+Files are read when a session is created. An edit, addition or deletion applies
+to new sessions (roots and children), not to a session that already exists: its
+resolved configuration is stored as a snapshot (below). A file that fails to
+parse is listed under `problems` (`GET /api/agent`, `nexus agent`) with the
+reason; it is never skipped silently.
+
+## Session snapshots
+
+Every session freezes what it needs to reproduce its requests when it is
+created (root or child). The daemon loads the current agent files, resolves the
+selected agent, its granted tools and the child-agent catalog, renders the
+system prompt once, reads the session's instruction file, and stores it all as
+JSON in the `session_snapshot` table (`nexus/snapshot.py`, `nexus/runtime.py`,
+`nexus/store.py`).
+
+The snapshot contains:
+
+- the agent configuration (name, description, mode, model/effort preferences,
+  steps, declared tools and control tools), its source (`builtin`, `global`,
+  `project`), absolute path, file fingerprint (`sha256:…`) and prompt body;
+- the ordered tool list, with each enabled tool's request description, JSON
+  parameters and `guidance`; a switched-off tool has none of these;
+- the child-agent catalog (name, description, mode, source, path and
+  fingerprint) used by the `session` tool's enum and guidance;
+- the rendered agent prompt and the final `system_prompt` sent as the provider's
+  `instructions`, including the linked `AGENTS.md` section;
+- the instruction-file record (path, status, content, bytes and hash) and the
+  snapshot's origin (`created`, `agent-switch` or `reconstructed`).
+
+Tool records are plain data. Execution is rebound by name through the tool
+registry (`nexus/tools/`) on every turn, so the daemon never stores Python
+callables. If a snapshot names a tool this build cannot execute, the turn fails
+with a clear error rather than silently dropping the tool.
+
+Ordinary turns, `GET …/context`, daemon restarts and the inspector all use the
+stored snapshot. Editing or deleting the agent file, changing another agent's
+description, editing `AGENTS.md` or letting the date roll over does not rewrite
+an existing session's prompt. New sessions pick up file changes.
+`GET /api/session/{id}/snapshot` returns the full stored snapshot; the session
+object carries a bounded summary.
+
+A session created before snapshots existed has no stored original prompt. On
+first use, the daemon reconstructs one from the current agent files and
+`AGENTS.md`, records `origin: "reconstructed"`, and puts a labelled
+`# Snapshot note` in the system prompt saying this is not a historical record.
+The reconstruction is stored once and is stable from then on. It also emits a
+`session.snapshot` event.
+
+## The instruction file
+
+The starting context also includes exactly one instruction file:
+`<session.directory>/AGENTS.md`. Ancestor and nested directories are not
+searched. Its path, status and actual content are a labelled `# Instructions
+file` section in `instructions`, separate from the agent's own prompt, and both
+are visible in the inspector's Requests level.
+
+Absence is explicit: the section says `Status: not found` and that no
+instructions were loaded. An unreadable file reports its error, and a file over
+256 KiB reports `Status: too large`, the byte count and the limit without
+including the content. Nothing is omitted silently.
+
+Editing (or deleting) `AGENTS.md` affects new sessions only. Switching agents
+replaces the agent prompt and tool snapshot deliberately; the instruction file
+loaded for the session is retained. A directory change (a later control-plane
+step) will add the destination's instructions as forward context instead of
+rewriting this prompt.
+
+## How a session uses its agent
+
+A session has one `agent`. The default is `build` when its mode allows a root;
+otherwise the first loaded agent allowed as a root is used (normally
+`orchestrate`). At creation:
+
+- **instructions** = the agent's body with `{{tools}}` replaced by guidance for
+  its actual tools, plus an environment block (workspace, date), then the
+  instruction-file section. This is rendered once and frozen.
+  `GET /api/session/{id}/context` shows the full text.
+- **tools** = the agent's `tools`, or all task tools, minus the session's
+  `disabled_tools`; explicitly granted control tools follow the same switch.
+  Disabled tools are absent from the stored definitions, the request schemas and
+  the system prompt's `# Tools` section.
+- **model** = the session's model if the user set one, else the agent's frozen
+  `model`, else the daemon's default. **effort** works the same way, ending
+  with the provider's default.
+- **steps** = the agent's frozen `steps`, or 50.
 
 ## Built-in agents
 
@@ -58,21 +140,6 @@ So a root session runs `orchestrate` or `build`, and a child session runs
 so "read-only" (`scout`) and "Markdown only" (`plan`) rest on the prompt.
 Granting `bash` also grants the `bash_output` and `bash_kill` companions for
 background jobs (the table lists only the frontmatter tools).
-
-## How a session uses its agent
-
-A session has one `agent`. The default is `build` when its mode allows a root;
-otherwise the first loaded agent allowed as a root is used (normally
-`orchestrate`). On each turn:
-
-- **instructions** = the agent's body with `{{tools}}` replaced by guidance for
-  its actual tools, plus an environment block (workspace, date). `GET /api/session/{id}/context` shows the full text.
-- **tools** = the agent's `tools`, or all task tools, minus the session's
-  `disabled_tools`; explicitly granted control tools follow the same switch.
-- **model** = the session's model if the user set one, else the agent's
-  `model`, else the daemon's default. **effort** works the same way, ending
-  with the provider's default.
-- **steps** = the agent's `steps`, or 50.
 
 The session JSON reports the result and where it came from: `model` and
 `model_source` (`session`, `agent` or `default`), and `effort` and
@@ -110,13 +177,30 @@ says none are available. Keep agent bodies tool-agnostic: naming tools elsewhere
 would leave stale advice when those tools are disabled. Custom bodies are not
 rewritten beyond the placeholder.
 
-The `session` tool's guidance and `agent` enum come from every loaded agent
-whose mode allows children, with its current description. Global and project
-overrides apply on the next turn, including changes to `build`'s mode.
+The `session` tool's guidance and `agent` enum are part of the snapshot: they
+come from the child-capable agents loaded when that parent session was created.
+A new parent picks up added agents, description changes and mode changes; an
+existing parent keeps its catalog. If an existing parent names a child agent
+that has since been deleted (or is no longer allowed as a child), the call
+fails with a clear error and never substitutes another agent.
 
 Use `nexus run|chat --disable bash,write` to save switches on a session;
 `--disable ''` clears them. In chat, `/tools` shows available and disabled tools.
-Disabled tools also disappear from the functions available inside code cells.
+A switch applies to subsequent calls; an already-running call keeps the
+configuration it started with. Disabling a tool removes it from the next request's
+schemas, from the nested functions inside code cells, and from the stored tool
+definitions. The frozen system prompt is not rewritten: the daemon appends a
+`[Nexus notice: tool availability changed]` message to the conversation. It
+names the tools now available (with their guidance), the tools switched off, and
+says the notice is authoritative where the frozen prompt mentions an old tool.
+Clearing a switch adds the tool's definition back and uses the same notice.
+
+Switching agents (`POST /api/session/{id}/agent`) is the deliberate prompt
+replacement: the agent prompt, tool definitions and child catalog are rebuilt
+from the current files, with a `[Nexus notice: agent changed]` message. The
+loaded `AGENTS.md` section is retained. Model and effort changes apply from the
+next model call and never mutate a running call. No filesystem hot reload is performed
+for existing sessions.
 
 `bash` brings `bash_output` and `bash_kill` with it, unless they are switched
 off individually, so a background command can always be read and stopped. They

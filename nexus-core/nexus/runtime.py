@@ -13,10 +13,12 @@ is published on the bus:
 | `session.error` | a turn failed (provider, auth or tool-loop error) |
 | everything else | the loop and stream events, unchanged (`wire_request`, `text_delta`, `tool_start`, …) |
 
-Each turn resolves the session's agent (`nexus/agents.py`, reloaded every turn
-so edits to agent files apply at once): its prompt plus the environment block
-becomes the instructions, its `tools` limit the tool list, and its `model`,
-`effort` and `steps` apply unless the session sets them.
+Each session freezes its agent, rendered prompt, tool definitions and child
+catalog at creation (`nexus/snapshot.py`). Turns replay that snapshot rather
+than reloading files, so agent edits affect new sessions only; explicit model,
+effort, agent and tool-switch changes apply to subsequent calls. The snapshot also
+carries the labelled `AGENTS.md` section from the session directory. An old
+session without a snapshot is reconstructed once with a visible note.
 
 One turn runs per session at a time. Interrupting cancels the turn, and the
 turns of every descendant session. A tool call left without a result gets an
@@ -35,10 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
 from . import agents as agent_files
+from . import snapshot as snapshots
 from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
 from .codec import message_to_json, to_json
@@ -51,7 +55,6 @@ from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
 from .tools.base import clip
-from .tools.code import SPEC as CODE_SPEC
 
 AUTO_APPROVED = {"read", "bash_output", "bash_kill", "session", "code"}
 CHILD_RESULT_CHARS = 30_000
@@ -131,13 +134,17 @@ class Runtime:
 
     def session_json(self, s: Session) -> dict[str, Any]:
         """`model`/`effort` are what the next turn uses; `*_source` says where they came from."""
+        snapshot_info: dict[str, Any] | None = None
         try:
-            agent = self.agent_def(s)
+            snapshot = self.snapshot_for(s)
+            agent = snapshot["agent"]
             model, model_source = self.resolve_model(s, agent)
-            effort = s.effort or agent.effort
-            effort_source = "session" if s.effort else ("agent" if agent.effort else "provider")
-            tools = self.tool_names(s, agent)
-        except ValueError:
+            effort = s.effort or agent["effort"]
+            effort_source = "session" if s.effort else ("agent" if agent["effort"] else "provider")
+            tools = self.effective_tool_names(snapshot, s)
+            snapshot_info = snapshots.summary(snapshot)
+        except ValueError as exc:
+            snapshot_info = {"error": str(exc)}
             tools = []
             model, model_source = s.model or self.default_model, "session" if s.model else "default"
             effort, effort_source = s.effort, "session" if s.effort else "provider"
@@ -146,7 +153,7 @@ class Runtime:
             "parent_id": s.parent_id, "parent_call_id": s.parent_call_id, "launched_by": s.launched_by,
             "children": [c.id for c in self.store.children(s.id)],
             "model": model, "model_source": model_source, "effort": effort, "effort_source": effort_source,
-            "tools": tools, "disabled_tools": sorted(s.disabled()),
+            "tools": tools, "disabled_tools": sorted(s.disabled()), "snapshot": snapshot_info,
             "permission": s.permission, "status": "busy" if s.id in self.turns else "idle",
             "created": s.created, "updated": s.updated,
         }
@@ -154,15 +161,155 @@ class Runtime:
     def agents(self, project_path: str | None) -> agent_files.AgentSet:
         return agent_files.load(project_path)
 
-    def agent_def(self, session: Session) -> agent_files.AgentDef:
-        return self.agents(self.project(session.project_id).path).get(session.agent)
-
-    def resolve_model(self, session: Session, agent: agent_files.AgentDef) -> tuple[str, str]:
+    def resolve_model(self, session: Session, agent: dict[str, Any]) -> tuple[str, str]:
         if session.model:
             return session.model, "session"
-        if agent.model:
-            return agent.model, "agent"
+        if agent["model"]:
+            return agent["model"], "agent"
         return self.default_model, "default"
+
+    # -- session snapshots -----------------------------------------------------
+
+    def _registry(self) -> dict[str, Tool]:
+        """Every task tool this build can execute and describe, by name."""
+        return {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS)}
+
+    @staticmethod
+    def granted_tool_names(spec: agent_files.AgentDef) -> list[str]:
+        """The task tools an agent grants. bash's background companions are added when it is available."""
+        return list(spec.tools) if spec.tools is not None else [t.spec.name for t in DEFAULT_TOOLS]
+
+    @staticmethod
+    def enabled_tool_names(granted: list[str], control: list[str], disabled: set[str], child: bool) -> list[str]:
+        names = [n for n in granted if n not in disabled]
+        if "bash" in names:
+            # Background jobs need their reader/killer; grant them with bash unless switched off individually.
+            at = names.index("bash") + 1
+            for tool in BASH_JOB_TOOLS:
+                name = tool.spec.name
+                if name not in names and name not in disabled:
+                    names.insert(at, name)
+                    at += 1
+        if not child and "session" in control and "session" not in disabled:
+            names.append("session")
+        return names
+
+    @staticmethod
+    def effective_tool_names(snapshot: dict[str, Any], session: Session) -> list[str]:
+        """Enabled tools in request order, from the snapshot's grants and the session's switches."""
+        return Runtime.enabled_tool_names(
+            snapshot["granted_tools"], snapshot["control"], session.disabled(), session.parent_id is not None)
+
+    def _session_spec(self, child_agents: list[dict[str, Any]]) -> ToolSpec:
+        return ToolSpec(
+            name="session",
+            description=(
+                "Start a child session running one of the agents listed in the system prompt's tools section, on a "
+                "complete prompt. wait=true (default) returns its answer; wait=false returns at once and the answer "
+                "arrives as a message when it finishes."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "enum": [a["name"] for a in child_agents], "description": "Which agent runs the child"},
+                    "prompt": {"type": "string", "description": "The complete task for the child"},
+                    "wait": {"type": "boolean", "description": "Block until the child answers (default true)"},
+                    "title": {"type": "string", "description": "Short title for the child session"},
+                },
+                "required": ["agent", "prompt"],
+            },
+        )
+
+    def _session_guidance(self, child_agents: list[dict[str, Any]]) -> str:
+        return (
+            "Start a child session: another agent works on a prompt in this directory, in a session the user can open. "
+            "It does not see this conversation, so give it a complete prompt. `wait=true` returns its answer; "
+            "`wait=false` lets you continue, and the answer arrives as a message when it finishes. Child agents:\n"
+            + "\n".join(f"  - `{a['name']}`: {a['description']}" for a in child_agents)
+        )
+
+    def _definition(self, name: str, registry: dict[str, Tool], child_agents: list[dict[str, Any]]) -> dict[str, Any]:
+        if name == "session":
+            return {
+                "name": "session",
+                "description": self._session_spec(child_agents).description,
+                "parameters": self._session_spec(child_agents).parameters,
+                "guidance": self._session_guidance(child_agents),
+            }
+        tool = registry[name]
+        return snapshots.tool_record(tool)
+
+    def _build_snapshot(self, *, directory: str, spec: agent_files.AgentDef, found: agent_files.AgentSet,
+                        disabled: set[str], child: bool, origin: str = "created",
+                        instruction_file: dict[str, Any] | None = None,
+                        notice: str | None = None) -> dict[str, Any]:
+        """Freeze one session's agent, prompt, tool schemas and child catalog."""
+        registry = self._registry()
+        granted = self.granted_tool_names(spec)
+        unknown = [n for n in granted if n not in registry]
+        if unknown:
+            raise ValueError(
+                f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join(registry)}"
+            )
+        child_agents = [snapshots.agent_summary(a) for a in found.allowed(child=True)]
+        names = self.enabled_tool_names(granted, list(spec.control), disabled, child)
+        definitions = {n: self._definition(n, registry, child_agents) for n in names}
+        if instruction_file is None:
+            instruction_file = snapshots.read_instruction_file(directory)
+        agent_prompt = agent_files.render_prompt(
+            spec, [(n, definitions[n]["guidance"]) for n in names], Path(directory))
+        return {
+            "version": snapshots.SNAPSHOT_VERSION,
+            "origin": origin,
+            "created": time.time(),
+            "notice": notice,
+            "directory": str(Path(directory).resolve()),
+            "agent": snapshots.agent_record(spec),
+            "granted_tools": granted,
+            "control": list(spec.control),
+            "tools": names,
+            "tool_definitions": definitions,
+            "child_agents": child_agents,
+            "instruction_file": instruction_file,
+            "agent_prompt": agent_prompt,
+            "system_prompt": snapshots.compose_prompt(agent_prompt, instruction_file, notice=notice),
+        }
+
+    def snapshot_for(self, session: Session) -> dict[str, Any]:
+        """The stored snapshot, reconstructing and storing one once for an old session."""
+        stored = self.store.snapshot(session.id)
+        if stored is not None:
+            return stored
+        found = self.agents(self.project(session.project_id).path)
+        spec = found.get(session.agent, child=session.parent_id is not None)
+        rebuilt = self._build_snapshot(
+            directory=session.directory, spec=spec, found=found, disabled=session.disabled(),
+            child=session.parent_id is not None, origin="reconstructed", notice=snapshots.RECONSTRUCTED_NOTE,
+        )
+        self.store.set_snapshot(session.id, rebuilt)
+        self.bus.publish("session.snapshot", snapshots.summary(rebuilt), session_id=session.id)
+        return rebuilt
+
+    def snapshot_json(self, session_id: str) -> dict[str, Any]:
+        """The full stored snapshot: prompt, tool schemas, guidance and every source path."""
+        return self.snapshot_for(self.session(session_id))
+
+    def _sync_tool_definitions(self, snapshot: dict[str, Any], session: Session) -> None:
+        """Keep definitions for exactly the tools an explicit switch leaves available.
+
+        A switched-off tool's schema and guidance disappear from the stored snapshot
+        as well as the next request. Re-enabling it adds its definition again.
+        """
+        registry = self._registry()
+        names = self.effective_tool_names(snapshot, session)
+        available = set(names)
+        for name in list(snapshot["tool_definitions"]):
+            if name not in available:
+                del snapshot["tool_definitions"][name]
+        for name in names:
+            if name not in snapshot["tool_definitions"]:
+                snapshot["tool_definitions"][name] = self._definition(name, registry, snapshot["child_agents"])
+        snapshot["tools"] = names
 
     def session(self, session_id: str) -> Session:
         session = self.store.session(session_id)
@@ -211,16 +358,49 @@ class Runtime:
             # `build` unless the user's agent files make it child-only; then the first agent allowed here.
             fitting = [a.name for a in found.allowed(child=parent is not None)]
             agent = agent_files.DEFAULT_AGENT if agent_files.DEFAULT_AGENT in fitting else (fitting or [""])[0]
-        found.get(agent, child=parent is not None)  # the agent's mode must fit
+        spec = found.get(agent, child=parent is not None)  # the agent's mode must fit
+        directory = parent.directory if parent else project.path
+        snapshot = self._build_snapshot(
+            directory=directory, spec=spec, found=found, disabled=set(disabled_tools or []),
+            child=parent is not None,
+        )
         session = self.store.create_session(project, title=title or "New session", agent=agent, model=model or "",
                                             permission=permission or "ask", effort=effort or None, parent=parent,
                                             parent_call_id=parent_call_id, launched_by=launched_by,
-                                            disabled_tools=disabled_tools)
+                                            disabled_tools=disabled_tools, snapshot=snapshot)
         self.bus.publish("session.created", self.session_json(session), session_id=session.id)
         return session
 
+    @staticmethod
+    def _tool_notice(snapshot: dict[str, Any], names: list[str], before: set[str]) -> str:
+        gained = [n for n in names if n not in before]
+        lost = sorted(before - set(names))
+        lines = [
+            "[Nexus notice: tool availability changed]",
+            ("This is forward guidance for subsequent calls. The session's starting system prompt is frozen and "
+             "is not rewritten; where it describes tools that are now switched off, this notice is authoritative."),
+        ]
+        if gained:
+            lines.append("Now available:")
+            for name in gained:
+                guidance = snapshot["tool_definitions"].get(name, {}).get("guidance", "")
+                lines.append(f"- `{name}`: {guidance}" if guidance else f"- `{name}`")
+        if lost:
+            lines.append("No longer available, including inside `code`: " + ", ".join(f"`{n}`" for n in lost) + ".")
+        lines.append("Current tools: " + (", ".join(f"`{n}`" for n in names) if names else "none") + ".")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _agent_notice(before: str, after: str) -> str:
+        return (
+            "[Nexus notice: agent changed]\n"
+            f"The session now runs agent `{after}` instead of `{before}`. Its starting system prompt and tool "
+            "definitions were replaced with the new agent's snapshot; earlier messages and the loaded instructions "
+            "file remain in the conversation."
+        )
+
     def update_session(self, session_id: str, **fields: Any) -> Session:
-        self.session(session_id)
+        current = self.session(session_id)
         if fields.get("permission") not in (None, "ask", "allow"):
             raise ValueError("permission must be 'ask' or 'allow'")
         if fields.get("model"):
@@ -229,12 +409,58 @@ class Runtime:
             self.check_tool_names(fields["disabled_tools"])
         if fields.get("agent") == "":
             raise ValueError("agent must not be empty")
+        new_agent: agent_files.AgentDef | None = None
+        found: agent_files.AgentSet | None = None
         if fields.get("agent"):
-            current = self.session(session_id)
-            self.agents(self.project(current.project_id).path).get(fields["agent"], child=current.parent_id is not None)
+            found = self.agents(self.project(current.project_id).path)
+            candidate = found.get(fields["agent"], child=current.parent_id is not None)
+            if candidate.name != current.agent:
+                new_agent = candidate
+        before_disabled = current.disabled()
+        new_disabled = fields.get("disabled_tools")
+        tools_changed = new_disabled is not None and set(new_disabled) != before_disabled
+        before_snapshot = self.snapshot_for(current) if tools_changed and new_agent is None else None
+        before_enabled = set(self.effective_tool_names(before_snapshot, current)) if before_snapshot else set()
+        if before_snapshot is not None and new_disabled is not None:
+            target = self.enabled_tool_names(
+                before_snapshot["granted_tools"], before_snapshot["control"], set(new_disabled),
+                current.parent_id is not None)
+            registry = self._registry()
+            unknown_exec = [n for n in target if n not in registry and n not in ("code", "session")]
+            if unknown_exec:
+                raise ValueError(
+                    f"session snapshot needs tools this Nexus build cannot execute: {', '.join(unknown_exec)}; "
+                    "start a new session or switch the agent"
+                )
+        rebuilt: dict[str, Any] | None = None
+        if new_agent is not None and found is not None:
+            previous = self.store.snapshot(session_id)
+            rebuilt = self._build_snapshot(
+                directory=current.directory, spec=new_agent, found=found,
+                disabled=set(new_disabled) if new_disabled is not None else current.disabled(),
+                child=current.parent_id is not None, origin="agent-switch",
+                instruction_file=previous["instruction_file"] if previous else None,
+            )
         session = self.store.update_session(session_id, **fields)
-        self.bus.publish("session.updated", self.session_json(session), session_id=session_id)  # type: ignore[arg-type]
-        return session  # type: ignore[return-value]
+        assert session is not None
+        notice: str | None = None
+        if rebuilt is not None:
+            self.store.set_snapshot(session_id, rebuilt)
+            notice = self._agent_notice(current.agent, session.agent)
+        elif tools_changed:
+            snapshot = before_snapshot or self.snapshot_for(session)
+            self._sync_tool_definitions(snapshot, session)
+            self.store.set_snapshot(session_id, snapshot)
+            notice = self._tool_notice(snapshot, self.effective_tool_names(snapshot, session), before_enabled)
+        if notice is not None:
+            if session_id in self.turns:
+                # Add at the next model boundary, after the active call's results.
+                self.inboxes.setdefault(session_id, []).append(notice)
+            else:
+                stored = self.store.append_message(session_id, Message("user", (Text(notice),)))
+                self.bus.publish("message.added", message_json(stored), session_id=session_id)
+        self.bus.publish("session.updated", self.session_json(session), session_id=session_id)
+        return session
 
     async def delete_session(self, session_id: str) -> None:
         await self.interrupt(session_id)  # also interrupts descendants, which the delete cascades to
@@ -250,29 +476,6 @@ class Runtime:
         return agent.provider.body(agent.request())
 
     # -- turns ---------------------------------------------------------------
-
-    @staticmethod
-    def _has_session_tool(session: Session, spec: agent_files.AgentDef) -> bool:
-        return "session" in spec.control and session.parent_id is None and "session" not in session.disabled()
-
-    def _task_tool_names(self, session: Session, spec: agent_files.AgentDef) -> list[str]:
-        """The task tools this session offers, before the session control tool."""
-        names = list(spec.tools) if spec.tools is not None else [t.spec.name for t in DEFAULT_TOOLS]
-        names = [n for n in names if n not in session.disabled()]
-        if "bash" in names:
-            # Background jobs need their reader/killer; grant them with bash unless switched off individually.
-            at = names.index("bash") + 1
-            for tool in BASH_JOB_TOOLS:
-                name = tool.spec.name
-                if name not in names and name not in session.disabled():
-                    names.insert(at, name)
-                    at += 1
-        return names
-
-    def tool_names(self, session: Session, spec: agent_files.AgentDef) -> list[str]:
-        """The tools the session's next turn offers, in order."""
-        names = self._task_tool_names(session, spec)
-        return names + (["session"] if self._has_session_tool(session, spec) else [])
 
     @staticmethod
     def check_tool_names(names: Any) -> list[str]:
@@ -323,14 +526,31 @@ class Runtime:
             output = f"[… earlier output omitted …]\n{output}"
         return f"{head}\n{output or '(no output)'}\nUse bash_output(job_id=\"{job.id}\") for the retained output."
 
-    def _agent(self, session: Session) -> Agent:
-        spec = self.agent_def(session)
+    def _refresh_call(self, active: Agent, session_id: str) -> None:
+        """Rebind explicit changes at dispatch boundaries, never within a running call."""
+        updated = self._agent(self.session(session_id), refresh=False)
+        for name in ("provider", "model", "workspace", "tools", "instructions", "reasoning_effort", "approve"):
+            setattr(active, name, getattr(updated, name))
+
+    def _agent(self, session: Session, *, refresh: bool = True) -> Agent:
+        snapshot = self.snapshot_for(session)
+        spec = snapshot["agent"]
         provider, model = provider_for(self.resolve_model(session, spec)[0])
-        available = {tool.spec.name: tool for tool in (*DEFAULT_TOOLS, *BASH_JOB_TOOLS)}
-        names = self._task_tool_names(session, spec)
-        unknown = [n for n in names if n not in available]
-        if unknown:
-            raise ValueError(f"agent {spec.name} lists unknown tools: {', '.join(unknown)}; available: {', '.join(available)}")
+        names = self.effective_tool_names(snapshot, session)
+        definitions = snapshot["tool_definitions"]
+        missing = [n for n in names if n not in definitions]
+        if missing:
+            raise ValueError(
+                f"session snapshot is missing definitions for: {', '.join(missing)}; "
+                "switch the agent or clear the tool switch that re-enabled them"
+            )
+        registry = self._registry()
+        missing_exec = [n for n in names if n not in registry and n not in ("code", "session")]
+        if missing_exec:
+            raise ValueError(
+                f"session snapshot needs tools this Nexus build cannot execute: {', '.join(missing_exec)}; "
+                "start a new session or switch the agent"
+            )
         workspace = Path(session.directory)
         root = self._root(session)
 
@@ -354,15 +574,22 @@ class Runtime:
                 raise ToolError("job_id must be a non-empty string")
             return bash_tool.killed(await self.jobs.kill(job_id, root=root.id))
 
-        bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill}
+        async def run_session(args: dict[str, Any], ctx: ToolContext) -> str:
+            return await self._launch(session.id, args, ctx.call_id)
 
-        def bind(tool: Tool) -> Tool:
-            runner = bound.get(tool.spec.name)
-            return Tool(tool.spec, runner, tool.guidance) if runner else tool
+        bound = {"bash": run_bash, "bash_output": run_bash_output, "bash_kill": run_bash_kill,
+                 "session": run_session}
 
-        tools = [bind(available[n]) for n in names]
+        def stored_tool(name: str) -> Tool:
+            definition = definitions[name]
+            runner = bound.get(name) or (None if name == "code" else registry[name].run)
+            return Tool(ToolSpec(name, definition["description"], definition["parameters"]), runner,  # type: ignore[arg-type]
+                        guidance=definition["guidance"])
+
+        tools = [stored_tool(name) for name in names if name != "code"]
         if "code" in names:
-            task_tools = [t for t in tools if t.spec.name != "code"]
+            task_tools = [t for t in tools if t.spec.name not in agent_files.CONTROL_TOOLS]
+            code_definition = definitions["code"]
 
             async def run_code(args: dict[str, Any], ctx: ToolContext) -> str:
                 return await self.kernels.run(
@@ -371,52 +598,31 @@ class Runtime:
                     publish=lambda kind, data: self.bus.publish(kind, data, session_id=session.id),
                 )
 
-            tools = [Tool(CODE_SPEC, run_code, available["code"].guidance) if t.spec.name == "code" else t for t in tools]
-        if self._has_session_tool(session, spec):
-            tools.append(self._session_tool(session))
+            tools.insert(names.index("code"), Tool(
+                ToolSpec("code", code_definition["description"], code_definition["parameters"]),
+                run_code, guidance=code_definition["guidance"]))
         return Agent(
             provider, model=model, workspace=workspace,
             tools=tuple(tools),
-            instructions=agent_files.render_prompt(spec, [(t.spec.name, t.guidance) for t in tools], workspace),
-            reasoning_effort=session.effort or spec.effort, max_steps=spec.steps or MAX_STEPS,
+            instructions=snapshot["system_prompt"],
+            reasoning_effort=session.effort or spec["effort"], max_steps=spec["steps"] or MAX_STEPS,
             messages=[m.message for m in self.store.messages(session.id)],
             conversation_id=session.id, approve=lambda call, args: self._approve(session.id, call, args),
             inbox=lambda: self.inboxes.pop(session.id, []),
+            refresh=(lambda active: self._refresh_call(active, session.id)) if refresh else None,
         )
 
     # -- child sessions --------------------------------------------------------
 
     def _session_tool(self, parent: Session) -> Tool:
-        # Built from the agents loaded for this project each turn (builtin, global, project), filtered by mode,
-        # so a new agent file, or a mode change such as `build` made child-only, shows up here by itself.
+        # The live view, used by inspection. Turns use the session snapshot instead.
         allowed = self.agents(self.project(parent.project_id).path).allowed(child=True)
+        records = [snapshots.agent_summary(a) for a in allowed]
 
         async def run(args: dict[str, Any], ctx: ToolContext) -> str:
             return await self._launch(parent.id, args, ctx.call_id)
 
-        return Tool(ToolSpec(
-            name="session",
-            description=(
-                "Start a child session running one of the agents listed in the system prompt's tools section, on a "
-                "complete prompt. wait=true (default) returns its answer; wait=false returns at once and the answer "
-                "arrives as a message when it finishes."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "agent": {"type": "string", "enum": [a.name for a in allowed], "description": "Which agent runs the child"},
-                    "prompt": {"type": "string", "description": "The complete task for the child"},
-                    "wait": {"type": "boolean", "description": "Block until the child answers (default true)"},
-                    "title": {"type": "string", "description": "Short title for the child session"},
-                },
-                "required": ["agent", "prompt"],
-            },
-        ), run, guidance=(
-            "Start a child session: another agent works on a prompt in this directory, in a session the user can open. "
-            "It does not see this conversation, so give it a complete prompt. `wait=true` returns its answer; "
-            "`wait=false` lets you continue, and the answer arrives as a message when it finishes. Child agents:\n"
-            + "\n".join(f"  - `{a.name}`: {a.description}" for a in allowed)
-        ))
+        return Tool(self._session_spec(records), run, guidance=self._session_guidance(records))
 
     async def _launch(self, parent_id: str, args: dict[str, Any], call_id: str | None) -> str:
         parent = self.session(parent_id)
@@ -425,10 +631,14 @@ class Runtime:
         prompt = args.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ToolError("prompt must be a non-empty string")
+        agent = args.get("agent")
+        if not isinstance(agent, str) or not agent:
+            raise ToolError("agent must be a non-empty string; choose one of the child agents in the tool schema")
         try:
             child = self.create_session(
                 self.project(parent.project_id), title=args.get("title") or None, model=None, permission=parent.permission,
-                agent=str(args.get("agent") or ""), parent=parent, parent_call_id=call_id, launched_by="agent", disabled_tools=sorted(parent.disabled()),
+                agent=agent, parent=parent, parent_call_id=call_id, launched_by="agent",
+                disabled_tools=sorted(parent.disabled()),
             )
         except ValueError as exc:
             raise ToolError(str(exc)) from exc

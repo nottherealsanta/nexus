@@ -242,6 +242,9 @@ function render() {
       "permission", s.permission,
       "tools", (s.tools || []).join(", ") || "none",
       "disabled tools", (s.disabled_tools || []).join(", ") || "none",
+      "snapshot", s.snapshot && !s.snapshot.error ? `${s.snapshot.origin} · ${time(s.snapshot.created)}` : (s.snapshot ? h("span", { class: "err" }, s.snapshot.error) : "–"),
+      "agent source", s.snapshot && s.snapshot.agent ? h("span", {}, `${s.snapshot.agent.source} · `, h("span", { class: "mono" }, s.snapshot.agent.path), " · ", h("span", { class: "mono" }, s.snapshot.agent.fingerprint || "no fingerprint")) : "–",
+      "instructions", s.snapshot && s.snapshot.instructions ? `${s.snapshot.instructions.status} · ${s.snapshot.instructions.path}` : "–",
       "directory", h("span", { class: "mono" }, s.directory),
       "launched by", s.launched_by === "agent" ? h("span", {}, "agent in ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id), ", tool call ", h("span", { class: "mono" }, s.parent_call_id)) :
         (s.parent_id ? h("span", {}, "user, as a child of ", h("a", { onclick: () => select(s.parent_id) }, s.parent_id)) : "user"),
@@ -339,6 +342,19 @@ function viewSteps() {
 // Level 3: every request body, as labelled sections.
 function viewRequests() {
   const box = h("div", {});
+  if (S.session.snapshot) {
+    const meta = S.session.snapshot;
+    box.append(h("div", { class: "card" },
+      h("div", { class: "section" }, "Session snapshot (frozen at creation; file edits do not change this session)"),
+      kv("kv", "origin", meta.origin || meta.error || "–",
+         "agent", meta.agent ? `${meta.agent.name} · ${meta.agent.source}` : "–",
+         "agent source", meta.agent ? meta.agent.path : "–",
+         "agent fingerprint", meta.agent ? meta.agent.fingerprint || "none" : "–",
+         "instructions file", meta.instructions ? `${meta.instructions.status} · ${meta.instructions.path}` : "–",
+         "child agents", meta.child_agents ? meta.child_agents.map((a) => a.name).join(", ") || "none" : "–"),
+      meta.notice ? h("div", { class: "note" }, meta.notice) : null,
+      jsonBlock("Snapshot summary", meta)));
+  }
   const next = h("div", { class: "card" }, h("div", { class: "section" }, "Next request (what the model would see now)"));
   box.append(next);
   if (S.context) next.append(requestBody(S.context));
@@ -427,7 +443,7 @@ function live() {
       renderSoon();
     }
   };
-  for (const type of ["message.added", "session.created", "session.updated", "session.deleted", "session.status", "session.error", "session.notified",
+  for (const type of ["message.added", "session.created", "session.updated", "session.snapshot", "session.deleted", "session.status", "session.error", "session.notified",
     "bash.started", "bash.finished", "code.call", "code.cell", "kernel.deleted", "permission.asked", "permission.replied", "project.created", "project.updated", "project.deleted", "wire_request", "wire_response", "wire_event",
     "text_delta", "reasoning_delta", "tool_call_started", "tool_args_delta", "part_done", "usage", "done", "step_start", "tool_start", "tool_end", "turn_end"]) {
     source.addEventListener(type, handle);

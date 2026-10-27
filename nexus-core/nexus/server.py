@@ -28,6 +28,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/children | direct children |
 | GET | /api/session/{id}/tree | the whole tree containing it, from its root, nested |
 | GET | /api/session/{id}/context | the request body the next turn would send |
+| GET | /api/session/{id}/snapshot | the full frozen session snapshot |
 | GET | /api/session/{id}/permission | pending tool approvals |
 | POST | /api/session/{id}/permission/{pid} | `{reply: "allow" | "deny"}` → 204 |
 | GET | /inspector | the session inspector page (static; it reads the API with the token from its URL fragment) |
@@ -223,6 +224,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
     async def context(request: Request) -> Response:
         return JSONResponse(runtime.context(p(request, "id")))
 
+    async def snapshot(request: Request) -> Response:
+        return JSONResponse(runtime.snapshot_json(p(request, "id")))
+
     async def permissions(request: Request) -> Response:
         runtime.session(p(request, "id"))
         return JSONResponse(runtime.pending_approvals(p(request, "id")))
@@ -304,6 +308,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/children", route(children)),
         Route("/api/session/{id}/tree", route(tree)),
         Route("/api/session/{id}/context", route(context)),
+        Route("/api/session/{id}/snapshot", route(snapshot)),
         Route("/api/session/{id}/permission", route(permissions)),
         Route("/api/session/{id}/permission/{pid}", route(permission_reply), methods=["POST"]),
         Route("/api/event", route(events)),

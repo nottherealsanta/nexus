@@ -53,6 +53,16 @@ An async generator of `LoopEvent`.
 Calls run sequentially, even when a step has several (`parallel_tool_calls` is
 sent as `false` on the wire). The next `turn()` call continues the same history.
 
+## Explicit configuration updates
+
+An optional synchronous `refresh(agent)` callback runs before each model and
+tool dispatch. The daemon rebinds current stored configuration there without
+reloading agent files or instruction files. An already-running call is unchanged.
+Pending notices are drained before model requests, after previous tool results,
+so stored context stays in the same order as the model's context. Active `code`
+cells retain their caller's task-tool bindings until that outer call finishes;
+control tools are never available inside cells.
+
 ## Tool execution
 
 `_parse_args` parses `call.arguments` as JSON (empty text counts as `{}`). A

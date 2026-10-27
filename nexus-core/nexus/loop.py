@@ -83,6 +83,7 @@ class Agent:
         messages: list[Message] | None = None,
         conversation_id: str | None = None,
         inbox: Inbox | None = None,
+        refresh: Callable[[Any], None] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -95,6 +96,7 @@ class Agent:
         self.conversation_id = conversation_id or uuid.uuid4().hex
         self.messages: list[Message] = list(messages or [])
         self.inbox = inbox
+        self.refresh = refresh
 
     def request(self) -> Request:
         return Request(
@@ -113,6 +115,8 @@ class Agent:
     async def turn(self, user_text: str) -> AsyncIterator[LoopEvent]:
         yield self._add(Message("user", (Text(user_text),)))
         for step in range(1, self.max_steps + 1):
+            if self.refresh is not None:
+                self.refresh(self)
             notices = self.inbox() if self.inbox is not None else []
             if notices:
                 yield self._add(Message("user", tuple(Text(n) for n in notices)))
@@ -132,6 +136,8 @@ class Agent:
                 return
             results: list[ToolResult] = []
             for call in calls:
+                if self.refresh is not None:
+                    self.refresh(self)
                 args = _parse_args(call.arguments)
                 yield ToolStart(call, args)
                 result = await self._run(call, args)

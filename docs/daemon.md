@@ -42,13 +42,17 @@ the [HTTP API](api.md). Clients never read Nexus state files.
   - `permission`: `ask` or `allow`.
   - `effort`: reasoning effort, or none for the provider's default.
   - `title`: set from the first prompt.
+  - `snapshot`: the frozen agent, prompt, tool definitions, child catalog and
+    instruction file resolved at creation ([agents.md](agents.md#session-snapshots)).
 - **Messages.** Append-only rows in session order, saved as each one is
   produced (user, assistant, tool). Parts keep their `raw` wire items, so a
   resumed session replays to its provider without loss.
 - **Storage.** SQLite at `~/.nexus10/nexus.db` (WAL). Tables: `project`,
-  `session`, `message` and `event`. `event` holds every event of a session, in
-  order: the durable log behind the [inspector](inspector.md). Deleting a project
-  or session deletes everything under it, including its child sessions.
+  `session`, `session_snapshot`, `message` and `event`. `session_snapshot` is
+  the JSON configuration frozen for one session; `event` holds every event of a
+  session, in order: the durable log behind the [inspector](inspector.md).
+  Deleting a project or session deletes everything under it, including its child
+  sessions and snapshots.
 
 ## Session trees: who launched whom
 
@@ -79,10 +83,22 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
 ## Turns
 
 - One turn per session at a time; a second prompt gets 409.
-- Each turn reloads the session's agent file, then builds the loop's `Agent`
-  from it (prompt, tools, model, effort, steps) and the saved messages. It runs in
+- Each turn builds the loop's `Agent` from the session's stored snapshot
+  (prompt, tools, steps), the live session settings (model, effort, permission,
+  tool switches) and the saved messages. It does not reload agent files or
+  `AGENTS.md`, so edits affect new sessions only. It runs in
   `session.directory` with the session's model, using the session id as the
   prompt-cache key.
+- A running call keeps the configuration it started with. Explicit model,
+  effort, agent or tool-switch changes through the API apply before subsequent
+  model/tool calls, including within a turn. Tool/agent notices enter context
+  after outstanding tool results and before the next model request. An agent
+  switch replaces the snapshot deliberately.
+- **Old sessions.** A session from before `session_snapshot` existed gets a
+  snapshot on first use, reconstructed from the current files. Its origin is
+  `reconstructed` and its system prompt says this is not the exact historical
+  prompt; after that it is stored and stable.
+  `GET /api/session/{id}/snapshot` shows the full snapshot.
 - **Approval.** read, `bash_output`, `bash_kill` and the outer code call never ask; code delegates
   approval to its nested task calls. bash (including background), edit and write ask unless the session
   is `allow`. The turn waits on `permission.asked` until a client replies, or

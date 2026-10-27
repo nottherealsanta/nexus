@@ -21,6 +21,7 @@ nexus/
   llmhub/            types, sse, responses, chat, providers, catalog, hub
   llmhub/auth/       store, device, codex, copilot, grok, opencode, errors
   tools/             base, read, bash, edit, write, code
+  snapshot.py        serializable session configuration and instruction-file records
   agents.py          agent files: parse, load (builtin, global, project)
   builtin_agents/    orchestrate, build, quick, scout, plan (.md) + NOTICE
   loop.py            the agent loop

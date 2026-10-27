@@ -71,6 +71,7 @@ nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`,
     tools/          read, bash (background jobs too), edit (replacement or apply_patch), write, code; web_search/web_fetch planned
     kernels.py      Monty kernels for the `code` tool, owned by the daemon
     bash_jobs.py    background bash jobs, owned by the daemon
+    snapshot.py     stored session configuration, tool schemas and AGENTS.md
     agents.py       agent files: frontmatter + prompt + mode; builtin, global, project
     builtin_agents/ orchestrate, build, quick, scout, plan (.md) + NOTICE
     loop.py         the agent loop (no storage; yields MessageAdded)
@@ -400,9 +401,9 @@ new sessions pick up the changes (see the session snapshot decision below).
 - **Built-in prompts.** All five are rewritten with `{{tools}}`, and none names a
   tool outside it. `orchestrate.md` no longer lists child agents; that list
   lives in the `session` tool's guidance.
-- **Session guidance (current implementation).** Currently rebuilt every turn
-  from the loaded child-capable agents. This is superseded by the session
-  snapshot decision in Step 10: rebuild at new-session creation, not each turn.
+- **Session guidance.** Step 9 rebuilt this every turn; Step 10's snapshot
+  now freezes it from the loaded child-capable agents at session creation. New
+  sessions pick up changes, existing ones keep their catalog.
 - **Default agent.** A new root session uses `build` unless the agent files make
   it child-only. Then it uses the first agent allowed as a root
   (`runtime.create_session`).
@@ -505,40 +506,91 @@ The rest of the `nexus` namespace: workspace, worktree, move. Commands
 with their own events, exposed as API endpoints. Model and agent switching
 already exist (`POST /api/session/{id}/model`, `/agent`).
 
-**Frozen system prompt (do first).** Today `runtime._agent` re-renders the
-system prompt every turn, with the workspace path and today's date, so a date
-rollover or a directory change rewrites the cached prefix. Render it once when
-the session starts (or when its draft is confirmed), store it with the
-session, and replay it unchanged. Changes go forward as context items
-(Principle 8). An agent switch is the one deliberate exception, and it warns.
+**Session snapshot foundation (done 2026-10-27; delivered for review).** This
+increment implements the frozen prompt, session snapshots and the
+session-directory instruction file; it does not add `ask`, workspace controls,
+skills, MCP, handoff or permission changes.
 
-**Session snapshots.** On creation of every session (root or child), check the
-agent-definition files for additions, modifications and deletions and reload
-changed definitions instead of trusting cached file contents. Resolve that
-session's agent, granted tools and child-agent guidance once. Include only
-available tools' schemas and descriptions in its rendered system prompt;
-unavailable tools must not be described. Persist the resolved snapshot so later
-turns and daemon restarts do not silently reload it. New children get a fresh
-snapshot at their own creation, rather than inheriting stale agent definitions.
-Existing sessions do not change because an agent file was edited. Explicit
-mid-session agent/tool changes remain deliberate control actions, recorded in
-context. Changes affect only subsequent calls. A running provider/tool call
-keeps the configuration it started with. Snapshot the effective configuration
-when dispatching each call; never mutate it underneath running work. Record
-changes before the first subsequent call that uses them. Directory changes wait
-for active tools to finish before applying. Agent changes are the deliberate
-prompt-replacement exception and warn first; tool/MCP changes append guidance
-and update subsequent request schemas without rewriting the frozen prompt.
+- **Storage.** A new `session_snapshot` table (`session_id` primary key,
+  `data` JSON, `created`) is written in the same transaction as a new session.
+  The JSON holds the resolved agent configuration (source, absolute path,
+  fingerprint, body, mode, preferences, declared tools/control), the rendered
+  agent prompt, the final system prompt, the enabled tool definitions
+  (description, JSON schema, guidance), the child-agent catalog (name,
+  description, mode, source, path, fingerprint), the `AGENTS.md` record (path,
+  status, content, bytes, sha256, size limit), and the snapshot origin. No
+  callables are stored; execution is rebound through the tool registry by name.
+  An agent that lists a tool this build does not provide now fails session
+  creation (it previously failed the first turn), because no usable snapshot can
+  be resolved.
+- **Creation and stability.** Root and child sessions load agent files fresh at
+  their own creation. Turns and `/context`, the actual provider request, session
+  JSON and the inspector all use the stored snapshot. Editing or deleting an
+  agent file, changing a child-agent description, editing `AGENTS.md` or rolling
+  over the date affects new sessions only (an unchosen model still follows the
+  daemon default, as before). Agent switching rebuilds the snapshot deliberately;
+  tool switches add/remove
+  definitions for subsequent calls and append a visible `[Nexus notice: tool
+  availability changed]` message without rewriting the frozen prompt.
+- **Instruction file.** Exactly `<session.directory>/AGENTS.md` is read, with
+  no ancestor or nested search. Its labelled `# Instructions file` section is
+  part of `instructions`, separately from the agent prompt. Missing, unreadable
+  and over-256-KiB files get a visible status and announced omission.
+- **Migration.** Old sessions are initialized lazily on first use. The
+  reconstructed snapshot says `origin: "reconstructed"`, carries a `# Snapshot
+  note` saying it is not the exact historical prompt, emits `session.snapshot`,
+  and is then stored and stable.
+- **API and UI.** `GET /api/session/{id}/snapshot` returns the full stored
+  snapshot; session JSON carries a bounded summary. The inspector shows the
+  snapshot origin, agent source/fingerprint and instruction-file status, plus a
+  snapshot card in Requests.
+- **Verified offline** with scripted providers and temporary homes/workspaces:
+  agent edits/deletions affect new sessions only; the same for `AGENTS.md`;
+  missing, unreadable and oversized instruction files; restart stability; date
+  rollover; independent root/child snapshots and deleted child agents; disabled
+  tools absent from stored definitions, request schemas, prompt and nested code;
+  forward guidance when clearing a switch; explicit model/tool updates applying
+  within a turn, without changing running calls; old-schema reconstruction preserving
+  messages and staying stable; agent switching rebuilding from current files;
+  and `/context` matching the actual request. Delivery review added call-boundary refresh, ordered forward notices,
+  bounded instruction-file reads, and restored control-tool exclusion from
+  `code`. Regression tests cover same-turn changes, running-tool isolation and
+  blocked nested session creation. Full suite: 92 tests; Ruff and whitespace
+  checks clean. No live provider run was performed.
 
-**Instruction file.** Load `AGENTS.md` directly from the session's current
-`directory`, for both roots and children. Do not search ancestor directories or
-apply nested-directory discovery. Show its path and actual content in the
-starting context. If the session directory changes, load the destination's
-`AGENTS.md` and announce the new directory and instructions as forward context,
-without rewriting the previously sent prompt. Define absence explicitly in the
-context transition. Agent-definition files and this instruction file serve
-different purposes; changing directory does not silently replace the selected
-agent definition.
+**Frozen system prompt (done in the foundation above).** `runtime._agent` used
+to re-render the prompt every turn, with the workspace path and today's date, so
+a date rollover rewrote the cached prefix. It is now rendered once at creation,
+stored with the session, and replayed unchanged. Later deliberate changes go
+forward as context items (Principle 8). An agent switch is the one deliberate
+prompt-replacement exception.
+
+**Session snapshots (done in the foundation above; remaining items below).** On
+creation of every session (root or child), agent files are loaded fresh,
+including additions, modifications and deletions. That session's agent, granted
+tools and child-agent catalog are resolved once. Only available tools' schemas
+and descriptions enter the prompt and request. The snapshot is stored, so later
+turns and daemon restarts do not reload it. New children get a fresh snapshot at
+their own creation. Existing sessions do not change because an agent file was
+edited. Explicit mid-session agent/tool changes are deliberate control actions
+recorded in context and apply to subsequent calls. A running call keeps the
+configuration it started with. Agent switches are the prompt-replacement
+exception; tool/MCP changes append guidance and update later request schemas
+without rewriting the frozen prompt.
+
+**Remaining in this step:** warn before an agent switch (the API currently
+switches directly); record and apply directory changes at a tool-safe boundary,
+including the destination's `AGENTS.md` as forward context. Tool/MCP changes from later
+steps will reuse the same forward-guidance path.
+
+**Instruction file (done in the foundation above).** `AGENTS.md` is read directly
+from the session's `directory` for both roots and children; ancestors and nested
+directories are not searched. Its path and actual content are in the starting
+context. A directory change (remaining above) will load the destination's
+`AGENTS.md` and announce it as forward context without rewriting the previously
+sent prompt. Absence is explicit in the context transition. Agent definitions
+and this instruction file serve different purposes; changing directory does not
+silently replace the selected agent definition.
 
 **`ask` tool (before workspace controls).** A task tool for questions to the user:
 one or more questions, options (single or multi-select), free text and optional
@@ -846,10 +898,13 @@ show the wire view, the session tree and kernels.
 | bash was synchronous with a fixed timeout | No default time limit (optional `timeout`), plus daemon-owned background jobs read with `bash_output`/`bash_kill` | A long command need not block a turn; its result arrives as a notice |
 | Live events only; messages in the log | Every session event stored (`event` table) | The inspector can show any past session down to the wire |
 | Agent prompts name their tools in prose | `{{tools}}` placeholder filled from the session's actual tools (`Tool.guidance`) | A switched-off tool is never described to the model |
-| Fixed list of child agents in the orchestrator's prompt | The `session` guidance is snapshotted from freshly checked agent files at each new session (planned, Step 10) | New sessions pick up agent changes without rewriting existing prompts |
+| Fixed list of child agents in the orchestrator's prompt | The `session` guidance and enum are snapshotted from freshly checked agent files at each new session | New sessions pick up agent changes without rewriting existing prompts |
+| Agent files read again on every turn | Resolved once into a stored `session_snapshot`; later turns replay it | A cached prefix stays stable; edits cannot silently change an existing session |
+| No session instruction file | Exactly `<session.directory>/AGENTS.md`, labelled in the starting context with explicit absence/error/size status | Project instructions are visible to the model and inspector, without ancestor discovery |
+| Old sessions have no original prompt record | Lazy reconstruction marked `reconstructed`, with a visible note and a one-time `session.snapshot` event | Honest migration; stable afterwards |
 | Worktree tool, effectively mandatory | On-demand workspace controls: change session directory and worktree list/create/delete (planned, Step 10) | Keep ordinary sessions small; activate workspace controls when needed |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
-| System prompt rendered per turn | Rendered once at session start and replayed unchanged (planned, Step 10) | A stable cached prefix |
+| System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory edits require no approval and have no setting (planned, Step 10); stale or unread files are still rejected | Editing authorization and read freshness are separate |
 | Web tools named `websearch` / `webfetch`, deployment in `websearch/` | `web_search` / `web_fetch`, deployment in `nexus-search/` (planned, Step 11a) | Explicit names and self-contained service setup |
 | Extension system and MCP integrations in old Core | Focused skills/MCP support and upstream browser-use default in `nexus-browser/` (planned, Step 11a) | Carry over needed capabilities deliberately |
@@ -861,7 +916,8 @@ Work one reviewed increment at a time:
 1. Steps 8–9 and the requested Step 9a are reviewed and verified, with the
    reviewed diff prepared. Commit them as separate Conventional Commits and
    push `nexus10`.
-2. Persist session snapshots and load session-directory `AGENTS.md` (Step 10).
+2. Persist session snapshots and load session-directory `AGENTS.md` (Step 10
+   foundation) — done 2026-10-27; see Step 10.
 3. Add `ask`, approval-free workspace edits and read freshness checks; resolve
    the unrestricted-bash enforcement boundary before claiming full enforcement.
 4. Add on-demand workspace controls and directory/worktree operations.
@@ -891,8 +947,12 @@ Do not start the next increment until the current review is complete.
   plain tool call in the outer message stream; the durable `code.call` and
   `code.cell` events record what actually ran.
 - No retries, no context limit or compaction (planned as handoff, Step 12a).
-- The system prompt is re-rendered every turn (workspace, today's date), so a
-  date rollover changes the cached prefix (fix planned, Step 10).
+- Explicit updates apply to subsequent model/tool calls. An active `code` cell
+  retains the task-tool bindings it started with until that outer call finishes.
+  Agent switches retain the initially loaded `AGENTS.md` section. Directory
+  changes and destination instructions are still pending in Step 10.
+- Sessions from before snapshots existed are reconstructed once and marked
+  `reconstructed`; the note is visible, but the original prompt is unknowable.
 - The `event` table grows without limit (every token delta is a row); no retention yet.
 - Sign-in is only the local `nexus login`, not yet an API endpoint.
 - Nothing checks that a running daemon runs the current code: `nexus daemon stop` after changes.

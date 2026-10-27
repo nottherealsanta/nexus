@@ -12,10 +12,13 @@ tool). `parent_id` is the session it was started from, and `parent_call_id` is
 the tool call in the parent that started it. Deleting a session deletes its
 descendants.
 
-`event` keeps every bus event that belongs to a session (deltas, wire requests
-and SSE events included), in order, so the inspector can show any past session
-down to the raw wire traffic. Rows are deleted with their session. Messages are
-append-only rows in session order.
+`session_snapshot` stores the JSON configuration a session froze at creation:
+the agent, rendered prompt, tool descriptions/guidance, child catalog and the
+session's `AGENTS.md` record (`nexus/snapshot.py`). `event` keeps every bus event
+that belongs to a session (deltas, wire requests and SSE events included), in
+order, so the inspector can show any past session down to the raw wire traffic.
+Rows are deleted with their session. Messages are append-only rows in session
+order.
 """
 from __future__ import annotations
 
@@ -64,6 +67,11 @@ create table if not exists event (
   data text not null
 );
 create index if not exists event_session on event(session_id, id);
+create table if not exists session_snapshot (
+  session_id text primary key references session(id) on delete cascade,
+  data text not null,
+  created real not null
+);
 create table if not exists message (
   id text primary key,
   session_id text not null references session(id) on delete cascade,
@@ -181,7 +189,8 @@ class Store:
 
     def create_session(self, project: Project, *, title: str, agent: str, model: str = "", permission: str = "ask",
                        effort: str | None = None, parent: Session | None = None, parent_call_id: str | None = None,
-                       launched_by: str = "user", disabled_tools: list[str] | None = None) -> Session:
+                       launched_by: str = "user", disabled_tools: list[str] | None = None,
+                       snapshot: dict[str, Any] | None = None) -> Session:
         now = time.time()
         directory = parent.directory if parent else project.path
         disabled = json.dumps(sorted(set(disabled_tools or [])))
@@ -194,8 +203,23 @@ class Store:
                 (session.id, session.project_id, directory, session.title, model, permission, now, now, effort, agent,
                  session.parent_id, parent_call_id, launched_by, disabled),
             )
+            if snapshot is not None:
+                self.db.execute("insert into session_snapshot (session_id, data, created) values (?, ?, ?)",
+                                (session.id, json.dumps(snapshot), now))
             self.db.execute("update project set updated = ? where id = ?", (now, project.id))
         return session
+
+    def snapshot(self, session_id: str) -> dict[str, Any] | None:
+        row = self.db.execute("select data from session_snapshot where session_id = ?", (session_id,)).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def set_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
+        with self.db:
+            self.db.execute(
+                "insert into session_snapshot (session_id, data, created) values (?, ?, ?)"
+                " on conflict(session_id) do update set data = excluded.data",
+                (session_id, json.dumps(snapshot), time.time()),
+            )
 
     def sessions(self, project_id: str | None = None) -> list[Session]:
         if project_id:
