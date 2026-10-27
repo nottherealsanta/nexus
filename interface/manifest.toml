@@ -1,0 +1,1605 @@
+# Nexus interface manifest. Single source of truth for the TUI and NSH.
+# Schema, `when` vocabulary and keymap rules: interface/README.md.
+# Validate: python3 interface/check_manifest.py
+# Ids are stable. Renaming or removing one needs a PLAN.md ledger note.
+
+manifest_version = 1
+spec = "INTERFACE_PLAN.md"
+
+# --- Vocabulary -------------------------------------------------------------
+# `when` terms must come from `terms`. A leading "!" negates a term.
+# A command's `when` is a list; all terms must hold (AND).
+
+[vocabulary]
+terms = [
+  "always",
+  # workspace
+  "has_project", "has_session", "has_turns",
+  # session state (the session shown in the centre column)
+  "session.idle", "session.busy", "session.interrupted",
+  "session.archived", "session.child", "session.in_worktree",
+  # waiting for user input
+  "has_waiting", "waiting.approval", "waiting.question", "waiting.multiple",
+  # composer and queue
+  "composer.has_text", "composer.empty", "has_queued",
+  # timeline and focus
+  "timeline.scrolled_up", "timeline.has_older", "tool.output_clipped_in_ui",
+  "focus.turn", "focus.tool", "focus.user_message", "focus.assistant_block",
+  "focus.code_block", "focus.file", "focus.project", "focus.session_row",
+  "focus.child_card", "focus.git_file",
+  # views and overlays
+  "view.editor", "editor.dirty", "overlay.open", "dialog.open", "alert.open",
+  "drawer.open", "layout.narrow",
+  # connection and accounts
+  "connection.lost", "connection.no_daemon", "provider.signed_in",
+  "has_notifications", "text_edit.active", "view.settings",
+]
+placements = [
+  "palette", "row_menu", "header", "composer", "sidebar", "timeline",
+  "tool_line", "card", "toast", "banner", "dialog", "drawer", "editor",
+  "settings", "menu",
+]
+# `status`: absent = Core API ready. blocked_core = needs a Core increment
+# (PLAN.md Steps 11/11a/12a); deferred = deliberately not built yet.
+statuses = ["blocked_core", "deferred"]
+categories = [
+  "app", "auth", "appearance", "connection", "notifications", "navigation",
+  "session", "sessions", "project", "composer", "model", "agent", "tools",
+  "timeline", "tool", "waiting", "copy", "files", "editor", "git", "inspect",
+  "dictation",
+]
+
+# --- Keymap ------------------------------------------------------------------
+# Key syntax: lower-case, "+"-joined modifiers in the order cmd, ctrl, alt,
+# shift, then the key ("ctrl+p", "cmd+alt+b", "esc", "enter", "space").
+# `cmd` exists only in `keys.nsh` (macOS). NSH on other platforms maps cmd to
+# ctrl at runtime. Each command's `key_context` scopes conflicts: two commands
+# may share a key in different contexts, never within one (per client).
+# Context "escape_chain" is special: Esc is resolved by [keymap.escape] below,
+# not by per-command lookup.
+
+[keymap]
+contexts = [
+  "global", "composer", "composer_busy", "timeline", "turn", "tool", "card",
+  "waiting", "sidebar", "sidebar.sessions", "sidebar.files",
+  "sidebar.projects", "sidebar.git", "editor", "drawer", "dialog",
+  "escape_chain",
+]
+
+# Esc is evaluated top to bottom; the first rule whose `when` holds consumes the
+# key and the walk stops. Text editing always wins over interrupt, and
+# interrupt wins over back navigation, so a stray Esc in a child session
+# while the agent works stops the turn before it leaves the page.
+[[keymap.escape]]
+id = "overlay"
+when = ["overlay.open"]
+action = "overlay.close"
+note = "Palette, context menu, completion popup, tooltip: close it. Topmost first."
+
+[[keymap.escape]]
+id = "dialog"
+when = ["dialog.open"]
+action = "alert.cancel"
+note = "Confirm/blocking dialogs cancel (a blocking version-mismatch dialog is not dismissable)."
+
+[[keymap.escape]]
+id = "text_edit"
+when = ["text_edit.active"]
+action = "text_edit.cancel"
+note = "Inline rename, settings field, find bar, key capture: cancel the edit and keep focus. Composer text is NOT cleared by Esc."
+
+[[keymap.escape]]
+id = "drawer"
+when = ["layout.narrow", "drawer.open"]
+action = "nav.drawer.close"
+note = "Narrow layout drawer closes; focus returns to what opened it."
+
+[[keymap.escape]]
+id = "alert"
+when = ["alert.open"]
+action = "alert.dismiss"
+note = "Toast or banner with focus dismisses (it stays in the notifications drawer)."
+
+[[keymap.escape]]
+id = "interrupt"
+when = ["session.busy"]
+action = "session.interrupt"
+note = "Interrupt the viewed session. Never also navigates back on the same press."
+
+[[keymap.escape]]
+id = "editor"
+when = ["view.editor"]
+action = "editor.close"
+note = "Close the built-in editor (asks if dirty); returns to the previous centre view."
+
+[[keymap.escape]]
+id = "back"
+when = ["session.child"]
+action = "nav.back"
+note = "Child session returns to its parent at the card position. Backspace does the same when no text field has focus."
+
+[[keymap.escape]]
+id = "settings"
+when = ["view.settings"]
+action = "app.settings"
+note = "Settings view closes back to the previous centre view (app.settings toggles)."
+
+[[keymap.escape]]
+id = "refocus"
+when = ["always"]
+action = "composer.focus"
+note = "Last resort: move focus to the composer. Never destructive."
+
+# --- Navigation / screen map ----------------------------------------------------
+
+[navigation.header]
+leading = "sidebar.left.toggle"
+centre = "title_breadcrumbs"
+trailing = "sidebar.right.toggle"
+note = "Toggles stay available when their sidebar is closed. Same anchors in terminal, browser and desktop, allowing for native window chrome."
+title_click = "session.rename"
+breadcrumbs = "root title > child title; each crumb is a link; back via nav.back"
+extra = ["notifications.open"]
+
+[navigation.left_sidebar]
+default_tab = "sessions"
+remember_tab_and_focus = true
+settings_entry = "app.settings"
+settings_position = "bottom_fixed"
+
+[[navigation.left_sidebar.tab]]
+id = "sessions"
+label = "Sessions"
+command = "sidebar.tab.sessions"
+order = 1
+[[navigation.left_sidebar.tab]]
+id = "files"
+label = "Files"
+command = "sidebar.tab.files"
+order = 2
+[[navigation.left_sidebar.tab]]
+id = "projects"
+label = "Projects"
+command = "sidebar.tab.projects"
+order = 3
+
+[navigation.right_sidebar]
+remember_focus = true
+[[navigation.right_sidebar.section]]
+id = "session_info"
+label = "Session info"
+order = 1
+[[navigation.right_sidebar.section]]
+id = "git_status"
+label = "Git status"
+order = 2
+unavailable_reason = "Git status needs the files/git endpoints in Core (PLAN.md Step 12a)."
+
+[navigation.centre]
+# Exactly one centre view at a time.
+views = ["session", "new_session", "editor", "settings"]
+default = "session"
+empty_project_view = "new_session"
+first_run_view = "welcome_sign_in"
+[navigation.centre.view_note]
+session = "Timeline plus composer; a child session uses the same view with breadcrumbs and back."
+new_session = "Starting context (agent, model, effort, directory, system prompt, AGENTS.md, tools, skills, MCP, token count) with the composer below."
+editor = "Built-in editor for a project file; closing returns to the previous view."
+settings = "Opened from app.settings (palette or fixed sidebar entry)."
+
+[navigation.waiting_card]
+position = "above_composer"
+applies_to = ["session"]
+note = "Approvals and questions are one component. Shows a count and cycles when several wait; waits inside children bubble up labelled with the child."
+
+[navigation.narrow]
+# Narrow = phone or small terminal; breakpoint is a client decision.
+panes_at_once = 1
+left_sidebar = "drawer"
+right_sidebar = "drawer"
+anchors_kept = true
+notes = "Drawers open from the same header toggles; Esc or toggle closes; focus restores to the opener."
+
+[navigation.notifications]
+surface = "drawer"
+command = "notifications.open"
+order = "newest_first"
+shows_unread_count = true
+
+# --- Settings -----------------------------------------------------------------
+# Section order is fixed (INTERFACE_PLAN.md): Appearance, Providers, Models,
+# Agents, Tools, Skills, MCP, Context, Dictation, Keybindings, Notifications,
+# About. Rows keep their relative order in both clients; client-only rows are
+# labelled by `clients` and sit inside the matching section.
+# scope: core = read/written through the Core API; client = per-client view setting.
+# kinds: choice, toggle, number, text, list, action, info, keymap.
+# A row or section with unavailable_reason is shown disabled with that reason.
+
+[[settings.section]]
+id = "appearance"
+label = "Appearance"
+
+[[settings.section.row]]
+id = "appearance.theme"
+label = "Theme"
+kind = "choice"
+scope = "client"
+clients = "both"
+default = "system"
+options = ["system", "light", "dark", "named"]
+command = "app.theme"
+
+[[settings.section.row]]
+id = "appearance.named_theme"
+label = "Named theme"
+kind = "choice"
+scope = "client"
+clients = "both"
+unavailable_reason = "Shared theme tokens arrive with Step 12.2."
+note = "Named themes come from one shared token file (PLAN.md Step 12.2)."
+
+[[settings.section.row]]
+id = "appearance.density"
+label = "Density"
+kind = "choice"
+scope = "client"
+clients = "both"
+default = "comfortable"
+options = ["compact", "comfortable"]
+
+[[settings.section.row]]
+id = "appearance.font_family"
+label = "Font"
+kind = "choice"
+scope = "client"
+clients = "nsh"
+default = "system"
+note = "NSH only; the TUI uses the terminal font."
+
+[[settings.section.row]]
+id = "appearance.font_size"
+label = "Font size"
+kind = "number"
+scope = "client"
+clients = "nsh"
+default = 14
+
+[[settings.section.row]]
+id = "appearance.monochrome"
+label = "Monochrome mode"
+kind = "toggle"
+scope = "client"
+clients = "tui"
+default = false
+note = "Meaning is preserved without colour."
+
+[[settings.section]]
+id = "providers"
+label = "Providers"
+
+[[settings.section.row]]
+id = "providers.list"
+label = "Providers"
+kind = "list"
+scope = "core"
+clients = "both"
+note = "Status, account and expiry per provider."
+
+[[settings.section.row]]
+id = "providers.sign_in"
+label = "Sign in"
+kind = "action"
+scope = "core"
+clients = "both"
+command = "app.sign_in"
+unavailable_reason = "Sign-in over the API is not in Core yet; use `nexus login` locally."
+
+[[settings.section.row]]
+id = "providers.sign_out"
+label = "Sign out"
+kind = "action"
+scope = "core"
+clients = "both"
+command = "app.sign_out"
+unavailable_reason = "Sign-out over the API is not in Core yet."
+
+[[settings.section.row]]
+id = "providers.default_model"
+label = "Provider default model"
+kind = "choice"
+scope = "core"
+clients = "both"
+
+[[settings.section.row]]
+id = "providers.add_custom"
+label = "Add OpenAI-compatible provider"
+kind = "action"
+scope = "core"
+clients = "both"
+unavailable_reason = "Core does not support custom providers yet."
+
+[[settings.section]]
+id = "models"
+label = "Models"
+
+[[settings.section.row]]
+id = "models.default"
+label = "Default model"
+kind = "choice"
+scope = "core"
+clients = "both"
+command = "model.change"
+
+[[settings.section.row]]
+id = "models.default_effort"
+label = "Default effort"
+kind = "choice"
+scope = "core"
+clients = "both"
+command = "model.effort"
+
+[[settings.section.row]]
+id = "models.catalog"
+label = "Model catalog"
+kind = "list"
+scope = "core"
+clients = "both"
+
+[[settings.section.row]]
+id = "models.refresh"
+label = "Refresh catalog"
+kind = "action"
+scope = "core"
+clients = "both"
+
+[[settings.section]]
+id = "agents"
+label = "Agents"
+
+[[settings.section.row]]
+id = "agents.list"
+label = "Loaded agents"
+kind = "list"
+scope = "core"
+clients = "both"
+note = "Name, mode and source (built-in, global, project)."
+
+[[settings.section.row]]
+id = "agents.default_root"
+label = "Default root agent"
+kind = "choice"
+scope = "core"
+clients = "both"
+
+[[settings.section.row]]
+id = "agents.open_file"
+label = "Open agent file in editor"
+kind = "action"
+scope = "core"
+clients = "both"
+
+[[settings.section]]
+id = "tools"
+label = "Tools"
+
+[[settings.section.row]]
+id = "tools.defaults"
+label = "Tools on by default for new sessions"
+kind = "list"
+scope = "core"
+clients = "both"
+command = "tools.configure"
+
+[[settings.section]]
+id = "skills"
+label = "Skills"
+unavailable_reason = "Skills arrive with PLAN.md Step 11a."
+
+[[settings.section.row]]
+id = "skills.list"
+label = "Discovered skills"
+kind = "list"
+scope = "core"
+clients = "both"
+unavailable_reason = "Skills are not in Core yet (Step 11a)."
+
+[[settings.section.row]]
+id = "skills.defaults"
+label = "Skills on by default for new sessions"
+kind = "list"
+scope = "core"
+clients = "both"
+unavailable_reason = "Skills are not in Core yet (Step 11a)."
+
+[[settings.section.row]]
+id = "skills.diagnostics"
+label = "Skill diagnostics"
+kind = "list"
+scope = "core"
+clients = "both"
+unavailable_reason = "Skills are not in Core yet (Step 11a)."
+
+[[settings.section]]
+id = "mcp"
+label = "MCP"
+unavailable_reason = "MCP arrives with PLAN.md Step 11a."
+
+[[settings.section.row]]
+id = "mcp.servers"
+label = "Servers"
+kind = "list"
+scope = "core"
+clients = "both"
+unavailable_reason = "MCP is not in Core yet (Step 11a)."
+
+[[settings.section.row]]
+id = "mcp.defaults"
+label = "Enabled by default"
+kind = "list"
+scope = "core"
+clients = "both"
+unavailable_reason = "MCP is not in Core yet (Step 11a)."
+
+[[settings.section.row]]
+id = "mcp.connection"
+label = "Connect, disconnect, retry"
+kind = "action"
+scope = "core"
+clients = "both"
+unavailable_reason = "MCP is not in Core yet (Step 11a)."
+
+[[settings.section.row]]
+id = "mcp.browser_use"
+label = "Browser-use setup"
+kind = "info"
+scope = "core"
+clients = "both"
+unavailable_reason = "MCP is not in Core yet (Step 11a)."
+
+[[settings.section]]
+id = "context"
+label = "Context"
+
+[[settings.section.row]]
+id = "context.handoff_percent"
+label = "Automatic handoff threshold (%)"
+kind = "number"
+scope = "core"
+clients = "both"
+default = 80
+unavailable_reason = "Handoff is not in Core yet (Step 12a)."
+
+[[settings.section]]
+id = "dictation"
+label = "Dictation"
+unavailable_reason = "Dictation engine is undecided (INTERFACE_PLAN.md open questions)."
+
+[[settings.section.row]]
+id = "dictation.engine"
+label = "Engine"
+kind = "choice"
+scope = "client"
+clients = "both"
+unavailable_reason = "Dictation engine is undecided."
+
+[[settings.section.row]]
+id = "dictation.language"
+label = "Language"
+kind = "choice"
+scope = "client"
+clients = "both"
+unavailable_reason = "Dictation engine is undecided."
+
+[[settings.section.row]]
+id = "dictation.push_to_talk"
+label = "Push-to-talk key"
+kind = "keymap"
+scope = "client"
+clients = "tui"
+command = "composer.dictate"
+unavailable_reason = "Dictation engine is undecided."
+
+[[settings.section]]
+id = "keybindings"
+label = "Keybindings"
+
+[[settings.section.row]]
+id = "keybindings.list"
+label = "Command keys"
+kind = "keymap"
+scope = "client"
+clients = "both"
+note = "Every command in the manifest with an editable key; conflicts are refused per key_context."
+
+[[settings.section.row]]
+id = "keybindings.reset"
+label = "Reset to defaults"
+kind = "action"
+scope = "client"
+clients = "both"
+
+[[settings.section]]
+id = "notifications"
+label = "Notifications"
+
+[[settings.section.row]]
+id = "notifications.waiting"
+label = "Notify when waiting for input"
+kind = "toggle"
+scope = "client"
+clients = "both"
+default = true
+
+[[settings.section.row]]
+id = "notifications.turn_done"
+label = "Notify when a turn finishes out of view"
+kind = "toggle"
+scope = "client"
+clients = "both"
+default = true
+
+[[settings.section.row]]
+id = "notifications.error"
+label = "Notify on error"
+kind = "toggle"
+scope = "client"
+clients = "both"
+default = true
+
+[[settings.section.row]]
+id = "notifications.sound"
+label = "Completion sound"
+kind = "toggle"
+scope = "client"
+clients = "both"
+default = false
+
+[[settings.section.row]]
+id = "notifications.os"
+label = "OS notifications"
+kind = "toggle"
+scope = "client"
+clients = "both"
+default = true
+note = "Terminal bell or OSC 9/777 in the TUI."
+
+[[settings.section]]
+id = "about"
+label = "About"
+
+[[settings.section.row]]
+id = "about.versions"
+label = "Client, Core and API versions"
+kind = "info"
+scope = "client"
+clients = "both"
+
+[[settings.section.row]]
+id = "about.daemon"
+label = "Daemon pid and home directory"
+kind = "info"
+scope = "core"
+clients = "both"
+
+[[settings.section.row]]
+id = "about.inspector"
+label = "Open inspector"
+kind = "action"
+scope = "client"
+clients = "both"
+command = "app.open_inspector"
+
+# --- Commands -----------------------------------------------------------------
+
+[[command]]
+id = "palette.open"
+title = "Command palette"
+category = "app"
+keys = { tui = "ctrl+p", nsh = "cmd+p" }
+key_context = "global"
+when = ["always"]
+placement = ["header", "menu"]
+
+[[command]]
+id = "app.help_keys"
+title = "Show keyboard shortcuts"
+category = "app"
+slash = "help"
+keys = { tui = "f1", nsh = "cmd+/" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "menu"]
+
+[[command]]
+id = "app.quit"
+title = "Quit"
+category = "app"
+keys = { tui = "ctrl+q", nsh = "cmd+q" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "menu"]
+note = "Quit closes the client only; the daemon keeps running."
+
+[[command]]
+id = "app.sign_in"
+title = "Sign in to a provider"
+category = "auth"
+slash = "login"
+when = ["always"]
+placement = ["palette", "settings", "banner"]
+status = "blocked_core"
+note = "Browser or device-code flow shown in the UI. Needs login-over-API in Core (docs/api.md 'Not yet')."
+
+[[command]]
+id = "app.sign_out"
+title = "Sign out of a provider"
+category = "auth"
+when = ["provider.signed_in"]
+unavailable_reason = "No provider is signed in."
+placement = ["palette", "settings"]
+status = "blocked_core"
+
+[[command]]
+id = "app.open_inspector"
+title = "Open inspector"
+category = "inspect"
+when = ["always"]
+placement = ["palette", "sidebar", "menu"]
+note = "Opens the inspector page for the current session, or the index with no session."
+
+[[command]]
+id = "app.theme"
+title = "Change theme"
+category = "appearance"
+slash = "theme"
+when = ["always"]
+placement = ["palette", "settings"]
+
+[[command]]
+id = "app.settings"
+title = "Open settings"
+category = "navigation"
+slash = "settings"
+keys = { tui = "ctrl+,", nsh = "cmd+," }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "sidebar", "menu"]
+
+[[command]]
+id = "app.reconnect"
+title = "Reconnect to Core"
+category = "connection"
+when = ["connection.lost"]
+unavailable_reason = "Core is connected."
+placement = ["palette", "banner"]
+
+[[command]]
+id = "app.start_daemon"
+title = "Start Nexus Core"
+category = "connection"
+when = ["connection.no_daemon"]
+unavailable_reason = "A Core daemon is already running."
+placement = ["palette", "banner"]
+
+[[command]]
+id = "notifications.open"
+title = "Notifications"
+category = "notifications"
+slash = "notifications"
+keys = { tui = "ctrl+n", nsh = "cmd+shift+n" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "header"]
+
+[[command]]
+id = "notifications.mark_all_read"
+title = "Mark all notifications read"
+category = "notifications"
+when = ["has_notifications"]
+unavailable_reason = "There are no notifications."
+placement = ["palette", "drawer"]
+
+[[command]]
+id = "alert.dismiss"
+title = "Dismiss alert"
+category = "notifications"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["alert.open"]
+unavailable_reason = "No alert is open."
+placement = ["toast", "banner"]
+
+[[command]]
+id = "alert.confirm"
+title = "Confirm"
+category = "notifications"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "dialog"
+when = ["dialog.open"]
+unavailable_reason = "No confirmation is open."
+placement = ["dialog"]
+
+[[command]]
+id = "alert.cancel"
+title = "Cancel"
+category = "notifications"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["dialog.open"]
+unavailable_reason = "No dialog is open."
+placement = ["dialog"]
+
+[[command]]
+id = "sidebar.left.toggle"
+title = "Toggle left sidebar"
+category = "navigation"
+keys = { tui = "ctrl+b", nsh = "cmd+b" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "header", "menu"]
+note = "Leading edge of the workspace header; stays visible when the sidebar is closed."
+
+[[command]]
+id = "sidebar.right.toggle"
+title = "Toggle right sidebar"
+category = "navigation"
+keys = { tui = "alt+b", nsh = "cmd+alt+b" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "header", "menu"]
+note = "Trailing edge of the workspace header; stays visible when the sidebar is closed."
+
+[[command]]
+id = "sidebar.tab.sessions"
+title = "Sidebar: Sessions"
+category = "navigation"
+keys = { tui = "alt+1", nsh = "cmd+1" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "sidebar.tab.files"
+title = "Sidebar: Files"
+category = "navigation"
+keys = { tui = "alt+2", nsh = "cmd+2" }
+key_context = "global"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "sidebar.tab.projects"
+title = "Sidebar: Projects"
+category = "navigation"
+keys = { tui = "alt+3", nsh = "cmd+3" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "sidebar.focus"
+title = "Focus sidebar"
+category = "navigation"
+keys = { tui = "alt+h", nsh = "cmd+0" }
+key_context = "global"
+when = ["always"]
+placement = ["palette"]
+
+[[command]]
+id = "composer.focus"
+title = "Focus composer"
+category = "navigation"
+keys = { tui = "alt+l", nsh = "cmd+l" }
+key_context = "global"
+when = ["always"]
+placement = ["palette"]
+
+[[command]]
+id = "timeline.focus"
+title = "Focus timeline"
+category = "navigation"
+keys = { tui = "alt+k", nsh = "cmd+j" }
+key_context = "global"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette"]
+
+[[command]]
+id = "nav.back"
+title = "Back to parent session"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["session.child"]
+unavailable_reason = "Not viewing a child session."
+placement = ["header", "palette"]
+note = "Backspace also goes back when no text field has focus. Returns to the parent at the child card's position."
+
+[[command]]
+id = "nav.drawer.close"
+title = "Close drawer"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["layout.narrow", "drawer.open"]
+unavailable_reason = "No drawer is open."
+placement = ["drawer"]
+
+[[command]]
+id = "overlay.close"
+title = "Close menu, palette or popup"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["overlay.open"]
+unavailable_reason = "Nothing to close."
+placement = ["palette", "menu"]
+
+[[command]]
+id = "session.new"
+title = "New session"
+category = "session"
+slash = "new"
+keys = { tui = "ctrl+t", nsh = "cmd+n" }
+key_context = "global"
+when = ["has_project"]
+unavailable_reason = "Add or choose a project first."
+placement = ["palette", "sidebar", "menu"]
+
+[[command]]
+id = "session.open"
+title = "Open session"
+category = "session"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "sidebar.sessions"
+when = ["focus.session_row"]
+unavailable_reason = "Focus a session row first."
+placement = ["sidebar"]
+
+[[command]]
+id = "session.switch"
+title = "Switch session"
+category = "session"
+keys = { tui = "ctrl+k", nsh = "cmd+k" }
+key_context = "global"
+when = ["has_project"]
+unavailable_reason = "Add or choose a project first."
+placement = ["palette"]
+
+[[command]]
+id = "project.switch"
+title = "Switch project"
+category = "project"
+slash = "project"
+keys = { tui = "alt+p", nsh = "cmd+shift+k" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "session.search"
+title = "Search sessions"
+category = "session"
+slash = "search"
+keys = { tui = "ctrl+f", nsh = "cmd+shift+f" }
+key_context = "sidebar.sessions"
+when = ["always"]
+placement = ["palette", "sidebar"]
+note = "Matches titles and user messages only (Core index)."
+
+[[command]]
+id = "session.rename"
+title = "Rename session"
+category = "session"
+slash = "rename"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "row_menu", "header"]
+note = "Also by clicking the title in the header."
+
+[[command]]
+id = "session.archive"
+title = "Archive session"
+category = "session"
+when = ["has_session", "!session.archived", "!session.busy"]
+unavailable_reason = "Archiving needs an idle or interrupted session that is not already archived (a busy descendant also blocks it)."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "session.unarchive"
+title = "Unarchive session"
+category = "session"
+when = ["has_session", "session.archived"]
+unavailable_reason = "This session is not archived."
+placement = ["palette", "row_menu"]
+
+[[command]]
+id = "session.delete"
+title = "Delete session"
+category = "session"
+when = ["has_session", "!session.busy"]
+unavailable_reason = "Interrupt the session before deleting it."
+placement = ["palette", "row_menu"]
+note = "Confirm; names the number of child sessions removed. No undo."
+
+[[command]]
+id = "session.export"
+title = "Export session"
+category = "session"
+slash = "export"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "row_menu"]
+note = "Dialog: Markdown transcript or JSON (messages and events)."
+
+[[command]]
+id = "session.handoff"
+title = "Hand off to a new session"
+category = "session"
+slash = "compact"
+slash_aliases = ["handoff"]
+when = ["has_session", "session.idle"]
+unavailable_reason = "Hand-off needs an idle session."
+placement = ["palette", "header"]
+status = "blocked_core"
+note = "Compaction is a handoff to a new root session of the same agent (PLAN.md Step 12a)."
+
+[[command]]
+id = "session.change_directory"
+title = "Change session directory"
+category = "session"
+slash = "cd"
+when = ["has_session", "session.idle"]
+unavailable_reason = "Directory changes apply after active tools finish; wait for the turn."
+placement = ["palette"]
+
+[[command]]
+id = "session.worktrees"
+title = "Worktrees"
+category = "session"
+slash = "worktree"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette"]
+
+[[command]]
+id = "session.worktree.integrate"
+title = "Integrate or merge a worktree"
+category = "session"
+when = ["session.in_worktree"]
+unavailable_reason = "Integrate/merge is deferred; leaving a worktree is TBD."
+placement = ["palette"]
+status = "deferred"
+
+[[command]]
+id = "session.interrupt"
+title = "Interrupt"
+category = "session"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["session.busy"]
+unavailable_reason = "Nothing is running."
+placement = ["palette", "composer"]
+note = "Esc (see keymap.escape) or the stop button."
+
+[[command]]
+id = "session.continue"
+title = "Continue"
+category = "session"
+slash = "continue"
+when = ["session.interrupted"]
+unavailable_reason = "Continue is offered after an interrupted or failed turn; not while a turn is running."
+placement = ["palette", "composer", "timeline"]
+
+[[command]]
+id = "session.send"
+title = "Send message"
+category = "composer"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "composer"
+when = ["composer.has_text", "session.idle"]
+unavailable_reason = "Type a message first."
+placement = ["composer"]
+
+[[command]]
+id = "session.steer"
+title = "Send as steering message"
+category = "composer"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "composer_busy"
+when = ["composer.has_text", "session.busy"]
+unavailable_reason = "Steering needs a running turn."
+placement = ["composer"]
+status = "blocked_core"
+note = "Default while busy. Core: steer endpoint (Step 12a)."
+
+[[command]]
+id = "session.queue"
+title = "Queue message for next turn"
+category = "composer"
+keys = { tui = "alt+enter", nsh = "alt+enter" }
+key_context = "composer_busy"
+when = ["composer.has_text", "session.busy"]
+unavailable_reason = "Queueing needs a running turn."
+placement = ["composer"]
+status = "blocked_core"
+note = "Open question: final steer/queue keys."
+
+[[command]]
+id = "composer.newline"
+title = "Insert newline"
+category = "composer"
+keys = { tui = "shift+enter", nsh = "shift+enter" }
+key_context = "composer"
+when = ["always"]
+placement = ["composer"]
+note = "TUI falls back to ctrl+j where the terminal cannot report shift+enter."
+
+[[command]]
+id = "queue.edit"
+title = "Edit queued message"
+category = "composer"
+when = ["has_queued"]
+unavailable_reason = "No queued messages."
+placement = ["composer"]
+status = "blocked_core"
+
+[[command]]
+id = "queue.remove"
+title = "Remove queued message"
+category = "composer"
+when = ["has_queued"]
+unavailable_reason = "No queued messages."
+placement = ["composer"]
+status = "blocked_core"
+
+[[command]]
+id = "session.btw"
+title = "Ask a side question"
+category = "session"
+slash = "btw"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "composer"]
+status = "blocked_core"
+note = "Answer appears in an overlay tied to the parent, not in its timeline."
+
+[[command]]
+id = "session.jump_latest"
+title = "Jump to latest"
+category = "timeline"
+keys = { tui = "end", nsh = "cmd+down" }
+key_context = "timeline"
+when = ["has_session", "timeline.scrolled_up"]
+unavailable_reason = "Already following the latest item."
+placement = ["timeline", "palette"]
+
+[[command]]
+id = "session.open_inspector"
+title = "Open session in inspector"
+category = "inspect"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "row_menu", "header"]
+
+[[command]]
+id = "session.wire_toggle"
+title = "Toggle wire view"
+category = "inspect"
+slash = "wire"
+keys = { tui = "ctrl+w", nsh = "cmd+shift+w" }
+key_context = "global"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette"]
+
+[[command]]
+id = "session.copy_id"
+title = "Copy session id"
+category = "copy"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "row_menu", "sidebar"]
+
+[[command]]
+id = "session.child.open"
+title = "Open child session"
+category = "session"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "card"
+when = ["focus.child_card"]
+unavailable_reason = "Focus a child card first."
+placement = ["card"]
+
+[[command]]
+id = "model.change"
+title = "Change model"
+category = "model"
+slash = "model"
+keys = { tui = "ctrl+m", nsh = "cmd+shift+m" }
+key_context = "global"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "composer"]
+note = "Warns about cache invalidation first. Applies from the next model call."
+
+[[command]]
+id = "model.effort"
+title = "Change effort"
+category = "model"
+slash = "effort"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "composer"]
+
+[[command]]
+id = "agent.change"
+title = "Change agent"
+category = "agent"
+slash = "agent"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "composer"]
+note = "Warns: the system prompt changes."
+
+[[command]]
+id = "tools.configure"
+title = "Tools"
+category = "tools"
+slash = "tools"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "skills.configure"
+title = "Skills"
+category = "tools"
+slash = "skills"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette"]
+status = "blocked_core"
+
+[[command]]
+id = "mcp.configure"
+title = "MCP servers"
+category = "tools"
+slash = "mcp"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["palette"]
+status = "blocked_core"
+
+[[command]]
+id = "turn.fold_toggle"
+title = "Fold or unfold turn"
+category = "timeline"
+keys = { tui = "space", nsh = "space" }
+key_context = "turn"
+when = ["has_turns", "focus.turn"]
+unavailable_reason = "Focus a turn first."
+placement = ["timeline", "palette"]
+
+[[command]]
+id = "turn.fold_all_but_last"
+title = "Fold all turns but the last"
+category = "timeline"
+keys = { tui = "alt+z", nsh = "cmd+alt+z" }
+key_context = "global"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette"]
+
+[[command]]
+id = "turn.unfold_all"
+title = "Unfold all turns"
+category = "timeline"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette"]
+
+[[command]]
+id = "turn.go_to"
+title = "Go to turn"
+category = "timeline"
+slash = "turn"
+keys = { tui = "ctrl+g", nsh = "cmd+g" }
+key_context = "global"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette"]
+note = "Fetches the turn if it is not loaded."
+
+[[command]]
+id = "turn.prev"
+title = "Previous turn"
+category = "timeline"
+keys = { tui = "[", nsh = "cmd+[" }
+key_context = "timeline"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette"]
+
+[[command]]
+id = "turn.next"
+title = "Next turn"
+category = "timeline"
+keys = { tui = "]", nsh = "cmd+]" }
+key_context = "timeline"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette"]
+
+[[command]]
+id = "turn.load_older"
+title = "Load older turns"
+category = "timeline"
+when = ["timeline.has_older"]
+unavailable_reason = "All turns are loaded."
+placement = ["timeline"]
+
+[[command]]
+id = "tool.expand_toggle"
+title = "Expand or collapse tool"
+category = "tool"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "tool"
+when = ["focus.tool"]
+unavailable_reason = "Focus a tool line first."
+placement = ["tool_line"]
+
+[[command]]
+id = "tool.raw_toggle"
+title = "Show raw arguments and result"
+category = "tool"
+keys = { tui = "r", nsh = "r" }
+key_context = "tool"
+when = ["focus.tool"]
+unavailable_reason = "Focus a tool line first."
+placement = ["tool_line"]
+
+[[command]]
+id = "tool.show_all_output"
+title = "Show all output"
+category = "tool"
+when = ["focus.tool", "tool.output_clipped_in_ui"]
+unavailable_reason = "Output is not clipped in the UI."
+placement = ["tool_line"]
+
+[[command]]
+id = "tool.open_inspector"
+title = "Open in inspector"
+category = "inspect"
+keys = { tui = "i", nsh = "i" }
+key_context = "tool"
+when = ["focus.tool"]
+unavailable_reason = "Focus a tool line first."
+placement = ["tool_line"]
+
+[[command]]
+id = "waiting.go_to"
+title = "Go to waiting session"
+category = "waiting"
+when = ["has_waiting"]
+unavailable_reason = "Nothing is waiting for input."
+placement = ["palette", "banner", "drawer"]
+
+[[command]]
+id = "copy.user_message"
+title = "Copy user message"
+category = "copy"
+when = ["focus.user_message"]
+unavailable_reason = "Focus a user message first."
+placement = ["palette", "timeline"]
+note = "Uses OSC 52 in the TUI, system clipboard in NSH."
+
+[[command]]
+id = "copy.final_message"
+title = "Copy final message of turn"
+category = "copy"
+keys = { tui = "y" }
+key_context = "timeline"
+when = ["has_turns"]
+unavailable_reason = "No turns yet."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "copy.assistant_block"
+title = "Copy assistant text"
+category = "copy"
+when = ["focus.assistant_block"]
+unavailable_reason = "Focus an assistant block first."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "copy.code_block"
+title = "Copy code block"
+category = "copy"
+when = ["focus.code_block"]
+unavailable_reason = "Focus a code block first."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "copy.tool_input"
+title = "Copy tool input"
+category = "copy"
+when = ["focus.tool"]
+unavailable_reason = "Focus a tool line first."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "copy.tool_output"
+title = "Copy tool output"
+category = "copy"
+when = ["focus.tool"]
+unavailable_reason = "Focus a tool line first."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "copy.file_path"
+title = "Copy file path"
+category = "copy"
+when = ["focus.file"]
+unavailable_reason = "Focus a file first."
+placement = ["palette", "timeline"]
+
+[[command]]
+id = "file.open_editor"
+title = "Open in built-in editor"
+category = "files"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "sidebar.files"
+when = ["focus.file"]
+unavailable_reason = "Focus a file first."
+placement = ["sidebar", "palette"]
+
+[[command]]
+id = "file.open_external"
+title = "Open in external editor"
+category = "files"
+when = ["focus.file"]
+unavailable_reason = "Focus a file first."
+placement = ["sidebar"]
+
+[[command]]
+id = "file.insert_mention"
+title = "Insert as @path in composer"
+category = "files"
+when = ["focus.file"]
+unavailable_reason = "Focus a file first."
+placement = ["sidebar"]
+
+[[command]]
+id = "files.toggle_ignored"
+title = "Show or hide ignored files"
+category = "files"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["sidebar"]
+
+[[command]]
+id = "sessions.scope_toggle"
+title = "Sessions: current project or all projects"
+category = "sessions"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["sidebar", "palette"]
+
+[[command]]
+id = "sessions.archived_filter"
+title = "Sessions: show archived"
+category = "sessions"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["sidebar", "palette"]
+
+[[command]]
+id = "project.add"
+title = "Add project"
+category = "project"
+when = ["always"]
+placement = ["palette", "sidebar"]
+
+[[command]]
+id = "project.remove"
+title = "Remove project"
+category = "project"
+when = ["has_project"]
+unavailable_reason = "No project to remove."
+placement = ["palette", "row_menu"]
+note = "Confirm; its sessions go with it."
+
+[[command]]
+id = "project.open"
+title = "Open project"
+category = "project"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "sidebar.projects"
+when = ["focus.project"]
+unavailable_reason = "Focus a project first."
+placement = ["sidebar"]
+
+[[command]]
+id = "editor.save"
+title = "Save file"
+category = "editor"
+keys = { tui = "ctrl+s", nsh = "cmd+s" }
+key_context = "editor"
+when = ["view.editor", "editor.dirty"]
+unavailable_reason = "No unsaved changes."
+placement = ["editor", "palette"]
+note = "Refused if the file changed on disk; reload first, unsaved text is preserved."
+
+[[command]]
+id = "editor.find"
+title = "Find in file"
+category = "editor"
+keys = { tui = "ctrl+f", nsh = "cmd+f" }
+key_context = "editor"
+when = ["view.editor"]
+unavailable_reason = "No file is open."
+placement = ["editor", "palette"]
+
+[[command]]
+id = "editor.reload"
+title = "Reload file from disk"
+category = "editor"
+when = ["view.editor"]
+unavailable_reason = "No file is open."
+placement = ["editor", "palette"]
+
+[[command]]
+id = "editor.close"
+title = "Close editor"
+category = "editor"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["view.editor"]
+unavailable_reason = "No file is open."
+placement = ["editor", "palette"]
+note = "Asks first if the file is dirty."
+
+[[command]]
+id = "git.open_diff"
+title = "Open diff"
+category = "git"
+keys = { tui = "enter", nsh = "enter" }
+key_context = "sidebar.git"
+when = ["focus.git_file"]
+unavailable_reason = "Focus a changed file first."
+placement = ["sidebar"]
+status = "blocked_core"
+
+[[command]]
+id = "composer.attach"
+title = "Attach file or image"
+category = "composer"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["composer", "palette"]
+status = "blocked_core"
+
+[[command]]
+id = "composer.mention"
+title = "Mention file (@path)"
+category = "composer"
+keys = { tui = "@", nsh = "@" }
+key_context = "composer"
+when = ["has_project"]
+unavailable_reason = "Open a project first."
+placement = ["composer"]
+
+[[command]]
+id = "composer.dictate"
+title = "Dictate (push to talk)"
+category = "dictation"
+keys = { tui = "ctrl+d", nsh = "cmd+shift+d" }
+key_context = "composer"
+when = ["always"]
+unavailable_reason = "Dictation engine is undecided; it never sends by itself."
+placement = ["composer", "palette"]
+status = "deferred"
+note = "Transcribes into the composer as editable text."
+
+[[command]]
+id = "composer.slash_menu"
+title = "Slash command completion"
+category = "composer"
+keys = { tui = "/", nsh = "/" }
+key_context = "composer"
+when = ["composer.empty"]
+unavailable_reason = "Slash completion opens at the start of an empty composer."
+placement = ["composer"]
+
+[[command]]
+id = "waiting.allow_once"
+title = "Allow once"
+category = "waiting"
+keys = { tui = "y", nsh = "enter" }
+key_context = "waiting"
+when = ["waiting.approval"]
+unavailable_reason = "No approval is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.allow_session"
+title = "Allow for this session"
+category = "waiting"
+keys = { tui = "a", nsh = "alt+enter" }
+key_context = "waiting"
+when = ["waiting.approval"]
+unavailable_reason = "No approval is waiting; or Core does not offer session grants for this tool."
+placement = ["card"]
+
+[[command]]
+id = "waiting.deny"
+title = "Deny"
+category = "waiting"
+keys = { tui = "n", nsh = "cmd+backspace" }
+key_context = "waiting"
+when = ["waiting.approval"]
+unavailable_reason = "No approval is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.deny_note"
+title = "Deny with a note"
+category = "waiting"
+keys = { tui = "d", nsh = "cmd+shift+backspace" }
+key_context = "waiting"
+when = ["waiting.approval"]
+unavailable_reason = "No approval is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.submit_answers"
+title = "Submit answers"
+category = "waiting"
+keys = { tui = "ctrl+enter", nsh = "cmd+enter" }
+key_context = "waiting"
+when = ["waiting.question"]
+unavailable_reason = "No question is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.next"
+title = "Next waiting item"
+category = "waiting"
+keys = { tui = "tab", nsh = "cmd+shift+]" }
+key_context = "waiting"
+when = ["waiting.multiple"]
+unavailable_reason = "Only one item is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.prev"
+title = "Previous waiting item"
+category = "waiting"
+keys = { tui = "shift+tab", nsh = "cmd+shift+[" }
+key_context = "waiting"
+when = ["waiting.multiple"]
+unavailable_reason = "Only one item is waiting."
+placement = ["card"]
+
+[[command]]
+id = "waiting.focus"
+title = "Focus waiting card"
+category = "waiting"
+keys = { tui = "alt+w", nsh = "cmd+alt+w" }
+key_context = "global"
+when = ["has_waiting"]
+unavailable_reason = "Nothing is waiting for input."
+placement = ["palette"]
+[[command]]
+id = "text_edit.cancel"
+title = "Cancel text edit"
+category = "navigation"
+keys = { tui = "esc", nsh = "esc" }
+key_context = "escape_chain"
+when = ["text_edit.active"]
+unavailable_reason = "No text field is being edited."
+placement = ["editor", "settings"]
+note = "Inline rename, find bar, settings field, key capture. Not the composer: Esc never clears composer text."
+

@@ -1,13 +1,67 @@
 # Nexus interface plan (TUI and NSH)
 
 One interface, two clients: the Ratatui TUI (`nexus-tui/`) and NSH
-(`nexus-nsh/`: browser, desktop, iOS). They are functionally the same. Both
-speak only the Core HTTP API (`docs/api.md`) and differ only where the medium
+(`nexus-nsh/`: browser, desktop, iOS). They share the same workflows and information architecture; NSH may show
+richer details within that structure. Both speak only the Core HTTP API (`docs/api.md`) and differ only where the medium
 forces it (mouse vs keys, pixels vs cells). This file is the spec for both.
 Core work it depends on is tracked in [PLAN.md](PLAN.md) (Step 12 and the
 steps before it).
 
-Status: planning. Nothing here is built.
+Status: in progress (2026-10-27). The shared interface data and design language
+are frozen below; both clients now implement the shell and the timeline. This
+file stays the normative spec, including parts not built yet.
+
+**Implemented**
+
+- **TUI** (`nexus-tui/`, PLAN.md 12.3 and most of 12.4): connection supervisor
+  (discovery, handshake, durable cursors, resnapshot, keyed mutations, conflicts),
+  workspace header, both sidebars and drawers, session list/projects, palette,
+  settings navigation, alerts/notifications, waiting card, composer, and the
+  timeline: starting context, turn headers/footers, folding, reasoning,
+  Markdown-lite, tool rows with diffs/output/raw, child cards, notices and
+  diagnostics. Selecting a session loads all messages, retained diagnostics and
+  the snapshot. Model/effort/agent pickers, export (Markdown/JSON, session/tree),
+  directory change, inspector links, copy actions and turn navigation are wired.
+- **NSH** (`nexus-nsh/`, PLAN.md 12.5 partial): the same shell, workspace and
+  session flows plus the timeline above (native Markdown and richer code blocks),
+  catalog pickers for model/effort/agent, export, built from the same
+  manifest/theme, against a real Core through its host proxy.
+- **Core**: `/api/info` now reports `api_version` (`{major, minor}`), so clients
+  stop at a major mismatch and no longer carry an "unreported" banner.
+
+**Not built yet** (clients list these disabled with a reason, never as a control
+that appears to work): Files/editor and Git (Core file endpoints), worktree UI,
+settings editing beyond theme, session search (Core index), steering/queueing,
+btw, handoff and one-turn sessions, attachments/transcription, skills/MCP,
+sign-in over the API, and the inspector wire view inline. Their Core
+dependencies are listed in `interface/capability-matrix.md` and PLAN.md Step
+12a.
+
+Shared data both clients build from lives in [`interface/`](interface/README.md):
+
+- `manifest.toml`: command ids, slash names, default keys, `when` rules,
+  unavailable reasons, Esc precedence, settings sections and rows, navigation
+  map. Checked by `python3 interface/check_manifest.py`.
+- `theme.toml`: semantic tokens, light/dark/ANSI/monochrome themes and glyphs.
+  Checked by `python3 interface/check_theme.py`.
+- `capability-matrix.md`: each feature here classed as API ready, Core work,
+  client only or deferred, with the Core blockers and unplanned gaps.
+- `reference-inventory.md`: what to retain, improve and omit from old Nexus's
+  TUI, with copy sources.
+
+Decisions taken while freezing the manifest (proposals until reviewed):
+
+- **Esc** runs the first matching rule, once: close overlay, close dialog,
+  leave inline text edit, close narrow drawer, dismiss focused toast/banner,
+  interrupt, close editor, back from child, back from settings, focus
+  composer. Esc never clears the composer. Backspace navigates back only when
+  no text field has focus.
+- **Availability:** `when` is a list of terms that must all hold (`!` negates).
+  Unavailable commands show disabled with their reason, never hidden. Commands
+  waiting on Core carry `status = "blocked_core"`; deferred ones `"deferred"`.
+- **Default keys:** palette Ctrl+P (TUI) / Cmd+P (NSH); new session Ctrl+T;
+  sidebars Ctrl+B / Alt+B; left tabs Alt+1–3; while busy Enter steers and
+  Alt+Enter queues; Shift+Enter inserts a newline.
 
 ## Principles
 
@@ -32,6 +86,525 @@ Status: planning. Nothing here is built.
    invalidate the cache anyway (switching model or agent) warn first.
 5. **Core decides, clients render.** State lives in Core. Clients hold only
    view state (open panels, scroll, drafts) and resync from Core at any time.
+
+## Design language and cross-client consistency
+
+The TUI takes its primary visual reference from `../nexus` and develops that
+familiar environment into a substantially more polished interface. Design is an
+early deliverable, with repeated real-app review; a colour change at the end is
+not sufficient. Implementation milestones and reference files are in
+[PLAN.md, Step 12](PLAN.md#step-12-clients).
+
+- Use quiet neutral canvas/panel surfaces, strong readable primary text,
+  subordinate metadata and restrained accent colour. Align status marks,
+  labels, token counts and key hints consistently. Give context, execution
+  diagnostics and temporary UI feedback distinct treatments.
+- Define semantic tokens for surfaces, text, borders, accent, focus, selection,
+  success/warning/error and diff additions/deletions. Share theme definitions
+  and hierarchy; map spacing and typography appropriately to cells and pixels.
+  Light, dark and monochrome terminal modes preserve meaning without colour.
+- Specify component states and anatomy once: headers, session rows, context
+  sections, turns, tool rows, child cards, composer, waiting cards, settings,
+  menus, dialogs and alerts. Build representative component galleries and review
+  real screen compositions before broad feature implementation.
+- Maintain a shared manifest for command IDs, labels, settings order, navigation
+  destinations and availability. The TUI, browser and desktop use the same
+  organization. Platform conventions may adapt key modifiers, native menus,
+  input, window chrome and touch behavior.
+- NSH may display additional metadata, thumbnails, split diffs and richer
+  previews inside existing sections/expansions. More available space does not
+  justify moving a common action or changing its name. Details fetched for
+  inspection are labelled separately from bytes actually sent to the model.
+- Settings always follow this order: Appearance, Providers, Models, Agents,
+  Tools, Skills, MCP, Context, Dictation, Keybindings, Notifications, About.
+  Shared rows retain their relative order; platform-only rows stay within the
+  matching section. Unsupported capabilities show their reason.
+- Use the [NSH design guide](https://nsh.dev/docs/design-guides/) and
+  [base components](https://nsh.dev/elements/) for the graphical implementation.
+  Preserve Nexus's interface map while using each platform's focus, text input,
+  selection and accessibility behavior.
+
+## Design language
+
+The data lives in [`interface/theme.toml`](interface/theme.toml): colour
+tokens for `dark` and `light`, timeline roles, 256-colour and ANSI-16
+fallbacks, the monochrome mapping and the glyph table. Both renderers read or
+generate from it; neither hard-codes a colour. `python3 interface/check_theme.py`
+verifies contrast (text 4.5:1, meaningful marks 3:1, in hex and in the 256
+fallback), completeness and glyph rules. This section is the prose around that
+file. It is the reference for the later component galleries.
+
+The look, in order of priority: a **quiet neutral canvas** with panels one
+small step apart, **strong primary text**, **subordinate metadata** (counts,
+paths, durations, key hints), and **one restrained accent** (warm amber-orange,
+carried from old Nexus). Everything else is neutral or a status colour. If a
+screen reads as coloured, it has too much colour.
+
+### Tokens
+
+| Token | Dark | Light | Use |
+| --- | --- | --- | --- |
+| `surface.canvas` | `#121314` | `#f7f7f5` | Timeline, editor, app background |
+| `surface.panel` | `#181a1c` | `#efefec` | Sidebars, composer, cards, notices |
+| `surface.raised` | `#212427` | `#ffffff` | Dialogs, menus, toasts, user message, hover |
+| `text.primary` | `#e6e7e8` | `#1f2124` | Titles, user and agent text, tool names |
+| `text.secondary` | `#a4a9ae` | `#4f555b` | Tool arguments, summaries, labels |
+| `text.muted` | `#868c93` | `#5c636a` | Metadata, counts, timestamps, key hints, reasoning |
+| `border.default` | `#2e3236` | `#d4d5d2` | Hairlines and dividers (decorative) |
+| `border.focus` | `#e8a46e` | `#a84e16` | Focus ring or bar |
+| `interactive.accent` | `#e8a46e` | `#a84e16` | Active tab, links, primary action, waiting |
+| `interactive.focus` | `#e8a46e` | `#a84e16` | Keyboard focus indicator |
+| `interactive.selection` | `#2c2824` | `#f0e3d8` | Selected row or range background |
+| `interactive.hover` | `#212427` | `#e9e9e6` | Pointer hover background |
+| `status.success / warning / error / info` | `#8fc46a #e0af68 #f27d8f #7aa7f0` | `#2f7a1f #8a5d00 #c0283f #2a5fc4` | Status marks and their text |
+| `diff.add`, `diff.del` (+ `_bg`) | `#8fc46a #f27d8f` on `#1c2a1a #2e1b20` | `#2f7a1f #c0283f` on `#e1f0dc #f8e1e4` | Diff lines |
+
+- **Surfaces step, they do not contrast.** Canvas, panel and raised differ by
+  a few percent of lightness. Structure comes from spacing and one-cell rails
+  first, hairlines second, background steps third. A surface is never the
+  only cue for state.
+- **Text has three weights of grey and no more.** Primary is for what the user
+  reads; secondary for what explains it; muted for what can be skipped. Muted
+  still meets 4.5:1 on every surface.
+- **Accent is rationed**: the active tab, the focus bar, links, the primary
+  action, the user-message rail and the waiting mark. It is not used for
+  decoration, titles or tool names.
+- **Status colours** only ever appear with a glyph and a word (see below).
+- **Selection vs focus.** Selection is a background (what is chosen); focus is
+  a bar or ring (where the keyboard is). A selected, focused row has both.
+- **Hairlines are decorative** and exempt from the 3:1 rule. Anything that
+  conveys state (focus, error borders) uses a token that meets it.
+
+### Timeline roles
+
+Roles let the user tell, at a glance, who said a thing and whether the model
+has it. Each has a rail colour, an optional label and a text style; they
+never rely on colour alone.
+
+| Role | Text | Surface | Rail (left edge) | Label / style |
+| --- | --- | --- | --- | --- |
+| User text | primary | raised | accent `▌` | none; own block |
+| Agent text | primary | canvas | none | none; flush text |
+| Reasoning | muted | canvas | hairline `│` | `Thought`, italic |
+| Context notice | secondary | panel | info `┃` | `context` |
+| Context insertion | secondary | panel | accent `┃` | `inserted` (steering, settings) |
+| Execution diagnostic | secondary | panel | warning `┃` | `diagnostic` (retries, hooks, provider errors) |
+| Tool row | secondary (name primary) | canvas | none | status glyph first |
+| Child card | primary | panel | info `┃`, boxed | `child` |
+
+Rules: only user text has a filled block; only notices, insertions and
+diagnostics have the heavy rail, and the label says which. Errors that end a
+turn use the `error` token with `✕` and the word "error" in the footer, not
+a new role. Anything shown that the model did not receive is not in the
+timeline (see [Timeline](#session-view-timeline)); inspection data is labelled
+`inspect` and drawn in the NSH side panel or a dialog.
+
+### Colour tiers and monochrome
+
+- **Truecolor** uses the hex values. **256-colour** uses the xterm indices in
+  `fallback256`, hand-picked to keep the same contrast. **ANSI-16** collapses
+  surfaces to the terminal's own background, so panels are told apart by rails,
+  borders and labels; `text.muted` uses bright black (with `dim` where
+  available).
+- **Monochrome** (`NO_COLOR`, `TERM=dumb`, or the Appearance setting) uses
+  only `bold`, `dim`, `reverse` and `underline`: muted text is dim; titles and
+  the accent are bold; selection is reverse; hover is underline; focus is
+  bold plus the focus bar; error is bold and underlined; diff lines are told
+  apart by their `+` and `-` prefix (additions bold, deletions dim). Roles
+  keep their rail glyph and label, so a context notice and a reasoning block
+  remain different without colour. No italics, no background fills.
+- The theme picked by the terminal's background query or the setting is
+  `dark` or `light`; named themes may override tokens but not the checks.
+
+### Status: colour, glyph and label
+
+Every status shows **all three**, never one. The glyph is the one in
+`theme.toml`; the label is the word, shown where there is room (rows with
+width, tooltips and accessible names always).
+
+| Status | Glyph | ASCII | Label | Colour token |
+| --- | --- | --- | --- | --- |
+| Running | `◐` (spinner while live) | `~` | running | `text.primary` |
+| Done | `✓` | `+` | done | `status.success` |
+| Error | `✕` | `x` | error | `status.error` |
+| Denied | `⊘` | `-` | denied | `status.error` |
+| Waiting | `◆` | `?` | waiting | `interactive.accent` |
+| Interrupted | `◼` | `!` | interrupted | `status.warning` |
+| Cancelled | `⊖` | `o` | cancelled | `text.muted` |
+
+- Running is primary, not a colour: live work looks active by motion. The
+  spinner honours reduced motion and falls back to the static `◐`.
+- Attention marks (session rows, projects, tab titles) rank **waiting `◆`**
+  over **error `✕`** over **unread `●`**; only the highest one shows, with a
+  count when several sessions share it.
+- Glyphs are single-cell, non-emoji. ASCII glyphs are used when the locale or
+  terminal cannot draw Unicode; the label is unchanged.
+- Fold markers: `▾` open, `▸` closed (ASCII `v`, `>`). Sidebar toggles: `◧`
+  and `◨` when the sidebar is open, `□` when closed (ASCII `[|`, `|]`, `[ `,
+  ` ]`).
+
+### Scale
+
+**One hierarchy, two scales.** Five levels: *title* (session title, dialog
+title), *body* (user and agent text, composer), *secondary* (tool rows,
+labels), *meta* (counts, paths, key hints, timestamps) and *chrome* (rails,
+rules, bars). The same level has the same token and the same relative
+emphasis in both clients; sizes are chosen per medium.
+
+**Terminal** (cells; no fractional sizes):
+
+- Hierarchy comes from colour token, bold and dim, never from size.
+  Title = primary + bold; body = primary; secondary = secondary; meta = muted.
+- Spacing: **0** inside a row; **1 cell** gutter between a rail or status glyph
+  and its text, and between inline segments (separator `·` padded by one cell
+  each side); **1 blank row** between timeline blocks and between turns' major
+  parts; **2 blank rows** are never used. Cards and dialogs have 1 cell of
+  horizontal padding and no vertical padding; a card's first row is its title.
+- Indent is 2 cells per nesting level (tool inside code, child inside parent),
+  capped at 3 levels; deeper levels flatten with a "depth N" meta label.
+- Sidebars are 28 cells by default (min 22, max 40); the timeline column
+  never goes below 40. Below 100 cells total sidebars become drawers.
+- Truncate the middle of paths, the end of titles and commands, always with
+  `…`. Never wrap a status mark or a count away from its row.
+
+**NSH** (CSS pixels; rendered from the same levels, not by multiplying cells):
+
+- Base unit 4 px; spacing steps 4, 8, 12, 16, 24, 32. A row is 28-32 px, a
+  compact row 24 px; touch targets are 44 px on phone widths.
+- Type: Title 15/20 semibold; Body 14/22 (agent prose may go to 15/24 in the
+  reading column); Secondary 13/20; Meta 12/16, tabular figures for counts and
+  durations; code uses the Monaspace family at 13/20. These are starting
+  values: the user can scale all sizes (Appearance, NSH-only row), and the
+  levels keep their ratio.
+- Radius 6 px for controls and rows, 10 px for cards and dialogs, none on the
+  timeline blocks themselves (they are separated by space and rails, as in the
+  terminal). One-pixel borders in `border.default`; 2 px focus ring in
+  `border.focus`, offset 1 px, never clipped.
+- The extra room is spent on whitespace and previews, not on larger text or
+  decoration: a 720 px reading column, split diffs, thumbnails. Alignment
+  rules below apply unchanged.
+
+### State vocabulary
+
+Every interactive component supports these states, drawn consistently:
+
+| State | Terminal | NSH |
+| --- | --- | --- |
+| Default | `text.secondary`/`primary` on its surface | same |
+| Focused | focus bar `▌` in `interactive.focus` at the row's left edge; label bold | 2 px focus ring |
+| Selected | `interactive.selection` background | selection background, accent edge |
+| Hovered | `interactive.hover` background (mouse terminals only) | same, 120 ms ease |
+| Pressed | reverse video for the frame of the press | hover colour one step darker, 1 px inset |
+| Disabled | `text.muted`, no hover, reason shown or in the tooltip; never hidden | same, `aria-disabled`, reason as description |
+| Loading | spinner glyph and the word ("loading…") in place of the value; layout does not shift | spinner or skeleton in the same footprint |
+| Error | `✕`, `status.error` text and the error message in the row; border in error on inputs | same, with `aria-invalid` |
+| Empty | muted sentence that says what to do next, plus the key hint; no illustration | same |
+
+Disabled controls always carry the reason ("needs a model", "turn is running");
+a state never changes a component's size or position.
+
+### Alignment rules
+
+- **Left column** is a fixed 2-cell slot for the status mark or fold marker
+  (glyph, then a space). Labels start in the same column in a list, so marks
+  form a vertical line.
+- **Right column** holds meta, right-aligned in one block: counts, durations,
+  tokens, key hints. Within a column, numbers right-align; units follow
+  (`12 s`, `1.2k`, `+14 −3`). Never let meta push the title: the title
+  truncates first.
+- **Segment order** in any row: mark, title/name, key argument, summary, then
+  the right block. Separator is `·`. Order of meta in the right block: count,
+  tokens, duration, status word.
+- **Key hints** are muted, lowercase keys in the form `enter open · esc
+  close`, ordered by importance, placed at the trailing edge of the surface
+  they act on (footer row of a dialog or card; the status line for the view).
+  Keys that conflict with text input are not shown there.
+- **Counts** use plain digits with thousands abbreviated at 1,000 (`1.2k`).
+- Align `+N −M` as two fixed-width groups so adjacent rows stack.
+
+### Component anatomy
+
+Mockups are 80-cell terminal sketches; NSH uses the same order and content
+with its own spacing. `▌` is the focus bar, `◆` and friends are the status
+glyphs above.
+
+#### Workspace header
+
+```
+ ◧  nexus10 › research agent › child: sweep                 ◨
+```
+
+One row. Left toggle at the leading edge; title and breadcrumbs centred
+(`›` separators; the last crumb primary, earlier crumbs muted and clickable);
+right toggle at the trailing edge. Status on the right of the title block when
+the session is running (`◐ running`) or disconnected (`✕ offline`).
+- Focused: toggles show the focus bar to their left. Hovered: crumb underlines.
+- Disabled: a toggle is never disabled. Loading: title is replaced with
+  `loading…`. Error: `✕ offline` in error. Empty: new-session view title is
+  `New session`.
+- Narrow: the title truncates with `…` from the left of the crumb chain
+  (`… › child: sweep`); toggles stay.
+
+#### Session row
+
+```
+▌◆ Refactor loader                       3m   12
+ ● Fix flaky test                        1h
+ ▸ Release notes (2 children)            2d
+```
+
+Slot (2) mark or fold; title; right block with age and unread/turn count.
+Attention mark `◆`/`✕`/`●` replaces the status slot (waiting outranks all).
+- Default: title primary if unread or active, otherwise secondary.
+- Focused: focus bar. Selected: selection background (the open session).
+  Hovered: hover background, with inline actions (rename, archive) replacing
+  the age. Pressed: reverse. Disabled: muted (archived or deleting). Loading:
+  `◐`. Error: `✕` and error-coloured age text "failed". Empty list: "No
+  sessions. n new session".
+- Children indent 2 cells with `├─` / `╰─`; a folded parent shows its child
+  count in meta.
+
+#### Context section
+
+A section of the timeline that groups what the model received before the first
+turn (system prompt, tool list, instructions, skills, context insertions).
+
+```
+ ▾ Context · 6 items · 4.1k tokens
+   │ system prompt        1.8k
+   │ tools (9)            1.6k
+   │ AGENTS.md            0.7k
+```
+
+Header: fold marker, title (secondary, bold), `·`-separated meta in muted.
+Body rows use a hairline rail and the right-aligned token column. Collapsed by
+default after the first turn. Focused: focus bar on the header. Hovered: header
+background. Loading: `loading context…`. Error: `✕ failed to load context`
+with retry key hint. Empty: `No context yet`. Clipped items show a
+`context` notice line stating what was clipped and why.
+
+#### Turn header
+
+```
+ ▾ #3  Fix the failing test in loader.py…        2 tools   42 s   ✓ done
+```
+
+Fold marker, turn number (muted), first line of the user message (primary,
+truncates), then the right block: tools, duration, status with label. The
+number column is as wide as the largest visible number so titles align.
+- Focused: focus bar. Selected: selection background (jump target). Hovered:
+  hover. Pressed: reverse. Disabled: n/a. Loading: `◐ running` with live
+  duration. Error: `✕ error`. Empty (no user text): `(attachment only)`.
+- A folded turn shows only this line; an expanded turn shows it once, above
+  the content, in bold.
+
+#### Turn footer
+
+```
+ ───────────────────────────────────────────────────────────────────────────
+ codex/gpt-5 · high · 42 s · 4 calls · 7 tools · 12k in 9k cached 2k out · $0.04 · ✓ done
+```
+
+One muted row below a hairline: model (and every model used), effort,
+duration, calls, tools, tokens, cost, then the end status with glyph and
+label. Wraps at width into a second muted row, never truncating the status.
+Interrupted: `◼ interrupted`; error: `✕ error`; step limit: `◼ step limit`.
+Running: absent until the turn ends (the live row above the composer shows the
+running status). Hovered: tokens expand into a breakdown tooltip (NSH) or a
+`i` key (TUI).
+
+#### Tool row
+
+Collapsed (one line):
+
+```
+ ✓ edit   src/loader.py                                  +14 −3      0.2 s
+ ◐ bash   pytest -q tests/test_loader.py                 running…    4.1 s
+ ◆ bash   rm -rf build/                                  waiting for approval
+ ⊘ write  .env                                           denied by you
+ ✕ read   missing.py                                     not found
+```
+
+Anatomy: status glyph (2-cell slot), tool name (primary, padded to a common
+width within a block), key argument (secondary, truncates in the middle),
+summary (secondary; `+N` in `diff.add`, `−M` in `diff.del`), duration muted
+right-aligned. Name column width is the longest name in the visible block, up
+to 9 cells.
+
+Expanded:
+
+```
+ ▾ ✓ edit   src/loader.py                                +14 −3      0.2 s
+   │ @@ -12,7 +12,10 @@
+   │  12   def load(path):
+   │  13 -     return open(path).read()
+   │  13 +     with open(path) as f:
+   │  14 +         return f.read()
+   │ raw · copy
+```
+
+Expansion adds a hairline rail and the tool-specific detail (diffs use
+`diff.*` backgrounds; output boxes cap their height and say "N lines hidden ·
+show all"). A model-side clip is a separate `context` notice.
+- Focused: focus bar. Selected: selection background. Hovered: hover. Pressed:
+  reverse. Disabled: n/a (denied is a status, not disabled). Loading: `◐` and
+  streaming summary. Error: `✕`, error message in `status.error` as the
+  summary and in the detail. Empty detail: `no output`.
+
+#### Child card
+
+```
+ ┃ ◐ child · research agent · "Survey loaders"           waits · 1m 12s
+ ┃   running: grep "def load" …                        4 tools · 8.2k tok
+```
+
+Heavy info rail, boxed with the `child` label, in panel surface. Row 1:
+status, label, agent, quoted title, then right block (waits or not, elapsed).
+Row 2: current activity (or first lines of the answer when done) and the
+counts. Open with Enter or a click; the answer expands in place.
+- Waiting: `◆ waiting for input` and the question's first line; also bubbles to
+  the parent's waiting card. Done: `✓` and the first answer lines.
+  Error: `✕` and the error. Interrupted: `◼`. Empty: no activity yet →
+  `starting…`. Focused: focus bar replaces the rail's first row. Hovered:
+  raised surface.
+
+#### Composer
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Ask the agent…                                                              │
+│                                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ agent  gpt-5 · high · /repo ┈┈┈┈┈┈┈┈  enter send · alt+enter queue · @ file │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Input area (primary text, muted placeholder), then a muted control row:
+selectors on the left (agent, model, effort, directory) in `label value`
+pairs, key hints at the trailing edge. Attachments appear as chips above the
+input row (`[ shot.png 42k × ]`). Queued messages list above it, each with `×`.
+- Default: hairline border. Focused: border and cursor in `border.focus`.
+  Selected: n/a. Hovered: control row items underline. Pressed: reverse.
+  Disabled: muted with the reason replacing the placeholder ("Disconnected").
+  Loading (agent busy): control row shows `◐ running` and the hint changes to
+  `enter steer · alt+enter queue · esc stop`. Error: oversize or send failure
+  shows `✕ message` in `status.error` on the control row; draft is kept.
+  Empty: placeholder `Ask the agent…`. A pending model change is shown as
+  `gpt-5 → claude-… (next call)`.
+
+#### Waiting card
+
+```
+ ┃ ◆ waiting · edit src/loader.py                              1 of 2  tab next
+ ┃   @@ -12,7 +12,10 @@ …
+ ┃   [ allow once ]  [ allow session ]  [ deny ]  [ deny with note ]
+ ┃   a once · s session · d deny · n note
+```
+
+Docked directly above the composer, accent rail, panel surface. Row 1: mark
+`◆`, the word, the tool and key argument, count and cycle hint at the right.
+Body: full parameters or the questions with their options. Options row:
+bracketed buttons; the focused one is reverse, the default is bold.
+- A choice Core does not offer is shown disabled with its reason, not hidden.
+  Questions render options as `( )`/`(*)` or `[ ]`/`[x]` with a free-text field
+  and `enter submit`.
+- Loading (submitting): buttons replaced by `◐ sending…`. Error: `✕` and the
+  error above the buttons; the card stays. Empty: no card exists. Cancelled:
+  the card closes; the timeline row says `⊖ cancelled: interrupted`.
+
+#### Settings row
+
+```
+ ▌ Theme                              dark                         ▾
+   Colour theme for all clients.
+   Font size                          14        NSH only
+```
+
+Label (primary) on the left, value or control at a fixed column on the right
+(about 60% of the width), with a one-line muted description under the label.
+Order and section grouping follow [Settings](#settings). Client-only rows
+carry a muted `NSH only` or `TUI only` tag at the far right.
+- Focused: focus bar, label bold. Selected (open editor): selection
+  background. Hovered: hover. Pressed: reverse. Disabled: label and value
+  muted, reason replaces the description ("sign in first"). Loading: value is
+  `◐`. Error: value in `status.error` with `✕` and the message below. Empty
+  value: muted `not set`. Toggles show `[x]`/`[ ]` and the word on/off.
+
+#### Dialog and confirm
+
+```
+ ┌ Delete session ─────────────────────────────────┐
+ │ Delete "Refactor loader" and its 2 children?    │
+ │ This cannot be undone.                          │
+ │                                                  │
+ │            [ Cancel ]  [ Delete ]                │
+ │ enter confirm · esc cancel                       │
+ └──────────────────────────────────────────────────┘
+```
+
+On the `raised` surface over a dimmed canvas (terminal: no dim, the dialog is
+bordered and the content underneath is not redrawn). Title in the top border,
+body, one button row (safe choice first, destructive last and in `status.error`
+when irreversible), key hints in the footer. Width 44-72 cells, centred.
+Focus is trapped and returns to the invoker on close.
+- Focused: the focused button is reverse; Esc always cancels. Disabled: a
+  button shows its reason in the footer. Loading: the confirm button becomes
+  `◐ working…` and Esc is disabled until it ends. Error: `✕` and the message in
+  the body; dialog stays open. Empty: n/a. Blocking dialogs (version
+  mismatch) have no cancel and say which side to update.
+
+#### Banner
+
+```
+ ✕ Disconnected from Core · reconnecting in 4 s                 r retry · × hide
+```
+
+One row at the top of the centre column, panel surface, status glyph and
+colour in the mark and the first words only; the rest is secondary. Right
+block holds actions and a dismiss (if dismissible). Banners are for lasting
+state: they stay until the condition clears. Levels: info `i`, warning `!`,
+error `✕`. Loading state uses `◐`. Focused: the action takes the focus bar.
+Empty: n/a (no banner). Multiple banners stack with the most severe on top and
+a `+N` count.
+
+#### Toast
+
+```
+                                              ┌────────────────────────┐
+                                              │ ✓ Copied               │
+                                              └────────────────────────┘
+```
+
+Raised surface, bottom-right of the centre column in the TUI and NSH, one line
+(two at most), glyph then text, no actions except `undo` where one exists.
+They expire in 4 s (8 s for errors, no auto-dismiss while hovered or focused),
+stack up to three, newest at the bottom, and every toast is also kept in the
+notifications drawer. Levels: success `✓`, info `i`, warning `!`, error `✕`.
+Loading: not used (use a banner or inline spinner). Hovered: pauses the timer
+and shows `×`. Pressed: dismisses. Disabled and empty: n/a. Screen readers get
+the text as a polite live region (assertive for errors).
+
+### Review checklist
+
+For galleries and screen reviews: contrast check passes; nothing relies on
+colour alone (view in monochrome); status marks form a vertical line; titles
+truncate before meta; muted text is metadata only; accent is on no more than a
+handful of elements per screen; focus is visible in every state; ASCII mode
+loses no information.
+
+## Shared navigation anchors
+
+The workspace header has the **left sidebar toggle at its leading edge**,
+**title/child breadcrumbs in the centre**, and **right sidebar toggle at its
+trailing edge**. Toggles remain available when panels close. Use the same
+locations in terminal, browser and desktop, accounting for native window chrome.
+At narrow widths they open drawers rather than relocating to unrelated menus.
+
+Left sidebar tabs are **Sessions → Files → Projects**. **Settings** remains a
+fixed bottom entry in that sidebar and a palette command. The waiting-for-input
+card stays immediately above the composer. Additional desktop menu or keyboard
+entry points invoke the same actions. Preserve focus and selected tab when a
+sidebar is hidden and reopened.
 
 ## Layout
 
@@ -621,7 +1194,12 @@ clients through its configured port.
 ## Open questions
 
 - Dictation engine per platform.
-- Steer key vs queue key defaults.
+- Focus ring colour: shared with the accent (current) or a separate cool hue.
+- Status glyph rendering across terminals (`◐ ✓ ✕ ⊘ ◆ ◼ ⊖`; several are
+  ambiguous-width).
+- Approval choices Core does not yet offer (allow for session, deny with a
+  note); see `interface/capability-matrix.md` for this and other unplanned
+  Core gaps.
 - Worktree cleanup on archive/delete, and leaving a worktree.
 - Whether a user can steer a child session from the parent's card.
 - Output caps (lines vs bytes) and whether they are a setting.
