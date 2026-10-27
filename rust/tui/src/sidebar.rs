@@ -2432,6 +2432,37 @@ mod tests {
     }
 
     #[test]
+    fn project_click_and_keyboard_activation_emit_one_action_each() {
+        let mut s = open("Projects", 34);
+        s.sidebar.projects = json!({"browser_open":true,"browser_path":"/repo","browser_rows":[
+            {"name":"..","kind":"dir","path":"/"},
+            {"name":"src","kind":"dir","path":"/repo/src"}
+        ]});
+        let mut ui = SidebarUi::default();
+        screen(&mut ui, &s, 34, 24);
+        let picker = ui.picker.clone().unwrap();
+        for (row, op, path) in [(picker.action.y, "select_project", "/repo"), (picker.list.y, "browse_project", "/"), (picker.list.y + 1, "select_project", "/repo/src")] {
+            let clicked = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), picker.action.x + 1, row), &s, Rect::new(0, 0, 34, 24), 200);
+            let expected = json!({"type":"sidebar","op":op,"path":path});
+            assert_eq!(clicked.action, Some(expected.clone()));
+            assert!(clicked.operation.is_none(), "no duplicate dashboard operation");
+            let released = ui.mouse(
+                mouse(MouseEventKind::Up(MouseButton::Left), picker.action.x + 1, row),
+                &s, Rect::new(0, 0, 34, 24), 200,
+            );
+            assert!(released.action.is_none() && released.operation.is_none());
+            let activated = ui.key(key(KeyCode::Enter), &s, true);
+            assert_eq!(activated.action, Some(expected));
+            assert!(activated.operation.is_none());
+        }
+        let clicked = ui.mouse(mouse(MouseEventKind::Down(MouseButton::Left), picker.input.x + 1, picker.input.y + 1), &s, Rect::new(0, 0, 34, 24), 200);
+        assert!(clicked.action.is_none() && clicked.operation.is_none(), "path click only edits");
+        let submitted = ui.key(key(KeyCode::Enter), &s, true);
+        assert_eq!(submitted.action, Some(json!({"type":"sidebar","op":"project_path","path":"/repo"})));
+        assert!(submitted.operation.is_none());
+    }
+
+    #[test]
     fn files_navigate_through_listed_folders_only() {
         let mut s = open("Files", 34);
         s.sidebar.files = json!({"loaded":true,"path":"src","label":"repo/src","rows":[
