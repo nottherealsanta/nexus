@@ -220,8 +220,22 @@ Each session records `launched_by` (`user` or `agent`), `parent_id` and
   Each request resolves once ([tools.md](tools.md#ask)).
 - **Interrupt.** Cancels the turn task and its descendants. A tool call left
   without a result gets an error result, so the conversation stays valid: "while
-  this tool was running; its result is unknown" when it started, or "before this
-  tool ran" otherwise. `session.error` is published with `kind: "interrupted"`.
+  this tool was running; its result is unknown" when it started, "while this call
+  was waiting for approval; it did not run" when the approval was still pending,
+  or "before this tool ran" otherwise. `session.error` is published with
+  `kind: "interrupted"`.
+- **Manual continuation.** `POST /api/session/{id}/continue` (CLI `/continue` or
+  `nexus session continue ID`) starts an ordinary turn from the stored context
+  with no new user message. It uses the current model, effort, tools and
+  directory, and records requests, responses and tools normally. It refuses a
+  running turn (409), an archived tree (409), an empty conversation (400), an
+  unfinished turn record (409; restart so startup recovery reconciles it) and an
+  unknown session (404). Before the request it closes any tool call a crash left
+  dangling, using durable evidence and one labelled recovery notice, and never
+  re-runs a call or reconstructs partial output. The turn's `data` records
+  `origin: "continuation"` and a `predecessor` link (turn/request, or an honest
+  `none` for a legacy conversation); the `session.status` busy/idle events carry
+  the same provenance. A client must not repeat an ambiguous POST.
 - **Failures.** Provider, sign-in and request errors end the turn with
   `session.error`. Saved messages stay as they are.
 - **Sign-ins.** One sign-in object per provider for the daemon's lifetime, so
@@ -278,10 +292,13 @@ authority; the durable turn and request rows are.
   its recovery tombstone is held (404 after a later restart).
 - Appends one new, clearly labelled `[Nexus recovery: interrupted turn]` user
   message with the evidence: the request's partial-output summary, each call's
-  outcome, cancelled waits, and lost runtime state. It never edits earlier
-  context.
+  outcome, cancelled waits, and lost runtime state. It names a continuation
+  predecessor when the interrupted turn was a manual continuation. It never
+  edits earlier context.
 - Publishes one `turn.recovered` event per recovered turn with the same
-  outcomes in structured form, stored in the session's log.
+  outcomes in structured form, stored in the session's log. It carries the
+  turn's `origin` (`prompt` or `continuation`) and its `continuation` link, so a
+  restart does not lose why the turn started.
 
 **Partial output.** An interrupted stream is not a completed response. Its
 deltas, completed `part_done` items, `raw` data and `origin` stay in the event
@@ -335,6 +352,7 @@ nexus run "fix the test"            # new session in the current directory's pro
 nexus run -c "and now the docs"     # continue the project's latest session
 nexus chat --session ses_…          # continue a given session
 nexus chat --wire                   # also print every request and provider event
+nexus session continue ID           # resume from the stored context, no new user message
 nexus session list [--all] | show ID | rm ID
 nexus session archive ID | unarchive ID
 nexus session list --archived-only | --include-archived
@@ -343,31 +361,36 @@ nexus session export ID --format json --scope tree --output session.json
 nexus project list | open [PATH]
 ```
 
-The CLI subscribes to `/api/event?session=…` before it posts the prompt, and
-renders events (a child's under a `── child … ──` header) until every session in
-the tree is idle. The Python client (`Client.events`) understands durable ids
+The CLI subscribes to `/api/event?session=…` before it posts a prompt or
+continuation, and renders events (a child's under a `── child … ──` header) until
+every session in the tree is idle. The Python client (`Client.events`) understands durable ids
 and can resume from a cursor; the CLI's turn view does not reconnect by itself. `nexus session list` shows the tree. It answers `permission.asked`
 with a y/N prompt. For `question.asked` it shows each question and its options,
 collects the answers and submits them; Ctrl-C, EOF or an interrupted turn
 abandons the prompt without submitting, and the daemon closes the question.
 Ctrl-C during a turn sends `/interrupt`. `--yes` sets the session's permission
-to `allow`. In chat, `/model provider/model` changes the session's model and
-`/context` prints the next request body. `-c`/`--continue` skips archived
-sessions when choosing the project's latest; `--session` with an archived id
-stops with an unarchive command.
+to `allow`. In chat, `/continue` resumes from the stored context without adding a
+message, `/model provider/model` changes the session's model and `/context`
+prints the next request body. `nexus session continue ID` is the standalone form:
+it subscribes to the event stream before posting, renders the same events, and
+handles questions and approvals. Neither form repeats the POST after an
+ambiguous network failure. `-c`/`--continue` skips archived sessions when
+choosing the project's latest; `--session` with an archived id stops with an
+unarchive command.
 
 ## Not verified / not yet
 
 - **Crashes.** Startup recovery reconciles turns a crash left unfinished
   ([Crash recovery](#crash-recovery)): it marks them interrupted, restores
   durable output and results, cancels waits and reports lost runtime state. It
-  does not retry them; a new prompt or manual continuation is separate and not
-  implemented. A crash during recovery is itself recoverable. The crash windows
-  are covered offline by reconstructed durable states and a subprocess restart
-  smoke test; no live provider stream was killed mid-flight.
+  does not retry them; a new prompt or manual continuation is a separate client
+  action ([api.md](api.md#manual-continuation)). A crash during recovery is itself
+  recoverable. The crash windows are covered offline by reconstructed durable
+  states and a subprocess restart smoke test; no live provider stream was killed
+  mid-flight.
 - **Turns after restart.** Turns are not resumed after a restart. Event streams
   resume; in-memory approvals and questions are cancelled visibly and cannot be
-  answered later.
+  answered later. Manual continuation after recovery is explicit.
 - **Retention.** The event log has no expiry or compaction yet; every cursor
   stays resumable and the floor is 0. Turn, request and tool lifecycle rows also
   have no retention; they are small but accumulate one turn at a time.
@@ -488,3 +511,11 @@ so startup closes a crash in that interval without duplicating the idle event.
 An approval reply is committed before releasing its waiting tool; a persistence
 failure leaves the tool waiting. The message-link migration adds its column and
 marks legacy rows in one explicit transaction.
+
+
+Continuation delivery review: execution evidence is linked to its saved assistant
+message, including when call ids recur. Existing execution rows can be matched
+through their request's message link; an unlinked record is treated as unknown
+rather than borrowing an earlier result. Approval and question evidence used to
+classify a call is restricted to records since its assistant message. A repeated
+call id in a later model step starts a fresh execution state.

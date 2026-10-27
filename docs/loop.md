@@ -38,7 +38,14 @@ wire body (the CLI's `/context` prints it).
 
 An async generator of `LoopEvent`.
 
-1. Append the user message, yield `MessageAdded`.
+`user_text` is either the new user text or the explicit `NO_USER_MESSAGE`
+marker (`nexus.loop.NoUserMessage`). With the marker the loop appends no user
+message and sends the stored context as it is; that is the only difference a
+manual continuation has from an ordinary prompt. The daemon uses the marker for
+`POST /api/session/{id}/continue` and text for `POST …/prompt`, through the same
+turn lifecycle.
+
+1. Append the user message unless `user_text` is `NO_USER_MESSAGE`, yield `MessageAdded`.
 2. For `step` in `1..max_steps`:
    1. Yield `StepStart(step)`.
    2. Stream `provider.stream(request)`. Every event is yielded unchanged.
@@ -121,3 +128,6 @@ interrupt ([daemon.md](daemon.md)). The daemon also records the turn, each
 provider request and each tool call's lifecycle durably around this loop, so a
 crash can be reconciled from evidence rather than from memory
 ([daemon.md](daemon.md#crash-recovery)); the loop itself stays storage-free.
+Manual continuation reuses the same loop with `NO_USER_MESSAGE`; the daemon
+validates and reconciles the stored context before calling it
+([api.md](api.md#manual-continuation)).

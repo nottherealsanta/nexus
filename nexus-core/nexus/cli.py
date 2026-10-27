@@ -33,6 +33,8 @@ import webbrowser
 from pathlib import Path
 from typing import Any, TextIO
 
+import httpx
+
 from . import daemon
 from .client import ApiError, Client
 from .llmhub import catalog
@@ -135,6 +137,22 @@ class Renderer:
             self._break()
             if data["stop"] == "max_steps":
                 self._print(f"{YELLOW}stopped after {data['steps']} steps (limit){RESET}")
+        elif kind == "session.status" and data.get("status") == "busy" and data.get("origin") == "continuation":
+            self._break()
+            predecessor = (data.get("continuation") or {}).get("predecessor") or {}
+            if predecessor.get("turn_id"):
+                where = f"turn {predecessor['turn_id']}"
+                if predecessor.get("request_id"):
+                    where += f" · request {predecessor['request_id']}"
+                if predecessor.get("status"):
+                    where += f" · {predecessor['status']}"
+                self._print(f"{CYAN}⌁ manual continuation of {where}{RESET}")
+            else:
+                self._print(f"{CYAN}⌁ manual continuation; no durable preceding turn to link{RESET}")
+            reconciled = data.get("reconciled") or {}
+            if reconciled.get("calls"):
+                self._print(
+                    f"{YELLOW}  reconciled {len(reconciled['calls'])} unresolved tool call(s) before sending{RESET}")
         elif kind == "session.error":
             self._break()
             self._print(f"{RED}{data['message']}{RESET}")
@@ -199,10 +217,15 @@ async def _open_session(client: Client, args: argparse.Namespace) -> dict[str, A
     return session
 
 
-async def _send(client: Client, session_id: str, text: str, renderer: Renderer) -> None:
-    """Prompt, then render the events of this session and its child sessions until
-    the whole tree is idle. Ctrl-C interrupts the turn (and its children) and
-    abandons a question prompt without submitting an answer."""
+async def _stream_turn(client: Client, session_id: str, renderer: Renderer, start, *, label: str) -> None:
+    """Subscribe, start one turn, then render its tree until every session is idle.
+
+    The subscription is established before `start()` so the busy status, early
+    deltas and a tool call that runs immediately cannot be missed. A network
+    failure while posting is reported as ambiguous and is never retried here.
+    Ctrl-C interrupts the turn (and its children) and abandons a question prompt
+    without submitting an answer.
+    """
     loop = asyncio.get_running_loop()
     answering = threading.Event()
     input_readers: dict[str, threading.Event] = {}
@@ -233,10 +256,24 @@ async def _send(client: Client, session_id: str, text: str, renderer: Renderer) 
     try:
         async with contextlib.aclosing(client.events(session_id)) as events:
             await anext(events)  # server.connected: subscribed before the turn starts
-            await client.call("POST", f"/api/session/{session_id}/prompt", {"text": text})
+            try:
+                started = await start()
+            except httpx.HTTPError as exc:
+                raise ValueError(
+                    f"{label} request failed ({type(exc).__name__}); it may or may not have started. It was "
+                    "not repeated automatically; check the session or inspector before retrying."
+                ) from exc
             busy.add(session_id)
+            target_turn = started.get("turn_id") if isinstance(started, dict) else None
+            root_started = False
             async for event in events:
                 sid = event.get("session_id") or session_id
+                if sid == session_id and event["type"] == "session.status" and not root_started:
+                    if event["data"]["status"] == "busy" and (
+                            target_turn is None or event["data"].get("turn_id") == target_turn):
+                        root_started = True
+                    else:
+                        continue  # a previous turn may finish between subscription and the POST
                 if event["type"] == "session.created" and event["data"]["parent_id"]:
                     labels[sid] = f"child {sid} · agent {event['data']['agent']} · {event['data']['model']}"
                 if sid != current and event["type"] not in ("session.status", "session.created", "session.updated"):
@@ -273,6 +310,22 @@ async def _send(client: Client, session_id: str, text: str, renderer: Renderer) 
         with contextlib.suppress(asyncio.CancelledError):
             await input_task
         loop.remove_signal_handler(signal.SIGINT)
+
+
+async def _send(client: Client, session_id: str, text: str, renderer: Renderer) -> None:
+    """Prompt, then render the events of this session and its children."""
+    await _stream_turn(
+        client, session_id, renderer, label="prompt",
+        start=lambda: client.call("POST", f"/api/session/{session_id}/prompt", {"text": text}),
+    )
+
+
+async def _continue(client: Client, session_id: str, renderer: Renderer) -> None:
+    """Continue from the stored context; the daemon adds no user message."""
+    await _stream_turn(
+        client, session_id, renderer, label="continuation",
+        start=lambda: client.call("POST", f"/api/session/{session_id}/continue", {}),
+    )
 
 
 async def _read_answer(prompt: str, cancelled: threading.Event) -> str | None:
@@ -412,11 +465,46 @@ async def _run(args: argparse.Namespace, renderer: Renderer) -> None:
         await client.close()
 
 
+async def _chat_line(client: Client, session: dict[str, Any], text: str,
+                     renderer: Renderer) -> tuple[dict[str, Any], bool]:
+    """Handle one chat line. Returns (session, keep_going)."""
+    if text in ("/exit", "/quit"):
+        return session, False
+    if text == "/continue":
+        await _continue(client, session["id"], renderer)
+        return session, True
+    if text == "/context":
+        print(json.dumps(await client.call("GET", f"/api/session/{session['id']}/context"), indent=2))
+        return session, True
+    if text.startswith("/model"):
+        ref = text.removeprefix("/model").strip()
+        if ref:
+            session = await client.call("POST", f"/api/session/{session['id']}/model",
+                                        {"model": "" if ref == "default" else ref})
+        print(f"{DIM}{_describe(session)}  (/model default follows the agent){RESET}")
+        return session, True
+    if text == "/tools":
+        off = ", ".join(session["disabled_tools"]) or "none"
+        print(f"{DIM}tools: {', '.join(session['tools']) or 'none'} · switched off: {off}{RESET}")
+        return session, True
+    if text.startswith("/agent"):
+        name = text.removeprefix("/agent").strip()
+        if name:
+            session = await client.call("POST", f"/api/session/{session['id']}/agent", {"agent": name})
+        else:
+            await _agent_list(client, session["directory"])
+        print(f"{DIM}{_describe(session)}{RESET}")
+        return session, True
+    await _send(client, session["id"], text, renderer)
+    return session, True
+
+
 async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
     client = Client.connect()
     try:
         session = await _open_session(client, args)
-        print(f"{DIM}nexus · {_describe(session)} · {session['directory']} · session {session['id']}  (/context, /tools, /agent, /model, /exit){RESET}")
+        print(f"{DIM}nexus · {_describe(session)} · {session['directory']} · session {session['id']}  "
+              f"(/continue, /context, /tools, /agent, /model, /exit){RESET}")
         for message in await client.call("GET", f"/api/session/{session['id']}/message"):
             text = "".join(p.get("text", "") for p in message["parts"] if p["type"] == "text")
             if text and message["role"] in ("user", "assistant"):
@@ -432,33 +520,13 @@ async def _chat(args: argparse.Namespace, renderer: Renderer) -> None:
                 return
             if not text:
                 continue
-            if text in ("/exit", "/quit"):
-                return
-            if text == "/context":
-                print(json.dumps(await client.call("GET", f"/api/session/{session['id']}/context"), indent=2))
-                continue
-            if text.startswith("/model"):
-                ref = text.removeprefix("/model").strip()
-                if ref:
-                    session = await client.call("POST", f"/api/session/{session['id']}/model", {"model": "" if ref == "default" else ref})
-                print(f"{DIM}{_describe(session)}  (/model default follows the agent){RESET}")
-                continue
-            if text == "/tools":
-                off = ", ".join(session["disabled_tools"]) or "none"
-                print(f"{DIM}tools: {', '.join(session['tools']) or 'none'} · switched off: {off}{RESET}")
-                continue
-            if text.startswith("/agent"):
-                name = text.removeprefix("/agent").strip()
-                if name:
-                    session = await client.call("POST", f"/api/session/{session['id']}/agent", {"agent": name})
-                else:
-                    await _agent_list(client, session["directory"])
-                print(f"{DIM}{_describe(session)}{RESET}")
-                continue
             try:
-                await _send(client, session["id"], text, renderer)
-            except ApiError as exc:
+                session, keep_going = await _chat_line(client, session, text, renderer)
+            except (ApiError, ValueError) as exc:
                 print(f"{RED}{exc}{RESET}")
+                continue
+            if not keep_going:
+                return
     finally:
         await client.close()
 
@@ -538,6 +606,11 @@ async def _session(args: argparse.Namespace) -> None:
             print(f"deleted {args.id}")
         elif args.action == "export":
             await _export(client, args)
+        elif args.action == "continue":
+            with contextlib.ExitStack() as stack:
+                wire_file = stack.enter_context(open(args.wire_file, "a")) if args.wire_file else None  # noqa: ASYNC230
+                await _continue(client, args.id, Renderer(wire=args.wire, wire_file=wire_file))
+            print(f"{DIM}session {args.id}{RESET}")
         else:  # archive | unarchive
             session = await client.call("POST", f"/api/session/{args.id}/{args.action}")
             state = "archived" if session["archived"] else "unarchived"
@@ -765,7 +838,7 @@ def main(argv: list[str] | None = None) -> int:
     agent.add_argument("name", nargs="?")
     agent.add_argument("--workspace", default=".")
     session = sub.add_parser("session", aliases=["sessions"], help="sessions of the current project; `sessions inspector` opens the web inspector")
-    session.add_argument("action", choices=["list", "show", "rm", "export", "archive", "unarchive", "inspector"])
+    session.add_argument("action", choices=["list", "show", "rm", "export", "continue", "archive", "unarchive", "inspector"])
     session.add_argument("id", nargs="?")
     session.add_argument("--all", action="store_true", help="sessions of every project")
     archive_filter = session.add_mutually_exclusive_group()
@@ -778,6 +851,8 @@ def main(argv: list[str] | None = None) -> int:
                          help="export: just this session (default), or it and its descendants")
     session.add_argument("--output", "-o", help="export: write here instead of stdout; '-' means stdout")
     session.add_argument("--force", action="store_true", help="export: overwrite an existing output file")
+    session.add_argument("--wire", action="store_true", help="continue: print the raw request and every provider event")
+    session.add_argument("--wire-file", help="continue: append wire traffic to this JSONL file")
     workspace = sub.add_parser("workspace", help="workspace controls through the API: expose, directory, worktrees")
     workspace.add_argument("action", choices=["expose", "directory", "list", "create", "delete"])
     workspace.add_argument("argument", nargs="?", help="directory (directory) or worktree path (create/delete)")
@@ -830,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_open:
                 webbrowser.open(url)
         elif args.command in ("session", "sessions"):
-            if args.action in ("show", "rm", "export", "archive", "unarchive") and not args.id:
+            if args.action in ("show", "rm", "export", "continue", "archive", "unarchive") and not args.id:
                 parser.error(f"session {args.action} needs an id")
             asyncio.run(_session(args))
         elif args.command == "workspace":

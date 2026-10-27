@@ -36,6 +36,7 @@ nexus/
   bus.py             in-process event bus; persists before publishing, bounded per subscriber
   eventlog.py        log generation, cursors, session filtering, atomic replay-to-live stream
   recovery.py        startup reconciliation of turns a crash left unfinished
+  continuation.py    explicit manual continuation and provider-valid context reconciliation
   kernels.py         daemon-owned persistent Monty kernels
   bash_jobs.py       daemon-owned background bash jobs
   runtime.py         projects, sessions, turns, approvals, questions, workspace controls, interrupts
@@ -77,6 +78,12 @@ next command starts a daemon with the new code. With
 appends the same wire events as JSONL. `/context` in `chat` prints the next
 request body; `/exit` and `/quit` leave.
 
+`nexus session continue ID` resumes from a session's stored context without
+adding a user message. It subscribes to the session's event stream before
+posting, renders the turn (including questions and approvals), and accepts
+`--wire` and `--wire-file`. `/continue` does the same inside `chat`. See
+[api.md](api.md#manual-continuation).
+
 ## Tests
 
 `tests/` needs no network or credentials. `pytest-asyncio` runs in `auto` mode
@@ -91,6 +98,7 @@ request body; `/exit` and `/quit` leave.
 | `test_ask.py` | ask contract and validation, pending/reply API, cancellation, snapshots, nested code questions |
 | `test_eventlog.py` | durable ids and generations, cursors and resync errors, replay/live boundary and paging, filtering and tombstones, overflow, persistence failure, migration, HTTP framing via raw ASGI |
 | `test_recovery.py` | crash windows (accepted turn, interrupted stream, saved/started/finished/inserted tools, mixed batches, waits, code/kernels/jobs), parent/child and archive recovery, recovery interrupted at every step, repeated startup, migration, durable replay, no provider/tool calls, isolated subprocess restart |
+| `test_continuation.py` | manual continuation: exact first request with no synthetic user message, provider failure/interrupt/recovery, completed and unknown tools, new tool calls, settings and directory, busy/archived/empty/unknown errors, parent/child independence, provenance and crash-during-continuation recovery, reconciliation idempotency, CLI slash/standalone and subscription ordering |
 | `test_loop.py` | The loop with a scripted provider |
 
 Loop tests use a small scripted provider that replays one reply per request.

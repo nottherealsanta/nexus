@@ -1076,8 +1076,9 @@ the increment below.
   241 tests; Ruff and `git diff --check` clean. No live provider or browser run
   was performed; the inspector script was syntax-checked with `node --check`.
 - **Limitations.** No retention: the log grows without limit and the floor stays
-  0. Automatic retries, idempotent mutation requests and `/continue` are still
-  open. Turn recovery is implemented below; a crash during it is repeatable.
+  0. Automatic retries and idempotent mutation requests are still open. Turn
+  recovery and manual continuation are implemented below; a crash during
+  recovery is repeatable.
   `bus.overflow.dropped_after` is the last
   live event enqueued for that subscriber, which can be ahead of what it applied
   during replay; clients resume from their own cursor. Archive transitions
@@ -1085,8 +1086,8 @@ the increment below.
 
 **Durable turn recovery (done 2026-10-27; review pending).** The second half of
 Step 11: a restart reconciles turns a crash left unfinished. It does not
-implement automatic retries, `/continue`, mutation idempotency, retention, web
-tools, skills or MCP.
+implement automatic retries, mutation idempotency, retention, web tools, skills
+or MCP. Manual continuation is the increment below.
 
 - **Execution records.** Three tables, all cascading with the session. `turn`
   (`id`, session, `status` running/completed/interrupted/failed, start/finish,
@@ -1151,7 +1152,8 @@ tools, skills or MCP.
   once; durable replay of `turn.recovered`; no provider or tool
   call during recovery; and an isolated subprocess daemon kill/restart smoke
   test with a temporary `NEXUS10_HOME` and workspace.
-- **Limitations.** No retry, `/continue` or idempotent mutations. A background
+- **Limitations.** No retry or idempotent mutations; manual continuation is the
+  next increment. A background
   job that outlives an orderly turn and whose session had no interrupted turn
   is not reported individually after a restart (its record and output are
   gone). Kernels have no state recovery. There is no process supervision. A
@@ -1182,26 +1184,74 @@ Document ordering of steer, queued prompts, setting changes and interrupts.
 Verify disconnect during send, catch-up/live races, filtered streams, restart,
 retention expiry and competing clients.
 
-**Manual continuation (`/continue`).** A CLI chat/slash and client command backed
-by a Core endpoint resumes model generation from the session's existing context.
-Send that context as it stands to the selected LLM provider; do not append a
-synthetic user message saying "continue", rewrite history or retry an old tool
-call. Useful after a provider/network failure or an interrupted turn. Reject
-while a turn is still running. The resumed model request and subsequent events
-are recorded normally, with an explicit continuation link to the interrupted
-turn/attempt so the UI can show what happened.
+**Manual continuation (`/continue`) (done 2026-10-27; review pending).** The
+third part of Step 11: an explicit client action resumes generation from the
+stored context. It does not implement automatic retries, mutation idempotency,
+retention, web tools, skills or MCP.
 
-Completed tools and their saved results stay in context and are not re-executed
-by continuation. Before offering continuation, interruption/restart recovery
-must leave a provider-valid context: persist partial output where replayable,
-close dangling tool calls with explicit interrupted/unknown-outcome results,
-and announce any unreplayable partial output. Never claim a tool did not run
-when its side effects are uncertain; do not automatically rerun such calls.
-Recovery records are visible context added when interruption is reconciled;
-`/continue` itself then sends the reconciled context unchanged. Test provider
-failure before output, mid-text, mid-tool arguments, and after tool execution
-but before a result is durably saved. Automatic retry policy is separate and
-is not implied by this command; manual continuation is the initial recovery path.
+- **API.** `POST /api/session/{id}/continue` is authenticated and starts one
+  normal turn with no user text. It returns 202 with `{status: "busy", turn_id,
+  origin: "continuation", continuation, reconciled}`. It refuses a running turn
+  (409), an archived root tree (409 with the unarchive command), an empty
+  conversation (400 naming the prompt endpoint/CLI), an unknown session (404), a
+  missing token (401), and a session with an unfinished durable turn (409;
+  restart so startup recovery reconciles it). Reconnect, session reads and
+  daemon startup never continue by themselves.
+- **Loop and lifecycle.** `Agent.turn` takes either text or the explicit
+  `NO_USER_MESSAGE` marker. Ordinary prompts add exactly one user message;
+  continuation adds none. Runtime's `prompt` and `continue_session` share
+  `_begin_turn`, so both write the durable turn before the task exists, publish
+  busy before running, and use the same execution, interrupt, approval, question
+  and recovery paths. The current effective model, effort, tools, permission and
+  directory apply; new requests, responses and tool calls are recorded normally.
+- **Provider-valid context.** `nexus/continuation.py` scans saved messages for a
+  tool call with no result before the request. It closes only calls whose later
+  messages are tool results; a dangling call followed by conversation is refused
+  rather than closing it out of order. It uses durable evidence: a completed
+  result is preserved, a started call is labelled unknown and never re-run, a
+  saved call did not run, pending/denied/cancelled approvals and answered or
+  cancelled questions keep recovery's outcomes, and a call with no execution
+  record in a legacy conversation is labelled unknown. One tool message and one
+  labelled `[Nexus recovery: continuation reconciled interrupted tool calls]`
+  user notice are committed in one transaction, so repeating continuation adds
+  nothing. Partial streams stay diagnostic-only in the event log and are never
+  turned into arguments, reasoning or a completed response. Startup recovery is
+  never run for other sessions.
+- **Provenance.** The new turn's durable `data` records `origin:
+  "continuation"` and `continuation.predecessor` (`turn_id`, `request_id`,
+  status, request status, step, stop, `link`: request/turn/none, legacy note). It
+  names the preceding attempt when one exists and says `link: "none"` for a
+  legacy conversation without execution records. A crash during continuation
+  keeps this data; `turn.recovered` exposes `origin` and `continuation`, and its
+  notice names the predecessor. The durable `session.status` busy/idle events
+  carry `origin`, `turn_id`, `continuation` and (when repaired) `reconciled`.
+  Provenance is API/event metadata, never an extra model-visible user message.
+- **CLI.** Chat supports `/continue`; `nexus session continue ID` is the
+  standalone command. Both subscribe to `/api/event?session=` before posting,
+  render the normal event stream (including children), and handle questions and
+  approvals through the shared input queue. A network failure while posting is
+  reported as ambiguous and is not retried. `--wire`/`--wire-file` work for the
+  standalone command.
+- **Verified offline** (`tests/test_continuation.py`, scripted providers):
+  the exact first request equals the stored messages with no synthetic user
+  message; ordinary prompts are unchanged; continuation after a provider
+  failure, a clean interrupt and startup recovery; an earlier completed turn;
+  completed tools are not re-run; a finished dangling result is preserved; a
+  started call stays unknown; new calls from
+  the continued model write normally; current model/effort/tools/directory
+  apply; busy, archived, empty, unknown and unauthenticated responses;
+  parent/child independence; provenance in `turn.data`, the busy event and the
+  endpoint; crash-during-continuation recovery keeps the link; reconciliation
+  of saved and legacy calls once; CLI slash, standalone, subscription ordering
+  and ambiguous POST failure. Full suite: 296 tests; Ruff and
+  `git diff --check` clean. No live provider or browser run was performed.
+- **Limitations.** Pending questions/approvals a client saw before a daemon
+  crash are cancelled, not restored; continuation after recovery starts a new
+  turn and does not answer them. Automatic retries and idempotent mutation
+  request ids remain separate. A crash during the continuation POST leaves an
+  ambiguous client result by design; clients inspect the session rather than
+  repeating the POST. The reconciliation notice is user-visible context added
+  only when repair is needed; a normal continuation adds none.
 
 ### Step 11a: web tools, search service, skills and MCP
 
@@ -1417,6 +1467,7 @@ show the wire view, the session tree and kernels.
 | A crash left the last in-memory turn permanently busy, with no durable record of what ran | `turn`/`turn_request`/`turn_tool` records; startup recovery marks the turn interrupted, leaves the session idle and reconciles only durable evidence (done 2026-10-27) | Busy state was never durable, so recovery needs its own evidence |
 | An interrupted provider stream could be mistaken for a finished reply | Partial output stays diagnostic in the event log; only a response that durably reached `Done` is restored, and a recovery notice labels the rest (done 2026-10-27) | Never present partial text, arguments or reasoning as complete |
 | A crashed daemon silently dropped pending approvals and questions | Recovery publishes explicit `permission.replied`/`question.replied` cancellations; late ids cannot resume work (done 2026-10-27) | A vanished wait is not an answer |
+| Continuing meant sending a new message ("continue"), which appended model-visible text | An explicit `POST …/continue`, `/continue` and `nexus session continue ID` send the stored context unchanged, reconcile dangling calls from durable evidence, and record continuation provenance (done 2026-10-27) | The model receives exactly the context the user sees, with no invented user turn |
 | Compaction rewrites the session's history | A handoff to a new root session linked by `continued_from` (planned, Step 12a) | What the user sees stays what the model saw |
 | System prompt rendered per turn | Rendered once at session creation and replayed unchanged | A stable cached prefix |
 | Workspace edits require approval unless allowed | In-directory `edit`/`write` (patches and nested calls too) are auto-approved with no setting; bash approval is unchanged (done 2026-10-27) | Editing authorization and command execution are separate |
@@ -1448,8 +1499,9 @@ Work one reviewed increment at a time:
 4b. Add Markdown/JSON session export over the API, with an explicit read
    boundary and CLI file handling — done 2026-10-27; see Step 10.
 5. Durable events and reconnect-safe replay — done 2026-10-27; see Step 11.
-   Durable turn recovery — done 2026-10-27; see Step 11. Idempotent requests
-   and `/continue` remain.
+   Durable turn recovery — done 2026-10-27; see Step 11. Manual continuation
+   (`/api/session/{id}/continue`, `/continue`, `nexus session continue`) — done
+   2026-10-27; see Step 11. Automatic retries and idempotent requests remain.
 6. Bring artifact storage forward from Step 12a before web/MCP image results.
 7. Web tools, skills, MCP and remaining interface Core endpoints.
 
@@ -1483,8 +1535,9 @@ Do not start the next increment until the current review is complete.
   outcome, preserving the durable `code.call` and `code.cell` events and saying
   the kernel was lost. It does not invent a successful call or recover kernel
   state.
-- No retries, no `/continue`, no idempotent mutation requests and no context
-  limit or compaction (planned as handoff, Step 12a).
+- No retries and no idempotent mutation requests; manual continuation is an
+  explicit client action and never repeats an ambiguous POST. There is no
+  context limit or compaction (planned as handoff, Step 12a).
 - Explicit updates apply to subsequent model/tool calls. An active `code` cell
   retains the task-tool bindings it started with until that outer call finishes.
   Agent switches retain the initially loaded `AGENTS.md` section; a directory
@@ -1508,9 +1561,9 @@ Do not start the next increment until the current review is complete.
   `reconstructed`; the note is visible, but the original prompt is unknowable.
 - Reconnect resumes the event stream; startup recovery reconciles unfinished
   turns before the daemon serves requests and publishes their idle status,
-  cancellations and `turn.recovered`. Automatic retries, idempotent mutation
-  requests and `/continue` remain open. Archive transitions are still stored
-  only in the root's log.
+  cancellations and `turn.recovered`. Manual continuation after recovery is an
+  explicit request. Automatic retries and idempotent mutation requests remain
+  open. Archive transitions are still stored only in the root's log.
 - The `event` table grows without limit (every token delta is a row); no retention yet.
   Turn, request and tool lifecycle rows also have no retention. Reconnect uses
   durable ids and a log generation, but retention will have to raise the floor
@@ -1552,3 +1605,12 @@ normal idle events carry turn ids for deduplication. Approval replies persist
 before releasing a tool. Message-link migration DDL and legacy markers are
 transactional. Added terminal-cleanup crash, approval-storage failure, and
 migration rollback regressions. Reviewed full suite: 279 tests.
+
+
+Manual continuation delivery review: linked tool lifecycle evidence to the saved
+assistant message, avoiding reuse of old outputs or approval decisions when a
+provider reuses call ids. Added migration of that nullable link, conservative
+fallback through stored request links, and fresh execution state for reused ids
+within a turn. Added three regressions for repeated ids and stale approval
+classification. Also ignore a prior turn's idle event queued before the continuation starts.
+Reviewed suite: 300 tests; no live provider or browser run.

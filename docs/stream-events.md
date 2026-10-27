@@ -108,7 +108,7 @@ iterator; they are not events.
 
 | Event | Fields | Emitted when |
 | --- | --- | --- |
-| `MessageAdded` | `message` | Each time the loop appends to history: the user message (first event of a turn), each assistant message (after its provider stream ends), each tool message (after all its results) |
+| `MessageAdded` | `message` | Each time the loop appends to history: the user message (first event of a turn, unless it is a manual continuation), each assistant message (after its provider stream ends), each tool message (after all its results) |
 | `StepStart` | `step` (from 1) | Before each provider request |
 | `ToolStart` | `call`, `args` | Just before a tool call is checked, approved and run. `args` is `None` when the arguments are not a JSON object |
 | `ToolEnd` | `call`, `result` | After the call finished, was declined, or failed; `result.is_error` tells which |
@@ -251,16 +251,35 @@ appear in `session.updated` and model-visible forward notices. Notices received
 while a call is running are saved after its tool results, before the next model
 request, as ordinary `message.added` items.
 
+## Manual continuation
+
+`POST /api/session/{id}/continue` starts an ordinary turn with no new user
+message ([api.md](api.md#manual-continuation)). The provider sequence is the
+normal one: `session.status` busy with `turn_id`, `origin: "continuation"` and the
+`continuation` link, then `step_start`, `wire_request`, the stream events,
+`part_done`, `usage`, `done`, messages and any tool events, then `turn_end`,
+`session.status` idle with the same `turn_id` and origin. No synthetic user
+`message.added` is emitted.
+
+If the daemon had to close dangling tool calls first, one tool `message.added`
+and one user `message.added` carrying
+`[Nexus recovery: continuation reconciled interrupted tool calls]` appear before
+the busy event. They are committed once; a later continuation appends nothing
+again. `origin` is `prompt` for an ordinary prompt and `continuation` for this
+endpoint; startup recovery publishes `turn.recovered` instead and carries the
+recorded origin and continuation link.
+
 ## Crash recovery
 
 A daemon restart reconciles turns it left unfinished ([daemon.md](daemon.md#crash-recovery)).
 Recovery publishes only durable, replayable facts:
 
 - `turn.recovered` once per turn: `outcome` (`interrupted`, or `completed`
-  when a durable `turn_end` proved the loop finished), the request state,
-  restored `assistant_message` and `tool_message` ids, each tool call's
-  classification, cancelled waits, lost runtime state, the diagnostic-only
-  partial-output counts and the notice message id.
+  when a durable `turn_end` proved the loop finished), the recorded `origin`
+  (`prompt` or `continuation`; null for an older turn) and `continuation` link,
+  the request state, restored `assistant_message` and `tool_message` ids, each
+  tool call's classification, cancelled waits, lost runtime state, the
+  diagnostic-only partial-output counts and the notice message id.
 - `message.added` for a restored assistant message (parts that were completed
   before the crash, with `origin` and `raw`), for the single tool message that
   closes the calls, and for the new `[Nexus recovery: interrupted turn]` user

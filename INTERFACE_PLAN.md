@@ -426,7 +426,9 @@ user message. Offer it after an interrupted or failed turn, once Core has
 reconciled any incomplete calls; disable it while a turn is running. Show the
 continuation linked to the interrupted attempt. Previously completed tools are
 not rerun. Unknown tool outcomes and any partial output that cannot be replayed
-are labelled visibly. Core owns this recovery contract (PLAN.md Step 11).
+are labelled visibly. Core owns this recovery contract (PLAN.md Step 11):
+`POST /api/session/{id}/continue`, `/continue` in chat and
+`nexus session continue ID` are implemented.
 
 ## One-turn sessions
 

@@ -52,6 +52,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/session/{id}/worktrees` | | `{repository, main, session_directory, worktrees: [...]}` |
 | POST | `/api/session/{id}/worktrees` | `{action: "list" or "create" or "delete", path?, branch?, base?}` | the list, the created/reused worktree, or the deleted worktree |
 | POST | `/api/session/{id}/prompt` | `{text}` | 202 `{status: "busy"}`; 409 while a turn runs |
+| POST | `/api/session/{id}/continue` | `{}` | 202 with turn provenance; starts a turn from the stored context and adds no user message. 409 busy/archived/unreconciled, 400 empty, 404 unknown |
 | POST | `/api/session/{id}/interrupt` | | 204 |
 | GET | `/api/session/{id}/message` | | `[Message]` in order |
 | GET | `/api/session/{id}/event` | `?after=<event id>&limit=` (≤ 5000) `&type=a,b` | `{events, counts, more}`: the stored event log |
@@ -194,6 +195,74 @@ missing worktrees, and paths used by a session, a project or a pending move; it
 never deletes a branch. 400 carries Git's or the validation message; 404 is an
 unknown session.
 Limits and intent: [tools.md](tools.md#workspace-control-tools-on-demand).
+
+### Manual continuation
+
+`POST /api/session/{id}/continue` starts one normal turn from the session's
+stored context. It is an explicit client action: reconnecting, reading a
+session, restarting the daemon and startup recovery never continue a session by
+themselves.
+
+The request contains no user text. The daemon sends the frozen system prompt and
+the saved messages exactly as they are, in order; it appends no synthetic user
+message such as "continue" or an empty message, and it rewrites no history. It
+uses the session's current effective model, effort, tools, permission and
+directory, records the new provider request, response and any subsequent tool
+calls like an ordinary prompt, and supports interruption, approvals and
+questions.
+
+```jsonc
+// 202 from POST /api/session/ses_…/continue
+{
+  "status": "busy",
+  "turn_id": "trn_…",
+  "origin": "continuation",
+  "continuation": {
+    "predecessor": {
+      "turn_id": "trn_…", "request_id": "req_…", "status": "interrupted",
+      "request_status": "interrupted", "step": 2, "stop": null,
+      "link": "request", "legacy": false, "note": null
+    },
+    "reconciliation": null          // or {calls, tool_message, notice}
+  },
+  "reconciled": null
+}
+```
+
+| Situation | Status |
+| --- | --- |
+| A turn is already running (`session.status` `busy`) | 409; nothing is interrupted |
+| The root tree is archived | 409 with the unarchive command |
+| The session has no stored messages | 400, saying to send a prompt first and naming the prompt endpoint/CLI |
+| The session has an unfinished durable turn | 409; restart the daemon so startup recovery reconciles it |
+| Unknown session | 404 |
+| Missing or wrong token | 401 |
+
+`predecessor` names the preceding turn and its last provider request when they
+exist. `link` is `request`, `turn` (a turn with no request), or `none`; a legacy
+conversation without execution records says so in `note` rather than inventing a
+link. A crash during a continuation keeps this object in `turn.data`, and
+startup recovery reports it in `turn.recovered`.
+
+Before a provider request is made, every saved tool call must have a result. If
+a crash left calls dangling, the continuation closes them from durable evidence
+and appends one labelled `[Nexus recovery: continuation reconciled interrupted
+tool calls]` user notice. A completed result is preserved; a started call says
+its outcome is unknown and is never re-run; a saved call that never started says
+so; a legacy call with no execution record is labelled unknown. The tool message
+and notice are committed in one transaction, so repeating the continuation
+sends the reconciled context unchanged and appends nothing again. Partial
+provider output remains diagnostic history in the event log and is never
+reconstructed into arguments or reasoning.
+
+Continuation announces itself in the durable `session.status` `busy` event:
+`{status: "busy", turn_id, origin: "prompt" | "continuation", continuation?,
+reconciled?}`. The matching idle event carries the same `turn_id` and `origin`,
+and startup recovery's `turn.recovered` carries `origin` and `continuation` too.
+This is execution/API metadata; it is not an extra model-visible user message.
+Clients must not repeat the POST after an ambiguous network failure: the turn may
+have started, so inspect the session or event log before retrying. Automatic
+retries and idempotent mutation request ids remain separate work.
 
 ### Session export
 
@@ -474,7 +543,7 @@ Deleting a project publishes one tombstone per deleted session, then
 | `session.snapshot` | a snapshot summary, emitted once when an old session is lazily reconstructed |
 | `session.deleted` | `{id}`: a global tombstone stored without the session's history |
 | `session.archived` / `session.unarchived` | `{root, sessions: [ids], archived}`: one transition for a whole tree, stored in the root's event log |
-| `session.status` | `{status: "busy" or "idle"}` before and after each turn; a recovered turn's idle also carries `reason` and `turn_id` |
+| `session.status` | `{status: "busy" or "idle", turn_id?, origin?: "prompt" or "continuation", continuation?, reconciled?}` before and after each turn; a recovered turn's idle also carries `reason` and `turn_id` |
 | `message.added` | `Message`, once it is saved |
 | `permission.asked` | pending approval |
 | `permission.replied` | `{id, session_id?, allow, outcome: "allowed" or "denied" or "cancelled", reason?}`; a cancellation has `allow: false` |
@@ -511,10 +580,12 @@ durable log:
   `outcome: "cancelled"` for every wait the restart lost. The old ids cannot
   resume the turn: a question reply gets 409, an approval 404.
 - One `turn.recovered` per turn with `{turn_id, session_id, outcome,
-  reason, legacy, request, assistant_message, tool_message, tools, waits, losses,
-  partial_output, notice}`. `outcome` is `interrupted`, or `completed` when a
-  durable `turn_end` proved the loop finished before the crash (then `notice` is
-  null). `legacy` is true for a pre-execution-record session.
+  reason, legacy, origin, continuation, request, assistant_message, tool_message,
+  tools, waits, losses, partial_output, notice}`. `outcome` is `interrupted`, or
+  `completed` when a durable `turn_end` proved the loop finished before the crash
+  (then `notice` is null). `legacy` is true for a pre-execution-record session.
+  `origin` is `prompt` or `continuation` when recorded (null for an older turn),
+  and `continuation` is the predecessor link a continuation crashed with.
   `partial_output` is `{"diagnostic_only": true, "counts": …, "parts": …,
   "tool_calls": …}` for an interrupted stream, or null. `tools[].outcome`
   is `restored`, `not_run`, `approval_pending`,
@@ -538,7 +609,9 @@ during recovery does not duplicate a result, notice, cancellation or
 
 1. Subscribe: `GET /api/event?session=ses_…` (with `?cursor=` / `Last-Event-ID`
    when reconnecting) and wait for `server.connected`.
-2. `POST /api/session/ses_…/prompt {"text": "…"}` → 202.
+2. `POST /api/session/ses_…/prompt {"text": "…"}` → 202. To resume the stored
+   context without a new user message, `POST …/continue` instead and follow the
+   same events; a continuation has no user `message.added` before `step_start`.
 3. Events: `session.status busy` → `message.added` (user) → `step_start` →
    `wire_request` → `wire_event`… with `text_delta`/`tool_call_started`… →
    `part_done`… → `usage` → `done` → `message.added` (assistant) → `tool_start`
@@ -562,10 +635,11 @@ Login over the API (sign-in is the local `nexus login`), files and diffs.
 Event retention and log compaction: the `event` table still grows without
 limit and the log floor stays 0. The cursor protocol already reports
 `history_unavailable` with the current head and floor, so retention can arrive
-without a client change. Automatic retries, idempotent mutations and `/continue`
-are still open (Step 11). Turn recovery after a crash is implemented: startup
-marks interrupted turns and publishes their outcome in the log
-([Crash recovery](#crash-recovery)); it never resumes the turn itself.
+without a client change. Automatic retries and idempotent mutation requests are
+still open (Step 11). Manual continuation is implemented
+([Manual continuation](#manual-continuation)). Turn recovery after a crash is
+implemented: startup marks interrupted turns and publishes their outcome in the
+log ([Crash recovery](#crash-recovery)); it never resumes the turn itself.
 
 Worktree listing, creation and deletion exist, but merge/integration and branch
 cleanup are separate future operations. A session's directory can move anywhere

@@ -28,6 +28,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/session/{id}/worktrees | list the repository's worktrees with branch and working-tree state |
 | POST | /api/session/{id}/worktrees | `{action: "list" or "create" or "delete", path?, branch?, base?}` |
 | POST | /api/session/{id}/prompt | `{text}` → 202; 409 while a turn runs |
+| POST | /api/session/{id}/continue | start a turn from the stored context with no new user message → 202 |
 | POST | /api/session/{id}/interrupt | cancel the running turn → 204 |
 | GET | /api/session/{id}/message | saved messages, in order |
 | GET | /api/session/{id}/event | stored events: `?after=<event id>&limit=&type=a,b` (the durable log) |
@@ -354,6 +355,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         runtime.prompt(p(request, "id"), str(body["text"]))
         return JSONResponse({"status": "busy"}, status_code=202)
 
+    async def session_continue(request: Request) -> Response:
+        return JSONResponse(runtime.continue_session(p(request, "id")), status_code=202)
+
     async def interrupt(request: Request) -> Response:
         runtime.session(p(request, "id"))
         await runtime.interrupt(p(request, "id"))
@@ -505,6 +509,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/directory", route(session_directory), methods=["POST"]),
         Route("/api/session/{id}/worktrees", route(session_worktrees), methods=["GET", "POST"]),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),
+        Route("/api/session/{id}/continue", route(session_continue), methods=["POST"]),
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),
         Route("/api/session/{id}/message", route(messages)),
         Route("/api/session/{id}/event", route(stored_events)),

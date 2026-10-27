@@ -52,14 +52,15 @@ from . import worktrees
 from .bash_jobs import NOTICE_CHARS, Job, Jobs
 from .bus import Bus
 from .codec import message_to_json, to_json
+from .continuation import ContextInvalid, Reconciliation, predecessor, reconcile
 from .kernels import Kernels
 from .llmhub.auth import AuthError, CredentialError
 from .llmhub.hub import provider_for
 from .llmhub.types import Done, Message, PartDone, ProviderError, Text, ToolCall, ToolResult, ToolSpec
-from .loop import MAX_STEPS, Agent, MessageAdded, StepStart, ToolEnd, ToolStart
+from .loop import MAX_STEPS, NO_USER_MESSAGE, Agent, MessageAdded, NoUserMessage, StepStart, ToolEnd, ToolStart
 from .observations import FileGuard, FileObservation
 from .questions import PendingQuestion, QuestionError
-from .recovery import Recovery
+from .recovery import Recovery, open_approvals
 from .store import Project, Session, Store, StoredMessage, new_id
 from .tools import BASH_JOB_TOOLS, DEFAULT_TOOLS, Tool, ToolContext, ToolError
 from .tools import bash as bash_tool
@@ -1114,27 +1115,91 @@ class Runtime:
         self.bus.publish("session.notified", {"from": child_id, "text": notice}, session_id=parent_id)
         self._notify(parent_id, notice)
 
-    def prompt(self, session_id: str, text: str) -> None:
-        session = self.session(session_id)
+    def _check_turn_start(self, session: Session) -> None:
         if session.archived:
             root = self._root(session)
             raise Conflict(
-                f"session {session_id} is archived; unarchive its root tree (session {root.id}) before starting a turn "
+                f"session {session.id} is archived; unarchive its root tree (session {root.id}) before starting a turn "
                 f"(nexus session unarchive {root.id} or POST /api/session/{root.id}/unarchive)"
             )
-        if session_id in self.turns:
-            raise Busy(f"session {session_id} is already running a turn")
+        if session.id in self.turns:
+            raise Busy(f"session {session.id} is already running a turn")
+
+    def _begin_turn(self, session: Session, *, user_text: str | NoUserMessage, origin: str,
+                    continuation: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Record one turn durably, announce it, and start its task.
+
+        Prompting and manual continuation share this path; the only difference is
+        the explicit `NO_USER_MESSAGE` marker and the provenance carried in the
+        durable `turn.data`.
+        """
+        session_id = session.id
+        self.errors.pop(session_id, None)
+        data: dict[str, Any] = {"origin": origin}
+        if continuation is not None:
+            data["continuation"] = continuation
+        turn = self.store.start_turn(session_id, data=data)  # durable before the task exists
+        status: dict[str, Any] = {"status": "busy", "turn_id": turn["id"], "origin": origin}
+        if continuation is not None:
+            status["continuation"] = continuation
+            if continuation.get("reconciliation"):
+                status["reconciled"] = continuation["reconciliation"]
+        # Published here, not in the task, so a session is never seen idle between being prompted and running.
+        self.bus.publish("session.status", status, session_id=session_id)
+        self.turns[session_id] = asyncio.create_task(
+            self._run(session_id, user_text, turn["id"], origin=origin, continuation=continuation))
+        return turn
+
+    def prompt(self, session_id: str, text: str) -> dict[str, Any]:
+        session = self.session(session_id)
+        self._check_turn_start(session)
         if not text.strip():
             raise ValueError("text must not be empty")
         if session.title == "New session":
             self.update_session(session_id, title=" ".join(text.split())[:TITLE_CHARS])
-        self.errors.pop(session_id, None)
-        turn = self.store.start_turn(session_id)  # durable before the task exists
-        # Published here, not in the task, so a session is never seen idle between being prompted and running.
-        self.bus.publish("session.status", {"status": "busy"}, session_id=session_id)
-        self.turns[session_id] = asyncio.create_task(self._run(session_id, text, turn["id"]))
+        return self._begin_turn(session, user_text=text, origin="prompt")
 
-    async def _run(self, session_id: str, text: str, turn_id: str) -> None:
+    def continue_session(self, session_id: str) -> dict[str, Any]:
+        """Start a normal turn from the stored context, with no new user message.
+
+        This is an explicit client action. It refuses an empty conversation, an
+        archived tree, a running turn and a session a crash left unreconciled; it
+        never calls startup recovery for other sessions.
+        """
+        session = self.session(session_id)
+        self._check_turn_start(session)
+        unfinished = next((turn for turn in self.store.turns_for_session(session_id)
+                           if turn["status"] == "running" or turn["recovery"] == "pending"), None)
+        if unfinished is not None:
+            raise Conflict(
+                f"session {session_id} has unfinished durable turn {unfinished['id']}; restart the daemon so "
+                "startup recovery reconciles it before continuing"
+            )
+        if not self.store.messages(session_id):
+            raise ValueError(
+                f"session {session_id} has no stored messages to continue; send a prompt first "
+                f"(POST /api/session/{session_id}/prompt or `nexus run --session {session_id} \"…\"`)"
+            )
+        link: dict[str, Any] = {"predecessor": predecessor(self.store, session_id)}
+        try:
+            reconciliation: Reconciliation | None = reconcile(self.store, session_id)
+        except ContextInvalid as exc:
+            raise ValueError(str(exc)) from exc
+        if reconciliation is not None:
+            # The repair committed in one transaction; announce both stored messages once.
+            self._publish_message(session_id, reconciliation.tool_message)
+            self._publish_message(session_id, reconciliation.notice)
+            link["reconciliation"] = reconciliation.json()
+        else:
+            link["reconciliation"] = None
+        turn = self._begin_turn(session, user_text=NO_USER_MESSAGE, origin="continuation", continuation=link)
+        return {
+            "status": "busy", "turn_id": turn["id"], "origin": "continuation",
+            "continuation": link, "reconciled": link.get("reconciliation"),
+        }
+
+    async def _run(self, session_id: str, user_text: str | NoUserMessage, turn_id: str, *,
+                   origin: str = "prompt", continuation: dict[str, Any] | None = None) -> None:
         started: set[str] = set()
         finished: dict[str, ToolResult] = {}
         active_request: str | None = None
@@ -1143,7 +1208,7 @@ class Runtime:
         closed = False
         try:
             agent = self._agent(self.session(session_id))
-            async for event in agent.turn(text):
+            async for event in agent.turn(user_text):
                 if isinstance(event, MessageAdded):
                     if event.message.role == "assistant":
                         started.clear()
@@ -1185,7 +1250,9 @@ class Runtime:
         except asyncio.CancelledError:
             if active_request is not None:
                 self.store.interrupt_request(active_request, reason="interrupted by the user")
-            self._close_dangling_calls(session_id, started, finished, turn_id)
+            self._close_dangling_calls(
+                session_id, started, finished, turn_id,
+                pending_approvals=self._pending_approval_calls(session_id))
             error = {"kind": "interrupted", "message": "interrupted by the user"}
             self._fail(session_id, error)
             self.store.finish_turn(turn_id, "interrupted", steps=step, error=error)
@@ -1225,7 +1292,12 @@ class Runtime:
             if leftover and self.store.session(session_id) is not None:
                 self.prompt(session_id, "\n\n".join(leftover))  # notices that arrived as the turn ended
             else:
-                self.bus.publish("session.status", {"status": "idle", "turn_id": turn_id}, session_id=session_id)
+                idle: dict[str, Any] = {"status": "idle", "turn_id": turn_id, "origin": origin}
+                if continuation is not None:
+                    idle["continuation"] = continuation
+                    if continuation.get("reconciliation"):
+                        idle["reconciled"] = continuation["reconciliation"]
+                self.bus.publish("session.status", idle, session_id=session_id)
             if closed:
                 self.store.set_turn_recovery(turn_id, "none")
 
@@ -1246,18 +1318,37 @@ class Runtime:
         guard = FileGuard(self.store, session_id, self.file_lock, self.pending_reads.get(session_id, []))
         guard.commit_reads(calls)
 
+    def _pending_approval_calls(self, session_id: str) -> set[str]:
+        """Calls still waiting for a user decision when a turn was cancelled.
+
+        The in-memory wait is unwound before this runs, so the durable
+        `permission.asked`/`permission.replied` records are the evidence.
+        """
+        messages = self.store.messages(session_id)
+        lifecycle = self.store.wait_lifecycle(session_id, since=messages[-1].created if messages else None)
+        return {call_id for call_id, request in open_approvals(lifecycle).items()
+                if not request.get("replied")}
+
     def _close_dangling_calls(self, session_id: str, started: set[str],
-                              finished: dict[str, ToolResult], turn_id: str) -> None:
+                              finished: dict[str, ToolResult], turn_id: str, *,
+                              pending_approvals: set[str] | None = None) -> None:
         messages = self.store.messages(session_id)
         if not messages or messages[-1].message.role != "assistant":
             return
         calls = [p for p in messages[-1].message.parts if isinstance(p, ToolCall)]
         if not calls:
             return
+        waiting = pending_approvals or set()
         results: list[ToolResult] = []
         for call in calls:
             if call.id in finished:
                 results.append(finished[call.id])
+            elif call.id in waiting:
+                results.append(ToolResult(
+                    call.id,
+                    "interrupted by the user while this call was waiting for approval; it did not run",
+                    is_error=True,
+                ))
             elif call.id in started:
                 results.append(ToolResult(
                     call.id,

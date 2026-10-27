@@ -158,6 +158,8 @@ class Recovery:
         summary = {
             "turn_id": turn_id, "session_id": session_id, "outcome": "interrupted",
             "reason": turn["data"].get("reason") or RECOVERY_REASON, "legacy": legacy,
+            "origin": turn["data"].get("origin"),
+            "continuation": turn["data"].get("continuation"),
             "request": _request_summary(last_request),
             "assistant_message": assistant.id if assistant else None,
             "tool_message": tools["message_id"],
@@ -207,6 +209,8 @@ class Recovery:
         summary = {
             "turn_id": turn["id"], "session_id": turn["session_id"], "outcome": "completed",
             "reason": "the turn had durably ended before the daemon restarted", "legacy": False,
+            "origin": turn["data"].get("origin"),
+            "continuation": turn["data"].get("continuation"),
             "request": _request_summary(requests[-1] if requests else None),
             "assistant_message": requests[-1]["message_id"] if requests else None,
             "tool_message": None,
@@ -259,9 +263,10 @@ class Recovery:
         if not calls:
             return {"message_id": None, "calls": []}
         rows = {row["call_id"]: row for row in self.store.tools_for_turn(turn["id"])}
-        questions = _open_questions(lifecycle)
-        approvals = _open_approvals(lifecycle)
-        answers = _question_answers(lifecycle)
+        lifecycle = self.store.wait_lifecycle(session_id, since=messages[-1].created)
+        questions = open_questions(lifecycle)
+        approvals = open_approvals(lifecycle)
+        answers = question_answers(lifecycle)
         if any(rows.get(call.id, {}).get("state") == "inserted" for call in calls):
             # A tool message already holds at least one result; never append a second
             # partial batch. This state is unreachable with the atomic insert above.
@@ -272,7 +277,7 @@ class Recovery:
         for call in calls:
             row = rows.get(call.id) or {"call_id": call.id, "name": call.name, "state": "saved"
                                         if not legacy else "unknown"}
-            outcome, result = _classify(call, row, questions, approvals, answers, legacy=legacy)
+            outcome, result = classify_call(call, row, questions, approvals, answers, legacy=legacy)
             results.append(result)
             summary.append({"call_id": call.id, "name": call.name, "state": row["state"],
                             "outcome": outcome})
@@ -305,7 +310,7 @@ class Recovery:
         """Close every pending question and approval with an explicit cancellation."""
         cancelled_questions: list[str] = []
         cancelled_approvals: list[str] = []
-        for request in _open_questions(lifecycle).values():
+        for request in open_questions(lifecycle).values():
             qid = request["id"]
             if not self.store.has_event("question.replied", {"id": qid}, session_id=session_id):
                 self.bus.publish("question.replied", {
@@ -320,7 +325,7 @@ class Recovery:
             while len(self.runtime.resolved_questions) > MAX_RESOLVED_QUESTIONS:
                 self.runtime.resolved_questions.pop(next(iter(self.runtime.resolved_questions)))
             cancelled_questions.append(qid)
-        for request in _open_approvals(lifecycle).values():
+        for request in open_approvals(lifecycle).values():
             if request["replied"]:
                 continue  # already answered; not a lost wait
             pid = request["id"]
@@ -381,6 +386,19 @@ class Recovery:
                 "execution state. Its last assistant message ends in tool calls, but Nexus cannot tell which of "
                 "them started or completed. Their results are therefore labelled unknown, not 'did not run'. "
                 "The conversation is closed with unknown results so it stays valid for a later prompt.")
+        if turn["data"].get("origin") == "continuation":
+            predecessor = (turn["data"].get("continuation") or {}).get("predecessor") or {}
+            if predecessor.get("turn_id"):
+                attempt = f"turn {predecessor['turn_id']}"
+                if predecessor.get("request_id"):
+                    attempt += f" request {predecessor['request_id']}"
+                if predecessor.get("step") is not None:
+                    attempt += f" (step {predecessor['step']}, {predecessor.get('status') or 'unknown'})"
+                lines.append(f"This turn was started by manual continuation of {attempt}.")
+            else:
+                lines.append(
+                    "This turn was started by manual continuation, but no durable preceding turn or request record "
+                    "exists to link it to; the exact earlier attempt is unknown.")
 
         if request is None:
             if legacy:
@@ -430,7 +448,7 @@ class Recovery:
         if tools["calls"]:
             lines.append("Tool calls in the last assistant message:")
             for call in tools["calls"]:
-                lines.append(f"- `{call['call_id']}` `{call['name']}`: {_OUTCOMES[call['outcome']]}")
+                lines.append(f"- `{call['call_id']}` `{call['name']}`: {OUTCOMES[call['outcome']]}")
             if tools["message_id"]:
                 lines.append(f"Their results are in tool message {tools['message_id']}.")
         if waits["questions"] or waits["approvals"]:
@@ -449,7 +467,9 @@ class Recovery:
                 "it was not killed by PID because a reused pid could belong to another process.")
         if archived:
             lines.append("The session remains archived and idle.")
-        lines.append("Send a new prompt to continue; earlier context is unchanged.")
+        lines.append(
+            f"Send a new prompt or use manual continuation (POST /api/session/{turn['session_id']}/continue or "
+            "`/continue` in chat) to resume from this context; earlier context is unchanged.")
         return clip("\n".join(line for line in lines if line), NOTICE_CHARS)
 
     def _publish_idle(self, turn: dict[str, Any], *, reason: str | None = None) -> None:
@@ -465,7 +485,7 @@ class Recovery:
             self.bus.publish("turn.recovered", summary, session_id=turn["session_id"])
 
 
-_OUTCOMES = {
+OUTCOMES = {
     "restored": "its completed result was preserved exactly and inserted as a tool result (known outcome).",
     "inserted": "its result was already inserted; nothing changed.",
     "not_run": "it did not run; there is no durable record that it started.",
@@ -478,19 +498,20 @@ _OUTCOMES = {
     "unknown_code": "it had started inside the lost kernel; its result is unknown and it may have changed the "
                     "workspace. Nested `code.call`/`code.cell` evidence remains in the event log; no successful "
                     "result or kernel state was invented.",
-    "legacy_unknown": "its outcome is unknown: this session was saved before tool execution records existed, so "
+    "legacy_unknown": "its outcome is unknown: no execution record is linked to this saved call, so "
                       "Nexus cannot tell whether it ran. It was not re-run.",
 }
 
 
-def _classify(call: ToolCall, row: dict[str, Any], questions: dict[str, dict[str, Any]],
-              approvals: dict[str, dict[str, Any]],
-              answers: dict[str, tuple[str, str | None]], *, legacy: bool = False) -> tuple[str, ToolResult]:
+def classify_call(call: ToolCall, row: dict[str, Any], questions: dict[str, dict[str, Any]],
+                  approvals: dict[str, dict[str, Any]],
+                  answers: dict[str, tuple[str, str | None]], *, legacy: bool = False) -> tuple[str, ToolResult]:
+    """Classify one saved call from durable evidence; shared with continuation."""
     state = row["state"]
     if legacy:
         return "legacy_unknown", ToolResult(
             call.id,
-            "interrupted before this Nexus version recorded tool execution state; its outcome is unknown and it "
+            "no execution record is linked to this saved call; its outcome is unknown and it "
             "may have changed the workspace. It was not re-run and no result was invented.",
             is_error=True,
         )
@@ -544,7 +565,7 @@ def _classify(call: ToolCall, row: dict[str, Any], questions: dict[str, dict[str
     )
 
 
-def _question_answers(lifecycle: dict[str, Any]) -> dict[str, tuple[str, str | None]]:
+def question_answers(lifecycle: dict[str, Any]) -> dict[str, tuple[str, str | None]]:
     """Per `ask` call: the durable answer text, or its cancellation outcome."""
     asked = {item.get("id"): item for item in lifecycle["questions_asked"]}
     out: dict[str, tuple[str, str | None]] = {}
@@ -564,12 +585,12 @@ def _question_answers(lifecycle: dict[str, Any]) -> dict[str, tuple[str, str | N
     return out
 
 
-def _open_questions(lifecycle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def open_questions(lifecycle: dict[str, Any]) -> dict[str, dict[str, Any]]:
     replied = {item.get("id") for item in lifecycle["questions_replied"]}
     return {item["id"]: item for item in lifecycle["questions_asked"] if item.get("id") not in replied}
 
 
-def _open_approvals(lifecycle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def open_approvals(lifecycle: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Approvals by call id: unanswered ones and replied ones, so a denial is known."""
     replies = {item.get("id"): item for item in lifecycle["approvals_replied"]}
     out: dict[str, dict[str, Any]] = {}

@@ -144,6 +144,7 @@ create table if not exists turn_tool (
   session_id text not null references session(id) on delete cascade,
   call_id text not null,
   name text not null,
+  message_id text,
   arguments text not null default '',
   state text not null,
   started real,
@@ -255,6 +256,9 @@ class Store:
         if turn_columns and "start_seq" not in turn_columns:
             with self.db:
                 self.db.execute("alter table turn add column start_seq integer not null default 0")
+        tool_columns = {r["name"] for r in self.db.execute("pragma table_info(turn_tool)")}
+        if "message_id" not in tool_columns:
+            self.db.execute("alter table turn_tool add column message_id text")
         self.db.execute("create index if not exists session_parent on session(parent_id)")
         self._migrate_event_log()
         self._generation = self._ensure_log()
@@ -814,6 +818,30 @@ class Store:
         rows = self.db.execute("select * from turn_tool where turn_id = ? order by started, call_id", (turn_id,))
         return [self._tool_row(row) for row in rows]
 
+    def latest_tool_rows(self, session_id: str, call_ids: list[str], *, message_id: str) -> dict[str, dict[str, Any]]:
+        """Execution evidence for calls in a particular saved assistant message.
+
+        A saved assistant message and its call rows are one transaction, so this
+        is the evidence a continuation uses to close a dangling call: `started`
+        means unknown, `finished` preserves a completed result, and `saved` means
+        it never ran. Rows are ordered by their turn's start, newest first.
+        """
+        if not call_ids:
+            return {}
+        marks = ", ".join("?" * len(call_ids))
+        rows = self.db.execute(
+            "select tt.* from turn_tool tt join turn t on t.id = tt.turn_id"
+            f" where tt.session_id = ? and tt.call_id in ({marks})"
+            " and (tt.message_id = ? or (tt.message_id is null and exists"
+            " (select 1 from turn_request r where r.turn_id = tt.turn_id and r.message_id = ?)))"
+            " order by t.started desc, t.id desc",
+            (session_id, *call_ids, message_id, message_id),
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            out.setdefault(row["call_id"], self._tool_row(row))
+        return out
+
     def mark_tool_started(self, turn_id: str, session_id: str, call: ToolCall) -> None:
         """Record that a call is about to run, before the tool is invoked."""
         with self.db:
@@ -861,34 +889,57 @@ class Store:
             for part in message.parts:
                 if isinstance(part, ToolCall):
                     self.db.execute(
-                        "insert into turn_tool (turn_id, session_id, call_id, name, arguments, state)"
-                        " values (?, ?, ?, ?, ?, 'saved')"
+                        "insert into turn_tool (turn_id, session_id, call_id, name, arguments, message_id, state)"
+                        " values (?, ?, ?, ?, ?, ?, 'saved')"
                         " on conflict(turn_id, call_id) do update set name = excluded.name,"
-                        " arguments = excluded.arguments",
-                        (turn_id, session_id, part.id, part.name, part.arguments),
+                        " arguments = excluded.arguments, message_id = excluded.message_id, state = 'saved',"
+                        " started = null, finished = null, output = null, is_error = 0, observations = '[]'",
+                        (turn_id, session_id, part.id, part.name, part.arguments, stored.id),
                     )
         return stored
 
-    def save_tool_message(self, session_id: str, message: Message, *, turn_id: str) -> StoredMessage:
+    def _apply_tool_results(self, session_id: str, message: Message, *, turn_id: str | None,
+                            now: float) -> None:
+        """Mark one message's results inserted, or record a result with no known turn."""
+        if turn_id is None:
+            return
+        for part in message.parts:
+            if not isinstance(part, ToolResult):
+                continue
+            changed = self.db.execute(
+                "update turn_tool set state = 'inserted', output = ?, is_error = ?, finished = coalesce(finished, ?)"
+                " where turn_id = ? and call_id = ?",
+                (part.output, 1 if part.is_error else 0, now, turn_id, part.call_id),
+            ).rowcount
+            if not changed:  # a result whose call predates the lifecycle record still closes visibly
+                self.db.execute(
+                    "insert into turn_tool (turn_id, session_id, call_id, name, arguments, state,"
+                    " finished, output, is_error) values (?, ?, ?, '', '', 'inserted', ?, ?, ?)",
+                    (turn_id, session_id, part.call_id, now, part.output, 1 if part.is_error else 0),
+                )
+
+    def save_tool_message(self, session_id: str, message: Message, *, turn_id: str | None) -> StoredMessage:
         """Save a tool message and mark its results inserted, as one transaction."""
         now = time.time()
         with self.db:
             stored = self._insert_message(session_id, message, now)
-            for part in message.parts:
-                if not isinstance(part, ToolResult):
-                    continue
-                changed = self.db.execute(
-                    "update turn_tool set state = 'inserted', output = ?, is_error = ?, finished = coalesce(finished, ?)"
-                    " where turn_id = ? and call_id = ?",
-                    (part.output, 1 if part.is_error else 0, now, turn_id, part.call_id),
-                ).rowcount
-                if not changed:  # a result whose call predates the lifecycle record still closes visibly
-                    self.db.execute(
-                        "insert into turn_tool (turn_id, session_id, call_id, name, arguments, state,"
-                        " finished, output, is_error) values (?, ?, ?, '', '', 'inserted', ?, ?, ?)",
-                        (turn_id, session_id, part.call_id, now, part.output, 1 if part.is_error else 0),
-                    )
+            self._apply_tool_results(session_id, message, turn_id=turn_id, now=now)
         return stored
+
+    def save_tool_message_with_notice(self, session_id: str, message: Message, notice: Message, *,
+                                      turn_id: str | None) -> tuple[StoredMessage, StoredMessage]:
+        """Insert one tool message and one follow-up context message atomically.
+
+        Continuation reconciliation uses this so a crash cannot leave closed tool
+        calls without their labelled explanation, or a notice that a later
+        continuation would append again.
+        """
+        now = time.time()
+        with self.db:
+            stored = self._insert_message(session_id, message, now)
+            self._apply_tool_results(session_id, message, turn_id=turn_id, now=now)
+            explained = self._insert_message(session_id, notice, now)
+        return stored, explained
 
     def has_event(self, type_: str, fields: dict[str, Any], *, session_id: str | None = None) -> bool:
         """Whether a stored event of `type_` carries every field value (exact JSON match)."""
@@ -931,12 +982,13 @@ class Store:
                 finished.add(job)
         return [job for job in started if job not in finished]
 
-    def wait_lifecycle(self, session_id: str) -> dict[str, Any]:
+    def wait_lifecycle(self, session_id: str, *, since: float | None = None) -> dict[str, Any]:
         """Durable asked/replied records for approvals and questions in one session."""
         rows = self.db.execute(
             "select type, data from event where session_id = ? and type in"
-            " ('question.asked', 'question.replied', 'permission.asked', 'permission.replied') order by id",
-            (session_id,),
+            " ('question.asked', 'question.replied', 'permission.asked', 'permission.replied')"
+            " and (? is null or time >= ?) order by id",
+            (session_id, since, since),
         )
         out: dict[str, Any] = {
             "questions_asked": [], "questions_replied": [], "approvals_asked": [], "approvals_replied": [],
