@@ -1,5 +1,8 @@
 # Ratatui implementation and parity ledger
 
+The project strip starts at column 3; the activity indicator is inset one cell
+from the above-composer row and separated from its label by a space.
+
 The worktree bar renders the root from the incoming conversation reduction, even
 before the controller's cached view catches up, so an agent move updates it without
 a tab switch. Native PTY action readers ignore passive `draft_state` composer

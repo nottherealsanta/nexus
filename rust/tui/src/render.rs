@@ -1320,7 +1320,7 @@ pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     let mut out = AboveLayout::default();
     if status_visible(s) {
         out.status = take(&mut y).map(|row| {
-            let inset = row.width.min(2);
+            let inset = row.width.min(1);
             Rect::new(row.x + inset, row.y, row.width - inset, row.height)
         });
     }
@@ -1621,10 +1621,13 @@ fn draw_status_line(
     } else {
         "∴"
     };
-    let mut spans = vec![Span::styled(mark, Style::default().fg(shimmer_greys(p).1))];
+    let mut spans = vec![
+        Span::styled(mark, Style::default().fg(shimmer_greys(p).1)),
+        Span::raw(" "),
+    ];
     spans.extend(shimmer_spans(&label, frame_tick, animate, mono, p));
     // The only elapsed time is the right-hand turn clock.
-    let used = 1 + label.width();
+    let used = 2 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + right.width());
     spans.push(Span::raw(" ".repeat(gap)));
     let (info, button) = right.split_at(stop);
