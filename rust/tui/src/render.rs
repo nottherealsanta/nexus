@@ -1487,9 +1487,9 @@ pub fn stop_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
     if slot_waiting(s) && s.slot_wait.is_some() {
         return false; // the waiting line has no button
     }
-    // Same placement as `draw_status_line`: `∴`, label, gap, then the right text.
+    // Same placement as `draw_status_line`: three dots, one space, label, gap, then the right text.
     let label = status_label(s, usize::from(row.width), text.width());
-    let used = 2 + label.width();
+    let used = 4 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + text.width());
     let start = usize::from(row.x) + used + gap + text[..at].width();
     y == row.y && usize::from(x) >= start && x < row.right()
@@ -1501,7 +1501,7 @@ fn status_label(s: &Snapshot, row_width: usize, right_width: usize) -> String {
         .as_ref()
         .map(|t| t.activity.as_str())
         .unwrap_or_default();
-    let left_room = row_width.saturating_sub(right_width + 2);
+    let left_room = row_width.saturating_sub(right_width + 4);
     crate::transcript::truncate(&format!("{activity}…"), left_room.saturating_sub(10))
 }
 /// Motion-clock frames (30 Hz) one shimmer sweep takes across the activity word: 1.8 s.
@@ -1553,6 +1553,25 @@ fn shimmer_spans(
                 g.to_owned(),
                 Style::default().fg(nexus_widgets::theme::mix(dark, light, amount)),
             )
+        })
+        .collect()
+}
+/// Three one-cell dots, with a travelling highlight (static when motion is off).
+fn status_dots(frame: usize, animate: bool, mono: bool, p: &Palette) -> Vec<Span<'static>> {
+    let (light, dark) = shimmer_greys(p);
+    (0..3)
+        .map(|i| {
+            if mono {
+                Span::raw(".")
+            } else {
+                let phase = (frame % SHIMMER_FRAMES + SHIMMER_FRAMES - i * 9) % SHIMMER_FRAMES;
+                let amount = if animate {
+                    (1.0 - phase.min(SHIMMER_FRAMES - phase) as f32 / 18.0).max(0.0)
+                } else {
+                    0.0
+                };
+                Span::styled(".", Style::default().fg(nexus_widgets::theme::mix(dark, light, amount)))
+            }
         })
         .collect()
 }
@@ -1614,20 +1633,13 @@ fn draw_status_line(
     let now = crate::live_bar::now_epoch();
     let (right, stop) = status_right(s, now).unwrap_or_default();
     let label = status_label(s, usize::from(row.width), right.width());
-    // `∴` and the activity word, shimmering grey on the 30 Hz motion clock (THK-4). Only
-    // colours change, so the label keeps its width and `stop_at` keeps its geometry.
-    let mark = if crate::transcript::look::glyphs().ascii {
-        ":"
-    } else {
-        "∴"
-    };
-    let mut spans = vec![
-        Span::styled(mark, Style::default().fg(shimmer_greys(p).1)),
-        Span::raw(" "),
-    ];
+    // Three fixed-width dots pulse on the motion clock; one cell separates the word.
+    // Only colours change, keeping the label and `stop_at` geometry stable.
+    let mut spans = status_dots(frame_tick, animate, mono, p);
+    spans.push(Span::raw(" "));
     spans.extend(shimmer_spans(&label, frame_tick, animate, mono, p));
     // The only elapsed time is the right-hand turn clock.
-    let used = 2 + label.width();
+    let used = 4 + label.width();
     let gap = usize::from(row.width).saturating_sub(used + right.width());
     spans.push(Span::raw(" ".repeat(gap)));
     let (info, button) = right.split_at(stop);
@@ -5596,15 +5608,15 @@ mod editor_layout_tests {
         assert_eq!(
             buffer[(row.x, row.y)].fg,
             shimmer_greys(&p).1,
-            "the ∴ mark is the base dark grey"
+            "animations off: the dots are the base dark grey"
         );
         assert_eq!(
-            buffer[(row.x + 1, row.y)].fg,
+            buffer[(row.x + 4, row.y)].fg,
             shimmer_greys(&p).1,
-            "animations off: the word starts immediately after the mark"
+            "animations off: the word starts one cell after the three dots"
         );
         let status = text(row.y);
-        assert!(status.contains("∴Waiting for response…"), "{status}");
+        assert!(status.contains("... Waiting for response…"), "{status}");
         assert!(
             !status.contains("2.0s") && !status.contains("response… 2"),
             "{status}"
@@ -7331,6 +7343,22 @@ mod thinking_shimmer_tests {
 
     fn text_of(spans: &[Span<'static>]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn status_has_three_fixed_dots_that_animate_without_changing_width() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let rest = status_dots(0, false, false, &p);
+            for tick in 0..SHIMMER_FRAMES * 2 {
+                let dots = status_dots(tick, true, false, &p);
+                assert_eq!(text_of(&dots), "...");
+                assert_eq!(Line::from(dots).width(), 3);
+                assert_eq!(status_dots(tick, false, false, &p), rest);
+                assert_eq!(status_dots(tick, true, true, &p), vec![Span::raw("."); 3]);
+            }
+            assert_ne!(status_dots(0, true, false, &p), status_dots(9, true, false, &p));
+        }
     }
 
     #[test]
