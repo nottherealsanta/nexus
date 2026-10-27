@@ -85,7 +85,7 @@ user-facing host actions (`move_session_worktree`, `promote_session`,
 Host-facing Runtime API: `list_session_worktrees(session)` (the same rows the
 model sees), `move_session_worktree(session, to, reason)` (idle; `"main"` or a
 name), `promote_session(session, reason=, continuation=, name=, base=)` (idle
-create; `name` also becomes the session title) and
+create; `name` only names the worktree and branch, never the session title) and
 `detach_session_worktree(session)` (idle move to main).
 
 **Permissions.** `worktree_list`, `worktree_create` and `worktree_move` never ask

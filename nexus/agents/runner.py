@@ -161,8 +161,9 @@ RESUME_UNRESOLVED_KEY = "resume:unresolved"
 #: Follow-up runs allowed per root turn, across all children. They never count
 #: as fan-out (a continuation is not a new child).
 DEFAULT_MAX_CONTINUATIONS_PER_TURN = 8
-#: Total runs one child may ever have (the first run plus its follow-ups).
-DEFAULT_MAX_RUNS_PER_CHILD = 4
+#: Total runs one child may ever have (the first run plus its follow-ups);
+#: None is unlimited (continuing a child is advised, not capped).
+DEFAULT_MAX_RUNS_PER_CHILD: int | None = None
 #: The role an ad-hoc ``Task`` request uses when none is named.
 DEFAULT_CHILD_TYPE = "task"
 #: Namespace a model may prefix onto requested tool names (OpenAI Responses).

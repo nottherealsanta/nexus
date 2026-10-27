@@ -13,7 +13,7 @@ here, so add a row when you add a file.
 | `nexus/` | the package (below) |
 | `nexus/gateway/` | opt-in loopback device gateway; module file map below |
 | `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
-| `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
+| `.agents/skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
 | `tests/` | offline suite, Playwright/visual checks, fixtures, provider conformance ([testing.md](testing.md)) |
 | `examples/` | facade example and extension samples ([devtools.md](devtools.md#examples-examples)) |

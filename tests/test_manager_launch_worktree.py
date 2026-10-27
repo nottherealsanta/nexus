@@ -35,14 +35,16 @@ async def test_worktree_launch_creates_the_named_branch_before_the_first_turn(pr
     runtime, facade, port = _setup(project, tmp_path)
     try:
         launched = await port.launch("do it", "m1", title="isolated-fix", worktree=True)
-        assert launched.worktree_name == "isolated-fix" and launched.title == "isolated-fix"
+        assert launched.worktree_name == "isolated-fix" and launched.title == "do it"
         waited = await port.wait((launched.id,), "any", 30)
         assert waited.completed == (launched.id,)
         root = runtime.session_root(launched.id)
         assert root.kind == "worktree" and root.path.name == "isolated-fix"
         assert root.branch == "nexus/wt/isolated-fix"
         assert git(project, "branch", "--list", "nexus/wt/isolated-fix")
-        assert runtime.sessions.summary(launched.id).title == "isolated-fix"
+        summary = runtime.sessions.summary(launched.id)
+        assert summary.title and summary.title != "isolated-fix"
+        assert runtime.sessions.title_source(launched.id) != "user"
     finally:
         await facade.wait_idle(timeout=10)
         await runtime.aclose()

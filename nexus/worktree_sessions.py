@@ -49,8 +49,6 @@ class SessionWorktrees:
         self.runtime = runtime
         #: Moves requested by tools and not yet applied (one per session).
         self._moves: dict[str, dict] = {}
-        #: Worktree names to store as the user title once a draft's first turn creates its row.
-        self._titles: dict[str, str] = {}
         self._trust_once: set[tuple[str, str]] = set()
         self._skip_once: set[tuple[str, str]] = set()
         self._occupancy_cache: tuple[float, dict] = (0.0, {})
@@ -135,19 +133,6 @@ class SessionWorktrees:
     def _name(handle):
         row = handle._store.session_row(handle.id) or {}
         return str(row.get("name") or row.get("friendly_name") or handle.id)[:200]
-
-    def _title(self, session, name):
-        """Store the name as a user title (never replaced by auto-titling).
-
-        A draft has no session row until its first message, so this is best
-        effort here.
-        """
-        from .errors import SessionError
-        from .host_support.auto_title import set_user_title
-        try:
-            set_user_title(self.runtime.sessions, session, name)
-        except SessionError:
-            pass
 
     def _turn_data(self, handle, turn_id):
         prompt = ""
@@ -514,9 +499,6 @@ class SessionWorktrees:
     async def prepare(self, handle, lease, content):
         if getattr(handle, "_kind", None) == "manager":
             return
-        title = self._titles.pop(handle.id, "")
-        if title:
-            self._title(handle.id, title)
         root = self.runtime.session_root(handle.id)
         if root.kind != "worktree":
             return
@@ -1064,7 +1046,7 @@ class SessionWorktrees:
                 "The move happens after this step. Do not run tools that depend on the new directory in the same step; "
                 "other tool calls of this step still run in the old directory.")
 
-    async def move_session(self, session, to, *, reason="", action="move", name="", base="", continuation="", retitle=False):
+    async def move_session(self, session, to, *, reason="", action="move", name="", base="", continuation=""):
         """Idle-only entry (user override from the host): validate and apply now."""
         handle = self.handle(session)
         self._idle(handle)
@@ -1073,8 +1055,7 @@ class SessionWorktrees:
             if self.runtime.sessions._has_pending_work(session):
                 raise SessionBusy("Moving a session requires a turn boundary without pending work")
             request = {"action": action, "reason": reason or "requested by the user", "to": to, "name": name, "base": base,
-                       "request_id": "", "continuation": continuation[:16000] if isinstance(continuation, str) else "",
-                       "retitle": retitle}
+                       "request_id": "", "continuation": continuation[:16000] if isinstance(continuation, str) else ""}
             await self._validate(handle, request, in_turn=False)
             try:
                 await self._apply(handle, request, in_turn=False, held=True)
@@ -1088,7 +1069,7 @@ class SessionWorktrees:
     async def promote(self, session, *, reason="", continuation="", name="", base=""):
         """Create a worktree for an idle session and move into it (UI / launch override)."""
         return await self.move_session(session, "", reason=reason or "requested by the user", action="create",
-                                       name=name, base=base, continuation=continuation, retitle=bool(name))
+                                       name=name, base=base, continuation=continuation)
 
     async def detach(self, session):
         return await self.move_session(session, "main", reason="requested by the user")
@@ -1231,10 +1212,6 @@ class SessionWorktrees:
         if created and source.kind == "main":
             self._event(handle, "worktree.promoted", {"reason": redact_secrets(reason), "request_id": request_id, "files": list(owned),
                 "excluded": excluded, "source_display": source.to_data(workspace)["path_display"]})
-        if request.get("retitle") and request.get("name"):
-            # A draft has no session row yet: the title is repeated on its first turn.
-            self._titles[handle.id] = request["name"]
-            self._title(handle.id, request["name"])
         if request.get("continuation"):
             handle.enqueue(request["continuation"], origin={"kind": "promote", "request_id": request_id})
         try:

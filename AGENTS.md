@@ -35,8 +35,8 @@ Update the matching doc in the same change as the code.
 | CLI subcommands and chat slash commands | [docs/cli.md](docs/cli.md) |
 | Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
 | Native Ratatui terminal client | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
-| Native macOS screenshot review (TUI, NSH) | [native screenshot skill](skills/native-app-review/SKILL.md) |
-| `nexus web` client (basic NSH web client; `/v1/web/*` API) and the planned NSH desktop client (`rust/app`, `rust/client-core`) | [docs/nsh-client.md](docs/nsh-client.md), [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](skills/nsh-nexus/SKILL.md) |
+| Native macOS screenshot review (TUI, NSH) | [native screenshot skill](.agents/skills/native-app-review/SKILL.md) |
+| `nexus web` client (basic NSH web client; `/v1/web/*` API) and the planned NSH desktop client (`rust/app`, `rust/client-core`) | [docs/nsh-client.md](docs/nsh-client.md), [plan](plans/planning/nsh-cross-platform-clients.md), [NSH skill](.agents/skills/nsh-nexus/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | GPT Live voice calls (experimental) | [docs/live.md](docs/live.md) |
 | The workspace manager session (implemented, unverified, off by default) | [docs/manager.md](docs/manager.md) |

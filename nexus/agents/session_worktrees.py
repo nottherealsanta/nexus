@@ -527,7 +527,7 @@ def validate_session_name(name: object) -> str:
     """Return a user-chosen worktree name or raise ValueError the UI can show.
 
     Letters, digits, ``-`` and ``_``; 1-60 characters; first character a letter
-    or digit. The name is the session title, the folder and the branch suffix.
+    or digit. The name is the folder and the branch suffix, not the session title.
     """
     if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         raise ValueError(

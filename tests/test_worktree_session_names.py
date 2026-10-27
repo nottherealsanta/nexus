@@ -49,7 +49,7 @@ async def test_existing_branch_or_folder_refused_and_good_name_accepted(project,
         await rt.aclose()
 
 
-async def test_named_worktree_creates_exact_folder_branch_title_and_environment(project, tmp_path):  # noqa: F811
+async def test_named_worktree_creates_exact_folder_branch_and_environment(project, tmp_path):  # noqa: F811
     provider = ScriptedProvider(text_response("one"), text_response("two"))
     rt = runtime(project, tmp_path, provider)
     host = HostFacade(rt)
@@ -70,7 +70,7 @@ async def test_named_worktree_creates_exact_folder_branch_title_and_environment(
         assert state["worktree_name"] == "login-fix" and state["branch"] == "nexus/wt/login-fix"
         await drain(handle, "hello")
         await drain(handle, "again")
-        assert rt.sessions.summary(handle.id).title == "login-fix"
+        assert rt.sessions.summary(handle.id).title == "hello"
         sha = git(project, "rev-parse", "HEAD")
         for index in (0, 1):
             text = _system(provider, index)
@@ -95,7 +95,7 @@ async def test_worktree_and_root_survive_restart_and_replay(project, tmp_path): 
     try:
         state = again.session_worktree_status(sid)
         assert state["worktree_name"] == "keep-me" and state["branch"] == "nexus/wt/keep-me"
-        assert again.sessions.summary(sid).title == "keep-me"
+        assert again.sessions.summary(sid).title == "go"
         assert again.session_root(sid).kind == "worktree"
         listing = again.list_session_worktrees(sid)
         assert listing["current"] == "keep-me"
@@ -205,15 +205,15 @@ async def test_unnamed_create_gets_word_pair_without_becoming_its_title(project,
         await rt.aclose()
 
 
-async def test_explicit_name_sets_user_title_and_exact_folder(project, tmp_path):  # noqa: F811
+async def test_explicit_name_keeps_first_message_title_and_exact_folder(project, tmp_path):  # noqa: F811
     rt = runtime(project, tmp_path, ScriptedProvider(text_response("x")))
     try:
         h = rt.session("named2")
         await rt.promote_session(h.id, reason="r", name="exact-one")
         await drain(h, "hi")
         assert rt.session_root(h.id).path.name == "exact-one"
-        assert rt.sessions.summary(h.id).title == "exact-one"
-        assert rt.sessions.title_source(h.id) == "user"
+        assert rt.sessions.summary(h.id).title == "hi"
+        assert rt.sessions.title_source(h.id) == "first_message"
     finally:
         await rt.aclose()
 
@@ -237,5 +237,22 @@ async def test_every_git_session_gets_the_block_and_a_non_git_workspace_does_not
         await drain(h, "hi")
         assert "<session_worktree>" not in _system(bare)
         assert not {name for name in {t.name for t in bare.requests[0].tools} if name.startswith("worktree_")}
+    finally:
+        await rt.aclose()
+
+
+async def test_worktree_move_preserves_explicit_user_rename(project, tmp_path):  # noqa: F811
+    rt = runtime(project, tmp_path, ScriptedProvider(text_response("one"), text_response("two")))
+    host = HostFacade(rt)
+    try:
+        handle = rt.session("renamed")
+        await drain(handle, "first instruction")
+        result = await host.handle(p.SessionRename(session_id=handle.id, title="My chosen title"))
+        assert isinstance(result, p.SessionRenameResult)
+        await rt.promote_session(handle.id, reason="isolate", name="folder-only")
+        await drain(handle, "second instruction")
+        assert rt.session_root(handle.id).path.name == "folder-only"
+        assert rt.sessions.summary(handle.id).title == "My chosen title"
+        assert rt.sessions.title_source(handle.id) == "user"
     finally:
         await rt.aclose()

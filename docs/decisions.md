@@ -1559,9 +1559,10 @@ still no detached child, report queue, wake, idle slot or `subagent_send`. Decis
   continuable; Claude Code worker children carry an `external` block in the record (see above). Chosen over fields on `agent.spawned` (bloats and relays a sensitive
   prompt to every UI) and over a new table (migration).
 - **Continuation is not fan-out.** `SubagentBudget.reserve_continuation` charges
-  tokens/cost like a spawn but does not touch `children`; separate caps (8 follow-ups per
-  root turn, 4 runs per child, from the durable log) are fixed defaults, not config, since
-  nothing yet shows users need to tune them. Failed and cancelled runs count; nothing
+  tokens/cost like a spawn but does not touch `children`; a separate cap (8 follow-ups per
+  root turn) is a fixed default, not config. The former 4-runs-per-child cap was removed
+  (default `None`): it stranded long tasks, and the orchestrator prompt only *advises*
+  continuing the same child for related work rather than limiting it to one subagent. Failed and cancelled runs count; nothing
   retries.
 - **v1 limits.** Native Nexus children that ended `completed`, without a worktree. Failed,
   cancelled, interrupted, closed, external, worktree and legacy children, and user-initiated
@@ -1600,6 +1601,13 @@ The manager prompt makes `session_launch` use `worktree=true` with a descriptive
 user's main checkout is untouched unless they explicitly ask for it. A non-Git workspace falls back to
 `worktree=false` with a disclosure to the user. The tool schema default stays `false` (debug MCP and other callers
 are unchanged); the policy is prompt-level, so offline tests pin the wording only. See [manager.md](manager.md).
+
+## A worktree name is never the session title
+
+A name given to `promote_session` or a worktree launch only names the folder and branch. It used to be stored
+as a user title (`title_source='user'`), so the auto title could never replace it and sessions showed slugs.
+Now the title is derived from the first message and auto-titled as for any session; an explicit rename still
+wins. The launch `title` of a worktree launch is the worktree name only.
 
 ## System-prompt parts are uncapped by default
 

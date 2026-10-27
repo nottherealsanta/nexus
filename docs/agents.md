@@ -525,11 +525,12 @@ in this process (the child's session turn lease also guards other processes). A 
 cancelled follow-up leaves the child not continuable; nothing retries automatically.
 
 *Bounds.* A follow-up is not a new child: it never counts toward `max_fanout`. It reserves
-tokens/cost exactly like a spawn, and is bounded by two separate limits, both fixed defaults
-(not configuration): 8 follow-ups per root turn across all children
-(`DEFAULT_MAX_CONTINUATIONS_PER_TURN`) and 4 total runs per child
-(`DEFAULT_MAX_RUNS_PER_CHILD`, counted from the parent log so a restart cannot reset it).
-Failed and cancelled follow-ups count.
+tokens/cost exactly like a spawn, and is bounded by 8 follow-ups per root turn across all
+children (`DEFAULT_MAX_CONTINUATIONS_PER_TURN`, a fixed default, not configuration). Runs per
+child are unlimited by default (`DEFAULT_MAX_RUNS_PER_CHILD = None`); when a cap is set it is
+counted from the parent log so a restart cannot reset it. Failed and cancelled follow-ups
+count. Continuing a child is advised for related work, never required: the root may start a
+new subagent at any time.
 
 *External Claude Code workers.* A completed `claude-code/<model>` worker child is continuable.
 After a completed first run the runtime appends the same `agent.config` record with an

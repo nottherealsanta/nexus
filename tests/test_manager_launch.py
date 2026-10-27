@@ -73,9 +73,9 @@ async def test_launch_links_in_the_manager_log_then_starts_a_normal_root(tmp_pat
 async def test_launch_worktree_passes_the_exact_name_to_the_host(tmp_path):
     root, agents, manager, proxy, host, port = setup(tmp_path)
     launched = await port.launch("risky refactor", "m1", title="risky-refactor", worktree=True)
-    assert launched.title == "risky-refactor" and launched.worktree_name == "risky-refactor"
+    assert launched.title == "risky refactor" and launched.worktree_name == "risky-refactor"
     assert host.worktree_names == [("mgr-1", "risky-refactor")]
-    assert host.started[0][4] == "risky-refactor"
+    assert host.started[0][4] == "risky refactor"
     plain = await port.launch("other", "m1", title="Free form")
     assert plain.worktree_name == "" and host.worktree_names == [("mgr-1", "risky-refactor")]
     with pytest.raises(LaunchRefused):

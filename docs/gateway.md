@@ -23,7 +23,7 @@ trusted proxy. For example, configure `tailscale serve` manually to proxy that
 HTTPS name to the gateway's loopback port before starting `serve`. Do not use
 Tailscale Funnel or expose the listener publicly.
 
-In another terminal, mint a one-use code and enter it in the native app:
+In another terminal, mint a one-use six-digit code and enter it in the native app:
 
 ```sh
 python -m nexus gateway pair --name phone

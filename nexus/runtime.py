@@ -4914,7 +4914,7 @@ class Runtime:
     async def promote_session(self, session, *, reason="", continuation="", name="", base=""):
         """Create a worktree for an idle session and move into it (user override / launch).
 
-        ``name`` is an exact worktree name (also the session title); ``continuation`` is
+        ``name`` is an exact worktree name (folder and branch only); ``continuation`` is
         queued after the move.
         """
         return await self._session_worktrees.promote(

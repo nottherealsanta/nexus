@@ -325,8 +325,8 @@ pass `worktree=false` with a free-form title of a few words.
 
 `session_launch` takes an optional `worktree: boolean`. With `worktree=true`, `title` is required and is
 the worktree name: 1-60 characters of letters, digits, `-` or `_`, starting with a letter or digit (no
-spaces). The tool checks this before any side effect. The name is the launched session's title, its
-worktree folder and the branch `nexus/session/<name>`. `HostManagerPort` makes the selection while the
+spaces). The tool checks this before any side effect. The name is the worktree folder and the branch
+`nexus/wt/<name>`; it is not the session title, which is derived from the instruction and auto-titled as usual. `HostManagerPort` makes the selection while the
 session is still a draft: `ManagerHost.start_root(..., worktree_name=name)` opens the session, runs the
 host's `set_session_worktree(name=...)` (the same path as `SessionWorktreeSet`; it refuses a taken branch
 or folder and a non-Git workspace) and only then enqueues the instruction. The worktree itself is created
@@ -375,8 +375,8 @@ approval here (the MCP client's tool approval is the human gate):
   applied with `SessionRename` right after the enqueue, so it becomes a durable user title
   (differs from the manager, where it is only an auto-title hint); if the rename fails the
   session still runs and the reply's `title` is empty. `worktree=true` (title required, same name rule
-  as above) sends `SessionWorktreeSet(enabled=True, name=title)` before `SessionEnqueue`; the host sets
-  the title, so no `SessionRename` follows, and a refusal (taken name, not a Git repo) starts nothing.
+  as above) sends `SessionWorktreeSet(enabled=True, name=title)` before `SessionEnqueue`; the name
+  does not become the title (the reply's `title` is the sanitised instruction), and a refusal (taken name, not a Git repo) starts nothing.
   The id keeps its `dbg-` prefix; the name is the user-visible one. The new root is a
   normal root: default model, normal permissions.
 * `session_send`: 6 per minute, 16 KiB, visible roots that are live or active within 2 h.
@@ -419,3 +419,6 @@ Not verified against a live daemon or a real MCP client.
 - The plan's open questions resolve as: U1 one manager per workspace, U2 no cross-workspace, U3 no approval
   step for launch, cancel, send or show (superseded from "unconditional confirmation"), U4 provider-default effort (effort selection is refused), U5
   `session_send` exists (see Port, provenance and caps; superseded from "no `session_send`"), U6 moot (no model override).
+
+Launch results keep `worktree_name` as the folder/branch label; their `title`
+is a descriptive instruction-derived hint for worktree launches, never that label.

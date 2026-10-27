@@ -492,6 +492,13 @@ async def test_per_child_and_per_turn_run_caps(tmp_path):
     assert (await turn.resume("three")).ok
 
 
+async def test_runs_per_child_are_unlimited_by_default(tmp_path):
+    world = World(tmp_path, budget=SubagentBudget(max_continuations=None))
+    await world.spawn()
+    for n in range(6):
+        assert (await world.resume(f"follow-up {n}")).ok
+
+
 async def test_tokens_settle_per_run_and_an_exhausted_budget_refuses(tmp_path):
     world = World(tmp_path, token_budget=12, reserved_tokens=10)
     await world.spawn()

@@ -75,13 +75,16 @@ async def test_promotion_continuation_has_durable_origin(project, tmp_path):
         await rt.aclose()
 
 
-async def test_named_promote_titles_the_session_and_uses_the_exact_name(project, tmp_path):
+async def test_named_promote_uses_the_exact_name_without_retitling_the_session(project, tmp_path):
     rt = runtime(project, tmp_path, ScriptedProvider(text_response("done")))
     try:
         handle = rt.session("named")
         await rt.promote_session(handle.id, reason="launch", name="quiet-fox")
         root = rt.session_root(handle.id)
         assert root.path.name == "quiet-fox" and root.branch == "nexus/wt/quiet-fox"
+        await drain(handle, "hello")
+        assert rt.sessions.title_source("named") != "user"
+        assert rt.sessions.summary("named").title != "quiet-fox"
         other = rt.session("named-2")
         with pytest.raises(ValueError, match="quiet-fox"):
             await rt.promote_session(other.id, reason="launch", name="quiet-fox")

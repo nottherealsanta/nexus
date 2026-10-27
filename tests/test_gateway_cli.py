@@ -144,7 +144,7 @@ def test_allow_pair_devices_revoke_disallow_round_trip(workspace, gateway_home):
 
     code, out, err = gateway("pair", "--name", "phone", "--scopes", "read,prompt")
     assert code == 0 and err == ""
-    pairing = re.search(r"pairing code: ([A-Z2-7-]+)", out)
+    pairing = re.search(r"pairing code: (\d{6})\b", out)
     assert pairing
     assert "valid for 1" in out and "single use" in out  # 119 or 120 seconds
     assert "scopes: read,prompt" in out
