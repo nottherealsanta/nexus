@@ -1,0 +1,1 @@
+{"error":"cursor 'bad:1' belongs to log generation bad, but this database is log_c915bfc9b6d826c4; the log was replaced, so reload state and resume from the reported head","code":"cursor_generation","resync":true,"generation":"log_c915bfc9b6d826c4","head":3,"head_cursor":"log_c915bfc9b6d826c4:3","floor":0,"floor_cursor":"log_c915bfc9b6d826c4:0"}

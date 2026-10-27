@@ -1,0 +1,16 @@
+id: log_c915bfc9b6d826c4:20
+event: session.updated
+data: {"id": 20, "seq": 20, "time": 1793113320.0, "type": "session.updated", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "ses_1a17de160eccc428a38", "project_id": "prj_1a17de160d3c070dfda", "title": "Renamed", "revision": 2, "status": "idle", "archived": false}, "cursor": "log_c915bfc9b6d826c4:20"}
+
+id: log_c915bfc9b6d826c4:21
+event: session.archived
+data: {"id": 21, "seq": 21, "time": 1793113321.0, "type": "session.archived", "session_id": "ses_1a17de160eccc428a38", "data": {"root": "ses_1a17de160eccc428a38", "sessions": ["ses_1a17de160eccc428a38"], "archived": true}, "cursor": "log_c915bfc9b6d826c4:21"}
+
+id: log_c915bfc9b6d826c4:22
+event: session.deleted
+data: {"id": 22, "seq": 22, "time": 1793113322.0, "type": "session.deleted", "session_id": null, "data": {"id": "ses_1a17de160eccc428a38"}, "cursor": "log_c915bfc9b6d826c4:22"}
+
+id: log_c915bfc9b6d826c4:23
+event: project.deleted
+data: {"id": 23, "seq": 23, "time": 1793113323.0, "type": "project.deleted", "session_id": null, "data": {"id": "prj_1a17de160d3c070dfda"}, "cursor": "log_c915bfc9b6d826c4:23"}
+

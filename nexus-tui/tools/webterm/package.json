@@ -1,0 +1,19 @@
+{
+  "name": "nexus-tui-webterm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Visual test harness: runs the real nexus-tui binary in a PTY, shown by xterm.js, captured by Playwright.",
+  "type": "module",
+  "scripts": {
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "serve": "node server.js",
+    "shots": "node shots.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-canvas": "0.7.0",
+    "@xterm/xterm": "5.5.0",
+    "node-pty": "1.1.0",
+    "playwright": "1.64.1",
+    "ws": "8.22.0"
+  }
+}

@@ -1,0 +1,2771 @@
+//! The shell's behaviour: focus, the Esc precedence chain, command
+//! availability, palette, input handling and the effects that leave the UI
+//! (API calls, supervisor commands, clipboard, quit, suspend).
+//!
+//! Everything user-visible about a command comes from the manifest; a command is
+//! offered only when it is wired here (`WIRED`) and its `when` terms hold.
+
+use std::collections::HashMap;
+
+use serde_json::Value;
+use std::sync::Arc;
+use std::time::Instant;
+
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+
+use crate::actions::{ActionDone, ApiCall};
+use crate::api::{Message, Session};
+use crate::composer::Composer;
+use crate::keys;
+use crate::layout::{contains, Flags, HitMap, Regions};
+use crate::manifest::{term, Command, Manifest};
+use crate::state::{AppState, Banner, ConnectionState};
+use crate::sync::{Command as SyncCommand, SyncMsg};
+use crate::theme::{Theme, Tier};
+use crate::ui::*;
+
+/// Work the event loop performs on the shell's behalf.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    Quit,
+    Suspend,
+    Sync(SyncCommand),
+    Api(ApiCall),
+    Copy(String),
+    /// Open a URL in the platform browser (the inspector, documentation).
+    OpenUrl(String),
+}
+
+/// Commands this shell implements against an existing Core API. Everything
+/// else is shown disabled with a reason, never as a control that appears to work.
+pub const WIRED: &[&str] = &[
+    "palette.open",
+    "app.help_keys",
+    "app.quit",
+    "app.settings",
+    "app.theme",
+    "app.reconnect",
+    "notifications.open",
+    "notifications.mark_all_read",
+    "alert.dismiss",
+    "alert.confirm",
+    "alert.cancel",
+    "text_edit.cancel",
+    "overlay.close",
+    "nav.drawer.close",
+    "nav.back",
+    "sidebar.left.toggle",
+    "sidebar.right.toggle",
+    "sidebar.tab.sessions",
+    "sidebar.tab.files",
+    "sidebar.tab.projects",
+    "sidebar.focus",
+    "composer.focus",
+    "timeline.focus",
+    "session.new",
+    "session.open",
+    "session.switch",
+    "project.switch",
+    "project.open",
+    "session.rename",
+    "session.archive",
+    "session.unarchive",
+    "session.delete",
+    "session.interrupt",
+    "session.continue",
+    "session.send",
+    "session.export",
+    "session.change_directory",
+    "turn.go_to",
+    "model.change",
+    "model.effort",
+    "agent.change",
+    "composer.newline",
+    "session.jump_latest",
+    "session.copy_id",
+    "session.open_inspector",
+    "session.child.open",
+    "sessions.scope_toggle",
+    "sessions.archived_filter",
+    "turn.fold_toggle",
+    "turn.fold_all_but_last",
+    "turn.unfold_all",
+    "turn.prev",
+    "turn.next",
+    "tool.expand_toggle",
+    "tool.raw_toggle",
+    "tool.open_inspector",
+    "copy.final_message",
+    "copy.tool_output",
+    "copy.user_message",
+    "waiting.allow_once",
+    "waiting.deny",
+    "waiting.next",
+    "waiting.prev",
+    "waiting.focus",
+    "waiting.go_to",
+];
+
+/// Commands that change Core state: disabled while the connection is not live.
+const MUTATING: &[&str] = &[
+    "session.new",
+    "session.rename",
+    "session.archive",
+    "session.unarchive",
+    "session.delete",
+    "session.interrupt",
+    "session.continue",
+    "session.send",
+    "session.export",
+    "session.change_directory",
+    "turn.go_to",
+    "model.change",
+    "model.effort",
+    "agent.change",
+    "waiting.allow_once",
+    "waiting.deny",
+];
+
+const NOT_WIRED: &str = "Not built in the TUI yet (Step 12.4).";
+const READ_ONLY: &str = "Read-only until Core is connected again.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitKind {
+    Approval,
+    Question,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitItem {
+    pub kind: WaitKind,
+    pub id: String,
+    pub session_id: String,
+    /// The title of the child session it waits in, when not the viewed one.
+    pub child: Option<String>,
+}
+
+pub struct SideEntry {
+    pub id: String,
+    /// Project name heading printed before this row (all-projects scope).
+    pub heading: Option<String>,
+}
+
+pub struct Ui {
+    pub focus: Focus,
+    pub left_open: bool,
+    pub right_open: bool,
+    pub drawer: Option<Side>,
+    pub tab: Tab,
+    pub cursor: HashMap<Tab, usize>,
+    pub side_top: usize,
+    pub scope_all: bool,
+    pub show_archived: bool,
+    pub view: View,
+    pub settings_section: usize,
+    pub settings_row: usize,
+    pub settings_pane: SettingsPane,
+    pub overlay: Option<Overlay>,
+    pub dialog: Option<Dialog>,
+    pub edit: Option<TextEdit>,
+    pub alerts: Alerts,
+    pub scroll: Scroll,
+    pub scrolls: HashMap<String, Scroll>,
+    pub drafts: HashMap<String, Composer>,
+    pub wait_idx: usize,
+    pub project: Option<String>,
+    /// Content rows and viewport rows of the timeline at the last draw.
+    pub timeline_total: usize,
+    pub timeline_height: usize,
+    /// Explicit fold state, by block key. Absent means the block's default
+    /// (turns open, reasoning and tool detail closed, context open only before
+    /// the first turn).
+    pub timeline_open: HashMap<String, bool>,
+    /// The block the keyboard is on, as an index into `timeline_blocks`.
+    pub timeline_sel: Option<usize>,
+    /// The selected block's key, so a fold (which changes line ranges and may
+    /// add or remove blocks) keeps the selection on the same item.
+    pub timeline_sel_key: Option<String>,
+    /// Blocks of the last drawn timeline (selection and clicks use them).
+    pub timeline_blocks: Vec<crate::timeline::Block>,
+    pub monochrome_before: Option<Tier>,
+}
+
+pub struct App {
+    pub manifest: Arc<Manifest>,
+    pub theme: Theme,
+    pub state: AppState,
+    pub ui: Ui,
+    pub hits: HitMap,
+    pub regions: Regions,
+    pub effects: Vec<Effect>,
+    pub clock: Instant,
+    pub size: (u16, u16),
+    pub frame: usize,
+    pub mouse: Option<(u16, u16)>,
+    bindings: HashMap<(String, String), String>,
+}
+
+/// Subsequence match of `query` in `text`, preferring the tightest window,
+/// word starts and consecutive runs. `None` when it does not match or the
+/// matched characters are spread too thin to be what the user meant.
+fn fuzzy(query: &str, text: &str) -> Option<i32> {
+    let q: Vec<char> = query.to_lowercase().chars().filter(|c| *c != ' ').collect();
+    if q.is_empty() {
+        return Some(0);
+    }
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let mut best: Option<i32> = None;
+    for start in (0..t.len()).filter(|i| t[*i] == q[0]) {
+        let (mut qi, mut score, mut last) = (0, 0i32, None::<usize>);
+        for (i, c) in t.iter().enumerate().skip(start) {
+            if qi < q.len() && *c == q[qi] {
+                score += 10;
+                if last == Some(i.wrapping_sub(1)) {
+                    score += 15;
+                }
+                if i == 0 || !t[i - 1].is_alphanumeric() {
+                    score += 20;
+                }
+                last = Some(i);
+                qi += 1;
+            }
+        }
+        if qi == q.len() {
+            let span = last.unwrap_or(start) + 1 - start;
+            if span <= 2 * q.len() + 2 {
+                let s = score - span as i32 - (t.len() as i32) / 8;
+                best = Some(best.map_or(s, |b| b.max(s)));
+            }
+        }
+    }
+    best
+}
+
+impl App {
+    pub fn new(state: AppState, theme: Theme, size: (u16, u16)) -> Self {
+        let manifest = Arc::new(Manifest::load());
+        let mut bindings = HashMap::new();
+        for c in manifest.command.iter().filter(|c| c.for_tui()) {
+            if let (Some(k), Some(ctx)) = (c.tui_key(), c.key_context.as_deref()) {
+                if ctx != "escape_chain" {
+                    bindings.insert((ctx.to_owned(), k.to_owned()), c.id.clone());
+                }
+            }
+        }
+        let tab =
+            Tab::from_id(&manifest.navigation.left_sidebar.default_tab).unwrap_or(Tab::Sessions);
+        let area = Rect::new(0, 0, size.0, size.1);
+        let regions = Regions::compute(
+            area,
+            Flags {
+                left_open: true,
+                right_open: true,
+                drawer: None,
+            },
+            |_| Default::default(),
+        );
+        App {
+            manifest,
+            theme,
+            state,
+            ui: Ui {
+                focus: Focus::Composer,
+                left_open: true,
+                right_open: true,
+                drawer: None,
+                tab,
+                cursor: HashMap::new(),
+                side_top: 0,
+                scope_all: false,
+                show_archived: false,
+                view: View::Session,
+                settings_section: 0,
+                settings_row: 0,
+                settings_pane: SettingsPane::Nav,
+                overlay: None,
+                dialog: None,
+                edit: None,
+                alerts: Alerts::default(),
+                scroll: Scroll::default(),
+                scrolls: HashMap::new(),
+                drafts: HashMap::new(),
+                wait_idx: 0,
+                project: None,
+                timeline_total: 0,
+                timeline_height: 0,
+                timeline_open: HashMap::new(),
+                timeline_sel: None,
+                timeline_sel_key: None,
+                timeline_blocks: Vec::new(),
+                monochrome_before: None,
+            },
+            hits: HitMap::default(),
+            regions,
+            effects: Vec::new(),
+            clock: Instant::now(),
+            size,
+            frame: 0,
+            mouse: None,
+            bindings,
+        }
+    }
+
+    // ---- model queries -------------------------------------------------------
+
+    pub fn writable(&self) -> bool {
+        self.state.connection.is_live()
+    }
+
+    pub fn narrow(&self) -> bool {
+        Regions::is_narrow(self.size.0)
+    }
+
+    pub fn viewed_id(&self) -> Option<&str> {
+        self.state
+            .model
+            .selected
+            .as_ref()
+            .map(|v| v.session_id.as_str())
+            .filter(|id| self.state.model.sessions.contains_key(*id))
+    }
+
+    pub fn viewed(&self) -> Option<&Session> {
+        self.viewed_id()
+            .and_then(|id| self.state.model.sessions.get(id))
+    }
+
+    pub fn messages(&self) -> &[Message] {
+        self.state
+            .model
+            .selected
+            .as_ref()
+            .map_or(&[], |v| v.messages.as_slice())
+    }
+
+    pub fn is_busy(&self, id: &str) -> bool {
+        self.state.model.running.contains_key(id)
+            || self
+                .state
+                .model
+                .sessions
+                .get(id)
+                .and_then(|s| s.status.as_deref())
+                == Some("busy")
+    }
+
+    pub fn current_project(&self) -> Option<String> {
+        let m = &self.state.model;
+        if let Some(p) = self
+            .ui
+            .project
+            .as_ref()
+            .filter(|p| m.projects.contains_key(*p))
+        {
+            return Some(p.clone());
+        }
+        if let Some(s) = self.viewed() {
+            return Some(s.project_id.clone());
+        }
+        m.projects
+            .values()
+            .max_by(|a, b| a.updated.total_cmp(&b.updated))
+            .map(|p| p.id.clone())
+    }
+
+    pub fn ancestors_of<'a>(&'a self, id: &'a str) -> Vec<&'a Session> {
+        let mut chain = Vec::new();
+        let mut cur = self.state.model.sessions.get(id);
+        while let Some(s) = cur {
+            chain.push(s);
+            if chain.len() > 16 {
+                break;
+            }
+            cur = s
+                .parent_id
+                .as_deref()
+                .and_then(|p| self.state.model.sessions.get(p));
+        }
+        chain.reverse();
+        chain
+    }
+
+    fn is_descendant(&self, id: &str, ancestor: &str) -> bool {
+        self.ancestors_of(id).iter().any(|s| s.id == ancestor)
+    }
+
+    pub fn descendants(&self, id: &str) -> usize {
+        self.state
+            .model
+            .sessions
+            .keys()
+            .filter(|s| s.as_str() != id && self.is_descendant(s, id))
+            .count()
+    }
+
+    /// Approvals and questions waiting in the viewed session or its children.
+    pub fn wait_items(&self) -> Vec<WaitItem> {
+        let Some(vid) = self.viewed_id() else {
+            return Vec::new();
+        };
+        let m = &self.state.model;
+        let child = |sid: &str| {
+            (sid != vid).then(|| {
+                m.sessions
+                    .get(sid)
+                    .map(|s| s.title.clone())
+                    .unwrap_or_default()
+            })
+        };
+        let mut v = Vec::new();
+        for a in m
+            .approvals
+            .values()
+            .filter(|a| self.is_descendant(&a.session_id, vid))
+        {
+            v.push(WaitItem {
+                kind: WaitKind::Approval,
+                id: a.id.clone(),
+                session_id: a.session_id.clone(),
+                child: child(&a.session_id),
+            });
+        }
+        for q in m
+            .questions
+            .values()
+            .filter(|q| self.is_descendant(&q.session_id, vid))
+        {
+            v.push(WaitItem {
+                kind: WaitKind::Question,
+                id: q.id.clone(),
+                session_id: q.session_id.clone(),
+                child: child(&q.session_id),
+            });
+        }
+        v
+    }
+
+    pub fn wait_focused(&self) -> Option<WaitItem> {
+        let items = self.wait_items();
+        items
+            .get(self.ui.wait_idx.min(items.len().saturating_sub(1)))
+            .cloned()
+    }
+
+    /// Waits anywhere else (other sessions).
+    pub fn waiting_elsewhere(&self) -> Vec<String> {
+        let m = &self.state.model;
+        let here: Vec<String> = self.wait_items().iter().map(|w| w.id.clone()).collect();
+        let mut v: Vec<String> = m
+            .approvals
+            .values()
+            .map(|a| (a.id.clone(), a.session_id.clone()))
+            .chain(
+                m.questions
+                    .values()
+                    .map(|q| (q.id.clone(), q.session_id.clone())),
+            )
+            .filter(|(id, _)| !here.contains(id))
+            .map(|(_, s)| s)
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    pub fn session_waiting(&self, id: &str) -> bool {
+        let m = &self.state.model;
+        m.approvals
+            .values()
+            .any(|a| self.is_descendant(&a.session_id, id))
+            || m.questions
+                .values()
+                .any(|q| self.is_descendant(&q.session_id, id))
+    }
+
+    fn last_turn_interrupted(&self) -> bool {
+        let Some(v) = self.state.model.selected.as_ref() else {
+            return false;
+        };
+        for e in v.events.iter().rev() {
+            match e.kind.as_str() {
+                "turn_end" => return false,
+                "turn.recovered" => return true,
+                "session.error" => return true,
+                "session.status" if e.data["status"] == "busy" => return false,
+                _ => {}
+            }
+        }
+        // Without events (a fresh snapshot): a conversation that ends on a user
+        // or tool message was cut short; Core refuses with 409/400 otherwise.
+        v.messages.last().is_some_and(|m| m.role != "assistant")
+    }
+
+    pub fn side_entries(&self) -> Vec<SideEntry> {
+        let m = &self.state.model;
+        let cur = self.current_project();
+        let mut sessions: Vec<&Session> = m
+            .sessions_recent()
+            .into_iter()
+            .filter(|s| s.parent_id.is_none())
+            .filter(|s| self.ui.show_archived || !s.archived)
+            .filter(|s| self.ui.scope_all || cur.as_deref() == Some(s.project_id.as_str()))
+            .collect();
+        if self.ui.scope_all {
+            let mut names: Vec<(&String, f64)> = Vec::new();
+            for p in m.projects.values() {
+                names.push((&p.id, p.updated));
+            }
+            names.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let order = |pid: &str| {
+                names
+                    .iter()
+                    .position(|(id, _)| id.as_str() == pid)
+                    .unwrap_or(99)
+            };
+            sessions.sort_by_key(|s| order(&s.project_id));
+        }
+        let mut last: Option<&str> = None;
+        sessions
+            .into_iter()
+            .map(|s| {
+                let heading =
+                    (self.ui.scope_all && last != Some(s.project_id.as_str())).then(|| {
+                        m.projects
+                            .get(&s.project_id)
+                            .map_or(s.project_id.clone(), |p| p.name.clone())
+                    });
+                last = Some(s.project_id.as_str());
+                SideEntry {
+                    id: s.id.clone(),
+                    heading,
+                }
+            })
+            .collect()
+    }
+
+    pub fn project_ids(&self) -> Vec<String> {
+        let mut v: Vec<_> = self.state.model.projects.values().collect();
+        v.sort_by(|a, b| {
+            b.updated
+                .total_cmp(&a.updated)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        v.into_iter().map(|p| p.id.clone()).collect()
+    }
+
+    fn list_len(&self, tab: Tab) -> usize {
+        match tab {
+            Tab::Sessions => self.side_entries().len(),
+            Tab::Projects => self.state.model.projects.len(),
+            Tab::Files => 0,
+        }
+    }
+
+    pub fn cursor(&self, tab: Tab) -> usize {
+        self.ui
+            .cursor
+            .get(&tab)
+            .copied()
+            .unwrap_or(0)
+            .min(self.list_len(tab).saturating_sub(1))
+    }
+
+    // ---- terms and availability -----------------------------------------------
+
+    /// Evaluate a `when` term. `None` means the term is not known to this client.
+    pub fn term(&self, name: &str) -> Option<bool> {
+        let busy = self.viewed_id().is_some_and(|id| self.is_busy(id));
+        let has_session = self.viewed().is_some();
+        let waiting = self.wait_focused();
+        Some(match name {
+            "always" => true,
+            "has_project" => self.current_project().is_some(),
+            "has_session" => has_session,
+            "has_turns" => self.messages().iter().any(|m| m.role == "user"),
+            "session.idle" => has_session && !busy,
+            "session.busy" => has_session && busy,
+            "session.interrupted" => has_session && !busy && self.last_turn_interrupted(),
+            "session.archived" => self.viewed().is_some_and(|s| s.archived),
+            "session.child" => self.viewed().is_some_and(|s| s.parent_id.is_some()),
+            "session.in_worktree" => false,
+            "has_waiting" => {
+                !self.state.model.approvals.is_empty() || !self.state.model.questions.is_empty()
+            }
+            "waiting.approval" => waiting
+                .as_ref()
+                .is_some_and(|w| w.kind == WaitKind::Approval),
+            "waiting.question" => waiting
+                .as_ref()
+                .is_some_and(|w| w.kind == WaitKind::Question),
+            "waiting.multiple" => self.wait_items().len() > 1,
+            "composer.has_text" => self.composer_ref().has_text(),
+            "composer.empty" => self.composer_ref().is_empty(),
+            "has_queued" => false,
+            "timeline.scrolled_up" => !self.ui.scroll.follow,
+            "timeline.has_older" => self
+                .state
+                .model
+                .selected
+                .as_ref()
+                .is_some_and(|v| v.messages_more),
+            "tool.output_clipped_in_ui" => false,
+            "focus.session_row" => {
+                self.ui.focus == Focus::Sidebar
+                    && self.ui.tab == Tab::Sessions
+                    && self.list_len(Tab::Sessions) > 0
+            }
+            "focus.project" => {
+                self.ui.focus == Focus::Sidebar
+                    && self.ui.tab == Tab::Projects
+                    && self.list_len(Tab::Projects) > 0
+            }
+            "focus.turn"
+            | "focus.tool"
+            | "focus.user_message"
+            | "focus.assistant_block"
+            | "focus.code_block"
+            | "focus.file"
+            | "focus.child_card"
+            | "focus.git_file" => false,
+            "view.editor" | "editor.dirty" => false,
+            "view.settings" => self.ui.view == View::Settings,
+            "overlay.open" => self.ui.overlay.is_some(),
+            "dialog.open" => self.ui.dialog.is_some() || self.blocking().is_some(),
+            "alert.open" => self.ui.focus == Focus::Alert,
+            "drawer.open" => self.ui.drawer.is_some(),
+            "layout.narrow" => self.narrow(),
+            "connection.lost" => matches!(
+                self.state.connection,
+                ConnectionState::Reconnecting { .. }
+                    | ConnectionState::Offline { .. }
+                    | ConnectionState::AuthFailed { .. }
+            ),
+            "connection.no_daemon" => {
+                matches!(self.state.connection, ConnectionState::Offline { .. })
+            }
+            "provider.signed_in" => false,
+            "has_notifications" => !self.ui.alerts.history.is_empty(),
+            "text_edit.active" => self.ui.edit.is_some(),
+            _ => return None,
+        })
+    }
+
+    pub fn holds(&self, t: &str) -> bool {
+        let (neg, name) = term(t);
+        self.term(name).unwrap_or(false) != neg
+    }
+
+    /// `Err(reason)` when the command is disabled. Order: Core status, not
+    /// wired, read-only, then the manifest's own condition.
+    pub fn availability(&self, c: &Command) -> Result<(), String> {
+        let reason = || {
+            c.unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "Not available right now.".into())
+        };
+        if matches!(c.status.as_deref(), Some("blocked_core" | "deferred")) {
+            return Err(reason());
+        }
+        if !WIRED.contains(&c.id.as_str()) {
+            return Err(NOT_WIRED.into());
+        }
+        if MUTATING.contains(&c.id.as_str()) && !self.writable() {
+            return Err(READ_ONLY.into());
+        }
+        if c.when.iter().all(|t| self.holds(t)) {
+            Ok(())
+        } else {
+            Err(reason())
+        }
+    }
+
+    pub fn blocking(&self) -> Option<(String, Vec<String>)> {
+        match &self.state.connection {
+            ConnectionState::Incompatible { .. } => Some((
+                "Incompatible Core".into(),
+                vec![
+                    self.state.connection.detail(),
+                    "Nothing is sent to Core until this is fixed. ctrl+q quits.".into(),
+                ],
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn banners(&self) -> Vec<BannerItem> {
+        let mut v = Vec::new();
+        let c = &self.state.connection;
+        let retry = || Some(("".into(), "retry".into(), "app.reconnect".into()));
+        match c {
+            ConnectionState::Starting | ConnectionState::Connecting => v.push(BannerItem {
+                level: Level::Info,
+                loading: true,
+                text: c.detail(),
+                action: None,
+                hide: None,
+            }),
+            ConnectionState::Reconnecting { retry_in, .. } => v.push(BannerItem {
+                level: Level::Error,
+                loading: false,
+                text: format!(
+                    "Disconnected from Core {} reconnecting in {} s",
+                    self.theme.structure("separator"),
+                    retry_in.as_secs().max(1)
+                ),
+                action: retry(),
+                hide: None,
+            }),
+            ConnectionState::Offline { .. } => v.push(BannerItem {
+                level: Level::Error,
+                loading: false,
+                text: format!(
+                    "Core is not reachable {} run `nexus daemon start`",
+                    self.theme.structure("separator")
+                ),
+                action: retry(),
+                hide: None,
+            }),
+            ConnectionState::AuthFailed { .. } => v.push(BannerItem {
+                level: Level::Error,
+                loading: false,
+                text: c.detail(),
+                action: None,
+                hide: None,
+            }),
+            ConnectionState::Live | ConnectionState::Incompatible { .. } => {}
+        }
+        for (i, b) in self.state.banners.iter().enumerate() {
+            let (level, text) = match b {
+                Banner::ApiUnreported => (
+                    Level::Warning,
+                    "Core does not report an API version yet; compatibility is unchecked"
+                        .to_owned(),
+                ),
+                Banner::NewerCore { core } => (
+                    Level::Info,
+                    format!(
+                        "Core speaks API {core}, newer than this client; some features are missing"
+                    ),
+                ),
+                Banner::DaemonRestarted => (
+                    Level::Info,
+                    "Core restarted; the view was resynced from a fresh snapshot".to_owned(),
+                ),
+                Banner::Resynced(why) => (Level::Info, format!("Resynced from Core ({why})")),
+            };
+            v.push(BannerItem {
+                level,
+                loading: false,
+                text,
+                action: None,
+                hide: Some(i),
+            });
+        }
+        let elsewhere = self.waiting_elsewhere().len();
+        if elsewhere > 0 {
+            v.push(BannerItem {
+                level: Level::Info,
+                loading: false,
+                text: format!("{elsewhere} other session(s) waiting for input"),
+                action: Some(("".into(), "go".into(), "waiting.go_to".into())),
+                hide: None,
+            });
+        }
+        let rank = |l: Level| match l {
+            Level::Error => 0,
+            Level::Warning => 1,
+            _ => 2,
+        };
+        v.sort_by_key(|b| rank(b.level));
+        v
+    }
+
+    // ---- composer & drafts ------------------------------------------------------
+
+    fn draft_key(&self) -> String {
+        self.viewed_id().unwrap_or("").to_owned()
+    }
+
+    pub fn composer_ref(&self) -> &Composer {
+        static EMPTY: std::sync::OnceLock<Composer> = std::sync::OnceLock::new();
+        self.ui
+            .drafts
+            .get(&self.draft_key())
+            .unwrap_or_else(|| EMPTY.get_or_init(Composer::new))
+    }
+
+    pub fn composer(&mut self) -> &mut Composer {
+        let k = self.draft_key();
+        self.ui.drafts.entry(k).or_default()
+    }
+
+    fn restore_draft(&mut self, session: Option<&str>, text: &str) {
+        let c = self
+            .ui
+            .drafts
+            .entry(session.unwrap_or("").to_owned())
+            .or_default();
+        if c.is_empty() {
+            c.set_text(text);
+        } else {
+            let rest = c.text();
+            c.set_text(&format!("{text}\n{rest}"));
+        }
+    }
+
+    // ---- focus & overlays --------------------------------------------------------
+
+    fn restore_point(&self) -> Restore {
+        Restore {
+            focus: self.ui.focus,
+            scroll: self.ui.scroll,
+            settings_pane: self.ui.settings_pane,
+        }
+    }
+
+    fn apply_restore(&mut self, r: Restore) {
+        self.ui.focus = r.focus;
+        self.ui.scroll = r.scroll;
+        self.ui.settings_pane = r.settings_pane;
+    }
+
+    pub fn focus_order(&self) -> Vec<Focus> {
+        let mut v = vec![Focus::ToggleLeft];
+        if self.ui.left_open && !self.narrow() {
+            v.push(Focus::Sidebar);
+        }
+        v.push(Focus::Timeline);
+        if !self.wait_items().is_empty() && self.ui.view == View::Session {
+            v.push(Focus::Waiting);
+        }
+        if self.ui.view == View::Session {
+            v.push(Focus::Composer);
+        }
+        if self.ui.right_open && !self.narrow() {
+            v.push(Focus::Right);
+        }
+        v.push(Focus::ToggleRight);
+        if self.has_alerts() {
+            v.push(Focus::Alert);
+        }
+        v
+    }
+
+    fn has_alerts(&self) -> bool {
+        !self.ui.alerts.toasts.is_empty() || self.banners().iter().any(|b| b.hide.is_some())
+    }
+
+    fn cycle_focus(&mut self, back: bool) {
+        let order = self.focus_order();
+        let at = order.iter().position(|f| *f == self.ui.focus).unwrap_or(0);
+        let next = if back {
+            (at + order.len() - 1) % order.len()
+        } else {
+            (at + 1) % order.len()
+        };
+        self.ui.focus = order[next];
+        if self.ui.drawer.is_some() && !matches!(self.ui.focus, Focus::Sidebar | Focus::Right) {
+            // keep focus inside an open drawer
+            self.ui.focus = if self.ui.drawer == Some(Side::Left) {
+                Focus::Sidebar
+            } else {
+                Focus::Right
+            };
+        }
+    }
+
+    fn open_overlay(&mut self, kind: OverlayKind) {
+        let restore = match self.ui.overlay.take() {
+            Some(o) => o.restore,
+            None => self.restore_point(),
+        };
+        self.ui.overlay = Some(Overlay { kind, restore });
+    }
+
+    fn open_palette(&mut self, mode: PaletteMode) {
+        self.open_overlay(OverlayKind::Palette(Palette {
+            mode,
+            query: Composer::new(),
+            selected: 0,
+            top: 0,
+        }));
+    }
+
+    fn close_overlay(&mut self) {
+        if let Some(o) = self.ui.overlay.take() {
+            self.apply_restore(o.restore);
+        }
+    }
+
+    pub fn toast(&mut self, level: Level, text: impl Into<String>) {
+        let now = self.clock;
+        self.ui.alerts.push(level, text, now);
+    }
+
+    fn set_tab(&mut self, tab: Tab) {
+        self.ui.tab = tab;
+        self.ui.side_top = 0;
+        if self.narrow() {
+            self.ui.drawer = Some(Side::Left);
+        } else {
+            self.ui.left_open = true;
+        }
+        self.ui.focus = Focus::Sidebar;
+    }
+
+    // ---- palette --------------------------------------------------------------------
+
+    pub fn palette_items(&self) -> Vec<PaletteItem> {
+        let Some(Overlay {
+            kind: OverlayKind::Palette(p),
+            ..
+        }) = &self.ui.overlay
+        else {
+            return Vec::new();
+        };
+        let q = p.query.text();
+        let mut scored: Vec<(i32, usize, PaletteItem)> = Vec::new();
+        match p.mode {
+            PaletteMode::Commands => {
+                for (i, c) in self.manifest.command.iter().enumerate().filter(|(_, c)| {
+                    c.in_palette()
+                        && c.key_context.as_deref() != Some("dialog")
+                        && c.id != "palette.open"
+                }) {
+                    let score = fuzzy(&q, &c.title)
+                        .map(|s| s * 2)
+                        .or_else(|| fuzzy(&q, &c.id))
+                        .or_else(|| fuzzy(&q, &c.category));
+                    let Some(score) = score else { continue };
+                    let reason = self.availability(c).err();
+                    let bonus = if reason.is_none() { 1000 } else { 0 };
+                    scored.push((
+                        score + if q.is_empty() { 0 } else { bonus / 10 },
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Command(c.id.clone()),
+                            label: c.title.clone(),
+                            hint: c.tui_key().unwrap_or("").to_owned(),
+                            category: c.category.clone(),
+                            reason,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Sessions => {
+                for (i, s) in self.state.model.sessions_recent().into_iter().enumerate() {
+                    if s.parent_id.is_some() {
+                        continue;
+                    }
+                    let Some(score) = fuzzy(&q, &s.title) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Session(s.id.clone()),
+                            label: s.title.clone(),
+                            hint: crate::text::age(now_secs(), s.updated),
+                            category: "session".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Projects => {
+                for (i, id) in self.project_ids().into_iter().enumerate() {
+                    let p = &self.state.model.projects[&id];
+                    let Some(score) = fuzzy(&q, &p.name) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Project(id.clone()),
+                            label: p.name.clone(),
+                            hint: p.path.clone(),
+                            category: "project".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Models => {
+                let current = self
+                    .viewed()
+                    .and_then(|s| s.model.clone())
+                    .unwrap_or_default();
+                for (i, m) in self.state.models.iter().enumerate() {
+                    let r = m["ref"].as_str().unwrap_or_default();
+                    let label = format!("{} · {}", r, m["name"].as_str().unwrap_or(""));
+                    let Some(score) = fuzzy(&q, &label).or_else(|| fuzzy(&q, r)) else {
+                        continue;
+                    };
+                    let mut bits: Vec<String> = Vec::new();
+                    if let Some(c) = m["context"].as_u64() {
+                        bits.push(format!("{}k context", c / 1000));
+                    }
+                    if m["reasoning"].as_bool().unwrap_or(false) {
+                        let efforts: Vec<&str> = m["efforts"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(Value::as_str).collect())
+                            .unwrap_or_default();
+                        if !efforts.is_empty() {
+                            bits.push(efforts.join("/"));
+                        }
+                    }
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Model(r.to_owned()),
+                            label,
+                            hint: bits.join(" · "),
+                            category: if r == current { "current" } else { "model" }.into(),
+                            reason: None,
+                        },
+                    ));
+                }
+                if self.state.models.is_empty() {
+                    scored.push((
+                        0,
+                        0,
+                        PaletteItem {
+                            kind: PaletteKind::Model(String::new()),
+                            label: "No models".into(),
+                            hint: self.state.catalog_source.clone(),
+                            category: "model".into(),
+                            reason: Some(
+                                "No provider is signed in, or the catalog has not loaded yet"
+                                    .into(),
+                            ),
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Agents => {
+                let current = self.viewed().map(|s| s.agent.clone()).unwrap_or_default();
+                for (i, a) in self.state.agents.iter().enumerate() {
+                    let name = a["name"].as_str().unwrap_or("");
+                    let Some(score) = fuzzy(&q, name) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Agent(name.to_owned()),
+                            label: name.to_owned(),
+                            hint: a["mode"]
+                                .as_str()
+                                .map(|m| format!("{} · {}", a["source"].as_str().unwrap_or(""), m))
+                                .unwrap_or_else(|| a["source"].as_str().unwrap_or("").to_owned()),
+                            category: if name == current { "current" } else { "agent" }.into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Turns => {
+                for (i, b) in self.ui.timeline_blocks.iter().enumerate() {
+                    if b.kind != crate::timeline::BlockKind::Turn {
+                        continue;
+                    }
+                    let n = b.turn.map_or(0, |t| t + 1);
+                    let label = format!("#{n}");
+                    if let Some(score) = fuzzy(&q, &label) {
+                        scored.push((
+                            score,
+                            i,
+                            PaletteItem {
+                                kind: PaletteKind::Block(i),
+                                label,
+                                hint: String::new(),
+                                category: "turn".into(),
+                                reason: None,
+                            },
+                        ));
+                    }
+                }
+            }
+            PaletteMode::Export => {
+                for (i, (format, scope, label)) in [
+                    ("markdown", "session", "Markdown transcript"),
+                    ("json", "session", "JSON (messages and events)"),
+                    ("markdown", "tree", "Markdown transcript, whole tree"),
+                    ("json", "tree", "JSON, whole tree"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let Some(score) = fuzzy(&q, label) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Export(format.into(), scope.into()),
+                            label: label.into(),
+                            hint: scope.into(),
+                            category: "export".into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::Efforts => {
+                let mut opts: Vec<String> = Vec::new();
+                if let Some(m) = self.state.models.iter().find(|m| {
+                    self.viewed()
+                        .and_then(|s| s.model.as_deref())
+                        .is_some_and(|cur| m["ref"].as_str() == Some(cur))
+                }) {
+                    for e in m["efforts"].as_array().into_iter().flatten() {
+                        if let Some(e) = e.as_str() {
+                            opts.push(e.to_owned());
+                        }
+                    }
+                }
+                if opts.is_empty() {
+                    opts = ["low", "medium", "high"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                }
+                opts.push(String::new()); // clear: follow the agent/provider default
+                let current = self
+                    .viewed()
+                    .and_then(|s| {
+                        s.extra
+                            .get("effort")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default();
+                for (i, e) in opts.into_iter().enumerate() {
+                    let label = if e.is_empty() {
+                        "(default)".to_owned()
+                    } else {
+                        e.clone()
+                    };
+                    let Some(score) = fuzzy(&q, &label) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Effort(e.clone()),
+                            label,
+                            hint: String::new(),
+                            category: if e == current { "current" } else { "effort" }.into(),
+                            reason: None,
+                        },
+                    ));
+                }
+            }
+        }
+        if q.is_empty() {
+            // manifest order, enabled commands first
+            scored.sort_by_key(|(_, i, it)| (it.reason.is_some(), *i));
+        } else {
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        }
+        scored.into_iter().map(|(_, _, it)| it).collect()
+    }
+
+    fn palette_move(&mut self, delta: isize) {
+        let n = self.palette_items().len();
+        if let Some(Overlay {
+            kind: OverlayKind::Palette(p),
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
+            p.selected = if n == 0 {
+                0
+            } else {
+                (p.selected as isize + delta).clamp(0, n as isize - 1) as usize
+            };
+        }
+    }
+
+    fn palette_activate(&mut self, index: Option<usize>) {
+        let items = self.palette_items();
+        let sel = match (&self.ui.overlay, index) {
+            (_, Some(i)) => i,
+            (
+                Some(Overlay {
+                    kind: OverlayKind::Palette(p),
+                    ..
+                }),
+                None,
+            ) => p.selected,
+            _ => return,
+        };
+        let Some(item) = items.get(sel).cloned() else {
+            return;
+        };
+        if let Some(reason) = &item.reason {
+            // disabled commands explain themselves and keep the palette open
+            self.toast(Level::Warning, format!("{}: {reason}", item.label));
+            return;
+        }
+        self.close_overlay();
+        match item.kind {
+            PaletteKind::Command(id) => self.execute(&id),
+            PaletteKind::Session(id) => self.open_session(&id),
+            PaletteKind::Project(id) => self.select_project(&id),
+            PaletteKind::Model(model) => {
+                if let Some(s) = self.viewed() {
+                    let (session, revision) = (s.id.clone(), s.revision);
+                    if self.writable() {
+                        self.api(ApiCall::SetModel {
+                            session,
+                            model,
+                            revision,
+                        });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+            }
+            PaletteKind::Agent(agent) => {
+                if let Some(s) = self.viewed() {
+                    let (session, revision) = (s.id.clone(), s.revision);
+                    if self.writable() {
+                        self.api(ApiCall::SetAgent {
+                            session,
+                            agent,
+                            revision,
+                        });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+            }
+            PaletteKind::Block(i) => self.select_block(i),
+            PaletteKind::Export(format, scope) => {
+                if let Some(s) = self.viewed() {
+                    let session = s.id.clone();
+                    if self.writable() {
+                        self.api(ApiCall::Export {
+                            session,
+                            format,
+                            scope,
+                        });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+            }
+            PaletteKind::Effort(effort) => {
+                if let Some(s) = self.viewed() {
+                    let (session, revision) = (s.id.clone(), s.revision);
+                    if self.writable() {
+                        self.api(ApiCall::SetEffort {
+                            session,
+                            effort,
+                            revision,
+                        });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Open a picker and ask the supervisor for fresh catalog data.
+    fn open_picker(&mut self, mode: PaletteMode) {
+        let project = self.current_project();
+        self.effects
+            .push(Effect::Sync(SyncCommand::Catalog(project)));
+        self.open_palette(mode);
+    }
+
+    // ---- actions ----------------------------------------------------------------------
+
+    /// Run a command, explaining when it is disabled.
+    pub fn run_command(&mut self, id: &str) {
+        let Some(c) = self.manifest.command(id).cloned() else {
+            return;
+        };
+        match self.availability(&c) {
+            Ok(()) => self.execute(id),
+            Err(reason) => self.toast(Level::Warning, format!("{}: {reason}", c.title)),
+        }
+    }
+
+    fn api(&mut self, call: ApiCall) {
+        self.effects.push(Effect::Api(call));
+    }
+
+    pub fn open_session(&mut self, id: &str) {
+        if self.viewed_id() == Some(id) && self.ui.view == View::Session {
+            self.after_open();
+            return;
+        }
+        let from = self.draft_key();
+        self.ui.scrolls.insert(from, self.ui.scroll);
+        self.state.model.select(Some(id));
+        self.ui.scroll = self.ui.scrolls.get(id).copied().unwrap_or_default();
+        self.ui.timeline_sel = None;
+        self.ui.timeline_sel_key = None;
+        self.ui.wait_idx = 0;
+        if let Some(s) = self.state.model.sessions.get(id) {
+            self.ui.project = Some(s.project_id.clone());
+        }
+        self.effects
+            .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
+        self.ui.view = View::Session;
+        self.after_open();
+    }
+
+    fn after_open(&mut self) {
+        self.ui.drawer = None;
+        self.ui.focus = Focus::Composer;
+    }
+
+    fn select_project(&mut self, id: &str) {
+        self.ui.project = Some(id.to_owned());
+        self.ui.cursor.insert(Tab::Sessions, 0);
+        self.ui.drawer = None;
+        self.toast(
+            Level::Info,
+            format!(
+                "Project: {}",
+                self.state
+                    .model
+                    .projects
+                    .get(id)
+                    .map_or(id, |p| p.name.as_str())
+            ),
+        );
+    }
+
+    fn sidebar_activate(&mut self, index: usize) {
+        match self.ui.tab {
+            Tab::Sessions => {
+                if let Some(e) = self.side_entries().get(index) {
+                    let id = e.id.clone();
+                    self.open_session(&id);
+                }
+            }
+            Tab::Projects => {
+                if let Some(id) = self.project_ids().get(index).cloned() {
+                    self.select_project(&id);
+                    self.ui.tab = Tab::Sessions;
+                }
+            }
+            Tab::Files => {}
+        }
+    }
+
+    pub fn execute(&mut self, id: &str) {
+        match id {
+            "palette.open" => {
+                if matches!(
+                    self.ui.overlay,
+                    Some(Overlay {
+                        kind: OverlayKind::Palette(_),
+                        ..
+                    })
+                ) {
+                    self.close_overlay();
+                } else {
+                    self.open_palette(PaletteMode::Commands);
+                }
+            }
+            "app.help_keys" => self.open_overlay(OverlayKind::Help { top: 0 }),
+            "app.quit" => self.effects.push(Effect::Quit),
+            "app.settings" => {
+                if self.ui.view == View::Settings {
+                    self.ui.view = View::Session;
+                    self.ui.focus = Focus::Composer;
+                } else {
+                    self.ui.view = View::Settings;
+                    self.ui.settings_pane = SettingsPane::Nav;
+                    self.ui.focus = Focus::Timeline;
+                    self.ui.drawer = None;
+                }
+            }
+            "app.theme" => {
+                let mut o = self.theme.opts;
+                o.mode = match o.mode {
+                    crate::theme::Mode::Dark => crate::theme::Mode::Light,
+                    crate::theme::Mode::Light => crate::theme::Mode::Dark,
+                };
+                self.theme = self.theme.with(o);
+            }
+            "app.reconnect" => self.effects.push(Effect::Sync(SyncCommand::Resync)),
+            "notifications.open" => {
+                self.ui.alerts.mark_all_read();
+                self.open_overlay(OverlayKind::Notifications { selected: 0 });
+            }
+            "notifications.mark_all_read" => self.ui.alerts.mark_all_read(),
+            "alert.dismiss" => self.dismiss_alert(),
+            "alert.confirm" => self.confirm_dialog(true),
+            "alert.cancel" => self.confirm_dialog(false),
+            "text_edit.cancel" => {
+                if let Some(e) = self.ui.edit.take() {
+                    self.apply_restore(e.restore);
+                }
+            }
+            "overlay.close" => self.close_overlay(),
+            "nav.drawer.close" => {
+                if self.ui.drawer.take().is_some() {
+                    self.ui.focus = if self.ui.drawer.is_none() {
+                        self.drawer_opener()
+                    } else {
+                        Focus::Composer
+                    };
+                }
+            }
+            "nav.back" => {
+                if let Some(p) = self.viewed().and_then(|s| s.parent_id.clone()) {
+                    self.open_session(&p);
+                }
+            }
+            "sidebar.left.toggle" => self.toggle_side(Side::Left),
+            "sidebar.right.toggle" => self.toggle_side(Side::Right),
+            "sidebar.tab.sessions" => self.set_tab(Tab::Sessions),
+            "sidebar.tab.files" => self.set_tab(Tab::Files),
+            "sidebar.tab.projects" => self.set_tab(Tab::Projects),
+            "sidebar.focus" => {
+                if self.narrow() {
+                    self.ui.drawer = Some(Side::Left);
+                } else {
+                    self.ui.left_open = true;
+                }
+                self.ui.focus = Focus::Sidebar;
+            }
+            "composer.focus" => {
+                if self.ui.view == View::Settings {
+                    self.ui.view = View::Session;
+                }
+                self.ui.focus = Focus::Composer;
+            }
+            "timeline.focus" => self.ui.focus = Focus::Timeline,
+            "session.export" => self.open_palette(PaletteMode::Export),
+            "turn.go_to" => self.open_palette(PaletteMode::Turns),
+            "session.new" => {
+                if let Some(project) = self.current_project() {
+                    self.api(ApiCall::NewSession { project });
+                }
+            }
+            "session.open" => {
+                let c = self.cursor(self.ui.tab);
+                self.sidebar_activate(c);
+            }
+            "project.open" => {
+                let c = self.cursor(Tab::Projects);
+                self.sidebar_activate(c);
+            }
+            "session.switch" => self.open_palette(PaletteMode::Sessions),
+            "project.switch" => self.open_palette(PaletteMode::Projects),
+            "model.change" => self.open_picker(PaletteMode::Models),
+            "model.effort" => self.open_picker(PaletteMode::Efforts),
+            "agent.change" => self.open_picker(PaletteMode::Agents),
+            "session.rename" => {
+                if let Some(s) = self.viewed() {
+                    let (id, revision, title) = (s.id.clone(), s.revision, s.title.clone());
+                    let mut buf = Composer::new();
+                    buf.set_text(&title);
+                    let restore = self.restore_point();
+                    self.ui.edit = Some(TextEdit {
+                        label: "rename".into(),
+                        target: EditTarget::RenameSession { id, revision },
+                        buf,
+                        restore,
+                    });
+                }
+            }
+            "session.change_directory" => {
+                if let Some(s) = self.viewed() {
+                    let (id, dir) = (s.id.clone(), s.directory.clone());
+                    let mut buf = Composer::new();
+                    buf.set_text(&dir);
+                    let restore = self.restore_point();
+                    self.ui.edit = Some(TextEdit {
+                        label: "directory".into(),
+                        target: EditTarget::ChangeDirectory { id },
+                        buf,
+                        restore,
+                    });
+                }
+            }
+            "session.archive" | "session.unarchive" => {
+                if let Some(sid) = self.viewed_id().map(str::to_owned) {
+                    self.api(ApiCall::Archive {
+                        session: sid,
+                        archived: id == "session.archive",
+                    });
+                }
+            }
+            "session.delete" => self.ask_delete(),
+            "session.interrupt" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.api(ApiCall::Interrupt { session: id });
+                }
+            }
+            "session.continue" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.api(ApiCall::Continue { session: id });
+                }
+            }
+            "session.send" => self.send(),
+            "composer.newline" => self.composer().newline(),
+            "session.jump_latest" => {
+                self.ui.scroll = Scroll::default();
+            }
+            "session.copy_id" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.effects.push(Effect::Copy(id));
+                    self.toast(Level::Success, "Copied session id");
+                }
+            }
+            "turn.fold_toggle" | "tool.expand_toggle" => self.activate_block(),
+            "session.child.open" => self.activate_block(),
+            "turn.fold_all_but_last" => self.fold_turns(true),
+            "turn.unfold_all" => {
+                let keys: Vec<String> = self
+                    .ui
+                    .timeline_blocks
+                    .iter()
+                    .filter(|b| b.toggle)
+                    .map(|b| b.key.clone())
+                    .collect();
+                for k in keys {
+                    self.ui.timeline_open.insert(k, true);
+                }
+                self.fold_turns(false);
+                if let Some(b) = self
+                    .ui
+                    .timeline_blocks
+                    .iter()
+                    .find(|b| b.kind == crate::timeline::BlockKind::Tool)
+                {
+                    self.ui.timeline_open.insert(b.key.clone(), true);
+                }
+                self.toast(Level::Info, "All turns unfolded");
+            }
+            "turn.prev" => self.adjacent_turn(false),
+            "turn.next" => self.adjacent_turn(true),
+            "tool.raw_toggle" => {
+                if let Some(b) = self
+                    .ui
+                    .timeline_sel
+                    .and_then(|i| self.ui.timeline_blocks.get(i))
+                    .cloned()
+                {
+                    if b.kind == crate::timeline::BlockKind::Tool {
+                        let raw = format!("{}:raw", b.key);
+                        let now = self.ui.timeline_open.get(&raw).copied().unwrap_or(false);
+                        self.ui.timeline_open.insert(b.key, true);
+                        self.ui.timeline_open.insert(raw, !now);
+                    }
+                }
+            }
+            "session.open_inspector" | "tool.open_inspector" => self.open_inspector(),
+            "copy.final_message" | "copy.tool_output" | "copy.user_message" => self.copy_selected(),
+            "sessions.scope_toggle" => {
+                self.ui.scope_all = !self.ui.scope_all;
+                self.ui.cursor.insert(Tab::Sessions, 0);
+                self.ui.side_top = 0;
+            }
+            "sessions.archived_filter" => {
+                self.ui.show_archived = !self.ui.show_archived;
+                self.ui.cursor.insert(Tab::Sessions, 0);
+                self.ui.side_top = 0;
+            }
+            "waiting.allow_once" | "waiting.deny" => {
+                if let Some(w) = self.wait_focused().filter(|w| w.kind == WaitKind::Approval) {
+                    self.api(ApiCall::Reply {
+                        session: w.session_id,
+                        id: w.id,
+                        allow: id == "waiting.allow_once",
+                    });
+                }
+            }
+            "waiting.next" => self.ui.wait_idx += 1,
+            "waiting.prev" => self.ui.wait_idx = self.ui.wait_idx.saturating_sub(1),
+            "waiting.focus" => {
+                if !self.wait_items().is_empty() {
+                    self.ui.focus = Focus::Waiting;
+                } else {
+                    self.execute("waiting.go_to");
+                }
+            }
+            "waiting.go_to" => {
+                if let Some(first) = self.waiting_elsewhere().into_iter().next() {
+                    self.open_session(&first);
+                }
+            }
+            _ => {}
+        }
+        // keep the wait cursor in range
+        let n = self.wait_items().len();
+        if n > 0 {
+            self.ui.wait_idx %= n;
+        } else {
+            self.ui.wait_idx = 0;
+            if self.ui.focus == Focus::Waiting {
+                self.ui.focus = Focus::Composer;
+            }
+        }
+    }
+
+    fn drawer_opener(&self) -> Focus {
+        Focus::ToggleLeft
+    }
+
+    fn toggle_side(&mut self, side: Side) {
+        if self.narrow() {
+            if self.ui.drawer == Some(side) {
+                self.ui.drawer = None;
+                self.ui.focus = match side {
+                    Side::Left => Focus::ToggleLeft,
+                    Side::Right => Focus::ToggleRight,
+                };
+            } else {
+                self.ui.drawer = Some(side);
+                self.ui.focus = match side {
+                    Side::Left => Focus::Sidebar,
+                    Side::Right => Focus::Right,
+                };
+            }
+            return;
+        }
+        let open = match side {
+            Side::Left => &mut self.ui.left_open,
+            Side::Right => &mut self.ui.right_open,
+        };
+        *open = !*open;
+        if !*open
+            && matches!(
+                (side, self.ui.focus),
+                (Side::Left, Focus::Sidebar) | (Side::Right, Focus::Right)
+            )
+        {
+            self.ui.focus = Focus::Composer;
+        }
+    }
+
+    fn dismiss_alert(&mut self) {
+        if let Some(i) = self.banners().iter().find_map(|b| b.hide) {
+            if i < self.state.banners.len() {
+                self.state.banners.remove(i);
+            }
+        } else if let Some(t) = self.ui.alerts.toasts.first().map(|t| t.id) {
+            self.ui.alerts.dismiss(t);
+        }
+        if !self.has_alerts() {
+            self.ui.focus = Focus::Composer;
+        }
+    }
+
+    fn ask_delete(&mut self) {
+        let Some(s) = self.viewed() else { return };
+        let n = self.descendants(&s.id);
+        let mut body = vec![format!(
+            "Delete \"{}\"{}?",
+            s.title,
+            if n > 0 {
+                format!(" and its {n} child session(s)")
+            } else {
+                String::new()
+            }
+        )];
+        body.push("This cannot be undone.".into());
+        let restore = self.restore_point();
+        let id = s.id.clone();
+        self.ui.dialog = Some(Dialog {
+            title: "Delete session".into(),
+            body,
+            cancel: "Cancel".into(),
+            confirm: "Delete".into(),
+            danger: true,
+            action: Confirmed::DeleteSession(id),
+            button: 0,
+            restore,
+        });
+    }
+
+    fn confirm_dialog(&mut self, yes: bool) {
+        if self.blocking().is_some() {
+            return; // a blocking dialog cannot be dismissed
+        }
+        let Some(d) = self.ui.dialog.take() else {
+            return;
+        };
+        self.apply_restore(d.restore);
+        if yes {
+            match d.action {
+                Confirmed::DeleteSession(id) => {
+                    if self.writable() {
+                        self.api(ApiCall::Delete { session: id });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+            }
+        }
+    }
+
+    fn send(&mut self) {
+        let text = self.composer_ref().text();
+        if text.trim().is_empty() {
+            return;
+        }
+        // `/name args` runs the command with that slash name.
+        if !text.contains('\n') {
+            if let Some(rest) = text.trim().strip_prefix('/') {
+                let (word, arg) = rest.split_once(' ').unwrap_or((rest, ""));
+                if let Some(c) = self.manifest.slash(word).cloned() {
+                    self.composer().clear();
+                    let arg = arg.trim();
+                    if c.id == "session.rename" && !arg.is_empty() {
+                        if let Some(s) = self.viewed() {
+                            let call = ApiCall::Rename {
+                                session: s.id.clone(),
+                                title: arg.to_owned(),
+                                revision: s.revision,
+                            };
+                            if self.writable() {
+                                self.api(call);
+                            } else {
+                                self.toast(Level::Warning, READ_ONLY);
+                            }
+                            return;
+                        }
+                    }
+                    self.run_command(&c.id);
+                    return;
+                }
+            }
+        }
+        if !self.writable() {
+            self.toast(Level::Warning, READ_ONLY);
+            return;
+        }
+        match self.viewed_id().map(str::to_owned) {
+            Some(id) if self.is_busy(&id) => self.run_command("session.steer"),
+            Some(id) => {
+                self.composer().clear();
+                self.api(ApiCall::Prompt { session: id, text });
+            }
+            None => match self.current_project() {
+                Some(project) => {
+                    self.composer().clear();
+                    self.api(ApiCall::NewAndPrompt { project, text });
+                }
+                None => self.toast(
+                    Level::Warning,
+                    "No project yet: add one with the Nexus CLI, then it appears here.",
+                ),
+            },
+        }
+    }
+
+    // ---- sync & results ------------------------------------------------------------------
+
+    pub fn apply_sync(&mut self, msg: SyncMsg) {
+        self.state.apply(msg);
+        if let Some(gone) = self.state.model.selected_deleted.take() {
+            self.toast(Level::Info, format!("Session {gone} was deleted"));
+            self.ui.drafts.remove(&gone);
+            self.ui.scrolls.remove(&gone);
+            self.ui.scroll = Scroll::default();
+        }
+        if self.state.resync_wanted.take().is_some() {
+            self.effects.push(Effect::Sync(SyncCommand::Resync));
+        }
+    }
+
+    pub fn apply_done(&mut self, done: ActionDone) {
+        let name = done.call_name();
+        match done.result {
+            Ok(r) => {
+                if let Some(c) = r.conflict {
+                    self.toast(
+                        Level::Warning,
+                        format!("Changed elsewhere ({c}); nothing was overwritten"),
+                    );
+                } else if let Some(path) = &r.path {
+                    self.toast(Level::Success, format!("Exported to {path}"));
+                } else if !matches!(
+                    done.call,
+                    ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. }
+                ) {
+                    self.toast(Level::Success, done.call.done_label());
+                }
+                if let Some(id) = r.open {
+                    // events for the new session may not have arrived yet
+                    self.open_session(&id);
+                }
+            }
+            Err(e) => {
+                if let Some((session, text)) = done.call.draft() {
+                    let (session, text) = (session.map(str::to_owned), text.to_owned());
+                    self.restore_draft(session.as_deref(), &text);
+                }
+                self.toast(Level::Error, format!("{name}: {e}"));
+            }
+        }
+    }
+
+    /// Advance clocks. Returns true when something visible changed, so an idle
+    /// terminal is not redrawn (and not written to) on every tick.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        self.clock = now;
+        let mut changed = false;
+        let animated = !self.theme.opts.reduced_motion
+            && (!self.state.model.running.is_empty()
+                || matches!(
+                    self.state.connection,
+                    ConnectionState::Starting | ConnectionState::Connecting
+                ));
+        if animated {
+            self.frame = self.frame.wrapping_add(1);
+            changed = true;
+        }
+        let held = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
+            Some(Target::ToastDismiss(id)) => Some(*id),
+            _ => None,
+        });
+        let before = self.ui.alerts.toasts.len();
+        self.ui.alerts.expire(now, held);
+        changed |= self.ui.alerts.toasts.len() != before;
+        if self.ui.focus == Focus::Alert && !self.has_alerts() {
+            self.ui.focus = Focus::Composer;
+            changed = true;
+        }
+        changed
+    }
+
+    pub fn set_size(&mut self, w: u16, h: u16) {
+        self.size = (w, h);
+        // Targets from the old geometry are stale until the next draw.
+        self.hits.clear();
+        if !self.narrow() {
+            self.ui.drawer = None;
+        }
+    }
+
+    // ---- keyboard ---------------------------------------------------------------------------
+
+    fn lookup(&self, ctx: &str, key: &str) -> Option<String> {
+        self.bindings
+            .get(&(ctx.to_owned(), key.to_owned()))
+            .cloned()
+    }
+
+    fn focus_contexts(&self) -> Vec<String> {
+        match self.ui.focus {
+            Focus::Composer => {
+                if self.viewed_id().is_some_and(|i| self.is_busy(i)) {
+                    vec!["composer_busy".into(), "composer".into()]
+                } else {
+                    vec!["composer".into()]
+                }
+            }
+            Focus::Timeline => vec!["timeline".into()],
+            Focus::Waiting => vec!["waiting".into()],
+            Focus::Sidebar => vec![format!("sidebar.{}", self.ui.tab.id()), "sidebar".into()],
+            _ => vec![],
+        }
+    }
+
+    pub fn handle_key(&mut self, ev: KeyEvent) {
+        let Some(name) = keys::name(&ev) else { return };
+        match name.as_str() {
+            "ctrl+z" => return self.effects.push(Effect::Suspend),
+            "ctrl+c" => return self.effects.push(Effect::Quit),
+            _ => {}
+        }
+        if self.blocking().is_some() {
+            // Esc is consumed by the dialog rule and does nothing; ctrl+q quits.
+            if name == "ctrl+q" {
+                self.effects.push(Effect::Quit);
+            }
+            return;
+        }
+        if name == "esc" {
+            return self.escape();
+        }
+        if self.ui.dialog.is_some() {
+            return self.dialog_key(&name);
+        }
+        if self.ui.edit.is_some() {
+            return self.edit_key(&ev, &name);
+        }
+        if self.ui.overlay.is_some() && self.overlay_key(&ev, &name) {
+            return;
+        }
+        if let Some(cmd) = self.lookup("global", &name) {
+            return self.run_command(&cmd);
+        }
+        match name.as_str() {
+            "f6" => return self.cycle_focus(false),
+            "shift+f6" => return self.cycle_focus(true),
+            "pageup" | "pagedown" if self.ui.view == View::Session => {
+                let page = self.ui.timeline_height.saturating_sub(1).max(1) as isize;
+                return self.scroll_timeline(if name == "pageup" { -page } else { page });
+            }
+            _ => {}
+        }
+        match self.ui.focus {
+            Focus::Composer => self.composer_key(&ev, &name),
+            Focus::Timeline => self.timeline_key(&name),
+            Focus::Sidebar => self.sidebar_key(&name),
+            Focus::Waiting => self.waiting_key(&name),
+            Focus::ToggleLeft | Focus::ToggleRight => {
+                if matches!(name.as_str(), "enter" | "space") {
+                    let side = if self.ui.focus == Focus::ToggleLeft {
+                        Side::Left
+                    } else {
+                        Side::Right
+                    };
+                    self.toggle_side(side);
+                    self.ui.focus = if side == Side::Left {
+                        if self.ui.left_open && !self.narrow() {
+                            Focus::ToggleLeft
+                        } else {
+                            self.ui.focus
+                        }
+                    } else {
+                        self.ui.focus
+                    };
+                }
+            }
+            Focus::Alert => match name.as_str() {
+                "enter" => {
+                    let action = self.banners().into_iter().find_map(|b| b.action);
+                    if let Some((_, _, cmd)) = action {
+                        self.run_command(&cmd);
+                    }
+                }
+                "x" | "backspace" | "delete" => self.dismiss_alert(),
+                _ => {}
+            },
+            Focus::Right => {}
+        }
+        // `r` retries from the banner without moving focus.
+    }
+
+    /// The Esc precedence chain, exactly as the manifest orders it.
+    pub fn escape(&mut self) {
+        let rules = self.manifest.keymap.escape.clone();
+        for rule in rules {
+            if rule.when.iter().all(|t| self.holds(t)) {
+                self.execute(&rule.action);
+                return;
+            }
+        }
+    }
+
+    /// Which chain rule an Esc press would take now (for tests and hints).
+    pub fn escape_rule(&self) -> Option<String> {
+        self.manifest
+            .keymap
+            .escape
+            .iter()
+            .find(|r| r.when.iter().all(|t| self.holds(t)))
+            .map(|r| r.id.clone())
+    }
+
+    fn dialog_key(&mut self, name: &str) {
+        match name {
+            "left" | "right" | "tab" | "shift+tab" | "h" | "l" => {
+                if let Some(d) = self.ui.dialog.as_mut() {
+                    d.button = 1 - d.button.min(1);
+                }
+            }
+            "enter" => {
+                let yes = self.ui.dialog.as_ref().is_some_and(|d| d.button == 1);
+                self.confirm_dialog(yes);
+            }
+            _ => {
+                if let Some(cmd) = self.lookup("global", name).filter(|c| c == "app.quit") {
+                    self.run_command(&cmd);
+                }
+            }
+        }
+    }
+
+    fn edit_key(&mut self, ev: &KeyEvent, name: &str) {
+        let Some(e) = self.ui.edit.as_mut() else {
+            return;
+        };
+        match name {
+            "enter" => {
+                let title = e.buf.text().trim().to_owned();
+                let target = e.target.clone();
+                let restore = e.restore;
+                self.ui.edit = None;
+                self.apply_restore(restore);
+                if title.is_empty() {
+                    return;
+                }
+                if !self.writable() {
+                    self.toast(Level::Warning, READ_ONLY);
+                    return;
+                }
+                match target {
+                    EditTarget::RenameSession { id, revision } => self.api(ApiCall::Rename {
+                        session: id,
+                        title,
+                        revision,
+                    }),
+                    EditTarget::ChangeDirectory { id } => self.api(ApiCall::ChangeDirectory {
+                        session: id,
+                        directory: title,
+                    }),
+                }
+            }
+            _ => edit_buffer(&mut e.buf, ev, name, false),
+        }
+    }
+
+    fn overlay_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        let is_palette = matches!(
+            self.ui.overlay,
+            Some(Overlay {
+                kind: OverlayKind::Palette(_),
+                ..
+            })
+        );
+        match name {
+            "up" => self.overlay_move(-1),
+            "down" => self.overlay_move(1),
+            "pageup" => self.overlay_move(-8),
+            "pagedown" => self.overlay_move(8),
+            "enter" => match &self.ui.overlay {
+                Some(Overlay {
+                    kind: OverlayKind::Palette(_),
+                    ..
+                }) => self.palette_activate(None),
+                Some(Overlay {
+                    kind: OverlayKind::Notifications { selected },
+                    ..
+                }) => {
+                    let sel = *selected;
+                    self.notice_activate(sel);
+                }
+                _ => {}
+            },
+            _ if is_palette => {
+                if self.lookup("global", name).is_some() && !keys::printable(ev).is_some() {
+                    return false; // global shortcuts still work
+                }
+                let mut changed = false;
+                if let Some(Overlay {
+                    kind: OverlayKind::Palette(p),
+                    ..
+                }) = self.ui.overlay.as_mut()
+                {
+                    edit_buffer(&mut p.query, ev, name, true);
+                    changed = true;
+                    p.selected = 0;
+                    p.top = 0;
+                }
+                let _ = changed;
+            }
+            _ => return self.lookup("global", name).is_none(),
+        }
+        true
+    }
+
+    fn overlay_move(&mut self, delta: isize) {
+        let n_notices = self.ui.alerts.history.len();
+        match self.ui.overlay.as_mut().map(|o| &mut o.kind) {
+            Some(OverlayKind::Palette(_)) => self.palette_move(delta),
+            Some(OverlayKind::Notifications { selected }) => {
+                *selected = (*selected as isize + delta)
+                    .clamp(0, n_notices.saturating_sub(1) as isize)
+                    as usize;
+            }
+            Some(OverlayKind::Help { top }) => {
+                *top = (*top as isize + delta).max(0) as usize;
+            }
+            None => {}
+        }
+    }
+
+    fn notice_activate(&mut self, index: usize) {
+        let session = self
+            .ui
+            .alerts
+            .history
+            .get(index)
+            .and_then(|n| n.session.clone());
+        if let Some(id) = session.filter(|id| self.state.model.sessions.contains_key(id)) {
+            self.close_overlay();
+            self.open_session(&id);
+        }
+    }
+
+    fn composer_key(&mut self, ev: &KeyEvent, name: &str) {
+        if let Some(cmd) = self
+            .focus_contexts()
+            .iter()
+            .find_map(|ctx| self.lookup(ctx, name))
+        {
+            // Printable keys (`@`, `/`) are text unless their command is wired.
+            let printable = keys::printable(ev).is_some();
+            if !(printable && !WIRED.contains(&cmd.as_str())) {
+                if cmd == "session.send" || cmd == "session.steer" {
+                    return self.send();
+                }
+                return self.run_command(&cmd);
+            }
+        }
+        match name {
+            "ctrl+j" => self.composer().newline(),
+            "up" => {
+                if !self.composer().up() {
+                    self.ui.focus = Focus::Timeline;
+                }
+            }
+            "down" => {
+                self.composer().down();
+            }
+            _ => edit_buffer(self.composer(), ev, name, false),
+        }
+    }
+
+    // ---- timeline blocks -------------------------------------------------------
+
+    /// The blocks of the last frame (selection, toggles, clicks).
+    pub fn blocks(&self) -> &[crate::timeline::Block] {
+        &self.ui.timeline_blocks
+    }
+
+    fn has_turns(&self) -> bool {
+        self.messages().iter().any(|m| {
+            m.role == "user"
+                && m.parts.iter().any(|p| {
+                    p["type"] == "text"
+                        && !p["text"]
+                            .as_str()
+                            .unwrap_or("")
+                            .trim_start()
+                            .starts_with('[')
+                })
+        })
+    }
+
+    fn block_default_open(&self, b: &crate::timeline::Block) -> bool {
+        use crate::timeline::BlockKind::*;
+        match b.kind {
+            Turn | User | Assistant => true,
+            Context => !self.has_turns(),
+            Notice | Diagnostic | Reasoning | Tool | Child | Older => false,
+        }
+    }
+
+    fn select_block(&mut self, idx: usize) {
+        let Some(b) = self.ui.timeline_blocks.get(idx) else {
+            return;
+        };
+        let start = b.start;
+        self.ui.timeline_sel = Some(idx);
+        self.ui.timeline_sel_key = Some(b.key.clone());
+        self.ui.focus = Focus::Timeline;
+        let h = self.ui.timeline_height.max(1);
+        let total = self.ui.timeline_total;
+        let max_top = total.saturating_sub(h);
+        let cur = if self.ui.scroll.follow {
+            max_top
+        } else {
+            self.ui.scroll.top.min(max_top)
+        };
+        let top = if start < cur {
+            start
+        } else if start >= cur + h {
+            start.saturating_sub(h.saturating_sub(1))
+        } else {
+            cur
+        }
+        .min(max_top);
+        self.ui.scroll = Scroll {
+            follow: top >= max_top,
+            top,
+        };
+    }
+
+    fn move_block(&mut self, delta: isize) {
+        let n = self.ui.timeline_blocks.len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.ui.timeline_sel.unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, n as isize - 1) as usize;
+        self.select_block(next);
+    }
+
+    /// Enter/Space or a click on the selected block.
+    fn activate_block(&mut self) {
+        let Some(b) = self
+            .ui
+            .timeline_sel
+            .and_then(|i| self.ui.timeline_blocks.get(i))
+            .cloned()
+        else {
+            return;
+        };
+        if b.kind == crate::timeline::BlockKind::Child {
+            if let Some(id) = b.target.clone() {
+                self.open_session(&id);
+                return;
+            }
+        }
+        if b.toggle {
+            let default = self.block_default_open(&b);
+            let now = self
+                .ui
+                .timeline_open
+                .entry(b.key.clone())
+                .or_insert(default);
+            *now = !*now;
+        }
+    }
+
+    fn adjacent_turn(&mut self, forward: bool) {
+        let blocks = self.ui.timeline_blocks.clone();
+        let cur = self.ui.timeline_sel.unwrap_or(0);
+        let found = if forward {
+            blocks
+                .iter()
+                .enumerate()
+                .skip(cur + 1)
+                .find(|(_, b)| b.kind == crate::timeline::BlockKind::Turn)
+        } else {
+            blocks
+                .iter()
+                .enumerate()
+                .take(cur)
+                .rev()
+                .find(|(_, b)| b.kind == crate::timeline::BlockKind::Turn)
+        };
+        if let Some((i, _)) = found {
+            self.select_block(i);
+        }
+    }
+
+    fn fold_turns(&mut self, all_but_last: bool) {
+        let blocks = self.ui.timeline_blocks.clone();
+        let turns: Vec<usize> = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == crate::timeline::BlockKind::Turn)
+            .map(|(i, _)| i)
+            .collect();
+        for (n, i) in turns.iter().enumerate() {
+            let key = blocks[*i].key.clone();
+            let open = !all_but_last || n + 1 == turns.len();
+            self.ui.timeline_open.insert(key, open);
+        }
+        if all_but_last {
+            if let Some(b) = blocks
+                .iter()
+                .find(|b| b.kind == crate::timeline::BlockKind::Context)
+            {
+                self.ui.timeline_open.insert(b.key.clone(), false);
+            }
+        }
+    }
+
+    fn copy_selected(&mut self) {
+        let Some(b) = self
+            .ui
+            .timeline_sel
+            .and_then(|i| self.ui.timeline_blocks.get(i))
+            .cloned()
+        else {
+            self.toast(Level::Info, "Select a timeline item first");
+            return;
+        };
+        let text = match b.kind {
+            crate::timeline::BlockKind::Tool => {
+                let call = b.key.strip_prefix("tool:").unwrap_or_default();
+                self.tool_result(call).unwrap_or_default()
+            }
+            crate::timeline::BlockKind::User => self
+                .message_by_prefix(b.key.strip_prefix("user:").unwrap_or_default())
+                .map(|m| message_text(&m))
+                .unwrap_or_default(),
+            _ => self.final_message().unwrap_or_default(),
+        };
+        if text.trim().is_empty() {
+            self.toast(Level::Info, "Nothing to copy here");
+            return;
+        }
+        self.effects.push(Effect::Copy(text));
+        self.toast(Level::Success, "Copied");
+    }
+
+    fn message_by_prefix(&self, id: &str) -> Option<Message> {
+        self.messages().iter().find(|m| m.id == id).cloned()
+    }
+
+    fn final_message(&self) -> Option<String> {
+        self.messages()
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .map(message_text)
+            .filter(|t| !t.trim().is_empty())
+    }
+
+    fn tool_result(&self, call_id: &str) -> Option<String> {
+        self.messages().iter().find_map(|m| {
+            m.parts
+                .iter()
+                .find(|p| p["type"] == "tool_result" && p["call_id"].as_str() == Some(call_id))
+                .map(|p| p["output"].as_str().unwrap_or("").to_owned())
+        })
+    }
+
+    fn open_inspector(&mut self) {
+        let Some(info) = self.state.core.as_ref() else {
+            self.toast(Level::Info, "Not connected to Core");
+            return;
+        };
+        let sid = self.viewed_id().unwrap_or_default();
+        let mut url = format!("{}/inspector", info.url.trim_end_matches('/'));
+        if !sid.is_empty() {
+            url.push_str(&format!("#{sid}"));
+        }
+        self.effects.push(Effect::OpenUrl(url));
+    }
+
+    fn timeline_key(&mut self, name: &str) {
+        if let Some(cmd) = self.lookup("timeline", name) {
+            if WIRED.contains(&cmd.as_str()) {
+                return self.run_command(&cmd);
+            }
+        }
+        let page = self.ui.timeline_height.saturating_sub(1).max(1) as isize;
+        match name {
+            "up" | "k" => self.move_block(-1),
+            "down" | "j" => self.move_block(1),
+            "home" => {
+                if self.ui.timeline_blocks.is_empty() {
+                    self.ui.scroll = Scroll {
+                        follow: false,
+                        top: 0,
+                    };
+                } else {
+                    self.select_block(0);
+                }
+            }
+            "end" => {
+                let n = self.ui.timeline_blocks.len();
+                if n == 0 {
+                    self.ui.scroll = Scroll::default();
+                } else {
+                    self.select_block(n - 1);
+                }
+            }
+            "pageup" => self.scroll_timeline(-page),
+            "pagedown" => self.scroll_timeline(page),
+            // The manifest binds Enter to tool.expand_toggle and Space to
+            // turn.fold_toggle; both act on the selected block.
+            "space" | "enter" => self.activate_block(),
+            "left" | "h" => {
+                if let Some(b) = self
+                    .ui
+                    .timeline_sel
+                    .and_then(|i| self.ui.timeline_blocks.get(i))
+                    .cloned()
+                {
+                    if b.toggle {
+                        self.ui.timeline_open.insert(b.key, false);
+                    }
+                }
+            }
+            "right" | "l" => {
+                if let Some(b) = self
+                    .ui
+                    .timeline_sel
+                    .and_then(|i| self.ui.timeline_blocks.get(i))
+                    .cloned()
+                {
+                    if b.toggle {
+                        self.ui.timeline_open.insert(b.key, true);
+                    }
+                }
+            }
+            "tab" => self.cycle_focus(false),
+            "shift+tab" => self.cycle_focus(true),
+            _ => {
+                if let Some(cmd) = self.lookup("timeline", name) {
+                    self.run_command(&cmd);
+                }
+            }
+        }
+        if self.ui.view == View::Settings {
+            self.settings_key(name);
+        }
+    }
+
+    pub fn scroll_timeline(&mut self, delta: isize) {
+        let max_top = self
+            .ui
+            .timeline_total
+            .saturating_sub(self.ui.timeline_height);
+        let cur = if self.ui.scroll.follow {
+            max_top
+        } else {
+            self.ui.scroll.top.min(max_top)
+        };
+        let top = (cur as isize + delta).clamp(0, max_top as isize) as usize;
+        self.ui.scroll = Scroll {
+            follow: top >= max_top,
+            top,
+        };
+    }
+
+    fn sidebar_key(&mut self, name: &str) {
+        let n = self.list_len(self.ui.tab);
+        let c = self.cursor(self.ui.tab);
+        let set = |s: &mut Self, v: usize| {
+            s.ui.cursor.insert(s.ui.tab, v.min(n.saturating_sub(1)));
+        };
+        match name {
+            "up" | "k" => set(self, c.saturating_sub(1)),
+            "down" | "j" => set(self, c + 1),
+            "home" => set(self, 0),
+            "end" => set(self, n),
+            "pageup" => set(self, c.saturating_sub(8)),
+            "pagedown" => set(self, c + 8),
+            "left" | "h" => {
+                let t = match self.ui.tab {
+                    Tab::Sessions | Tab::Files => Tab::Sessions,
+                    Tab::Projects => Tab::Files,
+                };
+                self.ui.tab = t;
+            }
+            "right" | "l" => {
+                self.ui.tab = match self.ui.tab {
+                    Tab::Sessions => Tab::Files,
+                    _ => Tab::Projects,
+                };
+            }
+            "tab" => self.cycle_focus(false),
+            "shift+tab" => self.cycle_focus(true),
+            _ => {
+                if let Some(cmd) = self
+                    .focus_contexts()
+                    .iter()
+                    .find_map(|ctx| self.lookup(ctx, name))
+                {
+                    self.run_command(&cmd);
+                }
+            }
+        }
+    }
+
+    fn waiting_key(&mut self, name: &str) {
+        if let Some(cmd) = self.lookup("waiting", name) {
+            return self.run_command(&cmd);
+        }
+        if name == "left" {
+            self.execute("waiting.prev");
+        } else if name == "right" {
+            self.execute("waiting.next");
+        }
+    }
+
+    // ---- settings view ---------------------------------------------------------------------
+
+    pub fn settings_rows(&self) -> Vec<crate::manifest::Row> {
+        let sections = self.manifest.settings_for_tui();
+        sections
+            .get(self.ui.settings_section)
+            .map(|s| s.row.clone())
+            .unwrap_or_default()
+    }
+
+    fn settings_key(&mut self, name: &str) {
+        let sections = self.manifest.settings.section.len();
+        let rows = self.settings_rows().len();
+        match (self.ui.settings_pane, name) {
+            (SettingsPane::Nav, "up" | "k") => {
+                self.ui.settings_section = self.ui.settings_section.saturating_sub(1);
+                self.ui.settings_row = 0;
+            }
+            (SettingsPane::Nav, "down" | "j") => {
+                self.ui.settings_section = (self.ui.settings_section + 1).min(sections - 1);
+                self.ui.settings_row = 0;
+            }
+            (SettingsPane::Nav, "right" | "enter" | "tab") => {
+                self.ui.settings_pane = SettingsPane::Rows
+            }
+            (SettingsPane::Rows, "up" | "k") => {
+                self.ui.settings_row = self.ui.settings_row.saturating_sub(1)
+            }
+            (SettingsPane::Rows, "down" | "j") => {
+                self.ui.settings_row = (self.ui.settings_row + 1).min(rows.saturating_sub(1))
+            }
+            (SettingsPane::Rows, "left" | "shift+tab") => self.ui.settings_pane = SettingsPane::Nav,
+            (SettingsPane::Rows, "enter" | "space") => self.settings_activate(self.ui.settings_row),
+            _ => {}
+        }
+    }
+
+    pub fn settings_wired(id: &str) -> bool {
+        matches!(
+            id,
+            "appearance.theme"
+                | "appearance.monochrome"
+                | "about.versions"
+                | "about.daemon"
+                | "keybindings.list"
+        )
+    }
+
+    fn settings_activate(&mut self, index: usize) {
+        let Some(row) = self.settings_rows().get(index).cloned() else {
+            return;
+        };
+        if row.unavailable_reason.is_some() || !Self::settings_wired(&row.id) {
+            let why = row.unavailable_reason.unwrap_or_else(|| NOT_WIRED.into());
+            return self.toast(Level::Warning, format!("{}: {why}", row.label));
+        }
+        match row.id.as_str() {
+            "appearance.theme" => self.execute("app.theme"),
+            "appearance.monochrome" => {
+                let mut o = self.theme.opts;
+                match self.ui.monochrome_before.take() {
+                    Some(t) => o.tier = t,
+                    None => {
+                        self.ui.monochrome_before = Some(o.tier);
+                        o.tier = Tier::Mono;
+                    }
+                }
+                self.theme = self.theme.with(o);
+            }
+            "keybindings.list" => self.execute("app.help_keys"),
+            _ => {}
+        }
+    }
+
+    // ---- mouse ----------------------------------------------------------------------------------
+
+    pub fn handle_mouse(&mut self, ev: MouseEvent) {
+        self.mouse = Some((ev.column, ev.row));
+        match ev.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(t) = self.hits.at(ev.column, ev.row).cloned() {
+                    self.click(t);
+                }
+            }
+            MouseEventKind::ScrollUp => self.wheel(ev.column, ev.row, -3),
+            MouseEventKind::ScrollDown => self.wheel(ev.column, ev.row, 3),
+            _ => {}
+        }
+    }
+
+    fn wheel(&mut self, x: u16, y: u16, delta: isize) {
+        if self.ui.overlay.is_some() {
+            return self.overlay_move(delta.signum());
+        }
+        if self.ui.dialog.is_some() || self.blocking().is_some() {
+            return;
+        }
+        let left = self.regions.left.or(self
+            .regions
+            .drawer
+            .filter(|(s, _)| *s == Side::Left)
+            .map(|(_, r)| r));
+        if left.is_some_and(|r| contains(r, x, y)) && self.ui.view == View::Session {
+            let n = self.list_len(self.ui.tab);
+            let c = self.cursor(self.ui.tab) as isize;
+            self.ui.cursor.insert(
+                self.ui.tab,
+                (c + delta.signum()).clamp(0, n.saturating_sub(1) as isize) as usize,
+            );
+        } else if contains(self.regions.timeline, x, y) && self.ui.view == View::Session {
+            self.scroll_timeline(delta);
+        }
+    }
+
+    pub fn click(&mut self, t: Target) {
+        match t {
+            Target::Swallow => {}
+            Target::Scrim => {
+                if self.ui.overlay.is_some() {
+                    self.close_overlay();
+                } else if self.ui.drawer.is_some() {
+                    self.execute("nav.drawer.close");
+                }
+            }
+            Target::ToggleLeft => {
+                self.ui.focus = Focus::ToggleLeft;
+                self.execute("sidebar.left.toggle");
+            }
+            Target::ToggleRight => {
+                self.ui.focus = Focus::ToggleRight;
+                self.execute("sidebar.right.toggle");
+            }
+            Target::Title => self.run_command("session.rename"),
+            Target::Notifications => self.run_command("notifications.open"),
+            Target::Tab(tab) => {
+                let id = match tab {
+                    Tab::Sessions => "sidebar.tab.sessions",
+                    Tab::Files => "sidebar.tab.files",
+                    Tab::Projects => "sidebar.tab.projects",
+                };
+                self.run_command(id);
+            }
+            Target::SettingsEntry => self.run_command("app.settings"),
+            Target::SideRow(i) => {
+                self.ui.focus = Focus::Sidebar;
+                self.ui.cursor.insert(self.ui.tab, i);
+                self.sidebar_activate(i);
+            }
+            Target::ScopeToggle => self.run_command("sessions.scope_toggle"),
+            Target::ArchivedToggle => self.run_command("sessions.archived_filter"),
+            Target::RightSection(_) => self.ui.focus = Focus::Right,
+            Target::Timeline => self.ui.focus = Focus::Timeline,
+            Target::Block(i) => {
+                self.select_block(i);
+                self.activate_block();
+            }
+            Target::JumpLatest => self.run_command("session.jump_latest"),
+            Target::Composer => self.ui.focus = Focus::Composer,
+            Target::Wait(b) => {
+                self.ui.focus = Focus::Waiting;
+                self.run_command(match b {
+                    WaitButton::Allow => "waiting.allow_once",
+                    WaitButton::Deny => "waiting.deny",
+                    WaitButton::Next => "waiting.next",
+                });
+            }
+            Target::Stop => self.run_command("session.interrupt"),
+            Target::Continue => self.run_command("session.continue"),
+            Target::BannerAction(i) => {
+                if let Some((_, _, cmd)) = self.banners().get(i).and_then(|b| b.action.clone()) {
+                    self.run_command(&cmd);
+                }
+            }
+            Target::BannerHide(i) => {
+                if i < self.state.banners.len() {
+                    self.state.banners.remove(i);
+                }
+            }
+            Target::ToastDismiss(id) => self.ui.alerts.dismiss(id),
+            Target::PaletteItem(i) => self.palette_activate(Some(i)),
+            Target::NoticeItem(i) => self.notice_activate(i),
+            Target::DialogButton(i) => {
+                if let Some(d) = self.ui.dialog.as_mut() {
+                    d.button = i;
+                }
+                self.confirm_dialog(i == 1);
+            }
+            Target::SettingsNav(i) => {
+                self.ui.settings_section = i;
+                self.ui.settings_row = 0;
+                self.ui.settings_pane = SettingsPane::Nav;
+                self.ui.focus = Focus::Timeline;
+            }
+            Target::SettingsRow(i) => {
+                self.ui.settings_pane = SettingsPane::Rows;
+                self.ui.settings_row = i;
+                self.ui.focus = Focus::Timeline;
+                self.settings_activate(i);
+            }
+        }
+    }
+
+    pub fn handle_paste(&mut self, text: &str) {
+        if let Some(Overlay {
+            kind: OverlayKind::Palette(p),
+            ..
+        }) = self.ui.overlay.as_mut()
+        {
+            p.query.insert_str(&text.replace('\n', " "));
+            return;
+        }
+        if let Some(e) = self.ui.edit.as_mut() {
+            e.buf.insert_str(&text.replace('\n', " "));
+            return;
+        }
+        if self.ui.dialog.is_some() || self.ui.view == View::Settings {
+            return;
+        }
+        // Pasting into the composer from anywhere is the least surprising place.
+        self.composer().insert_str(text);
+        self.ui.focus = Focus::Composer;
+    }
+}
+
+impl ActionDone {
+    fn call_name(&self) -> &'static str {
+        match self.call {
+            ApiCall::Prompt { .. } | ApiCall::NewAndPrompt { .. } => "Send failed",
+            ApiCall::NewSession { .. } => "New session failed",
+            ApiCall::Continue { .. } => "Continue failed",
+            ApiCall::Interrupt { .. } => "Interrupt failed",
+            ApiCall::Archive { .. } => "Archive failed",
+            ApiCall::Rename { .. } => "Rename failed",
+            ApiCall::Delete { .. } => "Delete failed",
+            ApiCall::Reply { .. } => "Reply failed",
+            ApiCall::SetModel { .. } => "Model change failed",
+            ApiCall::SetAgent { .. } => "Agent change failed",
+            ApiCall::SetEffort { .. } => "Effort change failed",
+            ApiCall::Export { .. } => "Export failed",
+            ApiCall::ChangeDirectory { .. } => "Directory change failed",
+        }
+    }
+}
+
+pub fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// The plain text of a message (user or assistant), for copying.
+fn message_text(m: &Message) -> String {
+    m.parts
+        .iter()
+        .filter(|p| p["type"] == "text")
+        .map(|p| p["text"].as_str().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Shared single-line/multi-line text editing keys.
+fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool) {
+    if let Some(c) = keys::printable(ev) {
+        return buf.insert_char(c);
+    }
+    match name {
+        "backspace" => buf.backspace(),
+        "delete" => buf.delete(),
+        "left" => buf.left(),
+        "right" => buf.right(),
+        "home" | "ctrl+a" => buf.home(),
+        "end" | "ctrl+e" => buf.end(),
+        "ctrl+u" => buf.kill_to_line_start(),
+        "alt+backspace" => buf.delete_word_back(),
+        "up" if !single_line => {
+            buf.up();
+        }
+        "down" if !single_line => {
+            buf.down();
+        }
+        _ => {
+            if let KeyCode::Char(_) = ev.code {
+                // unbound modified key: ignore
+            }
+        }
+    }
+}

@@ -1,0 +1,3 @@
+event: bus.overflow
+data: {"type": "bus.overflow", "time": 1793113400.0, "session_id": null, "id": null, "data": {"dropped_after": 4210, "generation": "log_c915bfc9b6d826c4", "head": 4300}}
+

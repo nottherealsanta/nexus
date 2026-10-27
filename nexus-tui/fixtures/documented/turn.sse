@@ -1,0 +1,51 @@
+event: server.connected
+data: {"version": "0.10.0.dev0", "generation": "log_c915bfc9b6d826c4", "head": 16, "head_cursor": "log_c915bfc9b6d826c4:16", "resumed_from": 3, "session": null, "floor": 0}
+
+id: log_c915bfc9b6d826c4:4
+event: session.status
+data: {"id": 4, "seq": 4, "time": 1793113304.0, "type": "session.status", "session_id": "ses_1a17de160eccc428a38", "data": {"status": "busy", "turn_id": "trn_1", "origin": "prompt"}, "cursor": "log_c915bfc9b6d826c4:4"}
+
+id: log_c915bfc9b6d826c4:5
+event: message.added
+data: {"id": 5, "seq": 5, "time": 1793113305.0, "type": "message.added", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "msg_1", "session_id": "ses_1a17de160eccc428a38", "seq": 1, "created": 1793113300.0, "role": "user", "parts": [{"type": "text", "text": "hi", "origin": null, "raw": null}]}, "cursor": "log_c915bfc9b6d826c4:5"}
+
+id: log_c915bfc9b6d826c4:7
+event: step_start
+data: {"id": 7, "seq": 7, "time": 1793113307.0, "type": "step_start", "session_id": "ses_1a17de160eccc428a38", "data": {"type": "step_start", "step": 1}, "cursor": "log_c915bfc9b6d826c4:7"}
+
+id: log_c915bfc9b6d826c4:8
+event: text_delta
+data: {"id": 8, "seq": 8, "time": 1793113308.0, "type": "text_delta", "session_id": "ses_1a17de160eccc428a38", "data": {"type": "text_delta", "text": "Hel"}, "cursor": "log_c915bfc9b6d826c4:8"}
+
+id: log_c915bfc9b6d826c4:9
+event: text_delta
+data: {"id": 9, "seq": 9, "time": 1793113309.0, "type": "text_delta", "session_id": "ses_1a17de160eccc428a38", "data": {"type": "text_delta", "text": "lo"}, "cursor": "log_c915bfc9b6d826c4:9"}
+
+id: log_c915bfc9b6d826c4:10
+event: permission.asked
+data: {"id": 10, "seq": 10, "time": 1793113310.0, "type": "permission.asked", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "per_1", "session_id": "ses_1a17de160eccc428a38", "tool": "bash", "call_id": "call_1", "args": {"command": "ls"}}, "cursor": "log_c915bfc9b6d826c4:10"}
+
+id: log_c915bfc9b6d826c4:11
+event: question.asked
+data: {"id": 11, "seq": 11, "time": 1793113311.0, "type": "question.asked", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "qst_1", "session_id": "ses_1a17de160eccc428a38", "call_id": "call_2", "created": 1793113311.0, "questions": [{"id": "db", "question": "Which database?", "options": [{"id": "pg", "label": "PostgreSQL", "preview": null}], "multiple": false, "allow_free_text": false}]}, "cursor": "log_c915bfc9b6d826c4:11"}
+
+id: log_c915bfc9b6d826c4:12
+event: permission.replied
+data: {"id": 12, "seq": 12, "time": 1793113312.0, "type": "permission.replied", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "per_1", "session_id": "ses_1a17de160eccc428a38", "allow": true, "outcome": "allowed"}, "cursor": "log_c915bfc9b6d826c4:12"}
+
+id: log_c915bfc9b6d826c4:13
+event: question.replied
+data: {"id": 13, "seq": 13, "time": 1793113313.0, "type": "question.replied", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "qst_1", "session_id": "ses_1a17de160eccc428a38", "call_id": "call_2", "outcome": "answered", "answers": [{"question_id": "db", "selected": ["pg"], "text": null}]}, "cursor": "log_c915bfc9b6d826c4:13"}
+
+id: log_c915bfc9b6d826c4:14
+event: message.added
+data: {"id": 14, "seq": 14, "time": 1793113314.0, "type": "message.added", "session_id": "ses_1a17de160eccc428a38", "data": {"id": "msg_2", "session_id": "ses_1a17de160eccc428a38", "seq": 2, "created": 1793113300.0, "role": "assistant", "parts": [{"type": "text", "text": "Hello", "origin": "codex", "raw": {"type": "message"}}]}, "cursor": "log_c915bfc9b6d826c4:14"}
+
+id: log_c915bfc9b6d826c4:15
+event: turn_end
+data: {"id": 15, "seq": 15, "time": 1793113315.0, "type": "turn_end", "session_id": "ses_1a17de160eccc428a38", "data": {"type": "turn_end", "stop": "end_turn", "steps": 1}, "cursor": "log_c915bfc9b6d826c4:15"}
+
+id: log_c915bfc9b6d826c4:16
+event: session.status
+data: {"id": 16, "seq": 16, "time": 1793113316.0, "type": "session.status", "session_id": "ses_1a17de160eccc428a38", "data": {"status": "idle", "turn_id": "trn_1", "origin": "prompt"}, "cursor": "log_c915bfc9b6d826c4:16"}
+

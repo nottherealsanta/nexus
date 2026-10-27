@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nexus-tui in a PTY</title>
+<link rel="stylesheet" href="/xterm.css">
+<style>
+  html, body { margin: 0; background: var(--bg, #121314); }
+  #term { display: inline-block; padding: 0; }
+  .xterm-viewport { overflow: hidden !important; }
+</style>
+<div id="term"></div>
+<script src="/xterm.js"></script>
+<script src="/addon-canvas.js"></script>
+<script>
+  const q = new URLSearchParams(location.search);
+  const cols = Number(q.get("cols")) || 80, rows = Number(q.get("rows")) || 24;
+  const bg = q.get("bg") || "#121314", fg = q.get("fg") || "#e6e7e8";
+  document.documentElement.style.setProperty("--bg", bg);
+  const term = new Terminal({
+    cols, rows,
+    fontFamily: '"Monaspace Argon", Menlo, "SF Mono", monospace',
+    fontSize: Number(q.get("font")) || 16,
+    lineHeight: 1.0,
+    allowProposedApi: true,
+    macOptionIsMeta: true,
+    cursorBlink: false,
+    theme: { background: bg, foreground: fg },
+  });
+  term.loadAddon(new CanvasAddon.CanvasAddon());
+  term.open(document.getElementById("term"));
+  const ws = new WebSocket(`ws://${location.host}/pty?profile=${q.get("profile")}&cols=${cols}&rows=${rows}`);
+  window.__last = Date.now(); window.__exited = null; window.__bytes = 0;
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === "out") { term.write(m.d); window.__last = Date.now(); window.__bytes += m.d.length; }
+    if (m.t === "exit") window.__exited = m.code;
+  };
+  term.onData((d) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "in", d })));
+  term.focus();
+  window.term = term;
+  // Resolves once the PTY has been quiet for `ms`.
+  window.__idle = (ms) => new Promise((ok) => {
+    const t = setInterval(() => { if (Date.now() - window.__last >= ms) { clearInterval(t); ok(); } }, 50);
+  });
+  window.__resize = (c, r) => { term.resize(c, r); ws.send(JSON.stringify({ t: "resize", cols: c, rows: r })); };
+  // The visible screen as text, to assert on without OCR.
+  window.__text = () => {
+    const b = term.buffer.active, out = [];
+    for (let y = 0; y < term.rows; y++) out.push(b.getLine(y)?.translateToString(true) ?? "");
+    return out.join("\n");
+  };
+</script>

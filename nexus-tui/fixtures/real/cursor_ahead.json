@@ -1,0 +1,1 @@
+{"error":"cursor 'log_c915bfc9b6d826c4:999' is ahead of this log (head log_c915bfc9b6d826c4:3); reload state and resume from the reported head","code":"cursor_ahead","resync":true,"generation":"log_c915bfc9b6d826c4","head":3,"head_cursor":"log_c915bfc9b6d826c4:3","floor":0,"floor_cursor":"log_c915bfc9b6d826c4:0"}
