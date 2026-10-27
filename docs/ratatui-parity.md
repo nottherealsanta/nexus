@@ -1,5 +1,15 @@
 # Ratatui implementation and parity ledger
 
+The project strip starts at column 3; the activity indicator is inset one cell
+from the above-composer row and separated from its label by a space.
+
+The project browser submits edited paths as `project_path`, navigates directories
+as `browse_project`, and opens a folder as `select_project`; all are handled by
+the Python sidebar controller. The parent row is named `..` to match native
+Left/Backspace navigation. A path-row click only starts editing; folder clicks
+and Enter activation each emit one action, with no second action on mouse release.
+Python protocol coverage and Rust hit-target tests guard these contracts.
+
 The worktree bar renders the root from the incoming conversation reduction, even
 before the controller's cached view catches up, so an agent move updates it without
 a tab switch. Native PTY action readers ignore passive `draft_state` composer
@@ -855,13 +865,15 @@ typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
 models and the live `Thinking · …` summary). While a turn runs, one status line sits above the
-composer (`render.rs::above_layout`): `∴ Waiting for response…` on the left
+composer (`render.rs::above_layout`): `... Waiting for response…` on the left
 (the host's activity word, no time of its own; design overhaul step 6, THK-4: the word always shows
 its real characters and a soft grey shimmer sweeps left to right once every 54 motion frames (1.8 s at
 30 Hz, `cache.activity_frame`, not the 125 ms `cache.spin`), each grapheme blending dark grey to light
 grey over about four graphemes either side of the highlight; `render.rs::shimmer_spans`. The greys are the
 darker and lighter of `p.quiet` and `p.text` (dark theme: `p.quiet` dark, `p.text` light; light theme:
-`p.text` dark, `p.quiet` light), and the `∴` is the dark base grey; no purple or accent. Only colours change,
+`p.text` dark, `p.quiet` light), and three separate one-cell dots pulse left to right on the same motion clock, with exactly one
+terminal-cell space before the first status letter; no purple or accent. With animations off the
+dots stay dark grey; Monochrome uses static plain `...`. Only colours change,
 so the label keeps its width and `stop_at` its geometry; animations off draw the word in the dark base
 grey, Monochrome plain text) and `4m40s ↓121k [stop]`
 right-aligned (turn time, output tokens when known, `[stop]`). The fields come from

@@ -358,7 +358,7 @@ fn crumb_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
         return Vec::new();
     }
     let (path, branch) = partition(&s.breadcrumb);
-    let at = if width < 12 { 0 } else { 5 };
+    let at = if width < 12 { 0 } else { 3 };
     let mut room = width.saturating_sub(at + usize::from(width >= 12));
     let mut out: Vec<(usize, String, Seg)> = Vec::new();
     let mut column = at;
@@ -776,16 +776,16 @@ mod chrome_tests {
         s.breadcrumb = "~/repo:main".into();
         s.tabs = open_tabs(2, 0);
         let strip = strip_text(&s, 100);
-        // The basename starts at column 5, the branch one gap cell after it, then the full path.
-        assert_eq!(strip.find("repo"), Some(5), "{strip:?}");
-        assert_eq!(strip.find("main"), Some(5 + "repo".len() + 1), "{strip:?}");
+        // The basename starts at column 3, the branch one gap cell after it, then the full path.
+        assert_eq!(strip.find("repo"), Some(3), "{strip:?}");
+        assert_eq!(strip.find("main"), Some(3 + "repo".len() + 1), "{strip:?}");
         assert_eq!(
             strip.find("~/repo"),
-            Some(5 + "repo main ".len()),
+            Some(3 + "repo main ".len()),
             "{strip:?}"
         );
         let layout = crumb_layout(&s, 100);
-        assert_eq!(layout[0].0, 5);
+        assert_eq!(layout[0].0, 3);
         // Tab hit cells live on the first row only and are unaffected by the strip.
         assert!(tab_cells(&s, 100)
             .iter()
@@ -924,7 +924,7 @@ mod chrome_tests {
         assert!(strip.trim() == "repo main ~/repo wt-fix", "{strip:?}");
         assert_eq!(
             strip.find("repo"),
-            Some(5),
+            Some(3),
             "workspace strip uses the five-column breadcrumb inset"
         );
         assert!(

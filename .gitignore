@@ -33,3 +33,5 @@ ios/**/DerivedData/
 
 # NSH web client build output (scripts/nsh-app.sh package web)
 /nexus/ui/nsh/
+rust/app/.nsh/
+rust/app/target/

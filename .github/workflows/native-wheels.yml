@@ -11,7 +11,33 @@ on:
 permissions:
   contents: read
 jobs:
+  nsh-web:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.13'
+      - name: Install pinned NSH web toolchain
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup default 1.97.0
+          rustup target add wasm32-unknown-unknown
+          curl -fsSL https://nsh.dev/install.sh -o /tmp/install-nsh.sh
+          NSH_VERSION=v0.2.0 sh /tmp/install-nsh.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build required NSH browser assets
+        run: scripts/nsh-app.sh package web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsh-web-assets
+          path: nexus/ui/nsh/
+          if-no-files-found: error
   wheels:
+    needs: nsh-web
     strategy:
       fail-fast: false
       matrix:
@@ -25,18 +51,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: '3.13'
-      # The NSH browser client (nexus/ui/nsh/, git-ignored) must exist before the wheel is
-      # built so setuptools packages it. Not verified locally; see docs/nsh-client.md.
-      - name: Build the NSH web client bundle
-        run: |
-          curl -fsSL https://nsh.dev/install.sh | NSH_VERSION=v0.2.0 sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          rustup target add wasm32-unknown-unknown
-          scripts/nsh-app.sh package web
       - name: Pin Rust 1.97 on macOS (Linux installs it inside the build container)
         if: runner.os == 'macOS'
         run: rustup toolchain install 1.97.0 --profile minimal && rustup default 1.97.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: nsh-web-assets
+          path: nexus/ui/nsh
       - name: Build and install platform wheels
         run: uvx --from cibuildwheel==3.1.4 cibuildwheel --output-dir wheelhouse
         env:
@@ -67,6 +88,7 @@ jobs:
           # `optional` setuptools-rust bin, so only this step notices a skipped build) and
           # import the native surface without loading an obsolete terminal toolkit.
           CIBW_TEST_COMMAND: >-
+            python -c "from pathlib import Path; import nexus.ui; root=Path(nexus.ui.__file__).parent/'nsh'; assert (root/'index.html').is_file(); assert any(p.read_bytes().startswith(bytes([0,97,115,109])) for p in root.rglob('*.wasm')), 'NSH WASM missing from installed wheel'" &&
             nexus-ratatui --version &&
             nexus-live --version &&
             python -c "from nexus.host.web import NSH_ROOT; assert (NSH_ROOT / 'index.html').is_file(), 'wheel lacks the NSH client'" &&

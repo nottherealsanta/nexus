@@ -5,3 +5,10 @@ prune rust/tui/target
 include rust/live/Cargo.toml rust/live/Cargo.lock
 recursive-include rust/live/src *.rs
 prune rust/live/target
+
+include rust/app/Cargo.toml rust/app/Cargo.lock rust/app/nsh.json
+recursive-include rust/app/src *.rs
+include scripts/nsh-app.sh
+recursive-include nexus/ui/nsh *
+prune rust/app/target
+prune rust/app/.nsh

@@ -459,3 +459,27 @@ The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it
 Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
 the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.88 on
 macOS arm64; a Rust 1.88 build has not been reproduced).
+
+## Required NSH browser package
+
+Published wheels **and the sdist** include the NSH web bundle (`nexus/ui/nsh/`,
+[nsh-client.md](nsh-client.md)). The reusable `native-wheels` workflow builds it
+once on `macos-15` with `scripts/nsh-app.sh package web`, uploads
+`nsh-web-assets`, and every wheel job downloads that artifact before
+cibuildwheel. The publish job downloads the same artifact before
+`uv build --sdist`. The installed-wheel check requires `index.html` and a WASM
+module with the WASM magic bytes, so missing browser assets fail the release.
+
+Local release builds need Rust, the `wasm32-unknown-unknown` target and NSH
+**0.2.0**:
+
+```sh
+rustup target add wasm32-unknown-unknown
+curl -fsSL https://nsh.dev/install.sh | NSH_VERSION=v0.2.0 sh
+scripts/nsh-app.sh package web
+uv build
+```
+
+Keep generated `.nsh/`, `target/` and `nexus/ui/nsh/` out of Git. A source
+checkout without the bundle returns 404 for `/app/`. The GitHub-hosted release
+workflow has not been run with this job (not verified).
