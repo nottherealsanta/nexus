@@ -137,7 +137,7 @@ No surface reads Nexus state files.
 | 10 | Frozen session snapshot and prompt, `AGENTS.md`, `ask`, approval-free in-directory edits, read-before-edit observations, workspace controls and worktrees, archive, export | docs/daemon.md, docs/api.md |
 | 11, 11.1–11.7 | Durable events and cursors, crash recovery, manual continuation, idempotent mutations and revisions, bounded provider retries, `/api/snapshot` resync, retention | docs/api.md, docs/stream-events.md |
 | 12.1 | Shared interface data: manifest, capability matrix, reference inventory | interface/README.md |
-| 12.3 | TUI shell: connection supervisor, header, sidebars, palette, alerts, waiting card, composer, full timeline, Files tab, settings modal, rail sidebar | nexus-tui/README.md |
+| 12.3 | TUI shell: connection supervisor, header, sidebars with icon tabs and rail, palette, alerts and terminal notifications, waiting card with `ask` answers, composer with `/` and `@` completion, full timeline, Files tab with search, Git groups and diffs, settings modal, saved client preferences | nexus-tui/README.md |
 | 12.5 (web) | NSH web client with the shell, timeline, pickers and export, behind a hardened host proxy | nexus-nsh/README.md |
 
 ## Next
@@ -147,6 +147,21 @@ docs and this plan, runs the focused tests plus the suite and lint, and is
 checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
 
 ### Step 12 — TUI polish (current)
+
+Landed 2026-10-28 (see the Done table): icon tabs in the sidebar, the
+effective model everywhere instead of "default model", a context preview in
+the new-session view, plain one-line diagnostics, `/` and `@` completion.
+Open from that round:
+
+- Check the new look against the old Nexus TUI in a real terminal
+  (screenshots in `nexus-tui/tools/webterm`); the user reviews visually.
+- The new-session context preview is client-side (agent list, catalog,
+  project path). Replace it with Core's real starting context once session
+  drafts exist (Step 12a).
+- Completion requests go out on every keystroke with no debounce; add one if
+  large workspaces make search slow.
+- Terminal notifications: verify OSC 777 in kitty (it may need OSC 99) and
+  track terminal focus.
 
 The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 
@@ -239,7 +254,7 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 | --- | --- | --- |
 | Old Markdown replaces supported Mermaid source with a rendered diagram | Adapted diagram renderers show the diagram followed by its original fenced source; each fence has its own copy action | Preserve every model-visible item while retaining the old diagram presentation |
 | Old Settings builds a modal from its host snapshot and widget kit | Settings is the old centred modal over the dimmed session: one searchable list with section headings, values right-aligned, ←/→ to change, rows from Nexus 0.10's manifest (2026-10-28) | Familiar layout on the new Core and client contracts |
-| Old vertical tabs: a session rail with initials and hover details | The left sidebar resizes by its edge and collapses to that rail; Sessions/Files/Projects tabs sit in the first row (2026-10-28) | Old look, without a second tab model beside the sidebar tabs |
+| Old vertical tabs: a session rail with initials and hover details | The left sidebar resizes by its edge and collapses to that rail; Sessions/Files/Projects are icons inside the sidebar (a column on the rail) with labels on hover (2026-10-28) | Old look, without a second tab model beside the sidebar tabs |
 | Old TUI composer owns the grapheme editor | The copied editor backs the composer, while its public interface and Core send path remain in Nexus 0.10 | Reuse selection, undo and paste behavior without changing the Core-facing input contract |
 | Old TUI shimmer uses RGB theme colours and a host-side activity clock | The adapted TUI shimmer resolves the shared theme tiers and uses the client frame clock, with reduced-motion and monochrome fallbacks | Preserve the old motion while keeping Core-independent rendering and terminal accessibility |
 | Worktree is a tool, effectively mandatory | Worktree is a session property set from the control plane | Where work happens is not a task step |

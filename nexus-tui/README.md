@@ -16,8 +16,10 @@ show their branch and linked-worktree marker from Core below the composer; a
 project with no session shows its own branch. The composer shows the agent in
 its colour, catalog model names, a pending model change, effort and context
 occupancy against price tiers and the window, explained on hover.
-The first row holds the Sessions / Files / Projects tabs, the breadcrumb title
-and the notification bell. The left sidebar has its own surface
+The first row holds the sidebar toggles, the breadcrumb title
+and the notification bell. The Sessions / Files / Projects tabs are icons in
+the sidebar's first row (a column on the rail); hovering shows the label.
+The left sidebar has its own surface
 (`surface.sidebar`): two-line session rows (title, `project ⌥ branch`) and a
 closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,

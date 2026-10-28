@@ -20,8 +20,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   consecutive activity folds into a verb group. Folded content remains
   accessible, and any clipped output is labelled. Running activity uses the
   old Nexus soft shimmer; reduced motion and monochrome stay static.
-- The first row carries the Sessions / Files / Projects tabs (active tab bold on
-  a surface), the breadcrumb title and the bell. Sidebars and panels reserve
+- The header row carries the sidebar toggles, the breadcrumb title and the
+  bell. The sidebar's first row carries the Sessions / Files / Projects icons
+  (label on hover; the active icon bold on a surface). Sidebars and panels reserve
   consistent gutters. Session rows show title and `project ⌥ branch` on
   separate lines and end with `+ New session`; the open session is bold, focus
   is a bar, hover is a surface, and waiting is marked. The left sidebar resizes

@@ -157,6 +157,10 @@ await shot({ name: "sidebars-closed-160x48-dark", cols: 160, rows: 48, steps: as
 await shot({ name: "rail-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.sidebar(1); } });
 await shot({ name: "rail-hover-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 5, 500); } });
 await shot({ name: "rail-hover-120x36-light", cols: 120, rows: 36, theme: "light", steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 8, 500); } });
+await shot({ name: "tab-hover-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.hover(6, 1, 500); } });
+await shot({ name: "complete-slash-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/mo", 600); } });
+await shot({ name: "complete-at-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.type("look at @s", 1500); } });
+await shot({ name: "new-session-120x36-dark", cols: 120, rows: 36 });
 await shot({ name: "projects-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+3", 500); } });
 await shot({ name: "files-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+2", 500); } });
 await shot({ name: "editor-selection-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("Selected text", 100); for (let i = 0; i < 4; i++) await h.key("Shift+ArrowLeft", 80); } });
