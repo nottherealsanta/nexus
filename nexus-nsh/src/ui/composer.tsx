@@ -1,14 +1,14 @@
 import { Text, View, signal } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, IconButton, Status, T, FOCUS, midTruncate } from "./kit";
-import { availability, byId, draftKey, focusComposer, focusWaiting, otherWaits, run, sendPrompt, term, waitItems } from "../commands";
+import { availability, byId, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, waitItems } from "../commands";
 import {
   agentCatalog, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model,
-  modelCatalog, projectWorktrees, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
+  modelCatalog, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
-import { agentColor } from "../agent-color";
+import { agentColor, agentRailColor } from "../agent-color";
 
 export function Composer() {
   let ref: any;
@@ -28,18 +28,21 @@ export function Composer() {
   };
   const canSend = () => !reason() && text().trim().length > 0;
   const send = async () => {
+    const t = text().trim();
+    if (t && runSlashCommand(t)) { draft.update((d) => ({ ...d, [key()]: "" })); return; }
     if (!canSend()) { const r = reason(); if (r) toast("info", r); return; }
-    const t = text();
     const ok = await sendPrompt(t);
     if (ok) draft.update((d) => ({ ...d, [key()]: "" }));
   };
   const interrupted = () => term("session.interrupted");
-  const agent = () => { m(); return ses()?.agent ?? "build"; };
+  const agent = () => { m(); return ses()?.agent ?? sessionDraft().agent ?? "build"; };
   const modelRef = () => {
     m();
     const s = ses();
+    const chosen = !s ? sessionDraft().model : undefined;
     if (s?.model) return String(s.model);
-    const entry = agentCatalog().agents.find((a) => a.name === (s?.agent ?? "build"));
+    if (chosen) return chosen;
+    const entry = agentCatalog().agents.find((a) => a.name === agent());
     return entry?.model || defaultModel();
   };
   const modelLabel = () => {
@@ -53,7 +56,7 @@ export function Composer() {
   };
   const effort = () => {
     const s: any = ses();
-    return s?.effort || s?.extra?.effort || "default";
+    return s ? (s.effort || s.extra?.effort || "default") : (sessionDraft().effort || "default");
   };
   const usageLabel = () => {
     m();
@@ -63,50 +66,58 @@ export function Composer() {
     if (!Number.isFinite(input) || input < 0) return "";
     const ref = modelRef();
     const entry = modelCatalog().find((item) => item.ref === ref);
-    const values = [composerCount(input)];
     const window = Number(entry?.context);
-    const tiers: number[] = Array.isArray(entry?.tiers) ? [...new Set<number>((entry.tiers as unknown[]).map(Number))]
-      .filter((tier) => Number.isFinite(tier) && tier > 0 && tier !== window)
-      .sort((a, b) => a - b) : [];
-    if (!isNarrow()) values.push(...tiers.map((tier) => `${(100 * input / tier).toFixed(1)}%`));
-    if (Number.isFinite(window) && window > 0) values.push(`${(100 * input / window).toFixed(1)}%`);
-    return values.join(" · ");
+    return Number.isFinite(window) && window > 0
+      ? `${composerCount(input)} (${(100 * input / window).toFixed(1)}%)`
+      : composerCount(input);
+  };
+  const paletteHint = () => {
+    const c = byId.get("palette.open");
+    return `${c ? keyLabel(c) ?? "cmd+p" : "cmd+p"} commands`;
   };
   return (
-    <View class="px-3 pb-2 pt-1 items-center" testID="composer-area">
-      <View class="w-full max-w-[792px] bg-card px-3 pt-3 pb-4" accessibilityLabel="Composer" testID="composer-panel">
-        <Input
-          ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-          placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
-          readonly={!live() || !!ses()?.archived}
-          submitBehavior="submit" onSubmit={() => void send()} onChange={(t) => draft.update((d) => ({ ...d, [key()]: t }))}
-          onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.height) + 16)))}
-          style={{ height: h() }}
-          class="px-1 py-1 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
-        />
-        <View class="h-2" />
-        <View class="flex-row items-center gap-2 min-w-0 min-h-8">
-          <View class="flex-1 min-w-0 flex-row items-center gap-1">
-            <Selector command="agent.change" label={capitalize(agent())} color={agentColor(agent())} testID="composer-agent" />
-            <Text class={T.meta}>·</Text>
-            <Selector command="model.change" label={modelLabel()} testID="composer-model" />
-            <If when={!isNarrow()}>
-              <Text class={T.meta}>·</Text>
-              <Selector command="model.effort" label={effort()} muted testID="composer-effort" />
-            </If>
-            <If when={busy()}>
-              <Text class={T.meta}>· esc</Text>
-              <Btn label="Stop" icon="stop" onPress={() => run("session.interrupt")} disabled={!availability(byId.get("session.interrupt")!).ok} reason={availability(byId.get("session.interrupt")!).reason} testID="interrupt" />
-            </If>
-            <If when={!busy() && interrupted()}>
-              <Text class={T.meta}>·</Text>
-              <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
-            </If>
+    <View class="px-4 pb-2 pt-1 items-center" testID="composer-area">
+      <View class="w-full max-w-[760px] bg-card" accessibilityLabel="Composer" testID="composer-panel">
+        <View class="flex-row min-w-0">
+          <View class={`w-[3px] shrink-0 ${agentRailColor(agent())}`} testID="composer-agent-rail" />
+          <View class="flex-1 min-w-0 px-3 pt-3 pb-1">
+            <Input
+              ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
+              placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
+              readonly={!live() || !!ses()?.archived}
+              submitBehavior="submit" onSubmit={() => void send()} onChange={(t) => draft.update((d) => ({ ...d, [key()]: t }))}
+              onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.height) + 16)))}
+              style={{ height: h() }}
+              class="px-1 py-1 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+            />
+            <View class="h-2" />
+            <View class="flex-row items-center gap-2 min-w-0 min-h-8">
+              <View class="flex-1 min-w-0 flex-row items-center gap-1">
+                <Selector command="agent.change" label={capitalize(agent())} color={agentColor(agent())} testID="composer-agent" />
+                <Text class={T.meta}>·</Text>
+                <Selector command="model.change" label={modelLabel()} testID="composer-model" />
+                <If when={!isNarrow()}>
+                  <Text class={T.meta}>·</Text>
+                  <Selector command="model.effort" label={effort()} muted testID="composer-effort" />
+                </If>
+                <If when={busy()}>
+                  <Text class={T.meta}>· esc</Text>
+                  <Btn label="Stop" icon="stop" onPress={() => run("session.interrupt")} disabled={!availability(byId.get("session.interrupt")!).ok} reason={availability(byId.get("session.interrupt")!).reason} testID="interrupt" />
+                </If>
+                <If when={!busy() && interrupted()}>
+                  <Text class={T.meta}>·</Text>
+                  <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
+                </If>
+              </View>
+              <View class="shrink-0 flex-row items-center gap-2">
+                <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : ""} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
+              </View>
+            </View>
           </View>
-          <View class="shrink-0 flex-row items-center gap-2">
-            <If when={!!usageLabel()}><Text class={T.meta} numberOfLines={1} testID="composer-usage">{usageLabel()}</Text></If>
-            <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : ""} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
-          </View>
+        </View>
+        <View class="flex-row items-center justify-end gap-3 min-h-7 bg-sidebar px-3 py-1.5" testID="composer-status-band">
+          <If when={!!usageLabel()}><Text class={T.sec} numberOfLines={1} testID="composer-usage">{usageLabel()}</Text></If>
+          <Text class={T.meta}>{paletteHint()}</Text>
         </View>
       </View>
       <LocationStrip />
@@ -123,8 +134,8 @@ function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.sl
 function Selector(p: { command: string; label: string; color?: string; muted?: boolean; testID: string }) {
   const c = byId.get(p.command);
   const state = () => c ? availability(c) : { ok: false, reason: "Command is unavailable." };
-  const disabled = () => !viewed() || !state().ok;
-  const reason = () => !viewed() ? "Open a session first." : state().reason;
+  const disabled = () => !state().ok;
+  const reason = () => state().reason;
   return (
     <Button
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
@@ -165,12 +176,17 @@ function LocationStrip() {
   };
   return (
     <If when={project() && directory()}>
-      <View class="w-full max-w-[792px] pt-2" testID="location-strip">
-        <View class="flex-row items-end">
-          <Text testID="location-project" numberOfLines={1} class={`${T.title} border-b-2 border-primary pb-1`}>{project()!.name}</Text>
-          <View class="flex-1 h-px bg-border mb-px" />
-        </View>
-        <View class="flex-row items-center gap-1.5 min-w-0 pt-1">
+      <View class="w-full max-w-[760px] pt-2" testID="location-strip">
+        <View class="flex-row items-end gap-3 min-w-0">
+          <If when={!!session()}>
+            <Button
+              disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
+              accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
+              tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{directoryAvailability().reason ?? "Change session directory"}</Text>}
+              class={`min-w-0 shrink rounded-(--radius) px-0.5 border-b-2 border-primary pb-1 disabled:opacity-50 ${FOCUS}`}
+            ><Text numberOfLines={1} class={`${T.sec} min-w-0`}>{path()}</Text></Button>
+          </If>
+          <If when={!session()}><Text testID="location-directory" numberOfLines={1} class={`min-w-0 shrink border-b-2 border-primary px-0.5 pb-1 ${T.sec}`}>{path()}</Text></If>
           <If when={!!branch()}>
             <If when={!!session()} else={<Text numberOfLines={1} class={`${T.sec} shrink`}>{branch()!}</Text>}>
               <Button
@@ -180,17 +196,7 @@ function LocationStrip() {
                 class={`min-w-0 shrink rounded-(--radius) px-0.5 disabled:opacity-50 ${FOCUS}`}
               ><Text numberOfLines={1} class={T.sec}>{branch()!}</Text></Button>
             </If>
-            <Text class={T.meta}>·</Text>
           </If>
-          <If when={!!session()}>
-            <Button
-              disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
-              accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
-              tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{directoryAvailability().reason ?? "Change session directory"}</Text>}
-              class={`min-w-0 shrink rounded-(--radius) px-0.5 disabled:opacity-50 ${FOCUS}`}
-            ><Text numberOfLines={1} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
-          </If>
-          <If when={!session()}><Text numberOfLines={1} class={`${T.meta} min-w-0 shrink`}>{path()}</Text></If>
           <If when={linked()}><Text testID="location-worktree" class="shrink-0 text-[12px] leading-4 font-bold text-agent-violet">worktree</Text></If>
         </View>
       </View>

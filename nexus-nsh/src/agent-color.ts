@@ -20,4 +20,9 @@ const classes: Record<string, string> = {
   amber: "text-agent-amber", blue: "text-agent-blue", violet: "text-agent-violet", green: "text-agent-green",
   teal: "text-agent-teal", rose: "text-agent-rose", sky: "text-agent-sky", gold: "text-agent-gold",
 };
+const railClasses: Record<string, string> = {
+  amber: "bg-agent-amber", blue: "bg-agent-blue", violet: "bg-agent-violet", green: "bg-agent-green",
+  teal: "bg-agent-teal", rose: "bg-agent-rose", sky: "bg-agent-sky", gold: "bg-agent-gold",
+};
 export const agentColor = (name: string) => classes[agentSlot(name)];
+export const agentRailColor = (name: string) => railClasses[agentSlot(name)];

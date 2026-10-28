@@ -12,29 +12,35 @@ hand.
 The app itself is TSX (`App.tsx`, `src/`); `package.json` is tooling only.
 
 **Status (PLAN.md Step 12.5, in progress):** the shell, session list and filters,
-new-session view, timeline, waiting card, composer, settings navigation, alerts,
-notifications and connection states are usable against a real Core. The timeline
-now matches the TUI's information architecture: starting-context section, turn
-headers and footers, folding, collapsed reasoning, Markdown, tool-specific detail
-(diffs and raw output), and details over 220 lines show the first and last 100
-with an announced, clickable show-all toggle. Selecting a session loads its full
-stored history (messages, retained diagnostics, snapshot) after the bounded
-snapshot view.
+workspace session tabs, new-session view, timeline, waiting card, composer,
+settings navigation, alerts, notifications and connection states are usable
+against a real Core. Tabs show running, unread, failed and idle state; they
+switch, rename and close without deleting sessions. The timeline has starting
+context, turn headers and footers, folding, Markdown, and three detail levels:
+activity groups collapsed in low, individual collapsed tools in medium, and
+expanded tools in high. High-detail output keeps the first 30 and last 20 lines;
+clipping is announced and the show-all control restores the whole inspection
+output. Selecting a session loads its full stored history (messages, retained
+diagnostics, snapshot) after the bounded snapshot view.
 
-The composer follows the TUI's borderless panel and separate project/branch/
-directory strip. It shows the catalog model name and provider, effort, latest
-request usage and context occupancy; the starting-context section lists the
-prompt, tools, instructions, agent and child/workspace tools with estimates and
-the catalog window share. Turn footers include catalog-priced cost when prices
-are available. The right sidebar derives session turns, model calls, tool usage,
-enabled tools, token totals, latest-request context and catalog-priced cost from
-loaded messages and wire events; it also counts descendant sessions. Right-click
-or Shift+F10 opens the manifest-driven session/project row menu, including
-confirmed project removal, and Projects has a trailing `+ Add project` row.
-Settings shows Core's default model, catalog and loaded agents, with model and
-agent pickers and catalog refresh. Worktree data is loaded for branch/location
-display, while directory and worktree actions remain disabled with a reason.
-Kernel state is the remaining session-info item not reported by Core.
+The composer follows the TUI's borderless panel, agent-colour rail and darker
+status band. Its controls show the model/provider and effort; the status band
+shows latest input-token occupancy and the palette hint. The location strip shows
+the home-shortened directory, branch and linked-worktree marker without a project
+name. Before a session exists, the agent/model/effort pickers and slash commands
+set draft creation fields. Timeline detail is a saved NSH preference. The
+starting-context section lists the prompt, tools, instructions, agent and
+child/workspace tools with estimates and the catalog window share. Turn footers
+include catalog-priced cost when prices are available. The right sidebar derives
+session turns, model calls, tool usage, enabled tools, token totals,
+latest-request context and catalog-priced cost from loaded messages and wire
+events; it also counts descendant sessions. Right-click or Shift+F10 opens the
+manifest-driven session/project row menu, including confirmed project removal,
+and Projects has a trailing `+ Add project` row. Settings shows Core's default
+model, catalog and loaded agents, with model and agent pickers and catalog
+refresh. Worktree data is loaded for branch/location display, while directory
+and worktree actions remain disabled with a reason. Kernel state is the remaining
+session-info item not reported by Core.
 
 Still missing (shown disabled with their reason, never as a control that appears
 to work): the complete files/editor and Git workflows, worktree controls,

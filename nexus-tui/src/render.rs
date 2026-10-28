@@ -3490,29 +3490,30 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
     let end = r.right().saturating_sub(4);
-    // Status band: the context in use, then the palette hint.
-    let key = a
-        .manifest
-        .command("palette.open")
-        .and_then(|c| c.tui_key())
-        .unwrap_or("ctrl+p");
-    let hint = format!("{key} commands");
+    // Status band: the context in use and its share of the window; nothing
+    // sent yet reads `0 (0.0%)`.
+    let summary = usage.as_ref().map_or_else(
+        || {
+            let window = a
+                .state
+                .models
+                .iter()
+                .find(|m| m["ref"].as_str() == Some(a.effective_model(session).as_str()))
+                .and_then(|m| m["context"].as_u64())
+                .filter(|&n| n > 0);
+            match window {
+                Some(window) => format!("0 ({})", percent(0, window)),
+                None => "0".to_owned(),
+            }
+        },
+        |u| u.summary.clone(),
+    );
     let mut context_rect = None;
-    let band_style = cx.st(MUTED, SIDEBAR);
-    let mut bx = band.right().saturating_sub(2 + width(&hint) as u16);
-    put(buf, bx, band.y, &hint, band_style, width(&hint) as u16);
-    if let Some(usage) = &usage {
-        let w = width(&usage.summary) as u16;
-        bx = bx.saturating_sub(w + 2);
-        if bx > band.x + 2 {
-            put(
-                buf,
-                bx,
-                band.y,
-                &usage.summary,
-                cx.st(SECONDARY, SIDEBAR),
-                w,
-            );
+    let w = width(&summary) as u16;
+    let bx = band.right().saturating_sub(2 + w);
+    if bx > band.x + 2 {
+        put(buf, bx, band.y, &summary, cx.st(SECONDARY, SIDEBAR), w);
+        if usage.is_some() {
             context_rect = Some(Rect::new(bx, band.y, w, 1));
             hits.add(context_rect.unwrap(), Target::ComposerContext);
         }

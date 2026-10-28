@@ -382,6 +382,21 @@ export const manifest = {
       "note": "Rail shows one letter per session; hover a letter for its title. Drag the edge to resize."
      },
      {
+      "id": "appearance.timeline_detail",
+      "label": "Timeline detail",
+      "kind": "choice",
+      "scope": "client",
+      "clients": "tui",
+      "default": "medium",
+      "options": [
+       "low",
+       "medium",
+       "high"
+      ],
+      "command": "timeline.detail_cycle",
+      "note": "Low groups activity into one line, medium lists each tool collapsed, high expands every tool."
+     },
+     {
       "id": "appearance.details",
       "label": "Details sidebar",
       "kind": "toggle",
@@ -1296,6 +1311,61 @@ export const manifest = {
    "note": "Matches titles and user messages only (Core index)."
   },
   {
+   "id": "session.tab_close",
+   "title": "Close tab",
+   "category": "session",
+   "keys": {
+    "tui": "alt+x",
+    "nsh": "alt+x"
+   },
+   "key_context": "global",
+   "when": [
+    "has_session"
+   ],
+   "unavailable_reason": "Open a session first.",
+   "placement": [
+    "palette",
+    "header"
+   ],
+   "note": "Closes the session's tab; the session itself stays in the list."
+  },
+  {
+   "id": "session.tab_next",
+   "title": "Next tab",
+   "category": "session",
+   "keys": {
+    "tui": "alt+]",
+    "nsh": "alt+]"
+   },
+   "key_context": "global",
+   "when": [
+    "has_session"
+   ],
+   "unavailable_reason": "Open a session first.",
+   "placement": [
+    "palette",
+    "header"
+   ]
+  },
+  {
+   "id": "session.tab_prev",
+   "title": "Previous tab",
+   "category": "session",
+   "keys": {
+    "tui": "alt+[",
+    "nsh": "alt+["
+   },
+   "key_context": "global",
+   "when": [
+    "has_session"
+   ],
+   "unavailable_reason": "Open a session first.",
+   "placement": [
+    "palette",
+    "header"
+   ]
+  },
+  {
    "id": "session.rename",
    "title": "Rename session",
    "category": "session",
@@ -1931,6 +2001,25 @@ export const manifest = {
    "placement": [
     "tool_line"
    ]
+  },
+  {
+   "id": "timeline.detail_cycle",
+   "title": "Cycle detail level",
+   "category": "timeline",
+   "slash": "detail",
+   "keys": {
+    "tui": "alt+d",
+    "nsh": "alt+d"
+   },
+   "key_context": "global",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette",
+    "timeline"
+   ],
+   "note": "Low: each activity group is one line (`Ran 1 command`). Medium: every tool on its own collapsed line with its key detail. High: every tool expanded, long output capped to its first and last lines (`o` shows all)."
   },
   {
    "id": "tool.show_all_output",

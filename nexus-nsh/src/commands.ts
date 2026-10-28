@@ -6,8 +6,8 @@ import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   addProjectOpen, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  currentWorktree, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, paletteOpen, previousCentre, renaming, rightOpen,
-  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sidebarRowMenu, sync, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
+  agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
+  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
@@ -125,6 +125,37 @@ export function newSession() {
   bump();
 }
 
+/** Header tabs contain only opened sessions; the current one is always represented. */
+export function tabIds(): string[] {
+  m();
+  const ids = openedTabs().filter((id) => model.sessions.has(id));
+  const selected = model.selected?.sessionId;
+  return selected && !ids.includes(selected) ? [...ids, selected] : ids;
+}
+
+export function closeTab(id: string) {
+  const ids = tabIds();
+  const at = ids.indexOf(id);
+  if (at < 0) return;
+  openedTabs.set(ids.filter((tab) => tab !== id));
+  if (model.selected?.sessionId !== id) return;
+  const next = ids[at + 1] ?? ids[at - 1];
+  if (next) void selectSession(next);
+  else {
+    model.select(null);
+    centre.set("new_session");
+    bump();
+  }
+}
+
+export function stepTab(step: number) {
+  const ids = tabIds();
+  const at = ids.indexOf(model.selected?.sessionId ?? "");
+  if (at < 0 || ids.length < 2) return;
+  const next = ids[(at + step + ids.length) % ids.length];
+  if (next !== ids[at]) void selectSession(next);
+}
+
 export async function sendPrompt(text: string): Promise<boolean> {
   text = text.trim();
   if (!text) return false;
@@ -133,7 +164,13 @@ export async function sendPrompt(text: string): Promise<boolean> {
     if (centre() === "new_session" || !ses) {
       const project = currentProject();
       if (!project) throw new ApiError(400, "Add or choose a project first.");
-      const created = await request<any>("POST", "/api/session", { body: { project }, key: newKey() });
+      const selected = sessionDraft();
+      const fields: Record<string, string> = {};
+      if (selected.agent) fields.agent = selected.agent;
+      if (selected.model) fields.model = selected.model;
+      if (selected.effort) fields.effort = selected.effort;
+      const created = await request<any>("POST", "/api/session", { body: { project, ...fields }, key: newKey() });
+      sessionDraft.set({});
       await selectSession(created.id);
       ses = created;
     }
@@ -143,6 +180,20 @@ export async function sendPrompt(text: string): Promise<boolean> {
     toast("error", e instanceof ApiError ? e.message : String(e));
     return false;
   }
+}
+
+/** A slash command in the composer runs like its palette entry, not as a prompt. */
+export function runSlashCommand(text: string): boolean {
+  if (text.includes("\n")) return false;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) return false;
+  const [name, ...tail] = trimmed.slice(1).split(/\s+/);
+  const command = commands.find((c) => c.slash === name);
+  if (!command) return false;
+  const arg = tail.join(" ").trim();
+  if (command.id === "session.rename" && arg) void patchSession(arg);
+  else void run(command.id);
+  return true;
 }
 
 async function patchSession(title: string) {
@@ -226,6 +277,13 @@ on("sidebar.tab.projects", () => tab("projects"));
 on("sidebar.focus", () => { if (isNarrow()) drawer.set("left"); else leftOpen.set(true); });
 on("composer.focus", () => focusComposer.fn());
 on("session.new", newSession);
+on("session.tab_close", () => { const id = viewed()?.id; if (id) closeTab(id); });
+on("session.tab_next", () => stepTab(1));
+on("session.tab_prev", () => stepTab(-1));
+on("timeline.detail_cycle", () => {
+  const levels = ["low", "medium", "high"] as const;
+  setTimelineDetail(levels[(levels.indexOf(timelineDetail()) + 1) % levels.length]);
+});
 on("session.switch", () => { tab("sessions"); });
 on("project.switch", () => tab("projects"));
 on("project.add", () => addProjectOpen.set(true), true);
@@ -284,7 +342,11 @@ function choose(label: string, run: () => void | Promise<void>) {
 function applyModel(model: string) {
   return async () => {
     const s = viewed();
-    if (!s) return;
+    if (!s) {
+      sessionDraft.update((d) => ({ ...d, model }));
+      toast("info", `The new session will use model ${model || "default"}`);
+      return;
+    }
     try {
       await request("POST", `/api/session/${s.id}/model`, { body: { model }, ifMatch: s.revision, key: newKey() });
       toast("success", "Model changed from the next call");
@@ -303,14 +365,18 @@ on("model.change", () => void pickOne("Change model", async () => {
   }));
 }));
 on("agent.change", () => void pickOne("Change agent", async () => {
-  const s = viewed();
-  const res = await request<any>("GET", "/api/agent", { query: { project: s?.project_id } });
+  const res = await request<any>("GET", "/api/agent", { query: { project: viewed()?.project_id ?? currentProject() ?? undefined } });
   return ((res.agents ?? []) as any[]).map((a) => ({
     id: a.name,
     label: a.name,
     hint: [a.source, a.mode].filter(Boolean).join(" · "),
     run: choose(a.name, async () => {
-      if (!s) return;
+      const s = viewed();
+      if (!s) {
+        sessionDraft.update((d) => ({ ...d, agent: a.name }));
+        toast("info", `The new session will use agent ${a.name}`);
+        return;
+      }
       try {
         await request("POST", `/api/session/${s.id}/agent`, { body: { agent: a.name }, ifMatch: s.revision, key: newKey() });
         toast("success", "Agent changed from the next call");
@@ -321,12 +387,20 @@ on("agent.change", () => void pickOne("Change agent", async () => {
 on("model.effort", () => void pickOne("Reasoning effort", async () => {
   const s = viewed();
   const cat = await request<any>("GET", "/api/model");
-  const cur = (cat.models ?? []).find((m: any) => m.ref === s?.model);
+  const chosenAgent = s?.agent ?? sessionDraft().agent ?? "build";
+  const agentModel = agentCatalog().agents.find((a) => a.name === chosenAgent)?.model;
+  const selectedModel = s?.model || sessionDraft().model || agentModel || defaultModel();
+  const cur = (cat.models ?? []).find((m: any) => m.ref === selectedModel);
   const efforts: string[] = cur?.efforts?.length ? cur.efforts : ["low", "medium", "high"];
   const apply = async (effort: string) => {
-    if (!s) return;
+    const current = viewed();
+    if (!current) {
+      sessionDraft.update((d) => ({ ...d, effort }));
+      toast("info", `The new session will use effort ${effort || "default"}`);
+      return;
+    }
     try {
-      await request("PATCH", `/api/session/${s.id}`, { body: { effort }, ifMatch: s.revision, key: newKey() });
+      await request("PATCH", `/api/session/${current.id}`, { body: { effort }, ifMatch: current.revision, key: newKey() });
       toast("success", effort ? `Effort set to ${effort}` : "Effort follows the agent/provider");
     } catch (e) { toast("error", e instanceof ApiError ? e.message : String(e)); }
   };

@@ -34,6 +34,8 @@ export const leftTab = signal<"sessions" | "files" | "projects">("sessions");
 export const centre = signal<CentreView>("session");
 export const previousCentre = signal<CentreView>("session");
 export const currentProject = signal<string | null>(null);
+/** Sessions opened in the workspace header, in the order they were opened. */
+export const openedTabs = signal<string[]>([]);
 export const scopeAll = signal(false);
 export const archivedFilter = signal(false);
 export const drawer = signal<"left" | "right" | "notifications" | null>(null);
@@ -44,12 +46,18 @@ export const picker = signal<null | { title: string; items: PickerItem[]; note?:
 export const confirmDialog = signal<null | { title: string; body: string; confirm: string; destructive: boolean; run: () => Promise<void> | void; busy?: boolean; error?: string }>(null);
 export const renaming = signal(false);
 export const addProjectOpen = signal(false);
+/** Choices made before a session exists; consumed by its creation request. */
+export const sessionDraft = signal<{ agent?: string; model?: string; effort?: string }>({});
 export const draft = signal<Record<string, string>>({});
 export const waitIndex = signal(0);
 export const tick = signal(Date.now());
 export const settingsSection = signal<string | null>(null);
 export const themeChoice = signal<"system" | "light" | "dark">("system");
 export const prefs = signal<Record<string, boolean | number | string>>({});
+export type TimelineDetail = "low" | "medium" | "high";
+export const timelineDetail = signal<TimelineDetail>("medium");
+/** Explicit open/closed state for timeline groups and tool details. */
+export const timelineOpen = signal<Record<string, boolean>>({});
 export const scrolledUp = signal(false);
 export type SidebarRowTarget = { kind: "session" | "project"; id: string };
 export const focusedSidebarRow = signal<SidebarRowTarget | null>(null);
@@ -72,11 +80,21 @@ export async function loadPrefs() {
       if (typeof p.leftOpen === "boolean") leftOpen.set(p.leftOpen);
       if (typeof p.rightOpen === "boolean") rightOpen.set(p.rightOpen);
       if (p.leftTab) leftTab.set(p.leftTab);
+      const detail = p.timelineDetail ?? p.prefs?.["appearance.timeline_detail"];
+      if (detail === "low" || detail === "medium" || detail === "high") timelineDetail.set(detail);
     }
   } catch {}
 }
 export function savePrefs() {
-  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab() })); } catch {}
+  try { void Storage.setItem("nexus.prefs", JSON.stringify({ prefs: prefs(), theme: themeChoice(), leftOpen: leftOpen(), rightOpen: rightOpen(), leftTab: leftTab(), timelineDetail: timelineDetail() })); } catch {}
+}
+
+export function setTimelineDetail(level: TimelineDetail) {
+  timelineDetail.set(level);
+  timelineOpen.update((open) => Object.fromEntries(Object.entries(open).filter(([key]) => !key.startsWith("group:") && !key.startsWith("tool:"))));
+  toolOutputAll.set({});
+  savePrefs();
+  toast("info", `Detail: ${level}`);
 }
 
 export function bump() { rev.update((n) => n + 1); }
@@ -275,6 +293,8 @@ export const live = () => connection().kind === "live";
 
 export async function selectSession(id: string) {
   const ses = model.sessions.get(id);
+  openedTabs.update((tabs) => tabs.includes(id) ? tabs : [...tabs, id]);
+  model.unreadSessions.delete(id);
   if (ses) {
     currentProject.set(ses.project_id);
     loadComposerData(ses.project_id);

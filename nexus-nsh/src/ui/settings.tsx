@@ -4,7 +4,7 @@ import { Button } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
 import { manifest } from "../gen/manifest";
 import { byId, commands, keyLabel, loadProviders, run } from "../commands";
-import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, settingsSection, themeChoice, toast, currentProject } from "../store";
+import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, timelineDetail, toast, currentProject } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 
@@ -84,12 +84,16 @@ async function refreshCatalog() {
 }
 
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.theme", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
+const WIRED = new Set(["appearance.theme", "appearance.timeline_detail", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
 
 function control(r: Row): JSX.Element {
   if (r.id === "appearance.theme") {
     return <Seg label="Theme" options={["system", "light", "dark", "named"]} value={themeChoice()} disabled={false}
       onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
+  }
+  if (r.id === "appearance.timeline_detail") {
+    return <Seg label="Timeline detail" options={r.options ?? ["low", "medium", "high"]} value={timelineDetail()} disabled={false}
+      onPick={(v) => setTimelineDetail(v as "low" | "medium" | "high")} />;
   }
   if (r.id === "about.inspector") return <Btn label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
   if (r.id === "providers.default_model" || r.id === "models.default") return <Value text={data().modelDefault || "not reported"} mono />;
@@ -108,7 +112,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const wired = WIRED.has(r.id);
   const disabled = !!reason || !wired;
   const why = reason ?? (wired ? "" : "Not editable in this NSH increment yet.");
-  const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" ? "TUI only" : "";
+  const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
   return (
     <View class={`${isNarrow() ? "gap-2" : "flex-row gap-6 items-start"} py-3 border-b border-border`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>

@@ -453,7 +453,7 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     assert!(!row.contains("orchestrate"), "{row}");
     // Used and its share of the window in brackets, with the palette hint.
     assert!(all_contains(&rows, "52.0K (5.2%)"), "{row}");
-    assert!(all_contains(&rows, "ctrl+p commands"));
+    assert!(!all_contains(&rows, "ctrl+p commands"));
 
     let context = app
         .hits

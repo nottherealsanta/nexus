@@ -63,6 +63,7 @@ export class Model {
   sessions = new Map<string, Session>();
   running = new Map<string, string>();
   failedSessions = new Set<string>();
+  unreadSessions = new Set<string>();
   approvals = new Map<string, Approval>();
   questions = new Map<string, Question>();
   streaming = new Map<string, Streaming>();
@@ -185,6 +186,7 @@ export class Model {
       case "message.added": {
         const m = d as Message;
         const id = m.session_id || sid || "";
+        if (id && this.selected?.sessionId !== id) this.unreadSessions.add(id);
         if (m.role === "assistant") this.streaming.delete(id);
         if (this.selected && this.selected.sessionId === id && !this.selected.messages.some((x) => x.id === m.id)) {
           const msgs = this.selected.messages;
@@ -214,6 +216,7 @@ export class Model {
   private dropSession(id: string) {
     this.sessions.delete(id); this.running.delete(id); this.streaming.delete(id);
     this.failedSessions.delete(id);
+    this.unreadSessions.delete(id);
     for (const [k, a] of this.approvals) if (a.session_id === id) this.approvals.delete(k);
     for (const [k, q] of this.questions) if (q.session_id === id) this.questions.delete(k);
     if (this.selected?.sessionId === id) { this.selected = null; this.selectedDeleted = id; }

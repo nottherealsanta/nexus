@@ -27,7 +27,7 @@ with search on top and `+` below, and hovering a letter shows the session's
 title and place. Settings → Sidebar switches full / rail / hidden. The location
 strip under the composer shows the directory (underlined by the accent rule),
 the branch and, only in a linked worktree, `worktree`. The composer panel has
-an agent-coloured rail and a status band with `11.1K (4.1%)` and `ctrl+p commands`.
+an agent-coloured rail and a status band with `11.1K (4.1%)`.
 The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`). `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high

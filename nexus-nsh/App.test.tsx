@@ -62,6 +62,83 @@ describe("shell", () => {
     expect(app.shows("id:tab-sessions") && app.shows("id:tab-files") && app.shows("id:tab-projects")).toBe(true);
   });
 
+  test("session tabs open, switch and close without deleting their sessions", async () => {
+    const second = { ...snapshot.sessions[0], id: "ses_2", title: "Second task", created: 3, updated: 4 };
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], second] } },
+        "GET */api/session/ses_2": { body: second },
+        "GET */api/session/ses_1/message": { body: [] },
+        "GET */api/session/ses_1/snapshot": { body: null },
+        "GET */api/session/ses_1/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_2/message": { body: [] },
+        "GET */api/session/ses_2/snapshot": { body: null },
+        "GET */api/session/ses_2/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/*/worktrees": { body: { worktrees: [] } },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.press("id:session-ses_2");
+    await app.waitFor("id:session-tab-ses_1");
+    await app.waitFor("id:session-tab-ses_2");
+    await app.press("id:session-tab-ses_1");
+    await app.keyboard.press("alt+]");
+    await app.waitUntil(() => app.requests().some((r) => r.url.includes("/api/session/ses_2/message")));
+    await app.keyboard.press("alt+x");
+    expect(app.shows("id:session-tab-ses_2")).toBe(false);
+    expect(app.shows("id:session-ses_2")).toBe(true);
+    await app.keyboard.press("alt+x");
+    await app.waitFor("id:new-session-tab");
+    expect(app.shows("id:session-ses_1")).toBe(true);
+  });
+
+  test("pre-session picker choices and slash commands become creation fields", async () => {
+    const created = { ...snapshot.sessions[0], id: "ses_new", title: "Drafted session", agent: "plan", model: "codex/gpt-5", effort: "high" };
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000, efforts: ["low", "medium", "high"] }] } },
+        "GET */api/model/default": { body: { model: "codex/gpt-5" } },
+        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
+        "POST */api/session": { body: created },
+        "GET */api/session/ses_new": { body: created },
+        "GET */api/session/ses_new/message": { body: [] },
+        "GET */api/session/ses_new/snapshot": { body: null },
+        "GET */api/session/ses_new/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+        "GET */api/session/ses_new/worktrees": { body: { worktrees: [] } },
+        "POST */api/session/ses_new/prompt": { status: 204, body: null },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:demo");
+    await app.waitFor("id:composer-agent");
+    const type = async (value: string) => { for (const key of value) await app.keyboard.press(key); };
+    const slash = async (value: string) => {
+      await app.press("id:composer-input");
+      await type(value);
+      await app.press("id:send");
+    };
+    await slash("/agent");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-1");
+    await app.waitFor("text:The new session will use agent plan");
+    await slash("/model");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-0");
+    await slash("/effort");
+    await app.waitFor("id:picker");
+    await app.press("id:pick-2");
+    await app.press("id:composer-input");
+    await type("hello");
+    await app.press("id:send");
+    await app.waitUntil(() => app.requests().some((r) => r.method === "POST" && r.url.endsWith("/api/session")));
+    const request = app.requests().find((r) => r.method === "POST" && r.url.endsWith("/api/session")) as any;
+    expect(request.body).toEqual({ project: "prj_1", agent: "plan", model: "codex/gpt-5", effort: "high" });
+  });
+
   test("settings sections follow the manifest order", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.keyboard.press(`${mod}+,`);
@@ -274,7 +351,7 @@ describe("context, composer and footer parity", () => {
     expect(footer.includes("$0.16")).toBe(true);
   });
 
-  test("composer uses the catalog label and latest usage with tier and window occupancy", async () => {
+  test("composer puts latest input occupancy and the palette hint in its status band", async () => {
     const events = [
       { id: 1, type: "usage", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { input_tokens: 1000 } },
       { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 11100 } },
@@ -291,7 +368,8 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("id:composer-usage");
     const shown = app.texts().join("\n");
     expect(shown.includes("GPT-6.1 Terra codex")).toBe(true);
-    expect(shown.includes("11.1K · 4.1% · 1.1%")).toBe(true);
+    expect(shown.includes("11.1K (1.1%)")).toBe(true);
+    expect(shown.includes("commands")).toBe(true);
   });
 
   test("location strip uses the longest matching linked worktree and shows disabled action reasons", async () => {
@@ -332,6 +410,7 @@ describe("context, composer and footer parity", () => {
     expect(shown.includes("worktree")).toBe(true);
     expect(worktreeReads >= 2).toBe(true);
     expect(app.shows("id:location-directory")).toBe(true);
+    expect(app.shows("id:location-project")).toBe(false);
   });
 
   test("new-session location loads project worktrees and omits the linked marker for main", async () => {
@@ -366,6 +445,11 @@ describe("tool output detail cap", () => {
       expect(capToolDetail(lines, true)).toEqual(lines);
     }
     expect(capToolDetail(details[1], false)[100].text).toContain("301 lines hidden");
+    const high = capToolDetail(details[0].slice(0, 120), false, 30, 20);
+    expect(high).toHaveLength(51);
+    expect(high[30].text).toContain("70 lines hidden");
+    expect(high[29].text).toBe("plain line 30");
+    expect(high[31].text).toBe("plain line 101");
   });
 
   test("keeps the first and last 100 lines for plain, raw, and diff detail, with a reversible toggle", async () => {
@@ -423,6 +507,44 @@ describe("tool output detail cap", () => {
     expect(text.includes("diff line 1") && text.includes("diff line 100")).toBe(true);
     expect(text.includes("diff line 401") && text.includes("diff line 500")).toBe(true);
     expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
+  });
+
+  test("detail cycles groups, tools and high-detail clipping, then resets hand-open state", async () => {
+    const highOutput = Array.from({ length: 120 }, (_, i) => `high line ${i + 1}`).join("\n");
+    const messages = [
+      { ...userMessage, parts: [{ type: "text", text: "Run the tools" }] },
+      {
+        id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", created: 2,
+        parts: [
+          { type: "tool_call", id: "call_bash", name: "bash", arguments: JSON.stringify({ command: "printf output" }) },
+          { type: "tool_call", id: "call_echo", name: "bash", arguments: JSON.stringify({ command: "echo second" }) },
+        ],
+      },
+      { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: highOutput, is_error: false }, { type: "tool_result", call_id: "call_echo", output: "second output", is_error: false }] },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:tool-row-call_bash");
+    expect(app.texts().join("\n").includes("Ran 2 commands")).toBe(true);
+    await app.press("id:activity-group-tool-call_bash");
+    expect(app.shows("id:tool-row-call_bash")).toBe(false);
+    await app.keyboard.press("alt+d");
+    await app.waitFor("text:Detail: high");
+    await app.waitFor("text:high line 1");
+    let text = app.texts().join("\n");
+    expect(text.includes("high line 30") && text.includes("high line 101") && text.includes("high line 120")).toBe(true);
+    expect(text.includes("70 lines hidden · show all (o)")).toBe(true);
+    expect(text.includes("high line 31") || text.includes("high line 100")).toBe(false);
+    await app.press("id:tool-show-all-call_bash");
+    await app.waitFor("text:high line 100");
+    await app.keyboard.press("alt+d");
+    await app.waitFor("text:Detail: low");
+    expect(app.shows("id:tool-row-call_bash")).toBe(false);
+    expect(app.texts().join("\n").includes("high line 100")).toBe(false);
   });
 });
 

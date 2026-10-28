@@ -453,7 +453,7 @@ edge of the centre column, with a heavy rail down its left side in the agent's
 colour, a blank row above the input and one between the input and the control
 row. A darker status band (`surface.sidebar`) closes the panel under the control
 row: right-aligned `11.1K (4.1%)` (context in use and its share of the window)
-then `ctrl+p commands`. A canvas gutter surrounds it. The placeholder is `Type a message…`; disconnected sessions show the
+A canvas gutter surrounds it. The placeholder is `Type a message…`; disconnected sessions show the
 reason. In ANSI-16 and monochrome the focused input has a focus bar.
 
 The control row contains agent, model and effort selectors. The agent name is

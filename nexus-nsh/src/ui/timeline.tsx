@@ -3,7 +3,7 @@ import { List, Text, View } from "nsh";
 import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, Status, T } from "./kit";
 import { jump, run } from "../commands";
-import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, toolOutputAll, viewed } from "../store";
+import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
 import { roles } from "../gen/theme";
 import { signal } from "nsh";
@@ -23,6 +23,7 @@ type Row =
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
   | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean }
+  | { key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[]; open: boolean; defaultOpen: boolean; failed: number }
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
       state: "running" | "done" | "error" | "waiting"; duration?: string; output?: string;
@@ -37,29 +38,29 @@ type Row =
 export type ToolDetailLine = { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" };
 const DETAIL_HEAD = 100;
 const DETAIL_TAIL = 100;
-const DETAIL_THRESHOLD = DETAIL_HEAD + DETAIL_TAIL + 20;
+const HIGH_HEAD = 30;
+const HIGH_TAIL = 20;
 
 /** UI-only cap: the model's separate output clip stays untouched. */
-export function capToolDetail(lines: ToolDetailLine[], showAll: boolean): ToolDetailLine[] {
-  if (showAll || lines.length <= DETAIL_THRESHOLD) return lines;
-  const hidden = lines.length - DETAIL_HEAD - DETAIL_TAIL;
+export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = DETAIL_HEAD, tail = DETAIL_TAIL): ToolDetailLine[] {
+  if (showAll || lines.length <= head + tail + 20) return lines;
+  const hidden = lines.length - head - tail;
   return [
-    ...lines.slice(0, DETAIL_HEAD),
+    ...lines.slice(0, head),
     { text: `… ${hidden} lines hidden · show all (o)`, tone: "accent" },
-    ...lines.slice(-DETAIL_TAIL),
+    ...lines.slice(-tail),
   ];
 }
 
 const NOTICE = /^\[(Nexus notice|Nexus recovery|Notification)/;
 const closedTurns = signal<Record<string, boolean>>({});
-const openBlocks = signal<Record<string, boolean>>({});
 function open(key: string, fallback: boolean): boolean {
-  const v = openBlocks()[key];
+  const v = timelineOpen()[key];
   return v === undefined ? fallback : v;
 }
 function toggle(key: string, fallback: boolean) {
   const now = open(key, fallback);
-  openBlocks.update((o) => ({ ...o, [key]: !now }));
+  timelineOpen.update((o) => ({ ...o, [key]: !now }));
 }
 
 function toolArg(args: string | undefined): string {
@@ -411,16 +412,19 @@ export function buildRows(): Row[] {
             const key = `tool:${id}`;
             const rawOpen = open(`${key}:raw`, false);
             const showAll = toolOutputAll()[key] ?? false;
+            const detailLevel = timelineDetail();
+            const head = detailLevel === "high" ? HIGH_HEAD : DETAIL_HEAD;
+            const tail = detailLevel === "high" ? HIGH_TAIL : DETAIL_TAIL;
             const allDetail = detailOf(p.name ?? "tool", p.arguments, res?.output, rawOpen);
-            const clipped = allDetail.length > DETAIL_THRESHOLD;
-            const detail = capToolDetail(allDetail, showAll);
+            const clipped = allDetail.length > head + tail + 20;
+            const detail = capToolDetail(allDetail, showAll, head, tail);
             out.push({
               key, kind: "tool", id, name: p.name ?? "tool", arg: toolArg(p.arguments), summary,
               tone: counts ? (counts.add >= 0 ? "accent" : "info") : "info",
               state, duration: dur, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
-              open: open(key, false), clipped, showAll,
+              open: open(key, detailLevel === "high"), clipped, showAll,
             });
           }
         }
@@ -468,7 +472,53 @@ export function buildRows(): Row[] {
   if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true });
   if (st?.text) flat.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
   if (sel.eventsGap) flat.unshift({ key: "older-events", kind: "older", text: `${sel.eventsGap[0].toUpperCase()}${sel.eventsGap.slice(1)}.` });
-  return flat;
+  return groupActivities(flat);
+}
+
+type ActivityEntry = Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>;
+function activitySummary(items: ActivityEntry[]): string {
+  const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
+  if (tools.some((tool) => tool.state === "running" || tool.state === "waiting")) return "Working";
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    let label: string;
+    if (item.kind === "reasoning") label = "Thought";
+    else {
+      label = ({
+        bash: "Ran command", read: "Read file", edit: "Edited file", patch: "Edited file", write: "Wrote file",
+        code: "Ran cell", ask: "Asked question", web_search: "Searched time", web_fetch: "Fetched page",
+      } as Record<string, string>)[item.name] ?? `Used ${item.name}`;
+    }
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([label, count]) => {
+    if (label === "Thought") return "Thought";
+    const [verb, noun] = label.lastIndexOf(" ") > 0 ? [label.slice(0, label.lastIndexOf(" ")), label.slice(label.lastIndexOf(" ") + 1)] : [label, ""];
+    return `${verb} ${count} ${noun}${count === 1 || !noun ? "" : "s"}`.trim();
+  }).join(", ");
+}
+
+function groupActivities(rows: Row[]): Row[] {
+  const result: Row[] = [];
+  let items: ActivityEntry[] = [];
+  const flush = () => {
+    if (!items.length) return;
+    const key = `group:${items[0].key}`;
+    const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
+    const defaultOpen = timelineDetail() !== "low" || waiting;
+    result.push({
+      key, kind: "activity", summary: activitySummary(items), items,
+      open: open(key, defaultOpen), defaultOpen,
+      failed: items.filter((item) => item.kind === "tool" && item.state === "error").length,
+    });
+    items = [];
+  };
+  for (const row of rows) {
+    if (row.kind === "tool" || (row.kind === "reasoning" && !row.key.startsWith("stream-"))) items.push(row);
+    else { flush(); result.push(row); }
+  }
+  flush();
+  return result;
 }
 
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
@@ -579,6 +629,9 @@ function RowView(p: { r: () => Row }) {
             );
           }}
         </If>
+        <If when={r().kind === "activity"}>
+          <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
+        </If>
         <If when={r().kind === "tool"}>
           <ToolRow r={r as () => Extract<Row, { kind: "tool" }>} />
         </If>
@@ -638,6 +691,54 @@ function ContextItem(p: { item: () => Extract<Row, { kind: "context" }>["items"]
 
 function ToolTone(tone: string): string {
   return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : tone === "accent" ? "text-primary" : "text-foreground-secondary";
+}
+
+function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
+  const r = p.r;
+  return (
+    <View class="py-0.5">
+      <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
+        class={`w-full flex-row items-center gap-1.5 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
+        <Text class={T.meta}>{r().open ? "▾" : "▸"}</Text>
+        <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
+        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`${r().failed} failed`}</Text></If>
+      </Button>
+      <If when={r().open}>
+        <View class="ml-4 border-l border-border pl-2">
+          <Each of={r().items} key={(item) => item.key}>
+            {(item) => <ActivityItem item={item} />}
+          </Each>
+        </View>
+      </If>
+    </View>
+  );
+}
+
+function ActivityItem(p: { item: () => ActivityEntry }) {
+  const item = p.item;
+  return (
+    <View>
+      <If when={item().kind === "tool"}>
+        <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
+      </If>
+      <If when={item().kind === "reasoning"}>
+        {() => {
+          const x = item() as Extract<Row, { kind: "reasoning" }>;
+          return (
+            <View class="py-1.5">
+              <Button onPress={() => toggle(`reason:${x.key}`, false)} class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID="reasoning">
+                <Text class={T.meta}>{x.open ? "▾" : "▸"}</Text>
+                <Text class="text-xs leading-4 italic text-muted-foreground">{roles.reasoning.label}{x.encrypted ? " · encrypted (replayed, not readable)" : ""}</Text>
+              </Button>
+              <If when={x.open && !x.encrypted}>
+                <View class="pl-5 pt-1"><Text selectable class="text-[13px] leading-5 italic text-muted-foreground">{x.text}</Text></View>
+              </If>
+            </View>
+          );
+        }}
+      </If>
+    </View>
+  );
 }
 
 function ToolDetail(p: {
