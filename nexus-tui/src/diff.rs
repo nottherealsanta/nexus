@@ -691,6 +691,34 @@ mod tests {
     }
 
     #[test]
+    fn split_continuation_rows_start_at_the_text_column() {
+        let long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega";
+        let rows = text(&Diff::from_replace("x", long).split(110, &look()));
+        // The right half starts after the one-cell rule.
+        let right: Vec<&str> = rows
+            .iter()
+            .map(|r| r.split_once('│').expect("split rule").1)
+            .collect();
+        assert!(right.len() >= 3, "{rows:?}");
+        let first = right[0];
+        let col = first.find("alpha").expect("text on the first row");
+        // The sign sits just before the text; continuation rows leave it blank.
+        assert_eq!(
+            first[..col].trim_end().chars().last(),
+            Some('+'),
+            "{first:?}"
+        );
+        for cont in &right[1..] {
+            let (sign, text) = cont.split_at(col);
+            assert!(sign.trim().is_empty(), "sign column not blank: {cont:?}");
+            assert!(
+                text.starts_with(|c: char| c.is_ascii_lowercase()),
+                "continuation not at the text column: {cont:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tint_is_on_the_changed_side_only() {
         let l = look();
         let rows = Diff::from_replace("a", "b").split(110, &l);
