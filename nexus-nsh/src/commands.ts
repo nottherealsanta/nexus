@@ -5,7 +5,7 @@ import { loadFiles } from "./store";
 import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
-  addProjectOpen, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
+  addProjectOpen, alertDetail, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   agentCatalog, currentWorktree, defaultModel, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, openedTabs, paletteOpen, previousCentre, renaming, rightOpen,
   focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sessionDraft, setTimelineDetail, sidebarRowMenu, sync, timelineDetail, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
@@ -80,7 +80,7 @@ function evalTerm(t: string): boolean {
     case "timeline.has_older": return !!model.selected?.messagesMore;
     case "view.settings": return centre() === "settings";
     case "view.editor": return centre() === "editor";
-    case "overlay.open": return paletteOpen() || !!picker();
+    case "overlay.open": return paletteOpen() || !!picker() || !!alertDetail();
     case "dialog.open": return !!confirmDialog() || addProjectOpen() || connection().kind === "incompatible";
     case "alert.open": return toasts().length > 0;
     case "drawer.open": return !!drawer();
@@ -267,9 +267,9 @@ on("app.reconnect", () => sync.retryNow());
 on("app.start_daemon", async () => { try { await fetch("/__nexus/start", { method: "POST" }); } catch {} sync.retryNow(); });
 on("notifications.open", () => { drawer.set("notifications"); unread.set(0); });
 on("notifications.mark_all_read", () => { notifications.set([]); unread.set(0); });
-on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[t.length - 1].id); });
+on("alert.dismiss", () => { const t = toasts(); if (t.length) dismissToast(t[0].id); }); // the oldest, drawn on top
 on("alert.cancel", () => { const d = confirmDialog(); if (d) { if (!d.busy) confirmDialog.set(null); } else if (connection().kind !== "incompatible") addProjectOpen.set(false); });
-on("overlay.close", () => { if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
+on("overlay.close", () => { if (alertDetail()) { alertDetail.set(null); return; } if (picker()) { picker.set(null); return; } paletteOpen.set(false); });
 on("nav.drawer.close", () => drawer.set(null));
 on("sidebar.left.toggle", toggleLeft);
 on("sidebar.right.toggle", () => toggleRight(rightWidthHint.w));

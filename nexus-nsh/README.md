@@ -30,10 +30,23 @@ interrupted one adds `/continue`. Durations read `0.4s`, `4.2s`, `1m 05s` and
 members are 24 px rows on a tree line with verb icons (the status glyph replaces
 the icon while running, failed or waiting), and a member's output sits in a
 320 px box with Show all. Thoughts show `Thought · preview`, with the body behind
-a 2 px rule. High-detail output keeps the first 30 and last 20 lines;
+a 2 px rule; a thought with no tool beside it is a single `Thought · preview` row, never a group. High-detail output keeps the first 30 and last 20 lines;
 clipping is announced and the show-all control restores the whole inspection
 output. Selecting a session loads its full stored history (messages, retained
 diagnostics, snapshot) after the bounded snapshot view.
+
+The waiting card (D14) is docked above the composer in its 760 px column: a 3 px accent
+rail, `◆ Allow bash?` (`Nexus asks` for a question), `waiting on you · 0:42` counted from
+when the client first saw the request, the parameter table (at most six rows), for edit,
+write and patch the unified diff capped at 12 rows with `N more rows`, and a key-chip
+choice list. Choices Core does not offer (allow for session, deny with a note) are muted
+with their reason beside them. Questions show radios or checkboxes and a free-text field;
+`⌘↵` submits. Alerts (D15): toasts are 360 px, top-right under the header (and the banner),
+oldest first, three at most and then `+N more`, with no lifetime hairline. A toast keeps its
+full text on the record; clicking it, or pressing Enter on it, or clicking an entry of the
+notifications drawer opens it in the modal dialog (`c` copies, Esc closes). The banner is a
+36 px strip, and the jump-to-latest pill (`↓ 3 new · ⌘↓`) sits above the composer, right-aligned
+with its card.
 
 The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
 (the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The

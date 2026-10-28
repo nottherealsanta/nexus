@@ -3,6 +3,7 @@ import { Header } from "./src/ui/header";
 import { LeftSidebar } from "./src/ui/sidebar";
 import { RightSidebar } from "./src/ui/right";
 import { Centre } from "./src/ui/centre";
+import { AlertDetail } from "./src/ui/alerts";
 import { AddProject, Blocking, Confirm, Drawers, Palette, Picker } from "./src/ui/overlays";
 import { bindKeys, rightIsOpen, rightWidthHint } from "./src/commands";
 import { isNarrow, leftOpen, loadPrefs, startApp, themeChoice } from "./src/store";
@@ -29,6 +30,7 @@ function App() {
       </View>
       <Palette />
       <Picker />
+      <AlertDetail />
       <Confirm />
       <AddProject />
       <Blocking />

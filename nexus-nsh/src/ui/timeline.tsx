@@ -4,7 +4,7 @@ import { Button, TextView } from "nsh/base";
 import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, Status, T } from "./kit";
 import { DiffView } from "./diff";
-import { copyText, jump, run } from "../commands";
+import { byId, copyText, jump, keyLabel, run } from "../commands";
 import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
 import type { IconName } from "../icons";
@@ -67,6 +67,7 @@ const closedTurns = signal<Record<string, boolean>>({});
 type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
 const rowHeights = signal<Record<string, number>>({});
 const scrollY = signal(0);
+const viewH = signal(0);
 const focusedBand = signal<string | null>(null);
 // Sticky user bar line height (secondary text) and bar height, for the push-up geometry.
 const STICKY_LINE = 20;
@@ -999,6 +1000,18 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   );
 }
 
+/** Rows wholly below the viewport (the jump pill's `N new`). */
+function newBelow(rows: Row[]): number {
+  const h = rowHeights();
+  const bottom = scrollY() + viewH();
+  let top = LIST_PAD, n = 0;
+  for (const r of rows) {
+    if (top >= bottom) n++;
+    top += h[r.key] ?? ROW_ESTIMATE;
+  }
+  return n;
+}
+
 export function Timeline() {
   let ref: any;
   const rows = () => buildRows();
@@ -1011,6 +1024,7 @@ export function Timeline() {
           maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 96 }}
           onScroll={(e) => {
             scrollY.set(e.offset.y);
+            viewH.set(e.size.height);
             scrolledUp.set(e.contentSize.height - (e.offset.y + e.size.height) > 160);
           }}
           scrollEventThrottle={64}
@@ -1020,11 +1034,14 @@ export function Timeline() {
       </If>
       <StickyBar rows={rows} scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>
-        <View class="absolute bottom-3 left-0 right-0 items-center" style={{ pointerEvents: "box-none" }}>
-          <Button onPress={() => run("session.jump_latest")} accessibilityLabel="Jump to latest" testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
-            <Icon name="arrow-up" size={14} class="tint-foreground-secondary rotate-180" />
-            <Text class="text-[13px] leading-5 text-popover-foreground">Jump to latest</Text>
-          </Button>
+        <View class="absolute bottom-2 left-0 right-0 items-center px-4" style={{ pointerEvents: "box-none" }}>
+          <View class="w-full max-w-[760px] items-end" style={{ pointerEvents: "box-none" }}>
+            <Button onPress={() => run("session.jump_latest")} accessibilityLabel={`Jump to latest, ${newBelow(rows())} new`} testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
+              <Text class="text-[13px] leading-5 text-foreground-secondary">↓</Text>
+              <Text class="text-[13px] leading-5 text-popover-foreground">{newBelow(rows()) > 0 ? `${newBelow(rows())} new` : "latest"}</Text>
+              <Text class={T.meta}>{`· ${keyLabel(byId.get("session.jump_latest")!) ?? "end"}`}</Text>
+            </Button>
+          </View>
         </View>
       </If>
     </View>

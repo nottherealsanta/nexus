@@ -5,7 +5,7 @@ import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, IconButton, T, FOCUS } from "./kit";
 import { availability, commands, escape, keyLabel, run, Cmd } from "../commands";
-import { addProjectOpen, compat, confirmDialog, connection, currentProject, drawer, isNarrow, notifications, paletteOpen, picker, selectProject, toast, unread } from "../store";
+import { addProjectOpen, alertDetail, compat, confirmDialog, connection, currentProject, drawer, isNarrow, notifications, paletteOpen, picker, selectProject, toast, unread } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { LeftSidebar } from "./sidebar";
 import { RightSidebar } from "./right";
@@ -228,10 +228,10 @@ function NotificationList() {
       <If when={notifications().length > 0} else={<View class="p-4"><Text class={T.sec}>Nothing yet. Toasts and alerts are kept here, newest first.</Text></View>}>
         <List each={notifications()} keyExtractor={(n) => String(n.id)} class="flex-1" contentStyle={{ padding: 8, gap: 4 }}>
           {(n) => (
-            <View class="flex-row gap-2 rounded-(--radius) px-2.5 py-2 hover:bg-accent">
+            <Button onPress={() => alertDetail.set(n())} accessibilityLabel={`${n().level}: ${n().text}`} testID="notification-open" class={`flex-row gap-2 rounded-(--radius) px-2.5 py-2 hover:bg-accent ${FOCUS}`}>
               <Text class="w-3.5 text-center text-[13px] leading-5 text-foreground-secondary">{GL[n().level]}</Text>
-              <Text class="flex-1 text-[13px] leading-5 text-foreground">{n().text}</Text>
-            </View>
+              <Text style={{ numberOfLines: 3 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">{n().text}</Text>
+            </Button>
           )}
         </List>
       </If>

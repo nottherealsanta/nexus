@@ -194,14 +194,40 @@ export function currentWorktree() {
 
 // --- alerts -----------------------------------------------------------------------------
 let toastId = 1;
+/** Toasts drawn at once; the rest queue behind `+N more` and start their timer when first drawn. */
+export const TOAST_VISIBLE = 3;
+const TOAST_QUEUE = 20;
+const timed = new Set<number>();
+/** The alert whose full text is open in the detail modal (D15). */
+export const alertDetail = signal<Toast | null>(null);
+/**
+ * The toast's `text` is the whole message and stays on the record (notifications, detail modal). The
+ * card shows a title and an optional body: the first line, or the text up to an early `: `.
+ */
+export function splitAlert(text: string): { title: string; body: string; inline: boolean } {
+  const lines = text.split("\n");
+  if (lines.length > 1) return { title: lines[0], body: lines.slice(1).join(" ").trim(), inline: false };
+  const i = text.indexOf(": ");
+  // An early `: ` ends a bold lead-in; the text stays one run, so it reads whole to screen readers and search.
+  if (i > 0 && i <= 40) return { title: text.slice(0, i), body: text.slice(i), inline: true };
+  return { title: text, body: "", inline: false };
+}
+function startTimers() {
+  for (const t of toasts().slice(0, TOAST_VISIBLE)) {
+    if (timed.has(t.id)) continue;
+    timed.add(t.id);
+    setTimeout(() => dismissToast(t.id), t.level === "error" ? 8000 : 4000);
+  }
+}
 export function toast(level: Toast["level"], text: string) {
   const t: Toast = { id: toastId++, level, text, at: Date.now() };
-  toasts.update((l) => [...l.slice(-2), t]);
+  toasts.update((l) => [...l, t].slice(-TOAST_QUEUE));
   notifications.update((l) => [t, ...l].slice(0, 100));
   unread.update((n) => n + 1);
-  setTimeout(() => toasts.update((l) => l.filter((x) => x.id !== t.id)), level === "error" ? 8000 : 4000);
+  startTimers();
 }
-export const dismissToast = (id: number) => toasts.update((l) => l.filter((x) => x.id !== id));
+export const openAlert = (t: Toast) => { alertDetail.set(t); dismissToast(t.id); };
+export const dismissToast = (id: number) => { toasts.update((l) => l.filter((x) => x.id !== id)); timed.delete(id); startTimers(); };
 
 // --- sync ---------------------------------------------------------------------------------
 const host: SyncHost = {

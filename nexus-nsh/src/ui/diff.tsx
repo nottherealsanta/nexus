@@ -66,10 +66,10 @@ export function splitRows(items: DiffItem[]): SplitRow[] {
 const num = (n?: number) => (n === undefined ? "" : String(n));
 
 /** The diff of a tool detail. `lines` is reactive (the row's body). */
-export function DiffView(p: { lines: () => ToolDetailLine[] }) {
+export function DiffView(p: { lines: () => ToolDetailLine[]; unified?: boolean }) {
   return (
     <View class="w-full min-w-0" testID="diff">
-      {() => (width() >= SPLIT_MIN_WIDTH ? <SplitView lines={p.lines} /> : <UnifiedView lines={p.lines} />)}
+      {() => (width() >= SPLIT_MIN_WIDTH && !p.unified ? <SplitView lines={p.lines} /> : <UnifiedView lines={p.lines} />)}
     </View>
   );
 }

@@ -1,8 +1,10 @@
-import { Text, View } from "nsh";
+import { Scroll, Text, View, keymap } from "nsh";
 import { Button } from "nsh/base";
-import { Btn, Icon, T, FOCUS } from "./kit";
-import { run, availability, byId } from "../commands";
-import { banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, tick, toasts } from "../store";
+import { Btn, Icon, IconButton, T, FOCUS } from "./kit";
+import { Modal, ModalFooter, ModalTitle } from "./modal";
+import { run, availability, byId, copyText, escape } from "../commands";
+import { alertDetail, banners, compat, connection, dismissedBanners, dismissToast, info, isNarrow, openAlert, splitAlert, tick, TOAST_VISIBLE, toasts } from "../store";
+import type { Toast } from "../store";
 import { statusGlyphs } from "../gen/theme";
 
 type Level = "info" | "warning" | "error" | "loading";
@@ -47,48 +49,89 @@ export function currentAlerts(): Alert[] {
   return out.sort((a, b) => rank[b.level] - rank[a.level]);
 }
 
+/** The banner (D15): one 36 px strip on the panel surface, pushing the timeline down; never over it. */
 export function Banners() {
   const all = () => currentAlerts();
   const top = () => all()[0];
   return (
     <If when={top()}>
       {(a) => (
-        <View class="border-b border-border bg-card" role="alert" testID="banner" accessibilityLabel={`${GLYPH[a().level].word}: ${a().text}`}>
-          <View class="flex-row items-center gap-2.5 px-4 py-2">
-            <Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>
-            <View class="flex-1 min-w-0">
-              <Text class={`text-[13px] leading-5 ${GLYPH[a().level].tone} font-medium`}>{a().text}</Text>
-              <If when={a().sub}><Text class={T.sec}>{a().sub!}</Text></If>
-            </View>
-            <If when={all().length > 1}><Text class={T.meta}>{`+${all().length - 1}`}</Text></If>
-          </View>
-          <If when={a().actions.length > 0 || a().dismissible}>
-            <View class="flex-row items-center justify-end gap-2 px-4 pb-2 -mt-0.5">
-              <Each of={a().actions} key={(x) => x.label}>
-                {(x) => <Btn label={x().label} onPress={() => (x().cmd ? void run(x().cmd!) : x().run?.())} disabled={x().cmd ? !availability(byId.get(x().cmd!)!).ok : false} />}
-              </Each>
-              <If when={a().dismissible}><Btn label="Hide" kind="ghost" onPress={() => dismissedBanners.update((l) => [...l, a().key])} /></If>
-            </View>
-          </If>
+        <View class="h-9 shrink-0 flex-row items-center gap-2.5 border-b border-border bg-card px-4" role="alert" testID="banner" accessibilityLabel={`${GLYPH[a().level].word}: ${a().text}${a().sub ? `. ${a().sub}` : ""}`}>
+          <Text class={`w-4 text-center text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{GLYPH[a().level].g}</Text>
+          <Text style={{ numberOfLines: 1 }} class={`shrink min-w-0 text-[13px] leading-5 font-semibold ${GLYPH[a().level].tone}`}>{a().text}</Text>
+          <If when={!isNarrow() && !!a().sub}><Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 ${T.sec}`}>{a().sub!}</Text></If>
+          <If when={isNarrow() || !a().sub}><View class="flex-1" /></If>
+          <If when={all().length > 1}><Text class={T.meta}>{`+${all().length - 1}`}</Text></If>
+          <Each of={a().actions} key={(x) => x.label}>
+            {(x) => <Btn label={x().label} kind="ghost" onPress={() => (x().cmd ? void run(x().cmd!) : x().run?.())} disabled={x().cmd ? !availability(byId.get(x().cmd!)!).ok : false} />}
+          </Each>
+          <If when={a().dismissible}><IconButton icon="x" label="Hide" onPress={() => dismissedBanners.update((l) => [...l, a().key])} testID="banner-hide" /></If>
         </View>
       )}
     </If>
   );
 }
 
-const TG = { success: { g: "✓", t: "text-success" }, info: { g: "i", t: "text-info" }, warning: { g: "!", t: "text-warning" }, error: { g: "✕", t: "text-error" } };
+const TG = { success: { g: "✓", t: "text-success", r: "bg-success" }, info: { g: "i", t: "text-info", r: "bg-info" }, warning: { g: "!", t: "text-warning", r: "bg-warning" }, error: { g: "✕", t: "text-error", r: "bg-error" } };
+
+/** Toasts (D15): top-right under the header, oldest on top, three at most and then `+N more`; no lifetime hairline. */
 export function Toasts() {
+  const shown = () => toasts().slice(0, TOAST_VISIBLE);
+  const more = () => Math.max(0, toasts().length - TOAST_VISIBLE);
   return (
-    <View class={`absolute right-3 left-3 items-end gap-2 ${isNarrow() ? "top-2" : "bottom-[128px]"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
-      <Each of={toasts()} key={(t) => t.id}>
-        {(t) => (
-          <Button onPress={() => dismissToast(t().id)} role="alert" accessibilityLabel={`${t().level}: ${t().text}`} class={`flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-popover px-3.5 min-h-10 max-w-[420px] shadow-lg ${FOCUS}`}>
-            <Text class={`w-3.5 text-center text-[13px] font-semibold ${TG[t().level].t}`}>{TG[t().level].g}</Text>
-            <Text class="shrink min-w-0 text-[13px] leading-5 text-popover-foreground">{t().text}</Text>
-          </Button>
-        )}
-      </Each>
+    <View class={`absolute right-3 items-end gap-2 ${isNarrow() ? "left-3" : "w-[360px]"} ${currentAlerts().length > 0 ? "top-12" : "top-3"}`} style={{ pointerEvents: "box-none" }} testID="toasts" accessibilityLabel="Notifications">
+      <Each of={shown()} key={(t) => t.id}>{(t) => <ToastCard t={t} />}</Each>
+      <If when={more() > 0}><Text testID="toasts-more" class={`${T.meta} rounded-full bg-popover border border-border px-2.5 py-0.5`}>{`+${more()} more`}</Text></If>
     </View>
   );
 }
-void Icon; void compat; void info;
+function ToastCard(p: { t: () => Toast }) {
+  const t = p.t;
+  const sp = () => splitAlert(t().text);
+  return (
+    <View class="flex-row w-full rounded-(--radius-card) bg-popover overflow-hidden" style={{ boxShadow: "0 8px 24px rgb(0 0 0 / 0.3)" }} testID="toast">
+      <View class={`w-[3px] self-stretch ${TG[t().level].r}`} />
+      <Button onPress={() => openAlert(t())} role="alert" accessibilityLabel={`${t().level}: ${t().text}`} testID="toast-open" class={`flex-1 min-w-0 flex-row items-start gap-2.5 py-2.5 pl-3 hover:bg-accent ${FOCUS}`}>
+        <Text class={`w-3.5 pt-px text-center text-[13px] leading-5 font-semibold ${TG[t().level].t}`}>{TG[t().level].g}</Text>
+        <View class="flex-1 min-w-0">
+          <If when={sp().inline} else={
+            <View>
+              <Text style={{ numberOfLines: 2 }} class="text-[13px] leading-5 font-semibold text-popover-foreground">{sp().title}</Text>
+              <If when={!!sp().body}><Text style={{ numberOfLines: 2 }} class={T.sec}>{sp().body}</Text></If>
+            </View>
+          }>
+            <Text style={{ numberOfLines: 3 }} class={T.sec}><Text class="font-semibold text-popover-foreground">{sp().title}</Text>{sp().body}</Text>
+          </If>
+        </View>
+      </Button>
+      <View class="pr-1 pt-1"><IconButton icon="x" label="Dismiss" onPress={() => dismissToast(t().id)} testID="toast-dismiss" /></View>
+    </View>
+  );
+}
+
+/** The full text of an alert (D15, D13): a modal titled by the toast, the whole text wrapped and scrollable; `c` copies it. */
+export function AlertDetail() {
+  return <If when={alertDetail()}>{(a) => <AlertDetailBody a={a} />}</If>;
+}
+function AlertDetailBody(p: { a: () => Toast }) {
+  const a = p.a;
+  const copy = () => copyText(a().text, "Copied the notification");
+  keymap.bind("c", copy, { when: "notEditing" });
+  return (
+    <Modal width={520} top="top-[14%]" label="Notification" testID="alert-detail" onCancel={() => escape()} onOpenChange={(open) => { if (!open) alertDetail.set(null); }}>
+      <View class="gap-2" role="alert" accessibilityLabel={`${a().level}: ${a().text}`}>
+        <View class="flex-row items-center min-h-8 gap-3">
+          <Text class={`w-4 text-center text-[15px] font-semibold ${TG[a().level].t}`}>{TG[a().level].g}</Text>
+          <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-popover-foreground">{splitAlert(a().text).title}</Text>
+          <Text class={`${T.meta} rounded-(--radius) bg-muted px-1.5`}>esc</Text>
+        </View>
+        <Scroll class="max-h-[320px]">
+          <Text testID="alert-detail-text" style={{ userSelect: "text" }} class="text-[13px] leading-5 text-foreground">{a().text}</Text>
+        </Scroll>
+        <View class="flex-row justify-end"><Btn label="Copy" onPress={copy} testID="alert-detail-copy" /></View>
+        <ModalFooter hints="c copy · esc close" right={new Date(a().at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} />
+      </View>
+    </Modal>
+  );
+}
+void Icon; void compat; void info; void ModalTitle;

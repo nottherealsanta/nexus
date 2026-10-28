@@ -1,7 +1,7 @@
 import { Text, View, effect, signal, untracked } from "nsh";
 import { Button, Input } from "nsh/base";
 import { Btn, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
-import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, waitItems } from "../commands";
+import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, toKeystroke, waitItems } from "../commands";
 import type { Cmd } from "../commands";
 import type { FileEntry } from "../store";
 import {
@@ -11,7 +11,9 @@ import {
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
 import { agentColor, agentRailColor } from "../agent-color";
-import { fmtDuration } from "./timeline";
+import { detailOf, fmtDuration } from "./timeline";
+import type { ToolDetailLine } from "./timeline";
+import { DiffView, diffItems } from "./diff";
 
 // Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
 // a Working row above it while busy, the completion block on its top edge and the project strip below.
@@ -402,9 +404,9 @@ export function WaitingCard() {
   const cur = () => { const l = items(); return l.length ? l[waitIndex() % l.length] : null; };
   const others = () => { m(); return otherWaits(); };
   return (
-    <View class="px-3 items-center" testID="waiting-slot">
+    <View class="px-4 items-center" testID="waiting-slot">
       <If when={others().length > 0 && items().length === 0}>
-        <View class="w-full max-w-[792px] flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-card px-3 py-2 mb-2">
+        <View class="w-full max-w-[760px] flex-row items-center gap-2 rounded-(--radius-card) border border-border bg-card px-3 py-2 mb-2">
           <Status kind="waiting" />
           <Text class={`flex-1 ${T.sec}`}>{`${others().length} other session${others().length === 1 ? " is" : "s are"} waiting for input`}</Text>
           <Btn label="Go to" onPress={() => run("waiting.go_to")} testID="waiting-go-to" />
@@ -415,26 +417,72 @@ export function WaitingCard() {
   );
 }
 
+/** When the client first saw each request: `waiting on you · 0:42` counts from here. */
+const firstSeen = new Map<string, number>();
+const since = (id: string) => { let t = firstSeen.get(id); if (t === undefined) { t = Date.now(); firstSeen.set(id, t); } return t; };
+export const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.max(0, Math.floor(sec % 60))).padStart(2, "0")}`;
+
+const WAIT_DIFF_ROWS = 12;
+const WAIT_TABLE_ROWS = 6;
+const DIFF_ARGS = { edit: ["patch", "old_string", "new_string", "old", "new"], patch: ["patch", "old_string", "new_string", "old", "new"], write: ["content"] } as Record<string, string[]>;
+
+/** The parameter table (at most six rows; the diff's own arguments are left out) and, for edit, write and patch, the diff lines capped at 12 rows. */
+export function approvalParts(a: Approval): { table: [string, string][]; diff: ToolDetailLine[]; more: number } {
+  const diffAll = DIFF_ARGS[a.tool] ? diffItems(detailOf(a.tool, JSON.stringify(a.args ?? {}), undefined, false)) : [];
+  const skip = diffAll.length ? DIFF_ARGS[a.tool] : [];
+  const args = a.args && typeof a.args === "object" ? Object.entries(a.args).filter(([k]) => !skip.includes(k)) : [];
+  const table = args.map(([k, v]): [string, string] => {
+    const text = typeof v === "string" ? v : JSON.stringify(v);
+    const lines = text.split("\n");
+    return [k, lines.length > 1 ? `${lines[0]} …` : lines[0]];
+  }).slice(0, WAIT_TABLE_ROWS);
+  const cap = diffAll.length > WAIT_DIFF_ROWS ? WAIT_DIFF_ROWS - 1 : diffAll.length;
+  const diff = diffAll.slice(0, cap).map((it): ToolDetailLine =>
+    it.kind === "hunk" ? { text: it.text, tone: "info" } : it.kind === "add" ? { text: `+${it.text}`, tone: "add" } : it.kind === "del" ? { text: `-${it.text}`, tone: "del" } : { text: ` ${it.text}`, tone: "plain" });
+  return { table, diff, more: diffAll.length - cap };
+}
+
 function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; session_id: string }; count: number }) {
   const approval = () => { m(); return model.approvals.get(p.w().id); };
   const question = () => { m(); return model.questions.get(p.w().id); };
-  const from = () => { const s = model.sessions.get(p.w().session_id); return s && s.id !== viewed()?.id ? ` · from ${s.title || "child"}` : ""; };
+  const child = () => { const s = model.sessions.get(p.w().session_id); return s && s.id !== viewed()?.id ? s.title || "child" : ""; };
+  const elapsed = () => { tick(); return Math.floor((Date.now() - since(p.w().id)) / 1000); };
+  effect(() => {
+    const id = setInterval(() => tick.set(Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  // The modified keys of the card, bound while it shows. Enter belongs to the focused choice, never a global binding.
+  effect(() => {
+    const k = (id: string) => { const key = byId.get(id)?.keys?.nsh; return key ? toKeystroke(key) : null; };
+    const map: Record<string, () => void> = {};
+    const bind = (id: string, fn: () => void) => { const key = k(id); if (key && /(cmd|ctrl|alt|mod)\+/.test(key)) map[key] = fn; };
+    if (p.count > 1) { bind("waiting.next", () => run("waiting.next")); bind("waiting.prev", () => run("waiting.prev")); }
+    const a = approval(), q = question();
+    if (a && live()) bind("waiting.deny", () => void reply(a, false));
+    if (q && live()) bind("waiting.submit_answers", () => void submitQuestion(q));
+    return bindOpenKeys(map);
+  });
   return (
-    <View class="w-full max-w-[792px] mb-2 flex-row rounded-(--radius-card) border border-border bg-card overflow-hidden" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
-      <View class="w-[3px] bg-primary" />
-      <View class="flex-1 min-w-0 gap-2 px-3.5 py-3">
-        <View class="flex-row items-center gap-2">
-          <Status kind="waiting" word />
-          <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">
-            <If when={approval()}>{() => <Text>{`${approval()!.tool}${from()}`}</Text>}</If>
-            <If when={question()}>{() => <Text>{`question${from()}`}</Text>}</If>
+    <View class="w-full max-w-[760px] mb-2 flex-row rounded-(--radius-card) bg-card overflow-hidden" testID="waiting-card" accessibilityLabel="Waiting for your input" role="alert">
+      <View class="w-[3px] self-stretch bg-primary" testID="waiting-rail" />
+      <View class="flex-1 min-w-0 gap-2.5 px-3.5 py-3">
+        <View>
+          <View class="flex-row items-center gap-2 min-h-6">
+            <Text class="text-[15px] leading-5 text-primary">◆</Text>
+            <Text style={{ numberOfLines: 1 }} class="flex-1 min-w-0 text-[15px] leading-5 font-semibold text-foreground" testID="waiting-title">
+              {approval() ? `Allow ${approval()!.tool}?` : "Nexus asks"}
+            </Text>
+            <If when={p.count > 1}>
+              <Button onPress={() => run("waiting.next")} accessibilityLabel="Next waiting item" testID="waiting-next" class={`flex-row items-center gap-1.5 rounded-(--radius) px-1.5 hover:bg-accent ${FOCUS}`}>
+                <Text class={T.meta}>{`${(waitIndex() % p.count) + 1} of ${p.count} ·`}</Text>
+                <Text class={`${T.meta} rounded-(--radius) bg-muted px-1`}>{keyLabel(byId.get("waiting.next")!) ?? "next"}</Text>
+                <Text class={T.meta}>next</Text>
+              </Button>
+            </If>
+          </View>
+          <Text class={`${T.sec} text-muted-foreground`} testID="waiting-sub">
+            {`waiting on you · ${clock(elapsed())}${question() ? ` · question 1 of ${question()!.questions.length}` : ""}${child() ? ` · in child: ${child()}` : ""}`}
           </Text>
-          <If when={p.count > 1}>
-            <View class="flex-row items-center gap-2">
-              <Text class={T.meta}>{`${(waitIndex() % p.count) + 1} of ${p.count}`}</Text>
-              <Btn label="Next" kind="ghost" onPress={() => run("waiting.next")} />
-            </View>
-          </If>
         </View>
         <If when={approval()}>{() => <ApprovalBody a={approval()!} />}</If>
         <If when={question()}>{() => <QuestionBody q={question()!} />}</If>
@@ -446,19 +494,51 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
 
 function ApprovalBody(p: { a: Approval }) {
   const a = p.a;
-  const cmd = typeof a.args?.command === "string" ? (a.args.command as string) : JSON.stringify(a.args, null, 2);
-  const noSession = "Core's approval reply takes only allow or deny (Step 12a adds more choices).";
+  const parts = () => approvalParts(a);
+  const rows = (): { id: string; title: string; cmd: string; run?: () => void; why?: string }[] => [
+    { id: "allow-once", title: "Allow once", cmd: "waiting.allow_once", run: () => void reply(a, true) },
+    { id: "allow-session", title: "Allow for session", cmd: "waiting.allow_session", why: "not offered by Core yet" },
+    { id: "deny", title: "Deny", cmd: "waiting.deny", run: () => void reply(a, false) },
+    { id: "deny-note", title: "Deny with a note", cmd: "waiting.deny_note", why: "Core does not support notes yet" },
+  ];
   return (
     <View class="gap-2.5">
-      <View class="rounded-(--radius) border border-border bg-background px-3 py-2 max-h-40 overflow-hidden">
-        <Text style={{ userSelect: "text" }} class="font-mono text-xs leading-[18px] text-foreground">{cmd}</Text>
-      </View>
+      <If when={parts().table.length > 0}>
+        <View class="rounded-(--radius) bg-background px-3 py-2 gap-0.5" testID="waiting-table">
+          <Each of={parts().table} key={(r) => r[0]}>
+            {(r) => (
+              <View class="flex-row gap-3 min-h-5">
+                <Text class="w-16 shrink-0 text-xs leading-5 text-muted-foreground">{r()[0]}</Text>
+                <Text style={{ numberOfLines: 3, userSelect: "text" }} class="flex-1 min-w-0 font-mono text-[13px] leading-5 text-foreground">{r()[1]}</Text>
+              </View>
+            )}
+          </Each>
+        </View>
+      </If>
+      <If when={parts().diff.length > 0}>
+        <View class="rounded-(--radius) bg-background overflow-hidden" testID="waiting-diff">
+          <DiffView lines={() => parts().diff} unified />
+          <If when={parts().more > 0}><Text testID="waiting-diff-more" class={`${T.meta} px-3 py-1`}>{`${parts().more} more rows`}</Text></If>
+        </View>
+      </If>
       <If when={!busyWait()} else={<View class="flex-row items-center gap-2"><Status kind="running" /><Text class={T.sec}>sending…</Text></View>}>
-        <View class="flex-row flex-wrap items-center gap-2">
-          <Btn label="Allow once" kind="primary" onPress={() => void reply(a, true)} testID="allow-once" disabled={!live()} reason="Core is not connected" />
-          <Btn label="Allow for session" disabled reason={noSession} testID="allow-session" />
-          <Btn label="Deny" onPress={() => void reply(a, false)} testID="deny" disabled={!live()} />
-          <Btn label="Deny with note" disabled reason="Core's approval reply has no note field yet." />
+        <View role="list" accessibilityLabel="Choices" class="gap-0.5">
+          <Each of={rows()} key={(r) => r.id}>
+            {(r, i) => {
+              const off = () => !!r().why || (!!r().run && !live());
+              const reason = () => r().why ?? (r().run && !live() ? "Core is not connected" : "");
+              return (
+                <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
+                  accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === 0 && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-selection"} ${FOCUS}`}>
+                  <Text class={`w-3 text-[13px] leading-5 ${off() ? "text-transparent" : "text-primary"}`}>{i() === 0 && !off() ? "▸" : " "}</Text>
+                  <Text class={`w-10 shrink-0 text-center text-xs leading-5 font-bold rounded-(--radius) px-1.5 ${off() ? "bg-muted text-muted-foreground" : "bg-raised text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
+                  <Text class={`text-[13px] leading-5 ${off() ? "text-muted-foreground" : r().id === "allow-once" ? "font-semibold text-foreground" : "text-foreground"}`}>{r().title}</Text>
+                  <If when={off()}><Text testID={`${r().id}-reason`} class={`flex-1 min-w-0 ${T.meta}`}>{reason()}</Text></If>
+                </Button>
+              );
+            }}
+          </Each>
         </View>
       </If>
     </View>
@@ -495,7 +575,10 @@ function QuestionBody(p: { q: Question }) {
           );
         }}
       </Each>
-      <View class="flex-row gap-2"><Btn label="Submit answers" kind="primary" busy={busyWait()} onPress={() => void submitQuestion(q)} testID="submit-answers" disabled={!live()} /></View>
+      <View class="flex-row items-center gap-3">
+        <Btn label="Submit answers" kind="primary" busy={busyWait()} onPress={() => void submitQuestion(q)} testID="submit-answers" disabled={!live()} />
+        <Text class={T.meta}>{`${keyLabel(byId.get("waiting.submit_answers")!) ?? "enter"} submit · tab next question`}</Text>
+      </View>
     </View>
   );
 }
