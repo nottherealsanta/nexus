@@ -177,10 +177,7 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
    - Wire the rows Core can already serve (default model and effort, the
      catalog, loaded agents).
    - Persist client rows (theme, sidebar, animations).
-8. **Alerts**
-   - Terminal bell and OSC 9/777 notifications, set in Settings ›
-     Notifications.
-9. **Tests**
+8. **Tests**
    - PTY checks at 80×24 and 160×48 for anchor, follow and jump-to-latest.
    - A review gallery from fixed fixtures (`interface/review.md`).
 

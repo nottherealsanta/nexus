@@ -47,6 +47,13 @@ with a `~` path; Esc returns to the timeline. The selected file can be copied as
 an absolute path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the
 terminal suspended. The file view has no syntax highlighting or search yet.
 
+Alerts: a session that waits for approval or an answer is announced with a
+terminal notification (OSC 9, or OSC 777 in foot, kitty, Ghostty and WezTerm),
+only while it is out of view. Settings › Notifications › Terminal notifications
+sets off, waiting only (the default) or waiting, done and errors (a finished
+turn or a failed session too). Terminal focus is not tracked, so a session in
+view never notifies.
+
 Still Step 12.4: the built-in editor, Git diff UI, worktree
 management in the UI, settings editing beyond theme/monochrome, and
 steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.

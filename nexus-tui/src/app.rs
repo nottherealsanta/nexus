@@ -37,6 +37,30 @@ pub enum Effect {
     OpenEditor(String),
     /// Open a URL in the platform browser (the inspector, documentation).
     OpenUrl(String),
+    /// An OS notification through the terminal (OSC 9 or 777) for a session
+    /// that needs the user while it is out of view.
+    Notify(String),
+}
+
+/// Terminal notifications (Settings › Notifications › Terminal notifications).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Notify {
+    Off,
+    /// A session waits for approval or an answer.
+    #[default]
+    Waiting,
+    /// Also a finished turn and a failed session.
+    All,
+}
+
+impl Notify {
+    pub fn label(self) -> &'static str {
+        match self {
+            Notify::Off => "off",
+            Notify::Waiting => "waiting only",
+            Notify::All => "waiting, done and errors",
+        }
+    }
 }
 
 /// Commands this shell implements against an existing Core API. Everything
@@ -213,6 +237,7 @@ pub struct Ui {
     pub show_archived: bool,
     pub unread_sessions: HashSet<String>,
     pub failed_sessions: HashSet<String>,
+    pub notify: Notify,
     pub view: View,
     pub settings_row: usize,
     pub settings_search: Composer,
@@ -341,6 +366,7 @@ impl App {
                 show_archived: false,
                 unread_sessions: HashSet::new(),
                 failed_sessions: HashSet::new(),
+                notify: Notify::default(),
                 view: View::Session,
                 settings_row: 0,
                 settings_search: Composer::new(),
@@ -532,6 +558,28 @@ impl App {
         v.sort();
         v.dedup();
         v
+    }
+
+    /// The terminal notification an event earns under the Settings choice: a
+    /// session waiting for approval or a question (unless off), and a finished
+    /// turn or a failed session when the choice is all.
+    fn notice(&self, root: &str, kind: &str) -> Option<String> {
+        let what = match kind {
+            "permission.asked" if self.ui.notify != Notify::Off => "needs approval",
+            "question.asked" if self.ui.notify != Notify::Off => "has a question",
+            "turn_end" if self.ui.notify == Notify::All => "finished",
+            "session.error" if self.ui.notify == Notify::All => "failed",
+            _ => return None,
+        };
+        let title = self
+            .state
+            .model
+            .sessions
+            .get(root)
+            .map(|s| s.title.trim())
+            .filter(|t| !t.is_empty())
+            .unwrap_or("Session");
+        Some(format!("Nexus: {title} {what}"))
     }
 
     pub fn session_waiting(&self, id: &str) -> bool {
@@ -2292,6 +2340,11 @@ impl App {
                 if kind == "session.status" && data["status"] == "busy" {
                     self.ui.failed_sessions.remove(&root);
                 }
+                if viewed_root.as_deref() != Some(root.as_str()) {
+                    if let Some(text) = self.notice(&root, &kind) {
+                        self.effects.push(Effect::Notify(text));
+                    }
+                }
                 if viewed_root.as_deref() != Some(root.as_str())
                     && (kind == "session.error"
                         || (kind == "message.added" && data["role"] == "assistant"))
@@ -3220,6 +3273,7 @@ impl App {
             "appearance.theme"
                 | "appearance.monochrome"
                 | "appearance.animations"
+                | "notifications.terminal"
                 | "appearance.sidebar"
                 | "appearance.details"
                 | "appearance.session_scope"
@@ -3258,6 +3312,11 @@ impl App {
             return;
         };
         match row.id.as_str() {
+            "notifications.terminal" => {
+                let modes = [Notify::Off, Notify::Waiting, Notify::All];
+                let now = modes.iter().position(|m| *m == self.ui.notify).unwrap_or(1) as isize;
+                self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
+            }
             "appearance.sidebar" => {
                 let modes = [(true, false), (true, true), (false, false)];
                 let now = modes
@@ -3285,7 +3344,7 @@ impl App {
                 options.reduced_motion = !options.reduced_motion;
                 self.theme = self.theme.with(options);
             }
-            "appearance.sidebar" => self.settings_change(index, 1),
+            "appearance.sidebar" | "notifications.terminal" => self.settings_change(index, 1),
             "appearance.details" => self.ui.right_open = !self.ui.right_open,
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),

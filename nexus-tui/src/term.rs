@@ -109,11 +109,82 @@ pub fn run_external(term: &mut Term, editor: &str, path: &str) -> io::Result<()>
     term.clear()
 }
 
+/// Ask the terminal for an OS notification (best effort, between frames).
+pub fn notify(text: &str) {
+    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    let term = std::env::var("TERM").unwrap_or_default();
+    let mut out = io::stdout();
+    let _ = out.write_all(notify_sequence(text, &program, &term).as_bytes());
+    let _ = out.flush();
+}
+
+/// The notification escape sequence for `text`: OSC 777 (`notify;Nexus;text`)
+/// for terminals that prefer it, OSC 9 (`text`) otherwise. Control characters
+/// are dropped; `;` would end an OSC 777 field, so it becomes `,` there.
+pub fn notify_sequence(text: &str, term_program: &str, term: &str) -> String {
+    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+    let hint = format!("{term_program} {term}").to_ascii_lowercase();
+    let osc777 = ["foot", "kitty", "ghostty", "wezterm"]
+        .iter()
+        .any(|name| hint.contains(name));
+    if osc777 {
+        format!("\x1b]777;notify;Nexus;{}\x07", clean.replace(';', ","))
+    } else {
+        format!("\x1b]9;{clean}\x07")
+    }
+}
+
 /// Restores the terminal when dropped, including on early returns.
 pub struct Guard;
 
 impl Drop for Guard {
     fn drop(&mut self) {
         leave();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::notify_sequence;
+
+    #[test]
+    fn osc9_is_the_default() {
+        assert_eq!(
+            notify_sequence("Nexus: s needs approval", "", "xterm-256color"),
+            "\x1b]9;Nexus: s needs approval\x07"
+        );
+        assert_eq!(
+            notify_sequence("x", "iTerm.app", "xterm-256color"),
+            "\x1b]9;x\x07"
+        );
+    }
+
+    #[test]
+    fn osc777_for_terminals_that_prefer_it() {
+        assert_eq!(
+            notify_sequence("done", "WezTerm", "xterm-256color"),
+            "\x1b]777;notify;Nexus;done\x07"
+        );
+        assert_eq!(
+            notify_sequence("done", "", "foot"),
+            "\x1b]777;notify;Nexus;done\x07"
+        );
+        assert_eq!(
+            notify_sequence("done", "", "xterm-kitty"),
+            "\x1b]777;notify;Nexus;done\x07"
+        );
+        assert_eq!(
+            notify_sequence("done", "ghostty", "xterm-ghostty"),
+            "\x1b]777;notify;Nexus;done\x07"
+        );
+    }
+
+    #[test]
+    fn control_characters_cannot_end_the_sequence() {
+        assert_eq!(notify_sequence("a\x07b\x1b\nc", "", ""), "\x1b]9;abc\x07");
+        assert_eq!(
+            notify_sequence("a;b\x07", "foot", ""),
+            "\x1b]777;notify;Nexus;a,b\x07"
+        );
     }
 }

@@ -720,6 +720,20 @@ export const manifest = {
       "clients": "both",
       "default": true,
       "note": "Terminal bell or OSC 9/777 in the TUI."
+     },
+     {
+      "id": "notifications.terminal",
+      "label": "Terminal notifications",
+      "kind": "choice",
+      "scope": "client",
+      "clients": "tui",
+      "default": "waiting",
+      "options": [
+       "off",
+       "waiting",
+       "all"
+      ],
+      "note": "Sent only for sessions out of view. waiting: approval or question; all adds finished turns and errors."
      }
     ]
    },

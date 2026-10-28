@@ -2,11 +2,11 @@
 
 mod common;
 use common::*;
-use nexus_tui::app::{Effect, WIRED};
+use nexus_tui::app::{App, Effect, Notify, WIRED};
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::{Focus, PaletteKind, Tab, View};
 
-fn app() -> nexus_tui::app::App {
+fn app() -> App {
     with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36))
 }
 
@@ -539,4 +539,105 @@ fn mouse_drag_maps_to_the_scrolled_composer_viewport() {
         a.composer_ref().selected_text().as_deref(),
         Some("line05\nlin")
     );
+}
+
+/// Feed one stored event for `session` (ids continue the fixture's log).
+fn feed(a: &mut nexus_tui::app::App, id: u64, kind: &str, session: &str, data: &str) {
+    let sse = format!(
+        "id: log_c915bfc9b6d826c4:{id}\nevent: {kind}\ndata: {{\"id\": {id}, \"seq\": {id}, \"time\": 0, \"type\": \"{kind}\", \"session_id\": \"{session}\", \"data\": {data}, \"cursor\": \"log_c915bfc9b6d826c4:{id}\"}}\n\n"
+    );
+    for e in common::events(&sse) {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+}
+
+#[test]
+fn terminal_notifications_fire_only_for_sessions_out_of_view() {
+    let mut a = app(); // viewing SESSION
+    feed(
+        &mut a,
+        17,
+        "session.created",
+        "ses_2",
+        r#"{"id": "ses_2", "title": "Other", "agent": "build"}"#,
+    );
+    a.effects.clear();
+    let approval =
+        r#"{"id": "per_2", "session_id": "ses_2", "tool": "bash", "call_id": "c", "args": {}}"#;
+    let waiting = Effect::Notify("Nexus: Other needs approval".into());
+
+    // the default is waiting only: another session's approval is announced
+    assert_eq!(a.ui.notify, Notify::Waiting);
+    feed(&mut a, 18, "permission.asked", "ses_2", approval);
+    assert!(a.effects.contains(&waiting), "{:?}", a.effects);
+
+    // the session in view is never announced
+    a.effects.clear();
+    feed(
+        &mut a,
+        19,
+        "permission.asked",
+        common::SESSION,
+        r#"{"id": "per_3", "session_id": "ses_1a17de160eccc428a38", "tool": "bash", "call_id": "d", "args": {}}"#,
+    );
+    assert!(
+        !a.effects.iter().any(|e| matches!(e, Effect::Notify(_))),
+        "{:?}",
+        a.effects
+    );
+
+    // off announces nothing
+    a.ui.notify = Notify::Off;
+    a.effects.clear();
+    feed(
+        &mut a,
+        20,
+        "question.asked",
+        "ses_2",
+        r#"{"id": "qst_2", "session_id": "ses_2", "call_id": "e", "created": 0, "questions": []}"#,
+    );
+    assert!(a.effects.is_empty(), "{:?}", a.effects);
+
+    // waiting only: a finished turn is not announced
+    a.ui.notify = Notify::Waiting;
+    feed(
+        &mut a,
+        21,
+        "turn_end",
+        "ses_2",
+        r#"{"type": "turn_end", "stop": "end_turn", "steps": 1}"#,
+    );
+    assert!(a.effects.is_empty(), "{:?}", a.effects);
+
+    // all: finished turns and errors are announced too
+    a.ui.notify = Notify::All;
+    feed(
+        &mut a,
+        22,
+        "turn_end",
+        "ses_2",
+        r#"{"type": "turn_end", "stop": "end_turn", "steps": 1}"#,
+    );
+    assert!(a
+        .effects
+        .contains(&Effect::Notify("Nexus: Other finished".into())));
+    feed(
+        &mut a,
+        23,
+        "session.error",
+        "ses_2",
+        r#"{"message": "boom"}"#,
+    );
+    assert!(a
+        .effects
+        .contains(&Effect::Notify("Nexus: Other failed".into())));
+}
+
+#[test]
+fn terminal_notifications_setting_has_its_default_and_cycles() {
+    assert_eq!(Notify::default(), Notify::Waiting);
+    assert_eq!(Notify::Off.label(), "off");
+    assert_eq!(Notify::Waiting.label(), "waiting only");
+    assert_eq!(Notify::All.label(), "waiting, done and errors");
+    assert!(App::settings_wired("notifications.terminal"));
 }
