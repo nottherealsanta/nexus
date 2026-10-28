@@ -127,7 +127,11 @@ session ends with a two-file `patch` edit (CJK comment, a long line), so detail
 high shows a split diff at 200 columns and a unified one at 120 and below. It always stops
 the Cores. `NEXUS_CMD` picks the Core CLI (default `uv run nexus`; for example
 `NEXUS_CMD=/tmp/nexus10-venv/bin/nexus`), `CHROME` the browser (default the
-Playwright headless shell). The node harness in `nexus-tui/tools/webterm`
+Playwright headless shell). `NEXUS_PORT` is the seeded Core's port (default 4799)
+and `NEXUS_PORT_EMPTY` the empty Core's (default 4798); set both when those ports
+are held by another daemon, for example
+`NEXUS_PORT=5298 NEXUS_PORT_EMPTY=5297 tools/shots.sh ROOT OUT`. The ports must
+differ. The Cores it starts keep their homes under `ROOT` and are stopped on exit. The node harness in `nexus-tui/tools/webterm`
 (xterm.js, mouse and hover shots) remains for what keys cannot reach.
 
 ## Commands

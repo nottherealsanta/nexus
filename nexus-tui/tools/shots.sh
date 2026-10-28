@@ -3,10 +3,11 @@
 # `--dump-frame --keys --svg`, convert the SVGs to PNG with headless Chromium and
 # stop the Cores (always). Output: <out>/<name>.{txt,svg,png}.
 #   tools/shots.sh <root> <out>
-# Environment: NEXUS_CMD (Core CLI, default `uv run nexus`), NEXUS_TUI_BIN
-# (default target/debug/nexus-tui, built if missing), CHROME (headless Chromium
-# or chrome-headless-shell; default: the newest Playwright one in
-# ~/Library/Caches/ms-playwright).
+# Environment: NEXUS_CMD (Core CLI, default `uv run nexus`), NEXUS_PORT and
+# NEXUS_PORT_EMPTY (the two Cores' ports, default 4799 and 4798; see
+# webterm/seed.sh), NEXUS_TUI_BIN (default target/debug/nexus-tui, built if
+# missing), CHROME (headless Chromium or chrome-headless-shell; default: the
+# newest Playwright one in ~/Library/Caches/ms-playwright).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="${1:?usage: shots.sh <root> <out>}"
@@ -32,8 +33,10 @@ shot() {
   NEXUS10_HOME="$home" NEXUS_TUI_NO_START=1 NEXUS10_REDUCED_MOTION=1 \
     "$bin" "--$theme" --dump-frame "$size" --out "$out" --name "$name" --svg "$@" >/dev/null
   local w=${size%x*} h=${size#*x}
+  # Cells to pixels (8.4 x 18 px), in integer shell arithmetic: BSD awk and
+  # other awks differ in printf, and this needs no float.
   "$chrome" --headless --disable-gpu --hide-scrollbars --allow-file-access-from-files \
-    --window-size="$(awk "BEGIN{printf \"%d,%d\", $w*8.4+1, $h*18+1}")" \
+    --window-size="$(( w * 84 / 10 + 1 )),$(( h * 18 + 1 ))" \
     --screenshot="$out/$name.png" "file://$out/$name.svg" >/dev/null 2>&1
   echo "shot $out/$name.png"
 }

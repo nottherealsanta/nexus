@@ -4,6 +4,8 @@
 # NEXUS_CMD is the Core CLI (default `uv run nexus`, run from nexus-core);
 # NEXUS_PY runs seed_messages.py (default `uv run python`, or the python beside
 # a NEXUS_CMD that ends in `nexus`, e.g. NEXUS_CMD=/tmp/nexus10-venv/bin/nexus).
+# NEXUS_PORT is the seeded Core's port (default 4799) and NEXUS_PORT_EMPTY the
+# empty Core's (default 4798); set both when those are taken.
 #   tools/webterm/seed.sh <root>            start and seed
 #   tools/webterm/seed.sh <root> stop       stop both
 set -euo pipefail
@@ -14,11 +16,14 @@ mkdir -p "$root"
 cmd="${NEXUS_CMD:-uv run nexus}"
 py="${NEXUS_PY:-uv run python}"
 if [ -z "${NEXUS_PY:-}" ] && [ -n "${NEXUS_CMD:-}" ] && [ "${NEXUS_CMD##*/}" = nexus ]; then py="${NEXUS_CMD%nexus}python"; fi
+port="${NEXUS_PORT:-4799}"
+port_empty="${NEXUS_PORT_EMPTY:-4798}"
+[ "$port" != "$port_empty" ] || { echo "seed.sh: NEXUS_PORT and NEXUS_PORT_EMPTY must differ" >&2; exit 2; }
 # $cmd and $py are word-split on purpose: they may hold `uv run ...`.
 nexus() { (cd "$core" && NEXUS10_HOME="$1" NEXUS_PORT="$2" $cmd "${@:3}"); }
 if [ "${2:-}" = "stop" ]; then
-  nexus "$root/home" 4799 daemon stop || true
-  nexus "$root/home-empty" 4798 daemon stop || true
+  nexus "$root/home" "$port" daemon stop || true
+  nexus "$root/home-empty" "$port_empty" daemon stop || true
   exit 0
 fi
 for h in home home-empty; do rm -rf "$root/$h"; mkdir -p "$root/$h"; chmod 700 "$root/$h"; done
@@ -37,10 +42,10 @@ git -C "$side" -c user.email=seed@example.invalid -c user.name=seed commit -qm i
 printf '\nchanged\n' >> "$side/README.md"
 printf 'pub fn new() {}\n' > "$side/src/new.rs"
 rm "$side/src/old.rs"
-nexus "$root/home-empty" 4798 daemon start
-nexus "$root/home" 4799 daemon start >/dev/null
+nexus "$root/home-empty" "$port_empty" daemon start
+nexus "$root/home" "$port" daemon start >/dev/null
 token=$(python3 -c "import json,sys;print(json.load(open('$root/home/daemon.json'))['token'])")
-api() { curl -sf -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H "Idempotency-Key: $2" -d "$3" "http://127.0.0.1:4799$1"; }
+api() { curl -sf -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H "Idempotency-Key: $2" -d "$3" "http://127.0.0.1:$port$1"; }
 field() { python3 -c "import sys,json;print(json.load(sys.stdin)['id'])"; }
 p1=$(api /api/project p1 "{\"path\":\"$root/ws/nexus-demo\",\"name\":\"nexus-demo\"}" | field)
 p2=$(api /api/project p2 "{\"path\":\"$root/ws/side-project\",\"name\":\"side-project\"}" | field)
@@ -51,8 +56,8 @@ for t in "Refactor the loader" "Fix flaky test in sync" "Release notes for 0.10"
   [ -z "$first" ] && first=$id
 done
 api /api/session s9 "{\"project\":\"$p2\",\"title\":\"Spike: terminal harness\"}" >/dev/null
-nexus "$root/home" 4799 daemon stop >/dev/null
+nexus "$root/home" "$port" daemon stop >/dev/null
 (cd "$core" && NEXUS10_HOME="$root/home" $py "$here/seed_messages.py" "$first")
-nexus "$root/home" 4799 daemon start
-printf 'WEBTERM_HOME=%s\nWEBTERM_HOME_EMPTY=%s\nWEBTERM_PORT=4799\nWEBTERM_PORT_EMPTY=4798\n' "$root/home" "$root/home-empty" > "$root/env"
+nexus "$root/home" "$port" daemon start
+printf 'WEBTERM_HOME=%s\nWEBTERM_HOME_EMPTY=%s\nWEBTERM_PORT=%s\nWEBTERM_PORT_EMPTY=%s\n' "$root/home" "$root/home-empty" "$port" "$port_empty" > "$root/env"
 echo "seeded; env in $root/env"
