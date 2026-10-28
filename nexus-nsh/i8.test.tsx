@@ -2,6 +2,7 @@
 import { describe, expect, open, test } from "nsh/test";
 import { splitAlert } from "./src/store";
 import { approvalParts, clock } from "./src/ui/composer";
+import { detailOf } from "./src/ui/timeline";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -46,6 +47,16 @@ describe("waiting card (D14)", () => {
     expect(e.table.map((r) => r[0])).toEqual(["path"]);
     expect(e.diff.length).toBe(11); // 21 items: 11 rows and "10 more rows"
     expect(e.more).toBe(10);
+  });
+
+  test("replacement and write diffs carry no space after the sign, in the timeline and in the card", () => {
+    const args = JSON.stringify({ path: "a.py", old_string: "x = 1\ny", new_string: "x = 2" });
+    expect(detailOf("edit", args, undefined, false)).toEqual([
+      { text: "@@ a.py", tone: "info" }, { text: "-x = 1", tone: "del" }, { text: "-y", tone: "del" }, { text: "+x = 2", tone: "add" },
+    ]);
+    expect(detailOf("write", JSON.stringify({ path: "b.py", content: "hi" }), undefined, false)[1]).toEqual({ text: "+hi", tone: "add" });
+    const card = approvalParts({ ...edit, args: { path: "a.py", old_string: "x = 1", new_string: "x = 2" } } as any).diff;
+    expect(card.map((l) => l.text)).toEqual(["@@ a.py", "-x = 1", "+x = 2"]);
   });
 
   test("an approval shows the title, timer, table and the choice list; unoffered choices say why", async () => {

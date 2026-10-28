@@ -291,8 +291,8 @@ export function detailOf(name: string, args: string | undefined, output: string 
         }));
       }
       const out: { text: string; tone: "add" | "del" | "info" }[] = [{ text: `@@ ${o.path ?? ""}`, tone: "info" }];
-      for (const l of detailLines(String(o.old_string ?? o.old ?? ""))) out.push({ text: `- ${l}`, tone: "del" });
-      for (const l of detailLines(String(o.new_string ?? o.new ?? ""))) out.push({ text: `+ ${l}`, tone: "add" });
+      for (const l of detailLines(String(o.old_string ?? o.old ?? ""))) out.push({ text: `-${l}`, tone: "del" });
+      for (const l of detailLines(String(o.new_string ?? o.new ?? ""))) out.push({ text: `+${l}`, tone: "add" });
       return out;
     } catch { /* fall through to the output */ }
   }
@@ -300,7 +300,7 @@ export function detailOf(name: string, args: string | undefined, output: string 
     try {
       const o = JSON.parse(args ?? "{}");
       const out: { text: string; tone: "add" | "info" }[] = [{ text: `+ ${o.path ?? ""}`, tone: "info" }];
-      for (const l of detailLines(String(o.content ?? ""))) out.push({ text: `+ ${l}`, tone: "add" });
+      for (const l of detailLines(String(o.content ?? ""))) out.push({ text: `+${l}`, tone: "add" });
       return out;
     } catch { /* fall through */ }
   }

@@ -77,11 +77,6 @@ function WorkspaceTabs() {
             <Text class="text-[13px] leading-5 font-semibold text-foreground">New session</Text>
           </Button>
         </If>
-        <If when={current() === "settings"}>
-          <Button selected onPress={() => run("app.settings")} accessibilityLabel="Settings" testID="settings-tab" class={`shrink-0 rounded-(--radius) bg-background px-2.5 h-7 ${FOCUS}`}>
-            <Text class="text-[13px] leading-5 font-semibold text-foreground">Settings</Text>
-          </Button>
-        </If>
       </Scroll>
       <Button onPress={() => run("session.new")} accessibilityLabel="New session" testID="new-session-tab-add" class={`shrink-0 items-center justify-center rounded-(--radius) w-7 h-7 text-muted-foreground hover:bg-accent ${FOCUS}`}>
         <Text class="text-[17px] leading-5">+</Text>

@@ -452,6 +452,7 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     return () => clearInterval(id);
   });
   // The modified keys of the card, bound while it shows. Enter belongs to the focused choice, never a global binding.
+  effect(() => { p.w().id; choice.set(0); });
   effect(() => {
     const k = (id: string) => { const key = byId.get(id)?.keys?.nsh; return key ? toKeystroke(key) : null; };
     const map: Record<string, () => void> = {};
@@ -459,6 +460,17 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
     if (p.count > 1) { bind("waiting.next", () => run("waiting.next")); bind("waiting.prev", () => run("waiting.prev")); }
     const a = approval(), q = question();
     if (a && live()) bind("waiting.deny", () => void reply(a, false));
+    if (a && live()) {
+      const move = (d: number) => {
+        const list = approvalChoices(a);
+        let i = choice();
+        for (let n = 0; n < list.length; n++) { i = (i + d + list.length) % list.length; if (offered(list[i])) { choice.set(i); return; } }
+      };
+      map["down"] = () => move(1);
+      map["up"] = () => move(-1);
+      // Enter belongs to the composer while it holds text.
+      map["enter"] = () => { if (!(draft()[draftKey()] ?? "").length) approvalChoices(a)[choice()]?.run?.(); };
+    }
     if (q && live()) bind("waiting.submit_answers", () => void submitQuestion(q));
     return bindOpenKeys(map);
   });
@@ -492,15 +504,21 @@ function WaitBody(p: { w: () => { kind: "approval" | "question"; id: string; ses
   );
 }
 
+type Choice = { id: string; title: string; cmd: string; run?: () => void; why?: string };
+const approvalChoices = (a: Approval): Choice[] => [
+  { id: "allow-once", title: "Allow once", cmd: "waiting.allow_once", run: () => void reply(a, true) },
+  { id: "allow-session", title: "Allow for session", cmd: "waiting.allow_session", why: "not offered by Core yet" },
+  { id: "deny", title: "Deny", cmd: "waiting.deny", run: () => void reply(a, false) },
+  { id: "deny-note", title: "Deny with a note", cmd: "waiting.deny_note", why: "Core does not support notes yet" },
+];
+/** The selected choice of the approval card (`▸`); arrows move it over the offered choices. */
+const choice = signal(0);
+const offered = (c: Choice) => !c.why && !!c.run && live();
+
 function ApprovalBody(p: { a: Approval }) {
   const a = p.a;
   const parts = () => approvalParts(a);
-  const rows = (): { id: string; title: string; cmd: string; run?: () => void; why?: string }[] => [
-    { id: "allow-once", title: "Allow once", cmd: "waiting.allow_once", run: () => void reply(a, true) },
-    { id: "allow-session", title: "Allow for session", cmd: "waiting.allow_session", why: "not offered by Core yet" },
-    { id: "deny", title: "Deny", cmd: "waiting.deny", run: () => void reply(a, false) },
-    { id: "deny-note", title: "Deny with a note", cmd: "waiting.deny_note", why: "Core does not support notes yet" },
-  ];
+  const rows = () => approvalChoices(a);
   return (
     <View class="gap-2.5">
       <If when={parts().table.length > 0}>
@@ -530,9 +548,9 @@ function ApprovalBody(p: { a: Approval }) {
               return (
                 <Button onPress={() => r().run?.()} disabled={off()} testID={r().id}
                   accessibilityLabel={off() ? `${r().title}, unavailable: ${reason()}` : r().title}
-                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === 0 && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-selection"} ${FOCUS}`}>
-                  <Text class={`w-3 text-[13px] leading-5 ${off() ? "text-transparent" : "text-primary"}`}>{i() === 0 && !off() ? "▸" : " "}</Text>
-                  <Text class={`w-10 shrink-0 text-center text-xs leading-5 font-bold rounded-(--radius) px-1.5 ${off() ? "bg-muted text-muted-foreground" : "bg-raised text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
+                  class={`group/row relative flex-row items-center gap-2.5 rounded-(--radius) px-2 ${isNarrow() ? "min-h-11" : "min-h-8"} ${i() === choice() && !off() ? "bg-selection" : ""} ${off() ? "" : "hover:bg-selection"} ${FOCUS}`}>
+                  <Text class={`w-3 text-[13px] leading-5 ${off() ? "text-transparent" : "text-primary"}`}>{i() === choice() && !off() ? "▸" : " "}</Text>
+                  <Text style={{ numberOfLines: 1 }} class={`w-16 shrink-0 text-center text-xs leading-5 font-bold rounded-(--radius) px-1.5 ${off() ? "bg-muted text-muted-foreground" : "bg-raised text-foreground"}`}>{keyLabel(byId.get(r().cmd)!) ?? ""}</Text>
                   <Text class={`text-[13px] leading-5 ${off() ? "text-muted-foreground" : r().id === "allow-once" ? "font-semibold text-foreground" : "text-foreground"}`}>{r().title}</Text>
                   <If when={off()}><Text testID={`${r().id}-reason`} class={`flex-1 min-w-0 ${T.meta}`}>{reason()}</Text></If>
                 </Button>
