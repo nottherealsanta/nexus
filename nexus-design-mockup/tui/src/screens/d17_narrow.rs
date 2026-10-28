@@ -1,5 +1,5 @@
-//! D17 — responsive behaviour: 80x24, its drawer, and the 100-119 column layout.
-use super::{common, Shot, DL};
+//! D17 — responsive behaviour: 80x24, its drawer,.
+use super::{Shot, DL};
 use crate::kit::{bold, trunc, P};
 use crate::shell::{agent_title, code_style, group, prose, prose_segs, thought, user_block, Busy, Centre, Shell};
 use ratatui::{buffer::Buffer, layout::Rect};
@@ -11,7 +11,7 @@ fn header(p: &mut P) {
     p.fill(0, 0, w, 1, "surface.sidebar");
     p.put(1, 0, &[(t.g("closed_box"), t.secondary())]);
     p.put(4, 0, &[("… ", t.muted()), (t.g("crumb"), t.muted()), (" Refactor the loader", bold(t.primary()))]);
-    p.put_r(w - 7, 0, &[("◆", t.accent()), (" waiting", t.accent())]);
+    p.put_r(w - 10, 0, &[("◆", t.accent()), (" waiting", t.accent())]);
     p.put_r(w - 1, 0, &[(t.g("unread"), t.fg("status.info")), (" 1", t.muted()), ("  ", t.muted()), (t.g("closed_box"), t.secondary())]);
 }
 
@@ -63,17 +63,9 @@ fn drawer(p: &mut P) {
     }
 }
 
-fn mid_110(p: &mut P) {
-    let s = Shell { right: false, left_w: 28, ..Shell::default() };
-    let c = s.draw(p);
-    let y = common::turn_one(p, c, 2);
-    user_block(p, c, y, &["Go ahead, but keep the change small."], 2, "3:44 PM", false, false);
-}
-
 pub fn shots() -> Vec<Shot> {
     vec![
         Shot { id: "d17-80x24", caption: "80x24: one pane, toggles and breadcrumb only, wrapped footer", w: 80, h: 24, modes: DL, ascii: false, draw: narrow },
         Shot { id: "d17-80x24-drawer", caption: "80x24 with the left drawer over a scrimmed page", w: 80, h: 24, modes: DL, ascii: false, draw: drawer },
-        Shot { id: "d17-110x32", caption: "100-119 columns: left sidebar docked, right closed", w: 110, h: 32, modes: DL, ascii: false, draw: mid_110 },
     ]
 }

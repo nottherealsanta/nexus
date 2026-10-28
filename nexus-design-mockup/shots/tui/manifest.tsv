@@ -25,7 +25,6 @@ d15-alerts	200	50	Toasts, a banner and the jump-to-latest pill
 d16-files	200	50	Files tab and the file view with search
 d17-80x24	80	24	80x24: one pane, toggles and breadcrumb only, wrapped footer
 d17-80x24-drawer	80	24	80x24 with the left drawer over a scrimmed page
-d17-110x32	110	32	100-119 columns: left sidebar docked, right closed
 d18-empty	200	50	Empty workspace: wordmark, no projects
 d18-offline	200	50	Offline: header status, banner, draft kept
 d18-loading	200	50	Loading sessions without layout shift

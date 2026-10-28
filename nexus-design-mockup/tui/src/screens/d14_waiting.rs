@@ -9,7 +9,7 @@ fn scene(p: &mut P) -> Centre {
     let t = p.t;
     let s = Shell { left_w: 34, right_w: 36, busy: Busy::Waiting, ..Shell::default() };
     let c = s.draw(p);
-    group(p, c, 2, &[("Context", bold(t.secondary())), (" · 4 items · 1.1k tokens", t.muted())], "", false, false);
+    group(p, c, 2, &[("Context", bold(t.secondary())), (" · 4 items · 17.6k tokens", t.muted())], "", false, false);
     group(p, c, 4, &[("Read 2 files, ran 1 command", t.secondary())], "1.4s", false, false);
     group(p, c, 6, &[("Edited 1 file", t.secondary()), ("  ", t.muted()), ("+12", t.fg("diff.add")), (" ", t.muted()), ("−3", t.fg("diff.del"))], "0.9s", false, false);
     let y = 8 + user_block(p, c, 8, &["Run the loader tests, then fix whatever fails."], 2, "3:44 PM", false, false) + 1;

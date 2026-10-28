@@ -3,8 +3,8 @@ use super::{Shot, DL};
 use crate::kit::{bold, P};
 use crate::shell::{backdrop, Busy, Shell, Tab};
 
-/// The half-block NEXUS wordmark: two rows of ▀▄█ glyphs, four cells per letter.
-const MARK: [&str; 2] = ["█▀▄█  █▀▀▀  ▀▄▄▀  █  █  █▀▀▀", "█ ▀█  █▄▄▄  ▄▀▀▄  ▀▄▄▀  ▄▄▄█"];
+/// The half-block NEXUS wordmark: two rows of ▀▄█ glyphs, five cells per letter.
+const MARK: [&str; 2] = ["█▀▄ █ ████▀ ▀▄ ▄▀ █   █ ▄▀▀▀▀", "█  ▀█ █▄▄▄▄ ▄▀ ▀▄ ▀▄▄▄▀ ▄▄▄▄▀"];
 
 fn empty_side(p: &mut P, lw: u16, find: &str, body: &[&str]) {
     let t = p.t;

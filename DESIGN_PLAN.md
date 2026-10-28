@@ -398,6 +398,7 @@ One modal recipe for every overlay:
 - **Section headings:** UPPERCASE bold muted, with a blank row before each one except the first.
 - **Footer:** key hints in the bottom border (`↑↓ move · enter run · esc close`) and a count
   (`12 of 99`) on the right.
+- **Settings** has 12 sections, more than fit at the 70% height cap. At ≥ 160 columns it gets a section index on the left (the 12 names, the current one on the selection band); narrower, the list scrolls and the footer names the next section.
 - **Confirm:** a body text, then the buttons: `[ Cancel ]` (the safe default, selected) and
   `[ Delete ]` in `status.error`.
 - **NSH:** a 10 px radius dialog, a 1 px `--border-default` border, a shadow
@@ -433,7 +434,7 @@ One modal recipe for every overlay:
   three at most, then `+N more`. Old Nexus anatomy:
   - `raised`, a `▌` in the level colour, the level glyph, a bold title and `×` on the right.
   - The bottom hairline shrinks over the toast's lifetime.
-- **Banner:** one row at the top of the page on `panel`. The level glyph and the first words
+- **Banner:** one row at the top of the page on `panel`; it pushes the timeline down one row and never covers it. The level glyph and the first words
   are in the level colour; actions are on the right (`r retry · × hide`).
 - **Jump to latest:** a raised pill, right-aligned on the row above the composer card:
   `↓ 3 new · end`. It never overlaps content.

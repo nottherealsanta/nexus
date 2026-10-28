@@ -115,20 +115,20 @@ fn sheet(p: &mut P) {
     // Left column: idle, draft, busy, narrow shedding.
     let mut y = 1;
     cap(p, lx, y, "IDLE", "placeholder, cursor on the first letter, context meter right");
-    y = card(p, lx, y + 2, w, &Card::default());
+    y = card(p, lx, y + 1, w, &Card::default());
     strip(p, lx, y, w, false, true);
     y += 3;
     cap(p, lx, y, "DRAFT", "multi-line; the card grows, the control row stays at its foot");
-    y = card(p, lx, y + 2, w, &Card { lines: &["Add a regression test that counts parses, and keep the change small.", "Also check that edits to the manifest still show up after the cache is warm."], ..Card::default() });
+    y = card(p, lx, y + 1, w, &Card { lines: &["Add a regression test that counts parses, and keep the change small.", "Also check that edits to the manifest still show up after the cache is warm."], ..Card::default() });
     strip(p, lx, y, w, false, true);
     y += 3;
     cap(p, lx, y, "BUSY", "live row above the card; the meter becomes `esc stop`");
-    live_row(p, lx + 3, y + 2, 20);
-    y = card(p, lx, y + 3, w, &Card { busy: true, ..Card::default() });
+    live_row(p, lx + 3, y + 1, 20);
+    y = card(p, lx, y + 2, w, &Card { busy: true, ..Card::default() });
     strip(p, lx, y, w, true, false);
     y += 3;
     cap(p, lx, y, "NARROW", "sheds effort, then the provider, then the meter");
-    y += 2;
+    y += 1;
     for (cw, c) in [(70u16, Card { effort: false, ..Card::default() }), (56, Card { effort: false, prov: false, ..Card::default() }), (44, Card { effort: false, prov: false, meter: false, ..Card::default() })] {
         y = card(p, lx, y, cw, &c) + 1;
     }

@@ -34,22 +34,25 @@ pub fn to_svg(buf: &Buffer, dfg: &str, dbg: &str) -> String {
     let mut blocks: Vec<String> = Vec::new();
     for y in 0..a.height {
         let row = y as f32 * ch;
+        // Background runs: each cell's painted colour (reverse video paints the fg, default fg = page fg).
+        let paint = |c: &ratatui::buffer::Cell| -> Option<String> {
+            if c.modifier.contains(Modifier::REVERSED) {
+                Some(if c.fg == Color::Reset { dfg.to_string() } else { hex(c.fg, dfg) })
+            } else if c.bg == Color::Reset {
+                None
+            } else {
+                Some(hex(c.bg, dbg))
+            }
+        };
         let mut x = 0;
         while x < a.width {
-            let c = &buf[(x, y)];
-            let rev = c.modifier.contains(Modifier::REVERSED);
-            let bg = if rev { c.fg } else { c.bg };
+            let bg = paint(&buf[(x, y)]);
             let mut end = x + 1;
-            while end < a.width && {
-                let n = &buf[(end, y)];
-                (if n.modifier.contains(Modifier::REVERSED) { n.fg } else { n.bg }) == bg
-            } {
+            while end < a.width && paint(&buf[(end, y)]) == bg {
                 end += 1;
             }
-            if bg != Color::Reset {
-                let _ = write!(s, r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{ch}" fill="{}"/>"##, x as f32 * cw, row, (end - x) as f32 * cw, hex(bg, dbg));
-            } else if rev {
-                let _ = write!(s, r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{ch}" fill="{dfg}"/>"##, x as f32 * cw, row, (end - x) as f32 * cw);
+            if let Some(col) = bg {
+                let _ = write!(s, r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{ch}" fill="{col}"/>"##, x as f32 * cw, row, (end - x) as f32 * cw);
             }
             x = end;
         }
