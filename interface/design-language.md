@@ -78,6 +78,10 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 - The location strip under the composer names the project in bold, then its path (muted),
   `⌥ branch` and `checkout` (muted) or `worktree` (bold violet), with
   `ctrl+p commands` muted at the right; there is no accent underline. Counts abbreviate as `1.2K` and `3.4M`.
+- Breakpoints (D17): both sidebars docked from 120 columns (34 / 36 from 160, else 28 / 30),
+  the left only at 100-119, and below 100 drawers of 34 / 36 cells over the scrim with a header
+  of toggles, status and a left-truncated breadcrumb. The empty and connecting screens carry the
+  `_/` N splash logo in the accent colour (bold in mono), one block centred above the title.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and

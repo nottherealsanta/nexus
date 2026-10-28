@@ -314,11 +314,11 @@ fn connection_states_become_banners_and_a_blocking_dialog() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(
-        all.contains("Disconnected from Core") && all.contains("reconnecting in 4 s"),
+        all.contains("Disconnected from Core") && all.contains("retrying in 4s"),
         "{all}"
     );
     assert!(all.contains("+1"), "stacked banners count");
-    assert!(rows[0].contains("reconnecting"));
+    assert!(rows[0].contains("\u{2715} offline"), "{:?}", rows[0]);
     // read-only: mutating commands are disabled with a reason; the view stays
     assert!(all.contains("Hello"));
     let send = app.manifest.command("session.send").unwrap().clone();
@@ -627,7 +627,19 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
     let all = joined(&rows);
     assert!(all.contains("\u{25be} src"), "{all}");
     let child = rows.iter().find(|row| row.contains("b.rs")).unwrap();
-    assert!(child.starts_with("   "), "child is indented: {child:?}");
+    // one indent guide per ancestor, then the row indented under its folder
+    assert!(
+        child.starts_with(" \u{2502}"),
+        "child has an indent guide: {child:?}"
+    );
+    assert!(
+        col_of(child, "b.rs")
+            > col_of(
+                rows.iter().find(|r| r.contains("\u{25be} src")).unwrap(),
+                "src"
+            ),
+        "child is indented: {child:?}"
+    );
 
     press(&mut app, &["left"]);
     let (_, rows) = draw(&mut app, 120, 36);
@@ -686,7 +698,9 @@ fn file_actions_copy_mention_and_switch_the_root() {
     );
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
-    assert!(all.contains("ws \u{b7} feature"), "{all}");
+    // D16: the root header is the checkout name in capitals, then its branch
+    assert!(all.contains("\u{25be} WS"), "{all}");
+    assert!(all.contains("\u{2325} feature"), "{all}");
     assert!(app.hits.rect_of(&Target::FilesRoot).is_some());
     app.effects.clear();
     app.execute("files.root_toggle");
@@ -849,7 +863,7 @@ fn file_view_search_filters_jumps_and_ends_before_closing() {
     press(&mut app, &["/"]);
     typing(&mut app, "needle");
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("/needle  2 matches"), "{rows:?}");
+    assert!(joined(&rows).contains("/ needle  2 matches"), "{rows:?}");
 
     press(&mut app, &["enter"]);
     assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0));
@@ -884,7 +898,11 @@ fn file_view_highlights_matches_and_announces_the_line_range() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("lines 1-"), "{all}");
-    assert!(all.contains("of 101 · scroll"), "{all}");
+    assert!(all.contains("of 101"), "{all}");
+    assert!(
+        !all.contains("scroll"),
+        "the range moved to the header: {all}"
+    );
 
     press(&mut app, &["pagedown"]);
     let scroll = app.ui.file_scroll;
@@ -898,7 +916,7 @@ fn file_view_highlights_matches_and_announces_the_line_range() {
     typing(&mut app, "TARGET");
     press(&mut app, &["enter"]);
     let (buf, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("  1 matches"), "{rows:?}");
+    assert!(joined(&rows).contains("1 of 1"), "{rows:?}");
     let y = rows
         .iter()
         .position(|row| row.contains("target here"))
@@ -2753,4 +2771,376 @@ fn hovering_an_estimated_count_says_estimated_and_narrow_widths_clip_with_an_ell
     let (_, rows) = draw(&mut app, 80, 24);
     assert!(joined(&rows).contains("estimated"), "{}", joined(&rows));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+// ---- DESIGN_PLAN I10: files, narrow layouts and states -------------------------
+
+#[test]
+fn the_empty_workspace_shows_the_centred_logo_and_the_next_step() {
+    use nexus_tui::paint::{logo_width, LOGO};
+    for tier in [Tier::TrueColor, Tier::Mono] {
+        let mut app = empty(opts(Mode::Dark, tier), (120, 36));
+        app.state.model.projects.clear();
+        let (buf, rows) = draw(&mut app, 120, 36);
+        let all = joined(&rows);
+        assert!(all.contains("No projects yet"), "{all}");
+        assert!(
+            all.contains("alt+3 add a project \u{b7} ctrl+p commands"),
+            "{all}"
+        );
+        // five logo rows, one block: every row starts at the same column, so
+        // the strokes keep their shape, and the block is centred on the page
+        let centre = app.regions.timeline;
+        let top = rows
+            .iter()
+            .position(|r| r.contains(LOGO[0].trim()))
+            .expect("logo");
+        let want = centre.x + 1 + ((centre.width - 2) as usize - logo_width()) as u16 / 2;
+        for (i, row) in LOGO.iter().enumerate() {
+            let y = top + i;
+            let lead = row.len() - row.trim_start().len();
+            assert_eq!(
+                col_of(&rows[y], row.trim()) as u16,
+                want + lead as u16,
+                "logo row {i}: {:?}",
+                rows[y]
+            );
+        }
+        // accent, and bold in monochrome only
+        let mark = (want..want + logo_width() as u16)
+            .find(|x| buf[(*x, top as u16)].symbol() == "_")
+            .unwrap();
+        let cell = &buf[(mark, top as u16)];
+        if tier == Tier::Mono {
+            assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        } else {
+            assert_eq!(cell.fg, app.theme.color("interactive.accent").unwrap());
+            assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        }
+        // the title is below the logo, centred on the same axis
+        let title = rows
+            .iter()
+            .position(|r| r.contains("No projects yet"))
+            .unwrap();
+        assert!(title > top + LOGO.len(), "title under the logo");
+    }
+}
+
+#[test]
+fn the_connecting_screen_uses_the_same_logo_rows() {
+    use nexus_tui::state::ConnectionState as C;
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.state.connection = C::Connecting;
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    for row in nexus_tui::paint::LOGO {
+        assert!(all.contains(row.trim()), "{row:?} missing:\n{all}");
+    }
+    assert!(all.contains("Connecting to Nexus Core"), "{all}");
+    // a short page drops the logo rather than the text
+    let (_, rows) = draw(&mut app, 120, 12);
+    let all = joined(&rows);
+    assert!(all.contains("Connecting to Nexus Core"), "{all}");
+}
+
+#[test]
+fn offline_says_so_in_the_header_the_banner_and_the_composer() {
+    use nexus_tui::state::ConnectionState as C;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "draft");
+    app.state.connection = C::Reconnecting {
+        attempt: 1,
+        retry_in: std::time::Duration::from_secs(4),
+        reason: "stream closed".into(),
+    };
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(rows[0].contains("\u{2715} offline"), "{:?}", rows[0]);
+    assert!(
+        all.contains("Disconnected from Core \u{b7} retrying in 4s"),
+        "{all}"
+    );
+    // an empty composer says why it cannot send; the draft is never dropped
+    app.composer().clear();
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        joined(&rows).contains("Reconnecting to Core\u{2026} your draft is kept"),
+        "{}",
+        joined(&rows)
+    );
+    // no projects loaded: the page does not claim there are none
+    app.state.model.projects.clear();
+    app.state.model.sessions.clear();
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(all.contains("Not connected to Core"), "{all}");
+    assert!(!all.contains("No projects yet"), "{all}");
+}
+
+#[test]
+fn the_files_root_header_and_indent_guides_follow_d16() {
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = app.current_project().unwrap();
+    let dir = app.files_root().unwrap();
+    app.state.project_worktrees.insert(
+        project.clone(),
+        serde_json::json!({"project_directory": dir, "worktrees": [
+            {"path": dir, "branch": "trunk", "main": true}
+        ]}),
+    );
+    app.execute("sidebar.tab.files");
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: Some(SESSION.into()),
+        path: String::new(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [
+            {"name": "src", "kind": "directory"},
+            {"name": "a.rs", "kind": "file", "git_status": " M"},
+        ]})),
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    let head = rows
+        .iter()
+        .find(|r| r.contains("\u{2325} trunk"))
+        .expect("root header");
+    let name = app.files_header().unwrap().name.to_uppercase();
+    assert!(head.contains(&name), "{head:?}");
+    assert!(
+        col_of(head, "\u{2325}") > col_of(head, &name) + name.len(),
+        "the branch sits at the right: {head:?}"
+    );
+    assert!(
+        !head.chars().take(28).any(|c| c == '\u{25be}'),
+        "one checkout cannot be switched: {head:?}"
+    );
+    assert!(app.hits.rect_of(&Target::FilesRoot).is_none());
+
+    // Enter expands `src`; its child gets one guide, a grandchild two.
+    press(&mut app, &["enter"]);
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: Some(SESSION.into()),
+        path: "src".into(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [{"name": "deep", "kind": "directory"}]})),
+    });
+    press(&mut app, &["down", "enter"]);
+    app.apply_sync(SyncMsg::Files {
+        project,
+        session: Some(SESSION.into()),
+        path: "src/deep".into(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [{"name": "x.rs", "kind": "file"}]})),
+    });
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let y = rows.iter().position(|r| r.contains("x.rs")).unwrap();
+    assert!(
+        rows[y].starts_with(" \u{2502} \u{2502}"),
+        "two guides: {:?}",
+        rows[y]
+    );
+    let border = app.theme.color("border.default").unwrap();
+    assert_eq!(buf[(1, y as u16)].fg, border, "guides use border.default");
+    let deep = rows.iter().position(|r| r.contains("deep")).unwrap();
+    // (the selected row carries the focus bar in column 0)
+    let guides = |row: &str| row.chars().skip(1).take(4).collect::<String>();
+    assert_eq!(
+        guides(&rows[deep]),
+        "\u{2502} \u{25be} ",
+        "{:?}",
+        rows[deep]
+    );
+
+    // Git letters take their status colour through git_marker.
+    let a = rows.iter().position(|r| r.contains("a.rs")).unwrap();
+    let x = app.regions.left.unwrap().right() - 3;
+    assert_eq!(buf[(x, a as u16)].symbol(), "M");
+    assert_eq!(
+        buf[(x, a as u16)].fg,
+        app.theme.color("status.warning").unwrap()
+    );
+}
+
+#[test]
+fn the_file_view_has_a_header_a_gutter_and_a_search_row() {
+    let lines: String = (1..=40).map(|n| format!("line {n} needle\n")).collect();
+    let mut app = open_file_view(&lines);
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let r = app.regions.timeline;
+    let head = &rows[r.y as usize];
+    assert!(head.contains("hello.txt"), "{head:?}");
+    // the basename is bold, the directory is not
+    let at = col_of(head, "hello.txt") as u16;
+    assert!(buf[(at, r.y)]
+        .modifier
+        .contains(ratatui::style::Modifier::BOLD));
+    assert!(!buf[(at - 2, r.y)]
+        .modifier
+        .contains(ratatui::style::Modifier::BOLD));
+    // the range sits at the right edge of the column
+    let page = nexus_tui::paint::file_page(r.height);
+    assert!(
+        head.trim_end().ends_with(&format!("lines 1-{page} of 40")),
+        "{head:?}"
+    );
+    // the gutter: right-aligned numbers, then `\u{2502}`
+    let first = rows
+        .iter()
+        .position(|r| r.contains("line 1 needle"))
+        .unwrap();
+    assert_eq!(first as u16, r.y + 2, "a blank row under the header");
+    assert!(
+        rows[first].contains("  1 \u{2502} line 1"),
+        "{:?}",
+        rows[first]
+    );
+    assert!(
+        rows[first + 9].contains(" 10 \u{2502} line 10"),
+        "{:?}",
+        rows[first + 9]
+    );
+    let bar = col_of(&rows[first], "\u{2502}") as u16;
+    assert_eq!(
+        buf[(bar, first as u16)].fg,
+        app.theme.color("border.default").unwrap()
+    );
+    // the page is the rows between the blank row and the search row
+    assert!(page > 10 && page < 40, "{page}");
+    assert!(
+        rows[r.bottom() as usize - 1].trim().is_empty(),
+        "no search yet"
+    );
+    assert!(!joined(&rows).contains(&format!("line {} needle", page + 1)));
+
+    press(&mut app, &["/"]);
+    typing(&mut app, "needle");
+    press(&mut app, &["enter", "n"]);
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let bottom = &rows[r.bottom() as usize - 1];
+    assert!(bottom.contains("/ needle  2 of 40"), "{bottom:?}");
+    assert!(
+        bottom
+            .trim_end()
+            .ends_with("n next \u{b7} N prev \u{b7} esc end"),
+        "{bottom:?}"
+    );
+    // every match is on the selection band; the current one is reversed
+    let sel = app.theme.color("interactive.selection").unwrap();
+    let line = |n: usize| {
+        rows.iter()
+            .position(|r| r.contains(&format!("line {n} needle")))
+            .unwrap() as u16
+    };
+    let x = |n: usize| col_of(&rows[line(n) as usize], "needle") as u16;
+    // (`n` scrolled the second match to the top)
+    assert!(
+        buf[(x(3), line(3))].bg == sel
+            && !buf[(x(3), line(3))]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert!(buf[(x(2), line(2))]
+        .modifier
+        .contains(ratatui::style::Modifier::REVERSED));
+    // while typing the hints change
+    press(&mut app, &["/"]);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows[r.bottom() as usize - 1].contains("enter next"),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn from_100_to_119_columns_the_right_sidebar_starts_closed_and_still_opens() {
+    use nexus_tui::layout::Breakpoint;
+    assert!(!Breakpoint::of(110).right_open_by_default());
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (110, 30));
+    let (_, rows) = draw(&mut app, 110, 30);
+    assert!(app.regions.right.is_none(), "closed by default");
+    assert!(app.regions.left.is_some(), "the left stays docked");
+    assert!(!app.regions.narrow);
+    assert!(!joined(&rows).contains("SESSION"));
+    press(&mut app, &["alt+b"]);
+    let (_, rows) = draw(&mut app, 110, 30);
+    assert!(app.regions.right.is_some(), "the toggle docks it");
+    assert!(joined(&rows).contains("SESSION"));
+    assert!(app.regions.centre.width >= nexus_tui::layout::MIN_CENTRE);
+}
+
+#[test]
+fn a_narrow_drawer_sits_over_the_scrim_and_hit_tests_inside_and_out() {
+    use nexus_tui::ui::Side;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (80, 24));
+    let (plain, _) = draw(&mut app, 80, 24);
+    let probe = (60, 12);
+    let before = plain[probe].fg;
+    press(&mut app, &["ctrl+b"]);
+    let (buf, rows) = draw(&mut app, 80, 24);
+    let (side, rect) = app.regions.drawer.expect("drawer");
+    assert_eq!((side, rect.width), (Side::Left, 34));
+    // the page behind is dimmed by the scrim; the header keeps its toggles
+    assert_ne!(buf[probe].fg, before, "scrim over the centre");
+    assert!(rows[0].contains("New session"), "{:?}", rows[0]);
+    assert_eq!(buf[(1, 0)].fg, plain[(1, 0)].fg, "the header is not dimmed");
+    // inside the drawer: its own targets; outside: the scrim, which closes it
+    assert!(app
+        .hits
+        .at(rect.x + 3, rect.y + 3)
+        .is_some_and(|t| t != &Target::Scrim));
+    assert_eq!(
+        app.hits.at(rect.right() + 2, rect.y + 3),
+        Some(&Target::Scrim)
+    );
+    assert_eq!(
+        app.hits
+            .at(rect.right() - 1, rect.bottom() - 1)
+            .map(|t| t != &Target::Scrim),
+        Some(true)
+    );
+    click(&mut app, rect.right() + 2, rect.y + 3);
+    assert!(
+        app.ui.drawer.is_none(),
+        "a click on the scrim closes the drawer"
+    );
+    // the right drawer is 36 cells and sits at the right edge
+    press(&mut app, &["alt+b"]);
+    draw(&mut app, 80, 24);
+    let (side, rect) = app.regions.drawer.unwrap();
+    assert_eq!((side, rect.width, rect.right()), (Side::Right, 36, 80));
+    assert_eq!(app.hits.at(2, rect.y + 3), Some(&Target::Scrim));
+}
+
+#[test]
+fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (60, 24));
+    let (_, rows) = draw(&mut app, 60, 24);
+    let head = &rows[0];
+    assert!(
+        head.starts_with(" \u{25e7}") || head.starts_with(" \u{25a1}"),
+        "{head:?}"
+    );
+    assert!(head.contains("New session"), "{head:?}");
+    // no tab strip: no `+` new-session tab and no close crosses
+    assert!(
+        !head.contains('\u{d7}') && !head.contains(" + "),
+        "{head:?}"
+    );
+    // a long title keeps its end and loses its start
+    let id = app.viewed_id().unwrap().to_owned();
+    app.state.model.sessions.get_mut(&id).unwrap().title =
+        "An exceedingly long session title that cannot fit the header".into();
+    let (_, rows) = draw(&mut app, 60, 24);
+    let head = &rows[0];
+    assert!(
+        head.contains("\u{2026}") && head.contains("cannot fit the header"),
+        "{head:?}"
+    );
+    assert!(!head.contains("An exceedingly"), "{head:?}");
+    // the wide header still has tabs
+    app.set_size(120, 36);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(rows[0].contains('\u{d7}'), "{:?}", rows[0]);
 }

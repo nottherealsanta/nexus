@@ -202,7 +202,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         draw_toasts(&cx, buf, &regions, &mut hits);
         if let Some((side, r)) = regions.drawer {
-            // scrim: clicks outside the drawer close it
+            // The scrim dims the page under the drawer (the header keeps its
+            // toggles); clicks outside the drawer close it.
+            paint::scrim(cx.t, buf, regions.centre);
             hits.add(regions.centre, Target::Scrim);
             match side {
                 Side::Left => draw_left(&cx, buf, r, &mut hits),
@@ -525,7 +527,58 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         buf.set_style(Rect::new(lx, tr.y, 0, 0), Style::default());
         return;
     }
-    draw_tabs(cx, buf, tr, hits);
+    if cx.app.narrow() {
+        draw_crumb(cx, buf, tr);
+    } else {
+        draw_tabs(cx, buf, tr, hits);
+    }
+}
+
+/// The narrow header (DESIGN_PLAN.md D17): the toggles stay at the corners and
+/// the tab strip gives way to the breadcrumb of the viewed session, cut from
+/// the left so the current session stays readable. The run status keeps the
+/// right edge.
+fn draw_crumb(cx: &Cx, buf: &mut Buffer, tr: Rect) {
+    let a = cx.app;
+    let status = header_status(cx);
+    let status_w = status.as_ref().map_or(0, |(s, _)| width(s) + 2);
+    if let Some((s, style)) = &status {
+        let sx = tr.right().saturating_sub(width(s) as u16 + 1);
+        put(buf, sx, tr.y, s, *style, width(s) as u16);
+    }
+    let parts: Vec<String> = if a.ui.view == View::Settings {
+        vec!["Settings".to_owned()]
+    } else if let Some(id) = a.viewed_id() {
+        let chain = a.ancestors_of(id);
+        if chain.len() > 1 {
+            chain.iter().map(|s| s.title.clone()).collect()
+        } else {
+            vec![a
+                .state
+                .model
+                .sessions
+                .get(id)
+                .map_or_else(|| id.to_owned(), |s| s.title.clone())]
+        }
+    } else {
+        vec!["New session".to_owned()]
+    };
+    let sep = format!(" {} ", cx.t.structure("breadcrumb"));
+    let room = (tr.width as usize).saturating_sub(status_w + 2);
+    let shown = paint::crumb_left(&parts, &sep, cx.ell(), room);
+    let (head, last) = match shown.rfind(&sep) {
+        Some(i) => shown.split_at(i + sep.len()),
+        None => ("", shown.as_str()),
+    };
+    let x = put(buf, tr.x + 1, tr.y, head, cx.st(MUTED, SIDEBAR), tr.width);
+    put(
+        buf,
+        x,
+        tr.y,
+        last,
+        cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
+        tr.right().saturating_sub(x),
+    );
 }
 
 /// The session tabs (DESIGN_PLAN.md D02): `{glyph} {title} ×` per open
@@ -811,8 +864,10 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
             Some((
                 format!(
                     "{g} {}",
+                    // A dropped stream reads as offline too (DESIGN_PLAN D18):
+                    // the banner says it is retrying.
                     if matches!(c, ConnectionState::Reconnecting { .. }) {
-                        "reconnecting"
+                        "offline"
                     } else {
                         c.label()
                     }
@@ -1421,20 +1476,53 @@ fn session_place(cx: &Cx, s: &crate::api::Session) -> String {
 
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
-    let root = a.files_root_label();
     let mut top = r.y;
-    if let Some(label) = &root {
+    // D16: the root header, `SIDE-PROJECT` bold and `⌥ main` muted at the
+    // right. With several checkouts it switches between them.
+    if let Some(h) = a.files_header() {
         let row = Rect::new(r.x, r.y, r.width, 1);
         clear(buf, row, cx.st(MUTED, SIDEBAR));
-        put(
+        let lead = if h.switchable {
+            format!("{} ", cx.t.fold(true))
+        } else {
+            String::new()
+        };
+        let branch = h
+            .branch
+            .as_ref()
+            .map(|b| format!("{} {b}", if cx.t.opts.ascii { "~" } else { "\u{2325}" }));
+        let branch_w = branch.as_ref().map_or(0, |b| width(b) + 1);
+        let room = (r.width as usize).saturating_sub(2 + width(&lead) + branch_w);
+        let x = put(
             buf,
             r.x + 1,
             r.y,
-            &format!("{} {label}", cx.t.fold(true)),
+            &lead,
             cx.st(MUTED, SIDEBAR),
             r.width.saturating_sub(1),
         );
-        hits.add(row, Target::FilesRoot);
+        put(
+            buf,
+            x,
+            r.y,
+            &truncate(&h.name.to_uppercase(), room, cx.ell()),
+            cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
+            room as u16,
+        );
+        if let Some(b) = branch.filter(|_| room > 6) {
+            let bx = r.right().saturating_sub(width(&b) as u16 + 1);
+            put(
+                buf,
+                bx,
+                r.y,
+                &truncate(&b, branch_w, cx.ell()),
+                cx.st(MUTED, SIDEBAR),
+                width(&b) as u16,
+            );
+        }
+        if h.switchable {
+            hits.add(row, Target::FilesRoot);
+        }
         top += 1;
     }
     let height = r.bottom().saturating_sub(top);
@@ -1496,6 +1584,17 @@ fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitM
             );
         }
         let indent = 1 + entry.depth * 2;
+        // One `│` guide per ancestor level, under that folder's marker.
+        for level in 0..entry.depth {
+            put(
+                buf,
+                r.x + 1 + level as u16 * 2,
+                y,
+                cx.t.structure("rail"),
+                style.patch(cx.t.fg("border.default")),
+                1,
+            );
+        }
         let marker = match entry.kind.as_str() {
             "directory" => cx.t.fold(entry.expanded),
             "error" => cx.t.status("error").0,
@@ -1533,7 +1632,7 @@ fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitM
                 r.right().saturating_sub(2),
                 y,
                 &glyph.to_string(),
-                cx.st(token, SIDEBAR),
+                style.patch(cx.t.fg(token)),
                 1,
             );
         }
@@ -1558,8 +1657,12 @@ fn git_marker(code: &str) -> Option<(char, &'static str)> {
     }
 }
 
+/// The read-only file view (DESIGN_PLAN.md D16), on the page surface: a header
+/// row with the `~` path (the basename bold) and the shown line range at the
+/// right, a blank row, the numbered text behind a `│` gutter, and a bottom
+/// row that holds the search. The text is drawn up to the row above it.
 fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
-    clear(buf, r, cx.st(PRIMARY, SIDEBAR));
+    clear(buf, r, cx.st(PRIMARY, CANVAS));
     let Some((project, session, path, result)) = &cx.app.state.file else {
         put(
             buf,
@@ -1568,9 +1671,9 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
             if cx.t.opts.ascii {
                 "Loading file..."
             } else {
-                "Loading file…"
+                "Loading file\u{2026}"
             },
-            cx.st(MUTED, SIDEBAR),
+            cx.st(MUTED, CANVAS),
             r.width.saturating_sub(1),
         );
         return;
@@ -1584,18 +1687,64 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
         .files_root()
         .map(|root| short_home(&std::path::Path::new(&root).join(path).to_string_lossy()))
         .unwrap_or_else(|| path.clone());
-    put(
+    let content = result
+        .as_ref()
+        .ok()
+        .and_then(|data| data["content"].as_str())
+        .unwrap_or("");
+    let total = content.lines().count();
+    let page = paint::file_page(r.height);
+    let scroll = cx.app.ui.file_scroll;
+    // `lines 1-38 of 38`, right-aligned and muted.
+    let range = match result {
+        Ok(_) if total == 0 => "empty file".to_owned(),
+        Ok(_) => format!(
+            "lines {}-{} of {total}",
+            scroll + 1,
+            (scroll + page).min(total)
+        ),
+        Err(_) => String::new(),
+    };
+    let range_w = width(&range) as u16;
+    if range_w > 0 && r.width > range_w + 12 {
+        put(
+            buf,
+            r.right().saturating_sub(range_w + 1),
+            r.y,
+            &range,
+            cx.st(MUTED, CANVAS),
+            range_w,
+        );
+    }
+    // The path in secondary, the basename bold; a long directory is cut in the
+    // middle and the basename is kept.
+    let room = (r.width as usize)
+        .saturating_sub(range_w as usize + 4)
+        .max(8);
+    let (dir, base) = match display.rfind('/') {
+        Some(i) => display.split_at(i + 1),
+        None => ("", display.as_str()),
+    };
+    let base = truncate(base, room, cx.ell());
+    let dir = truncate_middle(dir, room.saturating_sub(width(&base)), cx.ell());
+    let x = put(
         buf,
         r.x + 1,
         r.y,
-        &truncate_middle(&display, r.width.saturating_sub(2) as usize, cx.ell()),
-        cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
+        &dir,
+        cx.st(SECONDARY, CANVAS),
         r.width.saturating_sub(1),
     );
+    put(
+        buf,
+        x,
+        r.y,
+        &base,
+        cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+        r.right().saturating_sub(x),
+    );
     match result {
-        Ok(data) => {
-            let content = data["content"].as_str().unwrap_or("");
-            let page = r.height.saturating_sub(2) as usize;
+        Ok(_) => {
             let query = cx
                 .app
                 .ui
@@ -1603,66 +1752,150 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
                 .as_ref()
                 .map(|search| search.query.to_ascii_lowercase())
                 .filter(|query| !query.is_empty());
-            for (i, line) in content
-                .lines()
-                .enumerate()
-                .skip(cx.app.ui.file_scroll)
-                .take(page)
-            {
-                let prefix = format!("{:>4}  ", i + 1);
-                let label = format!("{prefix}{line}");
-                let label = truncate(&label, r.width.saturating_sub(1) as usize, cx.ell());
-                let y = r.y + 1 + (i - cx.app.ui.file_scroll) as u16;
-                put(
+            let matches = cx.app.file_matches();
+            let current = cx
+                .app
+                .ui
+                .file_search
+                .as_ref()
+                .and_then(|search| search.hit)
+                .and_then(|hit| matches.get(hit).copied());
+            // line numbers right-aligned in a gutter of at least 3 digits
+            let digits = total.to_string().len().max(3);
+            let top = r.y + if r.height >= 8 { 2 } else { 1 };
+            let gutter = format!("{} ", cx.t.structure("rail"));
+            let base_x = r.x + 1 + digits as u16 + 1 + width(&gutter) as u16;
+            for (i, line) in content.lines().enumerate().skip(scroll).take(page) {
+                let y = top + (i - scroll) as u16;
+                let number = format!("{:>digits$} ", i + 1);
+                let nx = put(
                     buf,
                     r.x + 1,
                     y,
-                    &label,
-                    cx.st(SECONDARY, SIDEBAR),
+                    &number,
+                    cx.st(MUTED, CANVAS),
                     r.width.saturating_sub(1),
                 );
+                let tx = put(
+                    buf,
+                    nx,
+                    y,
+                    &gutter,
+                    cx.st("border.default", CANVAS),
+                    r.right().saturating_sub(nx),
+                );
+                debug_assert_eq!(tx, base_x);
+                let room = r.right().saturating_sub(base_x + 1);
+                put(
+                    buf,
+                    base_x,
+                    y,
+                    &truncate(line, room as usize, cx.ell()),
+                    cx.st(PRIMARY, CANVAS),
+                    room,
+                );
                 if let Some(query) = &query {
-                    let base = r.x + 1 + width(&prefix) as u16;
-                    for (at, _) in line.to_ascii_lowercase().match_indices(query.as_str()) {
-                        let x = base + width(&line[..at]) as u16;
+                    for (k, (at, _)) in line
+                        .to_ascii_lowercase()
+                        .match_indices(query.as_str())
+                        .enumerate()
+                    {
+                        let x = base_x + width(&line[..at]) as u16;
                         if x >= r.right() {
                             break;
                         }
                         let len = (width(query) as u16).min(r.right() - x);
-                        buf.set_style(Rect::new(x, y, len, 1), cx.t.bg("interactive.selection"));
+                        let mut style = cx.t.bg("interactive.selection");
+                        // the current match (the first on its line) is reversed
+                        if current == Some(i) && k == 0 {
+                            style = style.add_modifier(Modifier::REVERSED);
+                        }
+                        buf.set_style(Rect::new(x, y, len, 1), style);
                     }
                 }
             }
-            let total = content.lines().count();
-            let remaining = total.saturating_sub(cx.app.ui.file_scroll + page);
-            if r.height >= 2 {
-                if let Some(search) = &cx.app.ui.file_search {
-                    let found = cx.app.file_matches().len();
-                    let status = match (search.query.is_empty(), found) {
-                        (true, _) => String::new(),
-                        (false, 0) => "  no matches".to_owned(),
-                        (false, n) => format!("  {n} matches"),
-                    };
+            // `/ query  3 of 12   n next · N prev · esc end` on the bottom row.
+            if let (Some(search), true) = (&cx.app.ui.file_search, r.height >= 3) {
+                let y = r.bottom() - 1;
+                let found = matches.len();
+                let status = match (search.query.is_empty(), found, search.hit) {
+                    (true, _, _) => String::new(),
+                    (false, 0, _) => "no matches".to_owned(),
+                    (false, n, Some(h)) => format!("{} of {n}", h + 1),
+                    (false, n, None) => format!("{n} matches"),
+                };
+                let hints: Vec<(String, String)> = if search.typing {
+                    vec![
+                        ("enter".into(), "next".into()),
+                        ("esc".into(), "end".into()),
+                    ]
+                } else {
+                    vec![
+                        ("n".into(), "next".into()),
+                        ("N".into(), "prev".into()),
+                        ("esc".into(), "end".into()),
+                    ]
+                };
+                let hint_w: usize = hints
+                    .iter()
+                    .map(|(k, l)| width(k) + 1 + width(l))
+                    .sum::<usize>()
+                    + width(&cx.sep()) * (hints.len() - 1);
+                let x = put(
+                    buf,
+                    r.x + 1,
+                    y,
+                    "/ ",
+                    cx.st(MUTED, CANVAS),
+                    r.width.saturating_sub(1),
+                );
+                let x = put(
+                    buf,
+                    x,
+                    y,
+                    &search.query,
+                    cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+                    r.right().saturating_sub(x + 1),
+                );
+                let status_x = x + 2;
+                if status_x + width(&status) as u16 + hint_w as u16 + 4 < r.right() {
                     put(
                         buf,
-                        r.x + 1,
-                        r.bottom() - 1,
-                        &format!("/{}{status}", search.query),
-                        cx.st(PRIMARY, SIDEBAR),
-                        r.width.saturating_sub(1),
+                        status_x,
+                        y,
+                        &status,
+                        cx.st(SECONDARY, CANVAS),
+                        r.right().saturating_sub(status_x),
                     );
-                } else if remaining > 0 {
-                    let first = cx.app.ui.file_scroll + 1;
-                    let last = (cx.app.ui.file_scroll + page).min(total);
-                    let notice = format!("lines {first}-{last} of {total} · scroll");
-                    put(
-                        buf,
-                        r.x + 1,
-                        r.bottom() - 1,
-                        &notice,
-                        cx.st(MUTED, SIDEBAR),
-                        r.width.saturating_sub(1),
-                    );
+                    let mut hx = r.right().saturating_sub(hint_w as u16 + 1);
+                    for (i, (k, l)) in hints.iter().enumerate() {
+                        if i > 0 {
+                            hx = put(
+                                buf,
+                                hx,
+                                y,
+                                &cx.sep(),
+                                cx.st(MUTED, CANVAS),
+                                r.right().saturating_sub(hx),
+                            );
+                        }
+                        hx = put(
+                            buf,
+                            hx,
+                            y,
+                            k,
+                            cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+                            r.right().saturating_sub(hx),
+                        );
+                        hx = put(
+                            buf,
+                            hx,
+                            y,
+                            &format!(" {l}"),
+                            cx.st(MUTED, CANVAS),
+                            r.right().saturating_sub(hx),
+                        );
+                    }
                 }
             }
         }
@@ -1670,9 +1903,9 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
             put(
                 buf,
                 r.x + 1,
-                r.y + 1,
+                r.y + 2.min(r.height.saturating_sub(1)),
                 error,
-                cx.st("status.error", SIDEBAR),
+                cx.st("status.error", CANVAS),
                 r.width.saturating_sub(1),
             );
         }
@@ -2777,34 +3010,80 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
 // timeline
 // ============================================================================
 
-fn empty_state(cx: &Cx) -> (String, Vec<String>) {
+/// What the page shows when there is no timeline: an optional splash logo, a
+/// bold title, muted sentences and key hints.
+struct EmptyState {
+    /// The splash logo (`paint::LOGO`) above the text: the connecting screen
+    /// and the empty workspace.
+    logo: bool,
+    title: String,
+    body: Vec<String>,
+    /// `key label` pairs on one row, the key bold.
+    hints: Vec<(String, String)>,
+}
+
+fn empty_state(cx: &Cx) -> EmptyState {
     let a = cx.app;
+    let key = |id: &str, fallback: &str| {
+        a.manifest
+            .command(id)
+            .and_then(|c| c.tui_key())
+            .unwrap_or(fallback)
+            .to_owned()
+    };
+    let plain = |title: &str, body: Vec<String>| EmptyState {
+        logo: false,
+        title: title.to_owned(),
+        body,
+        hints: Vec::new(),
+    };
     match &a.state.connection {
-        ConnectionState::Starting => (
-            "Starting Nexus Core".into(),
-            vec!["This takes a moment the first time.".into()],
-        ),
-        ConnectionState::Connecting => ("Connecting to Nexus Core".into(), vec![]),
-        _ if a.state.model.projects.is_empty() => (
-            "Welcome to Nexus".into(),
-            vec![
-                "No project yet. Add one from the Projects tab or the command palette,".into(),
-                "then it appears here. Sign in to a provider with `nexus login`.".into(),
+        ConnectionState::Starting => EmptyState {
+            logo: true,
+            ..plain(
+                "Starting Nexus Core",
+                vec!["This takes a moment the first time.".into()],
+            )
+        },
+        ConnectionState::Connecting => EmptyState {
+            logo: true,
+            ..plain("Connecting to Nexus Core", vec![])
+        },
+        ConnectionState::Reconnecting { .. }
+        | ConnectionState::Offline { .. }
+        | ConnectionState::AuthFailed { .. }
+            if a.state.model.projects.is_empty() =>
+        {
+            // Nothing was loaded, so "no projects" would be a guess.
+            EmptyState {
+                logo: true,
+                ..plain(
+                    "Not connected to Core",
+                    vec!["Your projects load when Core is back.".into()],
+                )
+            }
+        }
+        _ if a.state.model.projects.is_empty() => EmptyState {
+            logo: true,
+            hints: vec![
+                (key("sidebar.tab.projects", "alt+3"), "add a project".into()),
+                (key("palette.open", "ctrl+p"), "commands".into()),
             ],
-        ),
+            ..plain("No projects yet", vec![])
+        },
         _ => {
             let name = a
                 .current_project()
                 .and_then(|p| a.state.model.projects.get(&p).map(|p| p.name.clone()))
                 .unwrap_or_default();
             if a.viewed().is_some() {
-                (
-                    "No messages yet".into(),
+                plain(
+                    "No messages yet",
                     vec!["Type below to start the conversation.".into()],
                 )
             } else {
-                (
-                    "New session".into(),
+                plain(
+                    "New session",
                     vec![
                         format!("Project {name}. Type a message below to start a session."),
                         "ctrl+p commands · f1 keys".into(),
@@ -3161,15 +3440,15 @@ fn draw_timeline(
     let inner = Rect::new(r.x + 1, r.y, r.width - 2, r.height);
     let lines = &timeline.lines;
     if a.viewed().is_none() || (lines.is_empty() && a.messages().is_empty()) {
-        let (title, body) = empty_state(cx);
+        let empty = empty_state(cx);
         let busy = matches!(
             a.state.connection,
             ConnectionState::Starting | ConnectionState::Connecting
         );
         let head = if busy {
-            format!("{} {title}", cx.t.spinner(a.frame / 2))
+            format!("{} {}", cx.t.spinner(a.frame / 2), empty.title)
         } else {
-            title
+            empty.title.clone()
         };
         let preview = a.viewed().is_none() && !busy && !a.state.model.projects.is_empty();
         if preview {
@@ -3189,27 +3468,75 @@ fn draw_timeline(
             return (0, r.height as usize, None);
         }
         let wrap_w = (inner.width as usize).saturating_sub(4).max(10);
-        let body: Vec<String> = body.iter().flat_map(|l| text::wrap(l, wrap_w)).collect();
-        let y0 = r.y + r.height.saturating_sub(2 + body.len() as u16) / 3;
+        let body: Vec<String> = empty
+            .body
+            .iter()
+            .flat_map(|l| text::wrap(l, wrap_w))
+            .collect();
+        // logo, a blank row, the title, a blank row, then the sentences and hints
+        let text_rows = 2 + body.len() as u16 + if empty.hints.is_empty() { 0 } else { 2 };
+        let logo_rows = paint::LOGO.len() as u16 + 1;
+        let logo = empty.logo && r.height >= logo_rows + text_rows;
+        let total = text_rows + if logo { logo_rows } else { 0 };
+        let mut y = r.y + r.height.saturating_sub(total) / if logo { 2 } else { 3 };
+        if logo {
+            // The accent colour; bold is what carries it in monochrome.
+            let mut style = cx.st(ACCENT, CANVAS);
+            if cx.t.opts.tier == crate::theme::Tier::Mono {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            let x0 = inner.x + paint::logo_x(inner.width as usize) as u16;
+            for row in paint::LOGO {
+                put(buf, x0, y, row, style, inner.right().saturating_sub(x0));
+                y += 1;
+            }
+            y += 1;
+        }
         let x0 = |s: &str| inner.x + (inner.width as usize).saturating_sub(width(s)) as u16 / 2;
         put(
             buf,
             x0(&head),
-            y0,
+            y,
             &truncate(&head, inner.width as usize, cx.ell()),
             cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
             inner.width,
         );
-        for (i, l) in body.iter().enumerate() {
+        y += 2;
+        for l in &body {
             let l = truncate(l, inner.width as usize, cx.ell());
-            put(
-                buf,
-                x0(&l),
-                y0 + 2 + i as u16,
-                &l,
-                cx.st(MUTED, CANVAS),
-                inner.width,
-            );
+            put(buf, x0(&l), y, &l, cx.st(MUTED, CANVAS), inner.width);
+            y += 1;
+        }
+        if !empty.hints.is_empty() {
+            let sep = cx.sep();
+            let total: usize = empty
+                .hints
+                .iter()
+                .map(|(k, l)| width(k) + 1 + width(l))
+                .sum::<usize>()
+                + width(&sep) * (empty.hints.len() - 1);
+            let mut x = inner.x + (inner.width as usize).saturating_sub(total) as u16 / 2;
+            for (i, (k, l)) in empty.hints.iter().enumerate() {
+                if i > 0 {
+                    x = put(buf, x, y, &sep, cx.st(MUTED, CANVAS), inner.right() - x);
+                }
+                x = put(
+                    buf,
+                    x,
+                    y,
+                    k,
+                    cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+                    inner.right().saturating_sub(x),
+                );
+                x = put(
+                    buf,
+                    x,
+                    y,
+                    &format!(" {l}"),
+                    cx.st(MUTED, CANVAS),
+                    inner.right().saturating_sub(x),
+                );
+            }
         }
         if a.ui.focus == Focus::Timeline {
             put(
@@ -4244,7 +4571,16 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let comp = a.composer_ref();
     if comp.is_empty() {
         let ph = if !a.writable() {
-            format!("Disconnected {} read-only", cx.t.structure("separator"))
+            match a.state.connection {
+                // The draft is kept and goes out once Core is back (D18).
+                ConnectionState::Reconnecting { .. } | ConnectionState::Offline { .. } => {
+                    "Reconnecting to Core\u{2026} your draft is kept".replace('\u{2026}', cx.ell())
+                }
+                ConnectionState::Starting | ConnectionState::Connecting => {
+                    "Connecting to Core\u{2026} your draft is kept".replace('\u{2026}', cx.ell())
+                }
+                _ => format!("Disconnected {} read-only", cx.t.structure("separator")),
+            }
         } else if a.viewed().is_none() {
             "Message to start a new session".to_owned()
         } else {

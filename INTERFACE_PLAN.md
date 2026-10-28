@@ -1199,10 +1199,20 @@ notification in the TUI. Each kind is switchable in Settings.
 
 ## Loading and empty states
 
-- **Daemon starting:** a "starting Nexus Core" screen with the log tail if it
-  takes long or fails.
-- **Daemon restarting / connection lost:** a banner, the last view stays
-  visible but read-only, then a resync.
+- **Splash logo (both clients, DESIGN_PLAN D18):** wherever a splash or wordmark
+  appears (the connecting screen and the empty workspace) the page shows the same five
+  rows of `_/` strokes forming an N, in the accent colour (bold in monochrome), centred
+  as one block above the title. The TUI keeps the rows in `paint::LOGO`; NSH uses the
+  same rows in Monaspace.
+- **Daemon starting:** a "starting Nexus Core" screen with the logo and the log tail if
+  it takes long or fails.
+- **Empty workspace:** the logo, `No projects yet`, and the keys to add a project and
+  open the command palette. While Core is not connected the page says `Not connected
+  to Core` instead, because nothing was loaded.
+- **Daemon restarting / connection lost:** `✕ offline` in the header, a banner
+  (`Disconnected from Core · retrying in 4s`, with retry), the last view stays visible
+  but read-only, and the composer stays editable with `Reconnecting to Core… your draft
+  is kept`; then a resync.
 - **Wrong protocol version:** the blocking alert (see Connection).
 - **First run:** no provider signed in: a short welcome that leads to sign-in,
   then to choosing a project.

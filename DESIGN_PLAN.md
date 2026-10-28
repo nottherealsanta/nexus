@@ -569,10 +569,11 @@ Work stopped at the user's request after I4. State on `nexus10`:
 | I7 modal recipe | done (`render.rs` `modal`: scrim, borderless raised block, title and `esc`, hint row; palette, pickers, Settings, confirm, help, notifications; UPPERCASE muted Settings headings, selection band; `[ Cancel ]` default) | done (`modal.tsx` shell: borderless, 10 px radius, 24 px padding, scrim and shadow; palette, pickers, confirm, add project, blocking and Settings use it; Settings is now a modal over the view; 32 px rows with selection and a 2 px bar; Cancel is the Enter default of a destructive confirm, Delete in error colour) | the TUI I7 commit and `feat(nsh): one modal recipe (DESIGN_PLAN I7)` |
 | I8 waiting card, alerts | done (`draw_waiting` with table, capped diff and key-chip choices; toasts top-right with `+N more`; full-text modal from a click, Enter or the notifications modal; the jump pill on the live row; banner lead in the level colour) | done (`composer.tsx` `WaitingCard`: accent rail, `◆ Allow bash?`, `waiting on you · 0:42`, parameter table, unified diff capped at 12 rows, key-chip choice list where unoffered choices show their reason, questions with radio/checkbox and free text; `alerts.tsx`: toasts top-right under the header with `+N more` and no hairline, the 36 px banner, the jump pill above the composer (`↓ N new · ⌘↓`), and a full-text `modal.tsx` dialog from a toast or a notifications entry with `c` copy; the full text stays on the alert record; `i8.test.tsx`) | the TUI I8 commit |
 | I9 new-session view | done (`paint::context_rows` shared by `draw_new_session_context` and the timeline `context_section`: `◆` sections, tools grid with switches, text total, folded line; client-side `~N` estimates with "estimated" on hover until Core drafts) | not started | the TUI I9 commit |
-| I10 files, narrow, states | not started | not started | |
+| I10 files, narrow, states | done (`draw_files` root header and indent guides; `draw_file_view` header, `│` gutter and search row on the page surface; `layout::Breakpoint` and 34 / 36 drawers over `paint::scrim` with a left-truncated crumb header below 100; `paint::LOGO` on the empty and connecting screens; offline header, banner and composer text) | not started | the TUI I10 commit |
 
 **Next, in order:** the split-diff wrap fix (continuation rows of a wrapped line in `diff.rs`
-start at the `+`/`-` column instead of the text column), then I6–I10 for both clients.
+start at the `+`/`-` column instead of the text column), then the NSH side of I8–I10. The TUI
+side of the design pass (I0–I10) has landed.
 
 **Known gaps from the landed increments:**
 - TUI: OSC 8 links and `path:line` links not done (ratatui cells carry no escapes; needs hit

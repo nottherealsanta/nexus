@@ -13,6 +13,12 @@ use crate::ui::{Side, Target};
 
 /// Below this many columns the sidebars become drawers (INTERFACE_PLAN.md Scale).
 pub const NARROW_BELOW: u16 = 100;
+/// From this width the right sidebar is open by default; between
+/// `NARROW_BELOW` and here it is closed until the user opens it (D17).
+pub const RIGHT_OPEN_FROM: u16 = 120;
+/// From this width the sidebars are 34 / 36 cells and the reading column is
+/// centred (D17); below it they are 28 / 30.
+pub const WIDE_FROM: u16 = 160;
 pub const MIN_CENTRE: u16 = 40;
 /// The collapsed left sidebar: one letter per session.
 pub const RAIL_WIDTH: u16 = 6;
@@ -81,10 +87,55 @@ pub struct Regions {
     pub title: Rect,
 }
 
+/// The D17 breakpoints, by terminal width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Breakpoint {
+    /// 160 columns and up: both sidebars docked (34 / 36), the reading column
+    /// capped and centred.
+    Wide,
+    /// 120-159: both sidebars docked (28 / 30).
+    Medium,
+    /// 100-119: the left sidebar docked, the right closed by default.
+    Compact,
+    /// Under 100: both sidebars are drawers over the page with the scrim; the
+    /// header keeps the toggles and a left-truncated crumb.
+    Drawers,
+}
+
+impl Breakpoint {
+    pub fn of(width: u16) -> Self {
+        match width {
+            w if w >= WIDE_FROM => Self::Wide,
+            w if w >= RIGHT_OPEN_FROM => Self::Medium,
+            w if w >= NARROW_BELOW => Self::Compact,
+            _ => Self::Drawers,
+        }
+    }
+
+    pub fn drawers(self) -> bool {
+        self == Self::Drawers
+    }
+
+    /// Whether the right sidebar starts open.
+    pub fn right_open_by_default(self) -> bool {
+        matches!(self, Self::Wide | Self::Medium)
+    }
+}
+
+/// Width of a drawer: the wide sidebars' 34 / 36 cells, within 4 cells of the
+/// page and never under 22.
+pub fn drawer_width(side: Side, total: u16) -> u16 {
+    let want = match side {
+        Side::Left => 34,
+        Side::Right => 36,
+    };
+    want.min(total.saturating_sub(4)).max(22.min(total))
+}
+
 /// Default width of the docked left sidebar (DESIGN_PLAN.md D17): 34 cells from
 /// 160 columns, 28 below.
 pub fn sidebar_width(total: u16) -> u16 {
-    if total >= 160 {
+    if total >= WIDE_FROM {
         34
     } else {
         28
@@ -93,7 +144,7 @@ pub fn sidebar_width(total: u16) -> u16 {
 
 /// Width of the docked right sidebar: 36 cells from 160 columns, 30 below.
 pub fn right_width(total: u16) -> u16 {
-    if total >= 160 {
+    if total >= WIDE_FROM {
         36
     } else {
         30
@@ -117,8 +168,6 @@ impl Regions {
         let header = r(area.x, area.y, area.width, area.height.min(1));
         let body_y = area.y + header.height;
         let body_h = area.height.saturating_sub(header.height);
-        let sw = sidebar_width(area.width);
-        let rw = right_width(area.width);
 
         let (mut x, mut w) = (area.x, area.width);
         let mut left = None;
@@ -131,6 +180,7 @@ impl Regions {
                 w -= lw;
             }
             if flags.right_open {
+                let rw = right_width(area.width);
                 w -= rw;
                 right = Some(r(x + w, body_y, rw, body_h));
             }
@@ -138,12 +188,7 @@ impl Regions {
         let centre = r(x, body_y, w, body_h);
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
-            let dw = match side {
-                Side::Left => sw,
-                Side::Right => rw,
-            }
-            .min(area.width.saturating_sub(4))
-            .max(22.min(area.width));
+            let dw = drawer_width(side, area.width);
             let rect = match side {
                 Side::Left => r(area.x, body_y, dw, body_h),
                 Side::Right => r(area.x + area.width - dw, body_y, dw, body_h),
@@ -325,6 +370,75 @@ mod tests {
         f.left_rail = true;
         let g = Regions::compute(Rect::new(0, 0, 120, 40), f, heights);
         assert_eq!(g.left.unwrap().width, RAIL_WIDTH);
+    }
+
+    #[test]
+    fn the_d17_breakpoint_table() {
+        // (width, class, drawers, right sidebar open by default, left, right)
+        let table = [
+            (200, Breakpoint::Wide, false, true, 34, 36),
+            (160, Breakpoint::Wide, false, true, 34, 36),
+            (159, Breakpoint::Medium, false, true, 28, 30),
+            (120, Breakpoint::Medium, false, true, 28, 30),
+            (119, Breakpoint::Compact, false, false, 28, 30),
+            (100, Breakpoint::Compact, false, false, 28, 30),
+            (99, Breakpoint::Drawers, true, false, 28, 30),
+            (80, Breakpoint::Drawers, true, false, 28, 30),
+        ];
+        for (width, class, drawers, right, left_w, right_w) in table {
+            assert_eq!(Breakpoint::of(width), class, "{width}");
+            assert_eq!(class.drawers(), drawers, "{width}");
+            assert_eq!(class.right_open_by_default(), right, "{width}");
+            assert_eq!(Regions::is_narrow(width), drawers, "{width}");
+            assert_eq!(sidebar_width(width), left_w, "{width}");
+            assert_eq!(right_width(width), right_w, "{width}");
+        }
+    }
+
+    #[test]
+    fn docked_sidebars_by_breakpoint() {
+        let docked = |w: u16, right: bool| {
+            Regions::compute(Rect::new(0, 0, w, 40), flags(true, right), heights)
+        };
+        let g = docked(120, true);
+        assert_eq!((g.left.unwrap().width, g.right.unwrap().width), (28, 30));
+        let g = docked(160, true);
+        assert_eq!((g.left.unwrap().width, g.right.unwrap().width), (34, 36));
+        // 100-119: the right sidebar can still be docked on request; the
+        // centre keeps its minimum
+        let g = docked(100, true);
+        assert!(g.centre.width >= MIN_CENTRE && g.right.is_some());
+        let g = docked(100, false);
+        assert!(g.right.is_none() && g.left.is_some());
+    }
+
+    #[test]
+    fn drawers_are_34_and_36_cells_and_stay_inside_the_page() {
+        for (side, w) in [(Side::Left, 34), (Side::Right, 36)] {
+            let mut f = flags(true, true);
+            f.drawer = Some(side);
+            let g = Regions::compute(Rect::new(0, 0, 80, 24), f, heights);
+            let (s, rect) = g.drawer.unwrap();
+            assert_eq!((s, rect.width), (side, w));
+            assert_eq!(rect.height, 23, "from under the header to the bottom");
+            match side {
+                Side::Left => assert_eq!(rect.x, 0),
+                Side::Right => assert_eq!(rect.right(), 80),
+            }
+        }
+        // a very small terminal keeps a gap of 4 cells for the scrim
+        let mut f = flags(true, true);
+        f.drawer = Some(Side::Right);
+        let g = Regions::compute(Rect::new(0, 0, 40, 24), f, heights);
+        assert_eq!(g.drawer.unwrap().1.width, 36);
+        let g = Regions::compute(Rect::new(0, 0, 30, 24), f, heights);
+        assert_eq!(g.drawer.unwrap().1.width, 26);
+        // never under 22 cells, nor wider than the terminal
+        let g = Regions::compute(Rect::new(0, 0, 24, 24), f, heights);
+        assert_eq!(g.drawer.unwrap().1.width, 22);
+        // a drawer is a narrow-layout feature: docked layouts ignore the flag
+        let g = Regions::compute(Rect::new(0, 0, 120, 24), f, heights);
+        assert!(g.drawer.is_none());
     }
 
     #[test]

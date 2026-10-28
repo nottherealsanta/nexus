@@ -335,6 +335,62 @@ pub fn context_folded(items: usize, total: u64, estimated: bool, sep: &str) -> (
     )
 }
 
+/// Rows of file text in a file view `height` rows high: the view has a header
+/// row, a blank row under it (when there is room) and the search row at the
+/// bottom, which is always reserved so the text does not shift (DESIGN_PLAN.md D16).
+pub fn file_page(height: u16) -> usize {
+    usize::from(if height >= 8 {
+        height - 3
+    } else {
+        height.saturating_sub(2)
+    })
+}
+
+/// The Nexus splash logo (DESIGN_PLAN.md D18): an `N` of `_/` strokes, five
+/// rows. Shared by the connecting screen and the empty workspace, in the
+/// accent colour (bold in mono). ASCII mode needs no fallback.
+pub const LOGO: [&str; 5] = [
+    "    _/      _/",
+    "   _/_/    _/",
+    "  _/  _/  _/",
+    " _/    _/_/",
+    "_/      _/",
+];
+
+/// The logo's width in cells: its widest row. The block is centred by this
+/// width, not row by row, so the strokes keep their shape.
+pub fn logo_width() -> usize {
+    LOGO.iter().map(|row| row.len()).max().unwrap_or(0)
+}
+
+/// The column, within `width` cells, where the logo block starts when centred.
+pub fn logo_x(width: usize) -> usize {
+    width.saturating_sub(logo_width()) / 2
+}
+
+/// A breadcrumb that keeps its end: `parts` joined by `sep`, and when that is
+/// wider than `max` cells the earliest parts become one `… ›` (the ellipsis
+/// and the separator) and, if the last part alone is still too wide, its start
+/// is cut (`…tail`).
+pub fn crumb_left(parts: &[String], sep: &str, ell: &str, max: usize) -> String {
+    use crate::text::{truncate_start, width};
+    let full = parts.join(sep);
+    if width(&full) <= max || parts.len() < 2 {
+        return truncate_start(&full, max, ell);
+    }
+    let lead = format!("{ell}{sep}");
+    let mut keep = parts.len();
+    while keep > 1 {
+        keep -= 1;
+        let tail = parts[parts.len() - keep..].join(sep);
+        if width(&lead) + width(&tail) <= max {
+            return format!("{lead}{tail}");
+        }
+    }
+    // Only the last part is left, and it does not fit after the lead.
+    truncate_start(&parts[parts.len() - 1], max, ell)
+}
+
 /// The first meaningful line of a system prompt: not blank, not a heading and
 /// not an HTML comment. The preview shows only text the model receives.
 pub fn first_prompt_line(prompt: &str) -> String {
@@ -486,6 +542,73 @@ mod ctx_tests {
         rows.iter()
             .map(|r| r.iter().map(|(t, _)| t.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn the_logo_is_five_rows_of_one_width_block_and_centres_by_the_block() {
+        assert_eq!(LOGO.len(), 5);
+        assert_eq!(
+            LOGO,
+            [
+                "    _/      _/",
+                "   _/_/    _/",
+                "  _/  _/  _/",
+                " _/    _/_/",
+                "_/      _/"
+            ]
+        );
+        assert!(
+            LOGO.iter().all(|row| row.is_ascii()),
+            "ASCII needs no fallback"
+        );
+        assert_eq!(logo_width(), 14);
+        // the block, not each row, is centred: 120 columns leave 53 each side
+        assert_eq!(logo_x(120), 53);
+        assert_eq!(logo_x(121), 53);
+        assert_eq!(logo_x(14), 0);
+        assert_eq!(logo_x(10), 0, "too narrow: starts at the edge");
+    }
+
+    #[test]
+    fn a_crumb_keeps_its_end() {
+        let p = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let sep = " \u{203a} ";
+        let two = p(&["root", "child"]);
+        assert_eq!(crumb_left(&two, sep, "\u{2026}", 40), "root \u{203a} child");
+        // the earliest parts give way first
+        let three = p(&["root", "middle", "child"]);
+        assert_eq!(
+            crumb_left(&three, sep, "\u{2026}", 14),
+            "\u{2026} \u{203a} child"
+        );
+        assert_eq!(
+            crumb_left(&three, sep, "\u{2026}", 20),
+            "\u{2026} \u{203a} middle \u{203a} child"
+        );
+        // a last part that is too long loses its start
+        assert_eq!(
+            crumb_left(&p(&["abcdefghij"]), sep, "\u{2026}", 6),
+            "\u{2026}fghij"
+        );
+        assert_eq!(crumb_left(&two, sep, "\u{2026}", 5), "child");
+        assert_eq!(crumb_left(&two, sep, "\u{2026}", 4), "\u{2026}ild");
+        // ASCII ellipsis
+        assert_eq!(crumb_left(&three, " > ", "...", 12), "... > child");
+        for max in 0..30 {
+            assert!(
+                crate::text::width(&crumb_left(&three, sep, "\u{2026}", max)) <= max.max(1),
+                "{max}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_page_reserves_the_header_blank_and_search_rows() {
+        assert_eq!(file_page(36), 33);
+        assert_eq!(file_page(8), 5);
+        assert_eq!(file_page(7), 5, "short views drop the blank row");
+        assert_eq!(file_page(2), 0);
+        assert_eq!(file_page(0), 0);
     }
 
     #[test]

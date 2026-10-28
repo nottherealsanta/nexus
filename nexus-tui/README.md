@@ -112,18 +112,39 @@ primary, context text is muted, long lines wrap inside their column (wide CJK
 characters included), hunks are separated by a muted `⋯ @@ … @@` row, and a
 diff with several files gets a `path  +a −r` header per file.
 
-The Files tab is a lazy tree: folders expand one level at a time, Git status
-letters are right-aligned, ignored entries are muted and can be hidden, and a
-root row switches between the project checkout and the open session's worktree
-when there is more than one. Enter opens a read-only, line-numbered file view
-with a `~` path; Esc returns to the timeline. The selected file can be copied as
-an absolute path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the
-terminal suspended. In the file view `/` opens a search line: typing filters
-and highlights matches, Enter or `n` goes to the next match and `N` to the
-previous one, and the first Esc ends the search while the next closes the file.
-Core serves whole files up to 1 MiB and has no offsets, so the bottom notice
-gives the exact range shown (`lines 1-40 of 300`). The file view has no syntax
-highlighting yet.
+The Files tab (DESIGN_PLAN D16) is a lazy tree under a root header: the checkout's name in
+capitals (bold) and `⌥ branch` muted at the right. With several checkouts the header shows `▾`
+and a click or `files.root_toggle` switches between the project and the open session's
+worktree. Folders expand one level at a time, each level has a `│` guide in `border.default`,
+folders are bold, ignored entries are muted and can be hidden, and Git status letters are
+right-aligned and coloured (`M` warning, `A` and `?` success, `D` error). Enter opens a
+read-only file view on the page surface: the header row has the `~` path (the basename bold)
+and `lines 1-38 of 38` muted at the right, a blank row follows, then right-aligned line numbers
+and a `│` gutter; Esc returns to the timeline. The selected file can be copied as an absolute
+path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the terminal suspended. In the
+file view `/` opens the search on the bottom row (always reserved, so the text does not move):
+`/ query  3 of 12   n next · N prev · esc end`. Matches are on the selection band and the
+current one is reversed; typing filters, Enter or `n` goes to the next match and `N` to the
+previous one, and the first Esc ends the search while the next closes the file. Core serves
+whole files up to 1 MiB and has no offsets, so the header gives the exact range shown. The
+file view has no syntax highlighting yet.
+
+Responsive layout (D17, `layout::Breakpoint`): from 160 columns both sidebars are docked at 34
+and 36 cells; at 120-159 they are 28 and 30; at 100-119 the left stays docked and the right is
+closed until opened (the toggle docks it; a saved preference wins); below 100 both are drawers
+of 34 and 36 cells over the page, which `paint::scrim` dims (a click on the scrim closes the
+drawer). Under 100 the header keeps the two toggles, the run status and the bell, and the tab
+strip gives way to a breadcrumb of the viewed session cut from the left (`… › child`).
+
+States (D18): the connecting screen and the empty workspace show the splash logo
+(`paint::LOGO`, five rows of `_/` strokes, accent, bold in mono, centred as one block) over the
+title. An empty workspace reads `No projects yet` with `alt+3 add a project · ctrl+p commands`
+(the manifest has no key for adding a project yet, so the hint names the Projects tab). A lost
+stream or an unreachable Core shows `✕ offline` in the header, the banner `Disconnected from
+Core · retrying in 4s` with retry, and the composer placeholder `Reconnecting to Core… your
+draft is kept`; with nothing loaded the page says `Not connected to Core`. The banner's `r`
+key of the mock-up is not bound (a bare letter would clash with typing), so it shows `retry`
+only.
 
 Alerts: a session that waits for approval or an answer is announced with a
 terminal notification (OSC 9, or OSC 777 in foot, kitty, Ghostty and WezTerm),

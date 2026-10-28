@@ -282,6 +282,15 @@ pub struct GitRow {
     pub removed: u64,
 }
 
+/// The Files root header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesHeader {
+    pub name: String,
+    pub branch: Option<String>,
+    /// More than one checkout: the header switches between them.
+    pub switchable: bool,
+}
+
 /// One drawable row of the Files tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileRow {
@@ -381,6 +390,11 @@ pub struct Ui {
     /// A drag of the left sidebar's edge is in progress.
     pub left_drag: bool,
     pub right_open: bool,
+    /// The user (or a saved preference) chose the right sidebar's state, so a
+    /// size change no longer picks it (D17: closed by default at 100-119).
+    pub right_chosen: bool,
+    /// `set_size` has run once: the construction size may be a placeholder.
+    pub sized: bool,
     pub drawer: Option<Side>,
     pub tab: Tab,
     pub cursor: HashMap<Tab, usize>,
@@ -533,7 +547,9 @@ impl App {
                 left_rail: false,
                 left_width: 0,
                 left_drag: false,
-                right_open: true,
+                right_open: crate::layout::Breakpoint::of(size.0).right_open_by_default(),
+                right_chosen: false,
+                sized: false,
                 drawer: None,
                 tab,
                 cursor: HashMap::new(),
@@ -1300,7 +1316,7 @@ impl App {
                 level: Level::Error,
                 loading: false,
                 text: format!(
-                    "Disconnected from Core {} reconnecting in {} s",
+                    "Disconnected from Core {} retrying in {}s",
                     self.theme.structure("separator"),
                     retry_in.as_secs().max(1)
                 ),
@@ -1538,38 +1554,42 @@ impl App {
         project.and_then(|p| self.state.model.projects.get(&p).map(|p| p.path.clone()))
     }
 
-    /// A label for the root row when the project has more than one checkout.
-    pub fn files_root_label(&self) -> Option<String> {
+    /// The Files root header (DESIGN_PLAN.md D16): the checkout's name, its
+    /// branch when Git reports one, and whether there are several checkouts to
+    /// switch between (a click or `files.root_toggle`).
+    pub fn files_header(&self) -> Option<FilesHeader> {
         let project = self.current_project()?;
-        let listing = self.state.project_worktrees.get(&project)?;
-        let count = listing["worktrees"].as_array().map_or(0, Vec::len);
-        if count < 2 {
-            return None;
-        }
         let root = self.files_root()?;
-        let entry = listing["worktrees"]
-            .as_array()?
-            .iter()
-            .filter(|tree| {
-                tree["path"]
-                    .as_str()
-                    .is_some_and(|path| root.starts_with(path))
-            })
-            .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len));
+        let trees = self
+            .state
+            .project_worktrees
+            .get(&project)
+            .and_then(|listing| listing["worktrees"].as_array());
+        let entry = trees.and_then(|trees| {
+            trees
+                .iter()
+                .filter(|tree| {
+                    tree["path"]
+                        .as_str()
+                        .is_some_and(|path| root.starts_with(path))
+                })
+                .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len))
+        });
         let name = if self.ui.files_project_root || self.viewed().is_none() {
-            self.state.model.projects[&project].name.clone()
+            self.state.model.projects.get(&project)?.name.clone()
         } else {
             std::path::Path::new(&root)
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| root.clone())
         };
-        let branch = entry
-            .and_then(|tree| tree["branch"].as_str())
-            .filter(|branch| !branch.is_empty());
-        Some(match branch {
-            Some(branch) => format!("{name} {} {branch}", self.theme.structure("separator")),
-            None => name,
+        Some(FilesHeader {
+            name,
+            branch: entry
+                .and_then(|tree| tree["branch"].as_str())
+                .filter(|branch| !branch.is_empty())
+                .map(str::to_owned),
+            switchable: trees.is_some_and(|trees| trees.len() >= 2),
         })
     }
 
@@ -2907,6 +2927,9 @@ impl App {
             Side::Right => &mut self.ui.right_open,
         };
         *open = !*open;
+        if side == Side::Right {
+            self.ui.right_chosen = true;
+        }
         if !*open
             && matches!(
                 (side, self.ui.focus),
@@ -3335,6 +3358,11 @@ impl App {
 
     pub fn set_size(&mut self, w: u16, h: u16) {
         self.size = (w, h);
+        // The first real size picks the right sidebar's default (D17).
+        if !self.ui.sized && !self.ui.right_chosen {
+            self.ui.right_open = crate::layout::Breakpoint::of(w).right_open_by_default();
+        }
+        self.ui.sized = true;
         // Targets from the old geometry are stale until the next draw.
         self.hits.clear();
         if !self.narrow() {
@@ -3466,7 +3494,7 @@ impl App {
                 .unwrap_or(count - 1),
         };
         search.hit = Some(next);
-        let page = self.regions.timeline.height.saturating_sub(2) as usize;
+        let page = crate::paint::file_page(self.regions.timeline.height);
         let max = self.file_line_count().saturating_sub(page);
         self.ui.file_scroll = matches[next].min(max);
     }
@@ -3582,7 +3610,7 @@ impl App {
                 return;
             }
             let lines = self.file_line_count();
-            let page = self.regions.timeline.height.saturating_sub(2) as usize;
+            let page = crate::paint::file_page(self.regions.timeline.height);
             let max = lines.saturating_sub(page);
             match name.as_str() {
                 "up" | "k" => self.ui.file_scroll = self.ui.file_scroll.saturating_sub(1),
@@ -4531,7 +4559,10 @@ impl App {
             "appearance.sidebar" | "notifications.terminal" | "appearance.timeline_detail" => {
                 self.settings_change(index, 1)
             }
-            "appearance.details" => self.ui.right_open = !self.ui.right_open,
+            "appearance.details" => {
+                self.ui.right_open = !self.ui.right_open;
+                self.ui.right_chosen = true;
+            }
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),
             "keybindings.list" => self.execute("app.help_keys"),
@@ -4609,6 +4640,7 @@ impl App {
             self.ui.left_open = v;
         }
         if let Some(v) = prefs.ui.right_open {
+            self.ui.right_chosen = true;
             self.ui.right_open = v;
         }
         if let Some(d) = prefs
