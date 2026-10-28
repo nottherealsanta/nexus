@@ -507,6 +507,111 @@ async def test_project_listing_git_names_and_special_files(setup):
     assert (await client.get(base + "/file", params={"path": "fifo"})).status_code == 400
 
 
+async def _file_search(client, workspace, query=None, **params):
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    if query is not None:
+        params["q"] = query
+    return await client.get(f"/api/project/{project['id']}/files/search", params=params)
+
+
+async def test_file_search_ranks_basename_prefix_then_substring_then_path(setup):
+    _, client, _, workspace = setup
+    for rel in ("configs/readme.md", "deep/a/b/xconfig.txt", "src/myconfig.py",
+                "src/config_loader.py", "config.py"):
+        (workspace / rel).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / rel).write_text("x", encoding="utf-8")
+    response = await _file_search(client, workspace, "CONFIG")
+    assert response.status_code == 200
+    assert response.json() == {"query": "CONFIG", "paths": [
+        "config.py", "src/config_loader.py", "src/myconfig.py",
+        "deep/a/b/xconfig.txt", "configs/readme.md"]}
+
+
+async def test_file_search_directories_have_slash_and_rank_ahead_of_files(setup):
+    _, client, _, workspace = setup
+    (workspace / "src").mkdir()
+    (workspace / "src" / "a.py").write_text("x", encoding="utf-8")
+    (workspace / "src.txt").write_text("x", encoding="utf-8")
+    plain = (await _file_search(client, workspace, "src")).json()["paths"]
+    assert plain == ["src.txt", "src/a.py"]
+    with_dirs = (await _file_search(client, workspace, "src", directories="true")).json()
+    assert with_dirs["paths"] == ["src/", "src.txt", "src/a.py"]
+
+
+async def test_file_search_excludes_hidden_symlinked_and_ignored_entries(setup, tmp_path):
+    _, client, _, workspace = setup
+    process = await asyncio.create_subprocess_exec("git", "init", "-q", str(workspace))
+    assert await process.wait() == 0
+    (workspace / ".gitignore").write_text("ignored.log\nignored/\n", encoding="utf-8")
+    (workspace / "visible.py").write_text("x", encoding="utf-8")
+    (workspace / "new.py").write_text("x", encoding="utf-8")
+    (workspace / ".hidden.py").write_text("x", encoding="utf-8")
+    (workspace / ".dotdir").mkdir()
+    (workspace / ".dotdir" / "x.py").write_text("x", encoding="utf-8")
+    (workspace / "ignored.log").write_text("x", encoding="utf-8")
+    (workspace / "ignored").mkdir()
+    (workspace / "ignored" / "y.py").write_text("x", encoding="utf-8")
+    (workspace / "link.py").symlink_to(workspace / "visible.py")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.py").write_text("x", encoding="utf-8")
+    (workspace / "escape").symlink_to(outside, target_is_directory=True)
+    response = await _file_search(client, workspace, "", directories="1")
+    assert response.json()["paths"] == ["new.py", "visible.py"]
+    assert (await _file_search(client, workspace, "leak")).json()["paths"] == []
+
+
+async def test_file_search_session_root_is_relative_to_that_directory(setup):
+    _, client, _, workspace = setup
+    process = await asyncio.create_subprocess_exec("git", "init", "-q", str(workspace))
+    assert await process.wait() == 0
+    (workspace / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    (workspace / "top.py").write_text("x", encoding="utf-8")
+    sub = workspace / "sub"
+    sub.mkdir()
+    (sub / "a.py").write_text("x", encoding="utf-8")
+    (sub / "build.log").write_text("x", encoding="utf-8")
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"project": project["id"]})).json()
+    moved = await client.post(f"/api/session/{session['id']}/directory", json={"directory": str(sub)})
+    assert moved.status_code == 200, moved.text
+    base = f"/api/project/{project['id']}/files/search"
+    scoped = await client.get(base, params={"q": "", "session": session["id"]})
+    assert scoped.json()["paths"] == ["a.py"]
+    whole = await client.get(base, params={"q": "", "limit": 10})
+    assert whole.json()["paths"] == ["top.py", "sub/a.py"]
+
+
+async def test_file_search_limit_is_capped_and_zero_is_empty(setup):
+    _, client, _, workspace = setup
+    for index in range(120):
+        (workspace / f"f{index:03}.txt").write_text("x", encoding="utf-8")
+    assert len((await _file_search(client, workspace, "f", limit=1000)).json()["paths"]) == 100
+    assert len((await _file_search(client, workspace, "f")).json()["paths"]) == 30
+    assert (await _file_search(client, workspace, "f", limit=0)).json()["paths"] == []
+
+
+async def test_file_search_rejects_invalid_queries_and_limits(setup):
+    _, client, _, workspace = setup
+    (workspace / "a.txt").write_text("x", encoding="utf-8")
+    for query in ("/abs", "\\back", "../up", "a/../b", "bad\x00", "x" * 257):
+        response = await _file_search(client, workspace, query)
+        assert response.status_code == 400 and "error" in response.json(), query
+    for limit in ("-1", "many", ""):
+        response = await _file_search(client, workspace, "a", limit=limit)
+        assert response.status_code == 400, limit
+
+
+async def test_file_search_empty_query_lists_first_visible_paths(setup):
+    _, client, _, workspace = setup
+    (workspace / "b.txt").write_text("x", encoding="utf-8")
+    (workspace / "a").mkdir()
+    (workspace / "a" / "z.txt").write_text("x", encoding="utf-8")
+    (workspace / "a.txt").write_text("x", encoding="utf-8")
+    response = await _file_search(client, workspace)
+    assert response.json() == {"query": "", "paths": ["a.txt", "b.txt", "a/z.txt"]}
+
+
 async def test_session_git_status_and_diff(setup):
     _, client, _, workspace = setup
     for args in (("init", "-q"), ("config", "user.email", "test@example.org"),
