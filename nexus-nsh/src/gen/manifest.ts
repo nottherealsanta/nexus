@@ -717,9 +717,9 @@ export const manifest = {
       "label": "OS notifications",
       "kind": "toggle",
       "scope": "client",
-      "clients": "both",
+      "clients": "nsh",
       "default": true,
-      "note": "Terminal bell or OSC 9/777 in the TUI."
+      "note": "The TUI uses Terminal notifications instead."
      },
      {
       "id": "notifications.terminal",
