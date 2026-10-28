@@ -33,6 +33,9 @@ pub struct UiPrefs {
     pub left_open: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub right_open: Option<bool>,
+    /// `low`, `medium` or `high`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -106,6 +109,7 @@ pub fn merge_changes(stored: &mut Prefs, seen: &Prefs, now: &Prefs) {
     field!(ui.left_rail);
     field!(ui.left_open);
     field!(ui.right_open);
+    field!(ui.detail);
     field!(theme.mode);
     field!(theme.monochrome);
     field!(theme.animations);
@@ -138,6 +142,7 @@ mod tests {
                 left_rail: Some(false),
                 left_open: Some(true),
                 right_open: Some(false),
+                detail: Some("high".into()),
             },
             theme: ThemePrefs {
                 mode: Some("light".into()),

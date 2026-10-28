@@ -7,8 +7,12 @@ use nexus_tui::api::History;
 use nexus_tui::theme::{Mode, Tier};
 use nexus_tui::ui::Focus;
 
+/// These tests pin the low detail level (groups collapsed); the other levels
+/// have their own test below.
 fn app() -> nexus_tui::app::App {
-    with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36))
+    let mut a = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.ui.detail = nexus_tui::ui::Detail::Low;
+    a
 }
 
 fn rows(a: &mut nexus_tui::app::App) -> Vec<String> {
@@ -1118,4 +1122,67 @@ fn following_anchors_and_jump_to_latest_hold_at_every_size() {
         assert!(a.ui.scroll.follow, "{w}x{h}");
         assert!(drawn.contains("paragraph number 60"), "{w}x{h}: {drawn}");
     }
+}
+
+fn add_tool(a: &mut nexus_tui::app::App, n: i64, command: &str, output: &str) {
+    let call = serde_json::json!({"id": 2000 + n * 10, "type": "message.added", "session_id": SESSION,
+        "cursor": format!("log_c915bfc9b6d826c4:{}", 2000 + n * 10),
+        "data": {"id": format!("msg_t{n}"), "session_id": SESSION, "seq": 200 + n * 2, "created": 1793113600.0 + n as f64,
+                 "role": "assistant", "parts": [{"type": "tool_call", "id": format!("call_t{n}"), "name": "bash",
+                 "arguments": serde_json::json!({"command": command}).to_string()}]}});
+    let result = serde_json::json!({"id": 2001 + n * 10, "type": "message.added", "session_id": SESSION,
+        "cursor": format!("log_c915bfc9b6d826c4:{}", 2001 + n * 10),
+        "data": {"id": format!("msg_r{n}"), "session_id": SESSION, "seq": 201 + n * 2, "created": 1793113600.5 + n as f64,
+                 "role": "tool", "parts": [{"type": "tool_result", "call_id": format!("call_t{n}"),
+                 "output": output, "is_error": false}]}});
+    for v in [call, result] {
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value(v["type"].as_str().unwrap(), None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+}
+
+#[test]
+fn detail_levels_show_groups_then_each_tool_then_every_tool_expanded() {
+    use nexus_tui::timeline::BlockKind;
+    use nexus_tui::ui::Detail;
+    let mut a = app();
+    add_tool(&mut a, 1, "echo first", "first-output");
+    add_tool(&mut a, 2, "echo second", "second-output");
+    let count =
+        |a: &nexus_tui::app::App, kind| a.blocks().iter().filter(|b| b.kind == kind).count();
+    let low = rows(&mut a).join("\n");
+    assert!(
+        count(&a, BlockKind::Group) > 0 && count(&a, BlockKind::Tool) == 0,
+        "{low}"
+    );
+    assert!(low.contains("Ran 2 commands"), "{low}");
+    assert!(!low.contains("echo first"), "{low}");
+    // Medium: each tool on a collapsed line of its own, with its key detail.
+    a.execute("timeline.detail_cycle");
+    assert_eq!(a.ui.detail, Detail::Medium);
+    let medium = rows(&mut a).join("\n");
+    assert_eq!(count(&a, BlockKind::Tool), 2, "{medium}");
+    assert!(
+        medium.contains("echo first") && medium.contains("echo second"),
+        "{medium}"
+    );
+    assert!(
+        !medium.contains("first-output"),
+        "collapsed tools hide their output: {medium}"
+    );
+    // High: every tool opens and shows its output.
+    a.execute("timeline.detail_cycle");
+    assert_eq!(a.ui.detail, Detail::High);
+    let high = rows(&mut a).join("\n");
+    assert!(
+        high.contains("first-output") && high.contains("second-output"),
+        "{high}"
+    );
+    // Back to low; a hand-opened group follows the level again.
+    a.execute("timeline.detail_cycle");
+    assert_eq!(a.ui.detail, Detail::Low);
+    assert!(a.ui.timeline_open.keys().all(|k| !k.starts_with("group:")));
 }

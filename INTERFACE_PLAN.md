@@ -314,12 +314,15 @@ glyphs above.
  ◧  Sessions  Files  Projects     nexus10 › research agent › child: sweep   ● 1  ◨
 ```
 
-One row. Left toggle at the leading edge, then the left sidebar tabs (the
-active one bold on a surface); title and breadcrumbs centred over the centre
-column
-(`›` separators; the last crumb primary, earlier crumbs muted and clickable);
-right toggle at the trailing edge. Status on the right of the title block when
-the session is running (`◐ running`) or disconnected (`✕ offline`).
+One row. Left toggle at the leading edge, then **session tabs** as in old
+Nexus: `○ Title ×` per opened session (status glyph: spinner running, `●` unread,
+`✕` failed, `○` idle), the viewed tab raised and bold, then `+` for a new session.
+A tab opens when its session is opened; `×` (or `alt+x`) closes the tab and
+leaves the session in the list, `alt+[` / `alt+]` move between tabs, clicking
+the viewed tab renames. When tabs do not fit, titles shorten to 8 cells, then
+the farthest tabs drop behind a leading `…`. The new-session screen and
+Settings show their own raised tab. Right toggle at the trailing edge; the run
+or connection status sits left of it (`◐ running`, `✕ offline`).
 - Focused: toggles show the focus bar to their left. Hovered: crumb underlines.
 - Disabled: a toggle is never disabled. Loading: title is replaced with
   `loading…`. Error: `✕ offline` in error. Empty: new-session view title is
@@ -445,29 +448,30 @@ counts. Open with Enter or a click; the answer expands in place.
 
 #### Composer
 
-The composer is a borderless `surface.panel` fill with a blank row above the
-input and one between the input and the control row. It ends half a row below
-the control row (the TUI draws an upper half block in the panel colour; ANSI-16,
-monochrome and ASCII have no surface edge to draw). A canvas gutter surrounds
-it. The placeholder is `Type a message…`; disconnected sessions show the
+The composer is a borderless `surface.panel` fill, inset two columns from each
+edge of the centre column, with a heavy rail down its left side in the agent's
+colour, a blank row above the input and one between the input and the control
+row. A darker status band (`surface.sidebar`) closes the panel under the control
+row: right-aligned `11.1K (4.1%)` (context in use and its share of the window)
+then `ctrl+p commands`. A canvas gutter surrounds it. The placeholder is `Type a message…`; disconnected sessions show the
 reason. In ANSI-16 and monochrome the focused input has a focus bar.
 
 The control row contains agent, model and effort selectors. The agent name is
 capitalised and shown in its identity colour; the model uses the catalog display
 name and provider; a change requested during a turn reads `old → new (next
 call)`. A busy turn shows `esc stop`; an interrupted turn offers `continue`.
-The location strip is a separate canvas row below the panel: the project name
-(bold, underlined by the accent rule), the branch, the directory (`~` form),
-and `worktree` in violet only when the session is in a linked worktree. A main
+The location strip is a separate canvas row below the panel: the directory
+(`~` form, underlined by the accent rule), the branch, and `worktree` in violet
+only when the session is in a linked worktree. A main
 checkout shows its branch and nothing else. The path opens the directory
 control and the branch opens the worktrees control. For an existing session, Core’s worktree listing supplies
 its branch and linked worktree marker, refreshed on directory changes; before a
 session exists, `GET /api/project/{id}/worktrees` supplies the project's own
-branch the same way. The right-hand count estimates context from the latest
-request’s input tokens, then shows occupancy of each price-tier boundary the
-catalog reports and of the window, as old Nexus did; hovering explains the
-numbers. Narrow rows drop effort, then the provider, then extra percentages
-before shortening names. Attachments and queue are tracked in
+branch the same way. The context figure estimates occupancy from the latest
+request’s input tokens; hovering it explains the numbers, including occupancy of
+each price-tier boundary the catalog reports. Narrow rows drop effort, then the
+provider before shortening names. Before a session exists the agent, model and
+effort pickers set a draft that goes into the session's creation request. Attachments and queue are tracked in
 PLAN.md (Step 12a).
 
 #### Waiting card
@@ -573,7 +577,7 @@ loses no information.
 ## Shared navigation anchors
 
 The workspace header has the **left sidebar toggle at its leading edge**,
-**title/child breadcrumbs in the centre**, and **right sidebar toggle at its
+**session tabs after it**, and **right sidebar toggle at its
 trailing edge**. Toggles remain available when panels close. Use the same
 locations in terminal, browser and desktop, accounting for native window chrome.
 At narrow widths they open drawers rather than relocating to unrelated menus.
@@ -903,8 +907,7 @@ tool call:
 
 **Opening a child** (click the card) opens the child session in the centre
 column. It looks exactly like a parent session view, with two differences at
-the top: **breadcrumbs** (`root title › child title`, each crumb clickable)
-and a **back button** (and Esc / Backspace) to return to the parent at the
+the top: its own tab (parent sessions keep theirs) and a **back button** (and Esc / Backspace) to return to the parent at the
 card's position. A child's composer can prompt the child directly.
 
 ## Waiting for user input

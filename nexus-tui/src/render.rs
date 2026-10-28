@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::app::{now_secs, App, GitGroup, WaitKind};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
 use crate::state::ConnectionState;
-use crate::text::{self, truncate, truncate_middle, truncate_start, width};
+use crate::text::{self, truncate, truncate_middle, width};
 use crate::theme::Theme;
 use crate::ui::*;
 
@@ -142,7 +142,23 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 Rect::new(l.x, l.y, l.width.saturating_sub(1), l.height),
                 &mut hits,
             );
-            draw_sidebar_edge(&cx, buf, l.right().saturating_sub(1), l);
+            let ex = l.right().saturating_sub(1);
+            draw_sidebar_edge(&cx, buf, ex, l);
+            // Dragging the edge resizes the sidebar; hovering it shows the handle.
+            let edge = Rect::new(ex, l.y, 1, l.height);
+            hits.add(edge, Target::SidebarEdge);
+            if cx.hovered(edge) || a.ui.left_drag {
+                for y in edge.y..edge.bottom() {
+                    put(
+                        buf,
+                        ex,
+                        y,
+                        cx.t.structure("rail_heavy"),
+                        cx.st(ACCENT, CANVAS),
+                        1,
+                    );
+                }
+            }
         }
         if let Some(r) = regions.right {
             draw_right(
@@ -325,18 +341,20 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 // heights
 // ============================================================================
 
+/// The text area: inside the panel (one cell in from each side of the
+/// column), after the agent-coloured rail and a gap.
 pub(crate) fn composer_inner(r: Rect) -> Rect {
     Rect::new(
-        r.x + 3,
+        r.x + 4,
         r.y + 1,
-        r.width.saturating_sub(6),
+        r.width.saturating_sub(8),
         r.height.saturating_sub(6),
     )
 }
 
 fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
-    let inner_w = w.saturating_sub(6) as usize;
+    let inner_w = w.saturating_sub(8) as usize;
     let rows = app.composer_ref().layout(inner_w).0.len().clamp(1, 8) as u16;
     let (waiting, composer) = (waiting_height(app), rows + 6);
     Heights {
@@ -505,76 +523,169 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         buf.set_style(Rect::new(lx, tr.y, 0, 0), Style::default());
         return;
     }
-    let sep = format!(" {} ", cx.t.structure("breadcrumb"));
-    let (crumbs, last): (Vec<String>, String) = match (cx.app.ui.view, cx.app.viewed_id()) {
-        (View::Settings, _) => (vec![], "Settings".into()),
-        (_, Some(id)) => {
-            let chain = cx.app.ancestors_of(id);
-            let mut titles: Vec<String> = chain.iter().map(|s| s.title.clone()).collect();
-            let last = titles.pop().unwrap_or_default();
-            if let Some(p) = chain
-                .first()
-                .and_then(|s| cx.app.state.model.projects.get(&s.project_id))
-            {
-                titles.insert(0, p.name.clone());
-            }
-            (titles, last)
-        }
-        _ => (vec![], "New session".into()),
-    };
-    // status block
+    draw_tabs(cx, buf, g.title, hits);
+}
+
+/// The session tabs: `● Title ×` per open session, the viewed one raised,
+/// then `+`. The connection or run status sits at the right.
+fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
+    let a = cx.app;
     let status = header_status(cx);
     let status_w = status.as_ref().map_or(0, |(s, _)| width(s) + 2);
-    let max_title = (tr.width as usize).saturating_sub(status_w + 2);
-    let mut prefix = String::new();
-    for c in &crumbs {
-        prefix.push_str(c);
-        prefix.push_str(&sep);
+    if let Some((s, style)) = &status {
+        let sx = tr.right().saturating_sub(width(s) as u16 + 1);
+        put(buf, sx, tr.y, s, *style, width(s) as u16);
     }
-    let full = format!("{prefix}{last}");
-    let shown = truncate_start(&full, max_title.max(1), cx.ell());
-    let total_w = width(&shown) + status_w;
-    let x0 = tr.x + (tr.width as usize).saturating_sub(total_w) as u16 / 2;
-    // split `shown` into muted prefix and primary last crumb
-    let last_w = width(&last).min(width(&shown));
-    let split_at = shown
-        .char_indices()
-        .rev()
-        .scan(0usize, |acc, (i, c)| {
-            *acc += text::cw(c);
-            Some((i, *acc))
-        })
-        .find(|(_, acc)| *acc >= last_w)
-        .map_or(0, |(i, _)| i);
-    let (muted, main) = shown.split_at(split_at.min(shown.len()));
-    let mut x = put(buf, x0, tr.y, muted, cx.st(MUTED, CANVAS), tr.width);
-    let title_style = cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD);
-    let title_style = if cx.hovered(tr) && cx.app.viewed().is_some() {
-        title_style.add_modifier(Modifier::UNDERLINED)
+    let ids = a.tab_ids();
+    let viewed = a.viewed_id().map(str::to_owned);
+    let settings = a.ui.view == View::Settings;
+    // A tab for what is on screen without a session: the new-session screen or Settings.
+    let extra = if settings {
+        Some("Settings")
+    } else if viewed.is_none() {
+        Some("New session")
     } else {
-        title_style
+        None
     };
-    let tx = x;
-    x = put(
-        buf,
-        x,
-        tr.y,
-        main,
-        title_style,
-        tr.right().saturating_sub(x),
-    );
-    if cx.app.viewed().is_some() && cx.app.ui.view == View::Session {
-        hits.add(Rect::new(tx, tr.y, x.saturating_sub(tx), 1), Target::Title);
+    let ascii = cx.t.opts.ascii;
+    let glyph_of = |id: &str| -> (String, Style) {
+        if a.is_busy(id) {
+            (cx.t.spinner(a.frame / 2).to_owned(), cx.st(ACCENT, CANVAS))
+        } else if a.ui.failed_sessions.contains(id) {
+            (
+                if ascii { "x" } else { "\u{2715}" }.to_owned(),
+                cx.st("status.error", CANVAS),
+            )
+        } else if a.ui.unread_sessions.contains(id) {
+            (
+                if ascii { "*" } else { "\u{25cf}" }.to_owned(),
+                cx.st("status.info", CANVAS),
+            )
+        } else {
+            (
+                if ascii { "o" } else { "\u{25cb}" }.to_owned(),
+                cx.st(MUTED, CANVAS),
+            )
+        }
+    };
+    struct Tab {
+        index: Option<usize>,
+        title: String,
+        active: bool,
+        id: Option<String>,
     }
-    if let Some((s, style)) = status {
+    let mut tabs: Vec<Tab> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| Tab {
+            index: Some(i),
+            title: a
+                .state
+                .model
+                .sessions
+                .get(id)
+                .map_or_else(|| id.clone(), |s| s.title.clone()),
+            active: !settings && viewed.as_deref() == Some(id.as_str()),
+            id: Some(id.clone()),
+        })
+        .collect();
+    if let Some(label) = extra {
+        tabs.push(Tab {
+            index: None,
+            title: label.to_owned(),
+            active: true,
+            id: None,
+        });
+    }
+    // The room: leave the `+` and the status.
+    let avail = (tr.width as usize).saturating_sub(status_w + 4);
+    let cell = |t: &Tab, max: usize| {
+        5 + width(&truncate(&t.title, max, cx.ell())) + usize::from(t.id.is_some()) * 2
+    };
+    let mut max_title = 28usize;
+    let total = |tabs: &[Tab], max: usize| tabs.iter().map(|t| cell(t, max) + 1).sum::<usize>();
+    while max_title > 8 && total(&tabs, max_title) > avail {
+        max_title -= 2;
+    }
+    // Still too many: drop the tabs farthest from the active one.
+    let mut dropped_left = false;
+    while tabs.len() > 1 && total(&tabs, max_title) > avail {
+        let active = tabs.iter().position(|t| t.active).unwrap_or(0);
+        if active > 0 {
+            tabs.remove(0);
+            dropped_left = true;
+        } else {
+            tabs.pop();
+        }
+    }
+    let mut x = tr.x + 1;
+    if dropped_left {
+        x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, CANVAS), 1) + 1;
+    }
+    for t in &tabs {
+        let w = cell(t, max_title) as u16;
+        if x + w > tr.right() {
+            break;
+        }
+        let rect = Rect::new(x, tr.y, w, 1);
+        let hovered = cx.hovered(rect);
+        let bg = if t.active { RAISED } else { CANVAS };
+        let mut base = cx.st(if t.active { PRIMARY } else { SECONDARY }, bg);
+        if hovered && !t.active {
+            base = base.patch(cx.t.bg("interactive.hover"));
+        }
+        clear(buf, rect, base);
+        let mut cx_x = x + 1;
+        if let Some(id) = &t.id {
+            let (g, gs) = glyph_of(id);
+            let gs = gs.patch(cx.t.bg(if t.active { RAISED } else { CANVAS }));
+            cx_x = put(buf, cx_x, tr.y, &g, gs, 1) + 1;
+        }
+        let title = truncate(&t.title, max_title, cx.ell());
+        let tstyle = if t.active {
+            base.add_modifier(Modifier::BOLD)
+        } else {
+            base
+        };
         put(
             buf,
-            x + 2,
+            cx_x,
             tr.y,
-            &s,
-            style,
-            tr.right().saturating_sub(x + 2),
+            &title,
+            tstyle,
+            rect.right().saturating_sub(cx_x),
         );
+        if let (Some(i), Some(_)) = (t.index, &t.id) {
+            let close = Rect::new(rect.right().saturating_sub(3), tr.y, 2, 1);
+            let hot = cx.hovered(close);
+            put(
+                buf,
+                close.x,
+                tr.y,
+                if ascii { "x" } else { "\u{00d7}" },
+                if hot {
+                    base.patch(cx.t.fg(PRIMARY)).add_modifier(Modifier::BOLD)
+                } else {
+                    base.patch(cx.t.fg(MUTED))
+                },
+                1,
+            );
+            hits.add(rect, Target::SessionTab(i));
+            hits.add(close, Target::SessionTabClose(i));
+        }
+        x += w + 1;
+    }
+    // new session
+    if x + 2 <= tr.right() {
+        let rect = Rect::new(x, tr.y, 3, 1);
+        let style = if cx.hovered(rect) {
+            cx.st(PRIMARY, CANVAS).patch(cx.t.bg("interactive.hover"))
+        } else {
+            cx.st(MUTED, CANVAS)
+        };
+        clear(buf, rect, style);
+        put(buf, x + 1, tr.y, "+", style, 1);
+        hits.add(rect, Target::NewSession);
     }
 }
 
@@ -2462,11 +2573,12 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect) {
     if r.height < 8 || r.width < 24 {
         return;
     }
+    let agent_name = a.current_agent();
     let agent = a
         .state
         .agents
         .iter()
-        .find(|ag| ag["name"].as_str() == Some("build"));
+        .find(|ag| ag["name"].as_str() == Some(agent_name.as_str()));
     let model = a.effective_model(None);
     let model_label = if model.is_empty() {
         cx.ell().to_owned()
@@ -2508,7 +2620,15 @@ fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect) {
     }
     y += 1;
     let rows = [
-        ("agent", "build · builtin".to_owned()),
+        (
+            "agent",
+            format!(
+                "{agent_name} · {}",
+                agent
+                    .and_then(|ag| ag["source"].as_str())
+                    .unwrap_or("builtin")
+            ),
+        ),
         (
             "model",
             if model.is_empty() {
@@ -3124,7 +3244,8 @@ fn pending_model_label(old: &str, new: &str, arrow: &str, room: usize, ell: &str
 
 /// One row of context accounting: what to print and what a hover explains.
 struct ComposerUsage {
-    numbers: Vec<String>,
+    /// `11.1K (4.1%)`: the context in use and its share of the window.
+    summary: String,
     lines: Vec<String>,
 }
 
@@ -3177,7 +3298,12 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
         lines.push(detail.join(" · "));
     }
     lines.push("Estimated from the latest request's input tokens.".to_owned());
-    Some(ComposerUsage { numbers, lines })
+    let summary = match window {
+        Some(window) => format!("{} ({})", text::count(input), percent(input, window)),
+        None => text::count(input),
+    };
+    let _ = numbers;
+    Some(ComposerUsage { summary, lines })
 }
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
@@ -3187,22 +3313,20 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
     let focused = a.ui.focus == Focus::Composer;
     let base = cx.st(PRIMARY, PANEL);
-    let panel = Rect::new(r.x + 1, r.y, r.width.saturating_sub(2), r.height - 3);
+    let panel = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), r.height - 2);
     clear(buf, panel, base);
-    // The panel ends half a row below the controls: an upper half block in the
-    // panel colour over the canvas. Without distinct surfaces there is no edge.
-    if !cx.t.opts.ascii
-        && matches!(
-            cx.t.opts.tier,
-            crate::theme::Tier::TrueColor | crate::theme::Tier::Ansi256
-        )
-    {
-        let edge = cx.st(PANEL, CANVAS);
-        for x in panel.x..panel.right() {
-            put(buf, x, panel.bottom(), "\u{2580}", edge, 1);
-        }
-    }
+    // The status band closing the panel, as in old Nexus.
+    let band = Rect::new(panel.x, panel.bottom() - 1, panel.width, 1);
+    clear(buf, band, cx.st(MUTED, SIDEBAR));
     hits.add(panel, Target::Composer);
+    // The rail carries the agent's colour down the whole panel.
+    let agent_for_rail = a.current_agent();
+    let rail_style = cx
+        .st(PRIMARY, PANEL)
+        .patch(cx.t.agent_style(&agent_for_rail));
+    for y in panel.y..panel.bottom() {
+        put(buf, panel.x, y, cx.t.structure("rail_heavy"), rail_style, 1);
+    }
     if focused
         && matches!(
             cx.t.opts.tier,
@@ -3213,7 +3337,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         for y in inner.y..inner.bottom() {
             put(
                 buf,
-                r.x + 1,
+                panel.x,
                 y,
                 cx.t.structure("focus_bar"),
                 cx.st("interactive.focus", PANEL),
@@ -3280,15 +3404,11 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // The right block is computed first: the left side gives way in the order
     // effort → provider → extra percentages → truncated names (A2).
     let cy = r.bottom() - 4;
-    let avail = r.width.saturating_sub(6) as usize;
+    let avail = r.width.saturating_sub(8) as usize;
     let busy = a.viewed_id().is_some_and(|i| a.is_busy(i));
     let interrupted = a.term("session.interrupted").unwrap_or(false);
     let session = a.viewed();
     let usage = session.and_then(|s| composer_usage(cx, s));
-    let mut numbers = usage
-        .as_ref()
-        .map(|usage| usage.numbers.clone())
-        .unwrap_or_default();
     let request_model = a
         .state
         .model
@@ -3305,7 +3425,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let mut effort_on = true;
     let mut provider_on = true;
     // A new session starts with the build agent until one is chosen.
-    let agent_name = session.map_or("build", |s| s.agent.as_str());
+    let agent_owned = a.current_agent();
+    let agent_name = agent_owned.as_str();
     let mut agent_label = text::capitalize(agent_name);
     let reference = a.effective_model(session);
     // Until the catalog reports Core's default, the model is not known yet.
@@ -3328,21 +3449,19 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         None if provider_on && !model_id.is_empty() => format!("{model_name} {provider}"),
         None => model_name.clone(),
     };
-    let effort = session.map_or("default", |s| {
-        s.extra
-            .get("effort")
-            .and_then(Value::as_str)
-            .unwrap_or("default")
-    });
+    let effort_owned = a.current_effort();
+    let effort = if effort_owned.is_empty() {
+        "default"
+    } else {
+        effort_owned.as_str()
+    };
     loop {
-        let text = numbers.join(&cx.sep());
         let left_width = width(&agent_label)
             + 3
             + width(&model_label)
             + if effort_on { 3 + width(effort) } else { 0 }
             + if busy || interrupted { 11 } else { 0 };
-        let right_width = width(&text);
-        if left_width + right_width + 2 <= avail {
+        if left_width + 2 <= avail {
             break;
         }
         if effort_on {
@@ -3350,11 +3469,9 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         } else if provider_on && pending.is_none() && !model_id.is_empty() {
             provider_on = false;
             model_label = model_name.clone();
-        } else if numbers.len() > 2 || (numbers.len() > 1 && avail < 40) {
-            numbers.pop();
         } else {
             // Last resort: keep the agent and one context number, shorten the model.
-            let room = avail.saturating_sub(width(&agent_label) + 3 + width(&text) + 2);
+            let room = avail.saturating_sub(width(&agent_label) + 3 + 2);
             model_label = match pending.as_deref() {
                 Some(used) => pending_model_label(
                     &model_name_for_id(a, used),
@@ -3365,29 +3482,47 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 ),
                 None => truncate(&model_label, room, cx.ell()),
             };
-            if width(&agent_label) + 3 + width(&model_label) + 2 + width(&text) > avail {
-                let room = avail.saturating_sub(width(&model_label) + 3 + width(&text) + 2);
+            if width(&agent_label) + 3 + width(&model_label) + 2 > avail {
+                let room = avail.saturating_sub(width(&model_label) + 3 + 2);
                 agent_label = truncate(&agent_label, room.max(1), cx.ell());
             }
             break;
         }
     }
-    let text = numbers.join(&cx.sep());
-    let right_width = width(&text) as u16;
-    let end = r.right().saturating_sub(5 + right_width);
+    let end = r.right().saturating_sub(4);
+    // Status band: the context in use, then the palette hint.
+    let key = a
+        .manifest
+        .command("palette.open")
+        .and_then(|c| c.tui_key())
+        .unwrap_or("ctrl+p");
+    let hint = format!("{key} commands");
     let mut context_rect = None;
-    if !text.is_empty() {
-        let rx = r.right().saturating_sub(3 + right_width);
-        put(buf, rx, cy, &text, cx.st(MUTED, PANEL), right_width);
-        context_rect = Some(Rect::new(rx, cy, right_width, 1));
-        hits.add(context_rect.unwrap(), Target::ComposerContext);
+    let band_style = cx.st(MUTED, SIDEBAR);
+    let mut bx = band.right().saturating_sub(2 + width(&hint) as u16);
+    put(buf, bx, band.y, &hint, band_style, width(&hint) as u16);
+    if let Some(usage) = &usage {
+        let w = width(&usage.summary) as u16;
+        bx = bx.saturating_sub(w + 2);
+        if bx > band.x + 2 {
+            put(
+                buf,
+                bx,
+                band.y,
+                &usage.summary,
+                cx.st(SECONDARY, SIDEBAR),
+                w,
+            );
+            context_rect = Some(Rect::new(bx, band.y, w, 1));
+            hits.add(context_rect.unwrap(), Target::ComposerContext);
+        }
     }
     let selector_end = if busy || interrupted {
         end.saturating_sub(11).max(r.x + 3)
     } else {
         end
     };
-    let mut x = r.x + 3;
+    let mut x = r.x + 4;
     {
         let fields: Vec<(String, Target, &str)> = vec![
             (agent_label, Target::ComposerAgent, PRIMARY),
@@ -3429,8 +3564,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 cx.st(token, PANEL)
             };
             x = put(buf, x, cy, &label, style, room);
-            // The pickers change a session; before one exists they only show.
-            if x > start && session.is_some() {
+            if x > start {
                 hits.add(Rect::new(start, cy, x - start, 1), target);
             }
         }
@@ -3498,39 +3632,40 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             .and_then(|tree| tree["branch"].as_str())
             .filter(|b| !b.is_empty());
         let linked = worktree.is_some_and(|tree| tree["main"].as_bool() == Some(false));
-        // Location strip: project name (underlined by the accent rule
-        // below), directory, branch and checkout kind.
+        // Location strip: the directory (underlined by the accent rule), the
+        // branch, and `worktree` only in a linked worktree.
         let y = r.bottom() - 2;
         let start = r.x + 2;
         let end = r.right().saturating_sub(2);
-        let name = project
-            .as_ref()
-            .and_then(|p| a.state.model.projects.get(p))
-            .map(|p| p.name.clone())
-            .unwrap_or_default();
+        let kind = "worktree";
+        let branch_text = branch.map(|b| truncate(b, 24, cx.ell()));
+        let kind_width = if linked { width(kind) + 1 } else { 0 };
+        let branch_width = branch_text.as_ref().map_or(0, |b| width(b) + 1);
+        let room = (end.saturating_sub(start) as usize).saturating_sub(kind_width + branch_width);
         let mut x = start;
-        if !name.is_empty() {
+        if room > 3 {
+            let begin = x;
             x = put(
                 buf,
                 x,
                 y,
-                &name,
-                cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+                &truncate_middle(&path, room, cx.ell()),
+                cx.st(PRIMARY, CANVAS),
                 end.saturating_sub(x),
             );
+            if a.viewed().is_some() && x > begin {
+                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerDirectory);
+            }
         }
-        let name_end = x;
-        // Order as in old Nexus: name, branch, path, then `worktree` in violet
-        // when the session is in a linked worktree. A main checkout says nothing.
-        let kind = "worktree";
-        if let Some(branch) = branch {
+        let path_end = x;
+        if let Some(branch) = &branch_text {
             x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), end.saturating_sub(x));
             let begin = x;
             x = put(
                 buf,
                 x,
                 y,
-                &truncate(branch, 24, cx.ell()),
+                branch,
                 cx.st(SECONDARY, CANVAS),
                 end.saturating_sub(x),
             );
@@ -3538,33 +3673,15 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerWorktree);
             }
         }
-        // The kind is dropped before the path is shortened below a useful length.
-        let kind_width = if linked { width(kind) + 1 } else { 0 };
-        let room = (end.saturating_sub(x + 1) as usize).saturating_sub(kind_width);
-        if room > 3 {
-            x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), 1);
-            let begin = x;
-            x = put(
-                buf,
-                x,
-                y,
-                &truncate_middle(&path, room, cx.ell()),
-                cx.st(MUTED, CANVAS),
-                end.saturating_sub(x),
-            );
-            if a.viewed().is_some() && x > begin {
-                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerDirectory);
-            }
-        }
         if linked && x + 1 + (width(kind) as u16) <= end {
             x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), 1);
             let style = cx.st("agent.violet", CANVAS).add_modifier(Modifier::BOLD);
             put(buf, x, y, kind, style, end.saturating_sub(x));
         }
-        // the rule closing the strip; the accent marks the project name
+        // the rule closing the strip; the accent marks the directory
         let rule = cx.t.structure("rule");
-        for rx in r.x + 1..r.right().saturating_sub(1) {
-            let accent = rx >= start && rx < name_end;
+        for rx in r.x + 2..r.right().saturating_sub(2) {
+            let accent = rx >= start && rx < path_end;
             put(
                 buf,
                 rx,
@@ -3602,7 +3719,7 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     if height == 0 {
         return;
     }
-    let area = Rect::new(r.x + 1, r.y - height, r.width.saturating_sub(2), height);
+    let area = Rect::new(r.x + 2, r.y - height, r.width.saturating_sub(4), height);
     let selected = cx.app.ui.completion.index.min(rows.len() - 1);
     let name_width = rows
         .iter()
@@ -3718,6 +3835,7 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             .into(),
         ),
         "appearance.details" => Some(on_off(a.ui.right_open)),
+        "appearance.timeline_detail" => Some(a.ui.detail.label().into()),
         "appearance.session_scope" => Some(
             if a.ui.scope_all {
                 "all projects"

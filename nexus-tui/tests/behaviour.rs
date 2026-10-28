@@ -448,7 +448,7 @@ fn mouse_drag_selects_composer_text_for_copy() {
     let mut a = app();
     typing(&mut a, "hello world");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 3;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 1;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 6),
@@ -494,7 +494,7 @@ fn mouse_drag_uses_display_cells_and_keeps_wide_graphemes_whole() {
     let mut a = app();
     typing(&mut a, "a日本b");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 3;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 1;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 1),
@@ -522,7 +522,7 @@ fn mouse_drag_maps_to_the_scrolled_composer_viewport() {
             .join("\n"),
     );
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 3;
+    let x = a.regions.composer.x + 4;
     let y = a.regions.composer.y + 1;
     for (kind, row, column) in [
         (MouseEventKind::Down(MouseButton::Left), y, x),
@@ -641,4 +641,35 @@ fn terminal_notifications_setting_has_its_default_and_cycles() {
     assert_eq!(Notify::Waiting.label(), "waiting only");
     assert_eq!(Notify::All.label(), "waiting, done and errors");
     assert!(App::settings_wired("notifications.terminal"));
+}
+
+#[test]
+fn agent_and_model_chosen_before_a_session_exists_go_into_its_creation() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    a.state.model.select(None);
+    a.state.agents = vec![
+        serde_json::json!({"name": "build", "source": "builtin"}),
+        serde_json::json!({"name": "plan", "source": "builtin"}),
+    ];
+    a.state.models = vec![serde_json::json!({"ref": "codex/gpt-5", "name": "GPT-5"})];
+    a.composer().set_text("/agent");
+    press(&mut a, &["enter"]);
+    typing(&mut a, "plan");
+    press(&mut a, &["enter"]);
+    assert_eq!(a.ui.draft.agent.as_deref(), Some("plan"));
+    assert_eq!(a.current_agent(), "plan");
+    a.composer().set_text("/model");
+    press(&mut a, &["enter"]);
+    press(&mut a, &["enter"]);
+    assert_eq!(a.ui.draft.model.as_deref(), Some("codex/gpt-5"));
+    a.effects.clear();
+    a.composer().set_text("hello");
+    press(&mut a, &["enter"]);
+    assert!(a.effects.iter().any(|e| matches!(
+        e,
+        Effect::Api(ApiCall::NewAndPrompt { fields, .. })
+            if fields["agent"] == "plan" && fields["model"] == "codex/gpt-5"
+    )));
+    assert_eq!(a.ui.draft, Default::default(), "the draft is spent");
 }

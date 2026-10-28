@@ -133,6 +133,10 @@ pub const WIRED: &[&str] = &[
     "tool.expand_toggle",
     "tool.raw_toggle",
     "tool.show_all_output",
+    "timeline.detail_cycle",
+    "session.tab_close",
+    "session.tab_next",
+    "session.tab_prev",
     "tool.open_inspector",
     "copy.final_message",
     "copy.assistant_block",
@@ -334,7 +338,36 @@ const COMPLETION_CACHE: usize = 64;
 const COMPLETION_HITS: u32 = 30;
 const COMPLETION_POOL: u32 = 100;
 
+/// Choices made before a session exists; they go into its creation request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Draft {
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl Draft {
+    /// The session fields these choices set.
+    pub fn fields(&self) -> Value {
+        let mut f = serde_json::Map::new();
+        if let Some(a) = &self.agent {
+            f.insert("agent".into(), a.clone().into());
+        }
+        if let Some(m) = self.model.as_ref().filter(|m| !m.is_empty()) {
+            f.insert("model".into(), m.clone().into());
+        }
+        if let Some(e) = self.effort.as_ref().filter(|e| !e.is_empty()) {
+            f.insert("effort".into(), e.clone().into());
+        }
+        Value::Object(f)
+    }
+}
+
 pub struct Ui {
+    /// Sessions opened as header tabs, in the order they were opened.
+    pub tabs: Vec<String>,
+    pub detail: crate::ui::Detail,
+    pub draft: Draft,
     pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
@@ -479,6 +512,9 @@ impl App {
             theme,
             state,
             ui: Ui {
+                tabs: Vec::new(),
+                detail: crate::ui::Detail::default(),
+                draft: Draft::default(),
                 focus: Focus::Composer,
                 left_open: true,
                 left_rail: false,
@@ -1791,10 +1827,10 @@ impl App {
                 }
             }
             PaletteMode::Models => {
-                let current = self
-                    .viewed()
-                    .and_then(|s| s.model.clone())
-                    .unwrap_or_default();
+                let current = self.viewed().map_or_else(
+                    || self.ui.draft.model.clone().unwrap_or_default(),
+                    |s| s.model.clone().unwrap_or_default(),
+                );
                 for (i, m) in self.state.models.iter().enumerate() {
                     let r = m["ref"].as_str().unwrap_or_default();
                     let label = format!("{} · {}", r, m["name"].as_str().unwrap_or(""));
@@ -1844,7 +1880,7 @@ impl App {
                 }
             }
             PaletteMode::Agents => {
-                let current = self.viewed().map(|s| s.agent.clone()).unwrap_or_default();
+                let current = self.current_agent();
                 for (i, a) in self.state.agents.iter().enumerate() {
                     let name = a["name"].as_str().unwrap_or("");
                     let Some(score) = fuzzy(&q, name) else {
@@ -1916,11 +1952,13 @@ impl App {
             }
             PaletteMode::Efforts => {
                 let mut opts: Vec<String> = Vec::new();
-                if let Some(m) = self.state.models.iter().find(|m| {
-                    self.viewed()
-                        .and_then(|s| s.model.as_deref())
-                        .is_some_and(|cur| m["ref"].as_str() == Some(cur))
-                }) {
+                let in_use = self.effective_model(self.viewed());
+                if let Some(m) = self
+                    .state
+                    .models
+                    .iter()
+                    .find(|m| m["ref"].as_str() == Some(in_use.as_str()))
+                {
                     for e in m["efforts"].as_array().into_iter().flatten() {
                         if let Some(e) = e.as_str() {
                             opts.push(e.to_owned());
@@ -1934,15 +1972,7 @@ impl App {
                         .collect();
                 }
                 opts.push(String::new()); // clear: follow the agent/provider default
-                let current = self
-                    .viewed()
-                    .and_then(|s| {
-                        s.extra
-                            .get("effort")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_default();
+                let current = self.current_effort();
                 for (i, e) in opts.into_iter().enumerate() {
                     let label = if e.is_empty() {
                         "(default)".to_owned()
@@ -2028,6 +2058,17 @@ impl App {
                     } else {
                         self.toast(Level::Warning, READ_ONLY);
                     }
+                } else {
+                    let shown = if model.is_empty() {
+                        "default".to_owned()
+                    } else {
+                        model.clone()
+                    };
+                    self.ui.draft.model = Some(model);
+                    self.toast(
+                        Level::Info,
+                        format!("The new session will use model {shown}"),
+                    );
                 }
             }
             PaletteKind::Agent(agent) => {
@@ -2042,6 +2083,17 @@ impl App {
                     } else {
                         self.toast(Level::Warning, READ_ONLY);
                     }
+                } else {
+                    let shown = if agent.is_empty() {
+                        "default".to_owned()
+                    } else {
+                        agent.clone()
+                    };
+                    self.ui.draft.agent = Some(agent);
+                    self.toast(
+                        Level::Info,
+                        format!("The new session will use agent {shown}"),
+                    );
                 }
             }
             PaletteKind::Block(i) => self.select_block(i),
@@ -2071,25 +2123,89 @@ impl App {
                     } else {
                         self.toast(Level::Warning, READ_ONLY);
                     }
+                } else {
+                    let shown = if effort.is_empty() {
+                        "default".to_owned()
+                    } else {
+                        effort.clone()
+                    };
+                    self.ui.draft.effort = Some(effort);
+                    self.toast(
+                        Level::Info,
+                        format!("The new session will use effort {shown}"),
+                    );
                 }
             }
         }
     }
 
+    /// Change how much activity the timeline shows. Blocks the reader opened
+    /// or closed by hand follow the new level again.
+    pub fn set_detail(&mut self, detail: crate::ui::Detail) {
+        self.ui.detail = detail;
+        self.ui
+            .timeline_open
+            .retain(|key, _| !(key.starts_with("group:") || key.starts_with("tool:")));
+        self.toast(Level::Info, format!("Detail: {}", detail.label()));
+    }
+
+    /// The agent of the viewed session, else the one chosen for the next.
+    pub fn current_agent(&self) -> String {
+        self.viewed().map_or_else(
+            || {
+                self.ui
+                    .draft
+                    .agent
+                    .clone()
+                    .unwrap_or_else(|| "build".into())
+            },
+            |s| s.agent.clone(),
+        )
+    }
+
+    /// The effort of the viewed session, else the one chosen for the next;
+    /// empty when it follows the agent's or provider's default.
+    pub fn current_effort(&self) -> String {
+        self.viewed().map_or_else(
+            || self.ui.draft.effort.clone().unwrap_or_default(),
+            |s| {
+                s.extra
+                    .get("effort")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            },
+        )
+    }
+
     /// The model reference a session runs with: its own, else the agent
     /// file's, else Core's default. Empty only before the catalog loads.
     pub fn effective_model(&self, session: Option<&crate::api::Session>) -> String {
+        if session.is_none() {
+            if let Some(m) = self.ui.draft.model.as_deref().filter(|m| !m.is_empty()) {
+                return m.to_owned();
+            }
+        }
+        let agent = session.map_or_else(
+            || {
+                self.ui
+                    .draft
+                    .agent
+                    .clone()
+                    .unwrap_or_else(|| "build".into())
+            },
+            |s| s.agent.clone(),
+        );
         if let Some(m) = session
             .and_then(|s| s.model.as_deref())
             .filter(|m| !m.is_empty())
         {
             return m.to_owned();
         }
-        let agent = session.map_or("build", |s| s.agent.as_str());
         self.state
             .agents
             .iter()
-            .find(|a| a["name"].as_str() == Some(agent))
+            .find(|a| a["name"].as_str() == Some(agent.as_str()))
             .and_then(|a| a["model"].as_str())
             .filter(|m| !m.is_empty())
             .map_or_else(|| self.state.default_model.clone(), str::to_owned)
@@ -2120,7 +2236,68 @@ impl App {
         self.effects.push(Effect::Api(call));
     }
 
+    /// The header's tabs: the sessions opened so far that still exist, and the
+    /// viewed one if it was reached some other way.
+    pub fn tab_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .ui
+            .tabs
+            .iter()
+            .filter(|id| self.state.model.sessions.contains_key(id.as_str()))
+            .cloned()
+            .collect();
+        if let Some(id) = self.viewed_id() {
+            if !ids.iter().any(|t| t == id) {
+                ids.push(id.to_owned());
+            }
+        }
+        ids
+    }
+
+    /// Close a tab (the session stays); the neighbouring tab, or the new
+    /// session screen, takes over when it was the one in view.
+    pub fn close_tab(&mut self, id: &str) {
+        let ids = self.tab_ids();
+        let Some(at) = ids.iter().position(|t| t == id) else {
+            return;
+        };
+        self.ui.tabs = ids.iter().filter(|t| t.as_str() != id).cloned().collect();
+        if self.viewed_id() != Some(id) {
+            return;
+        }
+        let next = ids
+            .get(at + 1)
+            .or_else(|| at.checked_sub(1).and_then(|i| ids.get(i)));
+        match next.cloned() {
+            Some(next) => self.open_session(&next),
+            None => {
+                self.state.model.select(None);
+                self.effects.push(Effect::Sync(SyncCommand::Select(None)));
+                self.ui.view = View::Session;
+                self.ui.timeline_sel = None;
+            }
+        }
+    }
+
+    fn step_tab(&mut self, step: isize) {
+        let ids = self.tab_ids();
+        let Some(at) = self
+            .viewed_id()
+            .and_then(|id| ids.iter().position(|t| t == id))
+        else {
+            return;
+        };
+        let to = (at as isize + step).rem_euclid(ids.len() as isize) as usize;
+        if to != at {
+            let id = ids[to].clone();
+            self.open_session(&id);
+        }
+    }
+
     pub fn open_session(&mut self, id: &str) {
+        if !self.ui.tabs.iter().any(|t| t == id) {
+            self.ui.tabs.push(id.to_owned());
+        }
         if let Some(root) = self.root_session(id) {
             self.ui.unread_sessions.remove(&root);
         }
@@ -2353,7 +2530,9 @@ impl App {
             "turn.go_to" => self.open_palette(PaletteMode::Turns),
             "session.new" => {
                 if let Some(project) = self.current_project() {
-                    self.api(ApiCall::NewSession { project });
+                    let fields = self.ui.draft.fields();
+                    self.ui.draft = Draft::default();
+                    self.api(ApiCall::NewSession { project, fields });
                 }
             }
             "session.open" => {
@@ -2495,6 +2674,14 @@ impl App {
                     }
                 }
             }
+            "timeline.detail_cycle" => self.set_detail(self.ui.detail.step(1)),
+            "session.tab_close" => {
+                if let Some(id) = self.viewed_id().map(str::to_owned) {
+                    self.close_tab(&id);
+                }
+            }
+            "session.tab_next" => self.step_tab(1),
+            "session.tab_prev" => self.step_tab(-1),
             "tool.show_all_output" => {
                 if let Some(b) = self
                     .ui
@@ -2835,7 +3022,13 @@ impl App {
             None => match self.current_project() {
                 Some(project) => {
                     self.composer().take();
-                    self.api(ApiCall::NewAndPrompt { project, text });
+                    let fields = self.ui.draft.fields();
+                    self.ui.draft = Draft::default();
+                    self.api(ApiCall::NewAndPrompt {
+                        project,
+                        text,
+                        fields,
+                    });
                 }
                 None => self.toast(
                     Level::Warning,
@@ -4062,6 +4255,7 @@ impl App {
                 | "notifications.terminal"
                 | "appearance.sidebar"
                 | "appearance.details"
+                | "appearance.timeline_detail"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
                 | "models.catalog"
@@ -4106,6 +4300,7 @@ impl App {
                 let now = modes.iter().position(|m| *m == self.ui.notify).unwrap_or(1) as isize;
                 self.ui.notify = modes[(now + step).rem_euclid(3) as usize];
             }
+            "appearance.timeline_detail" => self.set_detail(self.ui.detail.step(step)),
             "appearance.sidebar" => {
                 let modes = [(true, false), (true, true), (false, false)];
                 let now = modes
@@ -4134,7 +4329,9 @@ impl App {
                 options.reduced_motion = !options.reduced_motion;
                 self.theme = self.theme.with(options);
             }
-            "appearance.sidebar" | "notifications.terminal" => self.settings_change(index, 1),
+            "appearance.sidebar" | "notifications.terminal" | "appearance.timeline_detail" => {
+                self.settings_change(index, 1)
+            }
             "appearance.details" => self.ui.right_open = !self.ui.right_open,
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),
@@ -4178,6 +4375,7 @@ impl App {
                 left_rail: Some(self.ui.left_rail),
                 left_open: Some(self.ui.left_open),
                 right_open: Some(self.ui.right_open),
+                detail: Some(self.ui.detail.label().to_owned()),
             },
             theme: ThemePrefs {
                 mode: Some(
@@ -4213,6 +4411,14 @@ impl App {
         }
         if let Some(v) = prefs.ui.right_open {
             self.ui.right_open = v;
+        }
+        if let Some(d) = prefs
+            .ui
+            .detail
+            .as_deref()
+            .and_then(crate::ui::Detail::from_label)
+        {
+            self.ui.detail = d;
         }
         let mut options = self.theme.opts;
         if !over.mode {
@@ -4387,6 +4593,21 @@ impl App {
                 self.execute("sidebar.right.toggle");
             }
             Target::Title => self.run_command("session.rename"),
+            Target::SessionTab(i) => {
+                let Some(id) = self.tab_ids().get(i).cloned() else {
+                    return;
+                };
+                if self.viewed_id() == Some(id.as_str()) && self.ui.view == View::Session {
+                    self.run_command("session.rename");
+                } else {
+                    self.open_session(&id);
+                }
+            }
+            Target::SessionTabClose(i) => {
+                if let Some(id) = self.tab_ids().get(i).cloned() {
+                    self.close_tab(&id);
+                }
+            }
             Target::Notifications => self.run_command("notifications.open"),
             Target::Tab(tab) => {
                 let id = match tab {

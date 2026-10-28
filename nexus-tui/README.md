@@ -25,9 +25,13 @@ closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
 title and place. Settings → Sidebar switches full / rail / hidden. The location
-strip under the composer names the project (underlined by the accent rule),
-then the branch, the directory and, only in a linked worktree, `worktree`.
-The panel ends half a row below the control row (an upper half block).
+strip under the composer shows the directory (underlined by the accent rule),
+the branch and, only in a linked worktree, `worktree`. The composer panel has
+an agent-coloured rail and a status band with `11.1K (4.1%)` and `ctrl+p commands`.
+The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`). `alt+d`
+(or Settings → Timeline detail) cycles the timeline between low (one line per
+activity group), medium (each tool on a collapsed line, the default) and high
+(every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
 The starting-context section lists the system prompt, tools, instructions,
 agent and child agents with estimated tokens (characters ÷ 4), detail rows, a
 total and the share of the model's window; a turn footer adds the catalog

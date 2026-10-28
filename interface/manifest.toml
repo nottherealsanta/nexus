@@ -293,6 +293,17 @@ options = ["full", "rail", "hidden"]
 note = "Rail shows one letter per session; hover a letter for its title. Drag the edge to resize."
 
 [[settings.section.row]]
+id = "appearance.timeline_detail"
+label = "Timeline detail"
+kind = "choice"
+scope = "client"
+clients = "tui"
+default = "medium"
+options = ["low", "medium", "high"]
+command = "timeline.detail_cycle"
+note = "Low groups activity into one line, medium lists each tool collapsed, high expands every tool."
+
+[[settings.section.row]]
 id = "appearance.details"
 label = "Details sidebar"
 kind = "toggle"
@@ -949,6 +960,37 @@ placement = ["palette", "sidebar"]
 note = "Matches titles and user messages only (Core index)."
 
 [[command]]
+id = "session.tab_close"
+title = "Close tab"
+category = "session"
+keys = { tui = "alt+x", nsh = "alt+x" }
+key_context = "global"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "header"]
+note = "Closes the session's tab; the session itself stays in the list."
+
+[[command]]
+id = "session.tab_next"
+title = "Next tab"
+category = "session"
+keys = { tui = "alt+]", nsh = "alt+]" }
+key_context = "global"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "header"]
+
+[[command]]
+id = "session.tab_prev"
+title = "Previous tab"
+category = "session"
+keys = { tui = "alt+[", nsh = "alt+[" }
+key_context = "global"
+when = ["has_session"]
+unavailable_reason = "Open a session first."
+placement = ["palette", "header"]
+
+[[command]]
 id = "session.rename"
 title = "Rename session"
 category = "session"
@@ -1338,6 +1380,17 @@ key_context = "tool"
 when = ["focus.tool"]
 unavailable_reason = "Focus a tool line first."
 placement = ["tool_line"]
+
+[[command]]
+id = "timeline.detail_cycle"
+title = "Cycle detail level"
+category = "timeline"
+slash = "detail"
+keys = { tui = "alt+d", nsh = "alt+d" }
+key_context = "global"
+when = ["always"]
+placement = ["palette", "timeline"]
+note = "Low: each activity group is one line (`Ran 1 command`). Medium: every tool on its own collapsed line with its key detail. High: every tool expanded, long output capped to its first and last lines (`o` shows all)."
 
 [[command]]
 id = "tool.show_all_output"

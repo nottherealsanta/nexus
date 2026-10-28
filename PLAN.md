@@ -320,6 +320,10 @@ says why the rest cannot change. Still open:
 | Output clipped to the first 200 lines, "show all" did nothing | First and last 100 lines with the hidden count between and `o` to toggle the whole output; `r`, `o`, `i` work on a focused tool (2026-10-28) | Clipping is announced and reversible; the model's own clip stays separate |
 | Projects were added with the CLI only | `+ Add project` and a confirmed remove in the Projects tab; right-click or `m` opens a row menu of the manifest's `row_menu` commands (2026-10-28) | Core already serves `POST`/`DELETE /api/project` |
 | Turn footer was a rule plus a left-aligned row; context items were a rail list | Footer is right-aligned `▪ Build · model · …` with no rule; context items are chip headings with indented details, as in old Nexus (2026-10-28) | The user asked for the old look |
+| Header showed the title and breadcrumbs | Session tabs as in old Nexus: opened sessions with status glyph, `×`, `+`, `alt+x`/`alt+[`/`alt+]`; clicking the viewed tab renames (2026-10-28) | The user asked for tabs |
+| Composer had a half-row edge and `used · tier% · window%` on the control row | Agent-coloured rail, darker status band with `11.1K (4.1%)  ctrl+p commands`, location strip `directory branch [worktree]` (2026-10-28) | The old Nexus look |
+| Activity groups were collapsed or live-open only | Three detail levels (low/medium/high, `alt+d`, Settings, persisted), medium by default (2026-10-28) | Spec: scan, then drill down |
+| Agent/model/effort pickers did nothing before a session existed | They set a draft sent with the session's creation request (2026-10-28) | `/model` and `/agent` must work on the new-session screen |
 | Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 
 ## Known gaps

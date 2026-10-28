@@ -179,6 +179,12 @@ for (const theme of ["dark", "light"]) {
   } });
 }
 await shot({ name: "row-menu-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.hover(8, 4, 100); await h.page.mouse.click(...(await h.cell(8, 4)), { button: "right" }); await h.idle(500); } });
+await shot({ name: "slash-model-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/model", 400); await h.key("Enter", 900); } });
+await shot({ name: "slash-agent-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/agent", 400); await h.key("Enter", 900); } });
+await shot({ name: "slash-new-agent-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.type("/agent", 400); await h.key("Enter", 900); } });
+await shot({ name: "detail-high-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.key("Alt+d", 800); } });
+await shot({ name: "detail-low-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.key("Alt+d", 300); await h.key("Alt+d", 800); } });
+await shot({ name: "tabs-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.page.mouse.click(...(await h.cell(8, 4))); await h.idle(500); await h.page.mouse.click(...(await h.cell(8, 7))); await h.idle(600); } });
 await shot({ name: "complete-slash-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/mo", 600); } });
 await shot({ name: "complete-at-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.type("look at @s", 1500); } });
 await shot({ name: "new-session-120x36-dark", cols: 120, rows: 36 });

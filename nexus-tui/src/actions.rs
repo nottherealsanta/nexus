@@ -22,9 +22,12 @@ pub enum ApiCall {
     NewAndPrompt {
         project: String,
         text: String,
+        /// Agent, model and effort chosen before the session existed.
+        fields: serde_json::Value,
     },
     NewSession {
         project: String,
+        fields: serde_json::Value,
     },
     Continue {
         session: String,
@@ -177,9 +180,13 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
         ApiCall::Prompt { session, text } => {
             conflict(api.prompt(session, text, &key).await.map_err(e)?)?;
         }
-        ApiCall::NewAndPrompt { project, text } => {
+        ApiCall::NewAndPrompt {
+            project,
+            text,
+            fields,
+        } => {
             let s = conflict(
-                api.create_session(project, json!({}), &key)
+                api.create_session(project, fields.clone(), &key)
                     .await
                     .map_err(e)?,
             )?
@@ -188,9 +195,9 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
             let key2 = RequestId::new();
             conflict(api.prompt(&s.id, text, &key2).await.map_err(e)?)?;
         }
-        ApiCall::NewSession { project } => {
+        ApiCall::NewSession { project, fields } => {
             let s = conflict(
-                api.create_session(project, json!({}), &key)
+                api.create_session(project, fields.clone(), &key)
                     .await
                     .map_err(e)?,
             )?

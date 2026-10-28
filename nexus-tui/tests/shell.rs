@@ -110,7 +110,16 @@ fn dark_frames_use_the_theme_file_surfaces() {
     // Timeline on the canvas, left sidebar on its own surface (interface/theme.toml).
     assert_eq!(buf[(60, 10)].bg, Color::Rgb(0x0b, 0x0b, 0x0b));
     assert_eq!(buf[(3, 20)].bg, Color::Rgb(0x14, 0x14, 0x14));
-    assert_eq!(buf[(29, 32)].bg, Color::Rgb(0x1e, 0x1e, 0x1e));
+    let composer = app.regions.composer;
+    assert_eq!(
+        buf[(composer.x + 6, composer.y + 1)].bg,
+        Color::Rgb(0x1e, 0x1e, 0x1e)
+    );
+    assert_eq!(
+        buf[(composer.x + 6, composer.bottom() - 3)].bg,
+        Color::Rgb(0x14, 0x14, 0x14),
+        "the status band is a darker surface"
+    );
     assert!(
         buf.content
             .iter()
@@ -398,7 +407,7 @@ fn composer_uses_latest_usage_and_catalog_window() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("Example Model codex"), "{all}");
-    assert!(all.contains("10.0K · 5.0%"), "{all}");
+    assert!(all.contains("10.0K (5.0%)"), "{all}");
     app.state.models.clear();
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
@@ -442,8 +451,9 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
         .expect("composer control row");
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
-    // Used, the next price tier and the window, as old Nexus showed them.
-    assert!(all_contains(&rows, "52.0K · 26.0% · 5.2%"), "{row}");
+    // Used and its share of the window in brackets, with the palette hint.
+    assert!(all_contains(&rows, "52.0K (5.2%)"), "{row}");
+    assert!(all_contains(&rows, "ctrl+p commands"));
 
     let context = app
         .hits
@@ -529,7 +539,7 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     let all = joined(&rows);
     assert!(all.contains("x \u{2325} project-branch"), "{all}");
     assert!(
-        all.contains("project-branch /work/nexus-home/ws worktree"),
+        all.contains("/work/nexus-home/ws project-branch worktree"),
         "{all}"
     );
 }
@@ -715,7 +725,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         }),
     );
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("feature /work/nexus-home/ws worktree"));
+    assert!(joined(&rows).contains("/work/nexus-home/ws feature worktree"));
     assert!(app.hits.rect_of(&Target::ComposerWorktree).is_some());
     app.effects.clear();
     app.apply_sync(SyncMsg::Event(Event {
@@ -733,7 +743,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         .iter()
         .any(|e| matches!(e, Effect::Sync(Command::Worktrees(id)) if id == SESSION)));
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(!joined(&rows).contains("feature /work/nexus-home/ws worktree"));
+    assert!(!joined(&rows).contains("/work/nexus-home/ws feature worktree"));
 }
 
 #[test]
@@ -990,15 +1000,18 @@ fn long_session_titles_fade_in_truecolour_and_use_ellipsis_in_256() {
     app.state.model.sessions.get_mut(SESSION).unwrap().title =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".into();
     let (buf, rows) = draw(&mut app, 120, 36);
+    // Row 0 is the header's tab; the fade belongs to the sidebar row.
     let row = rows
         .iter()
+        .skip(1)
         .position(|row| {
             row.chars()
                 .take(27)
                 .collect::<String>()
                 .contains("ABCDEFGHIJKLMNOP")
         })
-        .unwrap();
+        .unwrap()
+        + 1;
     let start = col_of(&rows[row], "ABCDEFGHIJKLMNOP") as u16;
     let visible = rows[row]
         .chars()
@@ -1770,4 +1783,72 @@ fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
         .map(|n| n.text.clone())
         .unwrap_or_default();
     assert!(toast.contains("no default setting"), "{toast}");
+}
+
+#[test]
+fn dragging_the_left_sidebar_edge_resizes_it() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
+    let edge = app
+        .hits
+        .rect_of(&Target::SidebarEdge)
+        .expect("an edge handle");
+    let before = app.regions.left.unwrap().width;
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), edge.x),
+        (MouseEventKind::Drag(MouseButton::Left), edge.x + 8),
+        (MouseEventKind::Up(MouseButton::Left), edge.x + 8),
+    ] {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: edge.y + 5,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    draw(&mut app, 120, 36);
+    assert!(app.regions.left.unwrap().width > before, "the sidebar grew");
+}
+
+#[test]
+fn tabs_replace_the_title_open_close_and_switch() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "second".into();
+    other.title = "Second task".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows[0].contains("New session"),
+        "the open session has a tab: {}",
+        rows[0]
+    );
+    assert!(rows[0].contains('+'), "{}", rows[0]);
+    app.open_session("second");
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows[0].contains("New session") && rows[0].contains("Second task"),
+        "{}",
+        rows[0]
+    );
+    // Clicking the other tab switches to it.
+    let first = app.hits.rect_of(&Target::SessionTab(0)).expect("first tab");
+    click(&mut app, first.x + 2, first.y);
+    assert_eq!(app.viewed_id(), Some(SESSION));
+    // Closing a tab keeps its session and moves to the neighbour.
+    let close = app
+        .hits
+        .rect_of(&Target::SessionTabClose(0))
+        .expect("close");
+    draw(&mut app, 120, 36);
+    click(&mut app, close.x, close.y);
+    assert_eq!(app.viewed_id(), Some("second"));
+    assert!(app.state.model.sessions.contains_key(SESSION));
+    assert_eq!(app.tab_ids(), vec!["second".to_owned()]);
+    // Keyboard: close the last tab and the new-session screen shows.
+    press(&mut app, &["alt+x"]);
+    assert!(app.viewed_id().is_none());
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(rows[0].contains("New session"), "{}", rows[0]);
 }

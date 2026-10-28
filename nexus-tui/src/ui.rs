@@ -51,6 +51,40 @@ impl Tab {
     }
 }
 
+/// How much of the agent's activity the timeline shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Detail {
+    /// One line per activity group (`Ran 1 command, Read 2 files`).
+    Low,
+    /// Every tool on its own collapsed line with its key detail.
+    #[default]
+    Medium,
+    /// Every tool expanded, long output capped to its ends.
+    High,
+}
+
+impl Detail {
+    pub const ALL: [Detail; 3] = [Detail::Low, Detail::Medium, Detail::High];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Detail::Low => "low",
+            Detail::Medium => "medium",
+            Detail::High => "high",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Detail> {
+        Self::ALL.into_iter().find(|d| d.label() == label)
+    }
+
+    /// The level `step` places along low, medium, high (wrapping).
+    pub fn step(self, step: isize) -> Detail {
+        let now = Self::ALL.iter().position(|d| *d == self).unwrap_or(1) as isize;
+        Self::ALL[(now + step).rem_euclid(3) as usize]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Session,
@@ -308,6 +342,9 @@ pub enum Target {
     ToggleLeft,
     ToggleRight,
     Title,
+    /// An open session's tab in the header, by position.
+    SessionTab(usize),
+    SessionTabClose(usize),
     Notifications,
     Tab(Tab),
     SettingsEntry,

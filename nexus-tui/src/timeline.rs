@@ -276,6 +276,9 @@ fn fmt_count(n: u64) -> String {
 /// Lines of a tool's detail shown from each end before the middle is folded.
 const DETAIL_HEAD: usize = 100;
 const DETAIL_TAIL: usize = 100;
+/// The same, when every tool is open (high detail).
+const HIGH_HEAD: usize = 30;
+const HIGH_TAIL: usize = 20;
 
 /// Tokens estimated from a character count (about four characters each).
 fn estimate(chars: usize) -> u64 {
@@ -1444,7 +1447,7 @@ impl Builder<'_> {
             .iter()
             .any(|a| matches!(a, Activity::Tool { id, .. } if waiting.contains_key(id)));
         let running = has_wait || (busy && activity.iter().any(|a| matches!(a, Activity::Tool { id, .. } if !results.contains_key(id) && !traces.get(id).is_some_and(|t| t.end.is_some()))));
-        let default_open = running || has_wait;
+        let default_open = running || has_wait || self.app.ui.detail != crate::ui::Detail::Low;
         let open = has_wait || self.is_open(&key, default_open);
         let tree_mode = running
             && !self
@@ -1689,7 +1692,7 @@ impl Builder<'_> {
         waiting: &HashMap<String, String>,
         tree: Option<bool>,
     ) {
-        let open = self.is_open(key, false);
+        let open = self.is_open(key, self.app.ui.detail == crate::ui::Detail::High);
         let raw = self.is_open(&format!("{key}:raw"), false);
         let done = results.get(call_id);
         let trace = traces.get(call_id);
@@ -1717,11 +1720,17 @@ impl Builder<'_> {
         // `o` (or "show all") brings it back. Clipping here is the UI's, never
         // the model's.
         let all = self.is_open(&format!("{key}:all"), false);
-        let clipped = detail.len() > DETAIL_HEAD + DETAIL_TAIL + 20;
+        // High detail opens every tool, so it keeps each one short.
+        let (head, tail_rows) = if self.app.ui.detail == crate::ui::Detail::High {
+            (HIGH_HEAD, HIGH_TAIL)
+        } else {
+            (DETAIL_HEAD, DETAIL_TAIL)
+        };
+        let clipped = detail.len() > head + tail_rows + 20;
         if clipped && !all {
-            let hidden = detail.len() - DETAIL_HEAD - DETAIL_TAIL;
-            let tail = detail.split_off(detail.len() - DETAIL_TAIL);
-            detail.truncate(DETAIL_HEAD);
+            let hidden = detail.len() - head - tail_rows;
+            let tail = detail.split_off(detail.len() - tail_rows);
+            detail.truncate(head);
             detail.push((
                 format!("{} {hidden} lines hidden · show all (o)", self.ell()),
                 self.st(ACCENT, CANVAS),
