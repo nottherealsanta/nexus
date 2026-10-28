@@ -416,6 +416,18 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         from nexus import files
         return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
 
+    async def project_file_search(request: Request) -> Response:
+        from nexus import files
+        query = request.query_params.get("q", "")
+        try:
+            limit = int(request.query_params.get("limit", "30"))
+        except ValueError:
+            raise ValueError("limit must be a non-negative integer") from None
+        directories = request.query_params.get("directories", "") in ("1", "true")
+        paths = await files.search_files(
+            file_root(request), query, limit, include_directories=directories)
+        return JSONResponse({"query": query, "paths": paths})
+
     async def session_git(request: Request) -> Response:
         from nexus import files
         session = runtime.session(p(request, "id"))
@@ -710,6 +722,7 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/project/{id}/worktrees", route(project_worktrees)),
         Route("/api/project/{id}/files", route(project_files)),
         Route("/api/project/{id}/file", route(project_file)),
+        Route("/api/project/{id}/files/search", route(project_file_search)),
         Route("/api/session", route(sessions), methods=["GET", "POST"]),
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),

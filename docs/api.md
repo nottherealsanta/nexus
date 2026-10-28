@@ -885,6 +885,19 @@ a SHA-256 content revision and a MIME-based language hint. Reads reject binary
 or non-UTF-8 data and files over 1 MiB. Paths are relative to the selected root;
 the session must belong to the project. File edits and change notifications are not yet provided.
 
+`GET /api/project/{id}/files/search?q=&limit=&directories=&session=` returns
+`{"query", "paths"}`: visible file paths under the selected root (relative,
+POSIX, with a trailing `/` for directories when `directories=1` or `true`) whose
+path contains `q`, case-insensitively. `q` defaults to `""`, which lists the first
+visible paths. Results rank basename prefix matches, then basename matches, then
+path matches; shallower paths come first, and directories rank ahead of files of
+equal rank. `limit` defaults to 30 and is capped at 100. The walk never opens
+files, skips hidden entries and all symlinks, and stops after 50,000 entries.
+Inside a Git work tree only paths Git would not ignore are listed, and the list is
+cached for 3 seconds. Invalid input returns 400: `q` must be at most 256
+characters, contain no NUL or backslash, and not start with `/` or contain a `..`
+segment; `limit` must be a non-negative integer.
+
 `GET /api/session/{id}/git` returns branch, ahead/behind counts and changed
 paths. Each change has `staged` (index column set), `unstaged` (worktree
 column set, also true for untracked files), the porcelain v1 `status` code

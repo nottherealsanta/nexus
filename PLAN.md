@@ -293,6 +293,7 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 | A reconnecting client had to catch up out of band | `/api/snapshot` watermark plus `Client.watch` reconnect/deduplicate/resync; CLI cursor advances only after applying (done 2026-10-27) | Rebuilding state is consistent and cannot resubmit a prompt |
 | The event log grew forever and the floor stayed 0 | Prefix retention with a durable head high-water mark, recovery/replay pins and an explicit `history_unavailable` boundary (done 2026-10-27) | Storage is bounded without losing recovery evidence |
 | Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
+| Old host `search_files` over the custom protocol, with read-deny roots from host policy | Core `GET /api/project/{id}/files/search` (`q`, `limit`, `directories`, `session`): the same bounded, Git-aware, ranked walk, with no read-deny roots (done 2026-10-28) | Clients complete `@` paths over HTTP. nexus10 has no read-deny policy, so the search takes no deny roots and reads only the selected root |
 
 ## Known gaps
 

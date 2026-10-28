@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import mimetypes
 import os
 import stat
-from pathlib import Path
+import time
+from pathlib import Path, PurePosixPath
 
 from nexus import worktrees
 
 MAX_FILE_BYTES = 1024 * 1024
+MAX_FILE_SEARCH_QUERY = 256
+MAX_FILE_SEARCH_LIMIT = 100
+MAX_FILE_SEARCH_ENTRIES = 50_000
+_GIT_LIST_MAX_BYTES = 16 * 1024 * 1024
+_GIT_LIST_TTL = 3.0
+_git_cache: dict[str, tuple[float, tuple[frozenset[str], frozenset[str]] | None]] = {}
 
 
 async def _git(root: Path, *args: str) -> tuple[bool, str]:
@@ -187,3 +195,132 @@ async def git_diff(root: Path, path: str) -> dict:
     unstaged, unstaged_clipped = clip(unstaged)
     return {"path": path, "staged": staged, "unstaged": unstaged,
             "staged_clipped": staged_clipped, "unstaged_clipped": unstaged_clipped}
+
+
+async def search_files(
+    root: Path,
+    query: str,
+    limit: int = 30,
+    *,
+    include_directories: bool = False,
+) -> list[str]:
+    """Bounded, visible POSIX paths under ``root`` whose relative path contains ``query``.
+
+    The walk never opens files. It skips hidden entries, all symlinks and anything
+    that resolves outside ``root``; in a Git work tree it also keeps only paths Git
+    would not ignore. With ``include_directories`` matching visible directories are
+    returned too, with a trailing ``/``. Results are ranked by ``_rank``.
+    """
+    if not isinstance(query, str) or len(query) > MAX_FILE_SEARCH_QUERY:
+        raise ValueError("file search query must be a string of at most 256 characters")
+    if (
+        "\x00" in query
+        or query.startswith(("/", "\\"))
+        or "\\" in query
+        or any(part == ".." for part in query.split("/"))
+    ):
+        raise ValueError("file search query must be workspace-relative")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise ValueError("file search limit must be a non-negative integer")
+    limit = min(limit, MAX_FILE_SEARCH_LIMIT)
+    if limit == 0:
+        return []
+
+    workspace = root.resolve()
+    visible = await _git_visible(workspace)
+    needle = query.casefold()
+    found: list[str] = []
+    visited = 0
+    stack = [workspace]
+    while stack and visited < MAX_FILE_SEARCH_ENTRIES:
+        current = stack.pop()
+        try:
+            if current.is_symlink() or not current.resolve().is_relative_to(workspace):
+                continue
+            with os.scandir(current) as iterator:
+                entries = sorted(
+                    itertools.islice(iterator, MAX_FILE_SEARCH_ENTRIES - visited),
+                    key=lambda entry: entry.name,
+                )
+        except (OSError, RuntimeError, ValueError):
+            continue
+
+        directories: list[Path] = []
+        for entry in entries:
+            visited += 1
+            if visited > MAX_FILE_SEARCH_ENTRIES:
+                break
+            name = entry.name
+            if name.startswith(".") or entry.is_symlink():
+                continue
+            path = Path(entry.path)
+            try:
+                relative = path.relative_to(workspace).as_posix()
+                relative_path = PurePosixPath(relative)
+                if (
+                    relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                    or any(part.startswith(".") for part in relative_path.parts)
+                    or any(ord(char) < 32 or ord(char) == 127 for char in relative)
+                ):
+                    continue
+                relative.encode("utf-8", errors="strict")
+                if not path.resolve().is_relative_to(workspace):
+                    continue
+                is_directory = entry.is_dir(follow_symlinks=False)
+                is_file = entry.is_file(follow_symlinks=False)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if visible is not None and relative not in (
+                visible[1] if is_directory else visible[0]
+            ):
+                continue
+            if is_directory:
+                directories.append(path)
+                if include_directories and needle in relative.casefold():
+                    found.append(relative + "/")
+            elif is_file and needle in relative.casefold():
+                found.append(relative)
+        stack.extend(reversed(directories))
+    return sorted(found, key=lambda path: _rank(path, needle))[:limit]
+
+
+def _rank(path: str, needle: str) -> tuple[int, int, int, str]:
+    bare = path.rstrip("/")
+    name = bare.rsplit("/", 1)[-1].casefold()
+    tier = 0 if name.startswith(needle) else 1 if needle in name else 2
+    return tier, bare.count("/"), 0 if path.endswith("/") else 1, path
+
+
+async def _git_visible(root: Path) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Files Git would not ignore, plus their parent directories, relative to ``root``.
+
+    ``None`` means "not a Git work tree, or Git failed": the search falls back to the
+    plain walk. The list is cached for a few seconds so per-keystroke searches do not
+    run Git each time.
+    """
+    key = str(root)
+    now = time.monotonic()
+    cached = _git_cache.get(key)
+    if cached is not None and now - cached[0] < _GIT_LIST_TTL:
+        return cached[1]
+    result: tuple[frozenset[str], frozenset[str]] | None = None
+    try:
+        ok, output = await _git(
+            root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."
+        )
+    except ValueError:  # output over the _git limit
+        ok, output = False, ""
+    if ok and len(output.encode("utf-8", "surrogateescape")) <= _GIT_LIST_MAX_BYTES:
+        files = frozenset(name for name in output.split("\0") if name)
+        directories = frozenset(
+            "/".join(parts[:index])
+            for name in files
+            for parts in (name.split("/"),)
+            for index in range(1, len(parts))
+        )
+        result = (files, directories)
+    if len(_git_cache) > 16:
+        _git_cache.clear()
+    _git_cache[key] = (now, result)
+    return result
