@@ -154,11 +154,8 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
    - Head+tail output caps with a working "show all".
    - `path:line` and OSC 8 links.
 2. **Sidebar**
-   - Session rows: relative time and child count (INTERFACE_PLAN.md, Sessions).
    - Worktree grouping.
    - A row menu (rename, archive, delete, copy id, inspector).
-   - Remember the sidebar width and mode across runs, with a client
-     preferences file under `$NEXUS10_HOME`.
 3. **Session info**
    - Effort, tool counts, a context bar and cost once Core reports usage
      totals.
@@ -176,7 +173,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 7. **Settings**
    - Wire the rows Core can already serve (default model and effort, the
      catalog, loaded agents).
-   - Persist client rows (theme, sidebar, animations).
 8. **Tests**
    - PTY checks at 80×24 and 160×48 for anchor, follow and jump-to-latest.
    - A review gallery from fixed fixtures (`interface/review.md`).

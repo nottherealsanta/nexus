@@ -2,7 +2,8 @@
 
 The Ratatui terminal client for Nexus Core (Rust). It speaks only the Core HTTP
 API (`/api/*` plus the `/api/event` stream, see `../docs/api.md`) and never
-reads Nexus state files, SQLite or provider credentials. Old Nexus's client in
+reads Nexus state files, SQLite or provider credentials. The one file it owns in
+the Nexus home is its own preferences file, `tui.json` (see Preferences below). Old Nexus's client in
 `~/repos/nexus/rust/tui` is reference.
 
 **Status (PLAN.md Steps 12.3 and most of 12.4):** the keyboard-first shell is
@@ -82,6 +83,24 @@ means truecolor), `--ascii` (also `NEXUS10_ASCII=1` or a non-UTF-8 locale),
 `--reduced-motion` (also `NEXUS10_REDUCED_MOTION=1`: spinners stay still and an
 idle terminal is never redrawn).
 
+Session rows in the left sidebar end the place line (`project ⌥ branch`) with a
+muted meta, right-aligned: the child count when the session has descendants,
+then the time of last activity (`2 ↳ 3h`, `now`, `3m`, `4d`). The place is
+truncated first; on a very narrow sidebar the meta is dropped.
+
+Preferences: the TUI keeps its own client preferences in `$NEXUS10_HOME/tui.json`
+(mode 0600, written atomically through a temporary file and a rename). This is
+not Nexus state: Core never reads it and the TUI still reads no other Nexus file.
+It holds `ui.left_width`, `ui.left_rail`, `ui.left_open`, `ui.right_open` and
+`theme.mode`, `theme.monochrome`, `theme.animations` (`false` is reduced
+motion). They are loaded at startup and saved when one changes (the sidebar
+edge drag is saved when the button is released). A missing or corrupt file is
+ignored and replaced by the next save. Flags and the environment override the
+file for the run and are not written back: `--dark|--light` over the saved mode,
+`--mono|--256|--16` or `NO_COLOR` over monochrome, and `--reduced-motion` or
+`NEXUS10_REDUCED_MOTION` over animations. `COLORFGBG` only picks the default, so
+a saved mode wins over it.
+
 Environment:
 
 | Variable | Meaning |
@@ -110,6 +129,7 @@ Lower layers know nothing of higher ones.
 | `transport` | HTTP (bearer auth, `Idempotency-Key`, `If-Match`, error classification, keyed transport retries) and SSE (incremental parser, `Last-Event-ID`, `EventStream`), `Backoff`. No Nexus types. |
 | `api` | Typed responses and the endpoints the TUI needs; `/api/info` and the API-version check (`check_compat`); cursors; SSE `Frame` decoding; `RequestId`, `PendingMutation`, `Outcome` (done vs revision conflict). |
 | `reduce` | Pure `Model` (projects, sessions, running turns, waits, streaming text, selected session's messages and every event): `apply_snapshot`, `apply_event`, dedup by durable id, generation check. |
+| `prefs` | `<home>/tui.json`: the TUI's own client preferences, load, atomic 0600 save, merge of changed fields. |
 | `discovery` | `daemon.json` under the Nexus home, `/api/info` verification, `nexus daemon start` bootstrap, daemon log tail. |
 | `sync` | The connection supervisor task: handshake, snapshot, SSE, reconnect with backoff, resync, restart detection. Emits `SyncMsg`, takes `Command`. |
 | `state` | `ConnectionState`, `Banner`, `AppState` (model + connection + banners; `apply(SyncMsg)`). |

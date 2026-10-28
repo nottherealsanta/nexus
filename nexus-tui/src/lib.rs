@@ -20,6 +20,7 @@ pub mod manifest;
 pub mod markdown;
 pub mod mermaid;
 pub mod mermaid_text;
+pub mod prefs;
 pub mod reduce;
 pub mod render;
 pub mod state;
