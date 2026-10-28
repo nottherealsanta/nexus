@@ -648,3 +648,56 @@ mod ctx_tests {
         assert!(rows.iter().flatten().any(|(_, r)| *r == CtxRole::ItemOff));
     }
 }
+
+/// The palette heading for a manifest `category` (DESIGN_PLAN.md D13): the
+/// session categories share one heading and so do model and agent; every
+/// other category is its own name, capitalised (the modal uppercases it).
+pub fn palette_group(category: &str) -> String {
+    match category {
+        "session" | "sessions" => "Session".to_owned(),
+        "model" | "agent" => "Model and agent".to_owned(),
+        other => {
+            let mut c = other.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// Where a palette group sorts when the query is empty: the session first,
+/// then the model, and the app-wide commands last, as in the mock-up.
+pub fn palette_group_rank(category: &str) -> usize {
+    const ORDER: [&str; 21] = [
+        "session",
+        "project",
+        "model",
+        "composer",
+        "tools",
+        "timeline",
+        "tool",
+        "waiting",
+        "navigation",
+        "files",
+        "editor",
+        "git",
+        "copy",
+        "inspect",
+        "notifications",
+        "connection",
+        "auth",
+        "appearance",
+        "dictation",
+        "app",
+        "",
+    ];
+    let key = match category {
+        "sessions" => "session",
+        "agent" => "model",
+        other => other,
+    };
+    ORDER
+        .iter()
+        .position(|c| *c == key)
+        .unwrap_or(ORDER.len() - 1)
+}

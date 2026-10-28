@@ -3144,3 +3144,16 @@ fn the_narrow_header_keeps_the_toggles_and_a_left_truncated_crumb() {
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(rows[0].contains('\u{d7}'), "{:?}", rows[0]);
 }
+
+#[test]
+fn the_palette_groups_commands_under_uppercase_muted_headings() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    press(&mut app, &["ctrl+p"]);
+    let (_, text) = draw(&mut app, 120, 36);
+    assert!(text.iter().any(|r| r.contains("SESSION")), "{text:#?}");
+    assert!(text.iter().any(|r| r.contains("Switch session")));
+    // a filtered palette is a flat ranked list, no headings
+    typing(&mut app, "tgl left");
+    let (_, text) = draw(&mut app, 120, 36);
+    assert!(!text.iter().any(|r| r.contains("MODEL AND AGENT")));
+}

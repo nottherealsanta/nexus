@@ -5835,13 +5835,36 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         );
     }
     let h = list.height as usize;
-    let top = if p.selected < h {
-        0
-    } else {
-        p.selected + 1 - h
-    };
-    for (i, it) in items.iter().enumerate().skip(top).take(h) {
-        let y = list.y + (i - top) as u16;
+    // Display rows: the command palette, unfiltered, is grouped (D13) with an
+    // UPPERCASE muted heading before each group and a blank row between them.
+    let grouped = p.mode == PaletteMode::Commands && q.is_empty();
+    let mut rows: Vec<(Option<String>, usize)> = Vec::new();
+    let mut last: Option<String> = None;
+    for (i, it) in items.iter().enumerate() {
+        if grouped {
+            let g = paint::palette_group(&it.category);
+            if last.as_ref() != Some(&g) {
+                if last.is_some() {
+                    rows.push((None, usize::MAX));
+                }
+                rows.push((Some(g.clone()), usize::MAX));
+                last = Some(g);
+            }
+        }
+        rows.push((None, i));
+    }
+    let at = rows.iter().position(|r| r.1 == p.selected).unwrap_or(0);
+    let top = if at < h { 0 } else { at + 1 - h };
+    for (di, (head, i)) in rows.iter().enumerate().skip(top).take(h) {
+        let (head, i) = (head, *i);
+        let y = list.y + (di - top) as u16;
+        if i == usize::MAX {
+            if let Some(g) = head {
+                heading(cx, buf, &m, y, g);
+            }
+            continue;
+        }
+        let it = &items[i];
         let rr = Rect::new(list.x, y, list.width, 1);
         let selected = i == p.selected;
         let token = if it.reason.is_some() { MUTED } else { PRIMARY };

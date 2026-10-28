@@ -199,9 +199,20 @@ fn palette_filters_fuzzily_and_shows_keys() {
     press(&mut a, &["ctrl+p"]);
     let all = a.palette_items();
     assert!(all.len() > 30, "the manifest drives the list");
-    // enabled commands come first when nothing is typed
-    let first_disabled = all.iter().position(|i| i.reason.is_some()).unwrap();
-    assert!(all[first_disabled..].iter().all(|i| i.reason.is_some()));
+    // grouped when nothing is typed (D13): each group's enabled commands come
+    // before its disabled ones, and a group is contiguous
+    let group = |i: &nexus_tui::ui::PaletteItem| nexus_tui::paint::palette_group(&i.category);
+    let mut seen: Vec<String> = Vec::new();
+    for g in all.chunk_by(|a, b| group(a) == group(b)) {
+        let name = group(&g[0]);
+        assert!(!seen.contains(&name), "{name} is split");
+        seen.push(name);
+        if let Some(d) = g.iter().position(|i| i.reason.is_some()) {
+            assert!(g[d..].iter().all(|i| i.reason.is_some()));
+        }
+    }
+    assert_eq!(seen[0], "Session");
+    assert!(seen.contains(&"Model and agent".to_owned()));
     typing(&mut a, "tgl left");
     let items = a.palette_items();
     assert_eq!(

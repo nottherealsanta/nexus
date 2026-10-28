@@ -2070,8 +2070,20 @@ impl App {
             }
         }
         if q.is_empty() {
-            // manifest order, enabled commands first
-            scored.sort_by_key(|(_, i, it)| (it.reason.is_some(), *i));
+            // manifest order, enabled commands first; the command palette is
+            // grouped (D13), each group in its fixed place
+            let grouped = p.mode == PaletteMode::Commands;
+            scored.sort_by_key(|(_, i, it)| {
+                (
+                    if grouped {
+                        crate::paint::palette_group_rank(&it.category)
+                    } else {
+                        0
+                    },
+                    it.reason.is_some(),
+                    *i,
+                )
+            });
         } else {
             scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         }
