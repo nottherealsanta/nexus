@@ -197,7 +197,16 @@ title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files, Projects
 with Settings fixed at the bottom; right sidebar Session info and Git status
 (shown with its manifest reason). Below 100 columns the sidebars become drawers
-opened from the same toggles. The waiting card sits directly above the composer. Settings opens in a centered
+opened from the same toggles. The waiting card sits directly above the composer.
+It also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
+tenth) or Up/Down with Enter picks an option, Space or a number ticks options of a
+multi-select question, and clicking an option picks it. A question without options,
+or one that allows a note, takes text typed in the composer (typing from the
+focused card moves there) and sent with Enter. Several questions go one at a time;
+the reply is sent once, as a keyed `POST …/question/{id}`, after the last one
+(`Ctrl+Enter` or the button confirms the current question). Esc keeps following
+the manifest chain, so while the turn is busy it interrupts, which cancels the
+question. Settings opens in a centered
 modal using old Nexus's panel geometry and a searchable root/drill list. Press
 `/` to filter settings; Enter opens a section, and Esc returns to the root
 before closing the panel. Existing Core-backed controls retain their own focus

@@ -342,12 +342,22 @@ fn heights(app: &App, w: u16) -> Heights {
     }
 }
 
+/// Option rows the question card shows at most; the cursor scrolls the rest.
+const ASK_ROWS: usize = 5;
+
+/// Rows between the question text and the hint line: the options, or the
+/// one-line prompt of a free-text question.
+fn question_rows(app: &App) -> usize {
+    app.ask_current()
+        .map_or(1, |c| c.options().len().clamp(1, ASK_ROWS))
+}
+
 fn waiting_height(app: &App) -> u16 {
     match app.wait_focused() {
         None => 0,
         Some(w) => match w.kind {
             WaitKind::Approval => 6,
-            WaitKind::Question => 6,
+            WaitKind::Question => 4 + question_rows(app) as u16,
         },
     }
 }
@@ -2429,19 +2439,13 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             (tool, lines)
         }
         WaitKind::Question => {
-            let q = a.state.model.questions.get(&w.id);
             let mut lines = Vec::new();
-            if let Some(q) = q {
-                if let Some(first) = q.questions.first() {
-                    lines.push(json_str(&first["question"]));
-                    if let Some(opts) = first["options"].as_array() {
-                        let list: Vec<String> = opts
-                            .iter()
-                            .map(|o| format!("( ) {}", json_str(&o["label"]).trim_matches('"')))
-                            .collect();
-                        lines.push(list.join("   "));
-                    }
-                }
+            if let Some(c) = a.ask_current() {
+                lines.push(
+                    json_str(&c.question["question"])
+                        .trim_matches('"')
+                        .replace('\n', " "),
+                );
             }
             ("question".into(), lines)
         }
@@ -2541,33 +2545,132 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 inner_w,
             );
         }
-        WaitKind::Question => {
-            let rect = button(
-                cx,
-                buf,
-                (x + 2, by),
-                "submit answers",
-                (false, false, false),
-            );
-            let _ = rect;
+        WaitKind::Question => draw_question_body(cx, buf, r, (x, inner_w), writable, hits),
+    }
+}
+
+/// The options (or the free-text prompt), a key hint and the submit button of
+/// the focused question. Each option is a mouse target.
+fn draw_question_body(
+    cx: &Cx,
+    buf: &mut Buffer,
+    r: Rect,
+    (x, inner_w): (u16, u16),
+    writable: bool,
+    hits: &mut HitMap,
+) {
+    let a = cx.app;
+    let Some(c) = a.ask_current() else { return };
+    let focused = a.ui.focus == Focus::Waiting;
+    let opts = c.options();
+    let mut y = r.y + 2;
+    if opts.is_empty() {
+        put(
+            buf,
+            x + 2,
+            y,
+            "Type the answer in the composer below, then press enter.",
+            cx.st(SECONDARY, PANEL),
+            inner_w,
+        );
+    } else {
+        let shown = opts.len().min(ASK_ROWS);
+        let top = c
+            .draft
+            .cursor
+            .saturating_sub(shown - 1)
+            .min(opts.len() - shown);
+        for (i, o) in opts.iter().enumerate().skip(top).take(shown) {
+            let on = c.draft.chosen.contains(&i);
+            let mark = match (c.multiple(), on) {
+                (true, true) => "[x]",
+                (true, false) => "[ ]",
+                (false, true) => "(*)",
+                (false, false) => "( )",
+            };
+            let num = (i + 1) % 10;
+            let label = json_str(&o["label"]);
+            let line = format!("{mark} {num} {}", label.trim_matches('"'));
+            let at = focused && i == c.draft.cursor;
+            let mut st = cx.st(if at { PRIMARY } else { SECONDARY }, PANEL);
+            if at {
+                st = st.add_modifier(Modifier::REVERSED);
+            }
+            let w = (inner_w.saturating_sub(2) as usize).min(width(&line));
             put(
                 buf,
                 x + 2,
-                by + 1,
-                "Answering questions arrives with the waiting-card work in 12.4.",
-                cx.st(MUTED, PANEL),
+                y,
+                &truncate(&line, inner_w.saturating_sub(2) as usize, cx.ell()),
+                st,
                 inner_w,
             );
-            put(
-                buf,
-                x + 2,
-                by + 2,
-                "esc stops the turn",
-                cx.st(MUTED, PANEL),
-                inner_w,
-            );
+            if writable {
+                hits.add(Rect::new(x + 2, y, w as u16, 1), Target::WaitOption(i));
+            }
+            y += 1;
         }
     }
+    let by = r.bottom().saturating_sub(2);
+    let step = if c.total > 1 {
+        format!("question {} of {}  ", c.index + 1, c.total)
+    } else {
+        String::new()
+    };
+    let hint = if c.draft.sent {
+        "sending the answers...".to_owned()
+    } else if opts.is_empty() {
+        format!("{step}enter in the composer sends the answer")
+    } else {
+        let pick = if c.multiple() {
+            "space/number tick, enter confirms"
+        } else {
+            "number or up/down+enter picks"
+        };
+        let text = if c.allows_text() {
+            ", or type a note"
+        } else {
+            ""
+        };
+        format!("{step}{pick}{text}")
+    };
+    put(
+        buf,
+        x + 2,
+        by,
+        &truncate(&hint, inner_w.saturating_sub(2) as usize, cx.ell()),
+        cx.st(MUTED, PANEL),
+        inner_w,
+    );
+    let last = c.index + 1 >= c.total;
+    let label = if last {
+        "submit answers"
+    } else {
+        "next question"
+    };
+    let enabled = writable && !c.draft.sent;
+    let rect = button(cx, buf, (x + 2, by + 1), label, (enabled, true, false));
+    if enabled {
+        hits.add(rect, Target::Wait(WaitButton::Submit));
+    }
+    let key = a
+        .manifest
+        .command("waiting.submit_answers")
+        .and_then(|c| c.tui_key())
+        .map(|k| format!("{k} {label}"))
+        .unwrap_or_default();
+    put(
+        buf,
+        rect.right() + 2,
+        by + 1,
+        &truncate(
+            &format!("{key}{}esc stops the turn", cx.sep()),
+            inner_w.saturating_sub(rect.width + 4) as usize,
+            cx.ell(),
+        ),
+        cx.st(MUTED, PANEL),
+        inner_w,
+    );
 }
 
 /// Display parts of a `provider/id` model reference. The catalog name wins over

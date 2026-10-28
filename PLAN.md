@@ -159,18 +159,16 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 3. **Session info**
    - Effort, tool counts, a context bar and cost once Core reports usage
      totals.
-4. **Waiting card**
-   - Answer `ask` questions in the TUI (NSH already can).
-5. **Files**
+4. **Files**
    - Syntax highlighting (the library is still undecided).
    - `/` search and load-more in the file view.
    - `@` completion in the composer.
-6. **Projects**
+5. **Projects**
    - Add and remove projects from the TUI.
-7. **Settings**
+6. **Settings**
    - Wire the rows Core can already serve (default model and effort, the
      catalog, loaded agents).
-8. **Tests**
+7. **Tests**
    - PTY checks at 80×24 and 160×48 for anchor, follow and jump-to-latest.
    - A review gallery from fixed fixtures (`interface/review.md`).
 

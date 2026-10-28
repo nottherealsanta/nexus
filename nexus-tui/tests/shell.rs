@@ -1208,3 +1208,144 @@ fn enter_in_the_right_sidebar_opens_the_selected_diff() {
     let (_, lines) = draw(&mut app, 120, 36);
     assert!(joined(&lines).contains("Untracked file"));
 }
+
+const GEN: &str = "log_c915bfc9b6d826c4";
+
+/// A session with one pending `ask` request of the given questions JSON.
+fn asking(questions: &str, size: (u16, u16)) -> nexus_tui::app::App {
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), size);
+    app.open_session(SESSION);
+    app.effects.clear();
+    let data = format!(
+        r#"{{"id":"qst_9","session_id":"{SESSION}","call_id":"call_9","created":1.0,"questions":{questions}}}"#
+    );
+    let sse = format!(
+        "id: {GEN}:4\nevent: question.asked\ndata: {{\"id\":4,\"seq\":4,\"time\":1.0,\"type\":\"question.asked\",\"session_id\":\"{SESSION}\",\"data\":{data},\"cursor\":\"{GEN}:4\"}}\n\n"
+    );
+    for e in events(&sse) {
+        app.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+    app
+}
+
+fn answers_sent(app: &nexus_tui::app::App) -> Vec<serde_json::Value> {
+    app.effects
+        .iter()
+        .filter_map(|e| match e {
+            nexus_tui::app::Effect::Api(nexus_tui::actions::ApiCall::Answer {
+                id,
+                answers,
+                ..
+            }) => {
+                assert_eq!(id, "qst_9");
+                Some(serde_json::Value::Array(answers.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+const DB: &str = r#"{"id":"db","question":"Which database?","options":[{"id":"pg","label":"PostgreSQL"},{"id":"lite","label":"SQLite"}],"multiple":false,"allow_free_text":false}"#;
+
+#[test]
+fn question_card_shows_options_and_a_number_key_answers() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(
+        all.contains("Which database?")
+            && all.contains("1 PostgreSQL")
+            && all.contains("2 SQLite")
+            && all.contains("submit answers"),
+        "{all}"
+    );
+    assert!(!all.contains("arrives with"), "{all}");
+    press(&mut app, &["alt+w", "2"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
+    );
+    // a second press while the reply is in flight sends nothing more
+    press(&mut app, &["1", "enter"]);
+    assert_eq!(answers_sent(&app).len(), 1);
+}
+
+#[test]
+fn arrows_and_enter_pick_and_clicks_hit_options() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    press(&mut app, &["alt+w", "down", "down", "enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]
+    );
+
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let row = rows
+        .iter()
+        .position(|r| r.contains("1 PostgreSQL"))
+        .unwrap();
+    let x = col_of(&rows[row], "PostgreSQL") as u16;
+    assert_eq!(
+        app.hits.at(x, row as u16),
+        Some(&Target::WaitOption(0)),
+        "option row is a hit target"
+    );
+    click(&mut app, x, row as u16);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([{"question_id": "db", "selected": ["pg"], "text": null}])]
+    );
+}
+
+#[test]
+fn free_text_goes_through_the_composer_and_several_questions_send_once() {
+    let notes = r#"{"id":"notes","question":"Anything else?"}"#;
+    let multi = r#"{"id":"tags","question":"Which tags?","options":[{"id":"a","label":"alpha"},{"id":"b","label":"beta"}],"multiple":true,"allow_free_text":false}"#;
+    let mut app = asking(&format!("[{DB},{multi},{notes}]"), (120, 36));
+    press(&mut app, &["alt+w", "1"]);
+    // multi-select: tick two, enter confirms
+    press(&mut app, &["1", "2", "enter"]);
+    assert!(answers_sent(&app).is_empty());
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(
+        all.contains("Anything else?") && all.contains("question 3 of 3"),
+        "{all}"
+    );
+    // typing from the card lands in the composer; Enter there answers
+    typing(&mut app, "keep it small");
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    press(&mut app, &["enter"]);
+    assert_eq!(
+        answers_sent(&app),
+        vec![serde_json::json!([
+            {"question_id": "db", "selected": ["pg"], "text": null},
+            {"question_id": "tags", "selected": ["a", "b"], "text": null},
+            {"question_id": "notes", "selected": [], "text": "keep it small"}
+        ])]
+    );
+    assert!(app.composer_ref().expanded_text().is_empty());
+}
+
+#[test]
+fn typed_text_for_an_option_only_question_is_refused_and_kept() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    press(&mut app, &["alt+w"]);
+    app.ui.focus = nexus_tui::ui::Focus::Composer;
+    typing(&mut app, "postgres please");
+    press(&mut app, &["enter"]);
+    assert!(answers_sent(&app).is_empty());
+    assert_eq!(app.composer_ref().expanded_text(), "postgres please");
+}
+
+#[test]
+fn escape_on_a_question_follows_the_manifest_chain() {
+    let mut app = asking(&format!("[{DB}]"), (120, 36));
+    press(&mut app, &["alt+w"]);
+    let rule = app.escape_rule();
+    // not busy here, so the chain falls through to refocusing the composer
+    assert_eq!(rule.as_deref(), Some("refocus"));
+    press(&mut app, &["esc"]);
+    assert_eq!(app.ui.focus, nexus_tui::ui::Focus::Composer);
+    assert!(answers_sent(&app).is_empty());
+}
