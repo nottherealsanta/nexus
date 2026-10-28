@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Nexus design chooser</title>
+<style>
+:root { --bg:#0e0e0f; --card:#17171a; --line:#2a2a2e; --fg:#e6e7e8; --sec:#a4a9ae; --mut:#7d838a; --acc:#e8a46e; --ok:#8fc46a; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui, -apple-system, sans-serif; }
+header { position:sticky; top:0; z-index:5; display:flex; gap:18px; align-items:center; padding:10px 24px; background:#141416ee; backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+header h1 { font-size:15px; margin:0; font-weight:600; }
+header .grow { flex:1; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+.seg button { background:none; border:0; color:var(--sec); padding:5px 11px; font:inherit; font-size:13px; cursor:pointer; }
+.seg button.on { background:#2a2622; color:var(--fg); }
+.btn { background:var(--acc); color:#151515; border:0; border-radius:7px; padding:6px 14px; font:inherit; font-weight:600; cursor:pointer; }
+.btn.ghost { background:none; color:var(--sec); border:1px solid var(--line); font-weight:500; }
+.progress { color:var(--mut); font-size:13px; }
+nav { position:fixed; top:58px; left:0; width:230px; bottom:0; overflow:auto; padding:14px 10px; border-right:1px solid var(--line); }
+nav a { display:flex; gap:8px; align-items:baseline; padding:4px 10px; border-radius:6px; color:var(--sec); text-decoration:none; font-size:13px; }
+nav a:hover { background:#1c1c20; }
+nav a .k { color:var(--mut); width:30px; flex:none; }
+nav a .pick { margin-left:auto; color:var(--ok); font-weight:600; }
+main { margin-left:230px; padding:8px 32px 120px; }
+section { padding:28px 0 20px; border-bottom:1px solid var(--line); }
+section h2 { margin:0 0 4px; font-size:19px; font-weight:600; }
+section h2 .k { color:var(--mut); font-weight:500; margin-right:8px; }
+.q { color:var(--sec); margin:0 0 16px; max-width:900px; }
+.opts { display:grid; grid-template-columns:repeat(auto-fill, minmax(520px, 1fr)); gap:18px; }
+.opt { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+.opt.chosen { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc); }
+.opt .imgs { display:flex; flex-direction:column; gap:1px; background:var(--line); }
+.opt figure { margin:0; background:#0b0b0b; position:relative; }
+.opt figure img { width:100%; display:block; cursor:zoom-in; }
+.opt figure figcaption { position:absolute; left:8px; top:6px; font-size:11px; color:#ddd; background:#000a; padding:1px 7px; border-radius:5px; }
+.opt .pending { padding:40px; text-align:center; color:var(--mut); font-size:13px; }
+.opt .body { padding:12px 16px 14px; display:flex; flex-direction:column; gap:6px; flex:1; }
+.opt .title { display:flex; align-items:center; gap:8px; font-weight:600; }
+.badge { font-size:11px; font-weight:600; padding:1px 7px; border-radius:5px; background:#2a2622; color:var(--acc); }
+.badge.cur { background:#222; color:var(--mut); }
+.badge.old { background:#1d2433; color:#7aa7f0; }
+.opt .desc { color:var(--sec); font-size:13px; }
+.opt .choose { margin-top:auto; align-self:flex-start; }
+.opt.chosen .choose { background:var(--ok); }
+textarea { width:100%; max-width:900px; margin-top:14px; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; font-size:13px; min-height:38px; }
+#lb { position:fixed; inset:0; background:#000e; z-index:20; display:none; overflow:auto; cursor:zoom-out; }
+#lb.on { display:block; }
+#lb img { display:block; margin:24px auto; max-width:calc(100vw - 48px); }
+#lb img.full { max-width:none; cursor:zoom-out; }
+#lb .hint { position:fixed; top:10px; right:18px; color:#aaa; font-size:12px; }
+#export { position:fixed; inset:0; background:#000c; z-index:30; display:none; align-items:center; justify-content:center; }
+#export.on { display:flex; }
+#export .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; width:min(900px, 92vw); }
+#export textarea { max-width:none; height:55vh; font-family:ui-monospace, monospace; font-size:12px; }
+</style>
+<header>
+  <h1>Nexus design chooser</h1>
+  <span class="seg" id="client"><button data-v="both" class="on">TUI + NSH</button><button data-v="TUI">TUI</button><button data-v="NSH">NSH</button></span>
+  <span class="seg" id="theme"><button data-v="dark" class="on">Dark</button><button data-v="light">Light</button><button data-v="all">All variants</button></span>
+  <span class="grow"></span>
+  <span class="progress" id="progress"></span>
+  <button class="btn ghost" id="recommend">Pick all recommended</button>
+  <button class="btn" id="exportBtn">Export choices</button>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div id="lb"><span class="hint">click: actual size · Esc: close</span><img></div>
+<div id="export"><div class="panel">
+  <p style="margin:0 0 8px;color:var(--sec)">Paste this back into Claude Code, or save it as <code>nexus-design-mockup/choices.json</code> (the Download button does that).</p>
+  <textarea id="exportText" readonly></textarea>
+  <p style="margin:10px 0 0;display:flex;gap:10px"><button class="btn" id="copy">Copy</button><button class="btn ghost" id="download">Download choices.json</button><button class="btn ghost" id="closeExport">Close</button></p>
+</div></div>
+<script>
+const DATA = /*DATA*/null;
+const KEY = "nexus-design-choices-v1";
+const state = JSON.parse(localStorage.getItem(KEY) || "{}"); // {D02: {pick:"A", note:""}}
+let client = "both", theme = "dark";
+const save = () => { localStorage.setItem(KEY, JSON.stringify(state)); progress(); };
+const $ = (s, r = document) => r.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) k === "class" ? e.className = v : k.startsWith("on") ? e[k] = v : e.setAttribute(k, v); for (const c of kids) e.append(c); return e; };
+
+function progress() {
+  const n = DATA.decisions.filter(d => state[d.id]?.pick).length;
+  $("#progress").textContent = `${n} of ${DATA.decisions.length} chosen`;
+  for (const d of DATA.decisions) { const p = $(`#nav a[href="#${d.id}"] .pick`); if (p) p.textContent = state[d.id]?.pick || ""; }
+}
+
+function render() {
+  const nav = $("#nav"), main = $("#main");
+  nav.innerHTML = ""; main.innerHTML = "";
+  for (const d of DATA.decisions) {
+    nav.append(el("a", { href: "#" + d.id }, el("span", { class: "k" }, d.id), d.title, el("span", { class: "pick" })));
+    const sec = el("section", { id: d.id }, el("h2", {}, el("span", { class: "k" }, d.id), d.title), el("p", { class: "q" }, d.question));
+    const grid = el("div", { class: "opts" });
+    for (const o of d.options) {
+      const card = el("div", { class: "opt" + (state[d.id]?.pick === o.key ? " chosen" : "") });
+      const imgs = el("div", { class: "imgs" });
+      // One image per shot in the chosen theme (falling back to dark); "All variants" shows every one.
+      const mine = o.images.filter(i => client === "both" || i.client === client);
+      const pick = theme === "all" ? mine : [...new Set(mine.map(i => i.label))].map(l => mine.find(i => i.label === l && i.theme === theme) || mine.find(i => i.label === l && i.theme === "dark") || mine.find(i => i.label === l));
+      if (!pick.length) imgs.append(el("div", { class: "pending" }, client === "both" ? "No images yet" : `No ${client} mock-up for this option`));
+      for (const i of pick) {
+        const f = el("figure");
+        if (i.src) { const im = el("img", { src: i.src, loading: "lazy" }); im.onclick = () => openLb(i.src); f.append(im); }
+        else f.append(el("div", { class: "pending" }, "rendering… (" + i.label + ")"));
+        f.append(el("figcaption", {}, `${i.client} · ${i.label} · ${i.theme}`));
+        imgs.append(f);
+      }
+      const title = el("div", { class: "title" }, `${o.key}. ${o.label}`);
+      if (o.recommended) title.append(el("span", { class: "badge" }, "recommended"));
+      if (o.kind === "current") title.append(el("span", { class: "badge cur" }, "today"));
+      if (o.kind === "old") title.append(el("span", { class: "badge old" }, "old Nexus"));
+      const btn = el("button", { class: "btn choose" }, state[d.id]?.pick === o.key ? "✓ Chosen" : "Choose " + o.key);
+      btn.onclick = () => { state[d.id] = { ...(state[d.id] || {}), pick: o.key }; save(); render(); location.hash = d.id; };
+      card.append(imgs, el("div", { class: "body" }, title, el("div", { class: "desc" }, o.desc), btn));
+      grid.append(card);
+    }
+    const note = el("textarea", { placeholder: "Notes for " + d.id + " (optional): tweaks, mix-and-match…" });
+    note.value = state[d.id]?.note || "";
+    note.oninput = () => { state[d.id] = { ...(state[d.id] || {}), note: note.value }; save(); };
+    sec.append(grid, note);
+    main.append(sec);
+  }
+  progress();
+}
+
+function openLb(src) { const lb = $("#lb"), im = $("#lb img"); im.src = src; im.classList.remove("full"); lb.classList.add("on"); }
+$("#lb").onclick = e => { const im = $("#lb img"); if (e.target === im && !im.classList.contains("full")) { im.classList.add("full"); e.stopPropagation(); } else $("#lb").classList.remove("on"); };
+document.onkeydown = e => { if (e.key === "Escape") { $("#lb").classList.remove("on"); $("#export").classList.remove("on"); } };
+for (const id of ["client", "theme"]) $("#" + id).onclick = e => { const b = e.target.closest("button"); if (!b) return; for (const x of $("#" + id).children) x.classList.toggle("on", x === b); if (id === "client") client = b.dataset.v; else theme = b.dataset.v; render(); };
+$("#recommend").onclick = () => { for (const d of DATA.decisions) { const r = d.options.find(o => o.recommended); if (r && !state[d.id]?.pick) state[d.id] = { ...(state[d.id] || {}), pick: r.key }; } save(); render(); };
+function exportText() {
+  const out = { exported: new Date().toISOString(), choices: {} };
+  for (const d of DATA.decisions) { const s = state[d.id] || {}; const o = d.options.find(o => o.key === s.pick); out.choices[d.id] = { title: d.title, pick: s.pick || null, option: o ? o.label : null, note: s.note || "" }; }
+  return JSON.stringify(out, null, 2);
+}
+$("#exportBtn").onclick = () => { $("#exportText").value = exportText(); $("#export").classList.add("on"); };
+$("#closeExport").onclick = () => $("#export").classList.remove("on");
+$("#copy").onclick = () => { navigator.clipboard.writeText($("#exportText").value); $("#copy").textContent = "Copied"; };
+$("#download").onclick = () => { const a = el("a", { href: URL.createObjectURL(new Blob([exportText()], { type: "application/json" })), download: "choices.json" }); a.click(); };
+render();
+</script>

@@ -1,0 +1,413 @@
+# Nexus design language: semantic tokens shared by the TUI and NSH.
+# Source of truth for colour. Spec: INTERFACE_PLAN.md "## Design language".
+# Check with: python3 interface/check_theme.py
+#
+# Values that are not "#rrggbb" are token references ("surface.panel").
+# Hairline borders (border.default) are decoration and are exempt from the
+# 3:1 rule; every mark that carries meaning (focus, status, accent) is not.
+
+[meta]
+version = 1
+themes = ["dark", "light"]
+# Minimum contrast ratios enforced by check_theme.py.
+text_min = 4.5          # text.primary / secondary / muted, role text, status text
+nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
+
+# ---------------------------------------------------------------- dark
+[dark.surface]
+canvas = "#0B0B0B"      # app background, timeline, sidebars
+panel  = "#1e1e1e"      # cards, composer, notices
+raised = "#242424"      # dialogs, menus, toasts, user message
+sidebar = "#141414"     # left sidebar and session rail
+
+
+[dark.agent]
+amber = "#d18a38"
+blue = "#5c9cf5"
+violet = "#a78bfa"
+green = "#86b97a"
+teal = "#55b9a5"
+rose = "#dc8295"
+sky = "#69b7d5"
+gold = "#c9a94a"
+
+[dark.text]
+primary   = "#e6e7e8"   # titles, user and agent text, tool names
+secondary = "#a4a9ae"   # tool arguments, summaries, labels
+muted     = "#868c93"   # metadata, counts, key hints, timestamps, reasoning
+
+[dark.border]
+strong  = "#4a4a50"   # modal frames, split rule (decorative)
+default = "#2a2a2a"     # hairlines and dividers (decorative)
+focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
+
+[dark.interactive]
+accent    = "#e8a46e"   # brand mark, active tab, links, primary action
+on_accent = "#121314"   # text on an accent fill
+focus     = "#e8a46e"   # keyboard focus indicator
+selection = "#2c2824"   # selected row/range background (accent tint)
+hover     = "#1e1e1e"   # pointer-hover background
+
+[dark.status]
+success = "#8fc46a"
+warning = "#e0af68"
+error   = "#f27d8f"
+info    = "#7aa7f0"
+
+[dark.diff]
+add    = "#8fc46a"
+del    = "#f27d8f"
+add_bg = "#1c2a1a"
+del_bg = "#2e1b20"
+
+# ---------------------------------------------------------------- light
+[light.surface]
+canvas = "#f7f7f5"
+panel  = "#efefec"
+raised = "#ffffff"
+sidebar = "#f0f0ed"
+
+
+[light.agent]
+amber = "#905200"
+blue = "#2459ac"
+violet = "#6743ae"
+green = "#396a30"
+teal = "#126d5d"
+rose = "#9a405a"
+sky = "#23687f"
+gold = "#735d0c"
+
+[light.text]
+primary   = "#1f2124"
+secondary = "#4f555b"
+muted     = "#5c636a"
+
+[light.border]
+strong  = "#c2c3c0"   # modal frames, split rule (decorative)
+default = "#d4d5d2"
+focus   = "#a84e16"
+
+[light.interactive]
+accent    = "#a84e16"
+on_accent = "#ffffff"
+focus     = "#a84e16"
+selection = "#f0e3d8"
+hover     = "#e9e9e6"
+
+[light.status]
+success = "#2f7a1f"
+warning = "#8a5d00"
+error   = "#c0283f"
+info    = "#2a5fc4"
+
+[light.diff]
+add    = "#2f7a1f"
+del    = "#c0283f"
+add_bg = "#e1f0dc"
+del_bg = "#f8e1e4"
+
+# Agent names are casefolded, then FNV-1a 32-bit selects a slot. Built-ins
+# are pinned; custom names select from the unpinned slots (rose, sky, gold).
+[agent_pins]
+orchestrate = "amber"
+build = "blue"
+quick = "green"
+scout = "teal"
+plan = "violet"
+
+# ---------------------------------------------------------------- roles
+# Timeline roles are theme-independent: each names tokens, so both themes
+# inherit them. fg/bg/rail are token references. `rail` is the left-edge bar
+# colour, `label` the text that identifies the role without colour, `style`
+# the extra text style. Role text is checked against its own background.
+[roles.user_text]
+fg = "text.primary"
+bg = "surface.raised"
+rail = "text.muted"
+label = ""              # fallback rail identifies the user when surfaces collapse
+style = ""
+
+[roles.agent_text]
+fg = "text.primary"
+bg = "surface.canvas"
+rail = ""
+label = ""
+style = ""
+
+[roles.reasoning]
+fg = "text.muted"
+bg = "surface.canvas"
+rail = "border.default"
+label = "Thought"
+style = "italic"
+
+[roles.context_notice]  # something the model also received: handoff, clip, directory change
+fg = "text.secondary"
+bg = "surface.panel"
+rail = "status.info"
+label = "context"
+style = ""
+
+[roles.context_insertion]  # steering message, settings insertion
+fg = "text.secondary"
+bg = "surface.panel"
+rail = "interactive.accent"
+label = "inserted"
+style = ""
+
+[roles.diagnostic]      # execution diagnostics: hooks, retries, provider errors
+fg = "text.secondary"
+bg = "surface.panel"
+rail = "status.warning"
+label = "diagnostic"
+style = ""
+
+[roles.tool_row]
+fg = "text.secondary"
+bg = "surface.canvas"
+rail = ""
+label = ""
+style = ""
+
+[roles.child_card]
+fg = "text.primary"
+bg = "surface.panel"
+rail = "status.info"
+label = "child"
+style = ""
+
+# ---------------------------------------------------------------- fallbacks
+# 256-colour: xterm indices. Used when truecolor is not available.
+# ANSI-16: names; "default" is the terminal's own fg/bg. On ANSI-16 the
+# surfaces collapse to the terminal background and are told apart by rails,
+# borders and labels (never by background alone).
+[fallback256.dark]
+"surface.canvas" = 232
+"surface.panel" = 234
+"surface.raised" = 235
+"surface.sidebar" = 233
+"text.primary" = 254
+"text.secondary" = 248
+"text.muted" = 246
+"border.default" = 236
+"border.focus" = 179
+"interactive.accent" = 179
+"interactive.on_accent" = 233
+"interactive.focus" = 179
+"interactive.selection" = 237
+"interactive.hover" = 234
+"status.success" = 113
+"status.warning" = 179
+"status.error" = 210
+"status.info" = 111
+"diff.add" = 113
+"diff.del" = 210
+"diff.add_bg" = 22
+"diff.del_bg" = 52
+
+"agent.amber" = 173
+"agent.blue" = 75
+"agent.violet" = 141
+"agent.green" = 108
+"agent.teal" = 73
+"agent.rose" = 174
+"agent.sky" = 74
+"agent.gold" = 179
+
+[fallback256.light]
+"surface.canvas" = 255
+"surface.panel" = 254
+"surface.raised" = 231
+"surface.sidebar" = 255
+"text.primary" = 235
+"text.secondary" = 238
+"text.muted" = 240
+"border.default" = 188
+"border.focus" = 94
+"interactive.accent" = 94
+"interactive.on_accent" = 231
+"interactive.focus" = 94
+"interactive.selection" = 224
+"interactive.hover" = 253
+"status.success" = 22
+"status.warning" = 94
+"status.error" = 125
+"status.info" = 26
+"diff.add" = 22
+"diff.del" = 125
+"diff.add_bg" = 194
+"diff.del_bg" = 224
+
+"agent.amber" = 94
+"agent.blue" = 25
+"agent.violet" = 60
+"agent.green" = 238
+"agent.teal" = 23
+"agent.rose" = 241
+"agent.sky" = 24
+"agent.gold" = 58
+
+[fallback16.dark]
+"surface.canvas" = "default"
+"surface.panel" = "default"
+"surface.raised" = "default"
+"surface.sidebar" = "default"
+"text.primary" = "default"
+"text.secondary" = "white"
+"text.muted" = "bright_black"
+"border.default" = "bright_black"
+"border.focus" = "yellow"
+"interactive.accent" = "yellow"
+"interactive.on_accent" = "black"
+"interactive.focus" = "yellow"
+"interactive.selection" = "bright_black"   # background
+"interactive.hover" = "default"
+"status.success" = "green"
+"status.warning" = "yellow"
+"status.error" = "red"
+"status.info" = "blue"
+"diff.add" = "green"
+"diff.del" = "red"
+"diff.add_bg" = "default"
+"diff.del_bg" = "default"
+
+"agent.amber" = "yellow"
+"agent.blue" = "blue"
+"agent.violet" = "magenta"
+"agent.green" = "green"
+"agent.teal" = "cyan"
+"agent.rose" = "red"
+"agent.sky" = "cyan"
+"agent.gold" = "yellow"
+
+[fallback16.light]
+"surface.canvas" = "default"
+"surface.panel" = "default"
+"surface.raised" = "default"
+"surface.sidebar" = "default"
+"text.primary" = "default"
+"text.secondary" = "bright_black"
+"text.muted" = "bright_black"
+"border.default" = "white"
+"border.focus" = "red"
+"interactive.accent" = "red"
+"interactive.on_accent" = "white"
+"interactive.focus" = "red"
+"interactive.selection" = "white"          # background
+"interactive.hover" = "default"
+"status.success" = "green"
+"status.warning" = "yellow"
+"status.error" = "red"
+"status.info" = "blue"
+"diff.add" = "green"
+"diff.del" = "red"
+"diff.add_bg" = "default"
+"diff.del_bg" = "default"
+
+"agent.amber" = "yellow"
+"agent.blue" = "blue"
+"agent.violet" = "magenta"
+"agent.green" = "green"
+"agent.teal" = "cyan"
+"agent.rose" = "red"
+"agent.sky" = "cyan"
+"agent.gold" = "yellow"
+
+# ---------------------------------------------------------------- monochrome
+# Only bold, dim, reverse, underline. No colour, no italic, no background.
+# Meaning that colour carried moves to glyph + label + prefix, which every
+# mode shows anyway. text.muted is the only dim text; titles are bold.
+[monochrome.tokens]
+"surface.canvas" = []
+"surface.panel" = []
+"surface.raised" = []
+"surface.sidebar" = []
+"text.primary" = []
+"text.secondary" = []
+"text.muted" = ["dim"]
+"border.default" = ["dim"]
+"border.strong" = []
+"border.focus" = ["bold"]
+"interactive.accent" = ["bold"]
+"interactive.focus" = ["bold"]         # always with the focus bar glyph
+"interactive.selection" = ["reverse"]
+"interactive.hover" = ["underline"]
+"status.success" = []                  # glyph "+" and label carry it
+"status.warning" = ["bold"]
+"status.error" = ["bold", "underline"]
+"status.info" = []
+"diff.add" = ["bold"]                  # line prefix "+"
+"diff.del" = ["dim"]                   # line prefix "-"
+"diff.add_bg" = []
+"diff.del_bg" = []
+"interactive.on_accent" = ["reverse"]  # accent fills render as reverse video
+
+"agent.amber" = ["bold"]
+"agent.blue" = ["bold"]
+"agent.violet" = ["bold"]
+"agent.green" = ["bold"]
+"agent.teal" = ["bold"]
+"agent.rose" = ["bold"]
+"agent.sky" = ["bold"]
+"agent.gold" = ["bold"]
+
+[monochrome.roles]
+user_text = ["bold"]                   # rail glyph, no label
+agent_text = []
+reasoning = ["dim"]                    # label "Thought", rail "│"
+context_notice = []                    # label "context", heavy rail "┃"
+context_insertion = []                 # label "inserted", heavy rail "┃"
+diagnostic = ["bold"]                  # label "diagnostic", marker "!"
+tool_row = []
+child_card = []                        # label "child", box border
+
+# ---------------------------------------------------------------- glyphs
+# `unicode` is default; `ascii` is used when the terminal or locale cannot
+# draw it (and with --ascii / NEXUS10_ASCII). Every status glyph is paired
+# with a word label (labels are shown where there is room, always in
+# accessible names). No emoji, no glyph that needs two cells.
+[glyphs.status]
+#            unicode  ascii  label
+running     = { unicode = "◐", ascii = "~", label = "running",     token = "text.primary" }
+done        = { unicode = "✓", ascii = "+", label = "done",        token = "status.success" }
+error       = { unicode = "✕", ascii = "x", label = "error",       token = "status.error" }
+denied      = { unicode = "⊘", ascii = "-", label = "denied",      token = "status.error" }
+waiting     = { unicode = "◆", ascii = "?", label = "waiting",     token = "interactive.accent" }
+interrupted = { unicode = "◼", ascii = "!", label = "interrupted", token = "status.warning" }
+cancelled   = { unicode = "⊖", ascii = "o", label = "cancelled",   token = "text.muted" }
+
+[glyphs.spinner]
+unicode = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+ascii = ["|", "/", "-", "\\"]
+
+[glyphs.fold]
+open   = { unicode = "▾", ascii = "v" }
+closed = { unicode = "▸", ascii = ">" }
+
+[glyphs.sidebar]
+left_open    = { unicode = "◧", ascii = "[|" }
+left_closed  = { unicode = "□", ascii = "[ " }
+right_open   = { unicode = "◨", ascii = "|]" }
+right_closed = { unicode = "□", ascii = " ]" }
+tab_sessions = { unicode = "≡", ascii = "S" }
+tab_files    = { unicode = "▤", ascii = "F" }
+tab_projects = { unicode = "◫", ascii = "P" }
+
+[glyphs.attention]
+waiting = { unicode = "◆", ascii = "?", token = "interactive.accent", rank = 1 }
+error   = { unicode = "✕", ascii = "x", token = "status.error",       rank = 2 }
+unread  = { unicode = "●", ascii = "*", token = "status.info",        rank = 3 }
+
+[glyphs.structure]
+focus_bar  = { unicode = "▌", ascii = ">" }
+rail       = { unicode = "│", ascii = "|" }
+rail_heavy = { unicode = "┃", ascii = "|" }
+tree_mid   = { unicode = "├─", ascii = "|-" }
+tree_end   = { unicode = "╰─", ascii = "`-" }
+rule       = { unicode = "─", ascii = "-" }
+ellipsis   = { unicode = "…", ascii = "..." }
+separator  = { unicode = "·", ascii = "-" }
+breadcrumb = { unicode = "›", ascii = ">" }
+arrow      = { unicode = "→", ascii = "->" }
+close      = { unicode = "×", ascii = "x" }

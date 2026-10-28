@@ -1,0 +1,45 @@
+d01-tokens	160	46	Tokens and surfaces: chrome, page, panel, raised, text, accent, status, agents, diff
+d02-shell-200x50	200	50	Shell: header band, chrome sidebars, centre page (200×50)
+d02-shell-120x36	120	36	Shell at 120×36
+d03-sessions	200	50	Sessions sidebar: open (band), focus (bar), hover, marks, shimmering running title
+d03-sessions-worktrees-menu	200	50	Worktree sub-groups and the row menu
+d03-rail	200	50	Rail mode: three-row items
+d04-user-band	200	50	User band: open, focused, folded, and the tags (steer, queued, via voice, from parent)
+d04-sticky	200	50	Sticky user header: a scrolled turn with the band pinned under the header
+d05-footer	200	50	Turn footer: done, model change, interrupted, error and narrow
+d06-groups	200	50	Activity groups: folded, live shimmer, expanded members, member detail box
+d07-reasoning	200	50	Reasoning: finished, open, running, encrypted
+d08-markdown	200	50	Markdown: headings, inline code, lists, table, link, quote and a focused fence
+d09-diff-split	200	50	Diff, split view (reading column ≥ 110 cells): old | new, hatch on the empty side
+d09-diff-unified	120	36	Diff, unified view (narrow column): new line numbers, +/- and tints
+d10-new-session	200	50	New session: header block, then the starting context as the content
+d10-context-folded	200	50	After the first turn the context folds to one line at the timeline top
+d11-composer	200	50	Composer states: idle, draft, busy, completion, narrow, offline
+d13-palette	200	50	Command palette over the scrimmed shell
+d13-settings	200	50	Settings in manifest order; disabled rows muted, reason in the footer
+d13-model-picker	200	50	Model picker
+d13-confirm	200	50	Confirm: Cancel is the safe default
+d14-approval	200	50	Approval card for bash, docked above the composer
+d14-question	200	50	Question card: options and free text
+d15-alerts	200	50	Toasts, a banner and the jump-to-latest pill
+d16-files	200	50	Files tab and the file view with search
+d17-80x24	80	24	80x24: one pane, toggles and breadcrumb only, wrapped footer
+d17-80x24-drawer	80	24	80x24 with the left drawer over a scrimmed page
+d17-110x32	110	32	100-119 columns: left sidebar docked, right closed
+d18-empty	200	50	Empty workspace: wordmark, no projects
+d18-offline	200	50	Offline: header status, banner, draft kept
+d18-loading	200	50	Loading sessions without layout shift
+alt-d01-oldpalette	200	50	D01 B: old Nexus Grok Night palette
+alt-d01-coolfocus	200	50	D01 C: cool focus colour
+alt-d02-tabs	200	50	D02 B: old tab strip and location row
+alt-d03-status-groups	200	50	D03 B: status groups
+alt-d04-inset	200	50	D04 B: inset card
+alt-d05-left	200	50	D05 B: footer left under a hairline
+alt-d06-status	200	50	D06 B: status glyphs only
+alt-d07-diamond	200	50	D07 B: ◇ preview line
+alt-d10-chips	200	50	D10 B: inverted label chips
+alt-d11-rail	200	50	D11 B: card with focus rail
+alt-d12-tabs	200	50	D12 B: tabbed details
+alt-d13-accentfill	200	50	D13 B: accent fill, violet headings
+alt-d14-buttons	200	50	D14 B: button row
+alt-d15-bottom	200	50	D15 B: toasts bottom-right

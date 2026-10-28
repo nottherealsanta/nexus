@@ -1,0 +1,12 @@
+[package]
+name = "nexus-design-mockup"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Static Ratatui mock-ups of the DESIGN_PLAN.md decisions (temporary; delete when the plan lands)"
+
+[dependencies]
+ratatui = "=0.29.0"
+serde = { version = "1", features = ["derive"] }
+toml = "=0.8.23"
+unicode-width = "=0.2.0"

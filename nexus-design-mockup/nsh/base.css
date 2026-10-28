@@ -1,0 +1,54 @@
+/* Shared NSH mock-up styles. Values follow INTERFACE_PLAN.md "Scale" and the
+   DESIGN_PLAN.md decisions; every colour is a token from tokens.css. */
+@import url("tokens.css");
+@font-face { font-family: "Monaspace Argon"; src: url("../../nexus-nsh/fonts/MonaspaceArgon-Regular.otf"); }
+@font-face { font-family: "Monaspace Argon"; font-weight: 500; src: url("../../nexus-nsh/fonts/MonaspaceArgon-Medium.otf"); }
+@font-face { font-family: "Monaspace Argon"; font-weight: 700; src: url("../../nexus-nsh/fonts/MonaspaceArgon-Bold.otf"); }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--surface-canvas); color: var(--text-primary);
+  font: 14px/22px system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased; font-feature-settings: "tnum" 0;
+}
+.mono, code, pre { font-family: "Monaspace Argon", ui-monospace, monospace; font-size: 13px; line-height: 20px; }
+
+/* type levels */
+.t-title { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--text-primary); }
+.t-body { font-size: 14px; line-height: 22px; color: var(--text-primary); }
+.t-prose { font-size: 15px; line-height: 24px; color: var(--text-primary); }
+.t-sec { font-size: 13px; line-height: 20px; color: var(--text-secondary); }
+.t-meta { font-size: 12px; line-height: 16px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.t-label { font-size: 11px; line-height: 16px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+.muted { color: var(--text-muted); } .sec { color: var(--text-secondary); } .pri { color: var(--text-primary); }
+.accent { color: var(--interactive-accent); } .ok { color: var(--status-success); } .err { color: var(--status-error); }
+.warn { color: var(--status-warning); } .info { color: var(--status-info); }
+.b { font-weight: 600; } .i { font-style: italic; }
+
+/* shell */
+.app { display: grid; grid-template-rows: 44px 1fr; height: 100vh; }
+.app.with-left { grid-template-columns: 264px 1fr; }
+.app.with-left.with-right { grid-template-columns: 264px 1fr 300px; }
+.header { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-bottom: 1px solid var(--border-default); }
+.left { background: var(--surface-sidebar); border-right: 1px solid var(--border-default); display: flex; flex-direction: column; min-height: 0; }
+.right { border-left: 1px solid var(--border-default); padding: 16px; overflow: hidden; }
+.centre { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.scroll { flex: 1; overflow: hidden; }
+.column { max-width: 760px; margin: 0 auto; padding: 24px 32px; }
+
+/* controls */
+.icon-btn { width: 32px; height: 32px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+.icon-btn:hover, .icon-btn.hover { background: var(--interactive-hover); }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--surface-raised); color: var(--text-primary); font-size: 13px; font-weight: 500; }
+.btn.primary { background: var(--interactive-accent); border-color: var(--interactive-accent); color: var(--interactive-on-accent); }
+.btn.danger { color: var(--status-error); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.kbd { font: 11px/16px "Monaspace Argon", monospace; color: var(--text-muted); border: 1px solid var(--border-default); border-radius: 4px; padding: 0 4px; }
+.focus { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--surface-panel); font-size: 12px; color: var(--text-secondary); }
+.rule { height: 1px; background: var(--border-default); }
+svg.ic { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* mock-up chrome: a caption strip that is not part of the design */
+.mock-caption { position: fixed; right: 8px; bottom: 6px; font: 11px system-ui; color: var(--text-muted); opacity: .7; }
