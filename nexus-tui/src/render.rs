@@ -1516,7 +1516,7 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
     let entries = a.side_entries();
     if entries.is_empty() {
         let msg = if a.state.model.projects.is_empty() {
-            "No project yet. Add one with the Nexus CLI."
+            "No project yet. Open the Projects tab to add one."
         } else if a.ui.show_archived || a.ui.scope_all {
             "No sessions here. Type in the composer to start one."
         } else {
@@ -1764,6 +1764,27 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
 fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
     let ids = a.project_ids();
+    let add_row = |buf: &mut Buffer, y: u16, hits: &mut HitMap| {
+        if y >= r.bottom() {
+            return;
+        }
+        let rr = Rect::new(r.x, y, r.width, 1);
+        let style = if cx.hovered(rr) {
+            cx.st(PRIMARY, SIDEBAR).patch(cx.t.bg("interactive.hover"))
+        } else {
+            cx.st(MUTED, SIDEBAR)
+        };
+        clear(buf, rr, style);
+        put(
+            buf,
+            rr.x + 1,
+            y,
+            "+ Add project",
+            style,
+            rr.width.saturating_sub(1),
+        );
+        hits.add(rr, Target::AddProject);
+    };
     if ids.is_empty() {
         put(
             buf,
@@ -1773,6 +1794,7 @@ fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
             cx.st(MUTED, SIDEBAR),
             r.width - 1,
         );
+        add_row(buf, r.y + 3, hits);
         return;
     }
     let cursor = a.cursor(Tab::Projects);
@@ -1850,6 +1872,9 @@ fn draw_projects(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
         );
         hits.add(rr, Target::SideRow(i));
     }
+    // The closing row follows the last visible project.
+    let shown = ids.len().saturating_sub(top).min(h) as u16;
+    add_row(buf, r.y + shown * per, hits);
 }
 
 // ============================================================================
@@ -2145,6 +2170,18 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
     );
     kv(cx, buf, r, y, "agent", &s.agent);
     kv(cx, buf, r, y, "model", &a_model_label(cx, s));
+    kv(
+        cx,
+        buf,
+        r,
+        y,
+        "effort",
+        s.extra
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|e| !e.is_empty())
+            .unwrap_or("default"),
+    );
     kv(cx, buf, r, y, "perm", &s.permission);
     kv(
         cx,
@@ -2208,7 +2245,131 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
             format!("{kids}, {running} running")
         },
     );
-    kv(cx, buf, r, y, "tokens", "not reported");
+    let stats = a.state.model.selected.as_ref().map(|v| {
+        crate::stats::compute(
+            &v.messages,
+            &v.events,
+            &a.state.models,
+            &a.effective_model(Some(s)),
+        )
+    });
+    let Some(stats) = stats else { return };
+    kv(
+        cx,
+        buf,
+        r,
+        y,
+        "turns",
+        &format!(
+            "{}{}",
+            stats.turns,
+            if stats.calls > 0 {
+                format!("{}{} calls", cx.sep(), stats.calls)
+            } else {
+                String::new()
+            }
+        ),
+    );
+    if !stats.tools.is_empty() {
+        let shown: Vec<String> = stats
+            .tools
+            .iter()
+            .take(3)
+            .map(|(name, n)| format!("{name} {n}"))
+            .collect();
+        let rest = stats.tools.len().saturating_sub(3);
+        let mut line = shown.join(&cx.sep());
+        if rest > 0 {
+            line.push_str(&format!("{}+{rest}", cx.sep()));
+        }
+        kv(cx, buf, r, y, "tools", &line);
+    }
+    if stats.has_tokens() {
+        kv(cx, buf, r, y, "input", &text::count(stats.input));
+        if stats.cached > 0 {
+            kv(cx, buf, r, y, "cached", &text::count(stats.cached));
+        }
+        kv(cx, buf, r, y, "output", &text::count(stats.output));
+        if stats.reasoning > 0 {
+            kv(cx, buf, r, y, "reasoning", &text::count(stats.reasoning));
+        }
+        if let Some(window) = a
+            .state
+            .models
+            .iter()
+            .find(|m| m["ref"].as_str() == Some(a.effective_model(Some(s)).as_str()))
+            .and_then(|m| m["context"].as_u64())
+            .filter(|&n| n > 0)
+        {
+            if let Some(last) = stats.last_input {
+                context_bar(cx, buf, r, y, last, window);
+            }
+        }
+        if let Some(usd) = stats.cost {
+            let value = format!(
+                "{}{}",
+                crate::stats::money(usd),
+                if stats.partial_cost { "+" } else { "" }
+            );
+            kv(cx, buf, r, y, "cost", &value);
+        }
+    } else {
+        kv(cx, buf, r, y, "tokens", "not reported");
+    }
+}
+
+/// `context  ██░░░░░░ 26%`: the latest request's input against the window.
+fn context_bar(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, used: u64, window: u64) {
+    if *y >= r.bottom() {
+        return;
+    }
+    put(buf, r.x + 1, *y, "context", cx.st(MUTED, CANVAS), 9);
+    let pct = used as f64 / window as f64 * 100.0;
+    let label = format!(" {pct:.0}%");
+    let room = r.width.saturating_sub(12) as usize;
+    let bar = room.saturating_sub(width(&label)).clamp(0, 24);
+    if bar < 3 {
+        put(
+            buf,
+            r.x + 11,
+            *y,
+            label.trim_start(),
+            cx.st(SECONDARY, CANVAS),
+            room as u16,
+        );
+        *y += 1;
+        return;
+    }
+    let filled = ((pct / 100.0) * bar as f64).round().clamp(0.0, bar as f64) as usize;
+    let (on, off) = if cx.t.opts.ascii {
+        ("#", "-")
+    } else {
+        ("\u{2588}", "\u{2591}")
+    };
+    let token = if pct >= 95.0 {
+        "status.error"
+    } else if pct >= 80.0 {
+        "status.warning"
+    } else {
+        SECONDARY
+    };
+    let mut x = r.x + 11;
+    for i in 0..bar {
+        x = put(
+            buf,
+            x,
+            *y,
+            if i < filled { on } else { off },
+            if i < filled {
+                cx.st(token, CANVAS)
+            } else {
+                cx.st("border.default", CANVAS)
+            },
+            1,
+        );
+    }
+    put(buf, x, *y, &label, cx.st(SECONDARY, CANVAS), 6);
+    *y += 1;
 }
 
 // ============================================================================
@@ -2226,7 +2387,7 @@ fn empty_state(cx: &Cx) -> (String, Vec<String>) {
         _ if a.state.model.projects.is_empty() => (
             "Welcome to Nexus".into(),
             vec![
-                "No project yet. Add one with the Nexus CLI (nexus project open <path>),".into(),
+                "No project yet. Add one from the Projects tab or the command palette,".into(),
                 "then it appears here. Sign in to a provider with `nexus login`.".into(),
             ],
         ),
@@ -3548,6 +3709,29 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
             format!("pid {}{}{}", c.pid, cx.sep(), c.home)
         })),
         "keybindings.list" => Some("enter".into()),
+        "models.default" | "providers.default_model" => Some(if a.state.default_model.is_empty() {
+            "not reported".into()
+        } else {
+            a.state.default_model.clone()
+        }),
+        "models.catalog" => Some(format!(
+            "{} models{}",
+            a.state.models.len(),
+            if a.state.catalog_source.is_empty() {
+                String::new()
+            } else {
+                format!("{}{}", cx.sep(), a.state.catalog_source)
+            }
+        )),
+        "agents.list" => Some(
+            a.state
+                .agents
+                .iter()
+                .filter_map(|agent| agent["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        "models.refresh" => Some("enter".into()),
         _ => None,
     };
     match live {
@@ -3825,6 +4009,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Efforts => "Reasoning effort",
         PaletteMode::Export => "Export session",
         PaletteMode::Turns => "Go to turn",
+        PaletteMode::RowMenu => "Actions",
     };
     boxed(cx, buf, b, title, RAISED);
     hits.add(b, Target::Swallow);
@@ -3849,6 +4034,7 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::Efforts => "type to filter efforts",
             PaletteMode::Export => "choose a format and scope",
             PaletteMode::Turns => "type to find a turn",
+            PaletteMode::RowMenu => "choose an action",
         };
         put(buf, b.x + 4, b.y + 1, ph, cx.st(MUTED, RAISED), b.width - 6);
     } else {

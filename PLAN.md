@@ -163,27 +163,32 @@ Open from that round:
 - Terminal notifications: verify OSC 777 in kitty (it may need OSC 99) and
   track terminal focus.
 
-The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
+The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28).
+Landed 2026-10-28 (second round): the composer matches the old look (panel
+ending half a row under the controls; the strip `name branch path` with
+`worktree` only in a linked worktree); the starting-context section lists
+items with estimates, previews and a window share; the turn footer shows
+cost; head+tail tool output caps with `o` to show all (and `r`/`o`/`i` now
+work on a focused tool); Session info shows effort, turns, calls, tools by
+name, tokens, a context bar and cost; the Sessions list puts the main
+checkout first; right-click or `m` opens a row menu (sessions and projects);
+projects are added (`+ Add project`) and removed (confirmation) from the TUI;
+Settings shows what Core reports (default model, catalog, agents, refresh) and
+says why the rest cannot change. Still open:
 
 1. **Timeline**
-   - Head+tail output caps with a working "show all".
-   - `path:line` and OSC 8 links.
-2. **Sidebar**
-   - Worktree grouping.
-   - A row menu (rename, archive, delete, copy id, inspector).
-3. **Session info**
-   - Effort, tool counts, a context bar and cost once Core reports usage
-     totals.
-4. **Files**
+   - `path:line` and OSC 8 links (inline hit targets in Markdown and tool
+     output; ratatui cells need an escape-safe way to carry OSC 8).
+2. **Files**
    - Syntax highlighting (the library is still undecided).
-5. **Projects**
-   - Add and remove projects from the TUI.
-6. **Settings**
-   - Wire the rows Core can already serve (default model and effort, the
-     catalog, loaded agents).
-7. **Tests**
+3. **Settings**
+   - Editing the defaults needs Core settings (Step 12a, "Settings over the
+     API").
+4. **Tests**
    - PTY checks at 80×24 and 160×48 for anchor, follow and jump-to-latest.
    - A review gallery from fixed fixtures (`interface/review.md`).
+5. **Session info**
+   - Child sessions failed count, enabled/disabled tools and kernels.
 
 ### Step 12a — Core work the interface needs
 
@@ -312,6 +317,8 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 | Old counts `1.2K` | Counts are `1.2K`/`3.4M` everywhere in both clients (2026-10-28) | One format, as the old composer showed it |
 | Old context header: headings with token figures, previews and a total | Same, as a rail list with a right-aligned token column, detail rows and a window share; estimates are characters ÷ 4 and marked `~` (2026-10-28) | The context is visible and costed before the first request |
 | Turn footer without price | Footer adds cost from the catalog's prices when the model has them (2026-10-28) | Spec: every turn shows what it cost |
+| Output clipped to the first 200 lines, "show all" did nothing | First and last 100 lines with the hidden count between and `o` to toggle the whole output; `r`, `o`, `i` work on a focused tool (2026-10-28) | Clipping is announced and reversible; the model's own clip stays separate |
+| Projects were added with the CLI only | `+ Add project` and a confirmed remove in the Projects tab; right-click or `m` opens a row menu of the manifest's `row_menu` commands (2026-10-28) | Core already serves `POST`/`DELETE /api/project` |
 | Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 
 ## Known gaps

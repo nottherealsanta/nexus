@@ -1932,6 +1932,11 @@ export const manifest = {
    "id": "tool.show_all_output",
    "title": "Show all output",
    "category": "tool",
+   "keys": {
+    "tui": "o",
+    "nsh": "o"
+   },
+   "key_context": "tool",
    "when": [
     "focus.tool",
     "tool.output_clipped_in_ui"

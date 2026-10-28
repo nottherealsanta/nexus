@@ -60,6 +60,8 @@ pub struct Block {
     pub default_open: Option<bool>,
     /// Child session to open, or message ID to copy for a turn/user block.
     pub target: Option<String>,
+    /// A tool whose detail is longer than the head and tail the UI shows.
+    pub clipped: bool,
 }
 
 pub struct Timeline {
@@ -271,6 +273,10 @@ fn fmt_count(n: u64) -> String {
     }
 }
 
+/// Lines of a tool's detail shown from each end before the middle is folded.
+const DETAIL_HEAD: usize = 100;
+const DETAIL_TAIL: usize = 100;
+
 /// Tokens estimated from a character count (about four characters each).
 fn estimate(chars: usize) -> u64 {
     (chars as u64).div_ceil(4)
@@ -372,6 +378,7 @@ impl Builder<'_> {
             toggle,
             default_open: None,
             target: None,
+            clipped: false,
         });
         self.blank();
     }
@@ -1227,22 +1234,14 @@ impl Builder<'_> {
     /// (reasoning tokens are billed as output and already counted there).
     fn turn_cost(&self, meta: &TurnMeta) -> Option<String> {
         let used = meta.models.last()?;
-        let id = used.rsplit('/').next().unwrap_or(used);
-        let entry = self.app.state.models.iter().find(|m| {
-            m["ref"]
-                .as_str()
-                .is_some_and(|r| r == used || r.rsplit('/').next() == Some(id))
-        })?;
-        let price = |key: &str| entry[key].as_f64();
-        let (input, output) = (price("input_cost")?, price("output_cost")?);
-        let cache = price("cache_read_cost").unwrap_or(input);
-        let fresh = meta.input.saturating_sub(meta.cached) as f64;
-        let usd = (fresh * input + meta.cached as f64 * cache + meta.output as f64 * output) / 1e6;
-        Some(if usd < 0.01 {
-            "<$0.01".to_owned()
-        } else {
-            format!("${usd:.2}")
-        })
+        let entry = crate::stats::catalog_entry(&self.app.state.models, used)?;
+        let price = crate::stats::price_of(entry)?;
+        Some(crate::stats::money(crate::stats::cost(
+            price,
+            meta.input,
+            meta.cached,
+            meta.output,
+        )))
     }
 
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
@@ -1675,7 +1674,22 @@ impl Builder<'_> {
             .then(|| done.and_then(|d| bash_exit_code(&d.output)))
             .flatten()
             .filter(|code| *code != 0);
-        let detail = self.tool_detail(name, args, done, trace, raw);
+        let mut detail = self.tool_detail(name, args, done, trace, raw);
+        // Head and tail stay visible; the middle says how much it hides and
+        // `o` (or "show all") brings it back. Clipping here is the UI's, never
+        // the model's.
+        let all = self.is_open(&format!("{key}:all"), false);
+        let clipped = detail.len() > DETAIL_HEAD + DETAIL_TAIL + 20;
+        if clipped && !all {
+            let hidden = detail.len() - DETAIL_HEAD - DETAIL_TAIL;
+            let tail = detail.split_off(detail.len() - DETAIL_TAIL);
+            detail.truncate(DETAIL_HEAD);
+            detail.push((
+                format!("{} {hidden} lines hidden · show all (o)", self.ell()),
+                self.st(ACCENT, CANVAS),
+            ));
+            detail.extend(tail);
+        }
         let key = key.to_owned();
         let name = name.to_owned();
         self.block(key.clone(), BlockKind::Tool, turn, true, |b| {
@@ -1746,9 +1760,24 @@ impl Builder<'_> {
                         if raw { b.st(ACCENT, CANVAS) } else { b.meta() },
                     ),
                     Span::styled("r", b.meta()),
+                    Span::styled(
+                        if clipped && all {
+                            format!("{}show less o", b.sep())
+                        } else if clipped {
+                            format!("{}show all o", b.sep())
+                        } else {
+                            String::new()
+                        },
+                        b.meta(),
+                    ),
                 ]);
             }
         });
+        if clipped {
+            if let Some(block) = self.blocks.last_mut() {
+                block.clipped = true;
+            }
+        }
     }
 
     fn tool_detail(
@@ -1761,11 +1790,11 @@ impl Builder<'_> {
     ) -> Vec<(String, Style)> {
         let mut out = Vec::new();
         if raw {
-            for line in args.lines().take(60) {
+            for line in args.lines() {
                 out.push((line.to_owned(), self.secondary()));
             }
             if let Some(d) = done {
-                for line in d.output.lines().take(60) {
+                for line in d.output.lines() {
                     out.push((
                         line.to_owned(),
                         if d.is_error {
@@ -1782,7 +1811,7 @@ impl Builder<'_> {
         match name {
             "edit" | "patch" => {
                 if let Some(patch) = a["patch"].as_str() {
-                    for line in patch.lines().take(200) {
+                    for line in patch.lines() {
                         let style = if line.starts_with('+') && !line.starts_with("+++") {
                             self.st("diff.add", CANVAS)
                         } else if line.starts_with('-') && !line.starts_with("---") {
@@ -1807,10 +1836,10 @@ impl Builder<'_> {
                         format!("@@ {}", a["path"].as_str().unwrap_or("")),
                         self.st("status.info", CANVAS),
                     ));
-                    for line in old.lines().take(100) {
+                    for line in old.lines() {
                         out.push((format!("- {line}"), self.st("diff.del", CANVAS)));
                     }
-                    for line in new.lines().take(100) {
+                    for line in new.lines() {
                         out.push((format!("+ {line}"), self.st("diff.add", CANVAS)));
                     }
                 }
@@ -1820,15 +1849,13 @@ impl Builder<'_> {
                     format!("+ {}", a["path"].as_str().unwrap_or("")),
                     self.st("status.info", CANVAS),
                 ));
-                for line in a["content"].as_str().unwrap_or("").lines().take(200) {
+                for line in a["content"].as_str().unwrap_or("").lines() {
                     out.push((format!("+ {line}"), self.st("diff.add", CANVAS)));
                 }
             }
             _ => {
                 if let Some(d) = done {
-                    let lines: Vec<&str> = d.output.lines().collect();
-                    let limit = 200;
-                    for line in lines.iter().take(limit) {
+                    for line in d.output.lines() {
                         out.push((
                             line.to_string(),
                             if d.is_error {
@@ -1836,16 +1863,6 @@ impl Builder<'_> {
                             } else {
                                 self.secondary()
                             },
-                        ));
-                    }
-                    if lines.len() > limit {
-                        out.push((
-                            format!(
-                                "{} {} lines hidden · show all",
-                                self.ell(),
-                                lines.len() - limit
-                            ),
-                            self.meta(),
                         ));
                     }
                 } else if let Some(err) = trace.and_then(|t| t.error.clone()) {
@@ -2187,6 +2204,7 @@ impl Builder<'_> {
                     toggle: false,
                     default_open: None,
                     target: Some(source.clone()),
+                    clipped: false,
                 });
             }
         }

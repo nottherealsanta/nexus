@@ -710,6 +710,20 @@ impl CoreApi {
         .try_decode()
     }
 
+    /// Delete a project and its sessions (`DELETE /api/project/{id}`).
+    pub async fn delete_project(&self, id: &str, key: &RequestId) -> Result<Outcome<()>, Error> {
+        Ok(self
+            .mutate(
+                Method::DELETE,
+                &format!("/api/project/{id}"),
+                None,
+                key,
+                None,
+            )
+            .await?
+            .map(|_| ()))
+    }
+
     pub async fn delete_session(&self, id: &str, key: &RequestId) -> Result<Outcome<()>, Error> {
         Ok(self
             .mutate(

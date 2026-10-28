@@ -6,7 +6,7 @@ import { Clipboard, keymap, openUrl } from "nsh";
 import { manifest } from "./gen/manifest";
 import {
   addProjectOpen, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
-  draft, isNarrow, leftOpen, leftTab, live, m, model, notifications, paletteOpen, previousCentre, renaming, rightOpen,
+  currentWorktree, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, paletteOpen, previousCentre, renaming, rightOpen,
   picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sync, toast, toasts, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
@@ -68,7 +68,7 @@ function evalTerm(t: string): boolean {
     case "session.interrupted": return inSession && ses!.status !== "busy" && lastTurnIncomplete(model.selected?.messages ?? []);
     case "session.archived": return inSession && !!ses!.archived;
     case "session.child": return inSession && !!ses!.parent_id;
-    case "session.in_worktree": return false;
+    case "session.in_worktree": return currentWorktree()?.main === false;
     case "has_waiting": return model.approvals.size + model.questions.size > 0;
     case "waiting.approval": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "approval"; }
     case "waiting.question": { const w = waitItems()[waitIndex() % Math.max(1, waitItems().length)]; return w?.kind === "question"; }
@@ -115,7 +115,13 @@ export function openSettings() {
 }
 function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
-export function newSession() { model.select(null); centre.set("new_session"); if (isNarrow()) drawer.set(null); bump(); }
+export function newSession() {
+  model.select(null); centre.set("new_session");
+  const project = currentProject();
+  if (project) { loadComposerData(project); loadProjectWorktrees(project); }
+  if (isNarrow()) drawer.set(null);
+  bump();
+}
 
 export async function sendPrompt(text: string): Promise<boolean> {
   text = text.trim();
@@ -293,6 +299,8 @@ export const focusWaiting = { fn: () => {} };
 const BLOCKED: Record<string, string> = {
   "app.sign_in": "Sign-in over the API is not in Core yet; use `nexus login` in a terminal.",
   "app.sign_out": "Sign-out over the API is not in Core yet.",
+  "session.change_directory": "NSH's directory picker is not built yet; this action is unavailable.",
+  "session.worktrees": "NSH's worktree controls are not built yet; this action is unavailable.",
 };
 
 export interface Availability { ok: boolean; reason?: string }
@@ -302,7 +310,7 @@ export function availability(c: Cmd): Availability {
   const h = handlers.get(c.id);
   const whenOk = c.when.every(term);
   if (!whenOk) return { ok: false, reason: c.unavailable_reason ?? "Not available right now." };
-  if (!h) return { ok: false, reason: "Not built in this NSH increment yet." };
+  if (!h) return { ok: false, reason: BLOCKED[c.id] ?? "Not built in this NSH increment yet." };
   if (h.mutates && !live()) return { ok: false, reason: "Core is not connected: the view is read-only." };
   return { ok: true };
 }

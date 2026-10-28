@@ -77,9 +77,19 @@ headers, new-file line numbers. A Staged row shows the staged diff, an Unstaged
 row the unstaged one; Untracked rows show a notice because Core's diff has no
 untracked contents. Esc returns to the timeline.
 
+Tool output longer than 220 lines keeps its first and last 100 lines with a
+`N lines hidden · show all (o)` row between; `o` on a focused tool toggles the
+full output (`r` raw, `i` inspector work there too). The right sidebar's Session
+info totals turns, calls, tools by name, tokens, a context bar against the
+model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
+its action menu; the Projects tab ends with `+ Add project` (an inline path
+field) and removal asks first. Settings shows the default model, catalog size
+and source and the loaded agents, and says why rows that need a Core setting
+cannot change.
+
 Still Step 12.4: the built-in editor, worktree
-management in the UI, settings editing beyond theme/monochrome, and
-steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.
+management in the UI, `path:line` links, settings editing beyond
+theme/monochrome, and steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.
 
 ## Build, run, test
 

@@ -77,7 +77,9 @@ export function relTime(sec: number, now = Date.now()): string {
   if (d < 86400 * 14) return `${Math.round(d / 86400)}d`;
   return `${Math.round(d / 604800)}w`;
 }
-export const abbrev = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n));
+export const abbrev = (n: number) => n >= 1_000_000
+  ? `${(n / 1_000_000).toFixed(1)}M`
+  : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
 
 /** Middle truncation with an ellipsis (paths, ids): the ends carry the meaning. */
 export function midTruncate(t: string, max: number): string {

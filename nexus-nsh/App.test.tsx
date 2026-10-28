@@ -23,6 +23,20 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/session/*": { body: snapshot.sessions[0] },
 });
 const mod = "mod";
+const userMessage = { id: "m_user", session_id: "ses_1", seq: 1, role: "user", parts: [{ type: "text", text: "hello" }], created: 1 };
+const assistantMessage = { id: "m_assistant", session_id: "ses_1", seq: 2, role: "assistant", parts: [{ type: "text", text: "done" }], created: 2 };
+
+function selectedSessionNetwork(extra: Record<string, unknown> = {}) {
+  return {
+    "GET */api/session/ses_1": { body: { ...snapshot.sessions[0], model: "codex/gpt-5", directory: "/work/demo" } },
+    "GET */api/session/ses_1/message": { body: [userMessage, assistantMessage] },
+    "GET */api/session/ses_1/snapshot": { body: null },
+    "GET */api/session/ses_1/event*": { body: { events: [], more: false, floor: 0, history_truncated: false } },
+    "GET */api/session/ses_1/worktrees": { body: { session_directory: "/work/demo", project_directory: "/work/demo", worktrees: [{ path: "/work/demo", branch: "trunk", main: true }] } },
+    ...core(),
+    ...extra,
+  };
+}
 
 describe("agent colours", () => {
   test("pins and hashes match the TUI", () => {
@@ -199,5 +213,106 @@ describe("history", () => {
     for (let i = 0; i < 30; i++) await app.clock.fastForward(5000); // several backoff cycles
     expect(app.requests().filter((r) => r.url.includes("/api/info")).length > 3).toBe(true);
     expect(app.requests().filter((r) => r.method === "POST" && r.url.includes("/__nexus/start")).length).toBe(1);
+  });
+});
+
+describe("context, composer and footer parity", () => {
+  const starting = {
+    origin: "created",
+    system_prompt: `# Agent prompt\nYou are coding in Nexus.\n${"x".repeat(4000)}`,
+    tools: ["read", "bash", "edit"],
+    tool_definitions: { read: { name: "read" } },
+    instruction_file: { path: "/work/demo/AGENTS.md", status: "loaded", bytes: 800 },
+    agent: { name: "build", source: "builtin", description: "Does the work." },
+    child_agents: [{ name: "scout" }, { name: "plan" }],
+    workspace: { active: true },
+  };
+
+  test("starting context shows the TUI items, estimates and catalog window share", async () => {
+    const app = await open("./App.tsx", {
+      network: {
+        ...selectedSessionNetwork({
+          "GET */api/session/ses_1/message": { body: [] },
+          "GET */api/session/ses_1/snapshot": { body: starting },
+          "GET */api/model*": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 100000 }] } },
+        }),
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:context-section");
+    const shown = app.texts().join("\n");
+    for (const text of [
+      "Context", "6 items", "~1.0K tokens", "1.0% of window", "System prompt", "You are coding in Nexus.",
+      "Tools", "[3]", "read  bash  edit", "~6", "Instructions", "AGENTS.md loaded", "800 B, part of the system prompt",
+      "Agent", "build", "builtin · Does the work.", "Child agents", "scout  plan", "Workspace tools", "active", "total", "of the window",
+    ]) expect(shown.includes(text)).toBe(true);
+  });
+
+  test("turn footer prices cached and uncached input using the catalog", async () => {
+    const events = [
+      { id: 1, type: "wire_request", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { body: { model: "gpt-5" } } },
+      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 100000, cached_input_tokens: 50000, output_tokens: 10000 } },
+      { id: 3, type: "turn_end", session_id: "ses_1", cursor: "log_t:3", seq: 3, time: 1.9, data: { stop: "completed", steps: 1 } },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({
+        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/model*": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 400000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
+      }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:turn-footer");
+    const footer = app.texts().join("\n");
+    expect(footer.includes("100K in 50.0K cached 10.0K out")).toBe(true);
+    expect(footer.includes("$0.16")).toBe(true);
+  });
+
+  test("location strip uses the longest matching linked worktree and shows disabled action reasons", async () => {
+    const session = { ...snapshot.sessions[0], directory: "/work/demo/ws/nested", model: "codex/gpt-5" };
+    const app = await open("./App.tsx", {
+      network: {
+        ...selectedSessionNetwork({
+          "GET */api/snapshot*": { body: { ...snapshot, sessions: [session] } },
+          "GET */api/session/ses_1": { body: session },
+          "GET */api/session/ses_1/worktrees": { body: {
+            session_directory: session.directory, project_directory: "/work/demo",
+            worktrees: [
+              { path: "/work/demo", branch: "trunk", main: true },
+              { path: "/work/demo/ws", branch: "feature", main: false },
+              { path: "/work/demo/ws/nested", branch: "nested", main: false },
+            ],
+          } },
+        }),
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:location-worktree");
+    const shown = app.texts().join("\n");
+    expect(shown.includes("demo")).toBe(true);
+    expect(shown.includes("nested")).toBe(true);
+    expect(shown.includes("/work/demo/ws/nested")).toBe(true);
+    expect(shown.includes("worktree")).toBe(true);
+    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/worktrees"))).toBe(true);
+    expect(app.shows("id:location-directory")).toBe(true);
+  });
+
+  test("new-session location loads project worktrees and omits the linked marker for main", async () => {
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/project/prj_1/worktrees": { body: { project_directory: "/work/demo", worktrees: [{ path: "/work/demo", branch: "trunk", main: true }] } },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:New session");
+    await app.waitFor("text:trunk");
+    expect(app.requests().some((r) => r.url.includes("/api/project/prj_1/worktrees"))).toBe(true);
+    expect(app.shows("id:location-worktree")).toBe(false);
   });
 });

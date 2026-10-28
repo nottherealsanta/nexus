@@ -83,6 +83,14 @@ pub enum ApiCall {
         session: String,
         directory: String,
     },
+    /// Add (or find) the project at a directory.
+    AddProject {
+        path: String,
+    },
+    /// Remove a project; its sessions go with it.
+    DeleteProject {
+        project: String,
+    },
 }
 
 impl ApiCall {
@@ -105,6 +113,8 @@ impl ApiCall {
             ApiCall::SetEffort { .. } => "Effort changed from the next call",
             ApiCall::Export { .. } => "Exported",
             ApiCall::ChangeDirectory { .. } => "Directory change requested",
+            ApiCall::AddProject { .. } => "Project added",
+            ApiCall::DeleteProject { .. } => "Project removed",
         }
     }
 
@@ -132,6 +142,8 @@ pub struct Done {
     pub conflict: Option<String>,
     /// A local file the action produced (exports), for the success toast.
     pub path: Option<String>,
+    /// A project the app should make current (added projects).
+    pub project: Option<String>,
 }
 
 /// An authenticated API for the daemon in `home`, from `daemon.json`.
@@ -263,6 +275,14 @@ async fn execute(api: &CoreApi, call: &ApiCall) -> Result<Done, String> {
                     .await
                     .map_err(e)?,
             )?;
+        }
+        ApiCall::AddProject { path } => {
+            let project = conflict(api.create_project(path, None, &key).await.map_err(e)?)?
+                .ok_or("no project returned")?;
+            done.project = Some(project.id);
+        }
+        ApiCall::DeleteProject { project } => {
+            conflict(api.delete_project(project, &key).await.map_err(e)?)?;
         }
         ApiCall::Export {
             session,

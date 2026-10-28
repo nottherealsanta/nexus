@@ -91,6 +91,8 @@ pub enum PaletteMode {
     Efforts,
     Export,
     Turns,
+    /// Actions on the focused sidebar row (the manifest's `row_menu` placement).
+    RowMenu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +145,7 @@ pub struct Overlay {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirmed {
     DeleteSession(String),
+    RemoveProject(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +171,8 @@ pub enum EditTarget {
     ChangeDirectory {
         id: String,
     },
+    /// Add a project by directory path.
+    AddProject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +317,8 @@ pub enum Target {
     /// Rail search (opens the session switcher).
     RailSearch,
     NewSession,
+    /// The closing row of the Projects tab.
+    AddProject,
     RightSection(usize),
     /// One changed file in the right sidebar's Git status, by row index.
     GitRow(usize),

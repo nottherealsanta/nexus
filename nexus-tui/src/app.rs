@@ -102,6 +102,9 @@ pub const WIRED: &[&str] = &[
     "session.switch",
     "project.switch",
     "project.open",
+    "project.add",
+    "project.remove",
+    "sidebar.row_menu",
     "session.rename",
     "session.archive",
     "session.unarchive",
@@ -129,6 +132,7 @@ pub const WIRED: &[&str] = &[
     "turn.next",
     "tool.expand_toggle",
     "tool.raw_toggle",
+    "tool.show_all_output",
     "tool.open_inspector",
     "copy.final_message",
     "copy.assistant_block",
@@ -961,12 +965,17 @@ impl App {
                 .or_else(|| m.projects.get(&s.project_id).map(|p| p.path.clone()))
                 .unwrap_or_else(|| s.directory.clone())
         };
+        // Per project: the main checkout first, then linked worktrees by path.
         sessions.sort_by_key(|s| {
+            let linked = self
+                .session_worktree(s)
+                .is_some_and(|tree| tree["main"].as_bool() == Some(false));
             (
                 project_order
                     .iter()
                     .position(|id| id == &s.project_id)
                     .unwrap_or(usize::MAX),
+                linked,
                 root(s),
             )
         });
@@ -1084,7 +1093,11 @@ impl App {
                 .selected
                 .as_ref()
                 .is_some_and(|v| v.messages_more),
-            "tool.output_clipped_in_ui" => false,
+            "tool.output_clipped_in_ui" => self
+                .ui
+                .timeline_sel
+                .and_then(|i| self.ui.timeline_blocks.get(i))
+                .is_some_and(|b| b.kind == crate::timeline::BlockKind::Tool && b.clipped),
             "focus.session_row" => {
                 self.ui.focus == Focus::Sidebar
                     && self.ui.tab == Tab::Sessions
@@ -1120,7 +1133,21 @@ impl App {
             "focus.git_file" => {
                 self.ui.focus == Focus::Right && self.git_rows().get(self.ui.git_cursor).is_some()
             }
-            "focus.turn" | "focus.tool" | "focus.user_message" | "focus.child_card" => false,
+            "focus.turn" | "focus.tool" | "focus.user_message" | "focus.child_card" => {
+                use crate::timeline::BlockKind as K;
+                let want = match name {
+                    "focus.turn" => K::Turn,
+                    "focus.tool" => K::Tool,
+                    "focus.user_message" => K::User,
+                    _ => K::Child,
+                };
+                self.ui.focus == Focus::Timeline
+                    && self
+                        .ui
+                        .timeline_sel
+                        .and_then(|i| self.ui.timeline_blocks.get(i))
+                        .is_some_and(|b| b.kind == want)
+            }
             "view.editor" | "editor.dirty" => false,
             "view.settings" => self.ui.view == View::Settings,
             "overlay.open" => self.ui.overlay.is_some(),
@@ -1695,6 +1722,30 @@ impl App {
                             hint: c.tui_key().unwrap_or("").to_owned(),
                             category: c.category.clone(),
                             reason,
+                        },
+                    ));
+                }
+            }
+            PaletteMode::RowMenu => {
+                let projects = self.ui.tab == Tab::Projects;
+                for (i, c) in self.manifest.command.iter().enumerate().filter(|(_, c)| {
+                    c.for_tui()
+                        && c.placement.iter().any(|p| p == "row_menu")
+                        && c.id
+                            .starts_with(if projects { "project." } else { "session." })
+                }) {
+                    let Some(score) = fuzzy(&q, &c.title) else {
+                        continue;
+                    };
+                    scored.push((
+                        score,
+                        i,
+                        PaletteItem {
+                            kind: PaletteKind::Command(c.id.clone()),
+                            label: c.title.clone(),
+                            hint: c.tui_key().unwrap_or("").to_owned(),
+                            category: c.category.clone(),
+                            reason: self.availability(c).err(),
                         },
                     ));
                 }
@@ -2313,6 +2364,30 @@ impl App {
                 let c = self.cursor(Tab::Projects);
                 self.sidebar_activate(c);
             }
+            "project.add" => {
+                let mut buf = Composer::new();
+                // Start from the current project's parent: the usual sibling checkout.
+                let start = self
+                    .current_project()
+                    .and_then(|p| self.state.model.projects.get(&p))
+                    .and_then(|p| {
+                        std::path::Path::new(&p.path)
+                            .parent()
+                            .map(|d| d.display().to_string())
+                    })
+                    .map(|d| if d.ends_with('/') { d } else { format!("{d}/") })
+                    .unwrap_or_default();
+                buf.set_text(&start);
+                let restore = self.restore_point();
+                self.ui.edit = Some(TextEdit {
+                    label: "add project".into(),
+                    target: EditTarget::AddProject,
+                    buf,
+                    restore,
+                });
+            }
+            "project.remove" => self.ask_remove_project(),
+            "sidebar.row_menu" => self.open_palette(PaletteMode::RowMenu),
             "session.switch" => self.open_palette(PaletteMode::Sessions),
             "project.switch" => self.open_palette(PaletteMode::Projects),
             "model.change" => self.open_picker(PaletteMode::Models),
@@ -2417,6 +2492,20 @@ impl App {
                         let now = self.ui.timeline_open.get(&raw).copied().unwrap_or(false);
                         self.ui.timeline_open.insert(b.key, true);
                         self.ui.timeline_open.insert(raw, !now);
+                    }
+                }
+            }
+            "tool.show_all_output" => {
+                if let Some(b) = self
+                    .ui
+                    .timeline_sel
+                    .and_then(|i| self.ui.timeline_blocks.get(i))
+                    .cloned()
+                {
+                    if b.kind == crate::timeline::BlockKind::Tool && b.clipped {
+                        let all = format!("{}:all", b.key);
+                        let now = self.ui.timeline_open.get(&all).copied().unwrap_or(false);
+                        self.ui.timeline_open.insert(all, !now);
                     }
                 }
             }
@@ -2595,6 +2684,54 @@ impl App {
         }
     }
 
+    /// The project a Projects row menu or `project.remove` acts on: the focused
+    /// row in the Projects tab, otherwise the current project.
+    fn menu_project(&self) -> Option<String> {
+        if self.ui.tab == Tab::Projects && self.ui.focus == Focus::Sidebar {
+            if let Some(id) = self.project_ids().get(self.cursor(Tab::Projects)) {
+                return Some(id.clone());
+            }
+        }
+        self.current_project()
+    }
+
+    fn ask_remove_project(&mut self) {
+        let Some(id) = self.menu_project() else {
+            return;
+        };
+        let Some(p) = self.state.model.projects.get(&id) else {
+            return;
+        };
+        let sessions = self
+            .state
+            .model
+            .sessions
+            .values()
+            .filter(|s| s.project_id == id)
+            .count();
+        let mut body = vec![format!(
+            "Remove \"{}\"{}?",
+            p.name,
+            if sessions > 0 {
+                format!(" and its {sessions} session(s)")
+            } else {
+                String::new()
+            }
+        )];
+        body.push("The directory and its files stay. This cannot be undone.".into());
+        let restore = self.restore_point();
+        self.ui.dialog = Some(Dialog {
+            title: "Remove project".into(),
+            body,
+            cancel: "Cancel".into(),
+            confirm: "Remove".into(),
+            danger: true,
+            action: Confirmed::RemoveProject(id),
+            button: 0,
+            restore,
+        });
+    }
+
     fn ask_delete(&mut self) {
         let Some(s) = self.viewed() else { return };
         let n = self.descendants(&s.id);
@@ -2635,6 +2772,13 @@ impl App {
                 Confirmed::DeleteSession(id) => {
                     if self.writable() {
                         self.api(ApiCall::Delete { session: id });
+                    } else {
+                        self.toast(Level::Warning, READ_ONLY);
+                    }
+                }
+                Confirmed::RemoveProject(id) => {
+                    if self.writable() {
+                        self.api(ApiCall::DeleteProject { project: id });
                     } else {
                         self.toast(Level::Warning, READ_ONLY);
                     }
@@ -2695,7 +2839,7 @@ impl App {
                 }
                 None => self.toast(
                     Level::Warning,
-                    "No project yet: add one with the Nexus CLI, then it appears here.",
+                    "No project yet: add one from the Projects tab, then it appears here.",
                 ),
             },
         }
@@ -2835,6 +2979,9 @@ impl App {
                 if let Some(id) = r.open {
                     // events for the new session may not have arrived yet
                     self.open_session(&id);
+                }
+                if let Some(id) = r.project {
+                    self.select_project(&id);
                 }
             }
             Err(e) => {
@@ -3268,6 +3415,16 @@ impl App {
                         session: id,
                         directory: title,
                     }),
+                    EditTarget::AddProject => {
+                        let path = match title.strip_prefix('~') {
+                            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                                std::env::var("HOME")
+                                    .map_or(title.clone(), |h| format!("{h}{rest}"))
+                            }
+                            _ => title,
+                        };
+                        self.api(ApiCall::AddProject { path });
+                    }
                 }
             }
             _ => edit_buffer(&mut e.buf, ev, name, false),
@@ -3664,7 +3821,22 @@ impl App {
             "tab" => self.cycle_focus(false),
             "shift+tab" => self.cycle_focus(true),
             _ => {
-                if let Some(cmd) = self.lookup("timeline", name) {
+                // Keys bound to the focused block's own context (a tool's
+                // `r` raw, `o` show all, `i` inspector) follow the timeline's.
+                let kind = self
+                    .ui
+                    .timeline_sel
+                    .and_then(|i| self.ui.timeline_blocks.get(i))
+                    .map(|b| b.kind);
+                let own = match kind {
+                    Some(crate::timeline::BlockKind::Tool) => Some("tool"),
+                    Some(crate::timeline::BlockKind::Turn) => Some("turn"),
+                    _ => None,
+                };
+                let cmd = self
+                    .lookup("timeline", name)
+                    .or_else(|| own.and_then(|ctx| self.lookup(ctx, name)));
+                if let Some(cmd) = cmd {
                     self.run_command(&cmd);
                 }
             }
@@ -3892,6 +4064,9 @@ impl App {
                 | "appearance.details"
                 | "appearance.session_scope"
                 | "appearance.show_archived"
+                | "models.catalog"
+                | "models.refresh"
+                | "agents.list"
                 | "about.versions"
                 | "about.daemon"
                 | "keybindings.list"
@@ -3941,7 +4116,8 @@ impl App {
                 self.ui.left_open = open;
                 self.ui.left_rail = rail;
             }
-            "keybindings.list" | "about.versions" | "about.daemon" => {}
+            "keybindings.list" | "about.versions" | "about.daemon" | "models.catalog"
+            | "models.refresh" | "agents.list" => {}
             _ => self.settings_activate(index),
         }
     }
@@ -3963,6 +4139,19 @@ impl App {
             "appearance.session_scope" => self.run_command("sessions.scope_toggle"),
             "appearance.show_archived" => self.run_command("sessions.archived_filter"),
             "keybindings.list" => self.execute("app.help_keys"),
+            "models.catalog" => {
+                self.execute("app.settings");
+                self.execute("model.change");
+            }
+            "models.refresh" => {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+                self.toast(Level::Info, "Refreshing the model catalog");
+            }
+            "agents.list" => {
+                self.execute("app.settings");
+                self.execute("agent.change");
+            }
             _ => {}
         }
     }
@@ -4095,6 +4284,19 @@ impl App {
                     self.click(t);
                 }
             }
+            MouseEventKind::Down(MouseButton::Right) => {
+                if self.ui.overlay.is_some() || self.ui.dialog.is_some() {
+                    return;
+                }
+                if let Some(Target::SideRow(i)) = self.hits.at(ev.column, ev.row).cloned() {
+                    self.ui.focus = Focus::Sidebar;
+                    self.ui.cursor.insert(self.ui.tab, i);
+                    if self.ui.tab == Tab::Sessions {
+                        self.sidebar_activate(i);
+                    }
+                    self.execute("sidebar.row_menu");
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.ui.left_drag => {
                 let x0 = self.regions.left.map_or(0, |l| l.x);
                 let want = ev.column.saturating_sub(x0) + 1;
@@ -4203,6 +4405,7 @@ impl App {
             Target::SidebarEdge => self.ui.left_drag = true,
             Target::RailSearch => self.run_command("session.switch"),
             Target::NewSession => self.run_command("session.new"),
+            Target::AddProject => self.run_command("project.add"),
             Target::RightSection(_) => self.ui.focus = Focus::Right,
             Target::GitRow(i) => {
                 self.ui.focus = Focus::Right;
@@ -4549,6 +4752,8 @@ impl ActionDone {
             ApiCall::SetEffort { .. } => "Effort change failed",
             ApiCall::Export { .. } => "Export failed",
             ApiCall::ChangeDirectory { .. } => "Directory change failed",
+            ApiCall::AddProject { .. } => "Add project failed",
+            ApiCall::DeleteProject { .. } => "Remove project failed",
         }
     }
 }

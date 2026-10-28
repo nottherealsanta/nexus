@@ -132,3 +132,12 @@ pub fn busy(app: &mut App) {
         app.apply_sync(SyncMsg::Event(e));
     }
 }
+
+pub fn right_click(app: &mut App, x: u16, y: u16) {
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    });
+}

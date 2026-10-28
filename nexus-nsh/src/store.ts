@@ -13,6 +13,12 @@ export const model = new Model();
 export const rev = signal(0);
 export const connection = signal<ConnectionState>({ kind: "connecting" });
 export const info = signal<Info | null>(null);
+export const userHome = signal("");
+export const modelCatalog = signal<any[]>([]);
+export const defaultModel = signal("");
+export const agentCatalog = signal<{ project: string | null; agents: any[] }>({ project: null, agents: [] });
+export const sessionWorktrees = signal<Record<string, any | null>>({});
+export const projectWorktrees = signal<Record<string, any | null>>({});
 export const compat = signal<Compat>({ kind: "unreported" });
 export const banners = signal<Banner[]>([]);
 export const dismissedBanners = signal<string[]>([]);
@@ -71,6 +77,79 @@ export function bump() { rev.update((n) => n + 1); }
 /** Read the model reactively: components call `m()`. */
 export const m = (): Model => { rev(); return model; };
 
+// --- catalog and location data ---------------------------------------------------------------
+let modelsAsked = false;
+let defaultAsked = false;
+const agentCache = new Map<string, any[]>();
+const agentRequests = new Set<string>();
+const sessionWorktreeRequests = new Set<string>();
+const projectWorktreeRequests = new Set<string>();
+const directoryEventsSeen = new Map<string, number>();
+
+export function loadComposerData(project = currentProject()) {
+  if (!modelsAsked) {
+    modelsAsked = true;
+    void request<any>("GET", "/api/model").then((r) => modelCatalog.set(r.models ?? [])).catch(() => { modelsAsked = false; });
+  }
+  if (!defaultAsked) {
+    defaultAsked = true;
+    void request<any>("GET", "/api/model/default").then((r) => defaultModel.set(r.model ?? "")).catch(() => { defaultAsked = false; });
+  }
+  const key = project ?? "";
+  if (agentCache.has(key)) {
+    if (agentCatalog().project !== project) agentCatalog.set({ project, agents: agentCache.get(key)! });
+  } else if (!agentRequests.has(key)) {
+    agentRequests.add(key);
+    void request<any>("GET", "/api/agent", { query: project ? { project } : undefined }).then((r) => {
+      const agents = r.agents ?? [];
+      agentCache.set(key, agents);
+      if ((currentProject() ?? "") === key) agentCatalog.set({ project, agents });
+    }).catch(() => { agentRequests.delete(key); });
+  }
+}
+
+export function loadSessionWorktrees(id: string, refresh = false) {
+  if (!refresh && (sessionWorktreeRequests.has(id) || Object.prototype.hasOwnProperty.call(sessionWorktrees(), id))) return;
+  sessionWorktreeRequests.add(id);
+  void request<any>("GET", `/api/session/${id}/worktrees`).then((data) => {
+    sessionWorktrees.update((all) => ({ ...all, [id]: data }));
+  }).catch(() => {
+    sessionWorktrees.update((all) => ({ ...all, [id]: null }));
+  }).finally(() => sessionWorktreeRequests.delete(id));
+}
+
+export function loadProjectWorktrees(id: string, refresh = false) {
+  if (!refresh && (projectWorktreeRequests.has(id) || Object.prototype.hasOwnProperty.call(projectWorktrees(), id))) return;
+  projectWorktreeRequests.add(id);
+  void request<any>("GET", `/api/project/${id}/worktrees`).then((data) => {
+    projectWorktrees.update((all) => ({ ...all, [id]: data }));
+  }).catch(() => {
+    projectWorktrees.update((all) => ({ ...all, [id]: null }));
+  }).finally(() => projectWorktreeRequests.delete(id));
+}
+
+/** The most-specific checkout containing a directory (path-component aware). */
+export function worktreeForDirectory(directory: string, listing: any | null | undefined): any | null {
+  const trees = listing?.worktrees;
+  if (!Array.isArray(trees)) return null;
+  return trees
+    .filter((tree: any) => {
+      const root = typeof tree?.path === "string" ? tree.path.replace(/\/$/, "") : "";
+      return root && (directory === root || directory.startsWith(`${root}/`));
+    })
+    .sort((a: any, b: any) => String(b.path).length - String(a.path).length)[0] ?? null;
+}
+
+export function currentWorktree() {
+  m();
+  const s = viewed();
+  const p = currentProject();
+  const directory = s?.directory ?? (p ? model.projects.get(p)?.path : undefined);
+  if (!directory) return null;
+  const listing = s ? sessionWorktrees()[s.id] : p ? projectWorktrees()[p] : null;
+  return worktreeForDirectory(directory, listing);
+}
+
 // --- alerts -----------------------------------------------------------------------------
 let toastId = 1;
 export function toast(level: Toast["level"], text: string) {
@@ -106,11 +185,28 @@ function reconcileSelection() {
     const p = sel?.project_id ?? model.projectsRecent()[0]?.id ?? null;
     if (p) currentProject.set(p);
   }
+  const selected = model.selected?.sessionId;
+  const project = selected ? model.sessions.get(selected)?.project_id : currentProject();
+  if (project) loadComposerData(project);
+  if (selected) {
+    loadSessionWorktrees(selected);
+    const newest = model.selected?.events.filter((e) => e.type === "session.directory_changed").at(-1);
+    if (newest && newest.id > (directoryEventsSeen.get(selected) ?? 0)) {
+      directoryEventsSeen.set(selected, newest.id);
+      loadSessionWorktrees(selected, true);
+    }
+  } else if (project) {
+    loadProjectWorktrees(project);
+  }
 }
 
 export function startApp() {
-  void fetch("/__nexus/host").then((r) => r.json()).then((h) => { host.canStart = !!h.canStart; }).catch(() => {});
+  void fetch("/__nexus/host").then((r) => r.json()).then((h) => {
+    host.canStart = !!h.canStart;
+    if (typeof h.userHome === "string") userHome.set(h.userHome);
+  }).catch(() => {});
   sync.start();
+  loadComposerData();
   setInterval(() => { const c = connection(); if (c.kind === "reconnecting") tick.set(Date.now()); }, 1000);
 }
 
@@ -155,12 +251,16 @@ export const live = () => connection().kind === "live";
 
 export async function selectSession(id: string) {
   const ses = model.sessions.get(id);
-  if (ses) currentProject.set(ses.project_id);
+  if (ses) {
+    currentProject.set(ses.project_id);
+    loadComposerData(ses.project_id);
+  }
   model.select(id);
   centre.set("session");
   scrolledUp.set(false);
   bump();
   void loadGit(id);
+  loadSessionWorktrees(id);
   if (leftTab() === "files") void loadFiles();
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {
@@ -176,6 +276,8 @@ export async function selectSession(id: string) {
 }
 export function selectProject(id: string) {
   currentProject.set(id);
+  loadComposerData(id);
+  loadProjectWorktrees(id);
   const first = model.sessionsRecent().find((s) => s.project_id === id && !s.parent_id && !s.archived);
   if (first) void selectSession(first.id);
   else { model.select(null); centre.set("new_session"); bump(); }

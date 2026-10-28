@@ -130,7 +130,7 @@ function route(req, res) {
   const url = new URL(req.url, "http://x");
   if (url.pathname === "/__nexus/host") {
     const d = daemonInfo();
-    return json(res, 200, { host: "nexus-nsh proxy", home: nexusHome, daemon: d ? { url: d.url, pid: d.pid } : null, canStart: !noStart, startCommand: `${coreCmd.join(" ")} daemon start` });
+    return json(res, 200, { host: "nexus-nsh proxy", home: nexusHome, userHome: os.homedir(), daemon: d ? { url: d.url, pid: d.pid } : null, canStart: !noStart, startCommand: `${coreCmd.join(" ")} daemon start` });
   }
   if (url.pathname === "/__nexus/start" && req.method === "POST") {
     if (noStart) return json(res, 403, { error: "starting Core is disabled (NEXUS_NSH_NO_START)" });

@@ -1635,3 +1635,139 @@ fn nothing_completes_while_a_palette_is_open() {
     app.execute("palette.open");
     assert!(app.completion_rows().is_none());
 }
+
+#[test]
+fn session_info_totals_tokens_tools_context_and_cost() {
+    use nexus_tui::api::Event;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
+    app.state.models = vec![serde_json::json!({
+        "ref": "codex/example", "name": "Example", "context": 200000,
+        "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
+    })];
+    let events = &mut app.state.model.selected.as_mut().unwrap().events;
+    for (id, input, cached, output) in [(100, 10_000, 0, 1000), (101, 50_000, 20_000, 2000)] {
+        events.push(Event {
+            id,
+            cursor: None,
+            seq: None,
+            time: id as f64,
+            kind: "usage".into(),
+            session_id: Some(SESSION.into()),
+            data: serde_json::json!({
+                "input_tokens": input, "cached_input_tokens": cached, "output_tokens": output
+            }),
+        });
+    }
+    let (_, rows) = draw(&mut app, 160, 40);
+    let all = joined(&rows);
+    for needle in [
+        "effort", "turns", "2 calls", "input", "60.0K", "cached", "output", "context", "25%",
+        "cost",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}:\n{all}");
+    }
+    // 10K in + 1K out, then 30K fresh + 20K cached + 2K out.
+    assert!(all.contains("$0.07"), "{all}");
+}
+
+#[test]
+fn right_click_on_a_session_row_opens_its_action_menu() {
+    use nexus_tui::ui::{Overlay, OverlayKind, PaletteMode};
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
+    let row = app
+        .hits
+        .rect_of(&Target::SideRow(0))
+        .expect("a session row");
+    right_click(&mut app, row.x + 2, row.y);
+    assert!(matches!(
+        app.ui.overlay,
+        Some(Overlay { kind: OverlayKind::Palette(ref p), .. }) if p.mode == PaletteMode::RowMenu
+    ));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    for action in [
+        "Rename session",
+        "Archive session",
+        "Delete session",
+        "Export session",
+        "Copy session id",
+    ] {
+        assert!(all.contains(action), "{action}: {all}");
+    }
+    assert!(!all.contains("Remove project"), "{all}");
+}
+
+#[test]
+fn projects_can_be_added_and_removed_from_the_sidebar() {
+    use nexus_tui::actions::ApiCall;
+    use nexus_tui::app::Effect;
+    use nexus_tui::ui::Tab;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.ui.tab = Tab::Projects;
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("+ Add project"));
+    let add = app.hits.rect_of(&Target::AddProject).expect("add row");
+    app.effects.clear();
+    click(&mut app, add.x + 2, add.y);
+    assert!(app.ui.edit.is_some(), "an inline path field opens");
+    // Replace the prefilled path.
+    app.ui.edit.as_mut().unwrap().buf.set_text("");
+    typing(&mut app, "/work/new-project");
+    press(&mut app, &["enter"]);
+    assert!(app.effects.iter().any(|e| matches!(
+        e,
+        Effect::Api(ApiCall::AddProject { path }) if path == "/work/new-project"
+    )));
+    // Remove asks first and names the sessions that go with it.
+    app.ui.focus = nexus_tui::ui::Focus::Sidebar;
+    app.execute("project.remove");
+    let dialog = app.ui.dialog.clone().expect("a confirmation");
+    assert!(
+        dialog.danger && dialog.body.join(" ").contains("session"),
+        "{dialog:?}"
+    );
+    app.effects.clear();
+    press(&mut app, &["tab", "enter"]);
+    assert!(
+        app.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Api(ApiCall::DeleteProject { .. }))),
+        "{:?}",
+        app.effects
+    );
+}
+
+#[test]
+fn settings_shows_what_core_reports_and_refuses_what_it_cannot_change() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 50));
+    app.state.default_model = "codex/gpt-5".into();
+    app.state.catalog_source = "cache (5 min old)".into();
+    app.state.models = vec![serde_json::json!({"ref": "codex/gpt-5"})];
+    app.state.agents = vec![
+        serde_json::json!({"name": "build"}),
+        serde_json::json!({"name": "plan"}),
+    ];
+    app.execute("app.settings");
+    let (_, rows) = draw(&mut app, 120, 50);
+    let all = joined(&rows);
+    for needle in [
+        "codex/gpt-5",
+        "1 models",
+        "cache (5 min old)",
+        "build, plan",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}: {all}");
+    }
+    typing(&mut app, "default model");
+    press(&mut app, &["enter"]);
+    let toast = app
+        .ui
+        .alerts
+        .history
+        .first()
+        .map(|n| n.text.clone())
+        .unwrap_or_default();
+    assert!(toast.contains("no default setting"), "{toast}");
+}

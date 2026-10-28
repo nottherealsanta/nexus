@@ -977,3 +977,73 @@ fn the_turn_footer_prices_a_turn_from_the_catalog() {
     assert!(text.contains("100K in 50.0K cached 10.0K out"), "{text}");
     assert!(text.contains("$0.16"), "{text}");
 }
+
+#[test]
+fn long_tool_output_keeps_head_and_tail_and_show_all_restores_the_middle() {
+    let mut a = app();
+    let output: String = (1..=500).map(|n| format!("line {n}\n")).collect();
+    let call = serde_json::json!({"id": 80, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:80",
+        "data": {"id": "msg_20", "session_id": SESSION, "seq": 20, "created": 1793113420.0,
+                 "role": "assistant", "parts": [{"type": "tool_call", "id": "call_long", "name": "bash",
+                 "arguments": "{\"command\":\"seq 500\"}"}]}});
+    let result = serde_json::json!({"id": 81, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:81",
+        "data": {"id": "msg_21", "session_id": SESSION, "seq": 21, "created": 1793113421.0,
+                 "role": "tool", "parts": [{"type": "tool_result", "call_id": "call_long",
+                 "output": output, "is_error": false}]}});
+    for v in [call, result] {
+        if let Ok(nexus_tui::api::Frame::Event(e)) =
+            nexus_tui::api::Frame::from_value(v["type"].as_str().unwrap(), None, &v)
+        {
+            a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+        }
+    }
+    rows(&mut a);
+    a.ui.focus = Focus::Timeline;
+    let find = |a: &nexus_tui::app::App, kind| a.blocks().iter().position(|b| b.kind == kind);
+    let group = find(&a, nexus_tui::timeline::BlockKind::Group).expect("group");
+    a.ui.timeline_sel = Some(group);
+    a.execute("tool.expand_toggle");
+    rows(&mut a);
+    let tool = find(&a, nexus_tui::timeline::BlockKind::Tool).expect("tool");
+    a.ui.timeline_sel = Some(tool);
+    a.execute("tool.expand_toggle");
+    // The view is tall enough for the whole detail only when scrolled; read the
+    // built lines instead of the visible rows.
+    let built = |a: &nexus_tui::app::App| {
+        let t = nexus_tui::timeline::build(a, &a.theme, 0, 100);
+        t.lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    rows(&mut a);
+    let text = built(&a);
+    assert!(
+        text.contains("line 1\n") && text.contains("line 100\n"),
+        "head"
+    );
+    assert!(
+        text.contains("line 500\n") && text.contains("line 401\n"),
+        "tail"
+    );
+    assert!(!text.contains("line 250\n"), "middle is folded");
+    assert!(text.contains("300 lines hidden · show all (o)"), "{text}");
+    assert!(a.term("tool.output_clipped_in_ui").unwrap());
+    press(&mut a, &["o"]);
+    let text = built(&a);
+    assert!(
+        text.contains("line 250\n") && !text.contains("lines hidden"),
+        "all shown"
+    );
+    assert!(text.contains("show less o"));
+    press(&mut a, &["o"]);
+    assert!(!built(&a).contains("line 250\n"), "o folds it again");
+}

@@ -355,6 +355,7 @@ label = "Provider default model"
 kind = "choice"
 scope = "core"
 clients = "both"
+unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "providers.add_custom"
@@ -375,6 +376,7 @@ kind = "choice"
 scope = "core"
 clients = "both"
 command = "model.change"
+unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "models.default_effort"
@@ -383,6 +385,7 @@ kind = "choice"
 scope = "core"
 clients = "both"
 command = "model.effort"
+unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "models.catalog"
@@ -416,6 +419,7 @@ label = "Default root agent"
 kind = "choice"
 scope = "core"
 clients = "both"
+unavailable_reason = "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
 
 [[settings.section.row]]
 id = "agents.open_file"
@@ -1339,6 +1343,8 @@ placement = ["tool_line"]
 id = "tool.show_all_output"
 title = "Show all output"
 category = "tool"
+keys = { tui = "o", nsh = "o" }
+key_context = "tool"
 when = ["focus.tool", "tool.output_clipped_in_ui"]
 unavailable_reason = "Output is not clipped in the UI."
 placement = ["tool_line"]
@@ -1493,6 +1499,16 @@ when = ["has_project"]
 unavailable_reason = "No project to remove."
 placement = ["palette", "row_menu"]
 note = "Confirm; its sessions go with it."
+
+[[command]]
+id = "sidebar.row_menu"
+title = "Actions for this row"
+category = "session"
+keys = { tui = "m", nsh = "shift+f10" }
+key_context = "sidebar"
+when = ["always"]
+placement = ["sidebar"]
+note = "Right-click on a row opens the same menu. Sessions: rename, archive, delete, export, copy id, inspector. Projects: remove."
 
 [[command]]
 id = "project.open"
