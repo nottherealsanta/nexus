@@ -11,7 +11,7 @@ use ratatui::text::Line;
 use ratatui::Frame;
 use serde_json::Value;
 
-use crate::app::{now_secs, App, WaitKind};
+use crate::app::{now_secs, App, GitGroup, WaitKind};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
 use crate::state::ConnectionState;
 use crate::text::{self, truncate, truncate_middle, truncate_start, width};
@@ -155,7 +155,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         draw_banner(&cx, buf, regions.banner, &mut hits);
         // The session stays drawn under the settings modal.
-        if a.ui.file_open {
+        if a.ui.diff_open.is_some() {
+            draw_diff_view(&cx, buf, regions.timeline);
+        } else if a.ui.file_open {
             draw_file_view(&cx, buf, regions.timeline);
         } else if let Some(t) = &timeline {
             metrics = draw_timeline(&cx, buf, regions.timeline, &mut hits, t);
@@ -1257,6 +1259,127 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
     }
 }
 
+/// A read-only Git diff in the centre column, like the file view: added
+/// lines on the add tint, removed lines on the delete tint, hunk headers muted.
+fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
+    clear(buf, r, cx.st(PRIMARY, SIDEBAR));
+    let Some((path, group)) = &cx.app.ui.diff_open else {
+        return;
+    };
+    let title = format!("{path} {} {}", cx.t.structure("separator"), group.label());
+    put(
+        buf,
+        r.x + 1,
+        r.y,
+        &truncate_middle(&title, r.width.saturating_sub(2) as usize, cx.ell()),
+        cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD),
+        r.width.saturating_sub(1),
+    );
+    let note = |buf: &mut Buffer, text: &str, token: &str| {
+        put(
+            buf,
+            r.x + 1,
+            r.y + 1,
+            text,
+            cx.st(token, SIDEBAR),
+            r.width.saturating_sub(1),
+        );
+    };
+    if *group == GitGroup::Untracked {
+        return note(buf, "Untracked file: Git has no diff for it yet.", MUTED);
+    }
+    let loaded = cx
+        .app
+        .state
+        .diff
+        .as_ref()
+        .filter(|(session, p, _)| Some(session.as_str()) == cx.app.viewed_id() && p == path);
+    match loaded {
+        None => {
+            let text = if cx.t.opts.ascii {
+                "Loading diff..."
+            } else {
+                "Loading diff…"
+            };
+            return note(buf, text, MUTED);
+        }
+        Some((_, _, Err(error))) => return note(buf, error, "status.error"),
+        Some(_) => {}
+    }
+    let lines = cx.app.diff_lines();
+    if lines.is_empty() {
+        return note(buf, "No changes in this part.", MUTED);
+    }
+    let page = r.height.saturating_sub(2) as usize;
+    // Line numbers follow the new file: hunk headers reset them, `-` lines have none.
+    let mut numbers = Vec::with_capacity(lines.len());
+    let mut next = 0usize;
+    for line in &lines {
+        if let Some(start) = hunk_start(line) {
+            next = start;
+            numbers.push(None);
+        } else if line.starts_with('-') || next == 0 {
+            numbers.push(None);
+        } else {
+            numbers.push(Some(next));
+            next += 1;
+        }
+    }
+    for (i, line) in lines
+        .iter()
+        .enumerate()
+        .skip(cx.app.ui.diff_scroll)
+        .take(page)
+    {
+        let y = r.y + 1 + (i - cx.app.ui.diff_scroll) as u16;
+        let row = Rect::new(r.x, y, r.width, 1);
+        let (fg, bg) = if line.starts_with('+') && !line.starts_with("+++") {
+            (cx.st("diff.add", SIDEBAR), Some("diff.add_bg"))
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (cx.st("diff.del", SIDEBAR), Some("diff.del_bg"))
+        } else if line.starts_with("@@")
+            || line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("---")
+            || line.starts_with("+++")
+        {
+            (cx.st(MUTED, SIDEBAR), None)
+        } else {
+            (cx.st(SECONDARY, SIDEBAR), None)
+        };
+        let style = match bg {
+            Some(token) => fg.patch(cx.t.bg(token)),
+            None => fg,
+        };
+        clear(buf, row, style);
+        let number = numbers[i].map_or_else(|| "    ".to_owned(), |n| format!("{n:>4}"));
+        let label = truncate(
+            &format!("{number}  {line}"),
+            r.width.saturating_sub(1) as usize,
+            cx.ell(),
+        );
+        put(buf, r.x + 1, y, &label, style, r.width.saturating_sub(1));
+    }
+    let remaining = lines.len().saturating_sub(cx.app.ui.diff_scroll + page);
+    if remaining > 0 && r.height >= 2 {
+        put(
+            buf,
+            r.x + 1,
+            r.bottom() - 1,
+            &format!("{remaining} more lines · scroll"),
+            cx.st(MUTED, SIDEBAR),
+            r.width.saturating_sub(1),
+        );
+    }
+}
+
+/// The new-file start line of a `@@ -a,b +c,d @@` hunk header.
+fn hunk_start(line: &str) -> Option<usize> {
+    let rest = line.strip_prefix("@@ ")?;
+    let new = rest.split_whitespace().nth(1)?.strip_prefix('+')?;
+    new.split(',').next()?.parse().ok()
+}
+
 fn row_style(cx: &Cx, selected: bool, hover: bool) -> Style {
     if selected {
         cx.st(PRIMARY, SIDEBAR)
@@ -1662,7 +1785,7 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         y += 1;
         match sec.id.as_str() {
             "session_info" => session_info(cx, buf, r, &mut y),
-            "git_status" => git_status(cx, buf, r, &mut y),
+            "git_status" => git_status(cx, buf, r, &mut y, hits),
             _ => {
                 let reason = sec
                     .unavailable_reason
@@ -1681,7 +1804,7 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 }
 
-fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
+fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap) {
     let Some(id) = cx.app.viewed_id() else {
         put(
             buf,
@@ -1761,38 +1884,91 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
                 r.width.saturating_sub(4),
             );
             *y += 1;
-            if let Some(changes) = data["changes"].as_array() {
-                if changes.is_empty() && *y < r.bottom() {
-                    put(
-                        buf,
-                        r.x + 3,
-                        *y,
-                        "Clean",
-                        cx.st(MUTED, CANVAS),
-                        r.width.saturating_sub(4),
-                    );
-                    *y += 1;
-                }
-                for change in changes {
+            let rows = cx.app.git_rows();
+            if rows.is_empty() && *y < r.bottom() {
+                put(
+                    buf,
+                    r.x + 3,
+                    *y,
+                    "Clean",
+                    cx.st(MUTED, CANVAS),
+                    r.width.saturating_sub(4),
+                );
+                *y += 1;
+            }
+            let focused = cx.app.ui.focus == Focus::Right;
+            let mut group = None;
+            for (index, row) in rows.iter().enumerate() {
+                if group != Some(row.group) {
+                    group = Some(row.group);
                     if *y >= r.bottom() {
                         break;
                     }
-                    let label = format!(
-                        "{} +{} -{}",
-                        change["path"].as_str().unwrap_or(""),
-                        change["added"].as_u64().unwrap_or(0),
-                        change["removed"].as_u64().unwrap_or(0)
-                    );
+                    let count = rows.iter().filter(|other| other.group == row.group).count();
                     put(
                         buf,
                         r.x + 3,
                         *y,
-                        &truncate(&label, r.width.saturating_sub(4) as usize, cx.ell()),
-                        cx.st(SECONDARY, CANVAS),
+                        &format!("{} {count}", row.group.label()),
+                        cx.st(MUTED, CANVAS).add_modifier(Modifier::BOLD),
                         r.width.saturating_sub(4),
                     );
                     *y += 1;
                 }
+                if *y >= r.bottom() {
+                    break;
+                }
+                let line = Rect::new(r.x, *y, r.width, 1);
+                let selected = index == cx.app.ui.git_cursor;
+                let mut style = cx.st(SECONDARY, CANVAS);
+                if selected && focused {
+                    style = style.patch(cx.t.bg("interactive.selection"));
+                } else if cx.hovered(line) {
+                    style = style.patch(cx.t.bg("interactive.hover"));
+                }
+                clear(buf, line, style);
+                if selected && focused {
+                    put(
+                        buf,
+                        r.x,
+                        *y,
+                        cx.t.structure("focus_bar"),
+                        cx.st("interactive.focus", CANVAS),
+                        1,
+                    );
+                }
+                // Staged rows read the index column, the others the worktree one.
+                let code: String = match row.group {
+                    GitGroup::Staged => row.status.chars().take(1).collect(),
+                    GitGroup::Unstaged => row.status.chars().skip(1).take(1).collect(),
+                    GitGroup::Untracked => "?".into(),
+                };
+                let marker = git_marker(&code);
+                if let Some((glyph, token)) = marker {
+                    put(
+                        buf,
+                        r.x + 3,
+                        *y,
+                        &glyph.to_string(),
+                        cx.st(token, CANVAS).patch(style),
+                        1,
+                    );
+                }
+                let label = if row.group == GitGroup::Untracked {
+                    row.path.clone()
+                } else {
+                    format!("{} +{} -{}", row.path, row.added, row.removed)
+                };
+                put(
+                    buf,
+                    r.x + 5,
+                    *y,
+                    &truncate(&label, r.width.saturating_sub(6) as usize, cx.ell()),
+                    style,
+                    r.width.saturating_sub(6),
+                );
+                hits.add(line, Target::GitRow(index));
+                *y += 1;
             }
         }
     }

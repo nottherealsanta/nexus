@@ -79,6 +79,11 @@ pub enum SyncMsg {
         session: String,
         data: Result<Value, String>,
     },
+    Diff {
+        session: String,
+        path: String,
+        data: Result<Value, String>,
+    },
     /// A project's own worktrees, used before a session exists.
     ProjectWorktrees {
         project: String,
@@ -101,6 +106,10 @@ pub enum Command {
     /// The project's own checkout, for a session that does not exist yet.
     ProjectWorktrees(String),
     Git(String),
+    GitDiff {
+        session: String,
+        path: String,
+    },
     Files {
         project: String,
         session: Option<String>,
@@ -161,6 +170,7 @@ struct Ctx {
     worktrees: Option<String>,
     project_worktrees: Vec<String>,
     git: Option<String>,
+    git_diff: Option<(String, String)>,
     files: Option<(String, Option<String>, String, bool)>,
     shutdown: bool,
 }
@@ -187,6 +197,7 @@ impl Ctx {
                 }
             }
             Command::Git(session) => self.git = Some(session),
+            Command::GitDiff { session, path } => self.git_diff = Some((session, path)),
             Command::Files {
                 project,
                 session,
@@ -244,6 +255,7 @@ pub async fn run(
         worktrees: None,
         project_worktrees: Vec::new(),
         git: None,
+        git_diff: None,
         files: None,
         shutdown: false,
     };
@@ -368,6 +380,7 @@ pub async fn run(
         }
         load_files(&mut cx, &api).await;
         load_git(&mut cx, &api).await;
+        load_git_diff(&mut cx, &api).await;
         match stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await {
             StreamEnd::Stop => return,
             StreamEnd::Resync { cause, progressed } => {
@@ -399,6 +412,20 @@ async fn load_git(cx: &mut Ctx, api: &CoreApi) {
     if let Some(session) = cx.git.take() {
         let data = api.git_status(&session).await.map_err(|e| e.to_string());
         cx.send(SyncMsg::Git { session, data });
+    }
+}
+
+async fn load_git_diff(cx: &mut Ctx, api: &CoreApi) {
+    if let Some((session, path)) = cx.git_diff.take() {
+        let data = api
+            .git_diff(&session, &path)
+            .await
+            .map_err(|e| e.to_string());
+        cx.send(SyncMsg::Diff {
+            session,
+            path,
+            data,
+        });
     }
 }
 
@@ -734,7 +761,7 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::Files { .. });
+                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         if let Some(project) = cx.catalog.take() {
@@ -755,6 +782,7 @@ async fn stream(
                         }
                         load_files(cx, api).await;
                         load_git(cx, api).await;
+                        load_git_diff(cx, api).await;
                         if !was_catalog {
                             if let Some(cause) = cx.resync.take() {
                                 return StreamEnd::Resync { cause, progressed };

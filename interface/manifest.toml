@@ -1543,7 +1543,6 @@ key_context = "sidebar.git"
 when = ["focus.git_file"]
 unavailable_reason = "Focus a changed file first."
 placement = ["sidebar"]
-status = "blocked_core"
 
 [[command]]
 id = "composer.attach"
