@@ -344,6 +344,19 @@ pub enum Target {
     Swallow,
     /// Outside an overlay: clicking closes it.
     Scrim,
+    /// Row `i` of the composer's completion popup.
+    CompletionRow(usize),
     /// A row of the settings list, by index into `App::settings_items`.
     SettingsRow(usize),
+}
+
+/// One row of the composer's completion popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionRow {
+    /// The text that is accepted: `/name` or a workspace path.
+    pub value: String,
+    /// Muted help beside the value (a command's title); empty for paths.
+    pub help: String,
+    /// `Some` for a command that is off right now.
+    pub reason: Option<String>,
 }

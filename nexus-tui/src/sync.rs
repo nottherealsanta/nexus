@@ -75,6 +75,14 @@ pub enum SyncMsg {
         data: Result<Value, String>,
         file: bool,
     },
+    /// Reply to `Command::Complete`: `{"query", "paths"}` from files/search.
+    Completion {
+        project: String,
+        session: Option<String>,
+        query: String,
+        limit: u32,
+        data: Result<Value, String>,
+    },
     Git {
         session: String,
         data: Result<Value, String>,
@@ -115,6 +123,13 @@ pub enum Command {
         session: Option<String>,
         path: String,
         file: bool,
+    },
+    /// Path candidates for an `@` token (the composer's completion popup).
+    Complete {
+        project: String,
+        session: Option<String>,
+        query: String,
+        limit: u32,
     },
     Shutdown,
 }
@@ -172,6 +187,7 @@ struct Ctx {
     git: Option<String>,
     git_diff: Option<(String, String)>,
     files: Option<(String, Option<String>, String, bool)>,
+    complete: Option<(String, Option<String>, String, u32)>,
     shutdown: bool,
 }
 
@@ -204,6 +220,12 @@ impl Ctx {
                 path,
                 file,
             } => self.files = Some((project, session, path, file)),
+            Command::Complete {
+                project,
+                session,
+                query,
+                limit,
+            } => self.complete = Some((project, session, query, limit)),
             Command::Shutdown => self.shutdown = true,
         }
     }
@@ -257,6 +279,7 @@ pub async fn run(
         git: None,
         git_diff: None,
         files: None,
+        complete: None,
         shutdown: false,
     };
     let mut backoff = cx.cfg.backoff.clone();
@@ -441,6 +464,21 @@ async fn load_files(cx: &mut Ctx, api: &CoreApi) {
             session,
             path,
             file,
+            data: result.map_err(|e| e.to_string()),
+        });
+    }
+}
+
+async fn load_completion(cx: &mut Ctx, api: &CoreApi) {
+    if let Some((project, session, query, limit)) = cx.complete.take() {
+        let result = api
+            .files_search(&project, session.as_deref(), &query, limit)
+            .await;
+        cx.send(SyncMsg::Completion {
+            project,
+            session,
+            query,
+            limit,
             data: result.map_err(|e| e.to_string()),
         });
     }
@@ -761,7 +799,7 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. });
+                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::GitDiff { .. } | Command::Files { .. } | Command::Complete { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         if let Some(project) = cx.catalog.take() {
@@ -781,6 +819,7 @@ async fn stream(
                             }
                         }
                         load_files(cx, api).await;
+                        load_completion(cx, api).await;
                         load_git(cx, api).await;
                         load_git_diff(cx, api).await;
                         if !was_catalog {

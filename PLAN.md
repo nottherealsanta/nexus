@@ -161,7 +161,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
      totals.
 4. **Files**
    - Syntax highlighting (the library is still undecided).
-   - `@` completion in the composer.
 5. **Projects**
    - Add and remove projects from the TUI.
 6. **Settings**
@@ -293,6 +292,7 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 | A reconnecting client had to catch up out of band | `/api/snapshot` watermark plus `Client.watch` reconnect/deduplicate/resync; CLI cursor advances only after applying (done 2026-10-27) | Rebuilding state is consistent and cannot resubmit a prompt |
 | The event log grew forever and the floor stayed 0 | Prefix retention with a durable head high-water mark, recovery/replay pins and an explicit `history_unavailable` boundary (done 2026-10-27) | Storage is bounded without losing recovery evidence |
 | Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
+| Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 
 ## Known gaps
 

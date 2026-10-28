@@ -303,7 +303,35 @@ pub struct FileSearch {
     pub hit: Option<usize>,
 }
 
+/// The composer's as-you-type completion: what was asked of Core, what came back,
+/// and which row is highlighted. Rows themselves are derived from the draft.
+#[derive(Debug, Default)]
+pub struct CompletionState {
+    /// The highlighted row of the popup.
+    pub index: usize,
+    /// The token last seen at the cursor; a different one resets `index`.
+    token: String,
+    /// Esc hid the popup for exactly this token.
+    hidden: Option<String>,
+    /// Project and session the cache and pool belong to.
+    scope: (Option<String>, Option<String>),
+    /// Core replies by prefix (context + `@token`).
+    cache: Vec<(String, Vec<String>)>,
+    /// The empty-query listing that pads short menus.
+    pool: Option<Vec<String>>,
+    /// Prefixes and the pool already asked for in this scope.
+    asked: Vec<String>,
+    pool_asked: bool,
+}
+
+/// Replies kept per scope.
+const COMPLETION_CACHE: usize = 64;
+/// Hits asked of Core for a token, and the size of the padding listing.
+const COMPLETION_HITS: u32 = 30;
+const COMPLETION_POOL: u32 = 100;
+
 pub struct Ui {
+    pub completion: CompletionState,
     pub focus: Focus,
     pub left_open: bool,
     /// The docked left sidebar shows one letter per session instead of rows.
@@ -481,6 +509,7 @@ impl App {
                 alerts: Alerts::default(),
                 scroll: Scroll::default(),
                 scrolls: HashMap::new(),
+                completion: CompletionState::default(),
                 drafts: HashMap::new(),
                 wait_idx: 0,
                 ask: AskDraft::default(),
@@ -2656,6 +2685,16 @@ impl App {
     // ---- sync & results ------------------------------------------------------------------
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
+        if let SyncMsg::Completion {
+            project,
+            session,
+            query,
+            limit,
+            data,
+        } = msg
+        {
+            return self.completion_reply(project, session, query, limit, data);
+        }
         let attention = match &msg {
             SyncMsg::Event(event) => event
                 .session_id
@@ -2955,6 +2994,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, ev: KeyEvent) {
+        self.handle_key_inner(ev);
+        self.completion_sync();
+    }
+
+    fn handle_key_inner(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
         match name.as_str() {
             "ctrl+z"
@@ -3004,6 +3048,10 @@ impl App {
             && self.ui.edit.is_none()
             && self.settings_key(&name, ev.code, ev.modifiers)
         {
+            return;
+        }
+        // The popup owns Esc, Tab, Enter and the arrows while it is visible.
+        if self.completion_key(&name) {
             return;
         }
         if name == "esc" {
@@ -4085,7 +4133,16 @@ impl App {
     }
 
     pub fn click(&mut self, t: Target) {
+        self.click_inner(t);
+        self.completion_sync();
+    }
+
+    fn click_inner(&mut self, t: Target) {
         match t {
+            Target::CompletionRow(i) => {
+                self.ui.completion.index = i;
+                self.completion_accept();
+            }
             Target::Swallow => {}
             Target::Scrim => {
                 if self.ui.overlay.is_some() {
@@ -4207,6 +4264,245 @@ impl App {
         }
         // Pasting into the composer from anywhere is the least surprising place.
         self.composer().paste(text);
+        self.ui.focus = Focus::Composer;
+        self.completion_sync();
+    }
+}
+
+// ---- composer completion -----------------------------------------------------------
+
+impl App {
+    /// The token at the cursor when something may complete it: a `/command` as
+    /// the draft's first word, or an `@path` anywhere. Nothing triggers while a
+    /// question, dialog, palette or other text field is open.
+    fn completion_token(&self) -> Option<String> {
+        if self.ui.focus != Focus::Composer
+            || self.ui.overlay.is_some()
+            || self.ui.dialog.is_some()
+            || self.ui.edit.is_some()
+            || self.ui.view == View::Settings
+            || self.blocking().is_some()
+            || self.ask_current().is_some()
+        {
+            return None;
+        }
+        let composer = self.composer_ref();
+        let before = composer.before_cursor();
+        let token = crate::completion::token(before);
+        let command = token.starts_with('/') && before == token && composer.text().starts_with('/');
+        let file = token.starts_with('@') && !composer.text().starts_with('!');
+        (command || file).then(|| token.to_owned())
+    }
+
+    fn completion_scope(&self) -> (Option<String>, Option<String>) {
+        (self.current_project(), self.viewed_id().map(str::to_owned))
+    }
+
+    /// The rows of the visible popup, at most ten. `None` when it is hidden.
+    pub fn completion_rows(&self) -> Option<Vec<CompletionRow>> {
+        let token = self.completion_token()?;
+        if self.ui.completion.hidden.as_deref() == Some(token.as_str()) {
+            return None;
+        }
+        let rows = if token.starts_with('/') {
+            self.command_completions(&token)
+        } else {
+            self.file_completions()?
+        };
+        (!rows.is_empty()).then_some(rows)
+    }
+
+    fn command_completions(&self, token: &str) -> Vec<CompletionRow> {
+        let mut commands: Vec<&Command> = self
+            .manifest
+            .command
+            .iter()
+            .filter(|c| c.for_tui() && c.slash.is_some())
+            .collect();
+        commands.sort_by(|a, b| a.slash.cmp(&b.slash));
+        let rows: Vec<(String, Vec<String>)> = commands
+            .iter()
+            .map(|c| {
+                let name = c.slash.clone().unwrap_or_default();
+                let names = std::iter::once(name.clone())
+                    .chain(c.slash_aliases.iter().cloned())
+                    .collect();
+                (format!("/{name}"), names)
+            })
+            .collect();
+        crate::completion::rank_menu(
+            token.trim_start_matches('/'),
+            &rows,
+            crate::completion::MENU_LIMIT,
+        )
+        .into_iter()
+        .filter_map(|value| {
+            let c = commands
+                .iter()
+                .find(|c| c.slash.as_deref() == value.strip_prefix('/'))?;
+            Some(CompletionRow {
+                help: c.title.clone(),
+                reason: self.availability(c).err(),
+                value,
+            })
+        })
+        .collect()
+    }
+
+    fn file_completions(&self) -> Option<Vec<CompletionRow>> {
+        let state = &self.ui.completion;
+        if state.scope != self.completion_scope() {
+            return None;
+        }
+        let before = self.composer_ref().before_cursor();
+        let mut paths = crate::completion::candidates(&state.cache, before)?;
+        if let Some(pool) = &state.pool {
+            let query = crate::completion::token(before).trim_start_matches('@');
+            paths = crate::completion::file_menu(query, &paths, pool);
+        }
+        Some(
+            paths
+                .into_iter()
+                .map(|value| CompletionRow {
+                    value,
+                    help: String::new(),
+                    reason: None,
+                })
+                .collect(),
+        )
+    }
+
+    /// After every edit or move: reset the highlight for a new token, drop a
+    /// stale hide, and ask Core for the `@` token's candidates once.
+    fn completion_sync(&mut self) {
+        let token = self.completion_token();
+        let state = &mut self.ui.completion;
+        let current = token.clone().unwrap_or_default();
+        if state.token != current {
+            state.token = current;
+            state.index = 0;
+        }
+        if state.hidden.is_some() && state.hidden != token {
+            state.hidden = None;
+        }
+        let Some(token) = token.filter(|t| t.starts_with('@')) else {
+            return;
+        };
+        let scope = self.completion_scope();
+        let (Some(project), session) = scope.clone() else {
+            return;
+        };
+        let state = &mut self.ui.completion;
+        if state.scope != scope {
+            *state = CompletionState {
+                scope,
+                ..CompletionState::default()
+            };
+        }
+        let prefix = self.composer_ref().before_cursor().to_owned();
+        let state = &mut self.ui.completion;
+        let mut asks = Vec::new();
+        if !state.pool_asked {
+            state.pool_asked = true;
+            asks.push((String::new(), COMPLETION_POOL));
+        }
+        if !state.asked.contains(&prefix) && !state.cache.iter().any(|(k, _)| *k == prefix) {
+            state.asked.push(prefix);
+            asks.push((token[1..].to_owned(), COMPLETION_HITS));
+        }
+        for (query, limit) in asks {
+            self.effects.push(Effect::Sync(SyncCommand::Complete {
+                project: project.clone(),
+                session: session.clone(),
+                query,
+                limit,
+            }));
+        }
+    }
+
+    /// A Core reply: kept by prefix when it still answers the current token,
+    /// otherwise dropped.
+    fn completion_reply(
+        &mut self,
+        project: String,
+        session: Option<String>,
+        query: String,
+        limit: u32,
+        data: Result<Value, String>,
+    ) {
+        let paths: Option<Vec<String>> = data.ok().map(|v| {
+            v["paths"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| p.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let scope = (Some(project), session);
+        if self.ui.completion.scope != scope || self.completion_scope() != scope {
+            return;
+        }
+        if limit == COMPLETION_POOL {
+            let state = &mut self.ui.completion;
+            match paths {
+                Some(paths) => state.pool = Some(paths),
+                None => state.pool_asked = false,
+            }
+            return;
+        }
+        let prefix = self.composer_ref().before_cursor().to_owned();
+        let token = crate::completion::token(&prefix);
+        // A reply for a token that is no longer under the cursor is dropped.
+        if token.strip_prefix('@') != Some(query.as_str()) {
+            return;
+        }
+        let state = &mut self.ui.completion;
+        state.asked.retain(|p| *p != prefix);
+        if let Some(paths) = paths {
+            state.cache.retain(|(k, _)| *k != prefix);
+            state.cache.push((prefix, paths));
+            let extra = state.cache.len().saturating_sub(COMPLETION_CACHE);
+            state.cache.drain(..extra);
+        }
+    }
+
+    /// Keys while the popup is visible. True when the key was taken.
+    fn completion_key(&mut self, name: &str) -> bool {
+        let Some(rows) = self.completion_rows() else {
+            return false;
+        };
+        let last = rows.len() - 1;
+        let index = self.ui.completion.index.min(last);
+        match name {
+            "up" => self.ui.completion.index = index.saturating_sub(1),
+            "down" => self.ui.completion.index = (index + 1).min(last),
+            "esc" => self.ui.completion.hidden = self.completion_token(),
+            "tab" => self.completion_accept(),
+            "enter" => {
+                let text = self.composer_ref().text();
+                if text.starts_with('/') && !text.contains(char::is_whitespace) {
+                    // A standalone `/command` runs the highlighted one, as if typed and sent.
+                    self.composer().set_text(&rows[index].value);
+                    self.send();
+                } else {
+                    self.completion_accept();
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Replace the token with the highlighted value.
+    fn completion_accept(&mut self) {
+        let (Some(rows), Some(token)) = (self.completion_rows(), self.completion_token()) else {
+            return;
+        };
+        let row = &rows[self.ui.completion.index.min(rows.len() - 1)];
+        let text = crate::completion::accepted_completion(&token, &row.value);
+        self.composer().replace_before_cursor(&token, &text);
         self.ui.focus = Focus::Composer;
     }
 }

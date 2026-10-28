@@ -1452,3 +1452,157 @@ fn files_and_projects_tabs_expand_the_rail() {
     app.execute("sidebar.tab.sessions");
     assert!(app.ui.left_rail);
 }
+
+fn completes(app: &nexus_tui::app::App) -> Vec<(String, u32)> {
+    app.effects
+        .iter()
+        .filter_map(|e| match e {
+            nexus_tui::app::Effect::Sync(nexus_tui::sync::Command::Complete {
+                query,
+                limit,
+                ..
+            }) => Some((query.clone(), *limit)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn reply(app: &mut nexus_tui::app::App, query: &str, limit: u32, paths: &[&str]) {
+    app.apply_sync(nexus_tui::sync::SyncMsg::Completion {
+        project: app.current_project().unwrap(),
+        session: Some(SESSION.into()),
+        query: query.into(),
+        limit,
+        data: Ok(serde_json::json!({"query": query, "paths": paths})),
+    });
+}
+
+fn rows_of(app: &nexus_tui::app::App) -> Vec<String> {
+    app.completion_rows()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| r.value)
+        .collect()
+}
+
+#[test]
+fn slash_completion_ranks_commands_and_tab_accepts_the_highlighted_one() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "/mo");
+    let (_, screen) = draw(&mut app, 120, 36);
+    let rows = rows_of(&app);
+    assert_eq!(rows.len(), 10, "{rows:?}");
+    assert_eq!(rows[0], "/model");
+    let at = screen
+        .iter()
+        .position(|r| r.contains("/model"))
+        .expect("popup row");
+    let composer = app.hits.rect_of(&Target::Composer).unwrap();
+    assert!(at < composer.y as usize, "popup sits above the composer");
+    assert!(
+        screen[at].contains("Change model") || screen[at].contains("model"),
+        "{:?}",
+        screen[at]
+    );
+    press(&mut app, &["down", "tab"]);
+    assert_eq!(app.composer_ref().text(), format!("{} ", rows[1]));
+    // The accepted command has an argument slot now: no popup.
+    assert!(app.completion_rows().is_none());
+}
+
+#[test]
+fn enter_on_a_standalone_command_runs_the_highlighted_one() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "/mod");
+    draw(&mut app, 120, 36);
+    press(&mut app, &["enter"]);
+    assert!(app.composer_ref().is_empty());
+    assert!(app.ui.overlay.is_some(), "/model opened its picker");
+}
+
+#[test]
+fn esc_hides_the_popup_for_that_token_only() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "/mo");
+    assert!(app.completion_rows().is_some());
+    press(&mut app, &["esc"]);
+    assert!(app.completion_rows().is_none());
+    assert_eq!(app.composer_ref().text(), "/mo", "Esc did not fall through");
+    press(&mut app, &["backspace"]);
+    assert!(
+        app.completion_rows().is_some(),
+        "a new token shows it again"
+    );
+}
+
+#[test]
+fn at_completion_asks_core_shows_paths_and_keeps_going_inside_directories() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    app.effects.clear();
+    typing(&mut app, "see @");
+    assert_eq!(completes(&app), [(String::new(), 100), (String::new(), 30)]);
+    assert!(app.completion_rows().is_none(), "nothing before the reply");
+    reply(&mut app, "", 30, &["src/", "README.md"]);
+    let (_, screen) = draw(&mut app, 120, 36);
+    assert!(all_contains(&screen, "src/") && all_contains(&screen, "README.md"));
+    app.effects.clear();
+    press(&mut app, &["tab"]);
+    assert_eq!(app.composer_ref().text(), "see @src/");
+    assert_eq!(completes(&app), [("src/".to_owned(), 30)]);
+    reply(&mut app, "src/", 30, &["src/a.rs", "src/b.rs"]);
+    assert_eq!(rows_of(&app)[..2], ["src/a.rs", "src/b.rs"]);
+    press(&mut app, &["down", "enter"]);
+    assert_eq!(app.composer_ref().text(), "see @src/b.rs ");
+    assert!(app.completion_rows().is_none());
+}
+
+#[test]
+fn short_at_replies_are_padded_from_the_empty_query_listing() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "@mian");
+    let pool: Vec<String> = (0..15).map(|i| format!("lib/f{i}.rs")).collect();
+    let pool: Vec<&str> = pool.iter().map(String::as_str).collect();
+    reply(&mut app, "", 100, &pool);
+    reply(&mut app, "mian", 30, &["src/main.rs"]);
+    let rows = rows_of(&app);
+    assert_eq!(rows.len(), 10);
+    assert_eq!(rows[0], "src/main.rs");
+}
+
+#[test]
+fn a_stale_reply_is_ignored_and_replies_stay_cached_while_typing() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "@a");
+    typing(&mut app, "b");
+    reply(&mut app, "a", 30, &["alpha.rs"]);
+    assert!(app.completion_rows().is_none(), "reply for an old token");
+    reply(&mut app, "ab", 30, &["abc.rs", "xab.rs"]);
+    assert_eq!(rows_of(&app), ["abc.rs", "xab.rs"]);
+    // Backspacing and typing again reuse the cached reply without a new request.
+    app.effects.clear();
+    typing(&mut app, "c");
+    assert_eq!(rows_of(&app), ["abc.rs", "xab.rs"]);
+    press(&mut app, &["backspace"]);
+    assert!(completes(&app).iter().all(|(q, _)| q != "ab"));
+    assert_eq!(rows_of(&app), ["abc.rs", "xab.rs"]);
+}
+
+#[test]
+fn clicking_a_completion_row_accepts_it() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "@");
+    reply(&mut app, "", 30, &["one.rs", "two.rs"]);
+    draw(&mut app, 120, 36);
+    let row = app.hits.rect_of(&Target::CompletionRow(1)).expect("row 1");
+    click(&mut app, row.x + 3, row.y);
+    assert_eq!(app.composer_ref().text(), "@two.rs ");
+}
+
+#[test]
+fn nothing_completes_while_a_palette_is_open() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "/mo");
+    assert!(app.completion_rows().is_some());
+    app.execute("palette.open");
+    assert!(app.completion_rows().is_none());
+}

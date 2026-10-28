@@ -204,6 +204,8 @@ impl AppState {
                 self.agents = agents;
                 self.catalog_source = source;
             }
+            // The app owns completion replies.
+            SyncMsg::Completion { .. } => {}
             SyncMsg::Git { session, data } => self.git = Some((session, data)),
             SyncMsg::Diff {
                 session,

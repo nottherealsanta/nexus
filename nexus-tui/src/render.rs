@@ -164,6 +164,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         draw_waiting(&cx, buf, regions.waiting, &mut hits);
         draw_composer(&cx, buf, regions.composer, &mut hits);
+        draw_completion(&cx, buf, &regions, &mut hits);
         if let Some(l) = regions
             .left
             .filter(|l| l.width <= crate::layout::RAIL_WIDTH)
@@ -3217,6 +3218,78 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         if cx.hovered(rect) {
             draw_usage_tooltip(cx, buf, r, usage);
         }
+    }
+}
+
+/// The completion popup, directly above the composer panel and drawn after it so
+/// it covers the timeline. Names are padded to the widest (at most 24) plus
+/// three columns, followed by muted help.
+fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
+    let Some(rows) = cx.app.completion_rows() else {
+        return;
+    };
+    let r = g.composer;
+    if r.height < 6 || r.width < 8 {
+        return;
+    }
+    let height =
+        (rows.len().min(crate::completion::MENU_LIMIT) as u16).min(r.y.saturating_sub(g.centre.y));
+    if height == 0 {
+        return;
+    }
+    let area = Rect::new(r.x + 1, r.y - height, r.width.saturating_sub(2), height);
+    let selected = cx.app.ui.completion.index.min(rows.len() - 1);
+    let name_width = rows
+        .iter()
+        .map(|row| width(&row.value))
+        .max()
+        .unwrap_or(0)
+        .min(24)
+        + 3;
+    let start = selected.saturating_sub(height as usize - 1);
+    for (offset, (i, row)) in rows
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(height as usize)
+        .enumerate()
+    {
+        let y = area.y + offset as u16;
+        let line = Rect::new(area.x, y, area.width, 1);
+        let mut base = cx.st(PRIMARY, RAISED);
+        if i == selected {
+            base = base.patch(cx.t.bg("interactive.selection"));
+        } else if cx.hovered(line) {
+            base = base.patch(cx.t.bg("interactive.hover"));
+        }
+        clear(buf, line, base);
+        let muted = base.patch(cx.t.fg(MUTED));
+        let name_style = if row.reason.is_some() { muted } else { base };
+        let x = put(
+            buf,
+            area.x + 2,
+            y,
+            &truncate(&row.value, name_width - 3, cx.ell()),
+            name_style,
+            area.width.saturating_sub(2),
+        );
+        let help_x = area.x + 2 + name_width as u16;
+        let help = match &row.reason {
+            Some(reason) => format!("{}{}{reason}", row.help, cx.sep()),
+            None => row.help.clone(),
+        };
+        let room = area.right().saturating_sub(help_x + 1) as usize;
+        if x < help_x && room > 0 {
+            put(
+                buf,
+                help_x,
+                y,
+                &truncate(&help, room, cx.ell()),
+                muted,
+                room as u16,
+            );
+        }
+        hits.add(line, Target::CompletionRow(i));
     }
 }
 

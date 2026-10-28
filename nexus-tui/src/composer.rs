@@ -71,6 +71,19 @@ impl Composer {
         let col = before.rsplit('\n').next().unwrap_or("").chars().count();
         (row, col)
     }
+    /// The display text before the cursor (completion looks at its last token).
+    pub fn before_cursor(&self) -> &str {
+        &self.editor.text[..self.editor.cursor]
+    }
+    /// Replace the `token` that ends at the cursor with `text`.
+    pub fn replace_before_cursor(&mut self, token: &str, text: &str) {
+        use unicode_segmentation::UnicodeSegmentation;
+        for _ in token.graphemes(true) {
+            self.editor.backspace();
+        }
+        self.editor.insert(&clean(text));
+        self.refresh();
+    }
     pub fn lines(&self) -> &[String] {
         &self.lines
     }
