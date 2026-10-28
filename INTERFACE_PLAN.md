@@ -7,38 +7,11 @@ forces it (mouse vs keys, pixels vs cells). This file is the spec for both.
 Core work it depends on is tracked in [PLAN.md](PLAN.md) (Step 12 and the
 steps before it).
 
-Status: in progress (2026-10-27). The shared interface data and design language
-are frozen below; both clients now implement the shell and the timeline. This
-file stays the normative spec, including parts not built yet. The build order
-for what remains (the old-Nexus look: composer, timeline, sidebar, agent
-colours, files, no status footer; then the rest of Step 12) is
-[INTERFACE_WORK_PLAN.md](INTERFACE_WORK_PLAN.md).
-
-**Implemented**
-
-- **TUI** (`nexus-tui/`, PLAN.md 12.3 and most of 12.4): connection supervisor
-  (discovery, handshake, durable cursors, resnapshot, keyed mutations, conflicts),
-  workspace header, both sidebars and drawers, session list/projects, palette,
-  settings navigation, alerts/notifications, waiting card, composer, and the
-  timeline: starting context, turn headers/footers, folding, reasoning,
-  Markdown-lite, tool rows with diffs/output/raw, child cards, notices and
-  diagnostics. Selecting a session loads all messages, retained diagnostics and
-  the snapshot. Model/effort/agent pickers, export (Markdown/JSON, session/tree),
-  directory change, inspector links, copy actions and turn navigation are wired.
-- **NSH** (`nexus-nsh/`, PLAN.md 12.5 partial): the same shell, workspace and
-  session flows plus the timeline above (native Markdown and richer code blocks),
-  catalog pickers for model/effort/agent, export, built from the same
-  manifest/theme, against a real Core through its host proxy.
-- **Core**: `/api/info` now reports `api_version` (`{major, minor}`), so clients
-  stop at a major mismatch and no longer carry an "unreported" banner.
-
-**Not built yet** (clients list these disabled with a reason, never as a control
-that appears to work): Files/editor and Git (Core file endpoints), worktree UI,
-settings editing beyond theme, session search (Core index), steering/queueing,
-btw, handoff and one-turn sessions, attachments/transcription, skills/MCP,
-sign-in over the API, and the inspector wire view inline. Their Core
-dependencies are listed in `interface/capability-matrix.md` and PLAN.md Step
-12a.
+This file is the normative spec, including parts not built yet. What is built
+is described in `nexus-tui/README.md` and `nexus-nsh/README.md`; what remains,
+with its Core dependencies, is in [PLAN.md](PLAN.md) ("Next") and
+`interface/capability-matrix.md`. Clients list unbuilt commands as disabled
+with a reason, never as a control that appears to work.
 
 Shared data both clients build from lives in [`interface/`](interface/README.md):
 
@@ -150,6 +123,7 @@ screen reads as coloured, it has too much colour.
 | `surface.canvas` | `#0B0B0B` | `#f7f7f5` | Timeline, editor, app background |
 | `surface.panel` | `#1e1e1e` | `#efefec` | Composer, cards, notices |
 | `surface.raised` | `#242424` | `#ffffff` | Dialogs, menus, toasts, user message |
+| `surface.sidebar` | `#141414` | `#f0f0ed` | Left sidebar and session rail (TUI) |
 | `text.primary` | `#e6e7e8` | `#1f2124` | Titles, user and agent text, tool names |
 | `text.secondary` | `#a4a9ae` | `#4f555b` | Tool arguments, summaries, labels |
 | `text.muted` | `#868c93` | `#5c636a` | Metadata, counts, timestamps, key hints, reasoning |
@@ -337,10 +311,12 @@ glyphs above.
 #### Workspace header
 
 ```
- ◧  nexus10 › research agent › child: sweep                 ◨
+ ◧  Sessions  Files  Projects     nexus10 › research agent › child: sweep   ● 1  ◨
 ```
 
-One row. Left toggle at the leading edge; title and breadcrumbs centred
+One row. Left toggle at the leading edge, then the left sidebar tabs (the
+active one bold on a surface); title and breadcrumbs centred over the centre
+column
 (`›` separators; the last crumb primary, earlier crumbs muted and clickable);
 right toggle at the trailing edge. Status on the right of the title block when
 the session is running (`◐ running`) or disconnected (`✕ offline`).
@@ -359,7 +335,18 @@ attention/focus slot, and the second line shows the project and, when known,
 are muted. Hover fills both lines, and either line opens the session. Running
 titles shimmer unless reduced motion is enabled. Branch data comes from one
 project checkout listing, so rows in a project load together.
-Scope and archived controls are in the sidebar header. Children are reached
+The list ends with a muted `+ New session` row. Scope and archived filters
+are palette commands and Settings rows, not sidebar chrome.
+
+#### Session rail
+
+The left sidebar sits on `surface.sidebar`. Its inner edge is a drag handle
+(20–60 columns); dragging below 14 columns collapses it to a 6-column rail:
+`⌕` (session switcher), one letter per session (the title's first letter, or
+the attention glyph or spinner), and `+`. Each item is three rows with the
+glyph in the middle; the open session's band is filled. Hovering a letter
+shows a popover beside the rail with the title (bold) and `project ⌥ branch`.
+Settings › Sidebar cycles full, rail and hidden. Children are reached
 from their parent rather than listed as separate root rows.
 
 #### Context section
@@ -457,7 +444,7 @@ request’s input tokens, then shows occupancy of each price-tier boundary the
 catalog reports and of the window, as old Nexus did; hovering explains the
 numbers. Narrow rows drop effort, then the provider, then extra percentages
 before shortening names. Attachments and queue are tracked in
-INTERFACE_WORK_PLAN.md.
+PLAN.md (Step 12a).
 
 #### Waiting card
 
@@ -567,7 +554,8 @@ trailing edge**. Toggles remain available when panels close. Use the same
 locations in terminal, browser and desktop, accounting for native window chrome.
 At narrow widths they open drawers rather than relocating to unrelated menus.
 
-Left sidebar tabs are **Sessions → Files → Projects**. **Settings** remains a
+Left sidebar tabs are **Sessions → Files → Projects**; in the TUI they sit in
+the header row after the leading toggle. **Settings** remains a
 fixed bottom entry in that sidebar and a palette command. The waiting-for-input
 card stays immediately above the composer. Additional desktop menu or keyboard
 entry points invoke the same actions. Preserve focus and selected tab when a
@@ -592,9 +580,12 @@ sidebar is hidden and reopened.
   overlays.
 - The centre column is the session view (or the new-session view, or an open
   file in the editor).
-- In the TUI, Settings opens as a centered modal from the palette or the fixed
-  sidebar entry. Its searchable root drills into sections; Esc returns to the
-  root before closing. NSH retains its own Settings view.
+- In the TUI, Settings opens as a centred modal over the dimmed session, from
+  the palette, Ctrl+, or the fixed sidebar entry: title and `esc`, a search
+  line (typing filters), then every section's rows under violet headings with
+  values right-aligned. The selected row is on the accent fill; ←/→ changes
+  it, Enter acts, the row's note or unavailable reason shows below the list.
+  Esc clears the search, then closes. NSH retains its own Settings view.
 
 ## Focus and scrolling
 
