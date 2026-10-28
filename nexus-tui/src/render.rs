@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::app::{now_secs, App, GitGroup, WaitKind};
 use crate::layout::{contains, Flags, Heights, HitMap, Regions};
+use crate::paint;
 use crate::state::ConnectionState;
 use crate::text::{self, truncate, truncate_middle, width};
 use crate::theme::Theme;
@@ -296,11 +297,11 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         if app.ui.overlay.is_some() {
             return None;
         }
-        let b = settings_box(g.area);
+        let m = Modal::of(settings_box(g.area));
         let col = text::width(&app.ui.settings_search.text()) as u16;
         return Some(Position::new(
-            b.x + 3 + col.min(b.width.saturating_sub(7)),
-            b.y + 3,
+            m.x + 2 + col.min(m.w.saturating_sub(3)),
+            m.body.y,
         ));
     }
     if let Some(Overlay {
@@ -308,9 +309,9 @@ fn cursor_position(app: &App, g: &Regions) -> Option<Position> {
         ..
     }) = &app.ui.overlay
     {
-        let b = palette_box(g.area);
-        let (_, (_, c)) = p.query.layout(b.width.saturating_sub(6) as usize);
-        return Some(Position::new(b.x + 4 + c as u16, b.y + 1));
+        let m = Modal::of(palette_box(g.area));
+        let (_, (_, c)) = p.query.layout(m.w.saturating_sub(2) as usize);
+        return Some(Position::new(m.x + 2 + c as u16, m.body.y));
     }
     if app.ui.overlay.is_some() {
         return None;
@@ -4428,65 +4429,63 @@ fn settings_value(cx: &Cx, row: &crate::manifest::Row) -> (String, bool) {
     }
 }
 
-/// Settings: a centred modal over the dimmed session (old Nexus layout):
-/// title and `esc`, a search line, then every section's rows with values
-/// right-aligned; left/right change the selected row.
+/// Settings (DESIGN_PLAN.md D13): the modal recipe over the scrimmed session.
+/// A search row, then every section's rows (UPPERCASE muted headings, values
+/// right-aligned, the selected row on the selection band with the focus bar);
+/// the selected row's note or reason is the line above the key hints.
 fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap) {
     let a = cx.app;
-    // dim everything under the modal: muted text (or the dim attribute
-    // without colour)
-    let muted = cx.t.color(MUTED);
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            let cell = &mut buf[(x, y)];
-            match muted {
-                Some(c) => {
-                    cell.set_fg(c);
-                }
-                None => {
-                    cell.set_style(cell.style().add_modifier(Modifier::DIM));
-                }
-            }
-        }
-    }
     hits.add(area, Target::Scrim);
     let r = settings_box(area);
     if r.width < 20 || r.height < 8 {
         return;
     }
-    let bg = PANEL;
-    clear(buf, r, cx.st(PRIMARY, bg));
-    hits.add(r, Target::Swallow);
-    let x = r.x + 4;
-    let w = r.width.saturating_sub(8);
-    put(
-        buf,
-        x,
-        r.y + 1,
-        "Settings",
-        cx.st(PRIMARY, bg).add_modifier(Modifier::BOLD),
-        w,
-    );
-    let close = Rect::new(r.right().saturating_sub(6), r.y + 1, 3, 1);
-    put(buf, close.x, close.y, "esc", cx.st(MUTED, bg), 3);
+    let m = modal(cx, buf, area, r, "Settings", hits);
+    let (x, w) = (m.x, m.w);
+    let close = Rect::new(r.right().saturating_sub(5), r.y + 1, 3, 1);
     hits.add(close, Target::SettingsEntry);
     let query = a.ui.settings_search.text();
+    let sy = m.body.y;
+    put(buf, x, sy, "\u{2315}", cx.st(MUTED, RAISED), 1);
     if query.is_empty() {
-        put(buf, x, r.y + 3, "Search", cx.st(MUTED, bg), w);
+        put(
+            buf,
+            x + 2,
+            sy,
+            "Filter settings\u{2026}",
+            cx.st(MUTED, RAISED),
+            w,
+        );
     } else {
-        put(buf, x, r.y + 3, &query, cx.st(PRIMARY, bg), w);
+        put(buf, x + 2, sy, &query, cx.st(PRIMARY, RAISED), w);
+    }
+    for hx in x..x + w {
+        put(
+            buf,
+            hx,
+            sy + 1,
+            cx.t.structure("rule"),
+            cx.st("border.default", RAISED),
+            1,
+        );
     }
 
     let items = a.settings_items();
     let rows = a.settings_rows();
     let sel = a.ui.settings_row.min(rows.len().saturating_sub(1));
     let sel_item = rows.get(sel).copied();
-    // footer: the selected row's note or reason, then the key hints
-    let foot_y = r.bottom().saturating_sub(2);
-    let note_y = foot_y.saturating_sub(1);
-    let list = Rect::new(r.x, r.y + 5, r.width, note_y.saturating_sub(r.y + 6));
+    // the note or reason sits on the blank row above the hints
+    let note_y = m.hint_y.saturating_sub(1);
+    let list = Rect::new(r.x, sy + 2, r.width, note_y.saturating_sub(sy + 2));
     if items.is_empty() {
-        put(buf, x, list.y, "No settings match.", cx.st(MUTED, bg), w);
+        put(
+            buf,
+            x,
+            list.y,
+            "No settings match.",
+            cx.st(MUTED, RAISED),
+            w,
+        );
     }
     // a blank line before every heading but the first
     let mut lines: Vec<Option<usize>> = Vec::new();
@@ -4506,16 +4505,7 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
         let y = list.y + (li - top) as u16;
         let Some(i) = line else { continue };
         match &items[*i] {
-            crate::app::SettingsItem::Heading(label) => {
-                put(
-                    buf,
-                    x,
-                    y,
-                    label,
-                    cx.st("agent.violet", bg).add_modifier(Modifier::BOLD),
-                    w,
-                );
-            }
+            crate::app::SettingsItem::Heading(label) => heading(cx, buf, &m, y, label),
             crate::app::SettingsItem::Row {
                 row,
                 section_reason,
@@ -4524,42 +4514,42 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
                 let selected = Some(*i) == sel_item;
                 let disabled = row.unavailable_reason.is_some() || section_reason.is_some();
                 let (value, wired) = settings_value(cx, row);
-                let band = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
-                let mut style = cx.st(if disabled || !wired { MUTED } else { PRIMARY }, bg);
-                let mut vstyle = cx.st(if wired && !disabled { SECONDARY } else { MUTED }, bg);
+                let rr = Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1);
+                let mut style = cx.st(if disabled || !wired { MUTED } else { PRIMARY }, RAISED);
+                let mut vstyle = cx.st(if wired && !disabled { SECONDARY } else { MUTED }, RAISED);
                 if selected {
-                    style = cx
-                        .st("interactive.on_accent", "interactive.accent")
-                        .add_modifier(Modifier::BOLD);
-                    vstyle = cx.st("interactive.on_accent", "interactive.accent");
-                    clear(buf, band, style);
-                    put(
+                    style = band(
+                        cx,
                         buf,
-                        r.x + 2,
+                        &m,
                         y,
-                        if cx.t.opts.ascii { "*" } else { "●" },
-                        style,
-                        1,
+                        if disabled || !wired { MUTED } else { PRIMARY },
                     );
-                } else if cx.hovered(band) {
+                    vstyle = cx.st(
+                        if wired && !disabled { SECONDARY } else { MUTED },
+                        "interactive.selection",
+                    );
+                } else if cx.hovered(rr) {
                     style = style.patch(cx.t.bg("interactive.hover"));
                     vstyle = vstyle.patch(cx.t.bg("interactive.hover"));
-                    clear(buf, band, style);
+                    clear(buf, rr, style);
                 }
                 let value = if disabled {
                     "unavailable".to_owned()
                 } else {
                     value
                 };
-                let vw = (width(&value) as u16).min(w / 2);
+                let lx = x + 2;
+                let lw = w.saturating_sub(2);
+                let vw = (width(&value) as u16).min(lw / 2);
                 let vx = x + w - vw;
                 put(
                     buf,
-                    x,
+                    lx,
                     y,
-                    &truncate(&row.label, (w - vw).saturating_sub(2) as usize, cx.ell()),
+                    &truncate(&row.label, (lw - vw).saturating_sub(2) as usize, cx.ell()),
                     style,
-                    (w - vw).saturating_sub(2),
+                    (lw - vw).saturating_sub(2),
                 );
                 put(
                     buf,
@@ -4569,7 +4559,7 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
                     vstyle,
                     vw,
                 );
-                hits.add(band, Target::SettingsRow(position));
+                hits.add(rr, Target::SettingsRow(position));
             }
         }
     }
@@ -4589,54 +4579,181 @@ fn draw_settings_modal(cx: &Cx, buf: &mut Buffer, area: Rect, hits: &mut HitMap)
             x,
             note_y,
             &truncate(&note, w as usize, cx.ell()),
-            cx.st(MUTED, bg),
+            cx.st(MUTED, RAISED),
             w,
         );
     }
-    let arrows = if cx.t.opts.ascii { "</>" } else { "←/→" };
-    put(
+    let arrows = if cx.t.opts.ascii {
+        "</>"
+    } else {
+        "\u{2190}/\u{2192}"
+    };
+    hint_row(
+        cx,
         buf,
-        x,
-        foot_y,
-        arrows,
-        cx.st(PRIMARY, bg).add_modifier(Modifier::BOLD),
-        w,
+        &m,
+        &[(arrows, "change"), ("enter", "select"), ("esc", "close")],
     );
+    let sections = items
+        .iter()
+        .filter(|i| matches!(i, crate::app::SettingsItem::Heading(_)))
+        .count();
+    let count = format!("{sections} sections");
     put(
         buf,
-        x + width(arrows) as u16 + 1,
-        foot_y,
-        "change  ·  enter select  ·  type to search",
-        cx.st(MUTED, bg),
-        w.saturating_sub(width(arrows) as u16 + 1),
+        r.right().saturating_sub(width(&count) as u16 + 2),
+        m.hint_y,
+        &count,
+        cx.st(MUTED, RAISED),
+        width(&count) as u16,
     );
 }
 
+/// One modal: the scrim over everything drawn so far, then a borderless
+/// `surface.raised` block (DESIGN_PLAN.md D13) with 2 cells of padding left
+/// and right and 1 row top and bottom. Inside: the title row (bold, `esc`
+/// right-aligned), a blank row, the body, a blank row, the key-hint row.
+struct Modal {
+    /// The whole block, padding included.
+    r: Rect,
+    /// Left edge and width of the content inside the padding.
+    x: u16,
+    w: u16,
+    /// Body rows: after the title and its blank row, before the hint row's
+    /// blank row.
+    body: Rect,
+    /// The key-hint row (the last row inside).
+    hint_y: u16,
+}
+
+impl Modal {
+    fn of(r: Rect) -> Self {
+        Self {
+            r,
+            x: r.x + 2,
+            w: r.width.saturating_sub(4),
+            body: Rect::new(
+                r.x + 2,
+                r.y + 3,
+                r.width.saturating_sub(4),
+                r.height.saturating_sub(6),
+            ),
+            hint_y: r.bottom().saturating_sub(2),
+        }
+    }
+}
+
+fn modal(cx: &Cx, buf: &mut Buffer, area: Rect, r: Rect, title: &str, hits: &mut HitMap) -> Modal {
+    paint::scrim(cx.t, buf, area);
+    clear(buf, r, cx.st(PRIMARY, RAISED));
+    hits.add(r, Target::Swallow);
+    let m = Modal::of(r);
+    let tw = m.w.saturating_sub(5);
+    put(
+        buf,
+        m.x,
+        r.y + 1,
+        &truncate(title, tw as usize, cx.ell()),
+        cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD),
+        tw,
+    );
+    put(
+        buf,
+        r.right().saturating_sub(5),
+        r.y + 1,
+        "esc",
+        cx.st(MUTED, RAISED),
+        3,
+    );
+    m
+}
+
+/// A row's selection band (D13): the `interactive.selection` background over
+/// the block minus 1 cell each side, with the `▌` focus bar at its left end.
+/// Returns the row's style (primary text on the band, bold).
+fn band(cx: &Cx, buf: &mut Buffer, m: &Modal, y: u16, token: &str) -> Style {
+    let rr = Rect::new(m.r.x + 1, y, m.r.width.saturating_sub(2), 1);
+    let style = cx
+        .st(token, "interactive.selection")
+        .add_modifier(Modifier::BOLD);
+    clear(buf, rr, style);
+    put(
+        buf,
+        rr.x,
+        y,
+        cx.t.structure("focus_bar"),
+        cx.st("interactive.focus", "interactive.selection"),
+        1,
+    );
+    style
+}
+
+/// A section heading inside a modal: UPPERCASE, bold, muted.
+fn heading(cx: &Cx, buf: &mut Buffer, m: &Modal, y: u16, label: &str) {
+    put(
+        buf,
+        m.x,
+        y,
+        &truncate(&label.to_uppercase(), m.w as usize, cx.ell()),
+        cx.st(MUTED, RAISED).add_modifier(Modifier::BOLD),
+        m.w,
+    );
+}
+
+/// Key hints on the modal's last row: bold key, muted label, `·` between.
+fn hint_row(cx: &Cx, buf: &mut Buffer, m: &Modal, hints: &[(&str, &str)]) -> u16 {
+    let muted = cx.st(MUTED, RAISED);
+    let key = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+    let mut x = m.x;
+    for (i, (k, label)) in hints.iter().enumerate() {
+        if i > 0 {
+            x = put(
+                buf,
+                x,
+                m.hint_y,
+                &cx.sep(),
+                muted,
+                m.r.right().saturating_sub(x + 2),
+            );
+        }
+        x = put(buf, x, m.hint_y, k, key, m.r.right().saturating_sub(x + 2));
+        x = put(
+            buf,
+            x,
+            m.hint_y,
+            &format!(" {label}"),
+            muted,
+            m.r.right().saturating_sub(x + 2),
+        );
+    }
+    x
+}
+
+fn updown(cx: &Cx) -> &'static str {
+    if cx.t.opts.ascii {
+        "up/down"
+    } else {
+        "\u{2191}\u{2193}"
+    }
+}
+
+/// The block for a modal of `width` and `height` cells: centred, within 2
+/// cells of each edge and at most 70% of the frame high.
+fn modal_box(area: Rect, width: u16, height: u16) -> Rect {
+    paint::modal_rect(area, width, height, false)
+}
+
 pub(crate) fn settings_box(area: Rect) -> Rect {
-    let w = area.width.saturating_sub(4).clamp(20, 72);
-    let h = area.height.saturating_sub(4).clamp(8, 44);
-    Rect::new(
-        area.x + area.width.saturating_sub(w) / 2,
-        area.y + area.height.saturating_sub(h) / 2,
-        w,
-        h,
-    )
+    modal_box(area, 88, 40)
+}
+
+fn palette_box(area: Rect) -> Rect {
+    paint::modal_rect(area, 64, 22, true)
 }
 
 // ============================================================================
 // overlays and dialogs
 // ============================================================================
-
-fn palette_box(area: Rect) -> Rect {
-    let w = area.width.saturating_sub(4).clamp(20, 72);
-    let h = area.height.saturating_sub(4).clamp(8, 18);
-    Rect::new(
-        area.x + (area.width - w) / 2,
-        area.y + 1.min(area.height.saturating_sub(h)) + area.height.saturating_sub(h + 2) / 4,
-        w,
-        h,
-    )
-}
 
 fn boxed(cx: &Cx, buf: &mut Buffer, r: Rect, title: &str, bg: &str) {
     let base = cx.st(PRIMARY, bg);
@@ -4783,18 +4900,11 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         PaletteMode::Turns => "Go to turn",
         PaletteMode::RowMenu => "Actions",
     };
-    boxed(cx, buf, b, title, RAISED);
-    hits.add(b, Target::Swallow);
+    let m = modal(cx, buf, area, b, title, hits);
     let base = cx.st(PRIMARY, RAISED);
-    // query row
-    put(
-        buf,
-        b.x + 2,
-        b.y + 1,
-        ">",
-        cx.st(ACCENT, RAISED).add_modifier(Modifier::BOLD),
-        1,
-    );
+    // search row: the glyph, then the query or its placeholder
+    let sy = m.body.y;
+    put(buf, m.x, sy, "\u{2315}", cx.st(MUTED, RAISED), 1);
     let q = p.query.text();
     if q.is_empty() {
         let ph = match p.mode {
@@ -4808,37 +4918,49 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
             PaletteMode::Turns => "type to find a turn",
             PaletteMode::RowMenu => "choose an action",
         };
-        put(buf, b.x + 4, b.y + 1, ph, cx.st(MUTED, RAISED), b.width - 6);
+        put(
+            buf,
+            m.x + 2,
+            sy,
+            ph,
+            cx.st(MUTED, RAISED),
+            m.w.saturating_sub(2),
+        );
     } else {
         put(
             buf,
-            b.x + 4,
-            b.y + 1,
+            m.x + 2,
+            sy,
             &q.replace('\n', " "),
             base,
-            b.width - 6,
+            m.w.saturating_sub(2),
         );
     }
-    for x in b.x + 1..b.right() - 1 {
+    for x in m.x..m.x + m.w {
         put(
             buf,
             x,
-            b.y + 2,
+            sy + 1,
             cx.t.structure("rule"),
             cx.st("border.default", RAISED),
             1,
         );
     }
     let items = cx.app.palette_items();
-    let list = Rect::new(b.x + 1, b.y + 3, b.width - 2, b.height.saturating_sub(5));
+    let list = Rect::new(
+        b.x + 1,
+        sy + 2,
+        b.width - 2,
+        m.body.height.saturating_sub(2),
+    );
     if items.is_empty() {
         put(
             buf,
-            list.x + 2,
+            m.x + 2,
             list.y,
             "Nothing matches.",
             cx.st(MUTED, RAISED),
-            list.width - 2,
+            m.w.saturating_sub(2),
         );
     }
     let h = list.height as usize;
@@ -4851,63 +4973,31 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
         let y = list.y + (i - top) as u16;
         let rr = Rect::new(list.x, y, list.width, 1);
         let selected = i == p.selected;
-        let mut style = if it.reason.is_some() {
-            cx.st(MUTED, RAISED)
-        } else {
-            base
-        };
+        let token = if it.reason.is_some() { MUTED } else { PRIMARY };
+        let mut style = cx.st(token, RAISED);
+        let mut quiet = cx.st(MUTED, RAISED);
         if selected {
-            style = style
-                .patch(cx.t.bg("interactive.selection"))
-                .patch(if it.reason.is_some() {
-                    Style::default()
-                } else {
-                    cx.st(PRIMARY, "interactive.selection")
-                });
-            clear(buf, rr, style);
-            put(
-                buf,
-                rr.x,
-                y,
-                cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", "interactive.selection")
-                    .add_modifier(Modifier::BOLD),
-                1,
-            );
+            style = band(cx, buf, &m, y, token);
+            quiet = cx.st(MUTED, "interactive.selection");
         } else if cx.hovered(rr) {
-            style = style.patch(cx.t.bg("interactive.hover"));
+            let hover = cx.t.bg("interactive.hover");
+            style = style.patch(hover);
+            quiet = quiet.patch(hover);
             clear(buf, rr, style);
         }
-        let hint = it.hint.clone();
-        let hw = width(&hint) as u16;
-        let hx = rr.right().saturating_sub(hw + 1);
+        let hw = width(&it.hint) as u16;
+        let hx = m.x + m.w - hw;
         if hw > 0 {
-            put(
-                buf,
-                hx,
-                y,
-                &hint,
-                style.patch(cx.st(MUTED, RAISED)).patch(if selected {
-                    cx.t.bg("interactive.selection")
-                } else {
-                    Style::default()
-                }),
-                hw,
-            );
+            put(buf, hx, y, &it.hint, quiet, hw);
         }
-        let room = hx.saturating_sub(rr.x + 3 + 1) as usize;
-        let lw = width(&it.label).min(room);
-        let mut label_style = if selected {
-            style.add_modifier(Modifier::BOLD)
-        } else {
-            style
-        };
+        let room = hx.saturating_sub(m.x + 2 + 1) as usize;
+        let mut label_style = style;
         if let PaletteKind::Agent(name) = &it.kind {
             label_style = label_style.patch(cx.t.agent_style(name));
         }
         let x1 = put(
             buf,
-            rr.x + 2,
+            m.x + 2,
             y,
             &truncate(&it.label, room, cx.ell()),
             label_style,
@@ -4925,97 +5015,89 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
                         rrm,
                         cx.ell(),
                     ),
-                    style.patch(cx.st(MUTED, RAISED)).patch(if selected {
-                        cx.t.bg("interactive.selection")
-                    } else {
-                        Style::default()
-                    }),
+                    quiet,
                     rrm as u16,
                 );
             }
         }
-        let _ = lw;
         hits.add(rr, Target::PaletteItem(i));
     }
-    let foot = if items.get(p.selected).is_some_and(|i| i.reason.is_some()) {
-        "enter explains why it is off - esc close"
-    } else {
-        "enter run - esc close"
-    };
-    let foot = foot.replace(" - ", &cx.sep());
-    put(
+    let explain = items.get(p.selected).is_some_and(|i| i.reason.is_some());
+    hint_row(
+        cx,
         buf,
-        b.x + 2,
-        b.bottom() - 2,
-        &truncate(&foot, b.width as usize - 4, cx.ell()),
-        cx.st(MUTED, RAISED),
-        b.width - 4,
+        &m,
+        &[
+            (updown(cx), "move"),
+            (
+                "enter",
+                if explain {
+                    "explain why it is off"
+                } else {
+                    "run"
+                },
+            ),
+            ("esc", "close"),
+        ],
     );
     let count = format!(
-        "{}/{}",
+        "{} of {}",
         if items.is_empty() { 0 } else { p.selected + 1 },
         items.len()
     );
     put(
         buf,
-        b.right().saturating_sub(width(&count) as u16 + 2),
-        b.bottom() - 2,
+        m.x + m.w - width(&count) as u16,
+        m.hint_y,
         &count,
         cx.st(MUTED, RAISED),
-        10,
+        width(&count) as u16,
     );
 }
 
+/// The notification history: the modal recipe, one entry per two rows at most.
 fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hits: &mut HitMap) {
-    let w = 46u16.min(area.width.saturating_sub(2));
-    let b = Rect::new(
-        area.right() - w,
-        area.y + 1,
-        w,
-        area.height.saturating_sub(2),
-    );
-    boxed(cx, buf, b, "Notifications", RAISED);
-    hits.add(b, Target::Swallow);
+    let b = modal_box(area, 64, 30);
+    let m = modal(cx, buf, area, b, "Notifications", hits);
+    hint_row(cx, buf, &m, &[(updown(cx), "move"), ("esc", "close")]);
     let hist = &cx.app.ui.alerts.history;
     if hist.is_empty() {
         put(
             buf,
-            b.x + 2,
-            b.y + 2,
+            m.x,
+            m.body.y,
             "Nothing yet. Toasts and alerts are kept here.",
             cx.st(MUTED, RAISED),
-            b.width - 4,
+            m.w,
         );
         return;
     }
-    let mut y = b.y + 1;
+    let mut y = m.body.y;
     for (i, n) in hist.iter().enumerate() {
-        let rows = text::wrap(&n.text, b.width.saturating_sub(7) as usize);
+        let rows = text::wrap(&n.text, m.w.saturating_sub(3) as usize);
         let h = rows.len().min(2) as u16;
-        if y + h > b.bottom() - 1 {
+        if y + h > m.body.bottom() {
             break;
         }
         let rr = Rect::new(b.x + 1, y, b.width - 2, h);
         let mut style = cx.st(PRIMARY, RAISED);
+        let mut bg = Style::default();
         if i == selected {
-            style = style.patch(cx.t.bg("interactive.selection"));
-            clear(buf, rr, style);
+            band(cx, buf, &m, y, PRIMARY);
+            for extra in 1..h {
+                clear(
+                    buf,
+                    Rect::new(rr.x, y + extra, rr.width, 1),
+                    cx.st(PRIMARY, "interactive.selection"),
+                );
+            }
+            style = cx.st(PRIMARY, "interactive.selection");
+            bg = cx.t.bg("interactive.selection");
         }
         let (g, tok) = cx.level(n.level);
-        put(
-            buf,
-            rr.x + 1,
-            y,
-            g,
-            cx.st(tok, RAISED).patch(if i == selected {
-                cx.t.bg("interactive.selection")
-            } else {
-                Style::default()
-            }),
-            2,
-        );
+        put(buf, m.x, y, g, cx.st(tok, RAISED).patch(bg), 2);
         for (j, l) in rows.iter().take(2).enumerate() {
-            put(buf, rr.x + 4, y + j as u16, l, style, rr.width - 5);
+            put(buf, m.x + 3, y + j as u16, l, style, m.w.saturating_sub(3));
         }
         hits.add(rr, Target::NoticeItem(i));
         y += h;
@@ -5032,8 +5114,7 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
         .filter(|c| !c.version.is_empty())
         .map(|c| format!("Keyboard shortcuts · Core {}", c.version))
         .unwrap_or_else(|| "Keyboard shortcuts".into());
-    boxed(cx, buf, b, &title, RAISED);
-    hits.add(b, Target::Swallow);
+    let m = modal(cx, buf, area, b, &title, hits);
     let mut rows: Vec<(String, String)> = cx
         .app
         .manifest
@@ -5049,32 +5130,35 @@ fn draw_help(cx: &Cx, buf: &mut Buffer, area: Rect, top: usize, hits: &mut HitMa
     ));
     rows.push(("ctrl+z".into(), "Suspend to the shell".into()));
     rows.push(("ctrl+c".into(), "Quit".into()));
-    let h = b.height.saturating_sub(4) as usize;
+    let h = m.body.height as usize;
     let top = top.min(rows.len().saturating_sub(h));
     for (i, (k, t)) in rows.iter().skip(top).take(h).enumerate() {
-        let y = b.y + 2 + i as u16;
-        put(buf, b.x + 2, y, k, cx.st(ACCENT, RAISED), 16);
+        let y = m.body.y + i as u16;
         put(
             buf,
-            b.x + 19,
+            m.x,
             y,
-            &truncate(t, b.width.saturating_sub(21) as usize, cx.ell()),
+            k,
+            cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD),
+            16,
+        );
+        put(
+            buf,
+            m.x + 17,
+            y,
+            &truncate(t, m.w.saturating_sub(17) as usize, cx.ell()),
             cx.st(PRIMARY, RAISED),
-            b.width - 21,
+            m.w.saturating_sub(17),
         );
     }
-    put(
-        buf,
-        b.x + 2,
-        b.bottom() - 2,
-        &format!("up/down scroll{}esc close", cx.sep()),
-        cx.st(MUTED, RAISED),
-        b.width - 4,
-    );
+    hint_row(cx, buf, &m, &[(updown(cx), "scroll"), ("esc", "close")]);
 }
 
 type Buttons<'a> = Option<(&'a str, &'a str, bool, usize)>;
 
+/// A confirm or blocking dialog: title, body, and `[ Cancel ]` (the safe
+/// default, on the selection band when focused) beside the confirm button
+/// (`[ Delete ]` in `status.error` when `danger`).
 fn draw_dialog(
     cx: &Cx,
     buf: &mut Buffer,
@@ -5086,68 +5170,99 @@ fn draw_dialog(
 ) {
     // modal: swallow everything underneath
     hits.add(area, Target::Swallow);
-    let w = area.width.saturating_sub(4).clamp(20, 64).min(72);
+    let w = area.width.saturating_sub(4).clamp(20, 60);
     let inner = w.saturating_sub(4) as usize;
     let rows: Vec<String> = body.iter().flat_map(|l| text::wrap(l, inner)).collect();
-    let h = (rows.len() as u16 + 6).min(area.height);
-    let b = Rect::new(
-        area.x + (area.width - w) / 2,
-        area.y + area.height.saturating_sub(h) / 2,
-        w,
-        h,
-    );
-    boxed(cx, buf, b, title, RAISED);
-    hits.add(b, Target::Swallow);
+    // padding 2 + title + blank + body + blank + buttons + blank + hints
+    let extra = if buttons.is_some() { 8 } else { 6 };
+    let want = (rows.len() as u16 + extra).max(8);
+    let b = modal_box(area, w, want.min(area.height.saturating_sub(4).max(8)));
+    let b = if want > b.height {
+        // a long body: take the room it needs (up to 70% was already tried)
+        let h = want.min(area.height);
+        Rect::new(b.x, area.y + area.height.saturating_sub(h) / 2, b.width, h)
+    } else {
+        b
+    };
+    let m = modal(cx, buf, area, b, title, hits);
     for (i, l) in rows.iter().enumerate() {
-        if (i as u16) + 2 >= b.height.saturating_sub(3) {
+        if i as u16
+            >= m.body
+                .height
+                .saturating_sub(if buttons.is_some() { 2 } else { 0 })
+        {
             break;
         }
         put(
             buf,
-            b.x + 2,
-            b.y + 1 + i as u16,
+            m.x,
+            m.body.y + i as u16,
             l,
             cx.st(PRIMARY, RAISED),
-            b.width - 4,
+            m.w,
         );
     }
-    let by = b.bottom() - 3;
     match buttons {
         Some((cancel, confirm, danger, focus)) => {
-            let cw_ = width(cancel) as u16 + 4;
-            let fw = width(confirm) as u16 + 4;
-            let total = cw_ + 2 + fw;
-            let mut x = b.x + (b.width.saturating_sub(total)) / 2;
-            for (i, (label, is_danger)) in
-                [(cancel, false), (confirm, danger)].into_iter().enumerate()
-            {
-                let mut style = cx.st(if is_danger { "status.error" } else { PRIMARY }, RAISED);
-                if focus == i {
-                    style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
-                }
+            let by = m.body.bottom().saturating_sub(1);
+            let labels = [(cancel, false), (confirm, danger)];
+            let total: u16 = labels
+                .iter()
+                .map(|(l, _)| width(l) as u16 + 4 + 2)
+                .sum::<u16>()
+                .saturating_sub(2);
+            // right-aligned on the inner edge; each button is `[ label ]`
+            let mut x = m.x + m.w.saturating_sub(total);
+            for (i, (label, is_danger)) in labels.into_iter().enumerate() {
+                let token = if is_danger { "status.error" } else { PRIMARY };
                 let s = format!("[ {label} ]");
-                let x1 = put(buf, x, by, &s, style, 40);
+                let sw = width(&s) as u16;
+                let style = if focus == i {
+                    let mut st = cx
+                        .st(token, "interactive.selection")
+                        .add_modifier(Modifier::BOLD);
+                    if cx.t.mono() {
+                        st = st.add_modifier(Modifier::REVERSED);
+                    }
+                    put(
+                        buf,
+                        x.saturating_sub(1),
+                        by,
+                        cx.t.structure("focus_bar"),
+                        cx.st("interactive.focus", RAISED),
+                        1,
+                    );
+                    st
+                } else {
+                    cx.st(token, RAISED)
+                };
+                let x1 = put(buf, x, by, &s, style, sw);
                 hits.add(Rect::new(x, by, x1 - x, 1), Target::DialogButton(i));
                 x = x1 + 2;
             }
-            put(
+            let lr = if cx.t.opts.ascii {
+                "</>"
+            } else {
+                "\u{2190}\u{2192}"
+            };
+            hint_row(
+                cx,
                 buf,
-                b.x + 2,
-                b.bottom() - 2,
-                &format!("enter confirm{}esc cancel", cx.sep()),
-                cx.st(MUTED, RAISED),
-                b.width - 4,
+                &m,
+                &[(lr, "choose"), ("enter", "confirm"), ("esc", "cancel")],
             );
         }
         None => {
+            // Esc does nothing on a blocking dialog: drop the title's `esc`
             put(
                 buf,
-                b.x + 2,
-                b.bottom() - 2,
-                "ctrl+q quit",
+                b.right().saturating_sub(5),
+                b.y + 1,
+                "   ",
                 cx.st(MUTED, RAISED),
-                b.width - 4,
+                3,
             );
+            hint_row(cx, buf, &m, &[("ctrl+q", "quit")]);
         }
     }
 }

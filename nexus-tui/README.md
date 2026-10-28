@@ -25,7 +25,7 @@ left sidebar (a column on the rail, the drawer's first row when narrow;
 hovering shows the label), the session tabs, the run status at the centre's
 right edge, the notification count and the right toggle. Sidebars are 34 / 36
 cells from 160 columns and 28 / 30 below. `paint::scrim` dims a buffer under a
-modal. The left sidebar (D03) opens with a `⌕ Search sessions` row (`ctrl+k`, it opens the
+modal (see the modal recipe below). The left sidebar (D03) opens with a `⌕ Search sessions` row (`ctrl+k`, it opens the
 switcher) and shows an UPPERCASE project header, `⌥ branch  ~/…/dir` sub-groups for
 linked worktrees, and two-line rows (mark slot, title, time; agent in its colour,
 `· ⌥ branch`, `2 ↳`) ending with `+ New session`; `Settings` is pinned at the bottom. Drag its inner edge to resize it (20–60 columns);
@@ -50,9 +50,18 @@ agent and child agents with estimated tokens (characters ÷ 4), detail rows, a
 total and the share of the model's window; the turn footer adds the catalog
 price when the model has one.
 
-Settings is a centred modal over the dimmed session: type to search, ↑/↓ to
+Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
+modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then
+a borderless `surface.raised` block, 2 cells of padding left and right and 1 row top and
+bottom, within 2 cells of the frame edge and at most 70% of its height. The title is the
+first row inside with `esc` on the right, key hints the last row, the selected row is on
+the selection band with the `▌` focus bar. Confirms default to `[ Cancel ]`; `[ Delete ]`
+is in `status.error`. The `.` row menu stays an unscrimmed popover beside its row.
+
+Settings is that modal, 88 cells wide: type to search, ↑/↓ to
 move, ←/→ to change a value, Enter to act, Esc to clear the search and then
-close. Rows the TUI cannot change yet are muted and say why below the list.
+close. Sections have UPPERCASE muted headings. Rows the TUI cannot change yet are
+muted and say why on the footer line above the key hints.
 Consecutive diagnostics (a provider retry sequence) form one tight stack with
 delays rounded to tenths.
 
@@ -255,7 +264,7 @@ for selection, undo/redo and collapsed large pastes; sent text expands every pas
 | `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, supervisor command, clipboard, quit, suspend). |
 | `actions` | The mutations the shell makes (prompt, new session, continue, interrupt, archive, rename, delete, allow/deny), each with its own `RequestId`; a failed send hands the draft back. |
 | `timeline` | The session timeline: blocks in model order (starting context, turns, user/assistant text, reasoning, tools and their diffs, notices, diagnostics, child cards) with fold state and the list of selectable blocks. Folding is view state only. |
-| `paint` | Buffer-level drawing helpers: `scrim` (dim a buffer under a modal). |
+| `paint` | Buffer-level drawing helpers: `scrim` (dim a buffer under a modal), `modal_rect` (the modal block's geometry), `meter`. |
 | `render` | Ratatui drawing from the model, theme and manifest. Timeline blocks become hit targets as they are drawn. `render_text` renders to a text grid for tests and frame dumps. |
 | `term` | Raw mode, alternate screen, mouse, bracketed paste, kitty keyboard flags; restored on error, panic (hook) and Ctrl+Z suspend/resume. |
 

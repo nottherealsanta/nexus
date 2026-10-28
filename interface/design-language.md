@@ -11,9 +11,15 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   is drawn at each sidebar edge. `border.strong` is decorative (diff split rule,
   tool-detail box, block-quote rail). Under a modal the buffer is dimmed by `paint::scrim`: each
   cell's colours move 50% toward the canvas, or `DIM` where colours cannot be
-  blended. Panel surfaces hold the composer and the
-  settings modal; raised surfaces hold user messages and modal panels. Borders are
-  quiet hairlines. A focused row uses the focus bar as well as its selection
+  blended. Panel surfaces hold the composer; raised surfaces hold user messages and modals.
+  One modal recipe (palette, pickers, Settings, confirms, help, notifications): the
+  scrim over the whole frame, then a borderless `surface.raised` block with 2 cells of
+  padding left and right and 1 row top and bottom; the title (bold) is the first row
+  inside with `esc` muted on its right, key hints (bold key, muted label) the last row;
+  at most 70% of the frame high and within 2 cells of its edge. The fill resets
+  modifiers. Rows use the selection band and the `▌` focus bar, section headings are
+  UPPERCASE bold muted, a disabled row is muted with its reason in the footer.
+  Borders are quiet hairlines. A focused row uses the focus bar as well as its selection
   surface so the state remains visible without colour.
 - Primary text carries content and headings. Secondary text carries labels;
   muted text carries metadata and instructions. Status colour is paired with
@@ -58,9 +64,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   on both lines, hover is a surface, and attention is marked. The right sidebar
   uses UPPERCASE bold muted section labels and a 9-cell key column. The left sidebar resizes
   by its edge and collapses to a rail of one letter per session whose hover
-  shows the title and place. Settings is a centred modal over the dimmed
-  session: search, violet section headings, values right-aligned, the selected
-  row on an accent fill, ←/→ to change. Escape clears the search, then closes.
+  shows the title and place. Settings is the modal recipe over the scrimmed
+  session: search, UPPERCASE muted section headings, values right-aligned, the selected
+  row on the selection band with the focus bar, ←/→ to change. Escape clears the search, then closes.
 - The location strip under the composer names the project in bold, then its path (muted),
   `⌥ branch` and `checkout` (muted) or `worktree` (bold violet), with
   `ctrl+p commands` muted at the right; there is no accent underline. Counts abbreviate as `1.2K` and `3.4M`.

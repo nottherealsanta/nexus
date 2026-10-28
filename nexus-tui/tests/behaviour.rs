@@ -314,7 +314,7 @@ fn settings_navigation_follows_the_manifest_order() {
         .collect();
     assert_eq!(headings, manifest);
     let (_, rows) = draw(&mut a, 120, 36);
-    assert!(rows.join("\n").contains("Appearance"));
+    assert!(rows.join("\n").contains("APPEARANCE"));
     // down moves through the rows; esc closes
     press(&mut a, &["down", "down"]);
     assert_eq!(a.ui.settings_row, 2);

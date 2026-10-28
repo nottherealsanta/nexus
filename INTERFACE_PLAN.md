@@ -545,19 +545,23 @@ carry a muted `NSH only` or `TUI only` tag at the far right.
 #### Dialog and confirm
 
 ```
- ┌ Delete session ─────────────────────────────────┐
- │ Delete "Refactor loader" and its 2 children?    │
- │ This cannot be undone.                          │
- │                                                  │
- │            [ Cancel ]  [ Delete ]                │
- │ enter confirm · esc cancel                       │
- └──────────────────────────────────────────────────┘
+  Delete session                                      esc
+
+  Delete "Refactor loader" and its 2 children?
+  This cannot be undone.
+
+                              ▌[ Cancel ]  [ Delete ]
+
+  ←→ choose · enter confirm · esc cancel
 ```
 
-On the `raised` surface over a dimmed canvas (terminal: no dim, the dialog is
-bordered and the content underneath is not redrawn). Title in the top border,
-body, one button row (safe choice first, destructive last and in `status.error`
-when irreversible), key hints in the footer. Width 44-72 cells, centred.
+TUI (DESIGN_PLAN D13, I7): no border. A filled `surface.raised` block over the
+scrimmed session (every cell 50% toward the canvas), with 2 cells of padding
+left and right and 1 row top and bottom. The title (bold) is the first row inside with `esc`
+on its right; the body follows; `[ Cancel ]` is the safe, selected default (selection
+band and `▌` focus bar) and `[ Delete ]` is in `status.error` when irreversible;
+key hints are the last row. Width 44-60 cells, centred, within 2 cells of the frame
+edge. Palette, pickers, Settings, help and notifications use the same block.
 Focus is trapped and returns to the invoker on close.
 - Focused: the focused button is reverse; Esc always cancels. Disabled: a
   button shows its reason in the footer. Loading: the confirm button becomes
@@ -638,11 +642,12 @@ sidebar is hidden and reopened.
   overlays.
 - The centre column is the session view (or the new-session view, or an open
   file in the editor).
-- In the TUI, Settings opens as a centred modal over the dimmed session, from
+- In the TUI, Settings opens as a centred modal over the scrimmed session, from
   the palette, Ctrl+, or the fixed sidebar entry: title and `esc`, a search
-  line (typing filters), then every section's rows under violet headings with
-  values right-aligned. The selected row is on the accent fill; ←/→ changes
-  it, Enter acts, the row's note or unavailable reason shows below the list.
+  line (typing filters), then every section's rows under UPPERCASE muted headings
+  with values right-aligned, in the D13 borderless modal block (88 cells). The selected
+  row is on the selection band with the focus bar; ←/→ changes it, Enter acts, the
+  row's note or unavailable reason shows on the footer line above the key hints.
   Esc clears the search, then closes. NSH retains its own Settings view.
 
 ## Focus and scrolling

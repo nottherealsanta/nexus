@@ -340,7 +340,7 @@ fn connection_states_become_banners_and_a_blocking_dialog() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(
-        all.contains("Incompatible Core") && all.contains("update nexus-tui"),
+        all.contains("Incompatible Core") && all.contains("update") && all.contains("nexus-tui"),
         "{all}"
     );
     let _ = ApiVersion { major: 1, minor: 0 };
@@ -964,8 +964,8 @@ fn settings_is_a_centred_modal_over_the_session() {
         app.hits.at(close_x, top as u16),
         Some(&Target::SettingsEntry)
     );
-    assert!(rows[top + 2].contains("Search"));
-    assert!(joined(&rows).contains("Appearance"));
+    assert!(rows[top + 2].contains("Filter settings"));
+    assert!(joined(&rows).contains("APPEARANCE"));
     app.click(Target::SettingsEntry);
     assert_eq!(app.ui.view, nexus_tui::ui::View::Session);
 }
@@ -978,7 +978,7 @@ fn settings_search_filters_rows_and_esc_clears_then_closes() {
     let (_, rows) = draw(&mut app, 120, 36);
     let text = joined(&rows);
     assert!(text.contains("model"));
-    assert!(text.contains("Models"));
+    assert!(text.contains("MODELS"));
     assert!(!text.contains("Dictation"));
     press(&mut app, &["esc"]);
     assert!(app.ui.settings_search.text().is_empty());
@@ -2455,4 +2455,188 @@ fn the_rail_marks_the_open_session_with_the_selection_band() {
         .expect("rail item for the open session");
     let selection = app.theme.bg("interactive.selection").bg;
     assert_eq!(Some(buf[(band.x + 1, band.y)].bg), selection);
+}
+
+// ---- DESIGN_PLAN I7: one modal recipe ----------------------------------
+
+/// The bounding box of the cells painted `surface.raised`; under a scrim
+/// everything else is blended, so this is the modal block.
+fn raised_box(app: &nexus_tui::app::App, buf: &ratatui::buffer::Buffer) -> ratatui::layout::Rect {
+    let raised = app.theme.color("surface.raised").unwrap();
+    let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0, 0);
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            if buf[(x, y)].bg == raised {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    assert!(x1 > x0, "no raised block drawn");
+    ratatui::layout::Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+fn open_modal(app: &mut nexus_tui::app::App, which: &str) {
+    match which {
+        "palette" => press(app, &["ctrl+p"]),
+        "settings" => app.execute("app.settings"),
+        "help" => app.execute("app.help_keys"),
+        "confirm" => {
+            press(app, &["ctrl+p"]);
+            typing(app, "delete session");
+            press(app, &["enter"]);
+            assert!(app.ui.dialog.is_some(), "confirm dialog");
+        }
+        other => panic!("{other}"),
+    }
+}
+
+#[test]
+fn a_modal_scrims_the_whole_frame_halfway_toward_the_canvas() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let (before, _) = draw(&mut app, 120, 36);
+    open_modal(&mut app, "palette");
+    let (after, _) = draw(&mut app, 120, 36);
+    let Some(Color::Rgb(cr, cg, cb)) = app.theme.color("surface.canvas") else {
+        panic!("canvas is rgb in truecolor");
+    };
+    let half = |a: u8, b: u8| (u16::from(a) + u16::from(b)).div_ceil(2) as u8;
+    let mut checked = 0;
+    // the corners and edges are far from the block: every one is blended
+    for (x, y) in [(0, 0), (119, 0), (0, 35), (119, 35), (60, 1), (118, 20)] {
+        let (Color::Rgb(r, g, b), Color::Rgb(ar, ag, ab)) = (before[(x, y)].bg, after[(x, y)].bg)
+        else {
+            continue;
+        };
+        assert_eq!(
+            (ar, ag, ab),
+            (half(r, cr), half(g, cg), half(b, cb)),
+            "bg at {x},{y}"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 3, "enough rgb cells compared");
+}
+
+#[test]
+fn modals_are_borderless_padded_blocks_within_two_cells_of_each_edge() {
+    use ratatui::layout::Rect;
+    let boxes = ["─", "│", "╭", "╮", "╰", "╯", "┌", "┐", "└", "┘"];
+    for (w, h) in [(120u16, 36u16), (80, 24)] {
+        for which in ["palette", "settings", "help", "confirm"] {
+            let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (w, h));
+            open_modal(&mut app, which);
+            let (buf, rows) = draw(&mut app, w, h);
+            let r = raised_box(&app, &buf);
+            let ctx = format!("{which} at {w}x{h}: {r:?}");
+            let frame = Rect::new(2, 2, w - 4, h - 4);
+            assert!(frame.contains((r.x, r.y).into()), "{ctx}");
+            assert!(
+                r.right() <= frame.right() && r.bottom() <= frame.bottom(),
+                "{ctx}"
+            );
+            assert!(u32::from(r.height) <= u32::from(h) * 7 / 10, "{ctx}");
+            // padding: 2 cells left and right, a blank row top and bottom
+            for x in r.x..r.right() {
+                for y in [r.y, r.bottom() - 1] {
+                    assert_eq!(buf[(x, y)].symbol(), " ", "{ctx}: padding row");
+                }
+            }
+            for y in r.y..r.bottom() {
+                for x in [r.x, r.x + 1, r.right() - 2, r.right() - 1] {
+                    let sym = buf[(x, y)].symbol();
+                    // only a selection bar may sit in the side padding
+                    assert!(sym == " " || sym == "▌", "{ctx}: {sym:?} at {x},{y}");
+                }
+            }
+            // no cell of the block carries a box-drawing border; the title is
+            // the first row inside, `esc` its right end, hints the last row
+            for y in r.y..r.bottom() {
+                for x in r.x..r.right() {
+                    let sym = buf[(x, y)].symbol();
+                    let edge = x == r.x || x == r.right() - 1 || y == r.y || y == r.bottom() - 1;
+                    assert!(!(edge && boxes.contains(&sym)), "{ctx}: border {sym}");
+                }
+            }
+            let title = &rows[r.y as usize + 1];
+            assert!(
+                title.contains("esc") || which == "confirm",
+                "{ctx}: {title}"
+            );
+            assert!(
+                buf[(r.x + 2, r.y + 1)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::BOLD),
+                "{ctx}: bold title"
+            );
+            let hints = &rows[r.bottom() as usize - 2];
+            assert!(hints.contains("esc"), "{ctx}: {hints}");
+        }
+    }
+}
+
+#[test]
+fn settings_headings_are_muted_uppercase_and_the_selected_row_is_on_the_band() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    open_modal(&mut app, "settings");
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let r = raised_box(&app, &buf);
+    let head = rows.iter().position(|l| l.contains("APPEARANCE")).unwrap();
+    let hx = col_of(&rows[head], "APPEARANCE") as u16;
+    assert_eq!(
+        buf[(hx, head as u16)].fg,
+        app.theme.color("text.muted").unwrap()
+    );
+    assert_ne!(
+        buf[(hx, head as u16)].fg,
+        app.theme.color("agent.violet").unwrap()
+    );
+    // the selected row: selection band and the focus bar, not the accent fill
+    let sel = app
+        .hits
+        .rect_of(&Target::SettingsRow(app.ui.settings_row))
+        .unwrap();
+    let selection = app.theme.color("interactive.selection").unwrap();
+    for x in [sel.x, sel.x + 5, sel.right() - 1] {
+        assert_eq!(buf[(x, sel.y)].bg, selection, "band at {x}");
+    }
+    assert_eq!(buf[(sel.x, sel.y)].symbol(), "▌");
+    assert_ne!(
+        buf[(sel.x + 5, sel.y)].bg,
+        app.theme.color("interactive.accent").unwrap()
+    );
+    assert!(r.contains((sel.x, sel.y).into()));
+    // a row that is not selected stays on the raised surface
+    let other = app
+        .hits
+        .rect_of(&Target::SettingsRow(app.ui.settings_row + 1))
+        .unwrap();
+    assert_eq!(
+        buf[(other.x + 5, other.y)].bg,
+        app.theme.color("surface.raised").unwrap()
+    );
+}
+
+#[test]
+fn confirm_defaults_to_cancel_and_marks_delete_as_an_error() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    open_modal(&mut app, "confirm");
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let y = rows.iter().position(|l| l.contains("[ Cancel ]")).unwrap();
+    let cx = col_of(&rows[y], "[ Cancel ]") as u16;
+    let dx = col_of(&rows[y], "[ Delete ]") as u16;
+    let selection = app.theme.color("interactive.selection").unwrap();
+    assert_eq!(buf[(cx + 2, y as u16)].bg, selection, "Cancel is selected");
+    assert_eq!(buf[(cx - 1, y as u16)].symbol(), "▌", "focus bar");
+    assert_eq!(
+        buf[(dx + 2, y as u16)].fg,
+        app.theme.color("status.error").unwrap()
+    );
+    assert_ne!(buf[(dx + 2, y as u16)].bg, selection);
+    // right/left moves the default onto Delete
+    press(&mut app, &["right"]);
+    let (buf, _) = draw(&mut app, 120, 36);
+    assert_eq!(buf[(dx + 2, y as u16)].bg, selection);
 }
