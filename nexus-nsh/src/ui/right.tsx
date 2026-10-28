@@ -176,7 +176,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
               return (
                 <View>
                   <Field k="Title" v={ses().title || "Untitled"} />
-                  <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 18)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
+                  <Field k="Id"><View class="flex-row items-center gap-1"><Text style={{ userSelect: "text" }} class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground">{midTruncate(ses().id, 15)}</Text><IconButton icon="copy" label="Copy session id" onPress={() => run("session.copy_id")} class="size-7" /></View></Field>
                   <Field k="Status"><View class="flex-row"><Status kind={ses().status === "busy" ? "running" : ses().archived ? "cancelled" : "done"} word /></View></Field>
                   <Field k="Agent"><Text class={agentColor(ses().agent)}>{ses().agent}</Text></Field>
                   <Field k="Model" v={`${ses().model || "default"}${ses().model_source ? ` (${ses().model_source})` : ""}`} mono />

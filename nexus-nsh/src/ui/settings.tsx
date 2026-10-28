@@ -1,10 +1,11 @@
 import type { JSX } from "nsh";
-import { Scroll, Text, View, setColorScheme, signal, openUrl, colorScheme } from "nsh";
+import { Scroll, Text, View, setColorScheme, signal, openUrl, colorScheme, windowSize } from "nsh";
 import { Button } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
+import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import { manifest } from "../gen/manifest";
-import { byId, commands, keyLabel, loadProviders, run } from "../commands";
-import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, timelineDetail, toast, currentProject } from "../store";
+import { byId, commands, escape, keyLabel, loadProviders, run } from "../commands";
+import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, setTimelineDetail, settingsSection, themeChoice, centre, timelineDetail, toast, currentProject } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 
@@ -114,7 +115,7 @@ function SettingRow(p: { r: Row; sec: Section }) {
   const why = reason ?? (wired ? "" : "Not editable in this NSH increment yet.");
   const tag = r.clients === "nsh" ? "NSH only" : r.clients === "tui" && r.id !== "appearance.timeline_detail" ? "TUI only" : "";
   return (
-    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-6 items-start"} py-3 border-b border-border`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
+    <View class={`${isNarrow() ? "gap-2" : "flex-row gap-6 items-start"} px-3 py-2 rounded-(--radius) hover:bg-accent`} testID={`setting-${r.id}`} accessible accessibilityLabel={`${r.label}${disabled ? `, unavailable: ${why}` : ""}`}>
       <View class={isNarrow() ? "" : "w-[44%] pr-2"}>
         <View class="flex-row items-center gap-2">
           <Text class={`text-[14px] leading-[22px] ${disabled ? "text-muted-foreground" : "text-foreground"}`}>{r.label}</Text>
@@ -132,26 +133,33 @@ export function SettingsView() {
   loadSettingsData();
   const cur = () => sections.find((s) => s.id === settingsSection()) ?? sections[0];
   const list = () => (cur().row ?? []);
-  void m; void model; void compat; void colorScheme; void byId; void keyLabel; void run;
+  void m; void model; void compat; void colorScheme; void byId; void keyLabel;
   return (
-    <View class={`flex-1 min-h-0 ${isNarrow() ? "" : "flex-row"}`} testID="settings">
-      <View class={isNarrow() ? "border-b border-border" : "w-[200px] border-r border-border p-2"}>
-        <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"} contentClass={isNarrow() ? "flex-row gap-1 p-2" : "gap-0.5"}>
-          <Each of={sections} key={(s) => s.id}>
-            {(s) => (
-              <Button onPress={() => settingsSection.set(s().id)} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().unavailable_reason ? " (unavailable)" : "")}
-                class={`flex-row items-center rounded-(--radius) px-2.5 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
-                <Text class={`text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
-              </Button>
-            )}
-          </Each>
-        </Scroll>
+    <Modal width={820} top="top-[8%]" label="Settings" testID="settings" onCancel={() => escape()} onOpenChange={(open) => { if (!open && centre() === "settings") void run("app.settings"); }}>
+      <View class="gap-3">
+        <ModalTitle title="Settings" />
+        <View class={`${isNarrow() ? "" : "flex-row gap-4"} min-h-0`} style={{ height: Math.max(240, Math.min(520, Math.round(windowSize().height * 0.76) - 48 - 32 - 12 - 12 - 28)) }}>
+          <View class={isNarrow() ? "pb-2" : "w-[180px]"}>
+            <Scroll horizontal={isNarrow()} scrollbar={false} class={isNarrow() ? "" : "flex-1"} contentClass={isNarrow() ? "flex-row gap-1" : "gap-0.5"}>
+              <Each of={sections} key={(s) => s.id}>
+                {(s) => (
+                  <Button onPress={() => settingsSection.set(s().id)} selected={cur().id === s().id} testID={`section-${s().id}`} accessibilityLabel={s().label + (s().unavailable_reason ? " (unavailable)" : "")}
+                    class={`relative flex-row items-center rounded-(--radius) px-3 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-10" : "min-h-8"} ${FOCUS}`}>
+                    <SelectBar on={cur().id === s().id} />
+                    <Text class={`text-[13px] leading-5 ${cur().id === s().id ? "text-foreground font-medium" : s().unavailable_reason ? "text-muted-foreground" : "text-foreground-secondary"}`}>{s().label}</Text>
+                  </Button>
+                )}
+              </Each>
+            </Scroll>
+          </View>
+          <Scroll class="flex-1 min-h-0" contentClass="pb-4 w-full">
+            <Heading text={cur().label} first />
+            <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
+            <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
+          </Scroll>
+        </View>
+        <ModalFooter hints="esc close" right={`Core ${info()?.version ?? "—"}`} />
       </View>
-      <Scroll class="flex-1" contentClass="px-5 pt-4 pb-10 w-full max-w-[760px]">
-        <Text class="text-[18px] leading-7 font-semibold text-foreground">{cur().label}</Text>
-        <If when={cur().unavailable_reason}><View class="flex-row gap-2 items-start pt-1 pb-1"><Text class="text-[13px] text-muted-foreground">⊖</Text><Text class={`flex-1 ${T.sec}`}>{cur().unavailable_reason!}</Text></View></If>
-        <Each of={list()} key={(r) => r.id}>{(r) => <SettingRow r={r()} sec={cur()} />}</Each>
-      </Scroll>
-    </View>
+    </Modal>
   );
 }

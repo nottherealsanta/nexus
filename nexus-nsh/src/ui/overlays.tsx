@@ -1,6 +1,7 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, Text, View, keymap, signal } from "nsh";
-import { Button, Dialog, Input } from "nsh/base";
+import { Button, Input } from "nsh/base";
+import { Heading, Modal, ModalFooter, ModalTitle, SelectBar } from "./modal";
 import type { JSX } from "nsh";
 import { Btn, IconButton, T, FOCUS } from "./kit";
 import { availability, commands, escape, keyLabel, run, Cmd } from "../commands";
@@ -33,37 +34,36 @@ function PaletteBody() {
   const offs = [keymap.bind("down", () => idx.set(clamp(idx() + 1)), { when: "always" }), keymap.bind("up", () => idx.set(clamp(idx() - 1)), { when: "always" })];
   void offs;
   return (
-    <Dialog
-      open onOpenChange={({ open }) => { if (!open) paletteOpen.set(false); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
-      backdropClass="bg-black/50" class={`absolute left-0 right-0 ${isNarrow() ? "top-3 mx-3" : "top-[12%] mx-auto w-[560px]"} max-h-[72%] rounded-(--radius-card) border border-border bg-popover shadow-2xl overflow-hidden`}
-    >
-      <View testID="palette" accessibilityLabel="Command palette" role="menu">
-        <View class="border-b border-border px-3">
-          <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-11 text-[14px] text-foreground placeholder:text-muted-foreground" />
+    <Modal width={560} top="top-[12%]" label="Command palette" testID="palette" onCancel={() => escape()} onOpenChange={(open) => { if (!open) paletteOpen.set(false); }}>
+      <View role="menu" class="gap-2">
+        <ModalTitle title="Commands" />
+        <View class="border-b border-border">
+          <Input autoFocus placeholder="Type a command…" accessibilityLabel="Search commands" testID="palette-input" onChange={({ value: t }) => { q.set(t); idx.set(0); }} onSubmit={() => { const it = items()[idx()]; if (it) pick(it.c); }} submitBehavior="submit" class="h-10 text-[14px] text-foreground placeholder:text-muted-foreground" />
         </View>
-        <If when={items().length > 0} else={<View class="p-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
-          <Scroll class="max-h-[420px]" contentClass="p-1.5 gap-0.5" testID="palette-list">
+        <If when={items().length > 0} else={<View class="py-4"><Text class={T.sec}>No command matches “{q()}”.</Text></View>}>
+          <Scroll class="max-h-[380px]" contentClass="gap-0.5" testID="palette-list">
             <Each of={items()} key={(x) => x.c.id}>
               {(it, i) => {
                 const c = () => it().c;
                 const dis = () => !it().a.ok;
                 return (
                   <Button onPress={() => pick(c())} selected={idx() === i()} accessibilityLabel={`${c().title}${dis() ? `, unavailable: ${it().a.reason}` : ""}`} testID={`cmd-${c().id}`}
-                    class={`rounded-(--radius) px-2.5 py-1.5 selected:bg-selection hover:bg-accent ${FOCUS}`}>
+                    class={`group/row relative rounded-(--radius) px-3 py-1 min-h-8 justify-center selected:bg-selection hover:bg-accent ${FOCUS}`}>
+                    <SelectBar on={idx() === i()} hover />
                     <View class="flex-row items-center gap-3">
-                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
+                      <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${dis() ? "text-muted-foreground" : "text-popover-foreground"}`}>{c().title}</Text>
                       <Text class={T.meta}>{keyLabel(c()) ?? (c().slash ? `/${c().slash}` : "")}</Text>
                     </View>
-                    <If when={dis()}><Text style={{ numberOfLines: 2 }} class={T.meta}>{it().a.reason!}</Text></If>
+                    <If when={dis() && idx() === i()}><Text style={{ numberOfLines: 2 }} class={T.meta}>{it().a.reason!}</Text></If>
                   </Button>
                 );
               }}
             </Each>
           </Scroll>
         </If>
-        <View class="flex-row items-center justify-end gap-3 border-t border-border px-3 py-1.5"><Text class={T.meta}>↑↓ choose · enter run · esc close</Text></View>
+        <ModalFooter hints="↑↓ move · enter run · esc close" right={`${items().length} commands`} />
       </View>
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -75,20 +75,18 @@ function PickerBody() {
   const p = () => picker()!;
   const runItem = (i: { id: string; label: string; run: () => void | Promise<void> }) => { void i.run(); };
   return (
-    <Dialog open onOpenChange={({ open }) => { if (!open) picker.set(null); }} closeOnEscape={false} onCancel={() => escape()} animation="fade"
-      backdropClass="bg-black/50" class={`absolute left-0 right-0 ${isNarrow() ? "top-3 mx-3" : "top-[14%] mx-auto w-[520px]"} max-h-[70%] rounded-(--radius-card) border border-border bg-popover shadow-2xl overflow-hidden`}>
-      <View testID="picker" accessibilityLabel={p().title} role="menu">
-        <View class="border-b border-border px-4 h-11 items-start justify-center">
-          <Text class="text-[15px] leading-5 font-semibold text-popover-foreground">{p().title}</Text>
-        </View>
-        <If when={p().items.length > 0} else={<View class="p-4"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
-          <Scroll class="max-h-[360px]" contentClass="p-1.5 gap-0.5">
+    <Modal width={520} top="top-[14%]" label={p().title} onCancel={() => escape()} onOpenChange={(open) => { if (!open) picker.set(null); }}>
+      <View testID="picker" accessibilityLabel={p().title} role="menu" class="gap-2">
+        <ModalTitle title={p().title} />
+        <If when={p().items.length > 0} else={<View class="py-3"><Text class={T.sec}>{p().note ?? "Nothing to choose from."}</Text></View>}>
+          <Scroll class="max-h-[340px]" contentClass="gap-0.5">
             <Each of={p().items} key={(x) => x.id}>
               {(it, i) => (
-                <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i}`}
-                  class={`rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${FOCUS}`}>
+                <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i()}`}
+                  class={`group/row relative rounded-(--radius) px-3 min-h-8 justify-center hover:bg-selection ${FOCUS}`}>
+                  <SelectBar hover />
                   <View class="flex-row items-center gap-3">
-                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
+                    <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[14px] leading-6 ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
                     <If when={!!it().hint}><Text class={T.meta}>{it().hint}</Text></If>
                   </View>
                 </Button>
@@ -96,9 +94,9 @@ function PickerBody() {
             </Each>
           </Scroll>
         </If>
-        <View class="flex-row items-center justify-end gap-3 border-t border-border px-3 py-1.5"><Text class={T.meta}>enter choose · esc close</Text></View>
+        <ModalFooter hints="enter choose · esc close" right={p().items.length ? `${p().items.length} of ${p().items.length}` : undefined} />
       </View>
-    </Dialog>
+    </Modal>
   );
 }
 
@@ -107,8 +105,7 @@ export function Confirm() {
   return (
     <If when={confirmDialog()}>
       {(d) => (
-        <Dialog open closeOnEscape={false} onCancel={() => escape()} closeOnBackdropPress={false} animation="fade" backdropClass="bg-black/50"
-          class={`absolute left-0 right-0 top-[22%] ${isNarrow() ? "mx-4" : "mx-auto w-[440px]"} rounded-(--radius-card) border border-border bg-popover shadow-2xl p-5 gap-4`}>
+        <Modal width={440} top="top-[22%]" label={d().title} onCancel={() => escape()} closeOnBackdropPress={false}>
           <ConfirmKeys />
           <View testID="confirm-dialog" role="alert" accessibilityLabel={d().title} class="gap-4">
             <View class="gap-1.5">
@@ -117,13 +114,13 @@ export function Confirm() {
               <If when={d().error}><Text class="text-[13px] leading-5 text-error">{"✕ " + d().error}</Text></If>
             </View>
             <View class="flex-row justify-end gap-2">
-              <Btn label="Cancel" onPress={() => run("alert.cancel")} disabled={!!d().busy} testID="confirm-cancel" />
+              <Btn label="Cancel" initial onPress={() => run("alert.cancel")} disabled={!!d().busy} testID="confirm-cancel" />
               <Btn label={d().confirm} kind={d().destructive ? "danger" : "primary"} testID="confirm-ok" busy={!!d().busy}
                 onPress={() => void runConfirm()} />
             </View>
-            <Text class={T.meta}>enter confirm · esc cancel</Text>
+            <Text class={T.meta}>{d().destructive ? "enter cancel · tab to the red button to confirm · esc cancel" : "enter confirm · esc cancel"}</Text>
           </View>
-        </Dialog>
+        </Modal>
       )}
     </If>
   );
@@ -132,7 +129,8 @@ export function Confirm() {
 function ConfirmKeys() {
   // Enter confirms, but never within 400 ms of the dialog opening: the Enter that chose the command must not also confirm it.
   const opened = Date.now();
-  keymap.bind("enter", () => { const d = confirmDialog(); if (d && !d.busy && Date.now() - opened > 400) void runConfirm(); }, { when: "always" });
+  // A destructive confirm has Cancel as its default (D13): Enter cancels, Delete is a deliberate press.
+  keymap.bind("enter", () => { const d = confirmDialog(); if (d && !d.busy && Date.now() - opened > 400) { if (d.destructive) void run("alert.cancel"); else void runConfirm(); } }, { when: "always" });
   return <View />;
 }
 async function runConfirm() {
@@ -147,14 +145,13 @@ export function Blocking() {
   const c = () => connection();
   return (
     <If when={c().kind === "incompatible"}>
-      <Dialog open closeOnEscape={false} onCancel={() => escape()} closeOnBackdropPress={false} animation="fade" backdropClass="bg-black/60"
-        class={`absolute left-0 right-0 top-[24%] ${isNarrow() ? "mx-4" : "mx-auto w-[460px]"} rounded-(--radius-card) border border-border bg-popover shadow-2xl p-5 gap-3`}>
+      <Modal width={460} top="top-[24%]" label="Incompatible Core" scrim="bg-black/60" onCancel={() => escape()} closeOnBackdropPress={false}>
         <View testID="blocking-dialog" role="alert" accessibilityLabel="Incompatible Core" class="gap-2">
           <View class="flex-row items-center gap-2"><Text class="text-error text-[15px]">✕</Text><Text class="text-[15px] leading-5 font-semibold text-popover-foreground">Incompatible Nexus Core</Text></View>
           <Text class={T.sec}>{(() => { const k = c(); return k.kind === "incompatible" ? `Core reports API ${k.core}; this client speaks 1.x. ${k.update === "client" ? "Update NSH (this app)." : "Update Nexus Core."} No requests are sent until this is fixed.` : ""; })()}</Text>
           <Text class={T.meta}>This dialog cannot be dismissed; it clears itself when Core changes.</Text>
         </View>
-      </Dialog>
+      </Modal>
     </If>
   );
 }
@@ -179,8 +176,7 @@ function AddProjectBody() {
     busy.set(false);
   };
   return (
-    <Dialog open closeOnEscape={false} onCancel={() => escape()} animation="fade" backdropClass="bg-black/50"
-      class={`absolute left-0 right-0 top-[22%] ${isNarrow() ? "mx-4" : "mx-auto w-[480px]"} rounded-(--radius-card) border border-border bg-popover shadow-2xl p-5 gap-4`}>
+    <Modal width={480} top="top-[22%]" label="Add project" onCancel={() => escape()} onOpenChange={(open) => { if (!open) addProjectOpen.set(false); }}>
       <View testID="add-project-dialog" class="gap-4" accessibilityLabel="Add project">
         <View class="gap-1.5">
           <Text class="text-[15px] leading-5 font-semibold text-popover-foreground">Add project</Text>
@@ -193,7 +189,7 @@ function AddProjectBody() {
           <Btn label="Add project" kind="primary" busy={busy()} onPress={() => void submit()} testID="project-add-ok" />
         </View>
       </View>
-    </Dialog>
+    </Modal>
   );
 }
 

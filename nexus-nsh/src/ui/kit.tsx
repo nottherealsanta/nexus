@@ -33,16 +33,16 @@ export function IconButton(p: { icon: IconName; label: string; onPress?: () => v
 }
 
 /** Text button: primary (accent fill), default (raised, hairline) or danger. */
-export function Btn(p: { label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName }) {
+export function Btn(p: { initial?: boolean; label: string; onPress?: () => void; kind?: "primary" | "default" | "danger" | "ghost"; disabled?: boolean; reason?: string; testID?: string; busy?: boolean; icon?: IconName }) {
   const k = p.kind ?? "default";
-  const skin = k === "primary" ? "bg-primary border-primary" : k === "danger" ? "bg-error border-error" : k === "ghost" ? "border-transparent hover:bg-accent" : "bg-secondary border-border hover:bg-accent";
-  const fg = k === "primary" || k === "danger" ? "text-on-accent" : "text-foreground";
+  const skin = k === "primary" ? "bg-primary border-primary" : k === "danger" ? "bg-secondary border-error hover:bg-accent" : k === "ghost" ? "border-transparent hover:bg-accent" : "bg-secondary border-border hover:bg-accent";
+  const fg = k === "primary" ? "text-on-accent" : k === "danger" ? "text-error" : "text-foreground";
   return (
     <Button
       onPress={p.onPress} disabled={p.disabled || p.busy} testID={p.testID} accessibilityLabel={p.reason && p.disabled ? `${p.label}, unavailable: ${p.reason}` : p.label}
-      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) border px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${FOCUS}`}
+      class={`flex-row items-center justify-center gap-1.5 rounded-(--radius) border px-3 ${isNarrow() ? "min-h-11" : "min-h-8"} disabled:opacity-50 active:opacity-80 ${skin} ${p.initial ? "border-ring" : ""} ${FOCUS}`}
     >
-      <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" || k === "danger" ? "tint-on-accent" : "tint-foreground-secondary"} />}</If>
+      <If when={p.icon}>{() => <Icon name={p.icon!} class={k === "primary" ? "tint-on-accent" : k === "danger" ? "tint-error" : "tint-foreground-secondary"} />}</If>
       <Text class={`text-[13px] leading-5 font-medium ${fg}`}>{p.busy ? "Working…" : p.label}</Text>
     </Button>
   );
