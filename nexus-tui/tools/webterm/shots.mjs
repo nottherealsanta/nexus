@@ -97,6 +97,11 @@ async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, hom
       await page.mouse.move(box.x + (col + 0.5) * (box.width / cols), box.y + (row + 0.5) * (box.height / rows));
       await sleep(wait);
     },
+    // Page coordinates of the middle of cell (col, row).
+    cell: async (col, row) => {
+      const box = await page.locator("#term .xterm-screen").boundingBox();
+      return [box.x + (col + 0.5) * (box.width / cols), box.y + (row + 0.5) * (box.height / rows)];
+    },
     // Switch the left sidebar between full, rail and hidden from Settings.
     sidebar: async (steps = 1) => {
       await h.key("Control+p", 300);
@@ -173,6 +178,7 @@ for (const theme of ["dark", "light"]) {
     await h.waitFor("Release notes for 0.10"); await h.waitFor("total"); await h.idle(500);
   } });
 }
+await shot({ name: "row-menu-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.hover(8, 4, 100); await h.page.mouse.click(...(await h.cell(8, 4)), { button: "right" }); await h.idle(500); } });
 await shot({ name: "complete-slash-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/mo", 600); } });
 await shot({ name: "complete-at-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.type("look at @s", 1500); } });
 await shot({ name: "new-session-120x36-dark", cols: 120, rows: 36 });

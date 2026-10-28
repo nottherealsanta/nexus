@@ -1047,3 +1047,68 @@ fn long_tool_output_keeps_head_and_tail_and_show_all_restores_the_middle() {
     press(&mut a, &["o"]);
     assert!(!built(&a).contains("line 250\n"), "o folds it again");
 }
+
+fn add_assistant_message(a: &mut nexus_tui::app::App, n: i64, text: &str) {
+    let v = serde_json::json!({"id": 1000 + n, "type": "message.added", "session_id": SESSION,
+        "cursor": format!("log_c915bfc9b6d826c4:{}", 1000 + n),
+        "data": {"id": format!("msg_long_{n}"), "session_id": SESSION, "seq": 100 + n,
+                 "created": 1793113500.0 + n as f64,
+                 "role": "assistant", "parts": [{"type": "text", "text": text}]}});
+    if let Ok(nexus_tui::api::Frame::Event(e)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &v)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(e));
+    }
+}
+
+#[test]
+fn following_anchors_and_jump_to_latest_hold_at_every_size() {
+    for (w, h) in [(80, 24), (160, 48)] {
+        let mut a = app();
+        for n in 0..60 {
+            add_assistant_message(&mut a, n, &format!("paragraph number {n}"));
+        }
+        let drawn = draw(&mut a, w, h).1.join("\n");
+        assert!(a.ui.scroll.follow, "{w}x{h}: follows the bottom");
+        assert!(
+            drawn.contains("paragraph number 59"),
+            "{w}x{h}: newest visible"
+        );
+        assert!(
+            !drawn.contains("paragraph number 10"),
+            "{w}x{h}: old content scrolled off"
+        );
+
+        // Scrolling up leaves follow mode and pins what is read.
+        a.ui.focus = Focus::Timeline;
+        a.scroll_timeline(-10);
+        assert!(
+            !a.ui.scroll.follow,
+            "{w}x{h}: scrolling up suspends following"
+        );
+        let top = a.ui.scroll.top;
+        let before = draw(&mut a, w, h).1.join("\n");
+        add_assistant_message(&mut a, 60, "paragraph number 60");
+        let after = draw(&mut a, w, h).1.join("\n");
+        assert_eq!(
+            a.ui.scroll.top, top,
+            "{w}x{h}: incoming text keeps the anchor"
+        );
+        assert!(
+            !after.contains("paragraph number 60"),
+            "{w}x{h}: new content stays below"
+        );
+        assert!(a.term("timeline.scrolled_up").unwrap());
+        assert!(
+            a.hits.rect_of(&nexus_tui::ui::Target::JumpLatest).is_some(),
+            "{w}x{h}: jump control"
+        );
+        let _ = before;
+
+        // Jumping restores following and shows the newest item.
+        a.execute("session.jump_latest");
+        let drawn = draw(&mut a, w, h).1.join("\n");
+        assert!(a.ui.scroll.follow, "{w}x{h}");
+        assert!(drawn.contains("paragraph number 60"), "{w}x{h}: {drawn}");
+    }
+}

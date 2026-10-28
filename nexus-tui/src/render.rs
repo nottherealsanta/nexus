@@ -2242,7 +2242,22 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
         &if kids == 0 {
             "none".to_owned()
         } else {
-            format!("{kids}, {running} running")
+            let failed = a
+                .state
+                .model
+                .sessions
+                .values()
+                .filter(|c| {
+                    c.id != s.id
+                        && a.ui.failed_sessions.contains(&c.id)
+                        && a.ancestors_of(&c.id).iter().any(|x| x.id == s.id)
+                })
+                .count();
+            let mut text = format!("{kids}, {running} running");
+            if failed > 0 {
+                text.push_str(&format!(", {failed} failed"));
+            }
+            text
         },
     );
     let stats = a.state.model.selected.as_ref().map(|v| {
@@ -2274,15 +2289,40 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
         let shown: Vec<String> = stats
             .tools
             .iter()
-            .take(3)
+            .take(2)
             .map(|(name, n)| format!("{name} {n}"))
             .collect();
-        let rest = stats.tools.len().saturating_sub(3);
+        let rest = stats.tools.len().saturating_sub(2);
         let mut line = shown.join(&cx.sep());
         if rest > 0 {
             line.push_str(&format!("{}+{rest}", cx.sep()));
         }
-        kv(cx, buf, r, y, "tools", &line);
+        kv(cx, buf, r, y, "used", &line);
+    }
+    let all_tools = s
+        .extra
+        .get("tools")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if all_tools > 0 {
+        let off = s
+            .extra
+            .get("disabled_tools")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        let on = all_tools.saturating_sub(off);
+        kv(
+            cx,
+            buf,
+            r,
+            y,
+            "tools",
+            &if off > 0 {
+                format!("{on} on{}{off} off", cx.sep())
+            } else {
+                format!("{on} on")
+            },
+        );
     }
     if stats.has_tokens() {
         kv(cx, buf, r, y, "input", &text::count(stats.input));
