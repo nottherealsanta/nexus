@@ -355,38 +355,40 @@ from their parent rather than listed as separate root rows.
 #### Context section
 
 A section of the timeline that groups what the model received before the first
-turn (system prompt, tool list, instructions, agent, child agents).
+turn (system prompt, instructions, tool list, child agents). The new-session view
+shows the same sections as its content, under a header block (DESIGN_PLAN D10).
 
 ```
- ▾ Context · 5 items · ~2.9K tokens · 1.4% of window
-   ▐ System prompt ▌ ~1.0K tokens
-    You are a coding agent running in Nexus, a coding agent…
+ ▾ Context · 4 items · ~2.9k tokens
+   ◆ System prompt  ~1,006 tok · build · 2 lines
+     You are a coding agent running in Nexus, a coding agent…
 
-   ▐ Tools ▌ [9] ~1.9K tokens
-    read  bash  bash_output  bash_kill  edit  write  ask  +2 more
+   ◆ AGENTS.md      ~200 tok   · loaded · in the system prompt · /work/AGENTS.md
 
-   ▐ Instructions ▌ AGENTS.md loaded ~0.7K tokens
-    /work/AGENTS.md · 2.8 KB, part of the system prompt
+   ◆ Tools          ~14 tok    · 3 tools · 3 on
+     read          bash          edit          (off tools struck through, muted)
 
-   ▐ Agent ▌ build
-    builtin · Does the actual work…
+   ◆ Child agents              · 2 agents
+     scout         plan
 
-   total  ~2.9K tokens · 1.4% of the window
+   Context total · ~1,020 tokens · 1.0% of the window
 ```
 
-Header: fold marker, title (secondary, bold), `·`-separated meta in muted, with
-the share of the model's window when the catalog reports one. Body, as in old Nexus: each item's name is a bold label on a filled chip
-(reversed in monochrome), followed by a count and the estimated token figure,
-with muted detail rows indented under the chip's text (first prompt line, tool names in at
-most two rows then `+N more`, the instruction file's path and size). A blank
-row separates items; a `total` row closes the list. Estimates are
+Header: fold marker, title (secondary, bold), `·`-separated meta in muted. Each
+section: a muted `◆`, the title bold primary, the count secondary and the meta
+muted, then one preview line (muted) for text sections or a column grid for
+inventories (up to four columns and three rows, then `+N more`). A blank row
+separates sections; a `Context total` row closes the list: text only, no bar,
+with the share of the model's window when the catalog reports one. Estimates are
 characters ÷ 4 and carry `~`; the provider's own counts appear in the turn
-footer. Instructions are part of the system prompt, so the total counts only
-the system prompt and the tool schemas. Collapsed by default after the first
-turn. Focused: focus bar on the header. Hovered: header background. Loading:
-`loading context…`. Error: `✕ failed to load context` with retry key hint.
-Empty: `No context yet`. Clipped items show a `context` notice line stating what
-was clipped and why.
+footer. Instructions are part of the system prompt, so the total counts only the
+system prompt and the tool schemas. Folded after the first turn to one line:
+`▸ Context · 4 items · ~2.9k tokens`. Focused: focus bar on the header. Hovered:
+header background. Loading: `loading context…`. Error: `✕ failed to load context`
+with retry key hint. Empty: `No context yet`. Clipping is announced: a preview or
+meta that does not fit ends in `…`, a grid in `+N more`. In the new-session view
+the figures are client-side estimates until Core session drafts land (PLAN.md
+Step 12a) and say "estimated" on hover.
 
 #### Turn header
 

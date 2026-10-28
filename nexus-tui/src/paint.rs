@@ -240,3 +240,268 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Starting-context sections (DESIGN_PLAN.md D10, I9)
+// ---------------------------------------------------------------------------
+
+/// What a span of a context row is, so the new-session view and the timeline
+/// each map it to their own styles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CtxRole {
+    /// The `◆` before a section title (muted).
+    Mark,
+    /// The section title (bold primary).
+    Title,
+    /// The token count (secondary); estimated counts read `~N tok`.
+    Tokens,
+    /// The meta after the count and indents (muted).
+    Meta,
+    /// A preview line (muted).
+    Preview,
+    /// A tool or other inventory name that is on (secondary).
+    Item,
+    /// An inventory name that is switched off (muted, struck through).
+    ItemOff,
+    /// The `Context total` label (bold primary).
+    TotalLabel,
+    /// The total's figure (primary).
+    TotalFigure,
+}
+
+/// One section of the starting context.
+#[derive(Debug, Clone)]
+pub struct CtxSection {
+    pub title: String,
+    /// Tokens the section costs; `None` when unknown.
+    pub tokens: Option<u64>,
+    /// `· meta` after the count (without the separator).
+    pub meta: String,
+    pub body: CtxBody,
+}
+
+#[derive(Debug, Clone)]
+pub enum CtxBody {
+    /// One preview line, clipped with an ellipsis.
+    Preview(String),
+    /// An inventory as a column grid; the flag is whether the entry is on.
+    Grid(Vec<(String, bool)>),
+    None,
+}
+
+/// How the rows are laid out.
+pub struct CtxLayout<'a> {
+    pub width: usize,
+    pub sep: &'a str,
+    pub ell: &'a str,
+    pub ascii: bool,
+    /// Counts are estimates (`~`).
+    pub estimated: bool,
+    /// The model's context window, for the total's share.
+    pub window: Option<u64>,
+}
+
+pub type CtxRow = Vec<(String, CtxRole)>;
+
+/// Group digits: `17580` is `17,580`.
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `17.6k` for the folded line; plain digits below a thousand.
+pub fn compact(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// The folded context line (`▸ Context · 4 items · ~17.6k tokens`) without the
+/// fold marker, as `(title, meta)`.
+pub fn context_folded(items: usize, total: u64, estimated: bool, sep: &str) -> (String, String) {
+    let tilde = if estimated { "~" } else { "" };
+    (
+        "Context".to_owned(),
+        format!("{sep}{items} items{sep}{tilde}{} tokens", compact(total)),
+    )
+}
+
+/// The rows of the open context: one per section header, its preview or grid
+/// rows and a blank row between sections, then the total row. Widths count
+/// terminal cells; every row fits in `layout.width`. Clipping is announced:
+/// a clipped preview ends in the ellipsis and a clipped grid in `+N more`.
+pub fn context_rows(sections: &[CtxSection], total: u64, layout: &CtxLayout) -> Vec<CtxRow> {
+    use crate::text::{truncate, width};
+    let mut rows: Vec<CtxRow> = Vec::new();
+    let mark = if layout.ascii { "*" } else { "\u{25c6}" };
+    let tilde = if layout.estimated { "~" } else { "" };
+    let title_w = sections
+        .iter()
+        .map(|s| width(&s.title))
+        .max()
+        .unwrap_or(0)
+        .max(6)
+        + 2;
+    let counts: Vec<String> = sections
+        .iter()
+        .map(|s| {
+            s.tokens
+                .map_or_else(String::new, |t| format!("{tilde}{} tok", thousands(t)))
+        })
+        .collect();
+    let count_w = counts.iter().map(|c| width(c)).max().unwrap_or(0);
+    let indent = "  ";
+    for (i, s) in sections.iter().enumerate() {
+        if i > 0 {
+            rows.push(Vec::new());
+        }
+        let pad =
+            |text: &str, to: usize| format!("{text}{}", " ".repeat(to.saturating_sub(width(text))));
+        let mut head: CtxRow = vec![
+            (format!("{mark} "), CtxRole::Mark),
+            (pad(&s.title, title_w), CtxRole::Title),
+            (pad(&counts[i], count_w), CtxRole::Tokens),
+        ];
+        if !s.meta.is_empty() {
+            head.push((format!("{}{}", layout.sep, s.meta), CtxRole::Meta));
+        }
+        rows.push(clip_row(head, layout));
+        let room = layout.width.saturating_sub(indent.len());
+        match &s.body {
+            CtxBody::Preview(text) if !text.is_empty() => {
+                rows.push(vec![
+                    (indent.to_owned(), CtxRole::Meta),
+                    (truncate(text, room, layout.ell), CtxRole::Preview),
+                ]);
+            }
+            CtxBody::Grid(names) if !names.is_empty() => {
+                let widest = names.iter().map(|(n, _)| width(n)).max().unwrap_or(1);
+                // Four columns when they fit; a long name is clipped with the ellipsis
+                // rather than costing the whole grid a column.
+                let col = (room / 4).clamp(widest.min(14) + 2, 24);
+                let cols = (room / col).clamp(1, 4);
+                let max_rows = 3;
+                let cap = cols * max_rows;
+                let (shown, hidden) = if names.len() > cap {
+                    (cap - 1, names.len() - (cap - 1))
+                } else {
+                    (names.len(), 0)
+                };
+                for chunk in names[..shown].chunks(cols) {
+                    let mut row: CtxRow = vec![(indent.to_owned(), CtxRole::Meta)];
+                    for (n, on) in chunk {
+                        let role = if *on { CtxRole::Item } else { CtxRole::ItemOff };
+                        row.push((pad(&truncate(n, col - 1, layout.ell), col), role));
+                    }
+                    rows.push(row);
+                }
+                if hidden > 0 {
+                    rows.push(vec![
+                        (indent.to_owned(), CtxRole::Meta),
+                        (format!("+{hidden} more"), CtxRole::Meta),
+                    ]);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !sections.is_empty() {
+        rows.push(Vec::new());
+    }
+    let mut totals: CtxRow = vec![
+        ("Context total".to_owned(), CtxRole::TotalLabel),
+        (
+            format!("{}{tilde}{} tokens", layout.sep, thousands(total)),
+            CtxRole::TotalFigure,
+        ),
+    ];
+    if let Some(w) = layout.window.filter(|&w| w > 0) {
+        let pct = total as f64 / w as f64 * 100.0;
+        let share = if pct > 0.0 && pct < 0.1 {
+            "<0.1%".to_owned()
+        } else {
+            format!("{pct:.1}%")
+        };
+        totals.push((
+            format!("{}{share} of the window", layout.sep),
+            CtxRole::Meta,
+        ));
+    }
+    rows.push(clip_row(totals, layout));
+    rows
+}
+
+/// Clip a row to the layout width with the ellipsis (never silently).
+fn clip_row(mut row: CtxRow, layout: &CtxLayout) -> CtxRow {
+    use crate::text::{truncate, width};
+    let mut used = 0;
+    for i in 0..row.len() {
+        let w = width(&row[i].0);
+        if used + w > layout.width {
+            row[i].0 = truncate(&row[i].0, layout.width.saturating_sub(used), layout.ell);
+            row.truncate(i + 1);
+            break;
+        }
+        used += w;
+    }
+    row
+}
+
+#[cfg(test)]
+mod ctx_tests {
+    use super::*;
+
+    fn layout(width: usize) -> CtxLayout<'static> {
+        CtxLayout {
+            width,
+            sep: " \u{b7} ",
+            ell: "\u{2026}",
+            ascii: false,
+            estimated: true,
+            window: Some(200_000),
+        }
+    }
+
+    fn text(rows: &[CtxRow]) -> Vec<String> {
+        rows.iter()
+            .map(|r| r.iter().map(|(t, _)| t.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn digits_group_and_compact() {
+        assert_eq!(thousands(17_580), "17,580");
+        assert_eq!(thousands(12), "12");
+        assert_eq!(compact(17_580), "17.6k");
+        assert_eq!(compact(980), "980");
+    }
+
+    #[test]
+    fn a_grid_clips_with_a_more_row() {
+        let names: Vec<(String, bool)> =
+            (0..20).map(|i| (format!("tool{i}"), i % 2 == 0)).collect();
+        let s = CtxSection {
+            title: "Tools".into(),
+            tokens: Some(100),
+            meta: "20 tools".into(),
+            body: CtxBody::Grid(names),
+        };
+        let rows = context_rows(&[s], 100, &layout(60));
+        let t = text(&rows);
+        assert!(
+            t.iter().any(|l| l.contains("+") && l.contains("more")),
+            "{t:?}"
+        );
+        assert!(t.iter().all(|l| crate::text::width(l) <= 60), "{t:?}");
+        assert!(rows.iter().flatten().any(|(_, r)| *r == CtxRole::ItemOff));
+    }
+}

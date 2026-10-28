@@ -2815,104 +2815,334 @@ fn empty_state(cx: &Cx) -> (String, Vec<String>) {
     }
 }
 
-/// The new-session view's context header: what the first prompt will be
-/// sent with. Core freezes the real context when the session starts, so this
-/// is labelled a preview.
-fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect) {
-    let a = cx.app;
-    if r.height < 8 || r.width < 24 {
-        return;
+/// Tokens the generated system prompt costs before the agent body and the
+/// instruction file are added. The preview is client-side until Core session
+/// drafts land (PLAN.md Step 12a), so every figure is an estimate.
+const PROMPT_BASE_TOKENS: u64 = 900;
+/// Tokens one tool's schema costs in the preview.
+const TOOL_SCHEMA_TOKENS: u64 = 450;
+/// The tools an agent without a `tools` list is offered, and the workspace
+/// entry point every new session gets (docs/agents.md).
+const DEFAULT_TOOLS: [&str; 7] = [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "ask",
+    "code",
+    "expose_workspace_tools",
+];
+
+/// The project's `AGENTS.md` as the preview sees it: size in bytes and its
+/// first prose line. Read once per path (the preview redraws every frame);
+/// `None` when the file is absent or unreadable (a remote Core's project).
+fn instruction_file(path: &str) -> Option<(u64, String)> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, Option<(u64, String)>>> =
+            RefCell::new(HashMap::new());
     }
+    CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(path.to_owned())
+            .or_insert_with(|| {
+                let text = std::fs::read_to_string(path).ok()?;
+                let line = text
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("<!--"))
+                    .unwrap_or("")
+                    .to_owned();
+                Some((text.len() as u64, line))
+            })
+            .clone()
+    })
+}
+
+/// The sections the next session will start with, estimated on the client.
+fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
+    use paint::{CtxBody, CtxSection};
+    let a = cx.app;
+    let sep = cx.sep();
     let agent_name = a.current_agent();
     let agent = a
         .state
         .agents
         .iter()
         .find(|ag| ag["name"].as_str() == Some(agent_name.as_str()));
-    let model = a.effective_model(None);
-    let model_label = if model.is_empty() {
-        cx.ell().to_owned()
-    } else {
-        let (provider, name, _) = model_parts(a, &model);
-        format!("{name} {provider}")
+    let description = agent
+        .and_then(|ag| ag["description"].as_str())
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    // An agent with no `tools` list is offered every default tool; every new
+    // session also gets the workspace entry point.
+    let mut tools: Vec<String> = match agent.and_then(|ag| ag["tools"].as_array()) {
+        Some(list) => list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        None => DEFAULT_TOOLS.iter().map(|t| (*t).to_owned()).collect(),
     };
-    let tools = agent
-        .and_then(|ag| ag["tools"].as_array())
-        .map(|t| {
-            t.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
+    if !tools.iter().any(|t| t == "expose_workspace_tools") {
+        tools.push("expose_workspace_tools".into());
+    }
+    let off = crate::app::disabled_tools(None);
+    let project = a
+        .current_project()
+        .and_then(|p| a.state.model.projects.get(&p));
+    let file_path = project.map(|p| format!("{}/AGENTS.md", p.path.trim_end_matches('/')));
+    let file = file_path.as_deref().and_then(instruction_file);
+    let file_tokens = file.as_ref().map_or(0, |(bytes, _)| bytes.div_ceil(4));
+    let prompt_tokens =
+        PROMPT_BASE_TOKENS + (description.chars().count() as u64).div_ceil(4) + file_tokens;
+    let tool_tokens = tools.len() as u64 * TOOL_SCHEMA_TOKENS;
+    let mut sections = vec![CtxSection {
+        title: "System prompt".into(),
+        tokens: Some(prompt_tokens),
+        meta: agent_name.clone(),
+        body: CtxBody::Preview(description),
+    }];
+    sections.push(match (&file, &file_path) {
+        (Some((_, line)), Some(path)) => CtxSection {
+            title: "AGENTS.md".into(),
+            tokens: Some(file_tokens),
+            meta: format!("in the system prompt{sep}{}", short_home(path)),
+            body: CtxBody::Preview(line.clone()),
+        },
+        _ => CtxSection {
+            title: "AGENTS.md".into(),
+            tokens: None,
+            meta: "none in this project".into(),
+            body: CtxBody::None,
+        },
+    });
+    sections.push(CtxSection {
+        title: "Tools".into(),
+        tokens: Some(tool_tokens),
+        meta: format!(
+            "{} tools{sep}{} on",
+            tools.len(),
+            tools.iter().filter(|t| !off.contains(t)).count()
+        ),
+        body: CtxBody::Grid(
+            tools
+                .iter()
+                .map(|t| (t.clone(), !off.contains(t)))
+                .collect(),
+        ),
+    });
+    // The instruction file is part of the system prompt: the total counts the
+    // prompt and the tool schemas, as the timeline does after the first turn.
+    (sections, prompt_tokens + tool_tokens)
+}
+
+/// `⌥ main` of the project checkout, from the worktree listing.
+fn preview_branch(cx: &Cx) -> Option<String> {
+    let a = cx.app;
+    let project = a.current_project()?;
+    let path = a.state.model.projects.get(&project)?.path.clone();
+    a.state
+        .project_worktrees
+        .get(&project)?
+        .get("worktrees")?
+        .as_array()?
+        .iter()
+        .filter(|t| {
+            t["path"]
+                .as_str()
+                .is_some_and(|p| std::path::Path::new(&path).starts_with(p))
         })
-        .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| "agent default".into());
-    let place = a
+        .max_by_key(|t| t["path"].as_str().map_or(0, str::len))
+        .and_then(|t| t["branch"].as_str())
+        .filter(|b| !b.is_empty())
+        .map(str::to_owned)
+}
+
+/// The new-session view (DESIGN_PLAN.md D10): a header block, then what the
+/// first prompt will be sent with, as the same sections the timeline shows
+/// after the session starts. Returns the rows used.
+fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect) -> u16 {
+    let a = cx.app;
+    if r.height < 4 || r.width < 24 {
+        return 0;
+    }
+    let sep = cx.sep();
+    let name = a
+        .current_project()
+        .and_then(|p| a.state.model.projects.get(&p).map(|p| p.name.clone()))
+        .unwrap_or_default();
+    let end = r.right();
+    let mut y = r.y;
+    let bold = |fg| cx.st(fg, CANVAS).add_modifier(Modifier::BOLD);
+    put(
+        buf,
+        r.x,
+        y,
+        &truncate(
+            &format!("New session in {name}"),
+            r.width as usize,
+            cx.ell(),
+        ),
+        bold(PRIMARY),
+        r.width,
+    );
+    y += 1;
+    // `Build · gpt-6.1-terra codex · medium · ~/repos/nexus-demo ⌥ main`
+    let agent = a.current_agent();
+    let mut x = put(
+        buf,
+        r.x,
+        y,
+        &text::capitalize(&agent),
+        cx.st(PRIMARY, CANVAS)
+            .add_modifier(Modifier::BOLD)
+            .patch(cx.t.agent_style(&agent)),
+        r.width,
+    );
+    let model = a.effective_model(None);
+    if !model.is_empty() {
+        let (provider, id, _) = model_parts(a, &model);
+        x = put(buf, x, y, &sep, cx.st(MUTED, CANVAS), end.saturating_sub(x));
+        x = put(
+            buf,
+            x,
+            y,
+            &id,
+            cx.st(PRIMARY, CANVAS),
+            end.saturating_sub(x),
+        );
+        x = put(
+            buf,
+            x,
+            y,
+            &format!(" {provider}"),
+            cx.st(MUTED, CANVAS),
+            end.saturating_sub(x),
+        );
+    }
+    let effort = a.current_effort();
+    if !effort.is_empty() {
+        x = put(buf, x, y, &sep, cx.st(MUTED, CANVAS), end.saturating_sub(x));
+        x = put(
+            buf,
+            x,
+            y,
+            &effort,
+            cx.st(SECONDARY, CANVAS),
+            end.saturating_sub(x),
+        );
+    }
+    if let Some(project) = a
         .current_project()
         .and_then(|p| a.state.model.projects.get(&p))
-        .map(|p| format!("{}/AGENTS.md", short_home(&p.path)))
-        .unwrap_or_else(|| "AGENTS.md".into());
-    let mut y = r.y;
-    let x = r.x;
-    let header = [
-        (format!("{} ", cx.t.fold(true)), cx.st(MUTED, CANVAS)),
-        (
-            "Context".to_owned(),
-            cx.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD),
-        ),
-        (
-            format!("{}preview{}{model_label}", cx.sep(), cx.sep()),
+    {
+        x = put(buf, x, y, &sep, cx.st(MUTED, CANVAS), end.saturating_sub(x));
+        let branch = preview_branch(cx).map(|b| truncate(&b, 24, cx.ell()));
+        let room = (end.saturating_sub(x) as usize)
+            .saturating_sub(branch.as_ref().map_or(0, |b| width(b) + 4));
+        x = put(
+            buf,
+            x,
+            y,
+            &truncate_middle(&short_home(&project.path), room, cx.ell()),
             cx.st(MUTED, CANVAS),
-        ),
-    ];
-    let mut hx = x;
-    for (text, style) in header {
-        hx = put(buf, hx, y, &text, style, r.right().saturating_sub(hx));
+            end.saturating_sub(x),
+        );
+        if let Some(branch) = branch {
+            let mark = if cx.t.opts.ascii { "@" } else { "\u{2325}" };
+            put(
+                buf,
+                x,
+                y,
+                &format!(" {mark} {branch}"),
+                cx.st(SECONDARY, CANVAS),
+                end.saturating_sub(x),
+            );
+        }
     }
     y += 1;
-    let rows = [
-        (
-            "agent",
-            format!(
-                "{agent_name} · {}",
-                agent
-                    .and_then(|ag| ag["source"].as_str())
-                    .unwrap_or("builtin")
-            ),
-        ),
-        (
-            "model",
-            if model.is_empty() {
-                cx.ell().to_owned()
-            } else {
-                model
-            },
-        ),
-        ("tools", tools),
-        ("instructions", place),
-        ("system prompt", "frozen when the session starts".to_owned()),
-    ];
-    let label_w = 15u16;
-    for (label, value) in rows {
-        put(
+    // `Tab agent · ctrl+m model · ctrl+e effort · ctrl+d directory`: keys bold, labels muted.
+    let mut x = r.x;
+    for (i, (key, label)) in [
+        ("Tab", "agent"),
+        ("ctrl+m", "model"),
+        ("ctrl+e", "effort"),
+        ("ctrl+d", "directory"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        if i > 0 {
+            x = put(buf, x, y, &sep, cx.st(MUTED, CANVAS), end.saturating_sub(x));
+        }
+        x = put(buf, x, y, key, bold(PRIMARY), end.saturating_sub(x));
+        x = put(
             buf,
-            x + 2,
+            x,
             y,
-            cx.t.structure("rail"),
-            cx.st("border.default", CANVAS),
-            1,
-        );
-        put(buf, x + 4, y, label, cx.st(SECONDARY, CANVAS), label_w);
-        let vw = r.right().saturating_sub(x + 4 + label_w);
-        put(
-            buf,
-            x + 4 + label_w,
-            y,
-            &truncate(&value, vw as usize, cx.ell()),
+            &format!(" {label}"),
             cx.st(MUTED, CANVAS),
-            vw,
+            end.saturating_sub(x),
         );
+    }
+    y += 2;
+    // The sections.
+    let (sections, total) = preview_sections(cx);
+    let window = a
+        .state
+        .models
+        .iter()
+        .find(|m| m["ref"].as_str() == Some(a.effective_model(None).as_str()))
+        .and_then(|m| m["context"].as_u64());
+    let layout = paint::CtxLayout {
+        width: r.width as usize,
+        sep: &sep,
+        ell: cx.ell(),
+        ascii: cx.t.opts.ascii,
+        estimated: true,
+        window,
+    };
+    let mut tip: Option<(u16, u16)> = None;
+    for row in paint::context_rows(&sections, total, &layout) {
+        if y >= r.bottom() {
+            break;
+        }
+        let mut x = r.x;
+        for (text, role) in row {
+            let style = match role {
+                paint::CtxRole::Mark | paint::CtxRole::Meta | paint::CtxRole::Preview => {
+                    cx.st(MUTED, CANVAS)
+                }
+                paint::CtxRole::Title | paint::CtxRole::TotalLabel => bold(PRIMARY),
+                paint::CtxRole::Tokens | paint::CtxRole::Item => cx.st(SECONDARY, CANVAS),
+                paint::CtxRole::ItemOff => cx.st(MUTED, CANVAS).add_modifier(Modifier::CROSSED_OUT),
+                paint::CtxRole::TotalFigure => cx.st(PRIMARY, CANVAS),
+            };
+            let start = x;
+            x = put(buf, x, y, &text, style, end.saturating_sub(x));
+            let counts = matches!(role, paint::CtxRole::Tokens | paint::CtxRole::TotalFigure)
+                && text.contains('~');
+            if counts && cx.hovered(Rect::new(start, y, x - start, 1)) {
+                tip = Some((start, y));
+            }
+        }
         y += 1;
     }
+    // Hovering an estimated count says so.
+    if let Some((tx, ty)) = tip {
+        let label = " estimated: Core counts when the session starts ";
+        let w = (width(label) as u16).min(r.width);
+        let tr = Rect::new(tx.min(end.saturating_sub(w)), ty + 1, w, 1);
+        if tr.bottom() <= buf.area.bottom() {
+            clear(buf, tr, cx.st(SECONDARY, RAISED));
+            put(buf, tr.x, tr.y, label, cx.st(SECONDARY, RAISED), tr.width);
+        }
+    }
+    y - r.y
 }
 
 fn draw_timeline(
@@ -2942,15 +3172,24 @@ fn draw_timeline(
         };
         let preview = a.viewed().is_none() && !busy && !a.state.model.projects.is_empty();
         if preview {
+            // D10: the context is the view's content; no centred text.
             draw_new_session_context(cx, buf, inner);
+            if a.ui.focus == Focus::Timeline {
+                put(
+                    buf,
+                    r.x,
+                    r.y,
+                    cx.t.structure("focus_bar"),
+                    cx.st("interactive.focus", CANVAS)
+                        .add_modifier(Modifier::BOLD),
+                    1,
+                );
+            }
+            return (0, r.height as usize, None);
         }
         let wrap_w = (inner.width as usize).saturating_sub(4).max(10);
         let body: Vec<String> = body.iter().flat_map(|l| text::wrap(l, wrap_w)).collect();
-        let y0 = (r.y + r.height.saturating_sub(2 + body.len() as u16) / 3).max(if preview {
-            r.y + 8
-        } else {
-            r.y
-        });
+        let y0 = r.y + r.height.saturating_sub(2 + body.len() as u16) / 3;
         let x0 = |s: &str| inner.x + (inner.width as usize).saturating_sub(width(s)) as u16 / 2;
         put(
             buf,

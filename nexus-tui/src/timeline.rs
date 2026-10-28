@@ -317,16 +317,6 @@ fn estimate(chars: usize) -> u64 {
     (chars as u64).div_ceil(4)
 }
 
-/// `4.1%`, or `<0.1%` for a sliver.
-fn share_of(tokens: u64, window: u64) -> String {
-    let pct = tokens as f64 / window as f64 * 100.0;
-    if pct > 0.0 && pct < 0.1 {
-        "<0.1%".to_owned()
-    } else {
-        format!("{pct:.1}%")
-    }
-}
-
 /// `0.4s`, `4.2s`, `12s`, `1m 05s`, `1h 02m` (DESIGN_PLAN.md D05); never `<1 s`.
 pub(crate) fn fmt_duration(secs: f64) -> String {
     let s = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
@@ -833,15 +823,17 @@ impl Builder<'_> {
     // -- context ---------------------------------------------------------------
 
     fn context_section(&mut self, view: &crate::reduce::SelectedView, no_turns: bool) {
+        use crate::paint::{CtxBody, CtxLayout, CtxRole, CtxSection};
         let Some(s) = &view.starting else { return };
         let key = format!("context:{}", view.session_id);
-        // Expanded before the first turn; collapsed once the session has content.
+        // Expanded before the first turn; folded to one line once the session has content.
         let open = self.is_open(&key, no_turns);
         let sys = s["system_prompt"].as_str().unwrap_or("");
         let names: Vec<&str> = s["tools"]
             .as_array()
             .map(|v| v.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        let off = crate::app::disabled_tools(self.app.viewed());
         let schemas = &s["tool_definitions"];
         let file = &s["instruction_file"];
         let agent = &s["agent"];
@@ -854,205 +846,141 @@ impl Builder<'_> {
             0
         };
         let file_tokens = file["bytes"].as_u64().map(|b| estimate(b as usize));
+        // The instruction file is part of the system prompt, so the total
+        // counts the prompt and the tool schemas only.
         let total = sys_tokens + tool_tokens;
         let window = self.context_window();
-        let mut items = vec!["system prompt", "tools", "instructions", "agent"];
-        let children = s["child_agents"].as_array().map_or(0, Vec::len);
-        if children > 0 {
-            items.push("child agents");
-        }
-        if s["workspace"]["active"].as_bool().unwrap_or(false) {
-            items.push("workspace tools");
-        }
-        let mut header = vec![
-            Span::styled(format!("{} ", self.t.fold(open)), self.st(MUTED, CANVAS)),
-            Span::styled(
-                "Context",
-                self.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                self.sep()
-                    + &format!("{} items", items.len())
-                    + &self.sep()
-                    + &format!("~{} tokens", fmt_count(total)),
-                self.meta(),
-            ),
-        ];
-        if let Some(share) = window.map(|w| share_of(total, w)) {
-            header.push(Span::styled(
-                self.sep() + &format!("{share} of window"),
-                self.meta(),
-            ));
-        }
-        if s["origin"].as_str() == Some("reconstructed") {
-            header.push(Span::styled(
-                self.sep() + "reconstructed",
-                self.st("status.warning", CANVAS),
-            ));
-        }
-        let file_status = match file["status"].as_str() {
-            Some("loaded") => "loaded".to_owned(),
-            Some("missing") => "not found".to_owned(),
-            Some(other) => other.replace('_', " "),
-            None => "not read".to_owned(),
-        };
-        let file_path = file["path"].as_str().unwrap_or("").to_owned();
-        let file_bytes = file["bytes"].as_u64().filter(|&b| b > 0);
+        let sep = self.sep();
         let first_prompt_line = sys
             .lines()
             .map(str::trim)
             .find(|l| !l.is_empty() && !l.starts_with('#'))
             .unwrap_or("")
             .to_owned();
-        let child_names = s["child_agents"]
+        let agent_name = agent["name"].as_str().unwrap_or("?");
+        let file_path = file["path"].as_str().unwrap_or("");
+        let file_title = std::path::Path::new(file_path).file_name().map_or_else(
+            || "AGENTS.md".to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let file_status = match file["status"].as_str() {
+            Some("loaded") => "loaded".to_owned(),
+            Some("missing") => "not found".to_owned(),
+            Some(other) => other.replace('_', " "),
+            None => "not read".to_owned(),
+        };
+        let mut sections = vec![CtxSection {
+            title: "System prompt".into(),
+            tokens: Some(sys_tokens),
+            meta: format!(
+                "{agent_name}{sep}{} line{}",
+                sys.lines().count(),
+                if sys.lines().count() == 1 { "" } else { "s" }
+            ),
+            body: CtxBody::Preview(first_prompt_line),
+        }];
+        // Status and the one-line fact first, so a narrow page clips the path.
+        let mut meta = file_status;
+        if file["bytes"].as_u64().is_some_and(|b| b > 0) {
+            meta.push_str(&format!("{sep}in the system prompt"));
+        }
+        if !file_path.is_empty() {
+            meta.push_str(&format!("{sep}{file_path}"));
+        }
+        sections.push(CtxSection {
+            title: file_title,
+            tokens: file_tokens,
+            meta,
+            body: CtxBody::None,
+        });
+        sections.push(CtxSection {
+            title: "Tools".into(),
+            tokens: (tool_tokens > 0).then_some(tool_tokens),
+            meta: format!(
+                "{} tools{sep}{} on",
+                names.len(),
+                names
+                    .iter()
+                    .filter(|n| !off.iter().any(|o| o == *n))
+                    .count()
+            ),
+            body: CtxBody::Grid(
+                names
+                    .iter()
+                    .map(|n| ((*n).to_owned(), !off.iter().any(|o| o == n)))
+                    .collect(),
+            ),
+        });
+        let children: Vec<(String, bool)> = s["child_agents"]
             .as_array()
             .map(|v| {
                 v.iter()
                     .filter_map(|c| c["name"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("  ")
+                    .map(|n| (n.to_owned(), true))
+                    .collect()
             })
             .unwrap_or_default();
-        let agent_name = agent["name"].as_str().unwrap_or("?").to_owned();
-        let agent_source = agent["source"].as_str().unwrap_or("?").to_owned();
-        let agent_description = agent["description"].as_str().unwrap_or("").to_owned();
+        if !children.is_empty() {
+            sections.push(CtxSection {
+                title: "Child agents".into(),
+                tokens: None,
+                meta: format!("{} agents", children.len()),
+                body: CtxBody::Grid(children),
+            });
+        }
+        if s["workspace"]["active"].as_bool().unwrap_or(false) {
+            sections.push(CtxSection {
+                title: "Workspace tools".into(),
+                tokens: None,
+                meta: "active".into(),
+                body: CtxBody::None,
+            });
+        }
+        let (title, folded) = crate::paint::context_folded(sections.len(), total, true, &sep);
+        let mut header = vec![
+            Span::styled(format!("{} ", self.t.fold(open)), self.st(MUTED, CANVAS)),
+            Span::styled(
+                title,
+                self.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(folded, self.meta()),
+        ];
+        if s["origin"].as_str() == Some("reconstructed") {
+            header.push(Span::styled(
+                sep.clone() + "reconstructed",
+                self.st("status.warning", CANVAS),
+            ));
+        }
         self.block(key.clone(), BlockKind::Context, None, true, |b| {
             b.row(header, Vec::new());
             if !open {
                 return;
             }
-            let meta = b.meta();
-            // As in old Nexus: the name on a filled chip, the figures after it,
-            // detail rows under the chip's text, a blank row between items.
-            let chip_style = if b.t.mono() {
-                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-            } else {
-                b.st(CANVAS, SECONDARY).add_modifier(Modifier::BOLD)
+            let layout = CtxLayout {
+                width: b.bw.min(100).saturating_sub(2),
+                sep: &sep,
+                ell: b.ell(),
+                ascii: b.t.opts.ascii,
+                estimated: true,
+                window,
             };
-            let inner = b.bw.min(100);
-            let item = |b: &mut Self, name: &str, chip: Option<String>, tokens: Option<String>| {
-                let mut spans = vec![
-                    Span::styled("  ".to_owned(), meta),
-                    Span::styled(format!(" {name} "), chip_style),
-                ];
-                if let Some(chip) = chip {
-                    spans.push(Span::styled(format!(" {chip}"), b.secondary()));
-                }
-                if let Some(tokens) = tokens {
-                    spans.push(Span::styled(format!(" {tokens} tokens"), meta));
-                }
-                b.line(spans);
-            };
-            let detail = |b: &mut Self, text: &str| {
-                if text.is_empty() {
-                    return;
-                }
-                let room = inner.saturating_sub(3).max(1);
-                b.line(vec![Span::styled(
-                    format!("   {}", truncate(text, room, b.ell())),
-                    meta,
-                )]);
-            };
-            let blank = |b: &mut Self| b.line(vec![Span::raw(String::new())]);
-
-            item(
-                b,
-                "System prompt",
-                None,
-                Some(format!("~{}", fmt_count(sys_tokens))),
-            );
-            detail(b, &first_prompt_line);
-            blank(b);
-
-            item(
-                b,
-                "Tools",
-                Some(format!("[{}]", names.len())),
-                (tool_tokens > 0).then(|| format!("~{}", fmt_count(tool_tokens))),
-            );
-            if !names.is_empty() {
-                // Names flow in rows of the available width, at most two rows.
-                let room = inner.saturating_sub(2).max(1);
-                let mut rows: Vec<String> = vec![String::new()];
-                let mut shown = 0;
-                for name in &names {
-                    let last = rows.last_mut().unwrap();
-                    let add = if last.is_empty() { 0 } else { 2 } + width(name);
-                    if width(last) + add > room {
-                        if rows.len() == 2 {
-                            break;
+            let rows = crate::paint::context_rows(&sections, total, &layout);
+            for row in rows {
+                let mut spans = vec![Span::raw("  ".to_owned())];
+                for (text, role) in row {
+                    let style = match role {
+                        CtxRole::Mark | CtxRole::Meta | CtxRole::Preview => b.meta(),
+                        CtxRole::Title | CtxRole::TotalLabel => {
+                            b.primary().add_modifier(Modifier::BOLD)
                         }
-                        rows.push(String::new());
-                    }
-                    let last = rows.last_mut().unwrap();
-                    if !last.is_empty() {
-                        last.push_str("  ");
-                    }
-                    last.push_str(name);
-                    shown += 1;
+                        CtxRole::Tokens | CtxRole::Item => b.secondary(),
+                        CtxRole::ItemOff => b.meta().add_modifier(Modifier::CROSSED_OUT),
+                        CtxRole::TotalFigure => b.primary(),
+                    };
+                    spans.push(Span::styled(text, style));
                 }
-                if shown < names.len() {
-                    let more = format!("  +{} more", names.len() - shown);
-                    let last = rows.last_mut().unwrap();
-                    if width(last) + width(&more) > room {
-                        *last = truncate(last, room.saturating_sub(width(&more)), "");
-                    }
-                    last.push_str(&more);
-                }
-                for row in rows {
-                    detail(b, &row);
-                }
+                b.line(if spans.len() == 1 { Vec::new() } else { spans });
             }
-            blank(b);
-
-            item(
-                b,
-                "Instructions",
-                Some(format!("AGENTS.md {file_status}")),
-                file_tokens.map(|t| format!("~{}", fmt_count(t))),
-            );
-            let mut place =
-                text::truncate_middle(&file_path, inner.saturating_sub(2 + 26).max(12), b.ell());
-            if let Some(bytes) = file_bytes {
-                place.push_str(&format!(
-                    "{}{} B, part of the system prompt",
-                    b.sep(),
-                    bytes
-                ));
-            }
-            detail(b, &place);
-            blank(b);
-
-            item(b, "Agent", Some(agent_name.clone()), None);
-            detail(
-                b,
-                &if agent_description.is_empty() {
-                    agent_source.clone()
-                } else {
-                    format!("{agent_source}{}{agent_description}", b.sep())
-                },
-            );
-            if children > 0 {
-                blank(b);
-                item(b, "Child agents", Some(format!("[{children}]")), None);
-                detail(b, &child_names);
-            }
-            if items.contains(&"workspace tools") {
-                blank(b);
-                item(b, "Workspace tools", Some("active".into()), None);
-            }
-            blank(b);
-            let mut total_row = vec![
-                Span::styled("  total".to_owned(), meta),
-                Span::styled(format!("  ~{} tokens", fmt_count(total)), b.secondary()),
-            ];
-            if let Some(w) = window {
-                total_row.push(Span::styled(
-                    format!("{}{} of the window", b.sep(), share_of(total, w)),
-                    meta,
-                ));
-            }
-            b.line(total_row);
         });
     }
 

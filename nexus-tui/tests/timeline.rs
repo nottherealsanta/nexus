@@ -179,7 +179,7 @@ fn history_replaces_the_bounded_snapshot_view_and_keeps_live_events() {
     a.execute("turn.unfold_all");
     let text = rows(&mut a).join("\n");
     assert!(text.contains("Context"), "context section: {text}");
-    assert!(text.contains("system prompt"), "{text}");
+    assert!(text.contains("System prompt"), "{text}");
     assert!(text.contains("boom"), "live diagnostic: {text}");
 }
 
@@ -956,31 +956,109 @@ fn starting_context() -> serde_json::Value {
 }
 
 #[test]
-fn the_context_section_lists_items_with_estimates_and_the_window_share() {
+fn the_context_section_lists_d10_sections_with_estimates_and_the_window_share() {
     let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
     a.open_session(SESSION);
     a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
     a.state.models = vec![serde_json::json!({"ref": "codex/gpt-5", "context": 100000})];
     a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
-    let text = rows(&mut a).join("\n");
+    let text = draw(&mut a, 200, 50).1.join("\n");
+    // D10: `◆` sections with a count and meta, a preview line, a tools grid,
+    // and a text total with no bar.
     for needle in [
-        "Context",
-        "System prompt",
+        "\u{25be} Context \u{b7} 4 items",
+        "\u{25c6} System prompt",
+        "~1,006 tok",
+        "build \u{b7} 2 lines",
         "You are a coding agent.",
-        "Tools  [3]",
-        "read  bash  edit",
-        "Instructions  AGENTS.md loaded",
+        "\u{25c6} AGENTS.md",
         "/work/AGENTS.md",
-        "part of the system prompt",
-        "Agent  build",
-        "Child agents  [2]",
-        "scout  plan",
+        "in the system prompt",
+        "\u{25c6} Tools",
+        "3 tools \u{b7} 3 on",
+        "read",
+        "bash",
+        "edit",
+        "\u{25c6} Child agents",
+        "2 agents",
+        "scout",
+        "plan",
+        "Context total \u{b7} ~1,020 tokens",
         "of the window",
     ] {
         assert!(text.contains(needle), "missing {needle:?}:\n{text}");
     }
-    // The system prompt is ~4,024 characters, so about a thousand tokens.
-    assert!(text.contains("~1.0K"), "{text}");
+    // The total is text: no meter cells.
+    let total_row = text.lines().find(|l| l.contains("Context total")).unwrap();
+    assert!(
+        !total_row.contains('\u{2571}') && !total_row.contains('/'),
+        "no context bar: {total_row}"
+    );
+}
+
+#[test]
+fn the_context_section_without_an_instruction_file_says_so() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.open_session(SESSION);
+    let mut starting = starting_context();
+    starting["instruction_file"] =
+        serde_json::json!({"path": "/work/AGENTS.md", "status": "missing"});
+    a.state.model.selected.as_mut().unwrap().starting = Some(starting);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("\u{25c6} AGENTS.md"), "{text}");
+    assert!(text.contains("not found"), "{text}");
+    assert!(!text.contains("in the system prompt"), "{text}");
+    assert!(text.contains("\u{25c6} Tools"), "{text}");
+}
+
+#[test]
+fn a_disabled_tool_is_struck_through_in_the_tools_grid() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.open_session(SESSION);
+    a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
+    a.state
+        .model
+        .sessions
+        .get_mut(SESSION)
+        .unwrap()
+        .extra
+        .insert("disabled_tools".into(), serde_json::json!(["bash"]));
+    let (buf, rows) = draw(&mut a, 120, 36);
+    let text = rows.join("\n");
+    assert!(text.contains("3 tools \u{b7} 2 on"), "{text}");
+    let y = rows
+        .iter()
+        .position(|l| l.contains("bash") && l.contains("read"))
+        .expect("grid row");
+    let x = rows[y].find("bash").unwrap();
+    let col = rows[y][..x]
+        .chars()
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum::<usize>();
+    let cell = &buf[(col as u16, y as u16)];
+    assert!(
+        cell.modifier
+            .contains(ratatui::style::Modifier::CROSSED_OUT),
+        "bash is struck through"
+    );
+}
+
+#[test]
+fn the_context_folds_to_one_line_after_the_first_turn() {
+    let mut a = app();
+    a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
+    let drawn = rows(&mut a);
+    let text = drawn.join("\n");
+    let line = drawn
+        .iter()
+        .find(|l| l.contains("Context"))
+        .expect("the folded context line");
+    assert!(
+        line.contains("\u{25b8} Context \u{b7} 4 items \u{b7} ~1.0k tokens"),
+        "{line}"
+    );
+    assert!(!text.contains("\u{25c6} System prompt"), "folded: {text}");
+    assert!(!text.contains("Context total"), "folded: {text}");
 }
 
 #[test]

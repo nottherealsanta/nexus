@@ -45,10 +45,20 @@ The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
-The starting-context section lists the system prompt, tools, instructions,
-agent and child agents with estimated tokens (characters ÷ 4), detail rows, a
-total and the share of the model's window; the turn footer adds the catalog
-price when the model has one.
+The starting context is a list of `◆` sections (DESIGN_PLAN D10, `paint::context_rows`, one
+renderer for the timeline and the new-session view): System prompt, AGENTS.md, Tools (a column
+grid; switched-off tools struck through and muted) and Child agents or Workspace tools when
+present. Each header keeps its estimated count (`~2,140 tok`, characters ÷ 4) and meta, a text
+row gives the total and the share of the model's window, and there is no bar. The instruction
+file is part of the system prompt, so the total counts the prompt and the tool schemas only.
+Previews clip with `…` and a long grid ends in `+N more`. After the first turn the whole
+section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
+sections under a header block (`New session in <project>`, agent, model, effort, directory and
+branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); until Core session drafts land
+(PLAN.md Step 12a) its preview is built on the client (the agent's description, the project's
+`AGENTS.md` when the TUI can read it, the agent's tool list or the default tools) and every
+count reads `~N` with "estimated" on hover. The turn footer adds the catalog price when the
+model has one.
 
 Every overlay (palette and pickers, Settings, confirms, help, notifications) is one
 modal recipe (`render.rs` `modal`, DESIGN_PLAN D13): the scrim over the whole frame, then

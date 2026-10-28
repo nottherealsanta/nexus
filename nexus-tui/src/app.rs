@@ -5267,3 +5267,27 @@ fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool)
         }
     }
 }
+
+/// The tool switches that are off for a session (`disabled_tools`; Core may
+/// send an array or a JSON string). A new session has none until Core drafts
+/// carry them (PLAN.md Step 12a), so every tool reads as on.
+pub fn disabled_tools(session: Option<&Session>) -> Vec<String> {
+    let Some(value) = session.and_then(|s| s.extra.get("disabled_tools")) else {
+        return Vec::new();
+    };
+    let parsed;
+    let list = match value {
+        serde_json::Value::String(text) => {
+            parsed = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+            &parsed
+        }
+        other => other,
+    };
+    list.as_array()
+        .map(|v| {
+            v.iter()
+                .filter_map(|n| n.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}

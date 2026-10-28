@@ -2645,3 +2645,109 @@ fn confirm_defaults_to_cancel_and_marks_delete_as_an_error() {
     let (buf, _) = draw(&mut app, 120, 36);
     assert_eq!(buf[(dx + 2, y as u16)].bg, selection);
 }
+
+/// An app on the new-session view with a project at `dir` and the given agent.
+fn new_session_app(dir: &std::path::Path, size: (u16, u16)) -> nexus_tui::app::App {
+    let mut app = empty(opts(Mode::Dark, Tier::TrueColor), size);
+    app.state.agents = vec![serde_json::json!({
+        "name": "build", "source": "builtin", "description": "Does the actual work.",
+        "tools": ["read", "bash", "edit", "write"]
+    })];
+    for p in app.state.model.projects.values_mut() {
+        p.path = dir.to_string_lossy().into_owned();
+    }
+    app
+}
+
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("nexus-tui-i9-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md() {
+    let dir = scratch_dir("with");
+    std::fs::write(
+        dir.join("AGENTS.md"),
+        "# Rules\n\nRead PLAN.md first: principles, layout.\n",
+    )
+    .unwrap();
+    let mut app = new_session_app(&dir, (120, 36));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    for needle in [
+        "New session in",
+        "Build",
+        "Tab agent \u{b7} ctrl+m model \u{b7} ctrl+e effort \u{b7} ctrl+d directory",
+        "\u{25c6} System prompt",
+        "Does the actual work.",
+        "\u{25c6} AGENTS.md",
+        "Read PLAN.md first: principles, layout.",
+        "in the system prompt",
+        "\u{25c6} Tools",
+        "5 tools \u{b7} 5 on",
+        "Context total \u{b7} ~",
+    ] {
+        assert!(all.contains(needle), "missing {needle:?}:\n{all}");
+    }
+    // Estimated until Core drafts land: every count carries `~`.
+    assert!(all.contains("~") && all.contains(" tok"), "{all}");
+    // The centred placeholder is gone, and there is no bar in the total row.
+    assert!(!all.contains("Type a message below"), "{all}");
+    let total = rows.iter().find(|l| l.contains("Context total")).unwrap();
+    assert!(!total.contains('\u{2571}'), "{total}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn the_new_session_view_without_agents_md_says_none_and_counts_less() {
+    let with = scratch_dir("a");
+    std::fs::write(with.join("AGENTS.md"), "x".repeat(4000)).unwrap();
+    let without = scratch_dir("b");
+    let total = |dir: &std::path::Path| -> u64 {
+        let mut app = new_session_app(dir, (120, 36));
+        let all = joined(&draw(&mut app, 120, 36).1);
+        let line = all
+            .lines()
+            .find(|l| l.contains("Context total"))
+            .unwrap()
+            .to_owned();
+        let digits: String = line
+            .split("~")
+            .nth(1)
+            .unwrap()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == ',')
+            .filter(char::is_ascii_digit)
+            .collect();
+        digits.parse().unwrap()
+    };
+    let mut app = new_session_app(&without, (120, 36));
+    let all = joined(&draw(&mut app, 120, 36).1);
+    assert!(all.contains("\u{25c6} AGENTS.md"), "{all}");
+    assert!(all.contains("none in this project"), "{all}");
+    assert!(
+        total(&with) >= total(&without) + 1000,
+        "AGENTS.md adds its estimate"
+    );
+    std::fs::remove_dir_all(&with).ok();
+    std::fs::remove_dir_all(&without).ok();
+}
+
+#[test]
+fn hovering_an_estimated_count_says_estimated_and_narrow_widths_clip_with_an_ellipsis() {
+    let dir = scratch_dir("hover");
+    let mut app = new_session_app(&dir, (80, 24));
+    let (_, rows) = draw(&mut app, 80, 24);
+    let y = rows
+        .iter()
+        .position(|l| l.contains("System prompt"))
+        .expect("section");
+    let x = rows[y].find('~').expect("estimate");
+    let col = rows[y][..x].chars().count() as u16;
+    app.mouse = Some((col, y as u16));
+    let (_, rows) = draw(&mut app, 80, 24);
+    assert!(joined(&rows).contains("estimated"), "{}", joined(&rows));
+    std::fs::remove_dir_all(&dir).ok();
+}
