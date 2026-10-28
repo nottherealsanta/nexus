@@ -1235,6 +1235,7 @@ impl Builder<'_> {
         let mut starts = Vec::new();
         let mut ends = Vec::new();
         let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+        let mut unknown = std::collections::BTreeSet::<&str>::new();
         let mut thought_secs = 0.0_f64;
         let mut failed = 0;
         let mut denied_count = 0;
@@ -1269,7 +1270,13 @@ impl Builder<'_> {
                         "write" => "Wrote file",
                         "code" => "Ran cell",
                         "ask" => "Asked question",
-                        _ => "Used tool",
+                        "web_search" => "Searched time",
+                        "web_fetch" => "Fetched page",
+                        "session" => "Started session",
+                        _ => {
+                            unknown.insert(name.as_str());
+                            "Used tool"
+                        }
                     }
                 }
             };
@@ -1288,6 +1295,9 @@ impl Builder<'_> {
                             "Thought".to_owned()
                         };
                     }
+                    if *label == "Used tool" && unknown.len() == 1 {
+                        return format!("Used {}", unknown.iter().next().unwrap());
+                    }
                     let (verb, noun) = label.rsplit_once(' ').unwrap_or((label, ""));
                     format!(
                         "{verb} {count} {noun}{}",
@@ -1304,6 +1314,11 @@ impl Builder<'_> {
         } else {
             None
         };
+        let agent = self
+            .app
+            .viewed()
+            .map(|s| s.agent.clone())
+            .unwrap_or_default();
         self.block(key, BlockKind::Group, self.turn, !has_wait, |b| {
             let mut spans = vec![Span::styled(format!("{} ", b.t.fold(open)), b.meta())];
             if running && !b.t.opts.reduced_motion && !b.t.mono() {
@@ -1312,7 +1327,7 @@ impl Builder<'_> {
                     b.frame,
                     true,
                     b.meta(),
-                    b.primary(),
+                    b.t.agent_style(&agent),
                 ));
             } else {
                 spans.push(Span::styled(
@@ -1462,6 +1477,10 @@ impl Builder<'_> {
             Some((end - start).max(0.0))
         });
         let (arg, _) = tool_summary(name, args, done);
+        let exit_code = (name == "bash")
+            .then(|| done.and_then(|d| bash_exit_code(&d.output)))
+            .flatten()
+            .filter(|code| *code != 0);
         let detail = self.tool_detail(name, args, done, trace, raw);
         let key = key.to_owned();
         let name = name.to_owned();
@@ -1494,6 +1513,15 @@ impl Builder<'_> {
                 right.push(Span::styled(format!("{}failed", b.sep()), b.meta()));
             } else if let Some(duration) = duration {
                 right.push(Span::styled(format!("{duration:.1}s"), b.meta()));
+            }
+            if let Some(code) = exit_code {
+                if !right.is_empty() {
+                    right.insert(0, Span::styled(b.sep(), b.meta()));
+                }
+                right.insert(
+                    0,
+                    Span::styled(format!("exit {code}"), b.st("status.error", CANVAS)),
+                );
             }
             let right_width: usize = right.iter().map(|s| width(s.content.as_ref())).sum();
             let label = if arg.is_empty() {
@@ -2217,6 +2245,17 @@ fn diff_counts(args: &str) -> Option<(usize, usize)> {
         .or_else(|| a["new"].as_str())
         .unwrap_or("");
     Some((new.lines().count(), old.lines().count()))
+}
+
+/// The code from a bash result's `[exit code N]` status line (after an optional cwd line).
+fn bash_exit_code(output: &str) -> Option<i32> {
+    output.lines().take(2).find_map(|line| {
+        line.strip_prefix("[exit code ")?
+            .split(']')
+            .next()?
+            .parse()
+            .ok()
+    })
 }
 
 fn tool_summary(

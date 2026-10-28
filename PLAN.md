@@ -151,12 +151,7 @@ checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
 The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 
 1. **Timeline**
-   - The Working shimmer should peak in the agent colour, not primary
-     (`timeline.rs`, around the Working heading).
-   - Verb groups for every tool family: "Searched N times", "Started N
-     sessions", web/MCP/skill tools instead of "Used tool".
-   - Bash exit codes in collapsed rows; head+tail output caps with a working
-     "show all".
+   - Head+tail output caps with a working "show all".
    - `path:line` and OSC 8 links.
 2. **Sidebar**
    - Session rows: relative time and child count (INTERFACE_PLAN.md, Sessions).

@@ -788,3 +788,116 @@ fn a_retry_sequence_is_one_tight_stack_with_rounded_delays() {
         "detail not repeated: {text}"
     );
 }
+
+/// Replace the viewed session's messages with one assistant turn of tool calls,
+/// each `(name, result output)`; a `None` output leaves the call running.
+fn calls(a: &mut nexus_tui::app::App, tools: &[(&str, Option<&str>)]) {
+    let parts: Vec<_> = tools
+        .iter()
+        .enumerate()
+        .map(|(n, (name, _))| serde_json::json!({"type":"tool_call", "id":format!("c{n}"), "name":name, "arguments":"{}"}))
+        .collect();
+    let results: Vec<_> = tools
+        .iter()
+        .enumerate()
+        .filter_map(|(n, (_, out))| {
+            out.map(|o| serde_json::json!({"type":"tool_result", "call_id":format!("c{n}"), "output":o, "is_error":false}))
+        })
+        .collect();
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"go"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":parts},
+        {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":results}
+    ]))
+    .unwrap();
+    view.events.clear();
+}
+
+#[test]
+fn verb_groups_cover_every_tool_family_and_name_unknown_tools() {
+    let mut a = app();
+    let ok = Some("ok");
+    for (tools, want) in [
+        (
+            vec![("web_search", ok), ("web_search", ok)],
+            "Searched 2 times",
+        ),
+        (vec![("web_fetch", ok); 3], "Fetched 3 pages"),
+        (vec![("ask", ok)], "Asked 1 question"),
+        (vec![("code", ok), ("code", ok)], "Ran 2 cells"),
+    ] {
+        calls(&mut a, &tools);
+        let text = rows(&mut a).join("\n");
+        assert!(text.contains(want), "{want}: {text}");
+    }
+    calls(&mut a, &[("mcp_weather", ok), ("mcp_weather", ok)]);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("Used mcp_weather"), "{text}");
+    assert!(!text.contains("Used tool"), "{text}");
+    calls(
+        &mut a,
+        &[("mcp_weather", ok), ("skill_x", ok), ("skill_x", ok)],
+    );
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("Used 3 tools"), "{text}");
+}
+
+#[test]
+fn working_shimmer_peaks_in_the_agent_colour() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    calls(&mut a, &[("bash", None)]);
+    busy(&mut a);
+    let mut options = a.theme.opts;
+    options.reduced_motion = false;
+    a.theme = a.theme.with(options);
+    let agent = a.viewed().map(|s| s.agent.clone()).unwrap_or_default();
+    let peak = a.theme.agent_style(&agent).fg;
+    assert_ne!(peak, a.theme.fg("text.primary").fg, "distinct peak colour");
+    let seen = (0..54).any(|frame| {
+        let t = build(&a, &a.theme, frame, 100);
+        let group = t
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::Group)
+            .unwrap();
+        t.lines[group.start]
+            .spans
+            .iter()
+            .any(|s| s.style.fg == peak)
+    });
+    assert!(seen, "the highlight reaches the agent colour");
+    // Reduced motion stays static.
+    options.reduced_motion = true;
+    a.theme = a.theme.with(options);
+    let t = build(&a, &a.theme, 10, 100);
+    let group = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    assert_eq!(t.lines[group.start].spans.len(), 2);
+}
+
+#[test]
+fn collapsed_bash_rows_show_a_non_zero_exit_code() {
+    let mut a = app();
+    // The second call keeps the group live, so member rows are visible.
+    calls(
+        &mut a,
+        &[
+            ("bash", Some("[exit code 2]\nboom")),
+            ("bash", Some("[cwd: /w]\n[exit code 0]\nfine")),
+            ("read", None),
+        ],
+    );
+    busy(&mut a);
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("exit 2"), "{text}");
+    assert_eq!(
+        text.matches("exit ").count(),
+        1,
+        "zero exit stays quiet: {text}"
+    );
+}
