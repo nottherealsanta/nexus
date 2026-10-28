@@ -448,8 +448,8 @@ fn mouse_drag_selects_composer_text_for_copy() {
     let mut a = app();
     typing(&mut a, "hello world");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 4;
-    let y = a.regions.composer.y + 1;
+    let x = a.regions.composer.x + 5;
+    let y = a.regions.composer.y + 2;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 6),
         (MouseEventKind::Drag(MouseButton::Left), x + 10),
@@ -494,8 +494,8 @@ fn mouse_drag_uses_display_cells_and_keeps_wide_graphemes_whole() {
     let mut a = app();
     typing(&mut a, "a日本b");
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 4;
-    let y = a.regions.composer.y + 1;
+    let x = a.regions.composer.x + 5;
+    let y = a.regions.composer.y + 2;
     for (kind, column) in [
         (MouseEventKind::Down(MouseButton::Left), x + 1),
         (MouseEventKind::Drag(MouseButton::Left), x + 5),
@@ -522,8 +522,8 @@ fn mouse_drag_maps_to_the_scrolled_composer_viewport() {
             .join("\n"),
     );
     let (_, _) = draw(&mut a, 120, 36);
-    let x = a.regions.composer.x + 4;
-    let y = a.regions.composer.y + 1;
+    let x = a.regions.composer.x + 5;
+    let y = a.regions.composer.y + 2;
     for (kind, row, column) in [
         (MouseEventKind::Down(MouseButton::Left), y, x),
         (MouseEventKind::Drag(MouseButton::Left), y + 1, x + 3),

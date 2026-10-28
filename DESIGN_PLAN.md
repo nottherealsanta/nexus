@@ -563,17 +563,15 @@ Work stopped at the user's request after I4. State on `nexus10`:
 | I2 header band and tabs | done (icons in the band, session tabs restyled, child crumbs, D17 widths) | done (icons in the header, tabs on the reading column) | `fea3b41` |
 | I3 timeline rhythm | done (band, footer without status, durations, Thought rows, verb tree, detail box, sticky header, header status) | done (user card, footer, verb icons, detail box, thought rows, sticky bar) | `f83653c` |
 | I4 Markdown, fences, diffs | done (`diff.rs` split ≥ 110 and unified; fences; inline code) | done (fence cards, `diff.tsx`) | `12dfa97` |
-| I5 composer | **started**: only `paint::meter` (the `╱` meter helper) | done (soft card, no rail/band, meter, Working row, card-wide completion, strip) | `12dfa97` + this commit |
+| I5 composer | done (soft card, `paint::meter` on the control row, Working row, card-wide completion, project strip) | done (soft card, no rail/band, meter, Working row, card-wide completion, strip) | `12dfa97` + the TUI I5 commit |
 | I6 sidebars | not started | not started | |
 | I7 modal recipe | not started | not started | |
 | I8 waiting card, alerts | not started | not started | |
 | I9 new-session view | not started | not started | |
 | I10 files, narrow, states | not started | not started | |
 
-**Next, in order:** TUI I5 (remove the rail and status band from `draw_composer`, soft card,
-`paint::meter` on the control row, Working row, borderless card-wide completion, project
-strip; also fix the split-diff wrap: continuation rows of a wrapped line in `diff.rs` start
-at the `+`/`-` column instead of the text column), then I6–I10 for both clients.
+**Next, in order:** the split-diff wrap fix (continuation rows of a wrapped line in `diff.rs`
+start at the `+`/`-` column instead of the text column), then I6–I10 for both clients.
 
 **Known gaps from the landed increments:**
 - TUI: OSC 8 links and `path:line` links not done (ratatui cells carry no escapes; needs hit

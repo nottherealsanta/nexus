@@ -348,20 +348,20 @@ pub(crate) fn visible_first(total: usize, cursor_row: usize, h: usize) -> usize 
 // heights
 // ============================================================================
 
-/// The text area: inside the panel (one cell in from each side of the
-/// column), after the agent-coloured rail and a gap.
+/// The text area: inside the card (inset two cells from the column), three
+/// cells in and two rows down (the live row and the card's top edge).
 pub(crate) fn composer_inner(r: Rect) -> Rect {
     Rect::new(
-        r.x + 4,
-        r.y + 1,
-        r.width.saturating_sub(8),
+        r.x + 5,
+        r.y + 2,
+        r.width.saturating_sub(10),
         r.height.saturating_sub(6),
     )
 }
 
 fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
-    let inner_w = w.saturating_sub(8) as usize;
+    let inner_w = w.saturating_sub(10) as usize;
     let rows = app.composer_ref().layout(inner_w).0.len().clamp(1, 8) as u16;
     let (waiting, composer) = (waiting_height(app), rows + 6);
     Heights {
@@ -3439,6 +3439,8 @@ fn pending_model_label(old: &str, new: &str, arrow: &str, room: usize, ell: &str
 struct ComposerUsage {
     /// `11.1K (4.1%)`: the context in use and its share of the window.
     summary: String,
+    /// Share of the window, when the window is known.
+    fraction: Option<f64>,
     lines: Vec<String>,
 }
 
@@ -3467,11 +3469,6 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
     tiers.retain(|&tier| tier > 0 && Some(tier) != window);
     tiers.sort_unstable();
     tiers.dedup();
-    let mut numbers = vec![text::count(input)];
-    numbers.extend(tiers.iter().map(|tier| percent(input, *tier)));
-    if let Some(window) = window {
-        numbers.push(percent(input, window));
-    }
     let mut lines = vec![match window {
         Some(window) => format!(
             "Context: {} of {} tokens",
@@ -3491,12 +3488,98 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
         lines.push(detail.join(" · "));
     }
     lines.push("Estimated from the latest request's input tokens.".to_owned());
-    let summary = match window {
-        Some(window) => format!("{} ({})", text::count(input), percent(input, window)),
+    let fraction = window.map(|window| input as f64 / window as f64);
+    let summary = match fraction {
+        Some(f) => format!("{}{}{:.0}%", text::count(input), cx.sep(), 100.0 * f),
         None => text::count(input),
     };
-    let _ = numbers;
-    Some(ComposerUsage { summary, lines })
+    Some(ComposerUsage {
+        summary,
+        fraction,
+        lines,
+    })
+}
+
+/// The card's half-row edge (`▄` above, `▀` below, in the panel colour over
+/// the canvas); mono and ASCII draw a `─` rule instead (DESIGN_PLAN.md D11).
+fn card_edge(cx: &Cx, buf: &mut Buffer, panel: Rect, y: u16, glyph: &str) {
+    let plain = cx.t.opts.ascii || cx.t.mono();
+    let style = match (cx.t.color(PANEL), cx.t.color(CANVAS)) {
+        (Some(fg), Some(bg)) if !plain => Style::default().fg(fg).bg(bg),
+        _ => cx.st("border.default", CANVAS),
+    };
+    let glyph = if style.bg.is_some() && !plain {
+        glyph
+    } else {
+        cx.t.structure("rule")
+    };
+    for x in panel.x..panel.right() {
+        put(buf, x, y, glyph, style, 1);
+    }
+}
+
+/// The live row above the card while the session works:
+/// `◐ Working · 12s · ↓4.1k`, with Working shimmering.
+fn draw_working(cx: &Cx, buf: &mut Buffer, x: u16, y: u16, end: u16) {
+    let a = cx.app;
+    let (started, output) = a.state.model.selected.as_ref().map_or((None, 0), |view| {
+        let started = view
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.created);
+        let output = view
+            .events
+            .iter()
+            .filter(|e| e.kind == "usage" && started.is_none_or(|t| e.time >= t))
+            .map(|e| e.data["output_tokens"].as_u64().unwrap_or(0))
+            .sum::<u64>();
+        (started, output)
+    });
+    let agent = a.current_agent();
+    let glyph = if cx.t.opts.ascii { "*" } else { "\u{25d0}" };
+    let mut x = put(
+        buf,
+        x,
+        y,
+        glyph,
+        cx.st(PRIMARY, CANVAS).patch(cx.t.agent_style(&agent)),
+        end.saturating_sub(x),
+    );
+    x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), end.saturating_sub(x));
+    let animate = !cx.t.opts.reduced_motion && !cx.t.mono();
+    let peak = cx.st(PRIMARY, CANVAS);
+    let spans = crate::theme::shimmer(
+        "Working",
+        a.frame,
+        animate,
+        if animate { cx.st(MUTED, CANVAS) } else { peak },
+        cx.t.agent_style(&agent),
+    );
+    for span in spans {
+        x = put(buf, x, y, &span.content, span.style, end.saturating_sub(x));
+    }
+    let mut tail = String::new();
+    if let Some(started) = started {
+        tail.push_str(&format!(
+            "{}{}",
+            cx.sep(),
+            crate::timeline::fmt_duration(now_secs() - started)
+        ));
+    }
+    if output > 0 {
+        let arrow = if cx.t.opts.ascii { "v" } else { "\u{2193}" };
+        tail.push_str(&format!("{}{arrow}{}", cx.sep(), text::count(output)));
+    }
+    put(
+        buf,
+        x,
+        y,
+        &tail,
+        cx.st(MUTED, CANVAS),
+        end.saturating_sub(x),
+    );
 }
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
@@ -3506,28 +3589,22 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
     let focused = a.ui.focus == Focus::Composer;
     let base = cx.st(PRIMARY, PANEL);
-    let panel = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), r.height - 2);
+    // Rows: the live row, the top edge, the input, a blank row, the control
+    // row, the bottom edge and the project strip.
+    let panel = Rect::new(r.x + 2, r.y + 1, r.width.saturating_sub(4), r.height - 2);
     clear(buf, panel, base);
-    // The status band closing the panel, as in old Nexus.
-    let band = Rect::new(panel.x, panel.bottom() - 1, panel.width, 1);
-    clear(buf, band, cx.st(MUTED, SIDEBAR));
     hits.add(panel, Target::Composer);
-    // The rail carries the agent's colour down the whole panel.
-    let agent_for_rail = a.current_agent();
-    let rail_style = cx
-        .st(PRIMARY, PANEL)
-        .patch(cx.t.agent_style(&agent_for_rail));
-    for y in panel.y..panel.bottom() {
-        put(buf, panel.x, y, cx.t.structure("rail_heavy"), rail_style, 1);
-    }
+    card_edge(cx, buf, panel, panel.y, "\u{2584}");
+    card_edge(cx, buf, panel, panel.bottom() - 1, "\u{2580}");
+    let inner = composer_inner(r);
+    let cy = r.bottom() - 3;
     if focused
         && matches!(
             cx.t.opts.tier,
             crate::theme::Tier::Ansi16 | crate::theme::Tier::Mono
         )
     {
-        let inner = composer_inner(r);
-        for y in inner.y..inner.bottom() {
+        for y in inner.y..=cy {
             put(
                 buf,
                 panel.x,
@@ -3540,7 +3617,6 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
 
     // input
-    let inner = composer_inner(r);
     let comp = a.composer_ref();
     if comp.is_empty() {
         let ph = if !a.writable() {
@@ -3584,8 +3660,8 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             let more = format!("{}/{}", cr + 1, rows.len());
             put(
                 buf,
-                r.right().saturating_sub(width(&more) as u16 + 2),
-                r.y,
+                panel.right().saturating_sub(width(&more) as u16 + 2),
+                inner.y,
                 &more,
                 cx.st(MUTED, PANEL),
                 8,
@@ -3593,12 +3669,14 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         }
     }
 
-    // Selectors and actions share the control row; each has its own hit target.
-    // The right block is computed first: the left side gives way in the order
-    // effort → provider → extra percentages → truncated names (A2).
-    let cy = r.bottom() - 4;
-    let avail = r.width.saturating_sub(8) as usize;
+    // Selectors and the meter share the control row; each has its own hit
+    // target. The right block is sized first: the left side gives way in the
+    // order effort → provider → meter → truncated names.
+    let avail = panel.width.saturating_sub(6) as usize;
     let busy = a.viewed_id().is_some_and(|i| a.is_busy(i));
+    if busy {
+        draw_working(cx, buf, panel.x + 3, r.y, panel.right().saturating_sub(2));
+    }
     let interrupted = a.term("session.interrupted").unwrap_or(false);
     let session = a.viewed();
     let usage = session.and_then(|s| composer_usage(cx, s));
@@ -3648,13 +3726,49 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     } else {
         effort_owned.as_str()
     };
+    // Right block: `esc stop` / `continue`, else the meter and the context
+    // figure (`0 · 0%` before anything is sent).
+    let (summary, fraction) = usage.as_ref().map_or_else(
+        || {
+            let window = a
+                .state
+                .models
+                .iter()
+                .find(|m| m["ref"].as_str() == Some(a.effective_model(session).as_str()))
+                .and_then(|m| m["context"].as_u64())
+                .filter(|&n| n > 0);
+            match window {
+                Some(_) => (format!("0{}0%", cx.sep()), Some(0.0)),
+                None => ("0".to_owned(), None),
+            }
+        },
+        |u| (u.summary.clone(), u.fraction),
+    );
+    let action = if busy {
+        Some(("esc stop", Target::Stop))
+    } else if interrupted {
+        Some(("continue", Target::Continue))
+    } else {
+        None
+    };
+    let mut meter_on = fraction.is_some() && action.is_none();
+    let right_width = |meter_on: bool| match action {
+        Some((label, _)) => width(label),
+        None => {
+            width(&summary)
+                + if meter_on {
+                    METER_CELLS as usize + 2
+                } else {
+                    0
+                }
+        }
+    };
     loop {
         let left_width = width(&agent_label)
             + 3
             + width(&model_label)
-            + if effort_on { 3 + width(effort) } else { 0 }
-            + if busy || interrupted { 11 } else { 0 };
-        if left_width + 2 <= avail {
+            + if effort_on { 3 + width(effort) } else { 0 };
+        if left_width + 2 + right_width(meter_on) <= avail {
             break;
         }
         if effort_on {
@@ -3662,9 +3776,11 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         } else if provider_on && pending.is_none() && !model_id.is_empty() {
             provider_on = false;
             model_label = model_name.clone();
+        } else if meter_on {
+            meter_on = false;
         } else {
-            // Last resort: keep the agent and one context number, shorten the model.
-            let room = avail.saturating_sub(width(&agent_label) + 3 + 2);
+            // Last resort: keep the agent and the figure, shorten the model.
+            let room = avail.saturating_sub(width(&agent_label) + 3 + 2 + right_width(false));
             model_label = match pending.as_deref() {
                 Some(used) => pending_model_label(
                     &model_name_for_id(a, used),
@@ -3675,56 +3791,69 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 ),
                 None => truncate(&model_label, room, cx.ell()),
             };
-            if width(&agent_label) + 3 + width(&model_label) + 2 > avail {
-                let room = avail.saturating_sub(width(&model_label) + 3 + 2);
+            if width(&agent_label) + 3 + width(&model_label) + 2 + right_width(false) > avail {
+                let room = avail.saturating_sub(width(&model_label) + 3 + 2 + right_width(false));
                 agent_label = truncate(&agent_label, room.max(1), cx.ell());
             }
             break;
         }
     }
-    let end = r.right().saturating_sub(4);
-    // Status band: the context in use and its share of the window; nothing
-    // sent yet reads `0 (0.0%)`.
-    let summary = usage.as_ref().map_or_else(
-        || {
-            let window = a
-                .state
-                .models
-                .iter()
-                .find(|m| m["ref"].as_str() == Some(a.effective_model(session).as_str()))
-                .and_then(|m| m["context"].as_u64())
-                .filter(|&n| n > 0);
-            match window {
-                Some(window) => format!("0 ({})", percent(0, window)),
-                None => "0".to_owned(),
-            }
-        },
-        |u| u.summary.clone(),
-    );
+    let end = panel.right().saturating_sub(3);
+    let rw = right_width(meter_on) as u16;
+    let right_x = end.saturating_sub(rw);
     let mut context_rect = None;
-    let w = width(&summary) as u16;
-    let bx = band.right().saturating_sub(2 + w);
-    if bx > band.x + 2 {
-        put(buf, bx, band.y, &summary, cx.st(SECONDARY, SIDEBAR), w);
+    if let Some((label, target)) = action {
+        put(buf, right_x, cy, label, cx.st(MUTED, PANEL), rw);
+        hits.add(Rect::new(right_x, cy, rw, 1), target);
+    } else {
+        let mut x = right_x;
+        if let (true, Some(fraction)) = (meter_on, fraction) {
+            let filled = cx.st(PRIMARY, PANEL).patch(cx.t.agent_style(agent_name));
+            crate::paint::meter(
+                cx.t,
+                buf,
+                (x, cy),
+                METER_CELLS,
+                fraction,
+                filled,
+                cx.st("border.default", PANEL),
+            );
+            x += METER_CELLS + 2;
+        }
+        put(
+            buf,
+            x,
+            cy,
+            &summary,
+            cx.st(SECONDARY, PANEL),
+            end.saturating_sub(x),
+        );
         if usage.is_some() {
-            context_rect = Some(Rect::new(bx, band.y, w, 1));
-            hits.add(context_rect.unwrap(), Target::ComposerContext);
+            let rect = Rect::new(right_x, cy, rw, 1);
+            context_rect = Some(rect);
+            hits.add(rect, Target::ComposerContext);
         }
     }
-    let selector_end = if busy || interrupted {
-        end.saturating_sub(11).max(r.x + 3)
-    } else {
-        end
-    };
-    let mut x = r.x + 4;
+    let selector_end = right_x.saturating_sub(2).max(panel.x + 3);
+    let mut x = panel.x + 3;
     {
-        let fields: Vec<(String, Target, &str)> = vec![
-            (agent_label, Target::ComposerAgent, PRIMARY),
-            (model_label, Target::ComposerModel, PRIMARY),
-            (effort.to_owned(), Target::ComposerEffort, MUTED),
+        let fields: Vec<(String, Target, Modifier, &str)> = vec![
+            (agent_label, Target::ComposerAgent, Modifier::BOLD, PRIMARY),
+            (
+                model_label,
+                Target::ComposerModel,
+                Modifier::empty(),
+                PRIMARY,
+            ),
+            (
+                effort.to_owned(),
+                Target::ComposerEffort,
+                Modifier::empty(),
+                SECONDARY,
+            ),
         ];
         let mut first = true;
-        for (index, (label, target, token)) in fields.into_iter().enumerate() {
+        for (index, (label, target, modifier, token)) in fields.into_iter().enumerate() {
             if index == 2 && !effort_on {
                 continue;
             }
@@ -3753,44 +3882,55 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 truncate(&label, room as usize, cx.ell())
             };
             let style = if target == Target::ComposerAgent {
-                cx.st(token, PANEL).patch(cx.t.agent_style(agent_name))
-            } else {
                 cx.st(token, PANEL)
+                    .patch(cx.t.agent_style(agent_name))
+                    .add_modifier(modifier)
+            } else {
+                cx.st(token, PANEL).add_modifier(modifier)
             };
             x = put(buf, x, cy, &label, style, room);
+            if index == 1 && provider_on && pending.is_none() && !model_id.is_empty() {
+                // The provider trails the model name, muted.
+                let name_end = start + width(&model_name).min((x - start) as usize) as u16;
+                for px in name_end..x {
+                    buf[(px, cy)].set_fg(cx.t.fg(MUTED).fg.unwrap_or_default());
+                }
+            }
             if x > start {
                 hits.add(Rect::new(start, cy, x - start, 1), target);
             }
         }
     }
-    if busy || interrupted {
-        if x < end {
-            x = put(buf, x, cy, &cx.sep(), cx.st(MUTED, PANEL), end - x);
-        }
-        let start = x;
-        let (label, target) = if busy {
-            ("esc stop", Target::Stop)
-        } else {
-            ("continue", Target::Continue)
-        };
-        x = put(
-            buf,
-            x,
-            cy,
-            label,
-            cx.st(MUTED, PANEL),
-            end.saturating_sub(x),
-        );
-        if x > start {
-            hits.add(Rect::new(start, cy, x - start, 1), target);
+    draw_strip(cx, buf, r, hits);
+    if let (Some(usage), Some(rect)) = (&usage, context_rect) {
+        if cx.hovered(rect) {
+            draw_usage_tooltip(
+                cx,
+                buf,
+                Rect::new(r.x, r.y + 1, r.width, r.height - 1),
+                usage,
+            );
         }
     }
+}
+
+/// Cells in the context meter (DESIGN_PLAN.md D11).
+const METER_CELLS: u16 = 10;
+
+/// The project strip under the card, on the canvas: the project name (bold),
+/// its path, `⌥ branch` and `checkout` or a bold violet `worktree`; `ctrl+p
+/// commands` sits muted at the right while idle (DESIGN_PLAN.md D11).
+fn draw_strip(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    let a = cx.app;
     let project = a.current_project();
     let directory = a.viewed().map(|s| s.directory.clone()).or_else(|| {
         project
             .as_ref()
             .and_then(|p| a.state.model.projects.get(p).map(|p| p.path.clone()))
     });
+    let Some(directory) = directory else {
+        return;
+    };
     let listing = a
         .viewed()
         .and_then(|s| a.state.worktrees.get(&s.id))
@@ -3799,121 +3939,169 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 .as_ref()
                 .and_then(|p| a.state.project_worktrees.get(p))
         });
-    if let Some(directory) = directory {
-        let directory = directory.as_str();
-        let path = short_home(directory);
-        let worktree = listing
-            .filter(|listing| {
-                listing["session_directory"]
+    let directory = directory.as_str();
+    let path = short_home(directory);
+    let worktree = listing
+        .filter(|listing| {
+            listing["session_directory"]
+                .as_str()
+                .is_none_or(|root| root == directory)
+                && listing["project_directory"]
                     .as_str()
-                    .is_none_or(|root| root == directory)
-                    && listing["project_directory"]
+                    .is_none_or(|root| std::path::Path::new(directory).starts_with(root))
+        })
+        .and_then(|listing| listing["worktrees"].as_array())
+        .and_then(|trees| {
+            trees
+                .iter()
+                .filter(|tree| {
+                    tree["path"]
                         .as_str()
-                        .is_none_or(|root| std::path::Path::new(directory).starts_with(root))
-            })
-            .and_then(|listing| listing["worktrees"].as_array())
-            .and_then(|trees| {
-                trees
-                    .iter()
-                    .filter(|tree| {
-                        tree["path"]
-                            .as_str()
-                            .is_some_and(|root| std::path::Path::new(directory).starts_with(root))
-                    })
-                    .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len))
-            });
-        let branch = worktree
-            .and_then(|tree| tree["branch"].as_str())
-            .filter(|b| !b.is_empty());
-        let linked = worktree.is_some_and(|tree| tree["main"].as_bool() == Some(false));
-        // Location strip: the directory (underlined by the accent rule), the
-        // branch, and `worktree` only in a linked worktree.
-        let y = r.bottom() - 2;
-        let start = r.x + 2;
-        let end = r.right().saturating_sub(2);
-        let kind = "worktree";
-        let branch_text = branch.map(|b| truncate(b, 24, cx.ell()));
-        let kind_width = if linked { width(kind) + 1 } else { 0 };
-        let branch_width = branch_text.as_ref().map_or(0, |b| width(b) + 1);
-        let room = (end.saturating_sub(start) as usize).saturating_sub(kind_width + branch_width);
-        let mut x = start;
-        if room > 3 {
-            let begin = x;
-            x = put(
-                buf,
-                x,
-                y,
-                &truncate_middle(&path, room, cx.ell()),
-                cx.st(PRIMARY, CANVAS),
-                end.saturating_sub(x),
-            );
-            if a.viewed().is_some() && x > begin {
-                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerDirectory);
-            }
-        }
-        let path_end = x;
-        if let Some(branch) = &branch_text {
-            x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), end.saturating_sub(x));
-            let begin = x;
-            x = put(
-                buf,
-                x,
-                y,
-                branch,
-                cx.st(SECONDARY, CANVAS),
-                end.saturating_sub(x),
-            );
-            if x > begin {
-                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerWorktree);
-            }
-        }
-        if linked && x + 1 + (width(kind) as u16) <= end {
-            x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), 1);
-            let style = cx.st("agent.violet", CANVAS).add_modifier(Modifier::BOLD);
-            put(buf, x, y, kind, style, end.saturating_sub(x));
-        }
-        // the rule closing the strip; the accent marks the directory
-        let rule = cx.t.structure("rule");
-        for rx in r.x + 2..r.right().saturating_sub(2) {
-            let accent = rx >= start && rx < path_end;
-            put(
-                buf,
-                rx,
-                r.bottom() - 1,
-                rule,
-                if accent {
-                    cx.st(ACCENT, CANVAS).add_modifier(Modifier::BOLD)
-                } else {
-                    cx.st("border.default", CANVAS)
-                },
-                1,
-            );
+                        .is_some_and(|root| std::path::Path::new(directory).starts_with(root))
+                })
+                .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len))
+        });
+    let branch = worktree
+        .and_then(|tree| tree["branch"].as_str())
+        .filter(|b| !b.is_empty())
+        .map(|b| truncate(b, 24, cx.ell()));
+    let linked = worktree.is_some_and(|tree| tree["main"].as_bool() == Some(false));
+    let name = project
+        .as_ref()
+        .and_then(|p| a.state.model.projects.get(p))
+        .map(|p| p.name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            std::path::Path::new(directory)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let y = r.bottom() - 1;
+    let start = r.x + 2;
+    let end = r.right().saturating_sub(2);
+    let kind = if linked { "worktree" } else { "checkout" };
+    let hint = "ctrl+p commands";
+    let busy = a.viewed_id().is_some_and(|i| a.is_busy(i));
+    let show_hint = !busy
+        && (end.saturating_sub(start) as usize)
+            >= width(&name)
+                + width(&path).min(20)
+                + branch.as_ref().map_or(0, |b| width(b) + 4)
+                + 12
+                + width(kind)
+                + width(hint);
+    let limit = if show_hint {
+        end - width(hint) as u16 - 2
+    } else {
+        end
+    };
+    let mut x = start;
+    let begin = x;
+    x = put(
+        buf,
+        x,
+        y,
+        &truncate(&name, 24, cx.ell()),
+        cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD),
+        limit.saturating_sub(x),
+    );
+    // `checkout` / `worktree` only where Core reported a worktree listing.
+    let kind_width = if worktree.is_some() {
+        2 + width(kind)
+    } else {
+        0
+    };
+    let room = (limit.saturating_sub(x) as usize)
+        .saturating_sub(branch.as_ref().map_or(0, |b| width(b) + 4) + 2 + kind_width);
+    if room > 3 {
+        x = put(
+            buf,
+            x,
+            y,
+            "  ",
+            cx.st(MUTED, CANVAS),
+            limit.saturating_sub(x),
+        );
+        x = put(
+            buf,
+            x,
+            y,
+            &truncate_middle(&path, room, cx.ell()),
+            cx.st(MUTED, CANVAS),
+            limit.saturating_sub(x),
+        );
+    }
+    if a.viewed().is_some() && x > begin {
+        hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerDirectory);
+    }
+    if let Some(branch) = &branch {
+        x = put(
+            buf,
+            x,
+            y,
+            "  ",
+            cx.st(MUTED, CANVAS),
+            limit.saturating_sub(x),
+        );
+        let begin = x;
+        let mark = if cx.t.opts.ascii { "@" } else { "\u{2325}" };
+        x = put(
+            buf,
+            x,
+            y,
+            &format!("{mark} {branch}"),
+            cx.st(SECONDARY, CANVAS),
+            limit.saturating_sub(x),
+        );
+        if x > begin {
+            hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerWorktree);
         }
     }
-    if let (Some(usage), Some(rect)) = (&usage, context_rect) {
-        if cx.hovered(rect) {
-            draw_usage_tooltip(cx, buf, r, usage);
-        }
+    if worktree.is_some() && x + kind_width as u16 <= limit {
+        x = put(buf, x, y, "  ", cx.st(MUTED, CANVAS), 2);
+        let style = if linked {
+            cx.st("agent.violet", CANVAS).add_modifier(Modifier::BOLD)
+        } else {
+            cx.st(MUTED, CANVAS)
+        };
+        put(buf, x, y, kind, style, limit.saturating_sub(x));
+    }
+    if show_hint {
+        put(
+            buf,
+            end - width(hint) as u16,
+            y,
+            hint,
+            cx.st(MUTED, CANVAS),
+            width(hint) as u16,
+        );
     }
 }
 
-/// The completion popup, directly above the composer panel and drawn after it so
-/// it covers the timeline. Names are padded to the widest (at most 24) plus
-/// three columns, followed by muted help.
+/// The completion popup: a borderless raised block exactly as wide as the
+/// composer card, sitting on its top edge and drawn after it so it covers the
+/// timeline (DESIGN_PLAN.md D11). Names are padded to the widest (at most 24)
+/// plus three columns, followed by muted help; key hints are the last row.
 fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let Some(rows) = cx.app.completion_rows() else {
         return;
     };
     let r = g.composer;
-    if r.height < 6 || r.width < 8 {
+    if r.height < 7 || r.width < 8 {
         return;
     }
-    let height =
-        (rows.len().min(crate::completion::MENU_LIMIT) as u16).min(r.y.saturating_sub(g.centre.y));
-    if height == 0 {
+    // The block ends where the card's top edge row begins.
+    let bottom = r.y + 1;
+    let room = bottom.saturating_sub(g.centre.y);
+    let shown = (rows.len().min(crate::completion::MENU_LIMIT) as u16).min(room.saturating_sub(1));
+    if shown == 0 {
         return;
     }
-    let area = Rect::new(r.x + 2, r.y - height, r.width.saturating_sub(4), height);
+    let pad = u16::from(room >= shown + 2);
+    let height = shown + 1 + pad;
+    let area = Rect::new(r.x + 2, bottom - height, r.width.saturating_sub(4), height);
+    clear(buf, area, cx.st(PRIMARY, RAISED));
     let selected = cx.app.ui.completion.index.min(rows.len() - 1);
     let name_width = rows
         .iter()
@@ -3922,15 +4110,15 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         .unwrap_or(0)
         .min(24)
         + 3;
-    let start = selected.saturating_sub(height as usize - 1);
+    let start = selected.saturating_sub(shown as usize - 1);
     for (offset, (i, row)) in rows
         .iter()
         .enumerate()
         .skip(start)
-        .take(height as usize)
+        .take(shown as usize)
         .enumerate()
     {
-        let y = area.y + offset as u16;
+        let y = area.y + pad + offset as u16;
         let line = Rect::new(area.x, y, area.width, 1);
         let mut base = cx.st(PRIMARY, RAISED);
         if i == selected {
@@ -3939,22 +4127,39 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             base = base.patch(cx.t.bg("interactive.hover"));
         }
         clear(buf, line, base);
+        if i == selected {
+            put(
+                buf,
+                area.x,
+                y,
+                cx.t.structure("focus_bar"),
+                cx.st("interactive.focus", RAISED)
+                    .patch(cx.t.bg("interactive.selection")),
+                1,
+            );
+        }
         let muted = base.patch(cx.t.fg(MUTED));
-        let name_style = if row.reason.is_some() { muted } else { base };
+        let name_style = if row.reason.is_some() {
+            muted
+        } else if i == selected {
+            base.add_modifier(Modifier::BOLD)
+        } else {
+            base
+        };
         let x = put(
             buf,
-            area.x + 2,
+            area.x + 3,
             y,
             &truncate(&row.value, name_width - 3, cx.ell()),
             name_style,
-            area.width.saturating_sub(2),
+            area.width.saturating_sub(3),
         );
-        let help_x = area.x + 2 + name_width as u16;
+        let help_x = area.x + 3 + name_width as u16;
         let help = match &row.reason {
             Some(reason) => format!("{}{}{reason}", row.help, cx.sep()),
             None => row.help.clone(),
         };
-        let room = area.right().saturating_sub(help_x + 1) as usize;
+        let room = area.right().saturating_sub(help_x + 2) as usize;
         if x < help_x && room > 0 {
             put(
                 buf,
@@ -3966,6 +4171,38 @@ fn draw_completion(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             );
         }
         hits.add(line, Target::CompletionRow(i));
+    }
+    // Key hints, then the position.
+    let y = area.bottom() - 1;
+    let muted = cx.st(MUTED, RAISED);
+    let key = cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD);
+    let updown = if cx.t.opts.ascii {
+        "up/down"
+    } else {
+        "\u{2191}\u{2193}"
+    };
+    let mut x = area.x + 3;
+    for (index, (k, label)) in [(updown, "move"), ("tab", "complete"), ("esc", "close")]
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            x = put(buf, x, y, &cx.sep(), muted, area.right().saturating_sub(x));
+        }
+        x = put(buf, x, y, k, key, area.right().saturating_sub(x));
+        x = put(
+            buf,
+            x,
+            y,
+            &format!(" {label}"),
+            muted,
+            area.right().saturating_sub(x),
+        );
+    }
+    let position = format!("{} of {}", selected + 1, rows.len());
+    let px = area.right().saturating_sub(width(&position) as u16 + 2);
+    if px > x + 1 {
+        put(buf, px, y, &position, muted, width(&position) as u16);
     }
 }
 

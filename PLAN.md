@@ -150,8 +150,8 @@ checked in the real app (TUI screenshots through `nexus-tui/tools/webterm`).
 
 **Design pass (2026-10-28):** [DESIGN_PLAN.md](DESIGN_PLAN.md) holds the decided look for
 both clients (the user's picks from the `nexus-design-mockup/` chooser). Increments I0–I4
-have landed (chrome band, header tabs, timeline rhythm, Markdown and diffs; NSH also the
-composer). I5 (TUI composer) through I10 remain; see DESIGN_PLAN.md "Progress".
+have landed (chrome band, header tabs, timeline rhythm, Markdown and diffs, the composer in both clients). I6
+through I10 remain; see DESIGN_PLAN.md "Progress".
 
 Landed 2026-10-28 (see the Done table): icon tabs in the sidebar, the
 effective model everywhere instead of "default model", a context preview in
@@ -281,6 +281,7 @@ says why the rest cannot change. Still open:
 | Agent definitions mixed into config and code | One Markdown file per agent (frontmatter + prompt) | Readable, editable, per project |
 | One general agent that also spawns helpers | `orchestrate` (delegates) vs `build` (does the work); children are `build`, `quick`, `scout`, `plan` | Clear roles; the orchestrator's context stays clean |
 | Subagents run inside a tool call | Child sessions with `launched_by`, `parent_id`, `parent_call_id` | A child's work is a full, visible, resumable session |
+| A parent could only launch a child and wait for it | The first `session` call exposes `message_session` (once, persisted): a steer for a working child, a follow-up turn for an idle one; the answer returns as a notification (2026-10-28) | Delegation needs steering and follow-ups, not only fire-and-collect |
 | Four kernel tools (`code_start`, `code_attach`, `code_run`, `code_reset`), one kernel per agent | One `code` tool; kernels owned by the daemon, shared by id across sessions | Simpler to use; a session tree works in one kernel |
 | Cancelling a cell could restore a signed checkpoint | Forced cancellation discards the kernel in v1 | Monty closes the checkout; checkpoint recovery is deferred |
 | bash was synchronous with a fixed timeout | No default time limit (optional `timeout`), plus daemon-owned background jobs read with `bash_output`/`bash_kill` | A long command need not block a turn; its result arrives as a notice |
@@ -328,7 +329,7 @@ says why the rest cannot change. Still open:
 | Old user card: padding rows and a left gutter; old sticky user card | The user message is a full-page-width band on the raised surface (rail `▌` at the edge, fold marker inside, `#n · time` at the right); the sticky header from old Nexus `sticky.rs` is kept: at most 3 rows, a `░` shade row with `↑ N lines of this turn above`, pushed up by the next band, click to scroll back (DESIGN_PLAN D04) | The user chose the band; the pin keeps the question in view |
 | Activity groups: `<1 s`, `Ran 1 command, Read 1 file`, groups without verb glyphs | Durations `0.4s 4.2s 1m 05s 1h 02m`; summaries in first-seen order (`Read 2 files, ran 1 command`) with `+N −M` and `✕ N failed`; live `Working` with the newest 5 members and `… N earlier`; verb glyphs `→ ← $ * λ ? ↳ ↗` (`[glyphs.verb]` in theme.toml); Thought rows `▸ Thought for 2.1s · preview` (DESIGN_PLAN D06, D07) | Old Nexus's groups, polished |
 | Header showed the title and breadcrumbs | Session tabs as in old Nexus: opened sessions with status glyph, `×`, `+`, `alt+x`/`alt+[`/`alt+]`; clicking the viewed tab renames (2026-10-28) | The user asked for tabs |
-| Composer had a half-row edge and `used · tier% · window%` on the control row | Agent-coloured rail, darker status band with `11.1K (4.1%)  ctrl+p commands`, location strip `directory branch [worktree]` (2026-10-28) | The old Nexus look |
+| Composer had a half-row edge and `used · tier% · window%` on the control row | Soft card with half-row edges, no rail or status band, the old `╱` meter and `82.0K · 41%` on the control row, `ctrl+p commands` on the project strip, completion as wide as the card (2026-10-28, DESIGN_PLAN D11, user choice; replaces the rail and status band of `5409281`) | The user chose the soft card over the rail |
 | Activity groups were collapsed or live-open only | Three detail levels (low/medium/high, `alt+d`, Settings, persisted), medium by default (2026-10-28) | Spec: scan, then drill down |
 | Agent/model/effort pickers did nothing before a session existed | They set a draft sent with the session's creation request (2026-10-28) | `/model` and `/agent` must work on the new-session screen |
 | Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |

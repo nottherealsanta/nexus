@@ -112,15 +112,24 @@ fn dark_frames_use_the_theme_file_surfaces() {
     assert_eq!(buf[(60, 10)].bg, Color::Rgb(0x0b, 0x0b, 0x0b));
     assert_eq!(buf[(3, 20)].bg, Color::Rgb(0x14, 0x14, 0x14));
     let composer = app.regions.composer;
-    assert_eq!(
-        buf[(composer.x + 6, composer.y + 1)].bg,
-        Color::Rgb(0x1e, 0x1e, 0x1e)
+    let panel = Color::Rgb(0x1e, 0x1e, 0x1e);
+    for y in [composer.y + 2, composer.bottom() - 3] {
+        assert_eq!(buf[(composer.x + 6, y)].bg, panel, "input and control rows");
+    }
+    // No status band: nothing in the card is a darker surface (D11).
+    assert!(
+        !(composer.y..composer.bottom())
+            .any(|y| buf[(composer.x + 6, y)].bg == Color::Rgb(0x14, 0x14, 0x14)),
+        "no status band under the card"
     );
+    // Half-row edges: the panel colour as the glyph over the canvas.
+    let top = &buf[(composer.x + 6, composer.y + 1)];
     assert_eq!(
-        buf[(composer.x + 6, composer.bottom() - 3)].bg,
-        Color::Rgb(0x14, 0x14, 0x14),
-        "the status band is a darker surface"
+        (top.symbol(), top.fg, top.bg),
+        ("\u{2584}", panel, Color::Rgb(0x0b, 0x0b, 0x0b))
     );
+    let bottom = &buf[(composer.x + 6, composer.bottom() - 2)];
+    assert_eq!((bottom.symbol(), bottom.fg), ("\u{2580}", panel));
     assert!(
         buf.content
             .iter()
@@ -401,7 +410,7 @@ fn composer_controls_and_stop_have_hit_targets() {
 #[test]
 fn composer_uses_latest_usage_and_catalog_window() {
     use nexus_tui::api::Event;
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
     app.state.models = vec![
         serde_json::json!({"ref": "codex/example", "name": "Example Model", "context": 200000}),
@@ -418,24 +427,24 @@ fn composer_uses_latest_usage_and_catalog_window() {
             data: serde_json::json!({"input_tokens": input, "output_tokens": output}),
         });
     }
-    let (_, rows) = draw(&mut app, 120, 36);
+    let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(all.contains("Example Model codex"), "{all}");
-    assert!(all.contains("10.0K (5.0%)"), "{all}");
+    assert!(all.contains("10.0K \u{b7} 5%"), "{all}");
     app.state.models.clear();
-    let (_, rows) = draw(&mut app, 120, 36);
+    let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(
         all.contains("example codex") && all.contains("10.0K"),
         "{all}"
     );
-    assert!(!all.contains("5.0%"));
+    assert!(!all.contains("5%"), "no window, no share: {all}");
 }
 
 #[test]
 fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     use nexus_tui::api::Event;
-    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
     let session = app.state.model.sessions.get_mut(SESSION).unwrap();
     session.agent = "orchestrate".into();
     session.model = Some("codex/example".into());
@@ -458,23 +467,23 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
             session_id: Some(SESSION.into()),
             data: serde_json::json!({"input_tokens": 52000}),
         });
-    let (_, rows) = draw(&mut app, 120, 36);
+    let (_, rows) = draw(&mut app, 160, 48);
     let row = rows
         .iter()
         .find(|row| row.contains("Example Model codex"))
         .expect("composer control row");
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
-    // Used and its share of the window in brackets, with the palette hint.
-    assert!(all_contains(&rows, "52.0K (5.2%)"), "{row}");
-    assert!(!all_contains(&rows, "ctrl+p commands"));
+    // Used and its share of the window; the palette hint is on the project strip.
+    assert!(all_contains(&rows, "52.0K \u{b7} 5%"), "{row}");
+    assert!(all_contains(&rows, "ctrl+p commands"));
 
     let context = app
         .hits
         .rect_of(&Target::ComposerContext)
         .expect("context numbers");
     app.mouse = Some((context.x + 1, context.y));
-    let (_, rows) = draw(&mut app, 120, 36);
+    let (_, rows) = draw(&mut app, 160, 48);
     let all = joined(&rows);
     assert!(all.contains("Context: 52.0K of 1.0M tokens"), "{all}");
     assert!(
@@ -525,11 +534,11 @@ fn composer_shows_a_pending_model_and_truncates_in_priority_order() {
     assert!(all.contains('\u{2192}'), "{all}");
 
     // Narrow: effort goes first, then the provider, then the model shortens,
-    // while the agent and a context percentage stay.
+    // while the agent and `esc stop` stay (busy swaps the meter for the stop hint).
     let (_, rows) = draw(&mut app, 60, 24);
     let all = joined(&rows);
     assert!(all.contains("Build"), "{all}");
-    assert!(all.contains('%'), "{all}");
+    assert!(all.contains("esc stop"), "{all}");
     assert!(!all.contains("default"), "{all}");
 }
 
@@ -553,7 +562,7 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     let all = joined(&rows);
     assert!(all.contains("x \u{2325} project-branch"), "{all}");
     assert!(
-        all.contains("/work/nexus-home/ws project-branch worktree"),
+        all.contains("/work/nexus-home/ws  \u{2325} project-branch  worktree"),
         "{all}"
     );
 }
@@ -733,7 +742,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         }),
     );
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("/work/nexus-home/ws feature worktree"));
+    assert!(joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  worktree"));
     assert!(app.hits.rect_of(&Target::ComposerWorktree).is_some());
     app.effects.clear();
     app.apply_sync(SyncMsg::Event(Event {
@@ -751,7 +760,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         .iter()
         .any(|e| matches!(e, Effect::Sync(Command::Worktrees(id)) if id == SESSION)));
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(!joined(&rows).contains("/work/nexus-home/ws feature worktree"));
+    assert!(!joined(&rows).contains("/work/nexus-home/ws  \u{2325} feature  worktree"));
 }
 
 #[test]
@@ -1944,4 +1953,242 @@ fn a_viewed_child_session_shows_root_and_child_crumbs() {
     assert_eq!(app.hits.at(crumb.x, 0), Some(&Target::SessionCrumb(0)));
     app.click(Target::SessionCrumb(0));
     assert_eq!(app.viewed_id(), Some("ses_parent"));
+}
+
+// ---- the composer card (DESIGN_PLAN.md D11) ---------------------------------
+
+/// The cells of one buffer row as text.
+fn row_text(buf: &ratatui::buffer::Buffer, y: u16) -> String {
+    (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+fn with_usage(app: &mut nexus_tui::app::App, input: u64) {
+    use nexus_tui::api::Event;
+    app.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/example".into());
+    app.state.models = vec![
+        serde_json::json!({"ref": "codex/example", "name": "Example Model", "context": 200000}),
+    ];
+    app.state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .events
+        .push(Event {
+            id: 900,
+            cursor: None,
+            seq: None,
+            time: 1.0,
+            kind: "usage".into(),
+            session_id: Some(SESSION.into()),
+            data: serde_json::json!({"input_tokens": input}),
+        });
+}
+
+#[test]
+fn composer_rows_are_edge_input_blank_control_edge_strip_at_every_width() {
+    for (w, h) in [(80, 24), (120, 36), (200, 50)] {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (w, h));
+        with_usage(&mut app, 82_000);
+        let (buf, _) = draw(&mut app, w, h);
+        let r = app.regions.composer;
+        let card = |y: u16| row_text(&buf, y);
+        let x = r.x as usize + 2;
+        // Live row, then the half-row edges at the card's width (inset 2).
+        assert!(card(r.y).trim().is_empty(), "{w}: idle live row is blank");
+        let top = &buf[(r.x + 2, r.y + 1)];
+        assert_eq!(top.symbol(), "\u{2584}", "{w}");
+        assert_eq!(buf[(r.x + 1, r.y + 1)].symbol(), " ", "{w}: inset");
+        assert_eq!(buf[(r.right() - 3, r.y + 1)].symbol(), "\u{2584}", "{w}");
+        assert_eq!(buf[(r.right() - 2, r.y + 1)].symbol(), " ", "{w}");
+        // Input at x+3 inside the card, a blank row, the control row.
+        let input = card(r.y + 2);
+        assert!(input[input.char_indices().nth(x + 3).unwrap().0..].starts_with("Type a message"));
+        assert!(card(r.y + 3).trim().is_empty(), "{w}: blank row");
+        let control = card(r.bottom() - 3);
+        assert!(control
+            .chars()
+            .skip(x + 3)
+            .collect::<String>()
+            .starts_with("Build"));
+        assert_eq!(buf[(r.x + 2, r.bottom() - 2)].symbol(), "\u{2580}", "{w}");
+        // Project strip on the canvas, flush with the bottom.
+        assert!(card(r.bottom() - 1).contains("ctrl+p commands"), "{w}");
+        assert_eq!(
+            buf[(r.x + 6, r.bottom() - 1)].bg,
+            Color::Rgb(0x0b, 0x0b, 0x0b)
+        );
+        assert_eq!(r.bottom(), h, "{w}: the composer ends at the bottom");
+    }
+}
+
+/// Which of effort, provider, meter and `41%` the control row shows.
+fn control_state(rows: &[String], row: usize) -> (bool, bool, bool, bool) {
+    let line = &rows[row];
+    (
+        line.contains("default"),
+        line.contains("Example Model codex"),
+        line.contains('\u{2571}'),
+        line.contains('%'),
+    )
+}
+
+#[test]
+fn narrow_control_rows_shed_effort_then_provider_then_meter() {
+    let mut seen = std::collections::BTreeSet::new();
+    for w in (50..=200).rev().step_by(2) {
+        let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (w, 36));
+        with_usage(&mut app, 82_000);
+        let (_, rows) = draw(&mut app, w, 36);
+        let cy = app.regions.composer.bottom() as usize - 3;
+        let (effort, provider, meter, figure) = control_state(&rows, cy);
+        assert!(figure, "{w}: the context figure stays: {:?}", rows[cy]);
+        assert!(
+            meter || !provider,
+            "{w}: the meter goes after the provider: {:?}",
+            rows[cy]
+        );
+        assert!(
+            !effort || provider,
+            "{w}: effort before provider: {:?}",
+            rows[cy]
+        );
+        assert!(rows[cy].contains("Build"), "{w}: {:?}", rows[cy]);
+        seen.insert((effort, provider, meter));
+    }
+    for state in [
+        (true, true, true),
+        (false, true, true),
+        (false, false, true),
+        (false, false, false),
+    ] {
+        assert!(seen.contains(&state), "never shown: {state:?} in {seen:?}");
+    }
+}
+
+#[test]
+fn the_meter_has_ten_cells_filled_in_the_agent_colour() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (200, 50));
+    with_usage(&mut app, 82_000); // 41% of 200k
+    let (buf, rows) = draw(&mut app, 200, 50);
+    let cy = app.regions.composer.bottom() - 3;
+    let cells: Vec<u16> = (0..buf.area.width)
+        .filter(|&x| buf[(x, cy)].symbol() == "\u{2571}")
+        .collect();
+    assert_eq!(cells.len(), 10, "{:?}", rows[cy as usize]);
+    assert!(cells.windows(2).all(|p| p[1] == p[0] + 1), "contiguous");
+    let agent = app.theme.agent_style("build").fg;
+    let filled = cells
+        .iter()
+        .filter(|&&x| buf[(x, cy)].fg == agent.unwrap())
+        .count();
+    assert_eq!(filled, 5, "ceil(10 * 0.41)");
+    let empty = app.theme.fg("border.default").fg.unwrap();
+    assert!(cells[5..].iter().all(|&x| buf[(x, cy)].fg == empty));
+    assert!(
+        rows[cy as usize].contains("82.0K \u{b7} 41%"),
+        "{:?}",
+        rows[cy as usize]
+    );
+}
+
+#[test]
+fn mono_and_ascii_cards_use_rules_and_only_they_keep_the_focus_bar() {
+    for tier in [Tier::Mono, Tier::Ansi16] {
+        let mut app = with_turn(opts(Mode::Dark, tier), (120, 36));
+        let (buf, _) = draw(&mut app, 120, 36);
+        let r = app.regions.composer;
+        let focused = app.ui.focus == nexus_tui::ui::Focus::Composer;
+        let rule = app.theme.structure("rule");
+        let (top, bottom) = (&buf[(r.x + 6, r.y + 1)], &buf[(r.x + 6, r.bottom() - 2)]);
+        if tier == Tier::Mono {
+            assert_eq!((top.symbol(), bottom.symbol()), (rule, rule));
+        }
+        let bar = buf[(r.x + 2, r.y + 2)].symbol() == app.theme.structure("focus_bar");
+        assert_eq!(
+            bar, focused,
+            "{tier:?}: the focus bar is drawn when focused"
+        );
+    }
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let (buf, _) = draw(&mut app, 120, 36);
+    let r = app.regions.composer;
+    assert_ne!(
+        buf[(r.x + 2, r.y + 2)].symbol(),
+        app.theme.structure("focus_bar")
+    );
+    let mut ascii = opts(Mode::Dark, Tier::TrueColor);
+    ascii.ascii = true;
+    let mut app = with_turn(ascii, (120, 36));
+    let (buf, _) = draw(&mut app, 120, 36);
+    let r = app.regions.composer;
+    assert_eq!(
+        buf[(r.x + 6, r.y + 1)].symbol(),
+        app.theme.structure("rule")
+    );
+    assert!(buf[(r.x + 6, r.y + 1)].symbol().is_ascii());
+}
+
+#[test]
+fn busy_shows_the_working_row_and_esc_stop_not_the_meter() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    with_usage(&mut app, 82_000);
+    busy(&mut app);
+    let (buf, rows) = draw(&mut app, 160, 48);
+    let r = app.regions.composer;
+    let live = &rows[r.y as usize];
+    assert!(live.contains("\u{25d0} Working"), "{live:?}");
+    let control = &rows[r.bottom() as usize - 3];
+    assert!(control.trim_end().ends_with("esc stop"), "{control:?}");
+    assert!(!control.contains('\u{2571}'), "{control:?}");
+    assert!(!rows[r.bottom() as usize - 1].contains("ctrl+p commands"));
+    // No old busy marker inside the card.
+    assert!(!rows[r.y as usize + 2].contains("Working"));
+    let _ = buf;
+}
+
+#[test]
+fn the_strip_marks_a_linked_worktree_in_bold_violet() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 48));
+    app.state.worktrees.insert(
+        SESSION.into(),
+        serde_json::json!({
+            "session_directory": "/work/nexus-home/ws",
+            "worktrees": [{"path": "/work/nexus-home/ws", "branch": "feature", "main": false}]
+        }),
+    );
+    let (buf, rows) = draw(&mut app, 160, 48);
+    let y = app.regions.composer.bottom() - 1;
+    let x = rows[y as usize].find("worktree").unwrap() as u16;
+    let cell = &buf[(x, y)];
+    assert_eq!(cell.fg, app.theme.fg("agent.violet").fg.unwrap());
+    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert!(!rows[y as usize].contains("checkout"));
+}
+
+#[test]
+fn completion_is_a_borderless_block_as_wide_as_the_card_with_key_hints() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    typing(&mut app, "/");
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let r = app.regions.composer;
+    let raised = Color::Rgb(0x24, 0x24, 0x24);
+    let hint = rows
+        .iter()
+        .position(|row| row.contains("move") && row.contains("tab complete"))
+        .expect("key hints row");
+    assert!(rows[hint].contains("esc close"), "{:?}", rows[hint]);
+    assert_eq!(
+        hint as u16 + 1,
+        r.y + 1,
+        "the hint row is last, on the card's top edge"
+    );
+    // As wide as the card, no border glyphs, flush with its edge.
+    assert_eq!(buf[(r.x + 2, hint as u16)].bg, raised);
+    assert_eq!(buf[(r.right() - 3, hint as u16)].bg, raised);
+    assert_ne!(buf[(r.x + 1, hint as u16)].bg, raised);
+    assert_ne!(buf[(r.right() - 2, hint as u16)].bg, raised);
+    assert!(rows[hint]
+        .chars()
+        .all(|c| !"\u{2502}\u{250c}\u{2514}\u{256d}".contains(c)));
 }

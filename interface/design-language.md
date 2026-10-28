@@ -18,8 +18,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 - Primary text carries content and headings. Secondary text carries labels;
   muted text carries metadata and instructions. Status colour is paired with
   a word or glyph. Agent colours identify agent names, not whole rows.
-- The composer names the agent in its colour and explains context occupancy
-  (tokens, price tier and window) on hover. A model change requested during a
+- The composer is a soft card (half-row edges, no rail, no status band) whose
+  control row names the agent in its colour and ends with the `╱` meter and
+  `82k · 41%`, explained on hover (tokens, price tier and window). A model change requested during a
   turn is marked until the next call; narrow rows shed effort and provider
   before names or the agent.
 - Timeline items follow model context order. The user message is a band across
@@ -57,8 +58,9 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   shows the title and place. Settings is a centred modal over the dimmed
   session: search, violet section headings, values right-aligned, the selected
   row on an accent fill, ←/→ to change. Escape clears the search, then closes.
-- The location strip under the composer names the project in bold over an
-  accent segment of the closing rule, then branch and `worktree` (violet, only in a linked worktree). The composer panel has a rail in the agent's colour and a darker status band with the context figure. Counts abbreviate as `1.2K` and `3.4M`.
+- The location strip under the composer names the project in bold, then its path (muted),
+  `⌥ branch` and `checkout` (muted) or `worktree` (bold violet), with
+  `ctrl+p commands` muted at the right; there is no accent underline. Counts abbreviate as `1.2K` and `3.4M`.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and

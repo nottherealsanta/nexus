@@ -472,29 +472,35 @@ counts. Open with Enter or a click; the answer expands in place.
 
 #### Composer
 
-The composer is a borderless `surface.panel` fill, inset two columns from each
-edge of the centre column, with a heavy rail down its left side in the agent's
-colour, a blank row above the input and one between the input and the control
-row. A darker status band (`surface.sidebar`) closes the panel under the control
-row: right-aligned `11.1K (4.1%)` (context in use and its share of the window)
-A canvas gutter surrounds it. The placeholder is `Type a message…`; disconnected sessions show the
-reason. In ANSI-16 and monochrome the focused input has a focus bar.
+The composer is a card on `surface.panel`, inset two columns from each edge of
+the centre column, with half-row edges (`▄` above and `▀` below in the panel
+colour over the canvas; `─` rules in mono and ASCII). There is no agent rail and
+no status band. Rows: the input at three cells in, a blank row, then the control
+row. The placeholder is `Type a message…` with the cursor on its first letter;
+disconnected sessions show the reason. The focus bar at the card's left edge is
+drawn only in ANSI-16 and monochrome.
 
-The control row contains agent, model and effort selectors. The agent name is
-capitalised and shown in its identity colour; the model uses the catalog display
-name and provider; a change requested during a turn reads `old → new (next
-call)`. A busy turn shows `esc stop`; an interrupted turn offers `continue`.
-The location strip is a separate canvas row below the panel: the directory
-(`~` form, underlined by the accent rule), the branch, and `worktree` in violet
-only when the session is in a linked worktree. A main
-checkout shows its branch and nothing else. The path opens the directory
+The control row reads `Agent · model provider · effort`: the agent capitalised,
+bold in its identity colour; the model uses the catalog display name with the
+provider muted; effort is secondary. A change requested during a turn reads
+`old → new (next call)`. On the right sit the old Nexus meter (ten `╱` cells,
+filled in the agent colour over `border.default`) and `82.0K · 41%`. Narrow rows
+shed effort, then the provider, then the meter. While busy, a live row above the
+card reads `◐ Working · 12s · ↓4.1k` (Working shimmers) and the control row's
+right side reads `esc stop`; an interrupted turn offers `continue` there.
+Completion (`/` and `@`) is a borderless `surface.raised` block exactly as wide
+as the card and flush with its top edge: ten rows at most, the selection band
+and focus bar on the chosen row, key hints as the last row.
+The project strip is a canvas row below the card: the project name (bold), its
+path (muted, `~` form), `⌥ branch` (secondary) and `checkout` (muted) or
+`worktree` (bold violet, linked worktrees only), with `ctrl+p commands` muted
+and right-aligned while idle; no accent underline. The path opens the directory
 control and the branch opens the worktrees control. For an existing session, Core’s worktree listing supplies
 its branch and linked worktree marker, refreshed on directory changes; before a
 session exists, `GET /api/project/{id}/worktrees` supplies the project's own
 branch the same way. The context figure estimates occupancy from the latest
 request’s input tokens; hovering it explains the numbers, including occupancy of
-each price-tier boundary the catalog reports. Narrow rows drop effort, then the
-provider before shortening names. Before a session exists the agent, model and
+each price-tier boundary the catalog reports. Before a session exists the agent, model and
 effort pickers set a draft that goes into the session's creation request. Attachments and queue are tracked in
 PLAN.md (Step 12a).
 

@@ -13,9 +13,11 @@ explicit focus model, the manifest's Esc chain, mouse and keyboard parity, and
 terminal hygiene. The status footer has been removed; key hints are available
 in the palette and F1, and stop appears in the composer. Existing sessions
 show their branch and linked-worktree marker from Core below the composer; a
-project with no session shows its own branch. The composer shows the agent in
-its colour, catalog model names, a pending model change, effort and context
-occupancy against price tiers and the window, explained on hover.
+project with no session shows its own branch. The composer is a soft card
+(half-row `▄`/`▀` edges in the panel colour; `─` rules in mono and ASCII) whose
+control row shows the agent in its colour, the catalog model name and provider,
+a pending model change, effort, and on the right the `╱` meter with
+`82.0K · 41%`, explained on hover.
 The first row is a band on the chrome surface (`surface.sidebar`, shared
 with both sidebars; no rules between them, a `│` edge only in ANSI-16 and
 mono). It holds the left toggle, the Sessions / Files / Projects icons over the
@@ -27,10 +29,16 @@ modal. The left sidebar has two-line session rows (title, `project ⌥ branch`) 
 closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
-title and place. Settings → Sidebar switches full / rail / hidden. The location
-strip under the composer shows the directory (underlined by the accent rule),
-the branch and, only in a linked worktree, `worktree`. The composer panel has
-an agent-coloured rail and a status band with `11.1K (4.1%)`.
+title and place. Settings → Sidebar switches full / rail / hidden. The project
+strip under the card shows the project name (bold), its path (muted),
+`⌥ branch` and `checkout` (muted) or `worktree` (bold violet); `ctrl+p commands`
+sits muted at the right while idle. The card has no rail and no status band.
+Rows, top to bottom: the live row (while busy: `◐ Working · 12s · ↓4.1k`, with
+Working shimmering), the top edge, the input at three cells in, a blank row, the
+control row, the bottom edge and the strip. The control row sheds effort, then
+the provider, then the meter as the column narrows; while busy its right side
+reads `esc stop` instead of the meter. The focus bar at the card's left edge is
+drawn only in ANSI-16 and mono.
 The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed tab is bold on the page surface, the others muted on the band, a child session shows `root › child` with clickable earlier crumbs. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
@@ -304,8 +312,10 @@ newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer selectio
 `/name` in the composer runs the command with that slash name (`/rename New
 title`, `/continue`, `/new`, `/settings`...); an unknown `/word` is sent as text.
 
-As-you-type completion: a popup of up to ten rows sits above the composer on the
-raised surface. Typing `/word` as the draft's first word ranks the manifest's
+As-you-type completion: a borderless popup of up to ten rows, exactly as wide as
+the composer card and flush with its top edge, sits above it on the raised
+surface (the selected row has the selection band and focus bar; the last row
+holds the key hints and `n of N`). Typing `/word` as the draft's first word ranks the manifest's
 slash commands locally (prefix, then subsequence, then typo, then the rest, so
 the height stays steady), each with its title as muted help and the reason when
 it is off. A token starting with `@` asks Core for paths
