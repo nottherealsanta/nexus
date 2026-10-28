@@ -37,7 +37,7 @@ const nexus = (home, port, ...args) =>
   });
 
 const THEMES = {
-  dark: { bg: "#121314", fg: "#e6e7e8", flag: "--dark" },
+  dark: { bg: "#0B0B0B", fg: "#e6e7e8", flag: "--dark" },
   light: { bg: "#f7f7f5", fg: "#1f2124", flag: "--light" },
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -86,12 +86,13 @@ async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, hom
       await h.key("Control+k", 400);
       await h.type("Refactor", 300);
       await h.key("Enter", 600);
-      await h.waitFor("Go ahead");
+      await h.waitFor("Refactor the loader");
+      await h.idle(500);
     },
   };
   const log = (m) => process.env.WEBTERM_DEBUG && console.log(`  [${name}] ${m}`);
-  log("waiting for live");
-  await h.waitFor("live", 20000).catch(async () => {});
+  log("waiting for header");
+  await h.waitFor("New session", 20000).catch(async () => {});
   log("idle");
   await h.idle(500);
   log("steps");
@@ -137,6 +138,32 @@ await shot({ name: "drawer-80x24-light", cols: 80, rows: 24, theme: "light", ste
 await shot({ name: "sidebars-closed-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.key("Control+b", 200); await h.key("Alt+b", 400); } });
 await shot({ name: "projects-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+3", 500); } });
 await shot({ name: "files-tab-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.key("Alt+2", 500); } });
+await shot({ name: "editor-selection-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("Selected text", 100); for (let i = 0; i < 4; i++) await h.key("Shift+ArrowLeft", 80); } });
+await shot({ name: "editor-paste-80x24-light", cols: 80, rows: 24, theme: "light", steps: async (h) => { await h.openSession(); await h.page.evaluate(() => window.term.paste("first line\nsecond line\nthird line")); await h.waitFor("Pasted ~"); } });
+await shot({ name: "attention-error-120x36-dark", cols: 120, rows: 36, steps: async (h) => {
+  await h.openSession();
+  const daemon = JSON.parse(fs.readFileSync(path.join(cfg.WEBTERM_HOME, "daemon.json"), "utf8"));
+  const headers = { authorization: `Bearer ${daemon.token}`, "content-type": "application/json" };
+  const sessions = await (await fetch(`${daemon.url}/api/session`, { headers })).json();
+  const target = sessions.find((session) => session.title === "Fix flaky test in sync");
+  if (!target) throw new Error("attention fixture session missing");
+  const model = await fetch(`${daemon.url}/api/session/${target.id}/model`, { method: "POST", headers, body: JSON.stringify({ model: "codex/gpt-5.5" }) });
+  if (!model.ok) throw new Error(`attention fixture model: ${model.status}`);
+  const prompt = await fetch(`${daemon.url}/api/session/${target.id}/prompt`, { method: "POST", headers, body: JSON.stringify({ text: "local attention fixture" }) });
+  if (!prompt.ok) throw new Error(`attention fixture prompt: ${prompt.status}`);
+  await h.waitFor("✕ Fix flaky");
+} });
+await shot({ name: "mermaid-review-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.waitFor("source below"); } });
+await shot({ name: "settings-detail-120x36-light", cols: 120, rows: 36, theme: "light", steps: async (h) => { await h.key("Control+p", 200); await h.type("open settings", 200); await h.key("Enter", 300); await h.key("Enter", 300); } });
+await shot({ name: "fence-review-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.waitFor("printf done"); await h.key("Alt+k", 150); for (let i = 0; i < 24; i++) await h.key("ArrowDown", 40); await h.key("ArrowUp", 200); await h.waitFor("Copy"); } });
+await shot({ name: "tools-expanded-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.key("Alt+k", 200); await h.key("Home", 200); for (let i = 0; i < 4; i++) await h.key("ArrowDown", 80); await h.key("Enter", 300); } });
+await shot({ name: "files-open-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.key("Alt+2", 500); await h.waitFor("hello.txt"); for (let i = 0; i < 3; i++) await h.key("ArrowDown", 80); await h.key("Enter", 500); await h.waitFor("Real Core file browsing works."); } });
+await shot({ name: "files-tree-120x36-dark", cols: 120, rows: 36, steps: async (h) => {
+  await h.key("Control+k", 400); await h.type("Spike", 300); await h.key("Enter", 600);
+  await h.waitFor("Spike: terminal harness");
+  await h.key("Alt+2", 500); await h.waitFor("src");
+  await h.key("Enter", 600); await h.waitFor("new.rs");
+} });
 // 4. Connection loss: stop the daemon under a live TUI (it never restarts it).
 if (!only || "reconnecting".includes(only) || only.includes("reconnect")) {
   await shot({

@@ -1,5 +1,6 @@
 //! Text helpers measured in terminal cells (Unicode display widths).
 
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn width(s: &str) -> usize {
@@ -8,6 +9,14 @@ pub fn width(s: &str) -> usize {
 
 pub fn cw(c: char) -> usize {
     UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// Uppercase the first grapheme only (agent names: `orchestrate` → `Orchestrate`).
+pub fn capitalize(s: &str) -> String {
+    match s.graphemes(true).next() {
+        Some(first) => first.to_uppercase() + &s[first.len()..],
+        None => String::new(),
+    }
 }
 
 /// Truncate to `max` cells, ending with `ellipsis` when cut (never splits a
@@ -22,13 +31,13 @@ pub fn truncate(s: &str, max: usize, ellipsis: &str) -> String {
     }
     let mut out = String::new();
     let mut w = 0;
-    for c in s.chars() {
-        let c_w = cw(c);
-        if w + c_w > max - e {
+    for grapheme in s.graphemes(true) {
+        let cell_width = width(grapheme);
+        if w + cell_width > max - e {
             break;
         }
-        out.push(c);
-        w += c_w;
+        out.push_str(grapheme);
+        w += cell_width;
     }
     out.push_str(ellipsis);
     out
@@ -112,10 +121,10 @@ pub fn wrap_line(line: &str, w: usize) -> Vec<String> {
     let mut cur = String::new();
     let mut cur_w = 0;
     let mut last_space: Option<(usize, usize)> = None; // (byte index in cur, width before)
-    for c in line.chars() {
-        let c_w = cw(c);
+    for grapheme in line.graphemes(true) {
+        let c_w = width(grapheme);
         if cur_w + c_w > w {
-            if c == ' ' {
+            if grapheme == " " {
                 // the line is exactly full: break here and drop the space
                 rows.push(std::mem::take(&mut cur));
                 cur_w = 0;
@@ -133,14 +142,14 @@ pub fn wrap_line(line: &str, w: usize) -> Vec<String> {
                 cur_w = 0;
             }
             last_space = None;
-            if c == ' ' && cur.is_empty() {
+            if grapheme == " " && cur.is_empty() {
                 continue;
             }
         }
-        if c == ' ' && !cur.is_empty() {
+        if grapheme == " " && !cur.is_empty() {
             last_space = Some((cur.len(), cur_w));
         }
-        cur.push(c);
+        cur.push_str(grapheme);
         cur_w += c_w;
     }
     rows.push(cur);
@@ -156,7 +165,9 @@ pub fn wrap(text: &str, w: usize) -> Vec<String> {
 
 /// `1.2k` style counts.
 pub fn count(n: u64) -> String {
-    if n >= 1000 {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
@@ -246,6 +257,10 @@ mod tests {
         assert_eq!(age(1000.0, 1000.0 - 180.0), "3m");
         assert_eq!(age(100_000.0, 100_000.0 - 7200.0), "2h");
         assert_eq!(count(1200), "1.2k");
+        assert_eq!(count(1_200_000), "1.2M");
+        assert_eq!(capitalize("orchestrate"), "Orchestrate");
+        assert_eq!(capitalize("éclair"), "Éclair");
+        assert_eq!(capitalize(""), "");
         assert_eq!(base64(b"Man"), "TWFu");
         assert_eq!(base64(b"Ma"), "TWE=");
     }

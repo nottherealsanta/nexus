@@ -97,6 +97,13 @@ pub enum Banner {
     Resynced(String),
 }
 
+pub type FileResponse = (
+    String,
+    Option<String>,
+    String,
+    Result<serde_json::Value, String>,
+);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
     pub model: Model,
@@ -113,6 +120,18 @@ pub struct AppState {
     pub models: Vec<serde_json::Value>,
     pub agents: Vec<serde_json::Value>,
     pub catalog_source: String,
+    /// Last worktree listing per session; validated against the current directory.
+    pub worktrees: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Last worktree listing per project's own checkout (no session yet).
+    pub project_worktrees: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Directory listings for the Files tree, keyed by relative path (`""` is
+    /// the selected root). A failure is kept so an expanded folder can say why.
+    pub file_dirs: std::collections::BTreeMap<String, Result<Vec<serde_json::Value>, String>>,
+    /// Project/session the tree listings belong to, so a late response for an
+    /// old selection is ignored.
+    pub file_scope: Option<(String, Option<String>)>,
+    pub git: Option<(String, Result<serde_json::Value, String>)>,
+    pub file: Option<FileResponse>,
 }
 
 impl Default for AppState {
@@ -129,6 +148,12 @@ impl Default for AppState {
             models: Vec::new(),
             agents: Vec::new(),
             catalog_source: String::new(),
+            worktrees: std::collections::BTreeMap::new(),
+            project_worktrees: std::collections::BTreeMap::new(),
+            file_dirs: std::collections::BTreeMap::new(),
+            file_scope: None,
+            git: None,
+            file: None,
         }
     }
 }
@@ -176,8 +201,46 @@ impl AppState {
                 self.agents = agents;
                 self.catalog_source = source;
             }
+            SyncMsg::Git { session, data } => self.git = Some((session, data)),
+            SyncMsg::ProjectWorktrees { project, data } => match data {
+                Ok(listing) => {
+                    self.project_worktrees.insert(project, listing);
+                }
+                Err(_) => {
+                    self.project_worktrees.remove(&project);
+                }
+            },
+            SyncMsg::Files {
+                project,
+                session,
+                path,
+                data,
+                file,
+            } => {
+                if file {
+                    self.file = Some((project, session, path, data));
+                } else {
+                    self.file_scope = Some((project, session));
+                    let entries =
+                        data.map(|value| value["entries"].as_array().cloned().unwrap_or_default());
+                    self.file_dirs.insert(path, entries);
+                }
+            }
             SyncMsg::Event(event) => match self.model.apply_event(&event) {
-                Applied::Applied => self.events_applied += 1,
+                Applied::Applied => {
+                    self.events_applied += 1;
+                    if let Some(id) = &event.session_id {
+                        match event.kind.as_str() {
+                            "worktree.listed" => {
+                                self.worktrees.insert(id.clone(), event.data.clone());
+                            }
+                            "session.directory_changed" | "session.deleted" => {
+                                self.worktrees.remove(id);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Applied::Duplicate => self.duplicates += 1,
                 Applied::NeedsResync(reason) => self.resync_wanted = Some(reason),
             },

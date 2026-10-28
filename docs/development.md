@@ -10,6 +10,7 @@ nexus-core/       Python (uv): everything that is not a UI
 nexus-tui/        Rust Ratatui client (its README has build, run and test steps)
 nexus-nsh/        NSH web/desktop client (TSX; its README has build and test steps)
 interface/        shared command manifest, theme and capability matrix for both clients
+scripts/nexus     development launcher (tui, web, build, restart, checks)
 ```
 
 The clients speak only the HTTP API ([api.md](api.md)). They never read SQLite,
@@ -56,6 +57,36 @@ tests/               offline tests (test_server.py drives the API with a scripte
 ```
 
 State lives in `~/.nexus10` (`$NEXUS10_HOME`). Never touch `~/.nexus` (old Nexus).
+
+## Shortcuts
+
+`scripts/nexus` is a development launcher for the whole repo. Install it once:
+
+```sh
+ln -sfn ~/repos/nexus10/scripts/nexus ~/.local/bin/nexus
+```
+
+Then, from any directory:
+
+| Command | Does |
+| --- | --- |
+| `nexus` / `nexus tui` | Launch the TUI (starts Core with the repo's `uv run nexus`); `--release` builds/runs the release binary |
+| `nexus build` | `uv sync`, debug TUI build, NSH web build (`--release` for the TUI) |
+| `nexus web` | Build the web app if needed, start Core, serve it on 4820 and open it (`--no-open`, `--port N`) |
+| `nexus restart` | Stop and start the Core daemon |
+| `nexus stop` | Stop the Core daemon |
+| `nexus status` | Core daemon and provider status |
+| `nexus ps` | Core daemon status only |
+| `nexus logs` | Follow `$NEXUS10_HOME/logs/daemon.log` |
+| `nexus test` | Core and TUI test suites |
+| `nexus check` | Tests, lints, shared theme/manifest checks, NSH checks |
+| `nexus fmt` | `cargo fmt` and regenerate the shared NSH files |
+| `nexus doctor` | Versions, paths and daemon state |
+| `nexus core <args>` | Core CLI explicitly |
+
+Anything not listed is passed to the Core CLI, so `nexus login codex`,
+`nexus chat`, `nexus session list` and similar commands work unchanged. The
+launcher honours `NEXUS10_HOME`; it refuses `~/.nexus`.
 
 Tuning (all optional, read at daemon start):
 

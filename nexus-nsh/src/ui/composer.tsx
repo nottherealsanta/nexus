@@ -6,6 +6,7 @@ import { centre, connection, currentProject, draft, isNarrow, live, m, model, vi
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
 import { structure } from "../gen/theme";
+import { agentColor } from "../agent-color";
 
 export function Composer() {
   let ref: any;
@@ -45,7 +46,7 @@ export function Composer() {
         />
         <View class={`flex-row items-center gap-2 px-2 pb-2 ${isNarrow() ? "flex-wrap" : ""}`}>
           <View class="flex-1 min-w-0 flex-row items-center gap-3 pl-1.5">
-            <Pair k="agent" v={ses()?.agent ?? "build"} />
+            <Pair k="agent" v={ses()?.agent ?? "build"} agent />
             <Pair k="model" v={(ses()?.model as string) || "default"} />
           </View>
           <If when={!isNarrow()}><Text class={T.meta} numberOfLines={1}>{busy() ? `${keyLabel(byId.get("session.interrupt")!) ?? "esc"} stop` : "enter send · shift+enter newline"}</Text></If>
@@ -64,8 +65,8 @@ export function Composer() {
     </View>
   );
 }
-function Pair(p: { k: string; v: string }) {
-  return <Text numberOfLines={1} class={`${T.meta} shrink min-w-0`}>{p.k} <Text class="text-foreground-secondary">{p.v}</Text></Text>;
+function Pair(p: { k: string; v: string; agent?: boolean }) {
+  return <Text numberOfLines={1} class={`${T.meta} shrink min-w-0`}>{p.k} <Text class={p.agent ? agentColor(p.v) : "text-foreground-secondary"}>{p.v}</Text></Text>;
 }
 
 // --- waiting card -----------------------------------------------------------------------------

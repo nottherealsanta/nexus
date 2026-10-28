@@ -45,7 +45,7 @@ Durations come from event `time`; Core sends no duration fields.
 | --- | --- | --- | --- | --- |
 | L1 | Scope toggle: current project / all projects | API ready | `GET /api/session` with or without `?project=`; `?archived=` | No filter returns every session of every project |
 | L2 | Group by project when scope is all | API ready | `GET /api/project`, `Session.project_id` | |
-| L3 | Group by worktree (main checkout first, then one group per worktree, branch and path) | API ready | `GET /api/session/{id}/worktrees` (`worktrees[]`: path, branch, main, dirty), `Session.directory` | Gap: the list is keyed by a session, so a project with no session has no worktree list. Group by matching `Session.directory` to a worktree path |
+| L3 | Group by worktree (main checkout first, then one group per worktree, branch and path) | API ready | `GET /api/session/{id}/worktrees` (`worktrees[]`: path, branch, main, dirty), `GET /api/project/{id}/worktrees` before a session exists, `Session.directory` | Group by matching `Session.directory` to a worktree path |
 | L4 | Row: title, "Untitled" until title | API ready | `Session.title` (placeholder `New session`; filled from the first prompt, truncated) | Real titles are L21. Treat `New session` as untitled |
 | L5 | Row: status idle / busy | API ready | `Session.status`; E: `session.status` | |
 | L6 | Row: status waiting for input | API ready | snapshot `approvals`, `questions`; `GET /api/question`; E: `permission.asked`, `question.asked` and their `*.replied` | Derived by joining pending waits to sessions |
@@ -86,13 +86,13 @@ Durations come from event `time`; Core sends no duration fields.
 
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
-| F1 | Project tree, lazy one level, gitignore aware | Core work | 12a Files and git | `api.md` "Not yet": files |
-| F2 | Project/worktree selector for the tree | API ready | worktrees list (A7) | Data for choosing the root; the tree itself is F1 |
-| F3 | Git status markers per file; ignored dimmed or hidden | Core work | 12a Files and git | |
-| F4 | Open file in built-in editor | Core work | 12a Files and git (read) | |
-| F5 | Open in `$EDITOR` / OS default | Client only | | Local clients only. Needs F1 for the path |
-| F6 | Copy path | Client only | | |
-| F7 | Insert `@path` into composer | Core work | 12a Files and git | Completion needs the F1 listing |
+| F1 | Project tree, lazy one level, gitignore aware | API ready | `GET /api/project/{id}/files`; TUI tree implemented | Entries include `ignored` |
+| F2 | Project/worktree selector for the tree | API ready | `GET /api/project/{id}/worktrees`; TUI root row | Main checkout or the open session's worktree |
+| F3 | Git status markers per file; ignored dimmed or hidden | API ready | entry `git_status`/`ignored`; TUI markers and toggle | |
+| F4 | Open file in built-in editor | Core work | 12a Files and git (read) | Read-only viewer exists; writes/editor remain |
+| F5 | Open in `$EDITOR` / OS default | Client only | TUI `$VISUAL`/`$EDITOR` action | Local clients only |
+| F6 | Copy path | Client only | TUI copies the absolute path | |
+| F7 | Insert `@path` into composer | API ready | TUI inserts from the selected row; `@` completion remains | Completion needs the F1 listing |
 
 ### Projects tab
 
@@ -120,7 +120,7 @@ Durations come from event `time`; Core sends no duration fields.
 | ID | Feature | Class | Source / step | Notes |
 | --- | --- | --- | --- | --- |
 | R1 | Title, id (copyable), agent, model and source, effort and source, directory | API ready | `GET /api/session/{id}` (`model_source`, `effort_source`) | |
-| R2 | Worktree branch for the directory | API ready | `GET …/worktrees` entry matching `session_directory`; E: `session.directory_changed.branch` | Non-git directory has none |
+| R2 | Worktree branch for the directory | API ready | `GET …/worktrees` entry matching `session_directory` (or `GET /api/project/{id}/worktrees` before a session); E: `session.directory_changed.branch` | Non-git directory has none |
 | R3 | Started at, last activity | API ready | `Session.created`, `Session.updated` | |
 | R4 | Total duration of turns | API ready | E: `session.status` busy/idle pairs (`turn_id`) | Event retention (14 days default) can drop old pairs. Gap: no stored aggregate |
 | R5 | Turns, model calls | API ready | E: `session.status`, `step_start`; or messages | Same retention caveat |
@@ -387,7 +387,7 @@ Dictation, Keybindings, Notifications, About.
 | ST4 | Providers: sign in (browser/device), sign out | Core work | 12a Settings over the API | Only local `nexus login` |
 | ST5 | Providers: default model per provider | Core work | 12a Settings over the API | `default_model` is read-only from the provider table |
 | ST6 | Providers: add OpenAI-compatible endpoint | Deferred | INTERFACE_PLAN "when Core supports custom providers" | Only four subscription providers now |
-| ST7 | Models: catalog list | API ready | `GET /api/model[?provider=]` (`source`, models with `efforts`, `context`, costs) | Lists only connected providers |
+| ST7 | Models: catalog list | API ready | `GET /api/model[?provider=]` (`source`, models with `efforts`, `context`, costs, price `tiers`) | Lists only connected providers |
 | ST8 | Models: catalog refresh | Core work | 12a? | `catalog.load(refresh=True)` is not reachable over HTTP |
 | ST9 | Models: default model and effort (read, write) | Core work | 12a Settings over the API | `GET /api/model/default` reads only |
 | ST10 | Agents: loaded agents, source, path, problems | API ready | `GET /api/agent[?project=]` (`agents`, `problems`) | Gap: `mode` missing |
@@ -424,10 +424,9 @@ increment. The client must show the reason and must not fake the state.
 | --- | --- | --- |
 | Start a session after reviewing and editing its starting context (N1, N4, N6, N8, N10) | No draft; editing an empty session pollutes context | 12a Session drafts |
 | Send while the agent works (K3, K4, U5, H8) | Busy prompt is 409 | 12a Steer and queue |
-| Browse files, mention `@path`, open an editor, save (F1-F4, F7, E2, E3, M4) | No file endpoints | 12a Files and git; Enforced read-before-edit |
-| Git status and diffs (G1, G2, F3) | No git endpoints | 12a Files and git |
+| Browse files, mention `@path`, open an editor, save (F1-F4, F7, E2, E3, M4) | Writes/editor, `@` completion and timeline path links remain | 12a Enforced read-before-edit; A7 |
+| Git status and diffs (G1, G2, F3) | Status and diff endpoints exist; diff UI and changed-file navigation remain | A7 / 12.4 |
 | Sign in on first run, manage providers, set defaults (Y4, ST3-ST5, ST9, ST12, ST13, Q8) | Sign-in only local; defaults read-only | 12a Settings over the API |
-| Version-safe connection (H2, Z4, Z6, Y3, ST21) | `/api/info` has no API version | 12a Version handshake |
 | Context window management (A5, O6, O7, L10, T15, ST16) | No handoff, no context limit | 12a Compaction as handoff |
 | Meaningful titles, `/btw` (L21, O4, O5, R13, L11) | No one-turn sessions | 12a One-turn sessions |
 | Search (L13, Q4) | No index | 12a Archive, search |
@@ -445,10 +444,9 @@ Candidates to add to Step 12a (all small):
 3. **Usage aggregates**: persist token counts per request/turn so session info and turn footers survive event retention (R4-R7, T6).
 4. **Agent `mode`** in `GET /api/agent` (N2, ST10).
 5. **Model catalog refresh** over HTTP (ST8).
-6. **Project-level worktree list** that does not need a session id (L3).
-7. **Cancel event for a normal interrupt of a pending approval** (A10, W11).
-8. **Per-call anchors for the inspector** (X22), low priority.
-9. **Diff context** in `edit`/`write` results or via the file/git endpoints (X5, X6).
+6. **Cancel event for a normal interrupt of a pending approval** (A10, W11).
+7. **Per-call anchors for the inspector** (X22), low priority.
+8. **Diff context** in `edit`/`write` results or via the file/git endpoints (X5, X6).
 
 ## 19. Counts
 

@@ -43,12 +43,16 @@ export function createServer() {
       ws.close(1008, "unknown profile");
       return;
     }
+    // The harness chooses its colour tier explicitly; do not inherit NO_COLOR
+    // from the process running the capture.
+    const childEnv = { ...process.env };
+    delete childEnv.NO_COLOR;
     const child = pty.spawn(profile.file, profile.args ?? [], {
       name: "xterm-256color",
       cols,
       rows,
       cwd: profile.cwd ?? process.cwd(),
-      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", LANG: "en_US.UTF-8", ...profile.env },
+      env: { ...childEnv, TERM: "xterm-256color", COLORTERM: "truecolor", LANG: "en_US.UTF-8", ...profile.env },
     });
     children.add(child);
     child.onData((d) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "out", d })));

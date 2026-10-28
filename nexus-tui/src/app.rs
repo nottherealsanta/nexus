@@ -5,13 +5,13 @@
 //! Everything user-visible about a command comes from the manifest; a command is
 //! offered only when it is wired here (`WIRED`) and its `when` terms hold.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 use crate::actions::{ActionDone, ApiCall};
@@ -33,6 +33,8 @@ pub enum Effect {
     Sync(SyncCommand),
     Api(ApiCall),
     Copy(String),
+    /// Suspend the TUI, open this path in `$VISUAL`/`$EDITOR`, and resume.
+    OpenEditor(String),
     /// Open a URL in the platform browser (the inspector, documentation).
     OpenUrl(String),
 }
@@ -60,8 +62,15 @@ pub const WIRED: &[&str] = &[
     "sidebar.tab.sessions",
     "sidebar.tab.files",
     "sidebar.tab.projects",
+    "copy.file_path",
+    "file.open_external",
+    "file.insert_mention",
+    "files.toggle_ignored",
+    "files.root_toggle",
     "sidebar.focus",
     "composer.focus",
+    "composer.undo",
+    "composer.redo",
     "timeline.focus",
     "session.new",
     "session.open",
@@ -97,6 +106,8 @@ pub const WIRED: &[&str] = &[
     "tool.raw_toggle",
     "tool.open_inspector",
     "copy.final_message",
+    "copy.assistant_block",
+    "copy.code_block",
     "copy.tool_output",
     "copy.user_message",
     "waiting.allow_once",
@@ -127,7 +138,7 @@ const MUTATING: &[&str] = &[
     "waiting.deny",
 ];
 
-const NOT_WIRED: &str = "Not built in the TUI yet (Step 12.4).";
+const NOT_WIRED: &str = "Not available yet.";
 const READ_ONLY: &str = "Read-only until Core is connected again.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +162,20 @@ pub struct SideEntry {
     pub heading: Option<String>,
 }
 
+/// One drawable row of the Files tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileRow {
+    /// Path relative to the selected root (also the key of its listing).
+    pub path: String,
+    pub name: String,
+    /// `file`, `directory`, `symlink` or `error`.
+    pub kind: String,
+    pub depth: usize,
+    pub expanded: bool,
+    pub git_status: Option<String>,
+    pub ignored: bool,
+}
+
 pub struct Ui {
     pub focus: Focus,
     pub left_open: bool,
@@ -159,12 +184,24 @@ pub struct Ui {
     pub tab: Tab,
     pub cursor: HashMap<Tab, usize>,
     pub side_top: usize,
+    pub file_open: bool,
+    pub file_scroll: usize,
+    /// Files tree: expanded relative directories, ignored visibility, and
+    /// whether to browse the project checkout instead of the session directory.
+    pub files_expanded: std::collections::BTreeSet<String>,
+    pub files_hide_ignored: bool,
+    pub files_project_root: bool,
+    pub composer_drag: Option<(usize, usize)>,
     pub scope_all: bool,
     pub show_archived: bool,
+    pub unread_sessions: HashSet<String>,
+    pub failed_sessions: HashSet<String>,
     pub view: View,
     pub settings_section: usize,
     pub settings_row: usize,
     pub settings_pane: SettingsPane,
+    pub settings_search: Composer,
+    pub settings_searching: bool,
     pub overlay: Option<Overlay>,
     pub dialog: Option<Dialog>,
     pub edit: Option<TextEdit>,
@@ -277,12 +314,22 @@ impl App {
                 tab,
                 cursor: HashMap::new(),
                 side_top: 0,
+                file_open: false,
+                file_scroll: 0,
+                files_expanded: std::collections::BTreeSet::new(),
+                files_hide_ignored: false,
+                files_project_root: false,
+                composer_drag: None,
                 scope_all: false,
                 show_archived: false,
+                unread_sessions: HashSet::new(),
+                failed_sessions: HashSet::new(),
                 view: View::Session,
                 settings_section: 0,
                 settings_row: 0,
                 settings_pane: SettingsPane::Nav,
+                settings_search: Composer::new(),
+                settings_searching: false,
                 overlay: None,
                 dialog: None,
                 edit: None,
@@ -501,6 +548,40 @@ impl App {
         v.messages.last().is_some_and(|m| m.role != "assistant")
     }
 
+    fn root_session(&self, id: &str) -> Option<String> {
+        let mut current = self.state.model.sessions.get(id)?;
+        for _ in 0..self.state.model.sessions.len() {
+            match current.parent_id.as_deref() {
+                Some(parent) => current = self.state.model.sessions.get(parent)?,
+                None => return Some(current.id.clone()),
+            }
+        }
+        None
+    }
+
+    pub fn session_worktree<'a>(&'a self, session: &Session) -> Option<&'a Value> {
+        let listing = self
+            .state
+            .worktrees
+            .get(&session.id)
+            .filter(|listing| {
+                listing["session_directory"].as_str() == Some(session.directory.as_str())
+            })
+            .or_else(|| self.state.project_worktrees.get(&session.project_id));
+        listing
+            .and_then(|listing| listing["worktrees"].as_array())
+            .and_then(|trees| {
+                trees
+                    .iter()
+                    .filter(|tree| {
+                        tree["path"].as_str().is_some_and(|root| {
+                            std::path::Path::new(&session.directory).starts_with(root)
+                        })
+                    })
+                    .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len))
+            })
+    }
+
     pub fn side_entries(&self) -> Vec<SideEntry> {
         let m = &self.state.model;
         let cur = self.current_project();
@@ -511,31 +592,64 @@ impl App {
             .filter(|s| self.ui.show_archived || !s.archived)
             .filter(|s| self.ui.scope_all || cur.as_deref() == Some(s.project_id.as_str()))
             .collect();
-        if self.ui.scope_all {
-            let mut names: Vec<(&String, f64)> = Vec::new();
-            for p in m.projects.values() {
-                names.push((&p.id, p.updated));
-            }
-            names.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let order = |pid: &str| {
-                names
+        let project_order = self.project_ids();
+        let root = |s: &Session| {
+            self.session_worktree(s)
+                .and_then(|tree| tree["path"].as_str())
+                .map(str::to_owned)
+                .or_else(|| m.projects.get(&s.project_id).map(|p| p.path.clone()))
+                .unwrap_or_else(|| s.directory.clone())
+        };
+        sessions.sort_by_key(|s| {
+            (
+                project_order
                     .iter()
-                    .position(|(id, _)| id.as_str() == pid)
-                    .unwrap_or(99)
-            };
-            sessions.sort_by_key(|s| order(&s.project_id));
+                    .position(|id| id == &s.project_id)
+                    .unwrap_or(usize::MAX),
+                root(s),
+            )
+        });
+        let mut roots: HashMap<String, HashSet<String>> = HashMap::new();
+        for session in &sessions {
+            roots
+                .entry(session.project_id.clone())
+                .or_default()
+                .insert(root(session));
         }
-        let mut last: Option<&str> = None;
+        let mut last: Option<(String, String)> = None;
         sessions
             .into_iter()
             .map(|s| {
-                let heading =
-                    (self.ui.scope_all && last != Some(s.project_id.as_str())).then(|| {
-                        m.projects
+                let worktree = root(s);
+                let group = (s.project_id.clone(), worktree.clone());
+                let multiple = roots
+                    .get(&s.project_id)
+                    .is_some_and(|items| items.len() > 1);
+                let heading = (last.as_ref() != Some(&group) && (self.ui.scope_all || multiple))
+                    .then(|| {
+                        let project = m
+                            .projects
                             .get(&s.project_id)
-                            .map_or(s.project_id.clone(), |p| p.name.clone())
+                            .map_or(s.project_id.as_str(), |p| p.name.as_str());
+                        let label = self
+                            .session_worktree(s)
+                            .and_then(|tree| tree["branch"].as_str())
+                            .filter(|name| !name.is_empty())
+                            .or_else(|| {
+                                std::path::Path::new(&worktree)
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                            })
+                            .unwrap_or("worktree");
+                        if self.ui.scope_all && multiple {
+                            format!("{project} · {label}")
+                        } else if self.ui.scope_all {
+                            project.to_owned()
+                        } else {
+                            label.to_owned()
+                        }
                     });
-                last = Some(s.project_id.as_str());
+                last = Some(group);
                 SideEntry {
                     id: s.id.clone(),
                     heading,
@@ -558,7 +672,7 @@ impl App {
         match tab {
             Tab::Sessions => self.side_entries().len(),
             Tab::Projects => self.state.model.projects.len(),
-            Tab::Files => 0,
+            Tab::Files => self.file_rows().len(),
         }
     }
 
@@ -620,13 +734,29 @@ impl App {
                     && self.ui.tab == Tab::Projects
                     && self.list_len(Tab::Projects) > 0
             }
-            "focus.turn"
-            | "focus.tool"
-            | "focus.user_message"
-            | "focus.assistant_block"
-            | "focus.code_block"
-            | "focus.file"
-            | "focus.child_card"
+            "focus.assistant_block" => {
+                self.ui.focus == Focus::Timeline
+                    && self
+                        .ui
+                        .timeline_sel
+                        .and_then(|i| self.ui.timeline_blocks.get(i))
+                        .is_some_and(|b| b.kind == crate::timeline::BlockKind::Assistant)
+            }
+            "focus.code_block" => {
+                self.ui.focus == Focus::Timeline
+                    && self
+                        .ui
+                        .timeline_sel
+                        .and_then(|i| self.ui.timeline_blocks.get(i))
+                        .is_some_and(|b| b.kind == crate::timeline::BlockKind::Code)
+            }
+            "focus.file" => {
+                self.ui.focus == Focus::Sidebar
+                    && self
+                        .selected_file()
+                        .is_some_and(|row| row.kind != "directory" && row.kind != "error")
+            }
+            "focus.turn" | "focus.tool" | "focus.user_message" | "focus.child_card"
             | "focus.git_file" => false,
             "view.editor" | "editor.dirty" => false,
             "view.settings" => self.ui.view == View::Settings,
@@ -809,7 +939,7 @@ impl App {
         if c.is_empty() {
             c.set_text(text);
         } else {
-            let rest = c.text();
+            let rest = c.expanded_text();
             c.set_text(&format!("{text}\n{rest}"));
         }
     }
@@ -903,9 +1033,190 @@ impl App {
         self.ui.alerts.push(level, text, now);
     }
 
+    /// The session whose directory the Files tree browses. The project checkout
+    /// is requested when the user chose it or there is no session.
+    fn files_session(&self) -> Option<String> {
+        if self.ui.files_project_root {
+            return None;
+        }
+        let project = self.current_project();
+        self.viewed()
+            .filter(|session| Some(&session.project_id) == project.as_ref())
+            .map(|session| session.id.clone())
+    }
+
+    /// Absolute directory the Files tree is rooted at.
+    pub fn files_root(&self) -> Option<String> {
+        let project = self.current_project();
+        if !self.ui.files_project_root {
+            if let Some(session) = self
+                .viewed()
+                .filter(|session| Some(&session.project_id) == project.as_ref())
+            {
+                if !session.directory.is_empty() {
+                    return Some(session.directory.clone());
+                }
+            }
+        }
+        project.and_then(|p| self.state.model.projects.get(&p).map(|p| p.path.clone()))
+    }
+
+    /// A label for the root row when the project has more than one checkout.
+    pub fn files_root_label(&self) -> Option<String> {
+        let project = self.current_project()?;
+        let listing = self.state.project_worktrees.get(&project)?;
+        let count = listing["worktrees"].as_array().map_or(0, Vec::len);
+        if count < 2 {
+            return None;
+        }
+        let root = self.files_root()?;
+        let entry = listing["worktrees"]
+            .as_array()?
+            .iter()
+            .filter(|tree| {
+                tree["path"]
+                    .as_str()
+                    .is_some_and(|path| root.starts_with(path))
+            })
+            .max_by_key(|tree| tree["path"].as_str().map_or(0, str::len));
+        let name = if self.ui.files_project_root || self.viewed().is_none() {
+            self.state.model.projects[&project].name.clone()
+        } else {
+            std::path::Path::new(&root)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.clone())
+        };
+        let branch = entry
+            .and_then(|tree| tree["branch"].as_str())
+            .filter(|branch| !branch.is_empty());
+        Some(match branch {
+            Some(branch) => format!("{name} {} {branch}", self.theme.structure("separator")),
+            None => name,
+        })
+    }
+
+    /// Rows of the Files tree in draw order, depth-first through expanded folders.
+    pub fn file_rows(&self) -> Vec<FileRow> {
+        let scope = (
+            self.current_project().unwrap_or_default(),
+            self.files_session(),
+        );
+        if self.state.file_scope.as_ref() != Some(&scope) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        self.walk_files("", 0, &mut out);
+        out
+    }
+
+    fn walk_files(&self, dir: &str, depth: usize, out: &mut Vec<FileRow>) {
+        let Some(listing) = self.state.file_dirs.get(dir) else {
+            return;
+        };
+        let entries = match listing {
+            Ok(entries) => entries,
+            Err(error) => {
+                out.push(FileRow {
+                    path: dir.to_owned(),
+                    name: error.clone(),
+                    kind: "error".into(),
+                    depth,
+                    expanded: false,
+                    git_status: None,
+                    ignored: false,
+                });
+                return;
+            }
+        };
+        for entry in entries {
+            let name = entry["name"].as_str().unwrap_or("");
+            if name == ".git" {
+                continue;
+            }
+            let ignored = entry["ignored"].as_bool().unwrap_or(false);
+            if ignored && self.ui.files_hide_ignored {
+                continue;
+            }
+            let path = if dir.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{dir}/{name}")
+            };
+            let kind = entry["kind"].as_str().unwrap_or("file").to_owned();
+            let expanded = kind == "directory" && self.ui.files_expanded.contains(&path);
+            out.push(FileRow {
+                path: path.clone(),
+                name: name.to_owned(),
+                kind: kind.clone(),
+                depth,
+                expanded,
+                git_status: entry["git_status"]
+                    .as_str()
+                    .filter(|status| !status.is_empty())
+                    .map(str::to_owned),
+                ignored,
+            });
+            if expanded {
+                self.walk_files(&path, depth + 1, out);
+            }
+        }
+    }
+
+    /// The selected Files row, when the Files tab has focus.
+    pub fn selected_file(&self) -> Option<FileRow> {
+        if self.ui.tab != Tab::Files {
+            return None;
+        }
+        self.file_rows().get(self.cursor(Tab::Files)).cloned()
+    }
+
+    /// Absolute path of a Files row, under the current tree root.
+    fn file_absolute(&self, row: &FileRow) -> Option<String> {
+        let root = self.files_root()?;
+        Some(
+            std::path::Path::new(&root)
+                .join(&row.path)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    fn request_files(&mut self, path: String, file: bool) {
+        if let Some(project) = self.current_project() {
+            if file {
+                self.state.file = None;
+            } else {
+                self.state.file_dirs.remove(&path);
+            }
+            self.effects.push(Effect::Sync(SyncCommand::Files {
+                project,
+                session: self.files_session(),
+                path,
+                file,
+            }));
+        }
+    }
+
+    fn reset_files(&mut self) {
+        self.state.file_dirs.clear();
+        self.state.file_scope = None;
+        self.state.file = None;
+        self.ui.files_expanded.clear();
+        self.ui.file_open = false;
+        self.ui.file_scroll = 0;
+        self.ui.cursor.insert(Tab::Files, 0);
+        if self.ui.tab == Tab::Files {
+            self.request_files(String::new(), false);
+        }
+    }
+
     fn set_tab(&mut self, tab: Tab) {
         self.ui.tab = tab;
         self.ui.side_top = 0;
+        if tab == Tab::Files {
+            self.request_files(String::new(), false);
+        }
         if self.narrow() {
             self.ui.drawer = Some(Side::Left);
         } else {
@@ -1305,6 +1616,10 @@ impl App {
     }
 
     pub fn open_session(&mut self, id: &str) {
+        if let Some(root) = self.root_session(id) {
+            self.ui.unread_sessions.remove(&root);
+        }
+        self.ui.file_open = false;
         if self.viewed_id() == Some(id) && self.ui.view == View::Session {
             self.after_open();
             return;
@@ -1318,10 +1633,26 @@ impl App {
         self.ui.wait_idx = 0;
         if let Some(s) = self.state.model.sessions.get(id) {
             self.ui.project = Some(s.project_id.clone());
+            if !self.state.project_worktrees.contains_key(&s.project_id) {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::ProjectWorktrees(
+                        s.project_id.clone(),
+                    )));
+            }
         }
+        self.ui.files_project_root = false;
+        self.reset_files();
         self.effects
             .push(Effect::Sync(SyncCommand::Select(Some(id.to_owned()))));
         self.ui.view = View::Session;
+        self.effects
+            .push(Effect::Sync(SyncCommand::Worktrees(id.to_owned())));
+        self.effects
+            .push(Effect::Sync(SyncCommand::Git(id.to_owned())));
+        if self.state.models.is_empty() {
+            self.effects
+                .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+        }
         self.after_open();
     }
 
@@ -1334,6 +1665,10 @@ impl App {
         self.ui.project = Some(id.to_owned());
         self.ui.cursor.insert(Tab::Sessions, 0);
         self.ui.drawer = None;
+        self.ui.files_project_root = true;
+        self.reset_files();
+        self.effects
+            .push(Effect::Sync(SyncCommand::ProjectWorktrees(id.to_owned())));
         self.toast(
             Level::Info,
             format!(
@@ -1345,6 +1680,37 @@ impl App {
                     .map_or(id, |p| p.name.as_str())
             ),
         );
+    }
+
+    /// Collapse the selected folder, or move to its parent row in the tree.
+    fn files_up(&mut self) {
+        let Some(row) = self.selected_file() else {
+            return;
+        };
+        if row.kind == "directory" && row.expanded {
+            self.ui.files_expanded.remove(&row.path);
+            return;
+        }
+        let Some((parent, _)) = row.path.rsplit_once('/') else {
+            return;
+        };
+        if let Some(index) = self.file_rows().iter().position(|row| row.path == parent) {
+            self.ui.cursor.insert(Tab::Files, index);
+        }
+    }
+
+    /// Expand the selected folder (Enter and right arrow).
+    fn files_expand(&mut self) {
+        let Some(row) = self.selected_file() else {
+            return;
+        };
+        if row.kind != "directory" || row.expanded {
+            return;
+        }
+        self.ui.files_expanded.insert(row.path.clone());
+        if !self.state.file_dirs.contains_key(&row.path) {
+            self.request_files(row.path.clone(), false);
+        }
     }
 
     fn sidebar_activate(&mut self, index: usize) {
@@ -1361,7 +1727,30 @@ impl App {
                     self.ui.tab = Tab::Sessions;
                 }
             }
-            Tab::Files => {}
+            Tab::Files => {
+                let Some(row) = self.file_rows().get(index).cloned() else {
+                    return;
+                };
+                match row.kind.as_str() {
+                    "directory" => {
+                        if self.ui.files_expanded.contains(&row.path) {
+                            self.ui.files_expanded.remove(&row.path);
+                        } else {
+                            self.ui.files_expanded.insert(row.path.clone());
+                            if !self.state.file_dirs.contains_key(&row.path) {
+                                self.request_files(row.path.clone(), false);
+                            }
+                        }
+                    }
+                    "file" | "symlink" => {
+                        self.ui.file_open = true;
+                        self.ui.file_scroll = 0;
+                        self.request_files(row.path.clone(), true);
+                        self.ui.focus = Focus::Timeline;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1519,6 +1908,8 @@ impl App {
             }
             "session.send" => self.send(),
             "composer.newline" => self.composer().newline(),
+            "composer.undo" => self.composer().undo(),
+            "composer.redo" => self.composer().redo(),
             "session.jump_latest" => {
                 self.ui.scroll = Scroll::default();
             }
@@ -1571,7 +1962,83 @@ impl App {
                 }
             }
             "session.open_inspector" | "tool.open_inspector" => self.open_inspector(),
-            "copy.final_message" | "copy.tool_output" | "copy.user_message" => self.copy_selected(),
+            "copy.final_message"
+            | "copy.tool_output"
+            | "copy.user_message"
+            | "copy.assistant_block" => self.copy_selected(),
+            "copy.code_block" => self.copy_selected(),
+            "copy.file_path" => {
+                let Some(row) = self
+                    .selected_file()
+                    .filter(|row| row.kind != "directory" && row.kind != "error")
+                else {
+                    self.toast(Level::Info, "Focus a file first");
+                    return;
+                };
+                if let Some(path) = self.file_absolute(&row) {
+                    self.effects.push(Effect::Copy(path));
+                    self.toast(Level::Success, "Copied file path");
+                }
+            }
+            "file.insert_mention" => {
+                let Some(row) = self
+                    .selected_file()
+                    .filter(|row| row.kind != "directory" && row.kind != "error")
+                else {
+                    self.toast(Level::Info, "Focus a file first");
+                    return;
+                };
+                self.composer().insert_str(&format!("@{} ", row.path));
+                self.ui.focus = Focus::Composer;
+                if self.narrow() {
+                    self.ui.drawer = None;
+                }
+            }
+            "file.open_external" => {
+                let Some(row) = self
+                    .selected_file()
+                    .filter(|row| row.kind != "directory" && row.kind != "error")
+                else {
+                    self.toast(Level::Info, "Focus a file first");
+                    return;
+                };
+                if let Some(path) = self.file_absolute(&row) {
+                    self.effects.push(Effect::OpenEditor(path));
+                }
+            }
+            "files.toggle_ignored" => {
+                self.ui.files_hide_ignored = !self.ui.files_hide_ignored;
+                self.ui.cursor.insert(Tab::Files, 0);
+                self.toast(
+                    Level::Info,
+                    if self.ui.files_hide_ignored {
+                        "Ignored files hidden"
+                    } else {
+                        "Ignored files shown"
+                    },
+                );
+            }
+            "files.root_toggle" => {
+                let count = self
+                    .current_project()
+                    .and_then(|project| self.state.project_worktrees.get(&project))
+                    .and_then(|listing| listing["worktrees"].as_array())
+                    .map_or(0, Vec::len);
+                if count < 2 {
+                    self.toast(Level::Info, "This project has one checkout");
+                    return;
+                }
+                self.ui.files_project_root = !self.ui.files_project_root;
+                self.reset_files();
+                self.toast(
+                    Level::Info,
+                    if self.ui.files_project_root {
+                        "Files: project checkout"
+                    } else {
+                        "Files: session checkout"
+                    },
+                );
+            }
             "sessions.scope_toggle" => {
                 self.ui.scope_all = !self.ui.scope_all;
                 self.ui.cursor.insert(Tab::Sessions, 0);
@@ -1717,7 +2184,7 @@ impl App {
     }
 
     fn send(&mut self) {
-        let text = self.composer_ref().text();
+        let text = self.composer_ref().expanded_text();
         if text.trim().is_empty() {
             return;
         }
@@ -1726,7 +2193,7 @@ impl App {
             if let Some(rest) = text.trim().strip_prefix('/') {
                 let (word, arg) = rest.split_once(' ').unwrap_or((rest, ""));
                 if let Some(c) = self.manifest.slash(word).cloned() {
-                    self.composer().clear();
+                    self.composer().take();
                     let arg = arg.trim();
                     if c.id == "session.rename" && !arg.is_empty() {
                         if let Some(s) = self.viewed() {
@@ -1755,12 +2222,12 @@ impl App {
         match self.viewed_id().map(str::to_owned) {
             Some(id) if self.is_busy(&id) => self.run_command("session.steer"),
             Some(id) => {
-                self.composer().clear();
+                self.composer().take();
                 self.api(ApiCall::Prompt { session: id, text });
             }
             None => match self.current_project() {
                 Some(project) => {
-                    self.composer().clear();
+                    self.composer().take();
                     self.api(ApiCall::NewAndPrompt { project, text });
                 }
                 None => self.toast(
@@ -1774,7 +2241,85 @@ impl App {
     // ---- sync & results ------------------------------------------------------------------
 
     pub fn apply_sync(&mut self, msg: SyncMsg) {
+        let attention = match &msg {
+            SyncMsg::Event(event) => event
+                .session_id
+                .as_deref()
+                .and_then(|id| self.root_session(id))
+                .map(|root| (root, event.kind.clone(), event.data.clone())),
+            _ => None,
+        };
+        let preserve_side = matches!(&msg, SyncMsg::Snapshot { .. })
+            || matches!(&msg, SyncMsg::Event(event) if matches!(event.kind.as_str(), "worktree.listed" | "session.created" | "session.updated" | "session.deleted" | "session.archived" | "session.unarchived"));
+        let focused_session = preserve_side
+            .then(|| {
+                self.side_entries()
+                    .get(self.cursor(Tab::Sessions))
+                    .map(|entry| entry.id.clone())
+            })
+            .flatten();
+        let applied_before = self.state.events_applied;
+        let snapshot = matches!(&msg, SyncMsg::Snapshot { .. });
+        let refresh = match &msg {
+            SyncMsg::Event(event)
+                if event.kind == "session.directory_changed"
+                    && event.session_id.as_deref() == self.viewed_id() =>
+            {
+                event.session_id.clone()
+            }
+            _ => None,
+        };
         self.state.apply(msg);
+        if self.state.events_applied > applied_before {
+            if let Some((root, kind, data)) = attention {
+                let viewed_root = self.viewed_id().and_then(|id| self.root_session(id));
+                if kind == "session.error" {
+                    self.ui.failed_sessions.insert(root.clone());
+                }
+                if kind == "session.status" && data["status"] == "busy" {
+                    self.ui.failed_sessions.remove(&root);
+                }
+                if viewed_root.as_deref() != Some(root.as_str())
+                    && (kind == "session.error"
+                        || (kind == "message.added" && data["role"] == "assistant"))
+                {
+                    self.ui.unread_sessions.insert(root);
+                }
+            }
+        }
+        if preserve_side {
+            let entries = self.side_entries();
+            let index = focused_session
+                .as_ref()
+                .and_then(|id| entries.iter().position(|entry| &entry.id == id))
+                .unwrap_or_else(|| {
+                    self.cursor(Tab::Sessions)
+                        .min(entries.len().saturating_sub(1))
+                });
+            self.ui.cursor.insert(Tab::Sessions, index);
+        }
+        if let Some(id) = refresh {
+            self.effects.push(Effect::Sync(SyncCommand::Worktrees(id)));
+        }
+        if snapshot {
+            // One repository listing covers every session in a project (main
+            // checkout and its linked worktrees), so sidebar branches load for
+            // all rows without one Git call per session.
+            let mut projects = self
+                .state
+                .model
+                .sessions_recent()
+                .into_iter()
+                .map(|s| s.project_id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            if let Some(project) = self.current_project() {
+                projects.insert(project);
+            }
+            for project in projects {
+                self.effects
+                    .push(Effect::Sync(SyncCommand::ProjectWorktrees(project)));
+            }
+        }
         if let Some(gone) = self.state.model.selected_deleted.take() {
             self.toast(Level::Info, format!("Session {gone} was deleted"));
             self.ui.drafts.remove(&gone);
@@ -1883,7 +2428,37 @@ impl App {
     pub fn handle_key(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
         match name.as_str() {
+            "ctrl+z"
+                if self.ui.focus == Focus::Composer
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none() =>
+            {
+                self.composer().undo();
+                return;
+            }
+            "ctrl+shift+z" | "ctrl+y"
+                if self.ui.focus == Focus::Composer
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none() =>
+            {
+                self.composer().redo();
+                return;
+            }
             "ctrl+z" => return self.effects.push(Effect::Suspend),
+            "ctrl+c"
+                if self.ui.focus == Focus::Composer
+                    && self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.edit.is_none()
+                    && self.composer_ref().selection().is_some() =>
+            {
+                if let Some(text) = self.composer_ref().selected_text() {
+                    self.effects.push(Effect::Copy(text));
+                }
+                return;
+            }
             "ctrl+c" => return self.effects.push(Effect::Quit),
             _ => {}
         }
@@ -1894,8 +2469,82 @@ impl App {
             }
             return;
         }
+        if self.ui.view == View::Settings
+            && self.ui.settings_pane == SettingsPane::Nav
+            && self.ui.overlay.is_none()
+            && self.ui.dialog.is_none()
+        {
+            if name == "/" && !self.ui.settings_searching {
+                self.ui.settings_searching = true;
+                return;
+            }
+            if self.ui.settings_searching {
+                match ev.code {
+                    KeyCode::Esc => {
+                        self.ui.settings_searching = false;
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        self.ui.settings_searching = false;
+                        return;
+                    }
+                    KeyCode::Backspace => self.ui.settings_search.backspace(),
+                    KeyCode::Char(c)
+                        if ev.modifiers.is_empty() || ev.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        self.ui.settings_search.insert_char(c)
+                    }
+                    _ => return,
+                }
+                if let Some(index) = self.settings_indices().first() {
+                    self.ui.settings_section = *index;
+                }
+                return;
+            }
+        }
         if name == "esc" {
+            if self.ui.view == View::Settings
+                && self.ui.settings_pane == SettingsPane::Rows
+                && self.ui.overlay.is_none()
+                && self.ui.dialog.is_none()
+                && self.ui.edit.is_none()
+            {
+                self.ui.settings_pane = SettingsPane::Nav;
+                return;
+            }
+            if self.ui.file_open
+                && self.ui.overlay.is_none()
+                && self.ui.dialog.is_none()
+                && self.ui.edit.is_none()
+            {
+                self.ui.file_open = false;
+                return;
+            }
             return self.escape();
+        }
+        if self.ui.file_open && self.ui.overlay.is_none() && self.ui.dialog.is_none() {
+            let lines = self
+                .state
+                .file
+                .as_ref()
+                .and_then(|(_, _, _, data)| data.as_ref().ok())
+                .and_then(|data| data["content"].as_str())
+                .map_or(0, |content| content.lines().count());
+            let page = self.regions.timeline.height.saturating_sub(2) as usize;
+            let max = lines.saturating_sub(page);
+            match name.as_str() {
+                "up" | "k" => self.ui.file_scroll = self.ui.file_scroll.saturating_sub(1),
+                "down" | "j" => self.ui.file_scroll = (self.ui.file_scroll + 1).min(max),
+                "pageup" => self.ui.file_scroll = self.ui.file_scroll.saturating_sub(page),
+                "pagedown" => self.ui.file_scroll = (self.ui.file_scroll + page).min(max),
+                _ => {}
+            }
+            if matches!(
+                name.as_str(),
+                "up" | "k" | "down" | "j" | "pageup" | "pagedown"
+            ) {
+                return;
+            }
         }
         if self.ui.dialog.is_some() {
             return self.dialog_key(&name);
@@ -2126,13 +2775,23 @@ impl App {
         }
         match name {
             "ctrl+j" => self.composer().newline(),
-            "up" => {
-                if !self.composer().up() {
-                    self.ui.focus = Focus::Timeline;
+            "up" | "down" => {
+                let width = crate::render::composer_inner(self.regions.composer)
+                    .width
+                    .max(1) as usize;
+                let single = self.composer_ref().layout(width).0.len() == 1;
+                let down = name == "down";
+                if (single || self.composer_ref().in_history()) && self.composer_ref().has_history()
+                {
+                    self.composer().history(!down);
+                } else {
+                    self.composer().select_move(false);
+                    if down {
+                        self.composer().down();
+                    } else if !self.composer().up() {
+                        self.ui.focus = Focus::Timeline;
+                    }
                 }
-            }
-            "down" => {
-                self.composer().down();
             }
             _ => edit_buffer(self.composer(), ev, name, false),
         }
@@ -2150,21 +2809,20 @@ impl App {
             m.role == "user"
                 && m.parts.iter().any(|p| {
                     p["type"] == "text"
-                        && !p["text"]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim_start()
-                            .starts_with('[')
+                        && !crate::timeline::is_notice(p["text"].as_str().unwrap_or(""))
                 })
         })
     }
 
     fn block_default_open(&self, b: &crate::timeline::Block) -> bool {
         use crate::timeline::BlockKind::*;
+        if let Some(open) = b.default_open {
+            return open;
+        }
         match b.kind {
             Turn | User | Assistant => true,
             Context => !self.has_turns(),
-            Notice | Diagnostic | Reasoning | Tool | Child | Older => false,
+            Notice | Diagnostic | Reasoning | Group | Tool | Child | Older | Code => false,
         }
     }
 
@@ -2173,6 +2831,7 @@ impl App {
             return;
         };
         let start = b.start;
+        let end = b.end;
         self.ui.timeline_sel = Some(idx);
         self.ui.timeline_sel_key = Some(b.key.clone());
         self.ui.focus = Focus::Timeline;
@@ -2186,8 +2845,12 @@ impl App {
         };
         let top = if start < cur {
             start
-        } else if start >= cur + h {
-            start.saturating_sub(h.saturating_sub(1))
+        } else if end > cur + h {
+            if end.saturating_sub(start) <= h {
+                end.saturating_sub(h)
+            } else {
+                start
+            }
         } else {
             cur
         }
@@ -2295,8 +2958,11 @@ impl App {
                 let call = b.key.strip_prefix("tool:").unwrap_or_default();
                 self.tool_result(call).unwrap_or_default()
             }
-            crate::timeline::BlockKind::User => self
-                .message_by_prefix(b.key.strip_prefix("user:").unwrap_or_default())
+            crate::timeline::BlockKind::Assistant | crate::timeline::BlockKind::Code => {
+                b.target.clone().unwrap_or_default()
+            }
+            crate::timeline::BlockKind::User | crate::timeline::BlockKind::Turn => self
+                .message_by_prefix(b.target.as_deref().unwrap_or_default())
                 .map(|m| message_text(&m))
                 .unwrap_or_default(),
             _ => self.final_message().unwrap_or_default(),
@@ -2438,24 +3104,29 @@ impl App {
             s.ui.cursor.insert(s.ui.tab, v.min(n.saturating_sub(1)));
         };
         match name {
+            "enter" if self.ui.tab == Tab::Files => self.sidebar_activate(c),
             "up" | "k" => set(self, c.saturating_sub(1)),
             "down" | "j" => set(self, c + 1),
             "home" => set(self, 0),
             "end" => set(self, n),
+            "backspace" if self.ui.tab == Tab::Files => self.files_up(),
             "pageup" => set(self, c.saturating_sub(8)),
             "pagedown" => set(self, c + 8),
+            "left" | "h" if self.ui.tab == Tab::Files => self.files_up(),
+            "right" | "l" if self.ui.tab == Tab::Files => self.files_expand(),
             "left" | "h" => {
                 let t = match self.ui.tab {
                     Tab::Sessions | Tab::Files => Tab::Sessions,
                     Tab::Projects => Tab::Files,
                 };
-                self.ui.tab = t;
+                self.set_tab(t);
             }
             "right" | "l" => {
-                self.ui.tab = match self.ui.tab {
+                let tab = match self.ui.tab {
                     Tab::Sessions => Tab::Files,
                     _ => Tab::Projects,
                 };
+                self.set_tab(tab);
             }
             "tab" => self.cycle_focus(false),
             "shift+tab" => self.cycle_focus(true),
@@ -2484,6 +3155,24 @@ impl App {
 
     // ---- settings view ---------------------------------------------------------------------
 
+    pub fn settings_indices(&self) -> Vec<usize> {
+        let query = self.ui.settings_search.text().to_lowercase();
+        self.manifest
+            .settings_for_tui()
+            .iter()
+            .enumerate()
+            .filter(|(_, section)| {
+                query.is_empty()
+                    || section.label.to_lowercase().contains(&query)
+                    || section
+                        .row
+                        .iter()
+                        .any(|row| row.label.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     pub fn settings_rows(&self) -> Vec<crate::manifest::Row> {
         let sections = self.manifest.settings_for_tui();
         sections
@@ -2493,18 +3182,34 @@ impl App {
     }
 
     fn settings_key(&mut self, name: &str) {
-        let sections = self.manifest.settings.section.len();
+        let indices = self.settings_indices();
+        let position = indices
+            .iter()
+            .position(|i| *i == self.ui.settings_section)
+            .unwrap_or(0);
         let rows = self.settings_rows().len();
         match (self.ui.settings_pane, name) {
+            (SettingsPane::Nav, "a") => {
+                let mut options = self.theme.opts;
+                options.reduced_motion = !options.reduced_motion;
+                self.theme = self.theme.with(options);
+            }
+            (SettingsPane::Nav, "m") => self.toggle_monochrome(),
             (SettingsPane::Nav, "up" | "k") => {
-                self.ui.settings_section = self.ui.settings_section.saturating_sub(1);
+                if let Some(index) = indices.get(position.saturating_sub(1)) {
+                    self.ui.settings_section = *index;
+                }
                 self.ui.settings_row = 0;
             }
             (SettingsPane::Nav, "down" | "j") => {
-                self.ui.settings_section = (self.ui.settings_section + 1).min(sections - 1);
+                if let Some(index) =
+                    indices.get((position + 1).min(indices.len().saturating_sub(1)))
+                {
+                    self.ui.settings_section = *index;
+                }
                 self.ui.settings_row = 0;
             }
-            (SettingsPane::Nav, "right" | "enter" | "tab") => {
+            (SettingsPane::Nav, "right" | "enter" | "tab") if !indices.is_empty() => {
                 self.ui.settings_pane = SettingsPane::Rows
             }
             (SettingsPane::Rows, "up" | "k") => {
@@ -2530,6 +3235,18 @@ impl App {
         )
     }
 
+    fn toggle_monochrome(&mut self) {
+        let mut options = self.theme.opts;
+        match self.ui.monochrome_before.take() {
+            Some(tier) => options.tier = tier,
+            None => {
+                self.ui.monochrome_before = Some(options.tier);
+                options.tier = Tier::Mono;
+            }
+        }
+        self.theme = self.theme.with(options);
+    }
+
     fn settings_activate(&mut self, index: usize) {
         let Some(row) = self.settings_rows().get(index).cloned() else {
             return;
@@ -2540,17 +3257,7 @@ impl App {
         }
         match row.id.as_str() {
             "appearance.theme" => self.execute("app.theme"),
-            "appearance.monochrome" => {
-                let mut o = self.theme.opts;
-                match self.ui.monochrome_before.take() {
-                    Some(t) => o.tier = t,
-                    None => {
-                        self.ui.monochrome_before = Some(o.tier);
-                        o.tier = Tier::Mono;
-                    }
-                }
-                self.theme = self.theme.with(o);
-            }
+            "appearance.monochrome" => self.toggle_monochrome(),
             "keybindings.list" => self.execute("app.help_keys"),
             _ => {}
         }
@@ -2562,10 +3269,47 @@ impl App {
         self.mouse = Some((ev.column, ev.row));
         match ev.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                let inner = crate::render::composer_inner(self.regions.composer);
+                if self.ui.overlay.is_none()
+                    && self.ui.dialog.is_none()
+                    && self.ui.view == View::Session
+                    && contains(inner, ev.column, ev.row)
+                {
+                    let (rows, (cursor_row, _)) = self.composer_ref().layout(inner.width as usize);
+                    let top =
+                        crate::render::visible_first(rows.len(), cursor_row, inner.height as usize);
+                    let start = self.composer_ref().point_at(
+                        inner.width,
+                        top + usize::from(ev.row - inner.y),
+                        ev.column - inner.x,
+                    );
+                    self.composer().select_range(start, start);
+                    self.ui.composer_drag = Some((start, top));
+                    self.ui.focus = Focus::Composer;
+                    return;
+                }
                 if let Some(t) = self.hits.at(ev.column, ev.row).cloned() {
                     self.click(t);
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((start, top)) = self.ui.composer_drag {
+                    let inner = crate::render::composer_inner(self.regions.composer);
+                    let row = ev
+                        .row
+                        .saturating_sub(inner.y)
+                        .min(inner.height.saturating_sub(1));
+                    let column = ev
+                        .column
+                        .saturating_sub(inner.x)
+                        .min(inner.width.saturating_sub(1));
+                    let end =
+                        self.composer_ref()
+                            .point_at(inner.width, top + usize::from(row), column);
+                    self.composer().select_range(start, end);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.ui.composer_drag = None,
             MouseEventKind::ScrollUp => self.wheel(ev.column, ev.row, -3),
             MouseEventKind::ScrollDown => self.wheel(ev.column, ev.row, 3),
             _ => {}
@@ -2624,6 +3368,12 @@ impl App {
                 };
                 self.run_command(id);
             }
+            Target::SettingsQuickMotion => {
+                let mut options = self.theme.opts;
+                options.reduced_motion = !options.reduced_motion;
+                self.theme = self.theme.with(options);
+            }
+            Target::SettingsQuickMono => self.toggle_monochrome(),
             Target::SettingsEntry => self.run_command("app.settings"),
             Target::SideRow(i) => {
                 self.ui.focus = Focus::Sidebar;
@@ -2638,8 +3388,19 @@ impl App {
                 self.select_block(i);
                 self.activate_block();
             }
+            Target::CopyBlock(i) => {
+                self.select_block(i);
+                self.copy_selected();
+            }
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,
+            Target::ComposerAgent => self.run_command("agent.change"),
+            Target::ComposerModel => self.run_command("model.change"),
+            Target::ComposerEffort => self.run_command("model.effort"),
+            Target::ComposerContext => self.ui.focus = Focus::Composer,
+            Target::ComposerDirectory => self.run_command("session.change_directory"),
+            Target::ComposerWorktree => self.run_command("session.worktrees"),
+            Target::FilesRoot => self.run_command("files.root_toggle"),
             Target::Wait(b) => {
                 self.ui.focus = Focus::Waiting;
                 self.run_command(match b {
@@ -2672,7 +3433,7 @@ impl App {
             Target::SettingsNav(i) => {
                 self.ui.settings_section = i;
                 self.ui.settings_row = 0;
-                self.ui.settings_pane = SettingsPane::Nav;
+                self.ui.settings_pane = SettingsPane::Rows;
                 self.ui.focus = Focus::Timeline;
             }
             Target::SettingsRow(i) => {
@@ -2701,7 +3462,7 @@ impl App {
             return;
         }
         // Pasting into the composer from anywhere is the least surprising place.
-        self.composer().insert_str(text);
+        self.composer().paste(text);
         self.ui.focus = Focus::Composer;
     }
 }
@@ -2748,12 +3509,48 @@ fn edit_buffer(buf: &mut Composer, ev: &KeyEvent, name: &str, single_line: bool)
         return buf.insert_char(c);
     }
     match name {
+        "shift+left" => {
+            buf.select_move(true);
+            buf.left();
+        }
+        "shift+right" => {
+            buf.select_move(true);
+            buf.right();
+        }
+        "shift+up" if !single_line => {
+            buf.select_move(true);
+            buf.up();
+        }
+        "shift+down" if !single_line => {
+            buf.select_move(true);
+            buf.down();
+        }
+        "shift+home" => {
+            buf.select_move(true);
+            buf.home();
+        }
+        "shift+end" => {
+            buf.select_move(true);
+            buf.end();
+        }
         "backspace" => buf.backspace(),
         "delete" => buf.delete(),
-        "left" => buf.left(),
-        "right" => buf.right(),
-        "home" | "ctrl+a" => buf.home(),
-        "end" | "ctrl+e" => buf.end(),
+        "left" => {
+            buf.select_move(false);
+            buf.left();
+        }
+        "right" => {
+            buf.select_move(false);
+            buf.right();
+        }
+        "home" | "ctrl+a" => {
+            buf.select_move(false);
+            buf.home();
+        }
+        "end" | "ctrl+e" => {
+            buf.select_move(false);
+            buf.end();
+        }
         "ctrl+u" => buf.kill_to_line_start(),
         "alt+backspace" => buf.delete_word_back(),
         "up" if !single_line => {

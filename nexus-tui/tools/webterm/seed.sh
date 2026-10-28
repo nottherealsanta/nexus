@@ -15,7 +15,21 @@ if [ "${2:-}" = "stop" ]; then
   exit 0
 fi
 for h in home home-empty; do rm -rf "$root/$h"; mkdir -p "$root/$h"; chmod 700 "$root/$h"; done
-mkdir -p "$root/ws/nexus-demo" "$root/ws/side-project"
+rm -rf "$root/ws"
+mkdir -p "$root/ws/nexus-demo" "$root/ws/side-project/src" "$root/ws/side-project/target"
+side="$root/ws/side-project"
+printf 'Real Core file browsing works.\n' > "$side/hello.txt"
+printf '# Side project\n' > "$side/README.md"
+printf 'fn main() {}\n' > "$side/src/main.rs"
+printf 'fn old() {}\n' > "$side/src/old.rs"
+printf 'target/\n' > "$side/.gitignore"
+printf 'build output\n' > "$side/target/out"
+git -C "$side" init -q
+git -C "$side" add -A
+git -C "$side" -c user.email=seed@example.invalid -c user.name=seed commit -qm initial
+printf '\nchanged\n' >> "$side/README.md"
+printf 'pub fn new() {}\n' > "$side/src/new.rs"
+rm "$side/src/old.rs"
 nexus "$root/home-empty" 4798 daemon start
 nexus "$root/home" 4799 daemon start >/dev/null
 token=$(python3 -c "import json,sys;print(json.load(open('$root/home/daemon.json'))['token'])")

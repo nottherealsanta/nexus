@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::transport::{ApiError, Error, Http, SseFrame};
 
 /// The Core API major/minor this client was written against.
-pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 0 };
+pub const CLIENT_API: ApiVersion = ApiVersion { major: 1, minor: 1 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
@@ -863,6 +863,58 @@ impl CoreApi {
                 &format!("/api/session/{session}/export"),
                 &[("format", format.to_owned()), ("scope", scope.to_owned())],
             )
+            .await
+    }
+
+    /// List one workspace directory level.
+    pub async fn files(
+        &self,
+        project: &str,
+        session: Option<&str>,
+        path: &str,
+    ) -> Result<Value, Error> {
+        let mut query = vec![("path", path.to_owned())];
+        if let Some(session) = session {
+            query.push(("session", session.to_owned()));
+        }
+        self.http
+            .get(&format!("/api/project/{project}/files"), &query)
+            .await
+    }
+
+    /// Read a UTF-8 workspace file.
+    pub async fn file(
+        &self,
+        project: &str,
+        session: Option<&str>,
+        path: &str,
+    ) -> Result<Value, Error> {
+        let mut query = vec![("path", path.to_owned())];
+        if let Some(session) = session {
+            query.push(("session", session.to_owned()));
+        }
+        self.http
+            .get(&format!("/api/project/{project}/file"), &query)
+            .await
+    }
+
+    pub async fn git_status(&self, session: &str) -> Result<Value, Error> {
+        self.http
+            .get(&format!("/api/session/{session}/git"), &[])
+            .await
+    }
+
+    /// List worktrees for a session's directory. Outside Git Core returns an error.
+    pub async fn worktrees(&self, session: &str) -> Result<Value, Error> {
+        self.http
+            .get(&format!("/api/session/{session}/worktrees"), &[])
+            .await
+    }
+
+    /// Worktrees of a project's own checkout, before a session exists.
+    pub async fn project_worktrees(&self, project: &str) -> Result<Value, Error> {
+        self.http
+            .get(&format!("/api/project/{project}/worktrees"), &[])
             .await
     }
 

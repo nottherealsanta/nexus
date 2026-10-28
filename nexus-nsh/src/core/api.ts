@@ -31,7 +31,7 @@ export interface Info {
 
 export const CLIENT_VERSION = "0.10.0";
 /** The API version this client was written against (same convention as nexus-tui). */
-export const CLIENT_API = { major: 1, minor: 0 };
+export const CLIENT_API = { major: 1, minor: 1 };
 
 export interface ApiVersion { major: number; minor: number }
 

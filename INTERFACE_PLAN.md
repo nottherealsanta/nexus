@@ -9,7 +9,10 @@ steps before it).
 
 Status: in progress (2026-10-27). The shared interface data and design language
 are frozen below; both clients now implement the shell and the timeline. This
-file stays the normative spec, including parts not built yet.
+file stays the normative spec, including parts not built yet. The build order
+for what remains (the old-Nexus look: composer, timeline, sidebar, agent
+colours, files, no status footer; then the rest of Step 12) is
+[INTERFACE_WORK_PLAN.md](INTERFACE_WORK_PLAN.md).
 
 **Implemented**
 
@@ -144,19 +147,20 @@ screen reads as coloured, it has too much colour.
 
 | Token | Dark | Light | Use |
 | --- | --- | --- | --- |
-| `surface.canvas` | `#121314` | `#f7f7f5` | Timeline, editor, app background |
-| `surface.panel` | `#181a1c` | `#efefec` | Sidebars, composer, cards, notices |
-| `surface.raised` | `#212427` | `#ffffff` | Dialogs, menus, toasts, user message, hover |
+| `surface.canvas` | `#0B0B0B` | `#f7f7f5` | Timeline, editor, app background |
+| `surface.panel` | `#1e1e1e` | `#efefec` | Composer, cards, notices |
+| `surface.raised` | `#242424` | `#ffffff` | Dialogs, menus, toasts, user message |
 | `text.primary` | `#e6e7e8` | `#1f2124` | Titles, user and agent text, tool names |
 | `text.secondary` | `#a4a9ae` | `#4f555b` | Tool arguments, summaries, labels |
 | `text.muted` | `#868c93` | `#5c636a` | Metadata, counts, timestamps, key hints, reasoning |
-| `border.default` | `#2e3236` | `#d4d5d2` | Hairlines and dividers (decorative) |
+| `border.default` | `#2a2a2a` | `#d4d5d2` | Hairlines and dividers (decorative) |
 | `border.focus` | `#e8a46e` | `#a84e16` | Focus ring or bar |
 | `interactive.accent` | `#e8a46e` | `#a84e16` | Active tab, links, primary action, waiting |
 | `interactive.focus` | `#e8a46e` | `#a84e16` | Keyboard focus indicator |
 | `interactive.selection` | `#2c2824` | `#f0e3d8` | Selected row or range background |
-| `interactive.hover` | `#212427` | `#e9e9e6` | Pointer hover background |
+| `interactive.hover` | `#1e1e1e` | `#e9e9e6` | Pointer hover background |
 | `status.success / warning / error / info` | `#8fc46a #e0af68 #f27d8f #7aa7f0` | `#2f7a1f #8a5d00 #c0283f #2a5fc4` | Status marks and their text |
+| `agent.*` | eight identity colours | darkened matching hues | Agent names; built-ins pinned, custom names hashed |
 | `diff.add`, `diff.del` (+ `_bg`) | `#8fc46a #f27d8f` on `#1c2a1a #2e1b20` | `#2f7a1f #c0283f` on `#e1f0dc #f8e1e4` | Diff lines |
 
 - **Surfaces step, they do not contrast.** Canvas, panel and raised differ by
@@ -167,7 +171,7 @@ screen reads as coloured, it has too much colour.
   reads; secondary for what explains it; muted for what can be skipped. Muted
   still meets 4.5:1 on every surface.
 - **Accent is rationed**: the active tab, the focus bar, links, the primary
-  action, the user-message rail and the waiting mark. It is not used for
+  action and the waiting mark. It is not used for
   decoration, titles or tool names.
 - **Status colours** only ever appear with a glyph and a word (see below).
 - **Selection vs focus.** Selection is a background (what is chosen); focus is
@@ -183,17 +187,19 @@ never rely on colour alone.
 
 | Role | Text | Surface | Rail (left edge) | Label / style |
 | --- | --- | --- | --- | --- |
-| User text | primary | raised | accent `▌` | none; own block |
+| User text | primary | raised | muted `▌` only without surface colour | none; padded block |
 | Agent text | primary | canvas | none | none; flush text |
 | Reasoning | muted | canvas | hairline `│` | `Thought`, italic |
 | Context notice | secondary | panel | info `┃` | `context` |
 | Context insertion | secondary | panel | accent `┃` | `inserted` (steering, settings) |
 | Execution diagnostic | secondary | panel | warning `┃` | `diagnostic` (retries, hooks, provider errors) |
-| Tool row | secondary (name primary) | canvas | none | status glyph first |
+| Tool activity | secondary | canvas | none | foldable group; expanded tool details |
 | Child card | primary | panel | info `┃`, boxed | `child` |
 
 Rules: only user text has a filled block; only notices, insertions and
-diagnostics have the heavy rail, and the label says which. Errors that end a
+diagnostics have the heavy rail, and the label says which. Consecutive tools
+and reasoning form a foldable activity group; child launches and agent text
+end the group. Waiting items stay open and failures are visible when folded. Errors that end a
 turn use the `error` token with `✕` and the word "error" in the footer, not
 a new role. Anything shown that the model did not receive is not in the
 timeline (see [Timeline](#session-view-timeline)); inspection data is labelled
@@ -316,8 +322,8 @@ a state never changes a component's size or position.
   the right block. Separator is `·`. Order of meta in the right block: count,
   tokens, duration, status word.
 - **Key hints** are muted, lowercase keys in the form `enter open · esc
-  close`, ordered by importance, placed at the trailing edge of the surface
-  they act on (footer row of a dialog or card; the status line for the view).
+  close`, ordered by importance, placed on the surface they act on (dialogs and cards), in the command
+  palette or F1, and in the composer for stop. There is no status footer.
   Keys that conflict with text input are not shown there.
 - **Counts** use plain digits with thousands abbreviated at 1,000 (`1.2k`).
 - Align `+N −M` as two fixed-width groups so adjacent rows stack.
@@ -347,22 +353,14 @@ the session is running (`◐ running`) or disconnected (`✕ offline`).
 
 #### Session row
 
-```
-▌◆ Refactor loader                       3m   12
- ● Fix flaky test                        1h
- ▸ Release notes (2 children)            2d
-```
-
-Slot (2) mark or fold; title; right block with age and unread/turn count.
-Attention mark `◆`/`✕`/`●` replaces the status slot (waiting outranks all).
-- Default: title primary if unread or active, otherwise secondary.
-- Focused: focus bar. Selected: selection background (the open session).
-  Hovered: hover background, with inline actions (rename, archive) replacing
-  the age. Pressed: reverse. Disabled: muted (archived or deleting). Loading:
-  `◐`. Error: `✕` and error-coloured age text "failed". Empty list: "No
-  sessions. n new session".
-- Children indent 2 cells with `├─` / `╰─`; a folded parent shows its child
-  count in meta.
+Sessions use two lines and a blank spacer: the title follows a two-cell
+attention/focus slot, and the second line shows the project and, when known,
+`⌥ branch` (`~` in ASCII). The open session's title is bold; archived titles
+are muted. Hover fills both lines, and either line opens the session. Running
+titles shimmer unless reduced motion is enabled. Branch data comes from one
+project checkout listing, so rows in a project load together.
+Scope and archived controls are in the sidebar header. Children are reached
+from their parent rather than listed as separate root rows.
 
 #### Context section
 
@@ -385,18 +383,12 @@ with retry key hint. Empty: `No context yet`. Clipped items show a
 
 #### Turn header
 
-```
- ▾ #3  Fix the failing test in loader.py…        2 tools   42 s   ✓ done
-```
-
-Fold marker, turn number (muted), first line of the user message (primary,
-truncates), then the right block: tools, duration, status with label. The
-number column is as wide as the largest visible number so titles align.
-- Focused: focus bar. Selected: selection background (jump target). Hovered:
-  hover. Pressed: reverse. Disabled: n/a. Loading: `◐ running` with live
-  duration. Error: `✕ error`. Empty (no user text): `(attachment only)`.
-- A folded turn shows only this line; an expanded turn shows it once, above
-  the content, in bold.
+In the TUI, the user-message block is the turn header. Its gutter contains the
+fold marker; the first text row shows the turn number and local time at the
+right. A folded turn shows the first message line and its tool count, duration
+and status. A hovered or focused block exposes Copy. Large messages have a
+separate expand control and are always sent and copied whole. The matching NSH
+presentation remains in A8.
 
 #### Turn footer
 
@@ -413,43 +405,20 @@ Running: absent until the turn ends (the live row above the composer shows the
 running status). Hovered: tokens expand into a breakdown tooltip (NSH) or a
 `i` key (TUI).
 
-#### Tool row
+#### Tool activity
 
-Collapsed (one line):
+In the TUI, consecutive tool calls and reasoning form a foldable group. A live
+group shows `▾ Working` and a muted tree of its newest five members; it
+announces earlier members and can be expanded to show them all. Reduced motion
+keeps the heading static. A finished group folds to a count by verb and, where
+available, elapsed time. Denials and failures are counted separately; a failed
+group carries an error glyph and word even when folded. Pending approvals and
+questions keep their group and turn open.
 
-```
- ✓ edit   src/loader.py                                  +14 −3      0.2 s
- ◐ bash   pytest -q tests/test_loader.py                 running…    4.1 s
- ◆ bash   rm -rf build/                                  waiting for approval
- ⊘ write  .env                                           denied by you
- ✕ read   missing.py                                     not found
-```
-
-Anatomy: status glyph (2-cell slot), tool name (primary, padded to a common
-width within a block), key argument (secondary, truncates in the middle),
-summary (secondary; `+N` in `diff.add`, `−M` in `diff.del`), duration muted
-right-aligned. Name column width is the longest name in the visible block, up
-to 9 cells.
-
-Expanded:
-
-```
- ▾ ✓ edit   src/loader.py                                +14 −3      0.2 s
-   │ @@ -12,7 +12,10 @@
-   │  12   def load(path):
-   │  13 -     return open(path).read()
-   │  13 +     with open(path) as f:
-   │  14 +         return f.read()
-   │ raw · copy
-```
-
-Expansion adds a hairline rail and the tool-specific detail (diffs use
-`diff.*` backgrounds; output boxes cap their height and say "N lines hidden ·
-show all"). A model-side clip is a separate `context` notice.
-- Focused: focus bar. Selected: selection background. Hovered: hover. Pressed:
-  reverse. Disabled: n/a (denied is a status, not disabled). Loading: `◐` and
-  streaming summary. Error: `✕`, error message in `status.error` as the
-  summary and in the detail. Empty detail: `no output`.
+An expanded group shows selectable `▸ Shell date`, `▸ Read src/app.rs` and
+reasoning rows. Opening a member shows its existing detail behind a `│` rail,
+including diffs, output and raw data. Execution-only detail is labelled apart
+from model context. NSH's matching presentation is still tracked in A8.
 
 #### Child card
 
@@ -470,27 +439,25 @@ counts. Open with Enter or a click; the answer expands in place.
 
 #### Composer
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Ask the agent…                                                              │
-│                                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ agent  gpt-5 · high · /repo ┈┈┈┈┈┈┈┈  enter send · alt+enter queue · @ file │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+The composer is a borderless `surface.panel` fill with a blank row above the
+input and one between the input and the control row. A canvas gutter surrounds
+it. The placeholder is `Type a message…`; disconnected sessions show the
+reason. In ANSI-16 and monochrome the focused input has a focus bar.
 
-Input area (primary text, muted placeholder), then a muted control row:
-selectors on the left (agent, model, effort, directory) in `label value`
-pairs, key hints at the trailing edge. Attachments appear as chips above the
-input row (`[ shot.png 42k × ]`). Queued messages list above it, each with `×`.
-- Default: hairline border. Focused: border and cursor in `border.focus`.
-  Selected: n/a. Hovered: control row items underline. Pressed: reverse.
-  Disabled: muted with the reason replacing the placeholder ("Disconnected").
-  Loading (agent busy): control row shows `◐ running` and the hint changes to
-  `enter steer · alt+enter queue · esc stop`. Error: oversize or send failure
-  shows `✕ message` in `status.error` on the control row; draft is kept.
-  Empty: placeholder `Ask the agent…`. A pending model change is shown as
-  `gpt-5 → claude-… (next call)`.
+The control row contains agent, model and effort selectors. The agent name is
+capitalised and shown in its identity colour; the model uses the catalog display
+name and provider; a change requested during a turn reads `old → new (next
+call)`. A busy turn shows `esc stop`; an interrupted turn offers `continue`.
+The directory is on a separate canvas row below the panel and opens the
+directory control. For an existing session, Core’s worktree listing supplies
+its branch and linked worktree marker, refreshed on directory changes; before a
+session exists, `GET /api/project/{id}/worktrees` supplies the project's own
+branch the same way. The right-hand count estimates context from the latest
+request’s input tokens, then shows occupancy of each price-tier boundary the
+catalog reports and of the window, as old Nexus did; hovering explains the
+numbers. Narrow rows drop effort, then the provider, then extra percentages
+before shortening names. Attachments and queue are tracked in
+INTERFACE_WORK_PLAN.md.
 
 #### Waiting card
 
@@ -625,8 +592,9 @@ sidebar is hidden and reopened.
   overlays.
 - The centre column is the session view (or the new-session view, or an open
   file in the editor).
-- Settings is its own view, opened from the palette or a fixed entry in the
-  left sidebar.
+- In the TUI, Settings opens as a centered modal from the palette or the fixed
+  sidebar entry. Its searchable root drills into sections; Esc returns to the
+  root before closing. NSH retains its own Settings view.
 
 ## Focus and scrolling
 
@@ -699,14 +667,16 @@ Core work (PLAN.md Step 10).
 ### Files
 
 - The current project's files as a tree: folders expand and collapse, loaded
-  lazily one directory at a time.
-- Not specific to a session: it always shows the project (the main checkout,
-  or the worktree of the open session; a selector when there are several).
-- Git status markers per file (modified, added, untracked, deleted, ignored
-  shown dimmed or hidden by a toggle).
-- Opening a file shows it in the built-in editor in the centre column.
-- Actions: open in the built-in editor, open in your editor (`$EDITOR` or the
-  OS default), copy path, insert as `@path` into the composer.
+  lazily one directory at a time. Expanded folders keep their place; a failed
+  listing says why.
+- Not specific to a session: it shows the project checkout, the worktree of the
+  open session, or a selectable root when there is more than one checkout.
+- Git status markers per file (modified, added, untracked, deleted; ignored
+  shown dimmed, with a toggle to hide them).
+- Opening a file shows a read-only view in the centre column with its `~` path
+  and line numbers. The built-in editor replaces this viewer when it lands.
+- Actions: open in your editor (`$EDITOR`/`$VISUAL`), copy path, insert as
+  `@path` into the composer. The built-in editor is not wired yet.
 
 ### Projects
 
@@ -794,7 +764,7 @@ token counts, and accepts the edits above.
 - **Turn footer** at the end of each turn: model, effort, duration, model calls,
   tool calls, tokens (input / cached / output / reasoning), cost, and how the
   turn ended (done, interrupted, error, step limit).
-- **Reasoning** is shown collapsed ("Thought for 12 s"), expandable to the
+- **Reasoning** is shown collapsed ("Thought for 12.0s"), expandable to the
   summary text. Encrypted reasoning is labelled as such (it exists, it is
   replayed, it is not readable).
 - **Notices and insertions** (child finished, session directory changed,
@@ -811,10 +781,12 @@ token counts, and accepts the edits above.
 
 ### User messages
 
-- Markdown as typed, with attachments as chips.
-- **Large text** (a paste over a threshold, e.g. 40 lines or 4 KB) is shown
-  collapsed to its first lines with "N more lines", expandable. It is sent
-  whole.
+- Markdown as typed, with attachments as chips. In the TUI, a focused or hovered
+  user block exposes a copy action; `c` also copies the focused block.
+- Large user messages are shown as a preview with an expansion control; the
+  full message is copied and sent. In the TUI composer, pastes of at least 200
+  characters or three lines become a compact marker, and expand to their full
+  text before sending.
 - **Images** show as thumbnails (NSH inline; TUI inline when the terminal
   supports the kitty, iTerm2 or sixel protocol, otherwise a chip with name,
   size and dimensions that opens externally).
@@ -825,6 +797,9 @@ token counts, and accepts the edits above.
 Assistant text is CommonMark plus GFM: headings, emphasis, lists, task lists,
 tables, block quotes, links, inline code, fenced code with syntax highlighting
 and a language label, and horizontal rules.
+In the TUI, each code fence is individually focusable and has a copy action.
+Supported Mermaid diagrams appear above their original source; unsupported
+formats and ASCII mode keep the source visible.
 
 - Streaming renders incrementally; an unfinished fence or table is rendered as
   plain text until it closes, so the layout does not jump.

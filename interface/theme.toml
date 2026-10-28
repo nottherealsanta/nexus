@@ -15,9 +15,20 @@ nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
 
 # ---------------------------------------------------------------- dark
 [dark.surface]
-canvas = "#121314"      # app background, timeline
-panel  = "#181a1c"      # sidebars, cards, composer, notices
-raised = "#212427"      # dialogs, menus, toasts, hover rows, user message
+canvas = "#0B0B0B"      # app background, timeline, sidebars
+panel  = "#1e1e1e"      # cards, composer, notices
+raised = "#242424"      # dialogs, menus, toasts, user message
+
+
+[dark.agent]
+amber = "#d18a38"
+blue = "#5c9cf5"
+violet = "#a78bfa"
+green = "#86b97a"
+teal = "#55b9a5"
+rose = "#dc8295"
+sky = "#69b7d5"
+gold = "#c9a94a"
 
 [dark.text]
 primary   = "#e6e7e8"   # titles, user and agent text, tool names
@@ -25,7 +36,7 @@ secondary = "#a4a9ae"   # tool arguments, summaries, labels
 muted     = "#868c93"   # metadata, counts, key hints, timestamps, reasoning
 
 [dark.border]
-default = "#2e3236"     # hairlines and dividers (decorative)
+default = "#2a2a2a"     # hairlines and dividers (decorative)
 focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
 
 [dark.interactive]
@@ -33,7 +44,7 @@ accent    = "#e8a46e"   # brand mark, active tab, links, primary action
 on_accent = "#121314"   # text on an accent fill
 focus     = "#e8a46e"   # keyboard focus indicator
 selection = "#2c2824"   # selected row/range background (accent tint)
-hover     = "#212427"   # pointer-hover background
+hover     = "#1e1e1e"   # pointer-hover background
 
 [dark.status]
 success = "#8fc46a"
@@ -52,6 +63,17 @@ del_bg = "#2e1b20"
 canvas = "#f7f7f5"
 panel  = "#efefec"
 raised = "#ffffff"
+
+
+[light.agent]
+amber = "#905200"
+blue = "#2459ac"
+violet = "#6743ae"
+green = "#396a30"
+teal = "#126d5d"
+rose = "#9a405a"
+sky = "#23687f"
+gold = "#735d0c"
 
 [light.text]
 primary   = "#1f2124"
@@ -81,6 +103,15 @@ del    = "#c0283f"
 add_bg = "#e1f0dc"
 del_bg = "#f8e1e4"
 
+# Agent names are casefolded, then FNV-1a 32-bit selects a slot. Built-ins
+# are pinned; custom names select from the unpinned slots (rose, sky, gold).
+[agent_pins]
+orchestrate = "amber"
+build = "blue"
+quick = "green"
+scout = "teal"
+plan = "violet"
+
 # ---------------------------------------------------------------- roles
 # Timeline roles are theme-independent: each names tokens, so both themes
 # inherit them. fg/bg/rail are token references. `rail` is the left-edge bar
@@ -89,8 +120,8 @@ del_bg = "#f8e1e4"
 [roles.user_text]
 fg = "text.primary"
 bg = "surface.raised"
-rail = "interactive.accent"
-label = ""              # no label: the accent rail marks the user
+rail = "text.muted"
+label = ""              # fallback rail identifies the user when surfaces collapse
 style = ""
 
 [roles.agent_text]
@@ -148,7 +179,7 @@ style = ""
 # surfaces collapse to the terminal background and are told apart by rails,
 # borders and labels (never by background alone).
 [fallback256.dark]
-"surface.canvas" = 233
+"surface.canvas" = 232
 "surface.panel" = 234
 "surface.raised" = 235
 "text.primary" = 254
@@ -160,7 +191,7 @@ style = ""
 "interactive.on_accent" = 233
 "interactive.focus" = 179
 "interactive.selection" = 237
-"interactive.hover" = 235
+"interactive.hover" = 234
 "status.success" = 113
 "status.warning" = 179
 "status.error" = 210
@@ -169,6 +200,15 @@ style = ""
 "diff.del" = 210
 "diff.add_bg" = 22
 "diff.del_bg" = 52
+
+"agent.amber" = 173
+"agent.blue" = 75
+"agent.violet" = 141
+"agent.green" = 108
+"agent.teal" = 73
+"agent.rose" = 174
+"agent.sky" = 74
+"agent.gold" = 179
 
 [fallback256.light]
 "surface.canvas" = 255
@@ -193,6 +233,15 @@ style = ""
 "diff.add_bg" = 194
 "diff.del_bg" = 224
 
+"agent.amber" = 94
+"agent.blue" = 25
+"agent.violet" = 60
+"agent.green" = 238
+"agent.teal" = 23
+"agent.rose" = 241
+"agent.sky" = 24
+"agent.gold" = 58
+
 [fallback16.dark]
 "surface.canvas" = "default"
 "surface.panel" = "default"
@@ -216,6 +265,15 @@ style = ""
 "diff.add_bg" = "default"
 "diff.del_bg" = "default"
 
+"agent.amber" = "yellow"
+"agent.blue" = "blue"
+"agent.violet" = "magenta"
+"agent.green" = "green"
+"agent.teal" = "cyan"
+"agent.rose" = "red"
+"agent.sky" = "cyan"
+"agent.gold" = "yellow"
+
 [fallback16.light]
 "surface.canvas" = "default"
 "surface.panel" = "default"
@@ -238,6 +296,15 @@ style = ""
 "diff.del" = "red"
 "diff.add_bg" = "default"
 "diff.del_bg" = "default"
+
+"agent.amber" = "yellow"
+"agent.blue" = "blue"
+"agent.violet" = "magenta"
+"agent.green" = "green"
+"agent.teal" = "cyan"
+"agent.rose" = "red"
+"agent.sky" = "cyan"
+"agent.gold" = "yellow"
 
 # ---------------------------------------------------------------- monochrome
 # Only bold, dim, reverse, underline. No colour, no italic, no background.
@@ -265,6 +332,15 @@ style = ""
 "diff.add_bg" = []
 "diff.del_bg" = []
 "interactive.on_accent" = ["reverse"]  # accent fills render as reverse video
+
+"agent.amber" = ["bold"]
+"agent.blue" = ["bold"]
+"agent.violet" = ["bold"]
+"agent.green" = ["bold"]
+"agent.teal" = ["bold"]
+"agent.rose" = ["bold"]
+"agent.sky" = ["bold"]
+"agent.gold" = ["bold"]
 
 [monochrome.roles]
 user_text = ["bold"]                   # rail glyph, no label
@@ -320,4 +396,5 @@ rule       = { unicode = "─", ascii = "-" }
 ellipsis   = { unicode = "…", ascii = "..." }
 separator  = { unicode = "·", ascii = "-" }
 breadcrumb = { unicode = "›", ascii = ">" }
+arrow      = { unicode = "→", ascii = "->" }
 close      = { unicode = "×", ascii = "x" }

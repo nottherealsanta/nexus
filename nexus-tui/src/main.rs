@@ -180,6 +180,19 @@ async fn run(cfg: SyncConfig, home: PathBuf, opts: Options) -> std::io::Result<(
                     term::suspend(&mut terminal)?;
                     app.set_size(terminal.size()?.width, terminal.size()?.height);
                 }
+                Effect::OpenEditor(path) => {
+                    let editor = std::env::var("VISUAL")
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                        .or_else(|| {
+                            std::env::var("EDITOR")
+                                .ok()
+                                .filter(|value| !value.is_empty())
+                        })
+                        .unwrap_or_else(|| "vi".into());
+                    term::run_external(&mut terminal, &editor, &path)?;
+                    app.set_size(terminal.size()?.width, terminal.size()?.height);
+                }
                 Effect::Sync(c) => {
                     let _ = handle.commands.send(c);
                 }

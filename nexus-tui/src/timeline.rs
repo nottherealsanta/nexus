@@ -6,14 +6,14 @@
 //! selectable units). Folding changes how much is drawn, never what exists.
 //! Nothing here talks to Core or to the terminal beyond `Theme`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use serde_json::Value;
 
 use crate::app::App;
-use crate::text::{self, truncate, truncate_middle, width};
+use crate::text::{self, truncate, width};
 use crate::theme::Theme;
 
 const CANVAS: &str = "surface.canvas";
@@ -34,7 +34,9 @@ pub enum BlockKind {
     Turn,
     User,
     Assistant,
+    Code,
     Reasoning,
+    Group,
     Tool,
     Notice,
     Diagnostic,
@@ -54,7 +56,9 @@ pub struct Block {
     pub focusable: bool,
     /// Enter/Space or a click toggles it.
     pub toggle: bool,
-    /// What opening the block navigates to (a child session), when anything.
+    /// When set, this block's default depends on its live state.
+    pub default_open: Option<bool>,
+    /// Child session to open, or message ID to copy for a turn/user block.
     pub target: Option<String>,
 }
 
@@ -100,6 +104,15 @@ struct Done {
     is_error: bool,
 }
 
+enum Activity<'a> {
+    Thought(&'a crate::api::Message, usize, &'a Value),
+    Tool {
+        id: String,
+        name: String,
+        args: String,
+    },
+}
+
 #[derive(Default)]
 struct ToolTrace {
     start: Option<f64>,
@@ -108,6 +121,13 @@ struct ToolTrace {
 }
 
 pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
+    let thoughts = app
+        .state
+        .model
+        .selected
+        .as_ref()
+        .map(|view| reasoning_times(&view.events))
+        .unwrap_or_default();
     let mut b = Builder {
         app,
         t,
@@ -116,7 +136,8 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         out: Vec::new(),
         blocks: Vec::new(),
         turn: None,
-        name_w: 5,
+        denied: HashSet::new(),
+        thoughts,
     };
     b.run();
     Timeline {
@@ -124,6 +145,44 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         blocks: b.blocks,
         turns: b.turn.map_or(0, |n| n + 1),
     }
+}
+
+/// Wall time per reasoning part, keyed by its summary text. Deltas are paired
+/// with the `part_done` that carries the same summary; a part whose summary
+/// arrived without deltas has no duration rather than an invented one.
+fn reasoning_times(events: &[crate::api::Event]) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let mut start: Option<f64> = None;
+    let mut text = String::new();
+    for event in events {
+        match event.kind.as_str() {
+            "reasoning_delta" => {
+                start.get_or_insert(event.time);
+                if let Some(delta) = event.data["text"].as_str() {
+                    text.push_str(delta);
+                }
+            }
+            "part_done" => {
+                let part = &event.data["part"];
+                if part["type"] == "reasoning" {
+                    let summary = json_str(&part["summary"]);
+                    if let Some(start) = start.filter(|_| !summary.trim().is_empty()) {
+                        if summary.trim() == text.trim() {
+                            out.insert(summary, (event.time - start).max(0.0));
+                        }
+                    }
+                }
+                start = None;
+                text.clear();
+            }
+            "text_delta" | "tool_start" | "step_start" => {
+                start = None;
+                text.clear();
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 struct Builder<'a> {
@@ -135,7 +194,9 @@ struct Builder<'a> {
     out: Vec<TLine>,
     blocks: Vec<Block>,
     turn: Option<usize>,
-    name_w: usize,
+    denied: HashSet<String>,
+    /// Reasoning duration per summary text.
+    thoughts: HashMap<String, f64>,
 }
 
 fn json_str(v: &Value) -> String {
@@ -150,11 +211,51 @@ fn arg_json(args: &str) -> Option<Value> {
     serde_json::from_str(args).ok()
 }
 
-fn is_notice(text: &str) -> bool {
+pub(crate) fn is_notice(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("[Nexus notice:")
         || t.starts_with("[Nexus recovery:")
         || t.starts_with("[Notification:")
+}
+
+fn is_diagnostic(e: &crate::api::Event) -> bool {
+    matches!(
+        e.kind.as_str(),
+        "session.error"
+            | "retry_scheduled"
+            | "retry_started"
+            | "retry_exhausted"
+            | "turn.recovered"
+            | "session.directory_changed"
+            | "session.notified"
+    ) || (matches!(e.kind.as_str(), "permission.replied" | "question.replied")
+        && e.data["outcome"].as_str() == Some("cancelled"))
+}
+
+/// Format a stored timestamp in the terminal's local timezone.
+#[cfg(unix)]
+fn local_clock(timestamp: f64) -> Option<String> {
+    if !timestamp.is_finite() || timestamp < 0.0 || timestamp > libc::time_t::MAX as f64 {
+        return None;
+    }
+    let value = timestamp as libc::time_t;
+    let mut out = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // localtime_r writes `out` on success and does not use shared static storage.
+    if unsafe { libc::localtime_r(&value, out.as_mut_ptr()) }.is_null() {
+        return None;
+    }
+    let time = unsafe { out.assume_init() };
+    let hour = time.tm_hour.rem_euclid(12);
+    Some(format!(
+        "{}:{:02} {}",
+        if hour == 0 { 12 } else { hour },
+        time.tm_min,
+        if time.tm_hour < 12 { "AM" } else { "PM" }
+    ))
+}
+#[cfg(not(unix))]
+fn local_clock(_timestamp: f64) -> Option<String> {
+    None
 }
 
 fn fmt_count(n: u64) -> String {
@@ -254,6 +355,7 @@ impl Builder<'_> {
             turn,
             focusable: true,
             toggle,
+            default_open: None,
             target: None,
         });
         self.blank();
@@ -357,6 +459,33 @@ impl Builder<'_> {
             .approvals
             .values()
             .map(|a| (a.call_id.clone(), a.tool.clone()))
+            .chain(
+                self.app
+                    .state
+                    .model
+                    .questions
+                    .values()
+                    .map(|q| (q.call_id.clone(), "ask".into())),
+            )
+            .collect();
+
+        // Approval replies refer to approval IDs, not call IDs. Join the durable
+        // lifecycle records so a denial is not presented as a tool failure.
+        let approval_calls: HashMap<&str, &str> = view
+            .events
+            .iter()
+            .filter(|event| event.kind == "permission.asked")
+            .filter_map(|event| Some((event.data["id"].as_str()?, event.data["call_id"].as_str()?)))
+            .collect();
+        self.denied = view
+            .events
+            .iter()
+            .filter(|event| {
+                event.kind == "permission.replied"
+                    && event.data["outcome"].as_str() == Some("denied")
+            })
+            .filter_map(|event| approval_calls.get(event.data["id"].as_str()?).copied())
+            .map(str::to_owned)
             .collect();
 
         // Where each message was announced, so diagnostics interleave with it.
@@ -370,17 +499,6 @@ impl Builder<'_> {
         }
 
         let turns = self.turn_meta(view, busy);
-        // Widest tool name in view, for the name column (max 9 cells).
-        self.name_w = view
-            .messages
-            .iter()
-            .flat_map(|m| m.parts.iter())
-            .filter(|p| p["type"] == "tool_call")
-            .map(|p| width(&json_str(&p["name"])))
-            .max()
-            .unwrap_or(5)
-            .clamp(5, 9);
-
         self.context_section(view, turns.is_empty());
         if view.messages_more {
             self.block("older-messages", BlockKind::Older, None, false, |b| {
@@ -445,10 +563,12 @@ impl Builder<'_> {
         let mut turn_open = false;
         let mut turn_no = 0usize;
         let mut folded = false;
+        let mut activity = Vec::new();
         for (_, _, item) in &items {
             match item {
                 Item::Msg(m) => {
                     if m.role == "user" {
+                        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
                         let text = parts_text(m);
                         if is_notice(&text) {
                             if !folded {
@@ -466,12 +586,22 @@ impl Builder<'_> {
                             .unwrap_or(turn_no);
                         self.turn = Some(turn_no);
                         turn_open = true;
-                        folded =
-                            !self.is_open(&format!("turn:{}:{turn_no}", view.session_id), true);
-                        self.turn_header(turn_no, &text, &turns);
-                        if !folded {
-                            self.user_block(m, &text);
-                        }
+                        let start = turns.get(turn_no).map_or(0, |t| t.start_msg);
+                        let end = turns
+                            .get(turn_no + 1)
+                            .map_or(view.messages.len(), |t| t.start_msg);
+                        let turn_waiting = view.messages[start..end]
+                            .iter()
+                            .flat_map(|message| message.parts.iter())
+                            .any(|part| {
+                                part["type"] == "tool_call"
+                                    && part["id"]
+                                        .as_str()
+                                        .is_some_and(|id| waiting.contains_key(id))
+                            });
+                        folded = !turn_waiting
+                            && !self.is_open(&format!("turn:{}:{turn_no}", view.session_id), true);
+                        self.turn_block(turn_no, m, &text, &turns, folded);
                         continue;
                     }
                     if !turn_open || folded {
@@ -482,26 +612,35 @@ impl Builder<'_> {
                             "text" => {
                                 let text = json_str(&p["text"]);
                                 if !text.trim().is_empty() {
+                                    self.activity_group(
+                                        &mut activity,
+                                        &results,
+                                        &traces,
+                                        &waiting,
+                                        busy,
+                                    );
                                     self.assistant_block(&format!("{}-{pi}", m.id), &text, false);
                                 }
                             }
-                            "reasoning" => self.reasoning_block(m, pi, p),
+                            "reasoning" => activity.push(Activity::Thought(m, pi, p)),
                             "tool_call" => {
                                 let call_id = json_str(&p["id"]);
                                 let name = json_str(&p["name"]);
                                 if name == "session" {
-                                    self.child_card(&call_id, &json_str(&p["arguments"]), &results);
-                                } else {
-                                    self.tool_block(
-                                        &format!("tool:{call_id}"),
-                                        Some(turn_no),
-                                        &call_id,
-                                        &name,
-                                        &json_str(&p["arguments"]),
+                                    self.activity_group(
+                                        &mut activity,
                                         &results,
                                         &traces,
                                         &waiting,
+                                        busy,
                                     );
+                                    self.child_card(&call_id, &json_str(&p["arguments"]), &results);
+                                } else {
+                                    activity.push(Activity::Tool {
+                                        id: call_id,
+                                        name,
+                                        args: json_str(&p["arguments"]),
+                                    });
                                 }
                             }
                             _ => {}
@@ -509,6 +648,9 @@ impl Builder<'_> {
                     }
                 }
                 Item::Ev(e) => {
+                    if !folded && is_diagnostic(e) {
+                        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
+                    }
                     if !folded && self.diagnostic(e) {
                         // Diagnostics belong to the turn they were produced in.
                         if turn_open {
@@ -518,6 +660,7 @@ impl Builder<'_> {
                 }
             }
         }
+        self.activity_group(&mut activity, &results, &traces, &waiting, busy);
         if turn_open && !folded {
             self.turn_footer(turn_no, &turns);
         }
@@ -748,41 +891,131 @@ impl Builder<'_> {
         out
     }
 
-    fn turn_header(&mut self, n: usize, text: &str, turns: &[TurnMeta]) {
+    fn turn_block(
+        &mut self,
+        n: usize,
+        message: &crate::api::Message,
+        text: &str,
+        turns: &[TurnMeta],
+        folded: bool,
+    ) {
         let key = format!("turn:{}:{n}", self.app.viewed_id().unwrap_or_default());
-        let folded = !self.is_open(&key, true);
+        let message_key = format!("user:{}", message.id);
         let meta = turns.get(n).cloned().unwrap_or_default();
-        let mut left = vec![
-            Span::styled(format!("{} ", self.t.fold(!folded)), self.meta()),
-            Span::styled(format!("#{}  ", n + 1), self.meta()),
-            Span::styled(
-                truncate(&first_line(text), self.bw.saturating_sub(20), self.ell()),
-                self.primary().add_modifier(Modifier::BOLD),
-            ),
-        ];
-        let mut right = Vec::new();
-        if meta.tools > 0 {
-            right.push(Span::styled(
-                format!(
-                    "{} tool{}{}",
+        let bg = self.t.role_style("user_text");
+        let gutter = self.st(MUTED, CANVAS);
+        let rail = self.st(MUTED, "surface.raised");
+        let use_rail = matches!(
+            self.t.opts.tier,
+            crate::theme::Tier::Ansi16 | crate::theme::Tier::Mono
+        );
+        let big = text.len() > 4096 || text.lines().count() > 40;
+        let full = self.is_open(&message_key, !big);
+        let body = if folded {
+            first_line(text)
+        } else if big && !full {
+            text.lines().take(6).collect::<Vec<_>>().join("\n")
+        } else {
+            text.to_owned()
+        };
+        let metadata = if folded {
+            let mut parts = vec![format!("#{}", n + 1)];
+            if meta.tools > 0 {
+                parts.push(format!(
+                    "{} tool{}",
                     meta.tools,
-                    if meta.tools == 1 { "" } else { "s" },
-                    self.sep()
-                ),
-                self.meta(),
-            ));
-        }
-        if meta.duration() >= 0.5 {
-            right.push(Span::styled(
-                format!("{}{}", fmt_duration(meta.duration()), self.sep()),
-                self.meta(),
-            ));
-        }
-        right.extend(self.turn_status(&meta));
-        let _ = &mut left;
+                    if meta.tools == 1 { "" } else { "s" }
+                ));
+            }
+            if meta.duration() >= 0.5 {
+                parts.push(fmt_duration(meta.duration()));
+            }
+            let status: String = self
+                .turn_status(&meta)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            parts.push(status);
+            parts.join(&self.sep())
+        } else {
+            local_clock(message.created).map_or_else(
+                || format!("#{}", n + 1),
+                |clock| format!("#{}{}{}", n + 1, self.sep(), clock),
+            )
+        };
+        let marker = self.t.fold(!folded).to_owned();
+        let fallback_rail = self.t.structure("focus_bar").to_owned();
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
-            b.row(left, right);
+            let pad = |prefix: String| TLine {
+                spans: vec![Span::styled(prefix, gutter)],
+                bg: Some(bg),
+            };
+            if !folded {
+                b.out.push(pad(marker.clone()));
+            }
+            let available = b.bw.saturating_sub(3);
+            let meta_width = width(&metadata);
+            let body_width = available.saturating_sub(meta_width + 2).max(1);
+            let mut rows = if folded {
+                vec![truncate(&body, body_width, b.ell())]
+            } else {
+                text::wrap(&body, body_width)
+            };
+            if big && !full && !folded {
+                rows.truncate(6);
+            }
+            for (i, row) in rows.iter().enumerate() {
+                let prefix = if folded {
+                    marker.as_str()
+                } else if use_rail {
+                    fallback_rail.as_str()
+                } else {
+                    " "
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        prefix.to_owned(),
+                        if !folded && use_rail { rail } else { gutter },
+                    ),
+                    Span::styled(format!("  {row}"), bg),
+                ];
+                if i == 0 && meta_width + 3 < b.bw {
+                    let padding = b.bw.saturating_sub(3 + width(row) + meta_width).max(1);
+                    spans.push(Span::styled(" ".repeat(padding), bg));
+                    spans.push(Span::styled(
+                        metadata.clone(),
+                        b.st(MUTED, "surface.raised"),
+                    ));
+                }
+                b.out.push(TLine {
+                    spans,
+                    bg: Some(bg),
+                });
+            }
+            if !folded {
+                b.out.push(pad(" ".into()));
+            }
         });
+        if let Some(block) = self.blocks.last_mut() {
+            block.target = Some(message.id.clone());
+        }
+        if big && !folded {
+            let label = if full {
+                "collapse message"
+            } else {
+                "show full message (sent whole)"
+            };
+            self.block(message_key, BlockKind::User, Some(n), true, |b| {
+                b.line(vec![Span::styled(
+                    format!("{} {label}", b.t.fold(full)),
+                    b.meta(),
+                )]);
+            });
+            if let Some(block) = self.blocks.last_mut() {
+                block.default_open = Some(false);
+                block.target = Some(message.id.clone());
+            }
+        }
     }
 
     fn turn_status(&self, meta: &TurnMeta) -> Vec<Span<'static>> {
@@ -900,38 +1133,6 @@ impl Builder<'_> {
 
     // -- items -----------------------------------------------------------------
 
-    fn user_block(&mut self, m: &crate::api::Message, text: &str) {
-        let key = format!("user:{}", m.id);
-        let bg = self.t.role_style("user_text");
-        let rail = self.t.role_rail_style("user_text");
-        let bar = self.t.structure("focus_bar").to_owned();
-        let lines = text.lines().count();
-        let big = text.len() > 4096 || lines > 40;
-        let open = self.is_open(&key, !big);
-        self.block(key.clone(), BlockKind::User, self.turn, big, |b| {
-            let body = if big && !open {
-                let head: Vec<&str> = text.lines().take(6).collect();
-                format!(
-                    "{}\n{} {} more lines (sent whole)",
-                    head.join("\n"),
-                    b.ell(),
-                    lines.saturating_sub(6)
-                )
-            } else {
-                text.to_owned()
-            };
-            for row in text::wrap(&body, b.bw.saturating_sub(2)) {
-                b.out.push(TLine {
-                    spans: vec![
-                        Span::styled(bar.clone(), rail),
-                        Span::styled(format!(" {row}"), bg),
-                    ],
-                    bg: Some(bg),
-                });
-            }
-        });
-    }
-
     fn notice(&mut self, m: &crate::api::Message, text: &str) {
         let key = format!("notice:{}", m.id);
         let kind = if text.contains("recovery") {
@@ -978,8 +1179,9 @@ impl Builder<'_> {
             format!("{}\n{} {n} more lines", head.join("\n"), self.ell())
         };
         let _ = streaming;
+        let block_start = self.blocks.len();
         self.block(k.clone(), BlockKind::Assistant, self.turn, true, |b| {
-            b.markdown(&body);
+            b.markdown(&body, &k, text);
             if !open {
                 b.line(vec![Span::styled(
                     format!("  show all ({} lines)", text.lines().count()),
@@ -987,9 +1189,215 @@ impl Builder<'_> {
                 )]);
             }
         });
+        if self.blocks.len() > block_start {
+            let mut assistant = self.blocks.pop().unwrap();
+            assistant.target = Some(text.to_owned());
+            self.blocks.insert(block_start, assistant);
+        }
     }
 
-    fn reasoning_block(&mut self, m: &crate::api::Message, pi: usize, p: &Value) {
+    fn activity_group(
+        &mut self,
+        activity: &mut Vec<Activity<'_>>,
+        results: &HashMap<String, Done>,
+        traces: &HashMap<String, ToolTrace>,
+        waiting: &HashMap<String, String>,
+        busy: bool,
+    ) {
+        if activity.is_empty() {
+            return;
+        }
+        let first = match &activity[0] {
+            Activity::Thought(m, i, _) => format!("reason:{}:{i}", m.id),
+            Activity::Tool { id, .. } => format!("tool:{id}"),
+        };
+        let key = format!("group:{first}");
+        let has_wait = activity
+            .iter()
+            .any(|a| matches!(a, Activity::Tool { id, .. } if waiting.contains_key(id)));
+        let running = has_wait || (busy && activity.iter().any(|a| matches!(a, Activity::Tool { id, .. } if !results.contains_key(id) && !traces.get(id).is_some_and(|t| t.end.is_some()))));
+        let default_open = running || has_wait;
+        let open = has_wait || self.is_open(&key, default_open);
+        let tree_mode = running
+            && !self
+                .app
+                .ui
+                .timeline_open
+                .get(&key)
+                .copied()
+                .unwrap_or(false);
+        let clip_live = running
+            && !has_wait
+            && !self
+                .app
+                .ui
+                .timeline_open
+                .get(&key)
+                .copied()
+                .unwrap_or(false);
+        let mut starts = Vec::new();
+        let mut ends = Vec::new();
+        let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+        let mut thought_secs = 0.0_f64;
+        let mut failed = 0;
+        let mut denied_count = 0;
+        for item in activity.iter() {
+            let label = match item {
+                Activity::Thought(_, _, p) => {
+                    if let Some(secs) = self.thoughts.get(&json_str(&p["summary"])) {
+                        thought_secs += *secs;
+                    }
+                    "Thought"
+                }
+                Activity::Tool { id, name, .. } => {
+                    if let Some(trace) = traces.get(id) {
+                        if let Some(start) = trace.start {
+                            starts.push(start);
+                        }
+                        if let Some(end) = trace.end {
+                            ends.push(end);
+                        }
+                    }
+                    if self.denied.contains(id) {
+                        denied_count += 1;
+                    } else if results.get(id).is_some_and(|d| d.is_error)
+                        || traces.get(id).is_some_and(|t| t.error.is_some())
+                    {
+                        failed += 1;
+                    }
+                    match name.as_str() {
+                        "bash" => "Ran command",
+                        "read" => "Read file",
+                        "edit" => "Edited file",
+                        "write" => "Wrote file",
+                        "code" => "Ran cell",
+                        "ask" => "Asked question",
+                        _ => "Used tool",
+                    }
+                }
+            };
+            *counts.entry(label).or_default() += 1;
+        }
+        let summary = if running {
+            "Working".to_owned()
+        } else {
+            counts
+                .iter()
+                .map(|(label, count)| {
+                    if *label == "Thought" {
+                        return if thought_secs > 0.0 {
+                            format!("Thought for {thought_secs:.1}s")
+                        } else {
+                            "Thought".to_owned()
+                        };
+                    }
+                    let (verb, noun) = label.rsplit_once(' ').unwrap_or((label, ""));
+                    format!(
+                        "{verb} {count} {noun}{}",
+                        if *count == 1 { "" } else { "s" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let duration = if !running && !starts.is_empty() && !ends.is_empty() {
+            let start = starts.into_iter().fold(f64::INFINITY, f64::min);
+            let end = ends.into_iter().fold(f64::NEG_INFINITY, f64::max);
+            (end >= start).then_some(end - start)
+        } else {
+            None
+        };
+        self.block(key, BlockKind::Group, self.turn, !has_wait, |b| {
+            let mut spans = vec![Span::styled(format!("{} ", b.t.fold(open)), b.meta())];
+            if running && !b.t.opts.reduced_motion && !b.t.mono() {
+                spans.extend(crate::theme::shimmer(
+                    &summary,
+                    b.frame,
+                    true,
+                    b.meta(),
+                    b.primary(),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    summary.clone(),
+                    if running { b.primary() } else { b.meta() },
+                ));
+            }
+            if let Some(duration) = duration {
+                spans.push(Span::styled(
+                    format!("{}{:0.1}s", b.sep(), duration),
+                    b.meta(),
+                ));
+            }
+            if denied_count > 0 {
+                spans.push(Span::styled(
+                    format!("{}{} denied", b.sep(), denied_count),
+                    b.meta(),
+                ));
+            }
+            if failed > 0 {
+                spans.push(Span::styled(
+                    format!(
+                        " {} {} {failed} failed",
+                        b.t.structure("separator"),
+                        b.t.status("error").0
+                    ),
+                    b.st("status.error", CANVAS),
+                ));
+            }
+            b.line(spans);
+        });
+        if let Some(block) = self.blocks.last_mut() {
+            block.default_open = Some(default_open);
+        }
+        if open {
+            // Keep the tree contiguous: block() normally adds a separating row.
+            self.out.pop();
+            let skipped = if clip_live {
+                activity.len().saturating_sub(5)
+            } else {
+                0
+            };
+            if skipped > 0 {
+                self.line(vec![Span::styled(
+                    format!("{} {skipped} earlier", self.ell()),
+                    self.meta(),
+                )]);
+            }
+            for (index, item) in activity.iter().enumerate().skip(skipped) {
+                let tree = tree_mode.then_some(index + 1 == activity.len());
+                match item {
+                    Activity::Thought(m, i, p) => {
+                        let secs = self.thoughts.get(&json_str(&p["summary"])).copied();
+                        self.reasoning_block(m, *i, p, tree, secs)
+                    }
+                    Activity::Tool { id, name, args } => self.tool_block(
+                        &format!("tool:{id}"),
+                        self.turn,
+                        id,
+                        name,
+                        args,
+                        results,
+                        traces,
+                        waiting,
+                        tree,
+                    ),
+                }
+                self.out.pop();
+            }
+            self.blank();
+        }
+        activity.clear();
+    }
+
+    fn reasoning_block(
+        &mut self,
+        m: &crate::api::Message,
+        pi: usize,
+        p: &Value,
+        tree: Option<bool>,
+        seconds: Option<f64>,
+    ) {
         let key = format!("reason:{}:{pi}", m.id);
         let summary = json_str(&p["summary"]);
         let encrypted = summary.trim().is_empty();
@@ -999,15 +1407,19 @@ impl Builder<'_> {
         let razor = self.t.structure("rail").to_owned();
         let label = self.t.role("reasoning").label.clone();
         self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
+            let prefix = match tree {
+                Some(true) => b.t.structure("tree_end"),
+                Some(false) => b.t.structure("tree_mid"),
+                None => b.t.fold(open),
+            };
             let head = if encrypted {
                 format!("{label} · encrypted (replayed, not readable)")
+            } else if let Some(seconds) = seconds {
+                format!("{label} for {seconds:.1}s")
             } else {
                 label.clone()
             };
-            b.line(vec![
-                Span::styled(format!("{razor} {head}"), st),
-                Span::styled(if open { String::new() } else { " …".into() }, st),
-            ]);
+            b.line(vec![Span::styled(format!("{prefix} {head}"), st)]);
             if open && !encrypted {
                 for row in text::wrap(&summary, b.bw.saturating_sub(2)) {
                     b.line(vec![
@@ -1032,91 +1444,72 @@ impl Builder<'_> {
         results: &HashMap<String, Done>,
         traces: &HashMap<String, ToolTrace>,
         waiting: &HashMap<String, String>,
+        tree: Option<bool>,
     ) {
         let open = self.is_open(key, false);
         let raw = self.is_open(&format!("{key}:raw"), false);
         let done = results.get(call_id);
         let trace = traces.get(call_id);
         let is_waiting = waiting.contains_key(call_id);
-        let (glyph, tok, label) = if is_waiting {
-            (
-                self.t.status("waiting").0,
-                self.t.status("waiting").2,
-                "waiting",
-            )
-        } else if done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.error.is_some()) {
-            (self.t.status("error").0, self.t.status("error").2, "error")
-        } else if done.is_some() || trace.is_some_and(|t| t.end.is_some()) {
-            (self.t.status("done").0, self.t.status("done").2, "done")
-        } else {
-            (self.t.spinner(self.frame / 2), PRIMARY, "running")
-        };
-        let dur = trace
-            .and_then(|t| Some((t.start?, t.end?)))
-            .map(|(s, e)| e - s);
-        let (arg, summary) = tool_summary(name, args, done);
+        let denied = self.denied.contains(call_id);
+        let failed = !denied
+            && (done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.error.is_some()));
+        let duration = trace.and_then(|t| {
+            let start = t.start?;
+            let end = t.end.or_else(|| {
+                self.app
+                    .viewed_id()
+                    .filter(|id| self.app.is_busy(id))
+                    .map(|_| crate::app::now_secs())
+            })?;
+            Some((end - start).max(0.0))
+        });
+        let (arg, _) = tool_summary(name, args, done);
         let detail = self.tool_detail(name, args, done, trace, raw);
         let key = key.to_owned();
         let name = name.to_owned();
-        let _ = label;
         self.block(key.clone(), BlockKind::Tool, turn, true, |b| {
-            let mut left = vec![
-                Span::styled(glyph.to_owned(), b.st(tok, CANVAS)),
-                Span::raw(" "),
-                Span::styled(
-                    text::pad_right(&name, b.name_w),
-                    b.primary().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-            ];
-            let mut pieces: Vec<Vec<Span<'static>>> = Vec::new();
-            if let Some(summary) = &summary {
-                let mut spans = Vec::new();
-                for (text, _) in summary {
-                    let style = if text.starts_with('+') {
-                        b.st("diff.add", CANVAS)
-                    } else if text.starts_with('−') || text.starts_with('-') {
-                        b.st("diff.del", CANVAS)
-                    } else {
-                        b.secondary()
-                    };
-                    spans.push(Span::styled(text.clone(), style));
-                }
-                pieces.push(spans);
-            }
+            let prefix = match tree {
+                Some(true) => b.t.structure("tree_end"),
+                Some(false) => b.t.structure("tree_mid"),
+                None => b.t.fold(open),
+            };
+            let verb = match name.as_str() {
+                "bash" => "Shell",
+                "read" => "Read",
+                "edit" | "patch" => "Edit",
+                "write" => "Write",
+                "code" => "Code",
+                "ask" => "Ask",
+                "web_search" => "Search",
+                "web_fetch" => "Fetch",
+                _ => &name,
+            };
+            let mut right = Vec::new();
             if is_waiting {
-                pieces.push(vec![Span::styled(
-                    "waiting for approval",
-                    b.status_style(tok),
-                )]);
-            } else if done.is_none() && trace.is_none() {
-                pieces.push(vec![Span::styled("running…", b.meta())]);
-            } else if let Some(d) = dur {
-                pieces.push(vec![Span::styled(fmt_duration(d), b.meta())]);
+                right.push(Span::styled(
+                    format!("{} waiting", b.t.status("waiting").0),
+                    b.st("interactive.accent", CANVAS),
+                ));
+            } else if denied {
+                right.push(Span::styled(format!("{}denied", b.sep()), b.meta()));
+            } else if failed {
+                right.push(Span::styled(format!("{}failed", b.sep()), b.meta()));
+            } else if let Some(duration) = duration {
+                right.push(Span::styled(format!("{duration:.1}s"), b.meta()));
             }
-            let mut right: Vec<Span<'static>> = Vec::new();
-            for (i, piece) in pieces.into_iter().enumerate() {
-                if i > 0 {
-                    right.push(Span::styled(b.sep(), b.meta()));
-                }
-                right.extend(piece);
-            }
+            let right_width: usize = right.iter().map(|s| width(s.content.as_ref())).sum();
+            let label = if arg.is_empty() {
+                format!("{prefix} {verb}")
+            } else {
+                format!("{prefix} {verb} {arg}")
+            };
             let room =
-                b.bw.saturating_sub(
-                    2 + b.name_w
-                        + 1
-                        + right
-                            .iter()
-                            .map(|s| width(s.content.as_ref()))
-                            .sum::<usize>()
-                        + 1,
-                )
-                .max(4);
-            left.push(Span::styled(
-                truncate_middle(&arg, room, b.ell()),
-                b.secondary(),
-            ));
-            b.row(left, right);
+                b.bw.saturating_sub(right_width + usize::from(!right.is_empty()));
+            b.row(
+                vec![Span::styled(truncate(&label, room, b.ell()), b.meta())],
+                right,
+            );
             if open && !detail.is_empty() {
                 for (line, style) in detail.clone() {
                     b.line(vec![
@@ -1327,7 +1720,11 @@ impl Builder<'_> {
                 "child",
                 self.st(SECONDARY, PANEL).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!(" · {agent}"), self.st(PRIMARY, PANEL)),
+            Span::styled(" · ", self.st(SECONDARY, PANEL)),
+            Span::styled(
+                agent.clone(),
+                self.st(PRIMARY, PANEL).patch(self.t.agent_style(&agent)),
+            ),
             Span::styled(quote, self.st(SECONDARY, PANEL)),
         ];
         let right = vec![Span::styled(status_word, self.st(tok, PANEL))];
@@ -1504,7 +1901,66 @@ impl Builder<'_> {
 
     // -- markdown-lite ----------------------------------------------------------
 
-    fn markdown(&mut self, text: &str) {
+    fn markdown(&mut self, text: &str, parent_key: &str, full_text: &str) {
+        let sources = crate::markdown::fence_sources(full_text);
+        let mut fences: std::collections::BTreeMap<usize, (usize, usize)> =
+            std::collections::BTreeMap::new();
+        let palette = crate::markdown::Palette::from_theme(self.t);
+        let rows = crate::markdown::lines(text, &palette, self.bw);
+        if rows.is_empty() && !text.trim().is_empty() {
+            self.legacy_markdown(text);
+            return;
+        }
+        for row in rows {
+            let row_start = self.out.len();
+            if row.blank {
+                self.blank();
+                continue;
+            }
+            let prefix_width: usize = row
+                .prefix
+                .iter()
+                .map(|span| crate::text::width(&span.content))
+                .sum();
+            let width = self.bw.saturating_sub(prefix_width).max(1);
+            let parts = crate::markdown::wrap_spans(&row.spans, width);
+            for (index, part) in parts.into_iter().enumerate() {
+                let mut spans = if index == 0 {
+                    row.prefix.clone()
+                } else {
+                    vec![Span::raw(" ".repeat(prefix_width))]
+                };
+                spans.extend(part);
+                self.line(spans);
+                if let Some(background) = row.bg {
+                    if let Some(line) = self.out.last_mut() {
+                        line.bg = Some(Style::default().bg(background));
+                    }
+                }
+            }
+            if let Some(index) = row.fence {
+                let range = fences.entry(index).or_insert((row_start, self.out.len()));
+                range.1 = self.out.len();
+            }
+        }
+        for (index, (start, end)) in fences {
+            if let Some(source) = sources.get(index) {
+                self.blocks.push(Block {
+                    key: format!("code:{parent_key}:{index}"),
+                    kind: BlockKind::Code,
+                    start,
+                    end,
+                    turn: self.turn,
+                    focusable: true,
+                    toggle: false,
+                    default_open: None,
+                    target: Some(source.clone()),
+                });
+            }
+        }
+    }
+
+    fn legacy_markdown(&mut self, text: &str) {
         let mut fence: Option<String> = None;
         let mut fence_lines: Vec<String> = Vec::new();
         for raw in text.lines() {
@@ -1826,4 +2282,56 @@ fn tool_summary(
     // The diff summary needs the theme; the caller applies colours for these
     // three tools, so a neutral style here is replaced there.
     (arg, summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reasoning_times;
+    use crate::api::Event;
+
+    fn event(id: i64, time: f64, kind: &str, data: serde_json::Value) -> Event {
+        Event {
+            id,
+            cursor: None,
+            seq: None,
+            time,
+            kind: kind.into(),
+            session_id: Some("ses_test".into()),
+            data,
+        }
+    }
+
+    #[test]
+    fn reasoning_time_comes_from_its_own_deltas() {
+        let events = vec![
+            event(
+                1,
+                10.0,
+                "reasoning_delta",
+                serde_json::json!({"text": "Let me "}),
+            ),
+            event(
+                2,
+                11.0,
+                "reasoning_delta",
+                serde_json::json!({"text": "think."}),
+            ),
+            event(
+                3,
+                13.5,
+                "part_done",
+                serde_json::json!({"part": {"type": "reasoning", "summary": "Let me think."}}),
+            ),
+            // A summary with no visible deltas has no measured duration.
+            event(
+                4,
+                14.0,
+                "part_done",
+                serde_json::json!({"part": {"type": "reasoning", "summary": "Opaque."}}),
+            ),
+        ];
+        let times = reasoning_times(&events);
+        assert_eq!(times.get("Let me think."), Some(&3.5));
+        assert_eq!(times.get("Opaque."), None);
+    }
 }

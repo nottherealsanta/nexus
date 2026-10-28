@@ -63,6 +63,7 @@ Frozen dataclass.
 | `input_cost` | `cost.input` | USD per million tokens |
 | `output_cost` | `cost.output` | USD per million tokens |
 | `cache_read_cost` | `cost.cache_read` | USD per million tokens |
+| `tiers` | each `cost.tiers[].tier.size` with `type == "context"` | ascending prompt sizes where the input price rises; empty if none |
 | `released` | `release_date` | string |
 | `ref` (property) | | `"{provider}/{id}"` |
 

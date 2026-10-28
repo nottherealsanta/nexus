@@ -27,6 +27,7 @@ ms = [
  Message("tool", (ToolResult("call_3", "edit failed: old text not found", True),)),
  Message("assistant", (Text("The edit did not apply because the line changed. Re-reading the file before trying again."),)),
  Message("user", (Text("Go ahead, but keep the change small. 日本語のコメントも残してください。"),)),
+ Message("assistant", (Text('A small example:\n\n```python\nprint("hello")\n```\n\n```sh\nprintf done\n```\n\n```mermaid\ngraph TD\n  A[Start] --> B[Finish]\n```'),)),
 ]
 for m in ms:
     st.append_message(sid, m)

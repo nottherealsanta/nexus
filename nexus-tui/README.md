@@ -9,22 +9,39 @@ reads Nexus state files, SQLite or provider credentials. Old Nexus's client in
 usable against a real Core: workspace header, both sidebars, session view, waiting
 card, composer, command palette, settings navigation and unified alerts, with an
 explicit focus model, the manifest's Esc chain, mouse and keyboard parity, and
-terminal hygiene.
+terminal hygiene. The status footer has been removed; key hints are available
+in the palette and F1, and stop appears in the composer. Existing sessions
+show their branch and linked-worktree marker from Core below the composer; a
+project with no session shows its own branch. The composer shows the agent in
+its colour, catalog model names, a pending model change, effort and context
+occupancy against price tiers and the window, explained on hover.
+The Sessions sidebar shows two-line rows with project and cached branch details;
+branch details load when the session is opened.
 
 The timeline is complete for one session: turn headers and footers, folding,
-collapsed reasoning, Markdown-lite text, tool-specific expansion (diffs, output
+collapsed reasoning, old-Nexus CommonMark text (supported Mermaid diagrams retain their source below), tool-specific expansion (diffs, output
 caps, raw arguments/results), child cards, context notices, diagnostics, and the
 frozen starting-context section. Selecting a session loads its full stored
 history (all messages, the retained diagnostics that carry duration and usage,
 and the snapshot) after the bounded snapshot view. Model, effort and agent
 pickers, session export and a directory change are wired.
 
-Still Step 12.4: the Files tab and built-in editor, Git status/diff, worktree
+The Files tab is a lazy tree: folders expand one level at a time, Git status
+letters are right-aligned, ignored entries are muted and can be hidden, and a
+root row switches between the project checkout and the open session's worktree
+when there is more than one. Enter opens a read-only, line-numbered file view
+with a `~` path; Esc returns to the timeline. The selected file can be copied as
+an absolute path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the
+terminal suspended. The file view has no syntax highlighting or search yet.
+
+Still Step 12.4: the built-in editor, Git diff UI, worktree
 management in the UI, settings editing beyond theme/monochrome, and
-steering/queueing (blocked on Core, Step 12a). Those commands are listed
-disabled with their reason, never as a control that appears to work.
+steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.
 
 ## Build, run, test
+
+If the repo launcher is installed (`docs/development.md`, “Shortcuts”), run
+`nexus` or `nexus tui` from anywhere. Otherwise:
 
 ```sh
 cd nexus-tui
@@ -77,7 +94,8 @@ Lower layers know nothing of higher ones.
 | `sync` | The connection supervisor task: handshake, snapshot, SSE, reconnect with backoff, resync, restart detection. Emits `SyncMsg`, takes `Command`. |
 | `state` | `ConnectionState`, `Banner`, `AppState` (model + connection + banners; `apply(SyncMsg)`). |
 | `manifest`, `theme` | `interface/manifest.toml` and `interface/theme.toml` embedded with `include_str!` and parsed into typed structs: commands, keys, Esc chain, navigation, settings; colour tokens per mode and tier (truecolor, 256, ANSI-16, monochrome), glyph tables (Unicode/ASCII). No command list, key, reason, colour or glyph is copied by hand. |
-| `text`, `keys`, `composer` | Display-width helpers (`unicode-width`), key names in the manifest's syntax, the multi-line composer buffer. |
+| `text`, `keys`, `composer`, `editor` | Display-width helpers, key names, and the multi-line composer. The grapheme editor and visual layout are adapted from old Nexus; composer movement and deletion respect grapheme boundaries. The composer uses the editor
+for selection, undo/redo and collapsed large pastes; sent text expands every paste. |
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
 | `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, supervisor command, clipboard, quit, suspend). |
 | `actions` | The mutations the shell makes (prompt, new session, continue, interrupt, archive, rename, delete, allow/deny), each with its own `RequestId`; a failed send hands the draft back. |
@@ -129,11 +147,16 @@ title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files, Projects
 with Settings fixed at the bottom; right sidebar Session info and Git status
 (shown with its manifest reason). Below 100 columns the sidebars become drawers
-opened from the same toggles. The waiting card sits directly above the composer.
+opened from the same toggles. The waiting card sits directly above the composer. Settings opens in a centered
+modal using old Nexus's panel geometry and a searchable root/drill list. Press
+`/` to filter settings; Enter opens a section, and Esc returns to the root
+before closing the panel. Existing Core-backed controls retain their own focus
+and keyboard handling.
 
 Keys come from the manifest (`F1` lists them; the palette shows each command's
 key). Beyond the manifest: `F6`/`Shift+F6` cycle focus, `Ctrl+J` inserts a
-newline where `Shift+Enter` is not reported, `Ctrl+C` quits, `Ctrl+Z` suspends.
+newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer selection or quits, `Ctrl+Z` undoes in the composer
+(and suspends elsewhere), and `Ctrl+Y` redoes.
 `/name` in the composer runs the command with that slash name (`/rename New
 title`, `/continue`, `/new`, `/settings`...); an unknown `/word` is sent as text.
 

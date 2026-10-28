@@ -1,3 +1,4 @@
+import { loadFiles } from "./store";
 // Command registry built from interface/manifest.toml (generated to src/gen/manifest.ts).
 // Ids, titles, keys, `when` rules, reasons and placements come from the manifest; this file
 // only evaluates terms and binds handlers for the actions whose Core API exists.
@@ -112,7 +113,7 @@ export function openSettings() {
   if (centre() === "settings") { centre.set(previousCentre()); return; }
   previousCentre.set(centre()); centre.set("settings"); if (isNarrow()) drawer.set(null);
 }
-function tab(t: "sessions" | "files" | "projects") { leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
+function tab(t: "sessions" | "files" | "projects") { if (t === "files") void loadFiles(); leftTab.set(t); savePrefs(); if (isNarrow()) drawer.set("left"); else leftOpen.set(true); }
 
 export function newSession() { model.select(null); centre.set("new_session"); if (isNarrow()) drawer.set(null); bump(); }
 

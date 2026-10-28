@@ -249,7 +249,10 @@ fn disabled_commands_are_listed_with_their_reason_and_never_run() {
     assert!(a.availability(&handoff).is_err());
     // commands that exist in the manifest but are not built yet say so
     let unbuilt = a.manifest.command("session.worktrees").unwrap().clone();
-    assert!(a.availability(&unbuilt).unwrap_err().contains("Step 12.4"));
+    assert!(a
+        .availability(&unbuilt)
+        .unwrap_err()
+        .contains("Not available yet"));
 }
 
 #[test]
@@ -369,5 +372,169 @@ fn session_actions_are_wired_to_the_api() {
     press(&mut a, &["enter"]);
     assert!(
         matches!(a.effects.pop(), Some(Effect::Api(ApiCall::Rename { title, .. })) if title == "New title")
+    );
+}
+
+#[test]
+fn composer_paste_selection_undo_and_send_preserve_full_text() {
+    use nexus_tui::actions::ApiCall;
+    let mut a = app();
+    a.effects.clear();
+    let pasted = "first line\nsecond line\nthird line";
+    a.handle_paste(pasted);
+    assert!(a.composer_ref().text().contains("Pasted ~"));
+    assert_eq!(a.composer_ref().expanded_text(), pasted);
+    press(&mut a, &["ctrl+z"]);
+    assert!(a.composer_ref().is_empty());
+    press(&mut a, &["ctrl+y"]);
+    assert_eq!(a.composer_ref().expanded_text(), pasted);
+    press(&mut a, &["enter"]);
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Api(ApiCall::Prompt { text, .. }) if text == pasted)));
+
+    let mut a = app();
+    typing(&mut a, "hello");
+    press(&mut a, &["shift+left", "shift+left"]);
+    assert!(a.composer_ref().selection().is_some());
+    typing(&mut a, "!");
+    assert_eq!(a.composer_ref().text(), "hel!");
+    press(&mut a, &["ctrl+z"]);
+    assert_eq!(a.composer_ref().text(), "hello");
+    press(&mut a, &["end", "shift+left", "shift+left", "ctrl+c"]);
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == "lo")));
+}
+
+#[test]
+fn failed_send_restores_expanded_pending_paste() {
+    use nexus_tui::actions::{ActionDone, ApiCall};
+    let mut a = app();
+    typing(&mut a, "sent");
+    press(&mut a, &["enter"]);
+    let pending = "first\nsecond\nthird";
+    a.handle_paste(pending);
+    a.apply_done(ActionDone {
+        call: ApiCall::Prompt {
+            session: SESSION.into(),
+            text: "sent".into(),
+        },
+        result: Err("offline".into()),
+    });
+    assert_eq!(a.composer_ref().expanded_text(), format!("sent\n{pending}"));
+}
+
+#[test]
+fn sent_draft_history_restores_the_unsent_draft() {
+    let mut a = app();
+    typing(&mut a, "first prompt");
+    press(&mut a, &["enter"]);
+    typing(&mut a, "unsent");
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().text(), "first prompt");
+    press(&mut a, &["down"]);
+    assert_eq!(a.composer_ref().text(), "unsent");
+}
+
+#[test]
+fn mouse_drag_selects_composer_text_for_copy() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut a = app();
+    typing(&mut a, "hello world");
+    let (_, _) = draw(&mut a, 120, 36);
+    let x = a.regions.composer.x + 3;
+    let y = a.regions.composer.y + 1;
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), x + 6),
+        (MouseEventKind::Drag(MouseButton::Left), x + 10),
+        (MouseEventKind::Up(MouseButton::Left), x + 10),
+    ] {
+        a.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    a.effects.clear();
+    press(&mut a, &["ctrl+c"]);
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == "worl")));
+}
+
+#[test]
+fn history_keeps_expanded_pastes_and_is_scoped_to_each_session() {
+    let mut a = app();
+    let first = "one\ntwo\nthree";
+    a.handle_paste(first);
+    press(&mut a, &["enter"]);
+    let scratch = "new\npending\npaste";
+    a.handle_paste(scratch);
+    press(&mut a, &["up"]);
+    assert_eq!(a.composer_ref().expanded_text(), first);
+    press(&mut a, &["down"]);
+    assert_eq!(a.composer_ref().expanded_text(), scratch);
+    a.state.model.select(None);
+    assert!(!a.composer_ref().has_history());
+    a.open_session(SESSION);
+    assert_eq!(a.composer_ref().expanded_text(), scratch);
+}
+
+#[test]
+fn mouse_drag_uses_display_cells_and_keeps_wide_graphemes_whole() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut a = app();
+    typing(&mut a, "a日本b");
+    let (_, _) = draw(&mut a, 120, 36);
+    let x = a.regions.composer.x + 3;
+    let y = a.regions.composer.y + 1;
+    for (kind, column) in [
+        (MouseEventKind::Down(MouseButton::Left), x + 1),
+        (MouseEventKind::Drag(MouseButton::Left), x + 5),
+        (MouseEventKind::Up(MouseButton::Left), x + 5),
+    ] {
+        a.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(a.composer_ref().selected_text().as_deref(), Some("日本"));
+}
+
+#[test]
+fn mouse_drag_maps_to_the_scrolled_composer_viewport() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut a = app();
+    a.composer().set_text(
+        &(1..=12)
+            .map(|n| format!("line{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let (_, _) = draw(&mut a, 120, 36);
+    let x = a.regions.composer.x + 3;
+    let y = a.regions.composer.y + 1;
+    for (kind, row, column) in [
+        (MouseEventKind::Down(MouseButton::Left), y, x),
+        (MouseEventKind::Drag(MouseButton::Left), y + 1, x + 3),
+        (MouseEventKind::Up(MouseButton::Left), y + 1, x + 3),
+    ] {
+        a.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    assert_eq!(
+        a.composer_ref().selected_text().as_deref(),
+        Some("line05\nlin")
     );
 }

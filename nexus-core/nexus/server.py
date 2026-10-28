@@ -16,6 +16,7 @@ browser `EventSource` can connect. Errors are `{"error": "..."}` with 400, 401,
 | GET | /api/project | all projects |
 | POST | /api/project | `{path, name?}` → the project at that path (created if new) |
 | GET/PATCH/DELETE | /api/project/{id} | one project; PATCH `{name}` |
+| GET | /api/project/{id}/worktrees | the project checkout's worktrees, before any session exists |
 | GET | /api/session | `?project=`, `?directory=` or `?parent=`; `?archived=` exclude/only/include |
 | POST | /api/session | `{project? or directory? or parent?, agent?, title?, model?, permission?, effort?}` |
 | GET/PATCH/DELETE | /api/session/{id} | one session; PATCH `{agent?, title?, model?, permission?, effort?}` |
@@ -82,7 +83,7 @@ VERSION = "0.10.0.dev0"
 # The HTTP API contract clients check before sending anything else. A change
 # that a client written for an older major cannot survive is a new major; new
 # fields and endpoints are a minor bump.
-API_VERSION = {"major": 1, "minor": 0}
+API_VERSION = {"major": 1, "minor": 1}
 INSPECTOR = Path(__file__).parent / "inspector" / "index.html"
 INSPECTOR_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
 MAX_BODY_BYTES = 1024 * 1024
@@ -394,6 +395,37 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
             return Response(status_code=204)
         return JSONResponse(project_json(runtime.project(pid)))
 
+    async def project_worktrees(request: Request) -> Response:
+        return JSONResponse(await runtime.list_project_worktrees(p(request, "id")))
+
+    def file_root(request: Request) -> Path:
+        project = runtime.project(p(request, "id"))
+        session_id = request.query_params.get("session")
+        if session_id:
+            session = runtime.session(session_id)
+            if session.project_id != project.id:
+                raise ValueError("session does not belong to project")
+            return Path(session.directory)
+        return Path(project.path)
+
+    async def project_files(request: Request) -> Response:
+        from nexus import files
+        return JSONResponse(await files.list_directory(file_root(request), request.query_params.get("path", "")))
+
+    async def project_file(request: Request) -> Response:
+        from nexus import files
+        return JSONResponse(files.read_file(file_root(request), request.query_params.get("path", "")))
+
+    async def session_git(request: Request) -> Response:
+        from nexus import files
+        session = runtime.session(p(request, "id"))
+        return JSONResponse(await files.git_status(Path(session.directory)))
+
+    async def session_git_diff(request: Request) -> Response:
+        from nexus import files
+        session = runtime.session(p(request, "id"))
+        return JSONResponse(await files.git_diff(Path(session.directory), request.query_params.get("path", "")))
+
     async def sessions(request: Request) -> Response:
         if request.method == "POST":
             body = await _body(request)
@@ -675,6 +707,9 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/agent/{name}", route(agent_one)),
         Route("/api/project", route(projects), methods=["GET", "POST"]),
         Route("/api/project/{id}", route(project), methods=["GET", "PATCH", "DELETE"]),
+        Route("/api/project/{id}/worktrees", route(project_worktrees)),
+        Route("/api/project/{id}/files", route(project_files)),
+        Route("/api/project/{id}/file", route(project_file)),
         Route("/api/session", route(sessions), methods=["GET", "POST"]),
         Route("/api/session/{id}", route(session), methods=["GET", "PATCH", "DELETE"]),
         Route("/api/session/{id}/model", route(session_model), methods=["POST"]),
@@ -684,6 +719,8 @@ def build_app(runtime: Runtime, *, token: str, url: str) -> Starlette:
         Route("/api/session/{id}/unarchive", route(session_unarchive), methods=["POST"]),
         Route("/api/session/{id}/directory", route(session_directory), methods=["POST"]),
         Route("/api/session/{id}/worktrees", route(session_worktrees), methods=["GET", "POST"]),
+        Route("/api/session/{id}/git", route(session_git)),
+        Route("/api/session/{id}/git/diff", route(session_git_diff)),
         Route("/api/session/{id}/prompt", route(prompt), methods=["POST"]),
         Route("/api/session/{id}/continue", route(session_continue), methods=["POST"]),
         Route("/api/session/{id}/interrupt", route(interrupt), methods=["POST"]),

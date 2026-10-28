@@ -10,6 +10,14 @@ Branch `nexus10` (an orphan branch, checked out as a worktree at
 `~/repos/nexus10`). It is released as **0.10.0** once it replaces the old code
 ("10" is binary for 2).
 
+## Interface direction (updated 2026-10-28)
+
+Reuse the old Nexus TUI broadly, including settings and modal pages, adapting
+it to the current Core API and the one-timeline principles. Polish a cohesive
+design language for tokens, spacing, typography and states. NSH parity is not
+the current objective; conflicting interface redesign targets in the work plan
+are superseded by this direction.
+
 ## Principles
 
 1. **Context is visible.** The user can see everything the agent sees: the
@@ -53,6 +61,7 @@ root holds only plans and docs.
 ```
 docs/             how the code works; start at docs/README.md
 INTERFACE_PLAN.md the TUI and NSH interface spec (both clients)
+INTERFACE_WORK_PLAN.md  build order for the remaining Step 12 client work
 nexus-core/       Python (uv): everything that is not a UI. Import name `nexus`, command `nexus`
   pyproject.toml, uv.lock, .python-version
   nexus/
@@ -1685,7 +1694,13 @@ documented in `docs/api.md`.
   those fields) remains.
 - **Files and git.** List a project directory (lazy, one level, gitignore
   aware), read and write a file (confined to the project), git status and
-  per-file diff of a session's directory.
+  per-file diff of a session's directory. Initial read-only project file
+  listing and UTF-8 reads now exist (1 MiB limit, content revisions, and
+  descriptor-relative no-symlink traversal), plus session Git status and diff
+  endpoints. A project's own worktree listing is available without a session
+  (`GET /api/project/{id}/worktrees`). The TUI has an initial directory browser
+  and read-only file view; richer file actions, writes, change notifications
+  and NSH parity remain.
 - **Attachments and images.** Files and images on user messages, in both
   dialects (no images today). Store uploaded assets and full tool outputs as
   durable artifacts with stable ids and upload/download APIs. Enforce explicit
@@ -1743,8 +1758,24 @@ Build the Ratatui TUI (`nexus-tui/`) first, then the shared NSH web and desktop
 app (`nexus-nsh/`); adapt the same app to iOS after the desktop interaction is
 stable. Both speak only the Core HTTP API. [INTERFACE_PLAN.md](INTERFACE_PLAN.md)
 is the shared product specification; this section is the implementation order.
+[INTERFACE_WORK_PLAN.md](INTERFACE_WORK_PLAN.md) is the detailed working plan
+for what remains: Part A brings the clients to old Nexus's look, Part B is the
+rest of 12.2–12.6.
 
-Progress (2026-10-27, current increment):
+Progress (updated 2026-10-28, current increment):
+Part A has neutral surfaces, TUI sidebar hairlines, a borderless TUI composer
+and no status footer. The composer shows a capitalised agent name in its
+colour, catalog model names and providers, a pending model change, and context
+occupancy against catalog price tiers and the window with a hover explanation;
+the location line shows the project's own branch before a session exists. Shared
+agent colours are
+assigned in both clients; NSH shimmer and visual review remain. The TUI timeline
+now groups consecutive tool calls and reasoning, with waiting and failed state
+visible, measured reasoning time and turn headers merged into user blocks. The
+Files tab now has a lazy tree with Git letters, ignored-file hiding, a root
+selector and read-only file view, plus copy-path, `@path` and `$EDITOR`
+actions. A1–A9 remain open for remaining implementation or review; see the work
+plan for details.
 12.1 is delivered as `interface/` (`capability-matrix.md`,
 `reference-inventory.md`, `manifest.toml` + `check_manifest.py`). 12.2 is
 delivered through item 3 (`theme.toml`, `check_theme.py`, the "Design language"
@@ -1757,24 +1788,25 @@ loads all messages, retained diagnostics and the snapshot (paged to the end,
 keeping the newest 20,000 events and announcing retention, the cap or a failed
 page; live messages are merged, and every resync reloads it); model/effort/agent
 pickers, export, directory change, copy actions, turn navigation and inspector
-links are wired. The TUI has 113 tests, `cargo clippy --all-targets -D warnings`
-passes and `cargo fmt --check` is clean.
+links are wired. The current full TUI run passes 322 tests,
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`.
 
-12.5 is partial: `nexus-nsh/` has the same shell and timeline against a real
-Core through its host proxy, with the same timeline, catalog pickers for
-model/effort/agent and export, built from the shared manifest/theme; its 13 browser
-interaction tests pass (`nsh test --target web`), the host proxy's hardening
-tests pass (`npm run test:host`), `nsh check` is clean, and the
-packaged app builds. `e2e/` captures 390x844, 1024x768 and 1440x900 in dark and
+12.5 is partial: `nexus-nsh/` has a shell and timeline against a real Core
+through its host proxy, with catalog pickers for model/effort/agent and export,
+built from the shared manifest/theme. The later TUI timeline redesign is not yet
+mirrored. Its last 14 browser interaction tests passed (`nsh test --target web`),
+the host proxy's hardening tests pass (`npm run test:host`), `nsh check` is
+clean, and the packaged app builds. `e2e/` captures 390x844, 1024x768 and 1440x900 in dark and
 light.
 
 Core: `/api/info` now reports `api_version: {major, minor}` (clients halt on a
 major mismatch). The remaining matrix gaps still need Step 12a decisions
 (approval choices beyond allow/deny, message paging, durable usage totals, write
 previous content, interrupt-cancel event for approvals, agent `mode` over HTTP,
-catalog refresh over HTTP, project-level worktree list). Still client work for
-12.4: Files/editor and Git (also blocked on Core file endpoints), worktree UI,
-settings editing beyond theme, and search; steer/queue, btw, handoff, one-turn
+catalog refresh over HTTP). Still client work for
+12.4: Files/editor and Git (tree, read view and file actions exist; editor,
+writes, search/highlighting and diff UI remain), worktree UI, settings editing
+beyond theme, and search; steer/queue, btw, handoff, one-turn
 sessions, attachments, dictation, skills/MCP and sign-in over the API remain
 Core or later increments.
 
@@ -1986,6 +2018,10 @@ checks pass. Feature presence alone does not satisfy the polish requirement.
 
 | Old | New | Why |
 | --- | --- | --- |
+| Old Markdown replaces supported Mermaid source with a rendered diagram | Adapted diagram renderers show the diagram followed by its original fenced source; each fence has its own copy action | Preserve every model-visible item while retaining the old diagram presentation |
+| Old Settings builds a modal from its host snapshot and widget kit | Settings uses old centered modal and searchable root/drill geometry with Nexus 0.10's manifest-backed rows and focus state | Preserve familiar layout while retaining the new Core and client contracts |
+| Old TUI composer owns the grapheme editor | The copied editor backs the composer, while its public interface and Core send path remain in Nexus 0.10 | Reuse selection, undo and paste behavior without changing the Core-facing input contract |
+| Old TUI shimmer uses RGB theme colours and a host-side activity clock | The adapted TUI shimmer resolves the shared theme tiers and uses the client frame clock, with reduced-motion and monochrome fallbacks | Preserve the old motion while keeping Core-independent rendering and terminal accessibility |
 | Worktree is a tool, effectively mandatory | Worktree is a session property set from the control plane | Where work happens is not a task step |
 | Task tools and Nexus-state tools mixed in one list | Separate task tools and `nexus` control commands | Different permissions, events and UI |
 | Normalized IR only; provider details reconstructed | Each part keeps its `raw` wire item and `origin` | Lossless replay; nothing hidden |

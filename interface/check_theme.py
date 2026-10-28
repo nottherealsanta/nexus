@@ -9,7 +9,7 @@ import tomllib
 import unicodedata
 from pathlib import Path
 
-GROUPS = ("surface", "text", "border", "interactive", "status", "diff")
+GROUPS = ("surface", "text", "border", "interactive", "status", "diff", "agent")
 STATUSES = ("running", "done", "error", "denied", "waiting", "interrupted", "cancelled")
 MONO_MODS = {"bold", "dim", "reverse", "underline"}
 
@@ -91,6 +91,8 @@ def main(path):
                 for mk in ("border.focus", "interactive.accent", "interactive.focus",
                            "status.success", "status.warning", "status.error", "status.info"):
                     check(f"{p} {mk} on {s}", cc[mk], cc[s], nmin)
+                for agent in data[tn]["agent"]:
+                    check(f"{p} agent.{agent} on {s}", cc[f"agent.{agent}"], cc[s], tmin)
                 for sk in ("status.success", "status.warning", "status.error", "status.info",
                            "interactive.accent"):
                     check(f"{p} {sk} (as text) on {s}", cc[sk], cc[s], tmin)
@@ -114,6 +116,13 @@ def main(path):
                     check(f"{p} role {name} rail", cc[role["rail"]], bg,
                           1.1 if role["rail"].startswith("border.") else nmin)  # hairline rails are decorative
         check(f"{tn} border.default vs canvas (informational >=1.1)", c["border.default"], c["surface.canvas"], 1.1)
+
+    slots = set(data["dark"]["agent"])
+    if slots != set(data["light"]["agent"]):
+        errors.append("agent slots differ between themes")
+    pins = data["agent_pins"]
+    if not set(pins.values()) <= slots or len(set(pins.values())) != len(pins):
+        errors.append("agent pins must name distinct palette slots")
 
     # Role references resolve; monochrome covers every token and role.
     t0 = flatten(data[meta["themes"][0]])

@@ -28,6 +28,9 @@ or the remaining 12.4 client work.
 
 ## Build, run, test
 
+If the repo launcher is installed (`docs/development.md`, “Shortcuts”), run
+`nexus web` from anywhere to build, serve and open the app. Otherwise:
+
 ```sh
 npm ci                 # playwright, for the browser e2e harness
 npm run gen            # interface/*.toml -> gen/theme.json, src/gen/*.ts

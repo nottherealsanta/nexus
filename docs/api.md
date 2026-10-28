@@ -39,6 +39,7 @@ the TUI (`nexus-tui/`) and NSH (`nexus-nsh/`). The shape follows OpenCode's
 | GET | `/api/project/{id}` | | `Project` |
 | PATCH | `/api/project/{id}` | `{name, expected_revision?}` or `If-Match` | `Project`; a stale revision is 409 |
 | DELETE | `/api/project/{id}` | | 204; deletes its sessions too |
+| GET | `/api/project/{id}/worktrees` | | the project checkout's worktrees (`repository`, `main`, `worktrees[]`, `project_directory`); 400 outside Git |
 | GET | `/api/session` | `?project=`, `?directory=` or `?parent=`, plus `?archived=exclude\|only\|include` | `[Session]` |
 | POST | `/api/session` | `{project` or `directory` or `parent, agent?, title?, model?, permission?, effort?, disabled_tools?}` | `Session`; with `parent`, a child in the parent's directory (`launched_by: "user"`) |
 | GET | `/api/session/{id}` | | `Session` |
@@ -868,3 +869,23 @@ A session created before snapshots existed returns `snapshot.origin:
 not presented as the exact historical prompt; the reconstruction is stored once
 and stays stable. It also starts with `workspace: {entry: false, active: false}`;
 activate it explicitly if needed.
+
+### Project file browsing (initial read-only API)
+
+`GET /api/project/{id}/worktrees` lists the worktrees of the project's own
+checkout (`repository`, `main`, `worktrees[]`, `project_directory`) when there
+is no session to ask. It is the same shape as the session endpoint and returns
+400 outside Git.
+
+`GET /api/project/{id}/files?path=&session=` lists one directory level under
+the project directory or the named session's directory. Entries report name,
+kind, byte size, modification time, Git status and ignored status. Symlinks are
+listed as links and are not followed when opening files or directories. `GET /api/project/{id}/file?path=&session=` returns UTF-8 text,
+a SHA-256 content revision and a MIME-based language hint. Reads reject binary
+or non-UTF-8 data and files over 1 MiB. Paths are relative to the selected root;
+the session must belong to the project. File edits and change notifications are not yet provided.
+
+`GET /api/session/{id}/git` returns branch, ahead/behind counts and changed
+paths, with staged/unstaged flags and tracked line counts.
+`GET /api/session/{id}/git/diff?path=` returns separate staged and unstaged
+diffs for a relative path. Untracked file contents are not included in diffs.

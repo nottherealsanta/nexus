@@ -35,7 +35,6 @@ pub struct Regions {
     pub area: Rect,
     pub narrow: bool,
     pub header: Rect,
-    pub footer: Rect,
     /// Docked sidebars (wide layouts only).
     pub left: Option<Rect>,
     pub right: Option<Rect>,
@@ -76,13 +75,8 @@ impl Regions {
     pub fn compute(area: Rect, flags: Flags, heights: impl Fn(u16) -> Heights) -> Regions {
         let narrow = Self::is_narrow(area.width);
         let header = r(area.x, area.y, area.width, area.height.min(1));
-        let footer = if area.height >= 2 {
-            r(area.x, area.y + area.height - 1, area.width, 1)
-        } else {
-            r(area.x, area.y, 0, 0)
-        };
         let body_y = area.y + header.height;
-        let body_h = area.height.saturating_sub(header.height + footer.height);
+        let body_h = area.height.saturating_sub(header.height);
         let sw = sidebar_width(area.width);
 
         let (mut x, mut w) = (area.x, area.width);
@@ -158,7 +152,6 @@ impl Regions {
             area,
             narrow,
             header,
-            footer,
             left,
             right,
             drawer,
@@ -251,7 +244,7 @@ mod tests {
         assert_eq!(g.left.unwrap().width, 28);
         assert_eq!(g.right.unwrap().width, 28);
         assert_eq!(g.centre.width, 120 - 56);
-        assert_eq!(g.header.height + g.footer.height + g.centre.height, 36);
+        assert_eq!(g.header.height + g.centre.height, 36);
         assert_eq!(
             g.composer.y + g.composer.height,
             g.centre.y + g.centre.height

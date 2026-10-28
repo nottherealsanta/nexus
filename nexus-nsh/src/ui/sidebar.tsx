@@ -6,6 +6,7 @@ import { manifest } from "../gen/manifest";
 import { archive, askDelete, availability, byId, keyLabel, newSession, run, toggleLeft } from "../commands";
 import { archivedFilter, centre, connection, currentProject, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, tick, live, viewed, savePrefs } from "../store";
 import { Session } from "../core/api";
+import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
 
@@ -16,7 +17,7 @@ function hint(id: string) { const c = byId.get(id); return c ? keyLabel(c) : nul
 
 export function LeftSidebar(p: { drawer?: boolean }) {
   return (
-    <View class={`bg-card ${p.drawer ? "flex-1" : "w-[264px] border-r border-border"}`} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
+    <View class={`bg-background ${p.drawer ? "flex-1" : "w-[264px] border-r border-border"}`} testID="left-sidebar" role="none" accessibilityLabel="Left sidebar">
       <Tabs class={`flex-row items-center gap-1 px-2 ${isNarrow() ? "h-14" : "h-11"} border-b border-border`}>
         <Each of={[...tabs].sort((a, b) => a.order - b.order)} key={(t) => t.id}>
           {(t) => {
@@ -25,7 +26,7 @@ export function LeftSidebar(p: { drawer?: boolean }) {
             return (
               <Tab
                 selected={leftTab() === t().id} accessibilityLabel={t().label} testID={`tab-${t().id}`} disabled={false}
-                onPress={() => { leftTab.set(t().id); savePrefs(); }}
+                onPress={() => { leftTab.set(t().id); if (t().id === "files") void loadFiles(); savePrefs(); }}
                 tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{t().label}{hint(t().command) ? `  ${hint(t().command)}` : ""}</Text>}
                 class={`flex-row items-center gap-1.5 rounded-(--radius) px-2.5 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
               >
@@ -195,10 +196,20 @@ function SessionMenuItems(p: { id: string }) {
 }
 
 function FilesTab() {
-  const reason = "Files and Git status need the files/git endpoints in Core (PLAN.md Step 12a). The tree appears here once they exist.";
-  return <Empty title="Files unavailable" body={reason} />;
+  return <Scroll class="flex-1" contentClass="p-2">
+    <If when={fileListing()} else={<Text class={T.sec}>Loading files…</Text>}>
+      {() => <View>
+        <If when={fileListing()!.path}><Button onPress={() => void loadFiles(fileListing()!.path.split("/").slice(0, -1).join("/"))} accessibilityLabel="Parent directory"><Text class={T.sec}>← {fileListing()!.path}</Text></Button></If>
+        <If when={fileListing()!.error}><Text class={T.sec}>{fileListing()!.error}</Text></If>
+        <Each of={fileListing()!.entries} key={(entry) => entry.name}>{(entry) =>
+          <Button onPress={() => { const path = [fileListing()!.path, entry().name].filter(Boolean).join("/"); if (entry().kind === "directory") void loadFiles(path); else if (entry().kind === "file") void showFile(path); }} accessibilityLabel={entry().name} class={`flex-row px-2 py-1 hover:bg-accent ${FOCUS}`}>
+            <Text class={entry().ignored ? T.meta : T.sec}>{entry().kind === "directory" ? "▸ " : "  "}{entry().name}{entry().git_status ? `  ${entry().git_status}` : ""}</Text>
+          </Button>
+        }</Each>
+      </View>}
+    </If>
+  </Scroll>;
 }
-
 function ProjectsTab() {
   const rows = () => { m(); return model.projectsRecent(); };
   const count = (id: string) => { let n = 0; for (const s of model.sessions.values()) if (s.project_id === id && !s.parent_id && !s.archived) n++; return n; };

@@ -849,6 +849,15 @@ class Runtime:
         self.bus.publish("worktree.listed", data, session_id=session_id)
         return data
 
+    async def list_project_worktrees(self, project_id: str) -> dict[str, Any]:
+        """Worktrees of a project's own checkout, for a client with no session yet."""
+        project = self.project(project_id)
+        try:
+            data = await worktrees.listing(project.path)
+        except worktrees.WorktreeError as exc:
+            raise ToolError(str(exc)) from exc
+        return data | {"project_directory": project.path}
+
     async def create_worktree(self, session_id: str, path: Any, branch: Any = None, base: Any = None) -> dict[str, Any]:
         """Create or reuse a worktree; never changes the session directory."""
         if not isinstance(path, str) or not path.strip():

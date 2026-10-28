@@ -68,6 +68,22 @@ pub enum SyncMsg {
         agents: Vec<Value>,
         source: String,
     },
+    Files {
+        project: String,
+        session: Option<String>,
+        path: String,
+        data: Result<Value, String>,
+        file: bool,
+    },
+    Git {
+        session: String,
+        data: Result<Value, String>,
+    },
+    /// A project's own worktrees, used before a session exists.
+    ProjectWorktrees {
+        project: String,
+        data: Result<Value, String>,
+    },
     Event(Event),
 }
 
@@ -80,6 +96,17 @@ pub enum Command {
     Resync,
     /// Load the model catalog and agent list for a project (picker data).
     Catalog(Option<String>),
+    /// Fetching also publishes a worktree.listed event on Core.
+    Worktrees(String),
+    /// The project's own checkout, for a session that does not exist yet.
+    ProjectWorktrees(String),
+    Git(String),
+    Files {
+        project: String,
+        session: Option<String>,
+        path: String,
+        file: bool,
+    },
     Shutdown,
 }
 
@@ -131,6 +158,10 @@ struct Ctx {
     resync: Option<ResyncCause>,
     /// A model/agent picker asked for the catalog of this project.
     catalog: Option<Option<String>>,
+    worktrees: Option<String>,
+    project_worktrees: Vec<String>,
+    git: Option<String>,
+    files: Option<(String, Option<String>, String, bool)>,
     shutdown: bool,
 }
 
@@ -149,6 +180,19 @@ impl Ctx {
             }
             Command::Resync => self.resync = Some(ResyncCause::Requested),
             Command::Catalog(project) => self.catalog = Some(project),
+            Command::Worktrees(session) => self.worktrees = Some(session),
+            Command::ProjectWorktrees(project) => {
+                if !self.project_worktrees.contains(&project) {
+                    self.project_worktrees.push(project);
+                }
+            }
+            Command::Git(session) => self.git = Some(session),
+            Command::Files {
+                project,
+                session,
+                path,
+                file,
+            } => self.files = Some((project, session, path, file)),
             Command::Shutdown => self.shutdown = true,
         }
     }
@@ -197,6 +241,10 @@ pub async fn run(
         selected: None,
         resync: None,
         catalog: None,
+        worktrees: None,
+        project_worktrees: Vec::new(),
+        git: None,
+        files: None,
         shutdown: false,
     };
     let mut backoff = cx.cfg.backoff.clone();
@@ -293,6 +341,33 @@ pub async fn run(
             }
         }
 
+        // A request received while reconnecting must not be stranded until a
+        // later command arrives on the live stream.
+        if let Some(project) = cx.catalog.take() {
+            if let Some((models, agents, source)) = load_catalog(&api, project.as_deref()).await {
+                if !cx.send(SyncMsg::Catalog {
+                    models,
+                    agents,
+                    source,
+                }) {
+                    return;
+                }
+            }
+        }
+        if let Some(session) = cx.worktrees.take() {
+            let _ = api.worktrees(&session).await;
+        }
+        for project in std::mem::take(&mut cx.project_worktrees) {
+            let data = api
+                .project_worktrees(&project)
+                .await
+                .map_err(|e| e.to_string());
+            if !cx.send(SyncMsg::ProjectWorktrees { project, data }) {
+                return;
+            }
+        }
+        load_files(&mut cx, &api).await;
+        load_git(&mut cx, &api).await;
         match stream(&mut cx, &api, &mut cursor, &mut backoff, &mut had_live).await {
             StreamEnd::Stop => return,
             StreamEnd::Resync { cause, progressed } => {
@@ -317,6 +392,30 @@ pub async fn run(
                 }
             }
         }
+    }
+}
+
+async fn load_git(cx: &mut Ctx, api: &CoreApi) {
+    if let Some(session) = cx.git.take() {
+        let data = api.git_status(&session).await.map_err(|e| e.to_string());
+        cx.send(SyncMsg::Git { session, data });
+    }
+}
+
+async fn load_files(cx: &mut Ctx, api: &CoreApi) {
+    if let Some((project, session, path, file)) = cx.files.take() {
+        let result = if file {
+            api.file(&project, session.as_deref(), &path).await
+        } else {
+            api.files(&project, session.as_deref(), &path).await
+        };
+        cx.send(SyncMsg::Files {
+            project,
+            session,
+            path,
+            file,
+            data: result.map_err(|e| e.to_string()),
+        });
     }
 }
 
@@ -635,7 +734,7 @@ async fn stream(
             cmd = cx.cmds.recv() => {
                 match cmd {
                     Some(c) => {
-                        let was_catalog = matches!(c, Command::Catalog(_));
+                        let was_catalog = matches!(c, Command::Catalog(_) | Command::Worktrees(_) | Command::ProjectWorktrees(_) | Command::Git(_) | Command::Files { .. });
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         if let Some(project) = cx.catalog.take() {
@@ -645,6 +744,17 @@ async fn stream(
                                 }
                             }
                         }
+                        if let Some(session) = cx.worktrees.take() {
+                            let _ = api.worktrees(&session).await;
+                        }
+                        for project in std::mem::take(&mut cx.project_worktrees) {
+                            let data = api.project_worktrees(&project).await.map_err(|e| e.to_string());
+                            if !cx.send(SyncMsg::ProjectWorktrees { project, data }) {
+                                return StreamEnd::Stop;
+                            }
+                        }
+                        load_files(cx, api).await;
+                        load_git(cx, api).await;
                         if !was_catalog {
                             if let Some(cause) = cx.resync.take() {
                                 return StreamEnd::Resync { cause, progressed };

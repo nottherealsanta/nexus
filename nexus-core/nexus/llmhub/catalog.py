@@ -43,6 +43,9 @@ class ModelInfo:
     output_cost: float | None
     cache_read_cost: float | None
     released: str | None
+    # Prompt sizes where the input price rises (models.dev `cost.tiers`),
+    # ascending. Clients use them to show occupancy of the next price tier.
+    tiers: tuple[int, ...] = ()
 
     @property
     def ref(self) -> str:
@@ -97,6 +100,21 @@ def _efforts(entry: dict[str, Any]) -> tuple[str, ...]:
     return ()
 
 
+def _tiers(entry: dict[str, Any]) -> tuple[int, ...]:
+    """Prompt sizes where the price rises, from models.dev `cost.tiers`."""
+    cost = entry.get("cost")
+    tiers = cost.get("tiers") if isinstance(cost, dict) else None
+    out: set[int] = set()
+    for tier in tiers or []:
+        if not isinstance(tier, dict):
+            continue
+        boundary = tier.get("tier")
+        size = boundary.get("size") if isinstance(boundary, dict) else None
+        if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+            out.add(size)
+    return tuple(sorted(out))
+
+
 def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
     info = PROVIDERS[provider_id]
     entries = (catalog.get(info.catalog_id) or {}).get("models") or {}
@@ -116,7 +134,7 @@ def models_for(catalog: dict[str, Any], provider_id: str) -> list[ModelInfo]:
             context=limit.get("context"), max_output=limit.get("output"),
             reasoning=bool(entry.get("reasoning")), efforts=_efforts(entry),
             input_cost=cost.get("input"), output_cost=cost.get("output"), cache_read_cost=cost.get("cache_read"),
-            released=entry.get("release_date"),
+            released=entry.get("release_date"), tiers=_tiers(entry),
         ))
     out.sort(key=lambda m: (m.released or "", m.id), reverse=True)
     return out

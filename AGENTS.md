@@ -31,6 +31,11 @@ uv run nexus chat --wire       # see every request and SSE event
 uv add <pkg>                   # never pip install
 ```
 
+The repo launcher `scripts/nexus` gives whole-repo shortcuts from any
+directory when linked into `~/.local/bin`: `nexus`/`nexus tui`, `nexus build`,
+`nexus web`, `nexus restart`, `nexus check`. See
+[docs/development.md](docs/development.md#shortcuts).
+
 ## Docs
 
 [docs/README.md](docs/README.md) indexes the docs, which describe the current

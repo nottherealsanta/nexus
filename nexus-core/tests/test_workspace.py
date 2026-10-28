@@ -581,6 +581,13 @@ async def test_worktree_list_create_reuse_delete(env):
     assert listing["repository"] == str(repo) and listing["main"] == str(repo)
     assert [item["main"] for item in listing["worktrees"]] == [True]
 
+    # A project with no session can show the same branch information.
+    project_listing = (await env.client.get(
+        f"/api/project/{session['project_id']}/worktrees")).json()
+    assert project_listing["main"] == str(repo)
+    assert project_listing["project_directory"] == str(repo)
+    assert [item["path"] for item in project_listing["worktrees"]] == [str(repo)]
+
     # An uncommitted change stays in the original checkout and is not copied.
     (env.workspace / "uncommitted.txt").write_text("keep me\n")
     created = (await env.client.post(f"/api/session/{sid}/worktrees", json={

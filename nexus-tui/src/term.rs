@@ -94,6 +94,21 @@ pub fn suspend(term: &mut Term) -> io::Result<()> {
     term.clear()
 }
 
+/// Run `$VISUAL`/`$EDITOR` on one path with the terminal returned to the shell,
+/// then take the TUI screen back. A failed launch is not fatal.
+pub fn run_external(term: &mut Term, editor: &str, path: &str) -> io::Result<()> {
+    let mut words = editor.split_whitespace();
+    let program = words.next().unwrap_or("vi");
+    let args: Vec<&str> = words.collect();
+    leave();
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .arg(path)
+        .status();
+    setup()?;
+    term.clear()
+}
+
 /// Restores the terminal when dropped, including on early returns.
 pub struct Guard;
 

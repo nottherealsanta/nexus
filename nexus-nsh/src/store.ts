@@ -6,7 +6,7 @@ import { Banner, ConnectionState, Sync, SyncHost } from "./core/sync";
 import { Compat, Info, Session } from "./core/api";
 import { ApiError, request } from "./core/transport";
 
-export type CentreView = "session" | "new_session" | "settings" | "editor";
+export type CentreView = "session" | "new_session" | "settings" | "editor" | "file";
 export type Toast = { id: number; level: "success" | "info" | "warning" | "error"; text: string; at: number };
 
 export const model = new Model();
@@ -114,6 +114,37 @@ export function startApp() {
   setInterval(() => { const c = connection(); if (c.kind === "reconnecting") tick.set(Date.now()); }, 1000);
 }
 
+export type FileEntry = { name: string; kind: string; git_status?: string | null; ignored: boolean };
+export const fileListing = signal<{ path: string; entries: FileEntry[]; error?: string } | null>(null);
+export const openFile = signal<{ path: string; content?: string; error?: string } | null>(null);
+export const gitStatus = signal<{ session: string; data?: any; error?: string } | null>(null);
+let filesRequest = 0;
+export async function loadFiles(path = "") {
+  const project = currentProject(), session = viewed()?.id;
+  if (!project) { fileListing.set(null); return; }
+  const seq = ++filesRequest;
+  fileListing.set(null);
+  try {
+    const data = await request<{ path: string; entries: FileEntry[] }>("GET", `/api/project/${project}/files`, { query: { path, session } });
+    if (seq === filesRequest) fileListing.set(data);
+  } catch (e) { if (seq === filesRequest) fileListing.set({ path, entries: [], error: String(e) }); }
+}
+export async function showFile(path: string) {
+  const project = currentProject(), session = viewed()?.id;
+  if (!project) return;
+  const seq = ++filesRequest;
+  openFile.set({ path }); centre.set("file");
+  try {
+    const data = await request<{ content: string }>("GET", `/api/project/${project}/file`, { query: { path, session } });
+    if (seq === filesRequest) openFile.set({ path, content: data.content });
+  } catch (e) { if (seq === filesRequest) openFile.set({ path, error: String(e) }); }
+}
+export async function loadGit(session: string) {
+  gitStatus.set(null);
+  try { const data = await request("GET", `/api/session/${session}/git`); if (viewed()?.id === session) gitStatus.set({ session, data }); }
+  catch (e) { if (viewed()?.id === session) gitStatus.set({ session, error: String(e) }); }
+}
+
 // --- derived ------------------------------------------------------------------------------
 export const viewed = (): Session | null => {
   m();
@@ -129,6 +160,8 @@ export async function selectSession(id: string) {
   centre.set("session");
   scrolledUp.set(false);
   bump();
+  void loadGit(id);
+  if (leftTab() === "files") void loadFiles();
   if (isNarrow()) drawer.set(null);
   void request<any>("GET", `/api/session/${id}`).then((full) => {
     const cur = model.sessions.get(id);

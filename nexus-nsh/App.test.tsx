@@ -1,6 +1,7 @@
 // Headless interaction tests (`nsh test`): the real runtime, a fake network standing in for the host's /api proxy.
 import { describe, expect, open, test } from "nsh/test";
 import { manifest } from "./src/gen/manifest";
+import { agentSlot } from "./src/agent-color";
 import { Model, foldEventPages } from "./src/core/reduce";
 
 const sse = (...frames: string[]) => frames.join("");
@@ -22,6 +23,14 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/session/*": { body: snapshot.sessions[0] },
 });
 const mod = "mod";
+
+describe("agent colours", () => {
+  test("pins and hashes match the TUI", () => {
+    expect(["orchestrate", "build", "quick", "scout", "plan", "review", "tester"].map(agentSlot))
+      .toEqual(["amber", "blue", "green", "teal", "violet", "rose", "sky"]);
+    expect(agentSlot("BUILD")).toBe("blue");
+  });
+});
 
 describe("shell", () => {
   test("header anchors, left tabs and fixed Settings entry", async () => {

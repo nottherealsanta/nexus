@@ -1,3 +1,4 @@
+import { agentColor } from "../agent-color";
 import { List, Scroll, Text, View, keymap, signal } from "nsh";
 import { Button, Dialog, Input } from "nsh/base";
 import type { JSX } from "nsh";
@@ -87,7 +88,7 @@ function PickerBody() {
                 <Button onPress={() => runItem(it())} accessibilityLabel={it().label} testID={`pick-${i}`}
                   class={`rounded-(--radius) px-2.5 py-1.5 hover:bg-accent ${FOCUS}`}>
                   <View class="flex-row items-center gap-3">
-                    <Text numberOfLines={1} class="flex-1 min-w-0 text-[14px] leading-[22px] text-popover-foreground">{it().label}</Text>
+                    <Text numberOfLines={1} class={`flex-1 min-w-0 text-[14px] leading-[22px] ${p().title === "Change agent" ? agentColor(it().id) : "text-popover-foreground"}`}>{it().label}</Text>
                     <If when={!!it().hint}><Text class={T.meta}>{it().hint}</Text></If>
                   </View>
                 </Button>

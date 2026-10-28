@@ -47,7 +47,17 @@ fn folding_a_turn_keeps_only_its_header_and_never_deletes_context() {
     a.execute("turn.fold_toggle");
     let drawn = rows(&mut a);
     let text = drawn.join("\n");
-    assert!(text.contains("#1"), "{text}");
+    assert!(text.contains("#1") && text.contains("hi"), "{text}");
+    let folded = a
+        .blocks()
+        .iter()
+        .find(|b| b.kind == nexus_tui::timeline::BlockKind::Turn)
+        .unwrap();
+    assert_eq!(
+        folded.end - folded.start,
+        1,
+        "folded turn is a single filled row"
+    );
     assert!(!text.contains("Hello"), "folded content is hidden: {text}");
     // Still in the model: folding is view state only.
     assert!(a.messages().iter().any(|m| m.role == "assistant"));
@@ -100,6 +110,14 @@ fn enter_expands_a_tool_into_its_detail_and_raw_toggle_shows_arguments() {
     }
     rows(&mut a);
     a.ui.focus = Focus::Timeline;
+    let group = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == nexus_tui::timeline::BlockKind::Group)
+        .expect("activity group");
+    a.ui.timeline_sel = Some(group);
+    a.execute("tool.expand_toggle");
+    rows(&mut a);
     let tool = a
         .blocks()
         .iter()
@@ -236,4 +254,493 @@ fn event_pages_keep_the_newest_and_say_what_is_missing() {
     assert!(gap
         .unwrap()
         .contains("after event 6 failed to load (timed out)"));
+}
+
+#[test]
+fn user_block_has_padding_and_rail_only_without_surface_colour() {
+    use nexus_tui::timeline::{build, BlockKind};
+    for tier in [Tier::TrueColor, Tier::Ansi256, Tier::Ansi16, Tier::Mono] {
+        let app = with_turn(opts(Mode::Dark, tier), (120, 36));
+        let timeline = build(&app, &app.theme, 0, 64);
+        let block = timeline
+            .blocks
+            .iter()
+            .find(|b| b.kind == BlockKind::Turn)
+            .unwrap();
+        assert_eq!(block.end - block.start, 3);
+        assert_eq!(timeline.lines[block.start].spans[0].content, "▾");
+        assert_eq!(timeline.lines[block.end - 1].spans[0].content, " ");
+        let prefix = timeline.lines[block.start + 1].spans[0].content.as_ref();
+        assert_eq!(
+            prefix,
+            if matches!(tier, Tier::Ansi16 | Tier::Mono) {
+                "▌"
+            } else {
+                " "
+            }
+        );
+    }
+}
+
+#[test]
+fn hovering_user_block_reveals_copy_and_copies_that_message() {
+    use nexus_tui::app::Effect;
+    use nexus_tui::timeline::BlockKind;
+    use nexus_tui::ui::Target;
+    let mut a = app();
+    rows(&mut a);
+    let user = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Turn)
+        .unwrap();
+    let rect = a.hits.rect_of(&Target::Block(user)).unwrap();
+    a.mouse = Some((rect.x + 2, rect.y));
+    rows(&mut a);
+    let copy = a
+        .hits
+        .rect_of(&Target::CopyBlock(user))
+        .expect("hover reveals copy");
+    a.effects.clear();
+    click(&mut a, copy.x, copy.y);
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == "hi")));
+}
+
+#[test]
+fn activity_groups_respect_text_and_child_boundaries_and_preserve_details() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let msgs = serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[
+            {"type":"tool_call","id":"c1","name":"read","arguments":"{\"path\":\"a\"}"},
+            {"type":"reasoning","summary":"considering"},
+            {"type":"tool_call","id":"c2","name":"bash","arguments":"{\"command\":\"date\"}"},
+            {"type":"text","text":"middle"},
+            {"type":"tool_call","id":"c3","name":"edit","arguments":"{}"},
+            {"type":"tool_call","id":"child","name":"session","arguments":"{}"},
+            {"type":"tool_call","id":"c4","name":"write","arguments":"{}"}
+        ]},
+        {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":[
+            {"type":"tool_result","call_id":"c1","output":"one","is_error":false},
+            {"type":"tool_result","call_id":"c2","output":"two","is_error":true},
+            {"type":"tool_result","call_id":"c3","output":"three","is_error":false},
+            {"type":"tool_result","call_id":"c4","output":"four","is_error":false}
+        ]}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(msgs).unwrap();
+    view.events.clear();
+    let timeline = build(&a, &a.theme, 0, 100);
+    let groups: Vec<_> = timeline
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Group)
+        .collect();
+    assert_eq!(groups.len(), 3);
+    let first = &timeline.lines[groups[0].start];
+    let text = first
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<String>();
+    assert!(
+        text.contains("Read 1 file")
+            && text.contains("Ran 1 command")
+            && text.contains("Thought")
+            && text.contains("1 failed"),
+        "{text}"
+    );
+    assert!(timeline.blocks.iter().any(|b| b.kind == BlockKind::Child));
+    assert!(!timeline.blocks.iter().any(|b| b.kind == BlockKind::Tool));
+    a.ui.timeline_open.insert(groups[0].key.clone(), true);
+    let expanded = build(&a, &a.theme, 0, 100);
+    assert!(expanded.blocks.iter().any(|b| b.key == "tool:c1"));
+    assert!(expanded.blocks.iter().any(|b| b.key == "reason:a:1"));
+    assert!(expanded.blocks.iter().any(|b| b.key == "tool:c2"));
+}
+
+#[test]
+fn waiting_groups_stay_open_and_live_groups_settle_without_changing_key() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let msgs = serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"tool_call","id":"c1","name":"bash","arguments":"{\"command\":\"date\"}"}]}
+    ]);
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(msgs).unwrap();
+    view.events.clear();
+    busy(&mut a);
+    let live = build(&a, &a.theme, 0, 100);
+    let group = live
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    let key = group.key.clone();
+    assert_eq!(group.default_open, Some(true));
+    assert!(live.blocks.iter().any(|b| b.key == "tool:c1"));
+    assert_eq!(
+        live.lines[group.start].spans.len(),
+        2,
+        "reduced motion stays static"
+    );
+    let mut options = a.theme.opts;
+    options.reduced_motion = false;
+    a.theme = a.theme.with(options);
+    let frame0 = build(&a, &a.theme, 0, 100);
+    let frame1 = build(&a, &a.theme, 1, 100);
+    let index0 = frame0
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap()
+        .start;
+    let index1 = frame1
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap()
+        .start;
+    assert_ne!(
+        frame0.lines[index0].spans[1].style, frame1.lines[index1].spans[1].style,
+        "highlight moves between frames"
+    );
+    a.state.model.approvals.insert(
+        "p".into(),
+        serde_json::from_value(
+            serde_json::json!({"id":"p", "session_id":SESSION, "call_id":"c1", "tool":"bash"}),
+        )
+        .unwrap(),
+    );
+    a.ui.timeline_open.insert(key.clone(), false);
+    a.ui.timeline_open
+        .insert(format!("turn:{SESSION}:0"), false);
+    let waiting = build(&a, &a.theme, 0, 100);
+    let group = waiting
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    assert!(!group.toggle);
+    assert!(waiting.blocks.iter().any(|b| b.key == "tool:c1"));
+    a.state.model.approvals.clear();
+    a.ui.timeline_open.remove(&format!("turn:{SESSION}:0"));
+    a.state.model.running.clear();
+    a.state.model.sessions.get_mut(SESSION).unwrap().status = Some("idle".into());
+    a.state.model.selected.as_mut().unwrap().messages.push(serde_json::from_value(serde_json::json!({"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":[{"type":"tool_result","call_id":"c1","output":"ok","is_error":false}]})).unwrap());
+    let done = build(&a, &a.theme, 0, 100);
+    let group = done
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    assert_eq!(group.key, key);
+    assert_eq!(group.default_open, Some(false));
+    assert!(!done.blocks.iter().any(|b| b.kind == BlockKind::Tool));
+}
+
+#[test]
+fn live_group_announces_clipping_and_explicit_expansion_restores_members() {
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let calls: Vec<_> = (0..7).map(|n| serde_json::json!({"type":"tool_call", "id":format!("c{n}"), "name":"read", "arguments":"{}"})).collect();
+    a.state.model.selected.as_mut().unwrap().messages = serde_json::from_value(serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":calls}
+    ])).unwrap();
+    a.state.model.selected.as_mut().unwrap().events.clear();
+    busy(&mut a);
+    let t = build(&a, &a.theme, 0, 100);
+    let group = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    assert_eq!(
+        t.blocks
+            .iter()
+            .filter(|b| b.kind == BlockKind::Tool)
+            .count(),
+        5
+    );
+    let tool_rows: Vec<String> = t
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Tool)
+        .map(|b| {
+            t.lines[b.start]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        })
+        .collect();
+    assert!(tool_rows.first().unwrap().starts_with("├─ Read"));
+    assert!(tool_rows.last().unwrap().starts_with("╰─ Read"));
+    let tools: Vec<_> = t
+        .blocks
+        .iter()
+        .filter(|b| b.kind == BlockKind::Tool)
+        .collect();
+    assert!(tools.windows(2).all(|pair| pair[0].end == pair[1].start));
+    assert!(t
+        .lines
+        .iter()
+        .flat_map(|l| &l.spans)
+        .any(|s| s.content.contains("2 earlier")));
+    a.ui.timeline_open.insert(group.key.clone(), true);
+    let t = build(&a, &a.theme, 0, 100);
+    assert_eq!(
+        t.blocks
+            .iter()
+            .filter(|b| b.kind == BlockKind::Tool)
+            .count(),
+        7
+    );
+}
+
+#[test]
+fn denied_approval_is_labelled_separately_from_failure() {
+    use nexus_tui::api::Event;
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let view = a.state.model.selected.as_mut().unwrap();
+    view.messages = serde_json::from_value(serde_json::json!([
+        {"id":"u", "session_id":SESSION, "seq":1, "created":1.0, "role":"user", "parts":[{"type":"text","text":"start"}]},
+        {"id":"a", "session_id":SESSION, "seq":2, "created":2.0, "role":"assistant", "parts":[{"type":"tool_call","id":"c1","name":"bash","arguments":"{\"command\":\"date\"}"}]},
+        {"id":"t", "session_id":SESSION, "seq":3, "created":3.0, "role":"tool", "parts":[{"type":"tool_result","call_id":"c1","output":"denied","is_error":true}]}
+    ])).unwrap();
+    view.events = [
+        (
+            10,
+            "permission.asked",
+            serde_json::json!({"id":"p1", "call_id":"c1"}),
+        ),
+        (
+            11,
+            "permission.replied",
+            serde_json::json!({"id":"p1", "outcome":"denied"}),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, kind, data)| Event {
+        id,
+        cursor: None,
+        seq: None,
+        time: id as f64,
+        kind: kind.into(),
+        session_id: Some(SESSION.into()),
+        data,
+    })
+    .collect();
+    let t = build(&a, &a.theme, 0, 100);
+    let group = t
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Group)
+        .unwrap();
+    let text: String = t.lines[group.start]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("1 denied") && !text.contains("failed"),
+        "{text}"
+    );
+    a.ui.timeline_open.insert(group.key.clone(), true);
+    let t = build(&a, &a.theme, 0, 100);
+    let tool = t.blocks.iter().find(|b| b.kind == BlockKind::Tool).unwrap();
+    let text: String = t.lines[tool.start]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("denied") && !text.contains("failed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn large_user_message_preview_expands_without_changing_context_or_turn_key() {
+    use nexus_tui::app::Effect;
+    use nexus_tui::timeline::{build, BlockKind};
+    let mut a = app();
+    let original = "word ".repeat(1100);
+    let user = a
+        .state
+        .model
+        .selected
+        .as_mut()
+        .unwrap()
+        .messages
+        .iter_mut()
+        .find(|m| m.role == "user")
+        .unwrap();
+    user.parts = vec![serde_json::json!({"type":"text", "text": original})];
+    let t = build(&a, &a.theme, 0, 64);
+    let turn = t.blocks.iter().find(|b| b.kind == BlockKind::Turn).unwrap();
+    let turn_key = turn.key.clone();
+    assert!(
+        turn.end - turn.start <= 8,
+        "preview has at most six text rows and two padding rows"
+    );
+    let control = t.blocks.iter().find(|b| b.kind == BlockKind::User).unwrap();
+    assert_eq!(control.default_open, Some(false));
+    assert!(t.lines[control.start]
+        .spans
+        .iter()
+        .any(|s| s.content.contains("sent whole")));
+    a.ui.timeline_open.insert(control.key.clone(), true);
+    let expanded = build(&a, &a.theme, 0, 64);
+    let turn = expanded
+        .blocks
+        .iter()
+        .find(|b| b.kind == BlockKind::Turn)
+        .unwrap();
+    assert_eq!(turn.key, turn_key);
+    assert!(turn.end - turn.start > 8);
+    assert_eq!(
+        a.messages()
+            .iter()
+            .find(|m| m.role == "user")
+            .unwrap()
+            .parts[0]["text"],
+        original
+    );
+    rows(&mut a);
+    let i = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Turn)
+        .unwrap();
+    a.ui.timeline_sel = Some(i);
+    a.effects.clear();
+    a.execute("copy.user_message");
+    assert!(a
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::Copy(text) if text == &original)));
+}
+
+#[test]
+fn assistant_and_individual_fence_copy_keep_full_source() {
+    use nexus_tui::app::Effect;
+    use nexus_tui::timeline::BlockKind;
+    let mut a = app();
+    let event = serde_json::json!({"id": 90, "type": "message.added", "session_id": SESSION,
+        "cursor": "log_c915bfc9b6d826c4:90",
+        "data": {"id": "msg_code", "session_id": SESSION, "seq": 90, "created": 1793113412.0,
+                 "role": "assistant", "parts": [{"type": "text", "text": "Example:\n\n```python\nprint(42)\n```\n\n```sh\necho second\n```"}]}});
+    if let Ok(nexus_tui::api::Frame::Event(event)) =
+        nexus_tui::api::Frame::from_value("message.added", None, &event)
+    {
+        a.apply_sync(nexus_tui::sync::SyncMsg::Event(event));
+    }
+    rows(&mut a);
+    a.ui.focus = Focus::Timeline;
+    a.ui.timeline_sel = a.blocks().iter().position(|b| {
+        b.kind == BlockKind::Assistant
+            && b.target.as_deref().is_some_and(|s| s.contains("print(42)"))
+    });
+    let assistant = a.ui.timeline_sel;
+    a.ui.timeline_sel = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Code && b.target.as_deref() == Some("print(42)"));
+    a.effects.clear();
+    a.run_command("copy.code_block");
+    assert!(a
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Copy(text) if text == "print(42)")));
+    a.ui.timeline_sel = a
+        .blocks()
+        .iter()
+        .position(|b| b.kind == BlockKind::Code && b.target.as_deref() == Some("echo second"));
+    assert!(a.ui.timeline_sel.is_some());
+    let second_fence = a.ui.timeline_sel.unwrap();
+    a.click(nexus_tui::ui::Target::Block(second_fence));
+    rows(&mut a);
+    assert!(a
+        .hits
+        .rect_of(&nexus_tui::ui::Target::CopyBlock(second_fence))
+        .is_some());
+    a.effects.clear();
+    a.run_command("copy.code_block");
+    assert!(a
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Copy(text) if text == "echo second")));
+    a.ui.timeline_sel = assistant;
+    a.effects.clear();
+    a.run_command("copy.assistant_block");
+    assert!(a.effects.iter().any(|effect| matches!(effect, Effect::Copy(text) if text.contains("Example:") && text.contains("print(42)"))));
+}
+
+#[test]
+fn bracketed_user_prompt_counts_as_a_turn_for_context_folding() {
+    let mut a = app();
+    let selected = a.state.model.selected.as_mut().unwrap();
+    selected.messages.retain(|message| message.role == "user");
+    selected.messages.truncate(1);
+    selected.messages[0].parts = vec![serde_json::json!({"type":"text", "text":"[bug] fix this"})];
+    selected.starting = Some(
+        serde_json::json!({"system_prompt":"prompt", "tools": [], "agent": {}, "instruction_file": {}}),
+    );
+    rows(&mut a);
+    let index = a
+        .blocks()
+        .iter()
+        .position(|block| block.kind == nexus_tui::timeline::BlockKind::Context)
+        .unwrap();
+    let key = a.blocks()[index].key.clone();
+    a.click(nexus_tui::ui::Target::Block(index));
+    assert_eq!(a.ui.timeline_open.get(&key), Some(&true));
+}
+
+#[test]
+fn reasoning_reports_its_measured_duration() {
+    use nexus_tui::api::Event;
+    use nexus_tui::sync::SyncMsg;
+    let mut a = app();
+    let fields = |id: i64, time: f64, kind: &str, data: serde_json::Value| Event {
+        id,
+        cursor: None,
+        seq: None,
+        time,
+        kind: kind.into(),
+        session_id: Some(SESSION.into()),
+        data,
+    };
+    a.apply_sync(SyncMsg::Event(fields(
+        500,
+        20.0,
+        "message.added",
+        serde_json::json!({
+            "id": "msg_reason", "session_id": SESSION, "seq": 20, "created": 1793113500.0,
+            "role": "assistant",
+            "parts": [{"type": "reasoning", "summary": "Let me think."}]
+        }),
+    )));
+    a.apply_sync(SyncMsg::Event(fields(
+        501,
+        20.5,
+        "reasoning_delta",
+        serde_json::json!({"text": "Let me think."}),
+    )));
+    a.apply_sync(SyncMsg::Event(fields(
+        503,
+        24.0,
+        "part_done",
+        serde_json::json!({"part": {"type": "reasoning", "summary": "Let me think."}}),
+    )));
+    let text = rows(&mut a).join("\n");
+    assert!(text.contains("Thought for 3.5s"), "{text}");
 }

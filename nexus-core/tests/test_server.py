@@ -59,7 +59,7 @@ async def test_token_is_required(setup):
 async def test_info_reports_the_api_contract_clients_check(setup):
     _, client, _, _ = setup
     info = (await client.get("/api/info")).json()
-    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 0}
+    assert info["name"] == "nexus" and info["api_version"] == {"major": 1, "minor": 1}
     assert set(info) >= {"version", "pid", "home", "url", "log", "retention", "retry", "idempotency"}
 
 
@@ -458,3 +458,72 @@ def test_disabled_tools_persist_and_migrate(tmp_path):
     store = Store(path)
     assert store.session(session.id).disabled() == set()
     store.close()
+
+
+async def test_project_file_browsing_confines_paths_and_rejects_binary(setup, tmp_path):
+    _, client, _, workspace = setup
+    (workspace / "hello.txt").write_text("hello", encoding="utf-8")
+    (workspace / "binary").write_bytes(b"a\0b")
+    (workspace / "escape").symlink_to(tmp_path, target_is_directory=True)
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    base = f"/api/project/{project['id']}"
+    listing = (await client.get(base + "/files")).json()
+    assert {e["name"]: e["kind"] for e in listing["entries"]}["escape"] == "symlink"
+    file = (await client.get(base + "/file", params={"path": "hello.txt"})).json()
+    assert file["content"] == "hello" and file["revision"].startswith("sha256:")
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    other = (await client.post("/api/project", json={"path": str(other_workspace)})).json()
+    other_session = (await client.post("/api/session", json={"project": other["id"]})).json()
+    assert (await client.get(base + "/files", params={"session": other_session["id"]})).status_code == 400
+    for path in ("../nexus.db", "escape/nexus.db", "binary", "/etc/passwd"):
+        assert (await client.get(base + "/file", params={"path": path})).status_code == 400
+
+
+async def test_project_listing_git_names_and_special_files(setup):
+    _, client, _, workspace = setup
+    process = await asyncio.create_subprocess_exec("git", "init", "-q", str(workspace))
+    assert await process.wait() == 0
+    (workspace / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    (workspace / "ignored").mkdir()
+    (workspace / "ignored" / "a").write_text("x", encoding="utf-8")
+    (workspace / "nested").mkdir()
+    (workspace / "nested" / "line\nname").write_text("x", encoding="utf-8")
+    (workspace / "fifo").unlink(missing_ok=True)
+    import os
+    os.mkfifo(workspace / "fifo")
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    base = f"/api/project/{project['id']}"
+    result = (await client.get(base + "/files")).json()
+    entries = {entry["name"]: entry for entry in result["entries"]}
+    assert entries["nested"]["git_status"] == "??"
+    assert entries["ignored"]["ignored"] and entries[".git"]["ignored"]
+    nested = (await client.get(base + "/files", params={"path": "nested"})).json()
+    assert nested["entries"][0]["name"] == "line\nname"
+    assert nested["entries"][0]["git_status"] == "??"
+    from nexus.files import list_directory
+    subroot = await list_directory(workspace / "nested", "")
+    assert subroot["entries"][0]["git_status"] == "??"
+    assert (await client.get(base + "/file", params={"path": "fifo"})).status_code == 400
+
+
+async def test_session_git_status_and_diff(setup):
+    _, client, _, workspace = setup
+    for args in (("init", "-q"), ("config", "user.email", "test@example.org"),
+                 ("config", "user.name", "Test")):
+        process = await asyncio.create_subprocess_exec("git", *args, cwd=workspace)
+        assert await process.wait() == 0
+    (workspace / "a.txt").write_text("before\n", encoding="utf-8")
+    for args in (("add", "a.txt"), ("commit", "-qm", "initial")):
+        process = await asyncio.create_subprocess_exec("git", *args, cwd=workspace)
+        assert await process.wait() == 0
+    (workspace / "a.txt").write_text("after\n", encoding="utf-8")
+    project = (await client.post("/api/project", json={"path": str(workspace)})).json()
+    session = (await client.post("/api/session", json={"project": project["id"]})).json()
+    base = f"/api/session/{session['id']}/git"
+    status = (await client.get(base)).json()
+    assert status["changes"][0]["path"] == "a.txt"
+    assert status["changes"][0]["added"] == 1 and status["changes"][0]["removed"] == 1
+    diff = (await client.get(base + "/diff", params={"path": "a.txt"})).json()
+    assert "+after" in diff["unstaged"] and diff["staged"] == ""
+    assert (await client.get(base + "/diff", params={"path": "../a.txt"})).status_code == 400

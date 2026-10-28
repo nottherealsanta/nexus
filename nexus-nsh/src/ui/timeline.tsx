@@ -1,3 +1,4 @@
+import { agentColor } from "../agent-color";
 import { List, Text, View } from "nsh";
 import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, Status, T } from "./kit";
@@ -480,7 +481,7 @@ function RowView(p: { r: () => Row }) {
                     class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID="child-card">
                     <Status kind={c.tone === "accent" ? "waiting" : c.status === "running" ? "running" : "done"} />
                     <Text class="text-xs leading-4 text-muted-foreground">child</Text>
-                    <Text class="text-[13px] leading-5 text-foreground">{c.agent}</Text>
+                    <Text class={`text-[13px] leading-5 ${agentColor(c.agent)}`}>{c.agent}</Text>
                     <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.title ? `“${c.title}”` : ""}</Text>
                     <Text class={T.meta}>{c.status}</Text>
                   </Button>

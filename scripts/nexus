@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# Nexus 0.10 development launcher.
+#
+#   nexus                     launch the TUI
+#   nexus tui [flags]         launch the TUI (flags: --dark, --light, --256,
+#                             --release for a release binary, ...)
+#   nexus build [--release]   sync Core, build the TUI and the NSH web app
+#   nexus web [flags]         serve the NSH web app and open it
+#   nexus restart             restart the Core daemon
+#   nexus stop                stop the Core daemon
+#   nexus status              Core daemon and provider status
+#   nexus ps                  Core daemon status only
+#   nexus logs                follow the Core daemon log
+#   nexus check               tests, lints and shared-file checks
+#   nexus test                Core and TUI tests
+#   nexus fmt                 format the TUI and regenerate shared files
+#   nexus doctor              show versions, paths and daemon state
+#   nexus core <args>         run the Core CLI (login, chat, session, ...)
+#
+# Anything not listed is passed to the Core CLI, so `nexus login codex`,
+# `nexus chat`, `nexus session list` and friends keep working.
+set -euo pipefail
+
+# Resolve the repository even when this file is installed as a symlink.
+source_file="${BASH_SOURCE[0]}"
+while [ -L "$source_file" ]; do
+  target="$(readlink "$source_file")"
+  case "$target" in
+    /*) source_file="$target" ;;
+    *) source_file="$(dirname "$source_file")/$target" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$source_file")/.." && pwd)"
+CORE="$ROOT/nexus-core"
+TUI="$ROOT/nexus-tui"
+NSH="$ROOT/nexus-nsh"
+HOME_DIR="${NEXUS10_HOME:-$HOME/.nexus10}"
+
+die() { printf 'nexus: %s\n' "$*" >&2; exit 1; }
+
+ensure_home() {
+  case "$HOME_DIR" in
+    "$HOME/.nexus"|"$HOME/.nexus/"*)
+      die "refusing to use ~/.nexus (old Nexus); set NEXUS10_HOME"
+      ;;
+  esac
+  mkdir -p "$HOME_DIR"
+  chmod 700 "$HOME_DIR"
+}
+
+core() {
+  (cd "$CORE" && uv run nexus "$@")
+}
+
+core_cmd() {
+  printf 'uv run --project %s nexus' "$CORE"
+}
+
+ensure_uv() {
+  command -v uv >/dev/null 2>&1 || die "uv is not on PATH"
+}
+
+ensure_cargo() {
+  command -v cargo >/dev/null 2>&1 || die "cargo is not on PATH"
+}
+
+ensure_npm() {
+  command -v npm >/dev/null 2>&1 || die "npm is not on PATH"
+  [ -d "$NSH/node_modules" ] || (cd "$NSH" && npm install)
+}
+
+ensure_nsh() {
+  command -v nsh >/dev/null 2>&1 || die "the nsh CLI is not on PATH (npm install -g nsh?)"
+}
+
+tui() {
+  ensure_home
+  ensure_uv
+  ensure_cargo
+  local profile=()
+  if [ "${1:-}" = "--release" ]; then
+    profile=(--release)
+    shift
+  fi
+  (cd "$TUI" && NEXUS_TUI_CORE_CMD="$(core_cmd)" cargo run --quiet ${profile[@]+"${profile[@]}"} -- "$@")
+}
+
+build_all() {
+  local release=0
+  for arg in "$@"; do
+    case "$arg" in
+      --release) release=1 ;;
+      *) die "build: unknown argument $arg" ;;
+    esac
+  done
+  ensure_uv
+  ensure_cargo
+  ensure_npm
+  ensure_nsh
+  printf '› Core dependencies\n'
+  (cd "$CORE" && uv sync)
+  printf '› TUI\n'
+  if [ "$release" = 1 ]; then
+    (cd "$TUI" && cargo build --release)
+  else
+    (cd "$TUI" && cargo build)
+  fi
+  printf '› NSH web app\n'
+  (cd "$NSH" && npm run gen && npm run build)
+}
+
+web() {
+  ensure_home
+  ensure_uv
+  ensure_npm
+  local open_browser=1
+  local args=()
+  local port="${NEXUS_NSH_PORT:-4820}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-open) open_browser=0 ;;
+      --port) shift; port="${1:?--port needs a value}"; args+=(--port "$port") ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  if [ ! -f "$NSH/dist/Nexus/index.html" ]; then
+    ensure_nsh
+    printf '› building the NSH web app\n'
+    (cd "$NSH" && npm run gen && npm run build)
+  fi
+  # The host starts Core itself if needed, and re-reads daemon.json on restart.
+  core daemon start >/dev/null || true
+  if [ "$open_browser" = 1 ]; then
+    (sleep 1; if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$port"; elif command -v xdg-open >/dev/null 2>&1; then xdg-open "http://127.0.0.1:$port"; fi) >/dev/null 2>&1 &
+  fi
+  (cd "$NSH" && NEXUS_NSH_CORE_CMD="$(core_cmd)" exec node scripts/serve.mjs ${args[@]+"${args[@]}"})
+}
+
+restart() {
+  ensure_home
+  ensure_uv
+  core daemon stop >/dev/null 2>&1 || true
+  core daemon start
+}
+
+status_all() {
+  ensure_home
+  ensure_uv
+  printf 'Core daemon\n'
+  core daemon status
+  printf '\nProviders\n'
+  core status
+}
+
+check_all() {
+  ensure_uv
+  ensure_cargo
+  ensure_npm
+  ensure_nsh
+  printf '› Core tests\n'
+  (cd "$CORE" && uv run pytest -q && uv run ruff check nexus tests)
+  printf '› TUI tests and lints\n'
+  (cd "$TUI" && cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check)
+  printf '› Shared interface checks\n'
+  (cd "$ROOT" && python3 interface/check_theme.py && python3 interface/check_manifest.py)
+  printf '› NSH checks\n'
+  (cd "$NSH" && npm run check && npm run test:host)
+}
+
+test_all() {
+  ensure_uv
+  ensure_cargo
+  printf '› Core tests\n'
+  (cd "$CORE" && uv run pytest -q)
+  printf '› TUI tests\n'
+  (cd "$TUI" && cargo test)
+}
+
+fmt_all() {
+  ensure_cargo
+  ensure_npm
+  (cd "$TUI" && cargo fmt)
+  (cd "$NSH" && npm run gen)
+}
+
+doctor() {
+  printf 'repository  %s\n' "$ROOT"
+  printf 'home        %s\n' "$HOME_DIR"
+  printf 'uv          %s\n' "$(uv --version 2>/dev/null || echo missing)"
+  printf 'cargo       %s\n' "$(cargo --version 2>/dev/null || echo missing)"
+  printf 'node        %s\n' "$(node --version 2>/dev/null || echo missing)"
+  if command -v nsh >/dev/null 2>&1; then
+    printf 'nsh         %s\n' "$(nsh --version 2>/dev/null | head -1)"
+  else
+    printf 'nsh         missing\n'
+  fi
+  if [ -d "$HOME_DIR" ]; then
+    printf 'daemon      %s\n' "$(core daemon status 2>/dev/null || echo 'not running')"
+  else
+    printf 'daemon      home not created\n'
+  fi
+}
+
+usage() {
+  awk 'NR > 1 { if ($0 ~ /^#/) { sub(/^# ?/, ""); print } else { exit } }' "$source_file"
+}
+
+case "${1:-}" in
+  ""|tui|t)
+    if [ "${1:-}" = "tui" ] || [ "${1:-}" = "t" ]; then shift; fi
+    tui "$@" ;;
+  once)                shift; tui --once "$@" ;;
+  build|b)             shift; build_all "$@" ;;
+  web|w)               shift; web "$@" ;;
+  restart|r)           shift; restart "$@" ;;
+  stop)                shift; ensure_home; core daemon stop "$@" ;;
+  status|s)            shift; status_all "$@" ;;
+  ps)                  shift; ensure_home; core daemon status "$@" ;;
+  logs)
+    shift
+    ensure_home
+    log="$HOME_DIR/logs/daemon.log"
+    [ -f "$log" ] || die "no daemon log yet at $log"
+    tail -f "$log"
+    ;;
+  check)               shift; check_all "$@" ;;
+  test)                shift; test_all "$@" ;;
+  fmt)                 shift; fmt_all "$@" ;;
+  doctor)              shift; doctor "$@" ;;
+  core)                shift; core "$@" ;;
+  help|-h|--help)      usage ;;
+  *)                   core "$@" ;;
+esac

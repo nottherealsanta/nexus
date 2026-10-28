@@ -317,8 +317,8 @@ export const manifest = {
       "kind": "choice",
       "scope": "client",
       "clients": "both",
-      "unavailable_reason": "Shared theme tokens arrive with Step 12.2.",
-      "note": "Named themes come from one shared token file (PLAN.md Step 12.2)."
+      "unavailable_reason": "Named themes are not available yet.",
+      "note": "Choose a named theme when themes are available."
      },
      {
       "id": "appearance.density",
@@ -488,7 +488,7 @@ export const manifest = {
    {
     "id": "skills",
     "label": "Skills",
-    "unavailable_reason": "Skills arrive with PLAN.md Step 11a.",
+    "unavailable_reason": "Skills are not available yet.",
     "row": [
      {
       "id": "skills.list",
@@ -496,7 +496,7 @@ export const manifest = {
       "kind": "list",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "Skills are not in Core yet (Step 11a)."
+      "unavailable_reason": "Skills are not available yet."
      },
      {
       "id": "skills.defaults",
@@ -504,7 +504,7 @@ export const manifest = {
       "kind": "list",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "Skills are not in Core yet (Step 11a)."
+      "unavailable_reason": "Skills are not available yet."
      },
      {
       "id": "skills.diagnostics",
@@ -512,14 +512,14 @@ export const manifest = {
       "kind": "list",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "Skills are not in Core yet (Step 11a)."
+      "unavailable_reason": "Skills are not available yet."
      }
     ]
    },
    {
     "id": "mcp",
     "label": "MCP",
-    "unavailable_reason": "MCP arrives with PLAN.md Step 11a.",
+    "unavailable_reason": "MCP is not available yet.",
     "row": [
      {
       "id": "mcp.servers",
@@ -527,7 +527,7 @@ export const manifest = {
       "kind": "list",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "MCP is not in Core yet (Step 11a)."
+      "unavailable_reason": "MCP is not available yet."
      },
      {
       "id": "mcp.defaults",
@@ -535,7 +535,7 @@ export const manifest = {
       "kind": "list",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "MCP is not in Core yet (Step 11a)."
+      "unavailable_reason": "MCP is not available yet."
      },
      {
       "id": "mcp.connection",
@@ -543,7 +543,7 @@ export const manifest = {
       "kind": "action",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "MCP is not in Core yet (Step 11a)."
+      "unavailable_reason": "MCP is not available yet."
      },
      {
       "id": "mcp.browser_use",
@@ -551,7 +551,7 @@ export const manifest = {
       "kind": "info",
       "scope": "core",
       "clients": "both",
-      "unavailable_reason": "MCP is not in Core yet (Step 11a)."
+      "unavailable_reason": "MCP is not available yet."
      }
     ]
    },
@@ -566,14 +566,14 @@ export const manifest = {
       "scope": "core",
       "clients": "both",
       "default": 80,
-      "unavailable_reason": "Handoff is not in Core yet (Step 12a)."
+      "unavailable_reason": "Automatic handoff is not available yet."
      }
     ]
    },
    {
     "id": "dictation",
     "label": "Dictation",
-    "unavailable_reason": "Dictation engine is undecided (INTERFACE_PLAN.md open questions).",
+    "unavailable_reason": "Dictation is not available yet.",
     "row": [
      {
       "id": "dictation.engine",
@@ -1469,6 +1469,37 @@ export const manifest = {
    "note": "TUI falls back to ctrl+j where the terminal cannot report shift+enter."
   },
   {
+   "id": "composer.undo",
+   "title": "Undo composer edit",
+   "category": "composer",
+   "keys": {
+    "tui": "ctrl+z"
+   },
+   "key_context": "composer",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ]
+  },
+  {
+   "id": "composer.redo",
+   "title": "Redo composer edit",
+   "category": "composer",
+   "keys": {
+    "tui": "ctrl+y"
+   },
+   "key_context": "composer",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "palette"
+   ],
+   "note": "Ctrl+Shift+Z also redoes in the TUI."
+  },
+  {
    "id": "queue.edit",
    "title": "Edit queued message",
    "category": "composer",
@@ -2022,6 +2053,19 @@ export const manifest = {
    "unavailable_reason": "Open a project first.",
    "placement": [
     "sidebar"
+   ]
+  },
+  {
+   "id": "files.root_toggle",
+   "title": "Files: project checkout or session worktree",
+   "category": "files",
+   "when": [
+    "has_project"
+   ],
+   "unavailable_reason": "Open a project first.",
+   "placement": [
+    "sidebar",
+    "palette"
    ]
   },
   {

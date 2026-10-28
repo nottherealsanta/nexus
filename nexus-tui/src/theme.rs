@@ -6,7 +6,52 @@
 use std::collections::BTreeMap;
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use serde::Deserialize;
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Soft travelling shimmer adapted from old Nexus `rust/tui/src/render.rs`.
+/// Grapheme boundaries keep combined characters intact. Static when animation is disabled.
+pub fn shimmer(
+    word: &str,
+    frame: usize,
+    animate: bool,
+    base: Style,
+    peak: Style,
+) -> Vec<Span<'static>> {
+    if !animate {
+        return vec![Span::styled(word.to_owned(), base)];
+    }
+    let count = word.graphemes(true).count() as f32;
+    let reach = 4.0_f32;
+    let head = (frame % 54) as f32 / 54.0 * (count + 2.0 * reach) - reach;
+    word.graphemes(true)
+        .enumerate()
+        .map(|(index, grapheme)| {
+            let near = (1.0 - (index as f32 - head).abs() / reach).clamp(0.0, 1.0);
+            let amount = near * near * (3.0 - 2.0 * near);
+            let color = match (base.fg, peak.fg) {
+                (Some(Color::Rgb(r, g, b)), Some(Color::Rgb(pr, pg, pb))) => {
+                    let mix = |a: u8, b: u8| {
+                        (f32::from(a) + (f32::from(b) - f32::from(a)) * amount).round() as u8
+                    };
+                    Some(Color::Rgb(mix(r, pr), mix(g, pg), mix(b, pb)))
+                }
+                (a, b) => {
+                    if amount > 0.5 {
+                        b.or(a)
+                    } else {
+                        a
+                    }
+                }
+            };
+            Span::styled(
+                grapheme.to_owned(),
+                color.map_or(base, |color| base.fg(color)),
+            )
+        })
+        .collect()
+}
 
 const SOURCE: &str = include_str!("../../interface/theme.toml");
 
@@ -17,6 +62,7 @@ pub struct ThemeData {
     pub dark: Tokens,
     pub light: Tokens,
     pub roles: BTreeMap<String, RoleDef>,
+    pub agent_pins: BTreeMap<String, String>,
     pub fallback256: Fallback<u8>,
     pub fallback16: Fallback<String>,
     pub monochrome: Mono,
@@ -258,6 +304,32 @@ impl Theme {
         }
     }
 
+    /// Stable identity slot. Core agent names are restricted to lowercase ASCII.
+    pub fn agent_slot(&self, name: &str) -> &str {
+        const SLOTS: [&str; 8] = [
+            "amber", "blue", "violet", "green", "teal", "rose", "sky", "gold",
+        ];
+        let name = name.to_ascii_lowercase();
+        if let Some(slot) = self.data.agent_pins.get(&name) {
+            return slot;
+        }
+        let hash = name.bytes().fold(0x811c9dc5u32, |h, byte| {
+            (h ^ u32::from(byte)).wrapping_mul(0x01000193)
+        });
+        let start = hash as usize % SLOTS.len();
+        for offset in 0..SLOTS.len() {
+            let slot = SLOTS[(start + offset) % SLOTS.len()];
+            if !self.data.agent_pins.values().any(|p| p == slot) {
+                return slot;
+            }
+        }
+        SLOTS[start]
+    }
+
+    pub fn agent_style(&self, name: &str) -> Style {
+        self.fg(&format!("agent.{}", self.agent_slot(name)))
+    }
+
     /// Text attributes a token carries: the monochrome mapping, plus `dim` for
     /// muted text on ANSI-16 where colours alone cannot tell it apart.
     fn mods(&self, token: &str) -> Modifier {
@@ -402,7 +474,7 @@ impl Theme {
         &frames[frame % frames.len()]
     }
 
-    /// Hairline box set for borders: Unicode light lines or ASCII.
+    /// Old Nexus modal frame: rounded Unicode hairlines or ASCII.
     pub fn border_set(&self) -> ratatui::symbols::border::Set {
         if self.opts.ascii {
             ratatui::symbols::border::Set {
@@ -416,7 +488,7 @@ impl Theme {
                 horizontal_bottom: "-",
             }
         } else {
-            ratatui::symbols::border::PLAIN
+            ratatui::symbols::border::ROUNDED
         }
     }
 }
@@ -424,6 +496,23 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_pins_and_hash_are_stable() {
+        let theme = Theme::new(Options::default());
+        for (name, slot) in [
+            ("orchestrate", "amber"),
+            ("build", "blue"),
+            ("quick", "green"),
+            ("scout", "teal"),
+            ("plan", "violet"),
+            ("review", "rose"),
+            ("tester", "sky"),
+        ] {
+            assert_eq!(theme.agent_slot(name), slot);
+        }
+        assert_eq!(theme.agent_slot("BUILD"), "blue");
+    }
 
     fn all_opts() -> Vec<Options> {
         let mut v = Vec::new();
