@@ -778,6 +778,98 @@ fn files_list_open_read_and_return_to_timeline() {
     assert!(joined(&rows).contains("Hello"));
 }
 
+/// Opens `hello.txt` in the file view with `content` loaded.
+fn open_file_view(content: &str) -> nexus_tui::app::App {
+    use nexus_tui::sync::SyncMsg;
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let project = app.current_project().unwrap();
+    app.execute("sidebar.tab.files");
+    app.apply_sync(SyncMsg::Files {
+        project: project.clone(),
+        session: Some(SESSION.into()),
+        path: String::new(),
+        file: false,
+        data: Ok(serde_json::json!({"entries": [{"name": "hello.txt", "kind": "file"}]})),
+    });
+    draw(&mut app, 120, 36);
+    app.click(Target::SideRow(0));
+    app.apply_sync(SyncMsg::Files {
+        project,
+        session: Some(SESSION.into()),
+        path: "hello.txt".into(),
+        file: true,
+        data: Ok(serde_json::json!({"content": content})),
+    });
+    draw(&mut app, 120, 36);
+    app
+}
+
+#[test]
+fn file_view_search_filters_jumps_and_ends_before_closing() {
+    let mut app = open_file_view("alpha\nbeta needle\ngamma\nNeedle again\n");
+    press(&mut app, &["/"]);
+    typing(&mut app, "needle");
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("/needle  2 matches"), "{rows:?}");
+
+    press(&mut app, &["enter"]);
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0));
+    press(&mut app, &["n"]);
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(1));
+    press(&mut app, &["n"]);
+    assert_eq!(app.ui.file_search.as_ref().unwrap().hit, Some(0), "wraps");
+    press(&mut app, &["N"]);
+    assert_eq!(
+        app.ui.file_search.as_ref().unwrap().hit,
+        Some(1),
+        "wraps back"
+    );
+
+    // Typing again edits the query, so n is a letter.
+    press(&mut app, &["/"]);
+    typing(&mut app, "n");
+    assert_eq!(app.ui.file_search.as_ref().unwrap().query, "needlen");
+
+    // The first Esc ends the search and keeps the file open.
+    press(&mut app, &["esc"]);
+    assert!(app.ui.file_search.is_none());
+    assert!(app.ui.file_open);
+    press(&mut app, &["esc"]);
+    assert!(!app.ui.file_open);
+}
+
+#[test]
+fn file_view_highlights_matches_and_announces_the_line_range() {
+    let lines: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+    let mut app = open_file_view(&format!("{lines}target here\n"));
+    let (_, rows) = draw(&mut app, 120, 36);
+    let all = joined(&rows);
+    assert!(all.contains("lines 1-"), "{all}");
+    assert!(all.contains("of 101 · scroll"), "{all}");
+
+    press(&mut app, &["pagedown"]);
+    let scroll = app.ui.file_scroll;
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        joined(&rows).contains(&format!("lines {}-", scroll + 1)),
+        "{rows:?}"
+    );
+
+    press(&mut app, &["/"]);
+    typing(&mut app, "TARGET");
+    press(&mut app, &["enter"]);
+    let (buf, rows) = draw(&mut app, 120, 36);
+    assert!(joined(&rows).contains("  1 matches"), "{rows:?}");
+    let y = rows
+        .iter()
+        .position(|row| row.contains("target here"))
+        .unwrap() as u16;
+    let x = col_of(&rows[y as usize], "target") as u16;
+    let highlighted = buf.cell((x, y)).unwrap().bg;
+    let plain = buf.cell((x + 20, y)).unwrap().bg;
+    assert_ne!(highlighted, plain, "matches use interactive.selection");
+}
+
 #[test]
 fn git_sidebar_shows_status_from_the_selected_session() {
     use nexus_tui::sync::SyncMsg;

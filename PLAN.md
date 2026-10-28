@@ -161,7 +161,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
      totals.
 4. **Files**
    - Syntax highlighting (the library is still undecided).
-   - `/` search and load-more in the file view.
    - `@` completion in the composer.
 5. **Projects**
    - Add and remove projects from the TUI.
