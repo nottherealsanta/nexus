@@ -124,7 +124,12 @@ sizes in dark and light, palette, settings, files, new session, detail high,
 delete confirmation, slash completion) against two seeded, isolated Cores and
 converts the SVGs to PNG with headless Chromium, with no node. The seeded
 session ends with a two-file `patch` edit (CJK comment, a long line), so detail
-high shows a split diff at 200 columns and a unified one at 120 and below. It always stops
+high shows a split diff at 200 columns and a unified one at 120 and below. The seed
+also gives the right sidebar its content: `nexus-demo` is a Git repo with uncommitted
+changes (modified, untracked and deleted files, so GIT lists them and the diff view
+has rows); the session has a `usage` event (CONTEXT shows tokens); and its `session`
+tool call launched a child session (the `↳` count). The composer's `╱` meter does not
+appear in the seeded session shot. It always stops
 the Cores. `NEXUS_CMD` picks the Core CLI (default `uv run nexus`; for example
 `NEXUS_CMD=/tmp/nexus10-venv/bin/nexus`), `CHROME` the browser (default the
 Playwright headless shell). `NEXUS_PORT` is the seeded Core's port (default 4799)
