@@ -312,6 +312,8 @@ pub enum Target {
     RailSearch,
     NewSession,
     RightSection(usize),
+    /// One changed file in the right sidebar's Git status, by row index.
+    GitRow(usize),
     Timeline,
     /// One timeline block, by index in the last built timeline.
     Block(usize),

@@ -55,7 +55,17 @@ sets off, waiting only (the default) or waiting, done and errors (a finished
 turn or a failed session too). Terminal focus is not tracked, so a session in
 view never notifies.
 
-Still Step 12.4: the built-in editor, Git diff UI, worktree
+The right sidebar's Git status groups changed files into Staged, Unstaged and
+Untracked from Core's `/api/session/{id}/git` (`staged`, `unstaged` and the
+porcelain `status` code). A file changed in both the index and the worktree
+appears in both groups. Click a row, or press Enter with the right sidebar
+focused (`up`/`down` move), to open its diff from `/git/diff` in the centre
+column: `+` lines on `diff.add_bg`, `-` lines on `diff.del_bg`, muted hunk
+headers, new-file line numbers. A Staged row shows the staged diff, an Unstaged
+row the unstaged one; Untracked rows show a notice because Core's diff has no
+untracked contents. Esc returns to the timeline.
+
+Still Step 12.4: the built-in editor, worktree
 management in the UI, settings editing beyond theme/monochrome, and
 steering/queueing (blocked on Core, Step 12a). Unavailable commands are listed disabled with their reason.
 

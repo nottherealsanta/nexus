@@ -886,6 +886,9 @@ or non-UTF-8 data and files over 1 MiB. Paths are relative to the selected root;
 the session must belong to the project. File edits and change notifications are not yet provided.
 
 `GET /api/session/{id}/git` returns branch, ahead/behind counts and changed
-paths, with staged/unstaged flags and tracked line counts.
+paths. Each change has `staged` (index column set), `unstaged` (worktree
+column set, also true for untracked files), the porcelain v1 `status` code
+(`"MM"`, `"A "`, `"??"`, with X as the index and Y as the worktree state) and
+tracked line counts. Clients treat `"??"` as untracked.
 `GET /api/session/{id}/git/diff?path=` returns separate staged and unstaged
 diffs for a relative path. Untracked file contents are not included in diffs.

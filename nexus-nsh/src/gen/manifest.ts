@@ -2289,8 +2289,7 @@ export const manifest = {
    "unavailable_reason": "Focus a changed file first.",
    "placement": [
     "sidebar"
-   ],
-   "status": "blocked_core"
+   ]
   },
   {
    "id": "composer.attach",

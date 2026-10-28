@@ -132,6 +132,8 @@ pub struct AppState {
     pub file_scope: Option<(String, Option<String>)>,
     pub git: Option<(String, Result<serde_json::Value, String>)>,
     pub file: Option<FileResponse>,
+    /// Last diff read: session, path and the `/git/diff` body.
+    pub diff: Option<(String, String, Result<serde_json::Value, String>)>,
 }
 
 impl Default for AppState {
@@ -153,6 +155,7 @@ impl Default for AppState {
             file_dirs: std::collections::BTreeMap::new(),
             file_scope: None,
             git: None,
+            diff: None,
             file: None,
         }
     }
@@ -202,6 +205,11 @@ impl AppState {
                 self.catalog_source = source;
             }
             SyncMsg::Git { session, data } => self.git = Some((session, data)),
+            SyncMsg::Diff {
+                session,
+                path,
+                data,
+            } => self.diff = Some((session, path, data)),
             SyncMsg::ProjectWorktrees { project, data } => match data {
                 Ok(listing) => {
                     self.project_worktrees.insert(project, listing);

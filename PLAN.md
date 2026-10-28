@@ -159,9 +159,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 3. **Session info**
    - Effort, tool counts, a context bar and cost once Core reports usage
      totals.
-   - Staged and unstaged Git split; clicking a file opens its diff (the Core
-     route exists, and `git.open_diff` is still marked `blocked_core` in the
-     manifest).
 4. **Waiting card**
    - Answer `ask` questions in the TUI (NSH already can).
 5. **Files**
