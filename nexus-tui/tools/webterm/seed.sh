@@ -27,6 +27,17 @@ if [ "${2:-}" = "stop" ]; then
   exit 0
 fi
 for h in home home-empty; do rm -rf "$root/$h"; mkdir -p "$root/$h"; chmod 700 "$root/$h"; done
+# The Core lists only models of connected providers (server.py `models`), so an
+# unsigned home has no catalog entry for the seeded model and no context window:
+# the composer meter needs one. Write a placeholder codex sign-in (never used:
+# the harness makes no provider calls) so codex/gpt-6.1-terra gets its window.
+python3 - "$root/home/auth.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"codex": {"refresh_token": "seed-placeholder", "account_id": "seed-placeholder"}}, f)
+PY
 rm -rf "$root/ws"
 mkdir -p "$root/ws/nexus-demo" "$root/ws/side-project/src" "$root/ws/side-project/target"
 side="$root/ws/side-project"

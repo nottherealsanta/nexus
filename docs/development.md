@@ -127,9 +127,12 @@ session ends with a two-file `patch` edit (CJK comment, a long line), so detail
 high shows a split diff at 200 columns and a unified one at 120 and below. The seed
 also gives the right sidebar its content: `nexus-demo` is a Git repo with uncommitted
 changes (modified, untracked and deleted files, so GIT lists them and the diff view
-has rows); the session has a `usage` event (CONTEXT shows tokens); and its `session`
-tool call launched a child session (the `↳` count). The composer's `╱` meter does not
-appear in the seeded session shot. It always stops
+has rows); the session has a `usage` event (CONTEXT shows the meter and the share of
+the window); and its `session` tool call launched a child session (the `↳` count).
+The composer's `╱` meter and `48.2K · 5%` show because the seed writes a placeholder
+codex sign-in (the Core lists only connected providers' models, and the window comes
+from that list) and ends the seeded turn on an assistant reply (otherwise the composer
+shows `continue`). It always stops
 the Cores. `NEXUS_CMD` picks the Core CLI (default `uv run nexus`; for example
 `NEXUS_CMD=/tmp/nexus10-venv/bin/nexus`), `CHROME` the browser (default the
 Playwright headless shell). `NEXUS_PORT` is the seeded Core's port (default 4799)

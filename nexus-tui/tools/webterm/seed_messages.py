@@ -3,7 +3,8 @@ calls). Run with the daemon stopped:
   NEXUS10_HOME=... uv run --project ../../../nexus-core python seed_messages.py <session id>
 Only used by the visual harness (tools/webterm/seed.sh). The last turn is a
 successful two-file `patch` edit: it gives the shots a split and a unified diff
-(D09), with a CJK comment and a long line that wraps.
+(D09), with a CJK comment and a long line that wraps. It ends with an assistant
+reply, so the turn is complete and the composer shows the context meter.
 
 It also seeds what the sidebars need and the API alone cannot write: a `usage`
 event after the turn (the composer's context meter reads the latest one), and a
@@ -44,7 +45,10 @@ ms = [
  Message("assistant", (
    ToolCall("call_4", "edit", json.dumps({"patch": '*** Begin Patch\n*** Update File: nexus-core/nexus/loader.py\n@@ def load(self, name: str) -> Manifest:\n     path = self.root / name\n-    return parse_manifest(path)\n+    key = path.stat().st_mtime_ns\n+    hit = self._cache.get(name)\n+    if hit and hit[0] == key:\n+        return hit[1]\n+    # キャッシュはファイルの更新時刻で無効になります。This line is deliberately long enough to wrap inside a split column of the diff.\n+    manifest = parse_manifest(path)\n+    self._cache[name] = (key, manifest)\n+    return manifest\n*** Update File: nexus-core/tests/test_loader.py\n@@ def test_load_returns_manifest(tmp_path):\n     assert loader.load("a")\n+\n+def test_cache_hit_skips_parse(tmp_path, monkeypatch):\n+    calls = []\n+    assert len(calls) == 1\n*** End Patch'})),
  )),
- Message("tool", (ToolResult("call_4", "updated nexus-core/nexus/loader.py (1 hunks)\nupdated nexus-core/tests/test_loader.py (1 hunks)"),))
+ Message("tool", (ToolResult("call_4", "updated nexus-core/nexus/loader.py (1 hunks)\nupdated nexus-core/tests/test_loader.py (1 hunks)"),)),
+ # A closing reply: a conversation that ends on a tool message reads as cut
+ # short, and the composer then shows `continue` instead of the context meter.
+ Message("assistant", (Text("Done: the loader caches the manifest on its mtime, and the new test checks that a cache hit skips the parse."),)),
 ]
 for m in ms:
     st.append_message(sid, m)
