@@ -933,6 +933,11 @@ impl CoreApi {
         self.http.get("/api/model", &[]).await
     }
 
+    /// Core's default model reference (`{model}`), used when a session sets none.
+    pub async fn default_model(&self) -> Result<Value, Error> {
+        self.http.get("/api/model/default", &[]).await
+    }
+
     /// Agents available to a project (`{agents, problems}`).
     pub async fn agents(&self, project: Option<&str>) -> Result<Value, Error> {
         let query: Vec<(&str, String)> = project

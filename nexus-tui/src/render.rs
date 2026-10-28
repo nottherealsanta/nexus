@@ -170,6 +170,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         {
             draw_rail_popup(&cx, buf, l, regions.centre);
         }
+        if let Some(l) = regions.left {
+            draw_tab_tooltip(&cx, buf, l, area);
+        }
         if a.ui.view == View::Settings {
             draw_settings_modal(&cx, buf, area, &mut hits);
         }
@@ -466,11 +469,8 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         hits.add(g.bell, Target::Notifications);
     }
 
-    // Sidebar tabs, in manifest order, right after the leading toggle.
-    let tabs_end = draw_header_tabs(cx, buf, g, hits);
-
     // title, breadcrumbs and status, centred over the centre column
-    let tx0 = g.title.x.max(tabs_end + 2).max(g.centre.x);
+    let tx0 = g.title.x.max(g.centre.x);
     let tr = Rect::new(
         tx0,
         g.title.y,
@@ -575,44 +575,6 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             tr.right().saturating_sub(x + 2),
         );
     }
-}
-
-/// The Sessions / Files / Projects tabs in the header row; returns the column
-/// after the last tab.
-fn draw_header_tabs(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) -> u16 {
-    let a = cx.app;
-    let y = g.header.y;
-    let mut x = g.toggle_left.right() + 1;
-    let limit = g.bell.x.saturating_sub(8);
-    for t in &a.manifest.navigation.left_sidebar.tab {
-        let Some(tab) = Tab::from_id(&t.id) else {
-            continue;
-        };
-        let w = width(&t.label) as u16 + 2;
-        if x + w > limit {
-            break;
-        }
-        let rect = Rect::new(x, y, w, 1);
-        let active = a.ui.tab == tab && a.ui.view == View::Session;
-        let mut style = if active {
-            cx.st(PRIMARY, CANVAS)
-                .add_modifier(Modifier::BOLD)
-                .patch(cx.t.bg("interactive.hover"))
-        } else {
-            cx.st(MUTED, CANVAS)
-        };
-        if cx.hovered(rect) && !active {
-            style = cx.st(SECONDARY, CANVAS).patch(cx.t.bg("interactive.hover"));
-        }
-        clear(buf, rect, style);
-        put(buf, x + 1, y, &t.label, style, w - 1);
-        if active && cx.t.mono() {
-            buf.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
-        }
-        hits.add(rect, Target::Tab(tab));
-        x += w;
-    }
-    x
 }
 
 fn header_status(cx: &Cx) -> Option<(String, Style)> {
@@ -843,12 +805,103 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
     hits.add(sr, Target::SettingsEntry);
 
-    let body = Rect::new(r.x, r.y + 1, r.width, r.height.saturating_sub(3));
+    draw_tab_icons(cx, buf, r, hits);
+    let body = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(4));
     match a.ui.tab {
         Tab::Sessions => draw_sessions(cx, buf, body, focused, hits),
         Tab::Files => draw_files(cx, buf, body, focused, hits),
         Tab::Projects => draw_projects(cx, buf, body, focused, hits),
     }
+}
+
+/// The sidebar tab icons, in manifest order: a row at the top of the full
+/// sidebar, or a column at the top of the rail. Labels show on hover.
+fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
+    let rail = r.width <= crate::layout::RAIL_WIDTH;
+    let mut out = Vec::new();
+    for (i, t) in cx
+        .app
+        .manifest
+        .navigation
+        .left_sidebar
+        .tab
+        .iter()
+        .enumerate()
+    {
+        let Some(tab) = Tab::from_id(&t.id) else {
+            continue;
+        };
+        let glyph = match tab {
+            Tab::Sessions => "tab_sessions",
+            Tab::Files => "tab_files",
+            Tab::Projects => "tab_projects",
+        };
+        let i = i as u16;
+        let rect = if rail {
+            Rect::new(r.x, r.y + 1 + i, r.width, 1)
+        } else {
+            Rect::new(r.x + 1 + i * 4, r.y, 3, 1)
+        };
+        if rect.right() <= r.right() && rect.bottom() <= r.bottom() {
+            out.push((tab, rect, t.label.clone(), glyph));
+        }
+    }
+    out
+}
+
+fn draw_tab_icons(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
+    let a = cx.app;
+    for (tab, rect, _, glyph) in tab_icons(cx, r) {
+        let active = a.ui.tab == tab;
+        let mut style = if active {
+            cx.st(PRIMARY, SIDEBAR)
+                .add_modifier(Modifier::BOLD)
+                .patch(cx.t.bg("interactive.hover"))
+        } else {
+            cx.st(MUTED, SIDEBAR)
+        };
+        if cx.hovered(rect) && !active {
+            style = cx
+                .st(SECONDARY, SIDEBAR)
+                .patch(cx.t.bg("interactive.hover"));
+        }
+        if active || cx.hovered(rect) {
+            clear(buf, rect, style);
+        }
+        let g = cx.t.sidebar_glyph(glyph);
+        let gx = rect.x + rect.width.saturating_sub(width(g) as u16) / 2;
+        put(buf, gx, rect.y, g, style, rect.width);
+        if active && cx.t.mono() {
+            buf.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
+        }
+        hits.add(rect, Target::Tab(tab));
+    }
+}
+
+/// The hovered tab icon's word label, drawn on top of everything.
+fn draw_tab_tooltip(cx: &Cx, buf: &mut Buffer, r: Rect, limit: Rect) {
+    let Some((_, rect, label, _)) = tab_icons(cx, r)
+        .into_iter()
+        .find(|(_, rect, _, _)| cx.hovered(*rect))
+    else {
+        return;
+    };
+    let w = width(&label) as u16 + 2;
+    let (x, y) = if r.width <= crate::layout::RAIL_WIDTH {
+        (rect.right(), rect.y)
+    } else {
+        (rect.x, rect.y + 1)
+    };
+    let tip = Rect::new(x, y, w, 1).intersection(limit);
+    clear(buf, tip, cx.st(PRIMARY, RAISED));
+    put(
+        buf,
+        tip.x + 1,
+        tip.y,
+        &label,
+        cx.st(PRIMARY, RAISED),
+        tip.width.saturating_sub(1),
+    );
 }
 
 /// One rail entry: a session, or the search and new-session controls.
@@ -864,6 +917,9 @@ const RAIL_ITEM: u16 = 3;
 
 fn rail_layout(cx: &Cx, r: Rect) -> Vec<(RailItem, Rect)> {
     let a = cx.app;
+    // Below the tab icons and a blank row.
+    let icons = tab_icons(cx, r).len() as u16 + 1;
+    let r = Rect::new(r.x, r.y + icons, r.width, r.height.saturating_sub(icons));
     let entries = a.side_entries();
     let room = (r.height.saturating_sub(1) / RAIL_ITEM) as usize;
     let mut items = vec![RailItem::Search];
@@ -895,6 +951,7 @@ fn rail_initial(title: &str) -> String {
 
 fn draw_rail(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let a = cx.app;
+    draw_tab_icons(cx, buf, r, hits);
     let entries = a.side_entries();
     let viewed = a.viewed_id();
     let focused = a.ui.focus == Focus::Sidebar;
@@ -2086,17 +2143,7 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
         &truncate_middle(&s.id, r.width.saturating_sub(13) as usize, cx.ell()),
     );
     kv(cx, buf, r, y, "agent", &s.agent);
-    kv(
-        cx,
-        buf,
-        r,
-        y,
-        "model",
-        s.model
-            .as_deref()
-            .filter(|m| !m.is_empty())
-            .unwrap_or("default"),
-    );
+    kv(cx, buf, r, y, "model", &a_model_label(cx, s));
     kv(cx, buf, r, y, "perm", &s.permission);
     kv(
         cx,
@@ -2205,6 +2252,97 @@ fn empty_state(cx: &Cx) -> (String, Vec<String>) {
     }
 }
 
+/// The new-session view's context header: what the first prompt will be
+/// sent with. Core freezes the real context when the session starts, so this
+/// is labelled a preview.
+fn draw_new_session_context(cx: &Cx, buf: &mut Buffer, r: Rect) {
+    let a = cx.app;
+    if r.height < 8 || r.width < 24 {
+        return;
+    }
+    let agent = a
+        .state
+        .agents
+        .iter()
+        .find(|ag| ag["name"].as_str() == Some("build"));
+    let model = a.effective_model(None);
+    let model_label = if model.is_empty() {
+        cx.ell().to_owned()
+    } else {
+        let (provider, name, _) = model_parts(a, &model);
+        format!("{name} {provider}")
+    };
+    let tools = agent
+        .and_then(|ag| ag["tools"].as_array())
+        .map(|t| {
+            t.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "agent default".into());
+    let place = a
+        .current_project()
+        .and_then(|p| a.state.model.projects.get(&p))
+        .map(|p| format!("{}/AGENTS.md", short_home(&p.path)))
+        .unwrap_or_else(|| "AGENTS.md".into());
+    let mut y = r.y;
+    let x = r.x;
+    let header = [
+        (format!("{} ", cx.t.fold(true)), cx.st(MUTED, CANVAS)),
+        (
+            "Context".to_owned(),
+            cx.st(SECONDARY, CANVAS).add_modifier(Modifier::BOLD),
+        ),
+        (
+            format!("{}preview{}{model_label}", cx.sep(), cx.sep()),
+            cx.st(MUTED, CANVAS),
+        ),
+    ];
+    let mut hx = x;
+    for (text, style) in header {
+        hx = put(buf, hx, y, &text, style, r.right().saturating_sub(hx));
+    }
+    y += 1;
+    let rows = [
+        ("agent", "build · builtin".to_owned()),
+        (
+            "model",
+            if model.is_empty() {
+                cx.ell().to_owned()
+            } else {
+                model
+            },
+        ),
+        ("tools", tools),
+        ("instructions", place),
+        ("system prompt", "frozen when the session starts".to_owned()),
+    ];
+    let label_w = 15u16;
+    for (label, value) in rows {
+        put(
+            buf,
+            x + 2,
+            y,
+            cx.t.structure("rail"),
+            cx.st("border.default", CANVAS),
+            1,
+        );
+        put(buf, x + 4, y, label, cx.st(SECONDARY, CANVAS), label_w);
+        let vw = r.right().saturating_sub(x + 4 + label_w);
+        put(
+            buf,
+            x + 4 + label_w,
+            y,
+            &truncate(&value, vw as usize, cx.ell()),
+            cx.st(MUTED, CANVAS),
+            vw,
+        );
+        y += 1;
+    }
+}
+
 fn draw_timeline(
     cx: &Cx,
     buf: &mut Buffer,
@@ -2230,9 +2368,17 @@ fn draw_timeline(
         } else {
             title
         };
+        let preview = a.viewed().is_none() && !busy && !a.state.model.projects.is_empty();
+        if preview {
+            draw_new_session_context(cx, buf, inner);
+        }
         let wrap_w = (inner.width as usize).saturating_sub(4).max(10);
         let body: Vec<String> = body.iter().flat_map(|l| text::wrap(l, wrap_w)).collect();
-        let y0 = r.y + r.height.saturating_sub(2 + body.len() as u16) / 3;
+        let y0 = (r.y + r.height.saturating_sub(2 + body.len() as u16) / 3).max(if preview {
+            r.y + 8
+        } else {
+            r.y
+        });
         let x0 = |s: &str| inner.x + (inner.width as usize).saturating_sub(width(s)) as u16 / 2;
         put(
             buf,
@@ -2712,6 +2858,16 @@ fn draw_question_body(
 
 /// Display parts of a `provider/id` model reference. The catalog name wins over
 /// the id; the id is the fallback for a model the catalog no longer lists.
+/// The details sidebar's model value: the effective `provider/id`.
+fn a_model_label(cx: &Cx, s: &crate::api::Session) -> String {
+    let reference = cx.app.effective_model(Some(s));
+    if reference.is_empty() {
+        cx.ell().to_owned()
+    } else {
+        reference
+    }
+}
+
 fn model_parts(app: &App, reference: &str) -> (String, String, String) {
     let (provider, id) = reference
         .split_once('/')
@@ -2780,13 +2936,13 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
         .find(|event| event.kind == "usage")
         .and_then(|event| event.data.get("input_tokens"))
         .and_then(Value::as_u64)?;
-    let model = session.model.as_deref().unwrap_or_default();
+    let model = cx.app.effective_model(Some(session));
     let entry = cx
         .app
         .state
         .models
         .iter()
-        .find(|m| m["ref"].as_str() == Some(model));
+        .find(|m| m["ref"].as_str() == Some(model.as_str()));
     let window = entry.and_then(|m| m["context"].as_u64()).filter(|&n| n > 0);
     let mut tiers: Vec<u64> = entry
         .and_then(|m| m["tiers"].as_array())
@@ -2933,21 +3089,16 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         .map(str::to_owned);
     let mut effort_on = true;
     let mut provider_on = true;
-    let mut agent_label = session
-        .map(|s| text::capitalize(&s.agent))
-        .unwrap_or_default();
-    let (provider, model_name, model_id) = session
-        .and_then(|s| s.model.as_deref().filter(|m| !m.is_empty()))
-        .map_or_else(
-            || {
-                (
-                    "codex".to_owned(),
-                    "default model".to_owned(),
-                    String::new(),
-                )
-            },
-            |reference| model_parts(a, reference),
-        );
+    // A new session starts with the build agent until one is chosen.
+    let agent_name = session.map_or("build", |s| s.agent.as_str());
+    let mut agent_label = text::capitalize(agent_name);
+    let reference = a.effective_model(session);
+    // Until the catalog reports Core's default, the model is not known yet.
+    let (provider, model_name, model_id) = if reference.is_empty() {
+        (String::new(), cx.ell().to_owned(), String::new())
+    } else {
+        model_parts(a, &reference)
+    };
     let pending = busy
         .then_some(request_model)
         .flatten()
@@ -3022,7 +3173,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         end
     };
     let mut x = r.x + 3;
-    if let Some(session) = session {
+    {
         let fields: Vec<(String, Target, &str)> = vec![
             (agent_label, Target::ComposerAgent, PRIMARY),
             (model_label, Target::ComposerModel, PRIMARY),
@@ -3058,12 +3209,13 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 truncate(&label, room as usize, cx.ell())
             };
             let style = if target == Target::ComposerAgent {
-                cx.st(token, PANEL).patch(cx.t.agent_style(&session.agent))
+                cx.st(token, PANEL).patch(cx.t.agent_style(agent_name))
             } else {
                 cx.st(token, PANEL)
             };
             x = put(buf, x, cy, &label, style, room);
-            if x > start {
+            // The pickers change a session; before one exists they only show.
+            if x > start && session.is_some() {
                 hits.add(Rect::new(start, cy, x - start, 1), target);
             }
         }

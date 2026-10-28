@@ -387,6 +387,9 @@ left_open    = { unicode = "◧", ascii = "[|" }
 left_closed  = { unicode = "□", ascii = "[ " }
 right_open   = { unicode = "◨", ascii = "|]" }
 right_closed = { unicode = "□", ascii = " ]" }
+tab_sessions = { unicode = "≡", ascii = "S" }
+tab_files    = { unicode = "▤", ascii = "F" }
+tab_projects = { unicode = "◫", ascii = "P" }
 
 [glyphs.attention]
 waiting = { unicode = "◆", ascii = "?", token = "interactive.accent", rank = 1 }

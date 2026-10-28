@@ -33,6 +33,7 @@ fn model_agent_and_effort_pickers_use_core_catalog_data() {
             serde_json::json!({"name": "scout", "source": "builtin", "mode": "subagent"}),
         ],
         source: "models.dev".into(),
+        default_model: "codex/gpt-6.1-terra".into(),
     });
     let items = a.palette_items();
     assert!(items.iter().any(|i| i.label == "scout"), "agents listed");

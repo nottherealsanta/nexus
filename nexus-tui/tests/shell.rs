@@ -54,13 +54,19 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
             assert!(all.contains("Type a message"), "{all}");
             assert!(!rows.last().unwrap().contains("✓ live"));
             if w >= 100 {
-                // tabs in manifest order, settings pinned at the bottom of the sidebar
-                let tabs: Vec<usize> = m
+                // tab icons in manifest order at the top of the sidebar,
+                // settings pinned at the bottom
+                let tabs: Vec<u16> = m
                     .navigation
                     .left_sidebar
                     .tab
                     .iter()
-                    .map(|t| col_of(&rows[0], &t.label))
+                    .map(|t| {
+                        let tab = nexus_tui::ui::Tab::from_id(&t.id).unwrap();
+                        let r = app.hits.rect_of(&Target::Tab(tab)).expect("tab icon");
+                        assert_eq!(r.y, 1, "icons sit on the sidebar's first row");
+                        r.x
+                    })
                     .collect();
                 assert!(tabs.windows(2).all(|p| p[0] < p[1]), "{tabs:?}");
                 assert!(
@@ -137,11 +143,11 @@ fn narrow_layout_uses_drawers_and_keeps_the_anchors() {
     draw(&mut app, 80, 24);
     press(&mut app, &["ctrl+b"]);
     let (_, rows) = draw(&mut app, 80, 24);
-    assert!(
-        rows[0].contains("Sessions") && rows[0].contains("Files"),
-        "{:?}",
-        rows[0]
-    );
+    // the drawer carries the tab icons
+    use nexus_tui::ui::Tab;
+    for tab in [Tab::Sessions, Tab::Files, Tab::Projects] {
+        assert!(app.hits.rect_of(&Target::Tab(tab)).is_some(), "{tab:?}");
+    }
     assert!(
         rows[0].starts_with(" \u{25e7}"),
         "toggle shows open: {:?}",
@@ -1451,4 +1457,23 @@ fn files_and_projects_tabs_expand_the_rail() {
     app.ui.left_rail = true;
     app.execute("sidebar.tab.sessions");
     assert!(app.ui.left_rail);
+}
+
+#[test]
+fn tab_icons_show_their_label_on_hover() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    draw(&mut app, 120, 36);
+    let r = app
+        .hits
+        .rect_of(&Target::Tab(nexus_tui::ui::Tab::Files))
+        .unwrap();
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(!rows[r.y as usize + 1].contains("Files"));
+    app.mouse = Some((r.x + 1, r.y));
+    let (_, rows) = draw(&mut app, 120, 36);
+    assert!(
+        rows[r.y as usize + 1].contains("Files"),
+        "{:?}",
+        rows[r.y as usize + 1]
+    );
 }

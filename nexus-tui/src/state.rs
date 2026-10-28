@@ -120,6 +120,8 @@ pub struct AppState {
     pub models: Vec<serde_json::Value>,
     pub agents: Vec<serde_json::Value>,
     pub catalog_source: String,
+    /// Core's default model reference, shown wherever a session sets none.
+    pub default_model: String,
     /// Last worktree listing per session; validated against the current directory.
     pub worktrees: std::collections::BTreeMap<String, serde_json::Value>,
     /// Last worktree listing per project's own checkout (no session yet).
@@ -150,6 +152,7 @@ impl Default for AppState {
             models: Vec::new(),
             agents: Vec::new(),
             catalog_source: String::new(),
+            default_model: String::new(),
             worktrees: std::collections::BTreeMap::new(),
             project_worktrees: std::collections::BTreeMap::new(),
             file_dirs: std::collections::BTreeMap::new(),
@@ -199,10 +202,14 @@ impl AppState {
                 models,
                 agents,
                 source,
+                default_model,
             } => {
                 self.models = models;
                 self.agents = agents;
                 self.catalog_source = source;
+                if !default_model.is_empty() {
+                    self.default_model = default_model;
+                }
             }
             SyncMsg::Git { session, data } => self.git = Some((session, data)),
             SyncMsg::Diff {

@@ -67,6 +67,8 @@ pub enum SyncMsg {
         models: Vec<Value>,
         agents: Vec<Value>,
         source: String,
+        /// Core's default model reference (`provider/id`), empty if unknown.
+        default_model: String,
     },
     Files {
         project: String,
@@ -356,11 +358,14 @@ pub async fn run(
         // A request received while reconnecting must not be stranded until a
         // later command arrives on the live stream.
         if let Some(project) = cx.catalog.take() {
-            if let Some((models, agents, source)) = load_catalog(&api, project.as_deref()).await {
+            if let Some((models, agents, source, default_model)) =
+                load_catalog(&api, project.as_deref()).await
+            {
                 if !cx.send(SyncMsg::Catalog {
                     models,
                     agents,
                     source,
+                    default_model,
                 }) {
                     return;
                 }
@@ -451,9 +456,15 @@ async fn load_files(cx: &mut Ctx, api: &CoreApi) {
 async fn load_catalog(
     api: &CoreApi,
     project: Option<&str>,
-) -> Option<(Vec<Value>, Vec<Value>, String)> {
+) -> Option<(Vec<Value>, Vec<Value>, String, String)> {
     let models = api.models().await.ok()?;
     let agents = api.agents(project).await.ok()?;
+    let default_model = api
+        .default_model()
+        .await
+        .ok()
+        .and_then(|v| v["model"].as_str().map(str::to_owned))
+        .unwrap_or_default();
     Some((
         models
             .get("models")
@@ -470,6 +481,7 @@ async fn load_catalog(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
+        default_model,
     ))
 }
 
@@ -765,8 +777,8 @@ async fn stream(
                         cx.handle(c);
                         if cx.shutdown { return StreamEnd::Stop; }
                         if let Some(project) = cx.catalog.take() {
-                            if let Some((models, agents, source)) = load_catalog(api, project.as_deref()).await {
-                                if !cx.send(SyncMsg::Catalog { models, agents, source }) {
+                            if let Some((models, agents, source, default_model)) = load_catalog(api, project.as_deref()).await {
+                                if !cx.send(SyncMsg::Catalog { models, agents, source, default_model }) {
                                     return StreamEnd::Stop;
                                 }
                             }

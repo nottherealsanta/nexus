@@ -776,17 +776,15 @@ fn a_retry_sequence_is_one_tight_stack_with_rounded_delays() {
     let drawn = rows(&mut a);
     let text = drawn.join("\n");
     assert!(text.contains("provider retry 1/3 in 0.8s"), "{text}");
+    // One line each, detail inline, no gap between them.
     let first = drawn.iter().position(|r| r.contains("retry 1/3")).unwrap();
-    assert!(drawn[first + 1].contains("codex: HTTP 429"), "{text}");
-    assert!(drawn[first + 2].contains("retry started"), "no gap: {text}");
+    assert!(drawn[first].contains("codex: HTTP 429"), "{text}");
+    assert!(drawn[first + 1].contains("retry started"), "no gap: {text}");
     let err = drawn
         .iter()
         .position(|r| r.contains("provider: codex: HTTP 429"))
         .unwrap();
-    assert!(
-        !drawn[err + 1].contains("HTTP 429"),
-        "detail not repeated: {text}"
-    );
+    assert_eq!(drawn[err].matches("HTTP 429").count(), 1, "{text}");
 }
 
 /// Replace the viewed session's messages with one assistant turn of tool calls,

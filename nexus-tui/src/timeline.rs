@@ -1906,30 +1906,31 @@ impl Builder<'_> {
             "warning" => self.t.status("interrupted"),
             _ => ("i", "info", "status.info"),
         };
-        let st = self.t.role_style("diagnostic");
-        let rail = self.t.role_rail_style("diagnostic");
-        let heavy = self.t.structure("rail_heavy").to_owned();
-        let bg = self.t.role("diagnostic").bg.clone();
-        let bgst = self.st(&bg, &bg);
-        let head = format!("{glyph} {text}");
+        // Old Nexus look: one plain line, indented like body text, the glyph
+        // in the level's colour; errors read in the error colour, retries stay
+        // quiet. The detail follows on the same line.
+        let text_style = if level == "error" {
+            self.st(token, CANVAS)
+        } else {
+            self.secondary()
+        };
+        let glyph_style = self.st(token, CANVAS);
+        let meta = self.meta();
+        let sep = self.sep();
         self.block(key, BlockKind::Diagnostic, self.turn, false, |b| {
-            b.out.push(TLine {
-                spans: vec![
-                    Span::styled(heavy.clone(), rail),
-                    Span::styled(format!(" {head}"), st.add_modifier(Modifier::BOLD)),
-                ],
-                bg: Some(bgst),
-            });
-            if let Some(detail) = detail {
-                for row in text::wrap(&detail, b.bw.saturating_sub(2)) {
-                    b.out.push(TLine {
-                        spans: vec![
-                            Span::styled(heavy.clone(), rail),
-                            Span::styled(format!(" {row}"), st),
-                        ],
-                        bg: Some(bgst),
-                    });
+            let mut spans = vec![
+                Span::styled(format!("  {glyph} "), glyph_style),
+                Span::styled(text.clone(), text_style),
+            ];
+            if let Some(detail) = &detail {
+                spans.push(Span::styled(format!("{sep}{detail}"), meta));
+            }
+            let parts = crate::markdown::wrap_spans(&spans, b.bw.max(8));
+            for (i, mut part) in parts.into_iter().enumerate() {
+                if i > 0 {
+                    part.insert(0, Span::raw("    "));
                 }
+                b.line(part);
             }
         });
         let _ = token;

@@ -1996,6 +1996,25 @@ impl App {
         }
     }
 
+    /// The model reference a session runs with: its own, else the agent
+    /// file's, else Core's default. Empty only before the catalog loads.
+    pub fn effective_model(&self, session: Option<&crate::api::Session>) -> String {
+        if let Some(m) = session
+            .and_then(|s| s.model.as_deref())
+            .filter(|m| !m.is_empty())
+        {
+            return m.to_owned();
+        }
+        let agent = session.map_or("build", |s| s.agent.as_str());
+        self.state
+            .agents
+            .iter()
+            .find(|a| a["name"].as_str() == Some(agent))
+            .and_then(|a| a["model"].as_str())
+            .filter(|m| !m.is_empty())
+            .map_or_else(|| self.state.default_model.clone(), str::to_owned)
+    }
+
     /// Open a picker and ask the supervisor for fresh catalog data.
     fn open_picker(&mut self, mode: PaletteMode) {
         let project = self.current_project();
@@ -2685,6 +2704,12 @@ impl App {
             _ => None,
         };
         self.state.apply(msg);
+        // Model names and the default model come with the catalog; ask once
+        // the workspace is known so the composer never says "default".
+        if snapshot && self.state.models.is_empty() && self.state.default_model.is_empty() {
+            self.effects
+                .push(Effect::Sync(SyncCommand::Catalog(self.current_project())));
+        }
         if self.state.events_applied > applied_before {
             if let Some((root, kind, data)) = attention {
                 let viewed_root = self.viewed_id().and_then(|id| self.root_session(id));
