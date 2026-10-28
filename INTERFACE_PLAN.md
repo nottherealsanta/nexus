@@ -841,7 +841,9 @@ token counts, and accepts the edits above.
 Assistant text is CommonMark plus GFM: headings, emphasis, lists, task lists,
 tables, block quotes, links, inline code, fenced code with syntax highlighting
 and a language label, and horizontal rules.
-In the TUI, each code fence is individually focusable and has a copy action.
+In the TUI, each code fence is individually focusable and has a copy action: a
+panel block whose header row holds the language (muted) and, on focus or hover,
+`copy`, with the code inset by 2 and no rule or rail (DESIGN_PLAN.md D08).
 Supported Mermaid diagrams appear above their original source; unsupported
 formats and ASCII mode keep the source visible.
 
@@ -889,8 +891,9 @@ name, the key argument, a short result summary, and duration.
 
 **Expanded detail:**
 
-- **edit / patch:** the diff, unified, with line numbers and syntax highlighting.
-  NSH offers a split view when wide. A patch shows one collapsible diff per
+- **edit / patch:** the diff, with line numbers where the patch has them. Split
+  (old | new, `╱` hatch on the empty side) when the column is at least 110 cells
+  (TUI) or the window 1100 px (NSH), unified below (D09). A patch shows one collapsible diff per
   file. A failed edit shows the error and the attempted change.
 - **write:** the diff against the previous file, or the new content when the
   file is new.

@@ -4,6 +4,7 @@ import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, foldEventPages } from "./src/core/reduce";
 import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
+import { diffItems, splitRows } from "./src/ui/diff";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -357,7 +358,7 @@ describe("context, composer and footer parity", () => {
     expect(footer.includes("$0.16")).toBe(true);
   });
 
-  test("composer puts latest input occupancy and the palette hint in its status band", async () => {
+  test("composer control row shows the context meter; the project strip shows the palette hint", async () => {
     const events = [
       { id: 1, type: "usage", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { input_tokens: 1000 } },
       { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 11100 } },
@@ -373,8 +374,10 @@ describe("context, composer and footer parity", () => {
     await app.press("id:session-ses_1");
     await app.waitFor("id:composer-usage");
     const shown = app.texts().join("\n");
-    expect(shown.includes("GPT-6.1 Terra codex")).toBe(true);
-    expect(shown.includes("11.1K (1.1%)")).toBe(true);
+    expect(shown.includes("GPT-6.1 Terra") && shown.includes("codex")).toBe(true);
+    expect(shown.includes("11k · 1.1%")).toBe(true);
+    expect(app.shows("id:composer-meter")).toBe(true);
+    expect(app.shows("id:location-strip")).toBe(true);
     expect(shown.includes("commands")).toBe(true);
   });
 
@@ -431,6 +434,43 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("text:trunk");
     expect(app.requests().some((r) => r.url.includes("/api/project/prj_1/worktrees"))).toBe(true);
     expect(app.shows("id:location-worktree")).toBe(false);
+  });
+});
+
+describe("markdown fences and diffs (I4)", () => {
+  test("splits runs of removals and additions into paired rows with their own numbers", () => {
+    const lines = detailOf("edit", JSON.stringify({ patch: "@@ -1,3 +1,3 @@\n a\n-b\n+c\n d" }), undefined, false);
+    const rows = splitRows(diffItems(lines));
+    expect(rows.map((r) => r.kind)).toEqual(["hunk", "ctx", "pair", "ctx"]);
+    const pair = rows[2] as { left?: { o?: number; text: string }; right?: { n?: number; text: string } };
+    expect(pair.left?.o).toBe(2);
+    expect(pair.right?.n).toBe(2);
+    expect(pair.left?.text).toBe("b");
+    expect(pair.right?.text).toBe("c");
+    const uneven = splitRows(diffItems(detailOf("edit", JSON.stringify({ patch: "@@ -1 +1 @@\n-x\n-y\n+z" }), undefined, false)));
+    const last = uneven[uneven.length - 1] as { left?: unknown; right?: unknown };
+    expect(last.left !== undefined && last.right === undefined).toBe(true);
+  });
+
+  test("a fenced block shows its language and a Copy button; an edit shows the diff view", async () => {
+    const messages = [
+      userMessage,
+      { id: "m_fence", session_id: "ses_1", seq: 2, role: "assistant", created: 2, parts: [{ type: "text", text: "Use:\n\n```python\nprint(1)\n```" }] },
+      { id: "m_edit", session_id: "ses_1", seq: 3, role: "assistant", created: 3, parts: [{ type: "tool_call", id: "call_edit", name: "edit", arguments: JSON.stringify({ patch: "@@ -1 +1 @@\n-old line\n+new line" }) }] },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      width: 1280, height: 800, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:code-fence");
+    const fence = app.texts().join("\n");
+    expect(fence.includes("python") && fence.includes("print(1)") && fence.includes("Copy")).toBe(true);
+    await app.waitFor("id:tool-row-call_edit");
+    await app.press("id:tool-row-call_edit");
+    await app.waitFor("id:diff");
+    expect(app.texts().join("\n").includes("new line")).toBe(true);
   });
 });
 

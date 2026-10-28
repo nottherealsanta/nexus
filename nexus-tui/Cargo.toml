@@ -25,5 +25,4 @@ toml = "=0.8.23"
 unicode-width = "=0.2.0"
 unicode-segmentation = "=1.13.3"
 pulldown-cmark = { version = "=0.13.4", default-features = false }
-ratatui-markdown = { version = "=0.3.6", default-features = false, features = ["markdown"] }
 libc = "=0.2.191"

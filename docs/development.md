@@ -122,7 +122,9 @@ character by character (`/mo`). Core's replies are applied between tokens.
 `nexus-tui/tools/shots.sh <root> <out>` runs a standard set (session at three
 sizes in dark and light, palette, settings, files, new session, detail high,
 delete confirmation, slash completion) against two seeded, isolated Cores and
-converts the SVGs to PNG with headless Chromium, with no node. It always stops
+converts the SVGs to PNG with headless Chromium, with no node. The seeded
+session ends with a two-file `patch` edit (CJK comment, a long line), so detail
+high shows a split diff at 200 columns and a unified one at 120 and below. It always stops
 the Cores. `NEXUS_CMD` picks the Core CLI (default `uv run nexus`; for example
 `NEXUS_CMD=/tmp/nexus10-venv/bin/nexus`), `CHROME` the browser (default the
 Playwright headless shell). The node harness in `nexus-tui/tools/webterm`

@@ -469,6 +469,15 @@ export function escape() {
   return null;
 }
 
+/** Keys for an open control (a completion list): bound while it shows, released by the returned function. */
+export function bindOpenKeys(keys: Record<string, () => void>): () => void {
+  const offs: (() => void)[] = [];
+  for (const [k, fn] of Object.entries(keys)) {
+    try { offs.push(keymap.bind(k, fn, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+  }
+  return () => offs.forEach((f) => f());
+}
+
 export function bindKeys(): () => void {
   const offs: (() => void)[] = [];
   for (const c of commands) {

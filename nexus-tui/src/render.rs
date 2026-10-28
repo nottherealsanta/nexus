@@ -1619,8 +1619,8 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
     }
 }
 
-/// A read-only Git diff in the centre column, like the file view: added
-/// lines on the add tint, removed lines on the delete tint, hunk headers muted.
+/// A read-only Git diff in the centre column, like the file view, drawn by
+/// `diff.rs`: split at 110 cells and wider, unified below.
 fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
     clear(buf, r, cx.st(PRIMARY, SIDEBAR));
     let Some((path, group)) = &cx.app.ui.diff_open else {
@@ -1671,56 +1671,18 @@ fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
         return note(buf, "No changes in this part.", MUTED);
     }
     let page = r.height.saturating_sub(2) as usize;
-    // Line numbers follow the new file: hunk headers reset them, `-` lines have none.
-    let mut numbers = Vec::with_capacity(lines.len());
-    let mut next = 0usize;
-    for line in &lines {
-        if let Some(start) = hunk_start(line) {
-            next = start;
-            numbers.push(None);
-        } else if line.starts_with('-') || next == 0 {
-            numbers.push(None);
-        } else {
-            numbers.push(Some(next));
-            next += 1;
-        }
+    let width = r.width.saturating_sub(2) as usize;
+    let look = crate::diff::Look::from_theme(cx.t);
+    let rows = crate::diff::Diff::from_patch(&lines.join("\n")).render(width, &look);
+    if rows.is_empty() {
+        return note(buf, "No changes in this part.", MUTED);
     }
-    for (i, line) in lines
-        .iter()
-        .enumerate()
-        .skip(cx.app.ui.diff_scroll)
-        .take(page)
-    {
-        let y = r.y + 1 + (i - cx.app.ui.diff_scroll) as u16;
-        let row = Rect::new(r.x, y, r.width, 1);
-        let (fg, bg) = if line.starts_with('+') && !line.starts_with("+++") {
-            (cx.st("diff.add", SIDEBAR), Some("diff.add_bg"))
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            (cx.st("diff.del", SIDEBAR), Some("diff.del_bg"))
-        } else if line.starts_with("@@")
-            || line.starts_with("diff ")
-            || line.starts_with("index ")
-            || line.starts_with("---")
-            || line.starts_with("+++")
-        {
-            (cx.st(MUTED, SIDEBAR), None)
-        } else {
-            (cx.st(SECONDARY, SIDEBAR), None)
-        };
-        let style = match bg {
-            Some(token) => fg.patch(cx.t.bg(token)),
-            None => fg,
-        };
-        clear(buf, row, style);
-        let number = numbers[i].map_or_else(|| "    ".to_owned(), |n| format!("{n:>4}"));
-        let label = truncate(
-            &format!("{number}  {line}"),
-            r.width.saturating_sub(1) as usize,
-            cx.ell(),
-        );
-        put(buf, r.x + 1, y, &label, style, r.width.saturating_sub(1));
+    let scroll = cx.app.ui.diff_scroll.min(rows.len().saturating_sub(page));
+    for (i, row) in rows.iter().enumerate().skip(scroll).take(page) {
+        let y = r.y + 1 + (i - scroll) as u16;
+        buf.set_line(r.x + 1, y, &Line::from(row.clone()), width as u16);
     }
-    let remaining = lines.len().saturating_sub(cx.app.ui.diff_scroll + page);
+    let remaining = rows.len().saturating_sub(scroll + page);
     if remaining > 0 && r.height >= 2 {
         put(
             buf,
@@ -1731,13 +1693,6 @@ fn draw_diff_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
             r.width.saturating_sub(1),
         );
     }
-}
-
-/// The new-file start line of a `@@ -a,b +c,d @@` hunk header.
-fn hunk_start(line: &str) -> Option<usize> {
-    let rest = line.strip_prefix("@@ ")?;
-    let new = rest.split_whitespace().nth(1)?.strip_prefix('+')?;
-    new.split(',').next()?.parse().ok()
 }
 
 fn row_style(cx: &Cx, selected: bool, hover: bool) -> Style {
@@ -2887,7 +2842,7 @@ fn draw_timeline(
         let y1 = r.y + (b.end.min(top + h).saturating_sub(top)) as u16;
         let rect = Rect::new(inner.x, y0, inner.width, y1 - y0);
         hits.add(rect, Target::Block(bi));
-        // Old Nexus exposes a fence's copy action only when its first row has room.
+        // A fence's `copy` sits at the right end of its header row, on focus or hover, when the row has room.
         if b.kind == crate::timeline::BlockKind::Code
             && b.start >= top
             && inner.width >= 8
@@ -2895,14 +2850,13 @@ fn draw_timeline(
                 || (a.ui.focus == Focus::Timeline && a.ui.timeline_sel == Some(bi)))
         {
             let button = Rect::new(inner.right() - 6, y0, 5, 1);
-            let empty = (button.x..button.right())
-                .all(|x| matches!(buf[(x, y0)].symbol(), " " | "─" | "-"));
+            let empty = (button.x..button.right()).all(|x| buf[(x, y0)].symbol() == " ");
             if empty {
                 put(
                     buf,
                     button.x,
                     button.y,
-                    "Copy",
+                    "copy",
                     cx.st(MUTED, PANEL),
                     button.width,
                 );

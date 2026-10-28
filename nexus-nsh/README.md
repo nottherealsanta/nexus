@@ -16,7 +16,8 @@ workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. The timeline has starting
-context, Markdown, and three detail levels: activity groups collapsed in low,
+context, Markdown (prose 15/24; fenced code is a panel card with the language and
+a Copy button; inline code is 13 px Monaspace on the panel), and three detail levels: activity groups collapsed in low,
 individual collapsed tools in medium, and expanded tools in high. Each user
 message is the turn's header: a full-width raised card (`#n · time` on the right,
 Copy and Fold on hover) that folds to one line. A sticky copy of the current
@@ -47,11 +48,17 @@ tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). Th
 `border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
 split rules and tool boxes.
 
-The composer follows the TUI's borderless panel, agent-colour rail and darker
-status band. Its controls show the model/provider and effort; the status band
-shows latest input-token occupancy and the palette hint. The location strip shows
-the home-shortened directory, branch and linked-worktree marker without a project
-name. Before a session exists, the agent/model/effort pickers and slash commands
+The composer is a card on the panel surface (12 px radius, 1 px border that turns
+to the focus colour, 12x16 padding) with pill selectors for agent (in its colour),
+model with its muted provider, and effort. Its control row ends with the context
+meter (an 80x4 px bar in the agent colour and `82k · 41%`) and the send button.
+While a session runs, a Working row above the card shows the elapsed time and
+output tokens (`Working · 12s · ↓4.1k`) with Stop. Typing `/` opens a completion
+block on the card's top edge (commands, with their key hints); `@` completes
+project paths from Core's file listing. Tab accepts, Enter runs a slash command,
+Esc closes. The project strip below the card shows the project name (bold), the
+home-shortened path, `⌥ branch`, and `checkout` or `worktree` (bold violet), with
+`ctrl+p commands` on the right when idle. Before a session exists, the agent/model/effort pickers and slash commands
 set draft creation fields. Timeline detail is a saved NSH preference. The
 starting-context section lists the prompt, tools, instructions, agent and
 child/workspace tools with estimates and the catalog window share. Turn footers
@@ -119,8 +126,9 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history loading. |
 | `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs. |
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, keys, Esc chain. |
-| `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, thoughts, groups and members, children, diagnostics, footers, and the sticky user bar. |
-| `src/ui/*` | Header, sidebars, right sidebar, composer and waiting card, settings, overlays, alerts. |
+| `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, code fences, thoughts, groups and members, children, diagnostics, footers, and the sticky user bar. |
+| `src/ui/diff.tsx` | Diffs of edit, write and patch details: split at window width 1100 px and up, unified below, built from the tool detail lines (so the detail cap still applies). The empty side of an add or remove is a flat fill: NSH views cannot draw the hatch. |
+| `src/ui/*` | Header, sidebars, right sidebar, composer (with completion, Working row and project strip) and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 
 ## Platform notes

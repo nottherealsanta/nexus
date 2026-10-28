@@ -13,6 +13,7 @@ pub mod api;
 pub mod app;
 pub mod completion;
 pub mod composer;
+pub mod diff;
 pub mod discovery;
 pub mod editor;
 pub mod keys;

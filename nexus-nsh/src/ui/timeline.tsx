@@ -1,7 +1,9 @@
 import { agentColor } from "../agent-color";
 import { List, Scroll, signal, Text, View } from "nsh";
 import { Button, TextView } from "nsh/base";
+import type { TextViewCodeBlock } from "nsh/base";
 import { FOCUS, Icon, IconButton, Status, T } from "./kit";
+import { DiffView } from "./diff";
 import { copyText, jump, run } from "../commands";
 import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
@@ -645,7 +647,11 @@ function RowView(p: { r: () => Row }) {
         </If>
         <If when={r().kind === "assistant"}>
           <View class="py-1.5" testID="msg-assistant">
-            <TextView selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }} classes={{ root: "text-[14px] leading-[22px] text-foreground", code: "font-mono text-[13px] bg-card", codeBlock: "rounded-(--radius) border border-border bg-card" }} />
+            <TextView
+              selectable markdown={(r() as any).text} options={{ streaming: !!(r() as any).streaming }}
+              renderCodeBlock={(block) => <CodeFence block={block} />}
+              classes={{ root: "text-[15px] leading-6 text-foreground", code: "font-mono text-[13px] rounded-[4px] bg-card text-foreground" }}
+            />
           </View>
         </If>
         <If when={r().kind === "reasoning"}>
@@ -690,6 +696,28 @@ function RowView(p: { r: () => Row }) {
         </If>
         <If when={r().kind === "older"}><Text class={`${T.meta} py-2`}>{(r() as any).text}</Text></If>
       </View>
+    </View>
+  );
+}
+
+/** A fenced code block (DESIGN_PLAN D08): a panel card with the language and a Copy button over the code. */
+function CodeFence(p: { block: TextViewCodeBlock }) {
+  const code = () => p.block.code;
+  return (
+    <View class="w-full my-3 rounded-[10px] bg-card overflow-hidden" testID="code-fence">
+      <View class="flex-row items-center h-8 pl-4 pr-2 gap-2">
+        <Text class="flex-1 min-w-0 text-xs leading-4 text-muted-foreground">{p.block.language ?? ""}</Text>
+        <Button onPress={() => copyText(code(), "Copied code")} accessibilityLabel="Copy code" testID="code-copy"
+          class={`flex-row items-center gap-1.5 rounded-(--radius) px-2 min-h-6 hover:bg-accent ${FOCUS}`}>
+          <Icon name="copy" size={12} class="tint-muted-foreground" />
+          <Text class={T.meta}>Copy</Text>
+        </Button>
+      </View>
+      <Scroll horizontal contentClass="px-4 pb-3.5">
+        <View class="gap-0">
+          {code().split("\n").map((line) => <Text selectable class="font-mono text-[13px] leading-5 text-foreground">{line || " "}</Text>)}
+        </View>
+      </Scroll>
     </View>
   );
 }
@@ -906,6 +934,7 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   const live = () => r().state === "running" || r().state === "waiting" || r().state === "error";
   const stateKind = () => (r().state === "running" ? "running" : r().state === "waiting" ? "waiting" : r().state === "error" ? "error" : "done");
   const body = () => r().detail.filter((x) => !x.text.includes(HIDDEN_MARK));
+  const isDiff = () => !r().raw && r().state !== "error" && (r().name === "edit" || r().name === "write" || r().name === "patch");
   const marker = () => r().detail.find((x) => x.text.includes(HIDDEN_MARK));
   const hidden = () => marker()?.text.match(/(\d+) lines hidden/)?.[1] ?? "";
   return (
@@ -933,9 +962,13 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
             </Button>
           </View>
           <Scroll class="max-h-[320px]" contentClass="px-3 py-2 gap-0.5">
-            <Each of={body()} key={(x, i) => `${i}`}>
-              {(x) => <ToolDetail line={x} />}
-            </Each>
+            <If when={isDiff()} else={
+              <Each of={body()} key={(x, i) => `${i}`}>
+                {(x) => <ToolDetail line={x} />}
+              </Each>
+            }>
+              {() => <DiffView lines={body} />}
+            </If>
           </Scroll>
           <If when={!!marker()}>
             {() => (

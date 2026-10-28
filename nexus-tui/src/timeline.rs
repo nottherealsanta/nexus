@@ -301,9 +301,15 @@ const COMMAND_ROWS: usize = 2;
 /// `tail_cap` output keeps its last `OUTPUT_TAIL` rows, anything else (a diff,
 /// the raw view) keeps a head and a tail.
 struct ToolDetail {
-    rows: Vec<(String, Style)>,
+    rows: Vec<Vec<Span<'static>>>,
     head: usize,
     tail_cap: bool,
+}
+
+fn plain_rows(rows: Vec<(String, Style)>) -> Vec<Vec<Span<'static>>> {
+    rows.into_iter()
+        .map(|(text, style)| vec![Span::styled(text, style)])
+        .collect()
 }
 
 /// Tokens estimated from a character count (about four characters each).
@@ -1939,10 +1945,10 @@ impl Builder<'_> {
                 let hidden = out_rows - OUTPUT_TAIL;
                 let tail = detail.rows.split_off(detail.rows.len() - OUTPUT_TAIL);
                 detail.rows.truncate(detail.head);
-                detail.rows.push((
+                detail.rows.push(vec![Span::styled(
                     format!("{up} {hidden} earlier lines · enter show all"),
                     self.meta(),
-                ));
+                )]);
                 detail.rows.extend(tail);
             }
         } else {
@@ -1957,10 +1963,10 @@ impl Builder<'_> {
                 let hidden = detail.rows.len() - head - tail_rows;
                 let tail = detail.rows.split_off(detail.rows.len() - tail_rows);
                 detail.rows.truncate(head);
-                detail.rows.push((
+                detail.rows.push(vec![Span::styled(
                     format!("{} {hidden} lines hidden · show all (o)", self.ell()),
                     self.st(ACCENT, CANVAS),
-                ));
+                )]);
                 detail.rows.extend(tail);
             }
         }
@@ -1968,10 +1974,10 @@ impl Builder<'_> {
             let n = detail.rows.len() - detail.head;
             detail.rows.insert(
                 detail.head,
-                (
+                vec![Span::styled(
                     format!("{up} showing all {n} lines · o show less"),
                     self.meta(),
-                ),
+                )],
             );
         }
         let rows = detail.rows;
@@ -2101,12 +2107,11 @@ impl Builder<'_> {
                     "\u{2570}".to_owned()
                 };
                 let last = rows.len() - 1;
-                for (i, (line, style)) in rows.iter().enumerate() {
+                for (i, row) in rows.iter().enumerate() {
                     let rail = if i == last { &corner } else { &vbar };
-                    b.line(vec![
-                        Span::styled(format!("  {rail} "), strong),
-                        Span::styled(line.clone(), *style),
-                    ]);
+                    let mut spans = vec![Span::styled(format!("  {rail} "), strong)];
+                    spans.extend(row.iter().cloned());
+                    b.line(spans);
                 }
             }
         });
@@ -2145,7 +2150,7 @@ impl Builder<'_> {
                 }
             }
             return ToolDetail {
-                rows: out,
+                rows: plain_rows(out),
                 head,
                 tail_cap,
             };
@@ -2153,19 +2158,8 @@ impl Builder<'_> {
         let a = arg_json(args).unwrap_or(Value::Null);
         match name {
             "edit" | "patch" => {
-                if let Some(patch) = a["patch"].as_str() {
-                    for line in patch.lines() {
-                        let style = if line.starts_with('+') && !line.starts_with("+++") {
-                            self.st("diff.add", CANVAS)
-                        } else if line.starts_with('-') && !line.starts_with("---") {
-                            self.st("diff.del", CANVAS)
-                        } else if line.starts_with("@@") {
-                            self.st("status.info", CANVAS)
-                        } else {
-                            self.secondary()
-                        };
-                        out.push((line.to_owned(), style));
-                    }
+                let diff = if let Some(patch) = a["patch"].as_str() {
+                    crate::diff::Diff::from_patch(patch)
                 } else {
                     let old = a["old_string"]
                         .as_str()
@@ -2175,26 +2169,13 @@ impl Builder<'_> {
                         .as_str()
                         .or_else(|| a["new"].as_str())
                         .unwrap_or("");
-                    out.push((
-                        format!("@@ {}", a["path"].as_str().unwrap_or("")),
-                        self.st("status.info", CANVAS),
-                    ));
-                    for line in old.lines() {
-                        out.push((format!("- {line}"), self.st("diff.del", CANVAS)));
-                    }
-                    for line in new.lines() {
-                        out.push((format!("+ {line}"), self.st("diff.add", CANVAS)));
-                    }
-                }
+                    crate::diff::Diff::from_replace(old, new)
+                };
+                return self.diff_detail(&diff);
             }
             "write" => {
-                out.push((
-                    format!("+ {}", a["path"].as_str().unwrap_or("")),
-                    self.st("status.info", CANVAS),
-                ));
-                for line in a["content"].as_str().unwrap_or("").lines() {
-                    out.push((format!("+ {line}"), self.st("diff.add", CANVAS)));
-                }
+                let diff = crate::diff::Diff::from_new(a["content"].as_str().unwrap_or(""));
+                return self.diff_detail(&diff);
             }
             _ => {
                 tail_cap = true;
@@ -2236,9 +2217,20 @@ impl Builder<'_> {
             }
         }
         ToolDetail {
-            rows: out,
+            rows: plain_rows(out),
             head,
             tail_cap,
+        }
+    }
+
+    /// A diff as detail rows: split at 110 cells and wider, unified below
+    /// (D09). The rail and its gap take 4 cells of the block.
+    fn diff_detail(&self, diff: &crate::diff::Diff) -> ToolDetail {
+        let look = crate::diff::Look::from_theme(self.t);
+        ToolDetail {
+            rows: diff.render(self.bw.saturating_sub(4).max(8), &look),
+            head: 0,
+            tail_cap: false,
         }
     }
 

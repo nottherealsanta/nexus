@@ -1,14 +1,63 @@
-import { Text, View, signal } from "nsh";
+import { Text, View, effect, signal, untracked } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, IconButton, Status, T, FOCUS, midTruncate } from "./kit";
-import { availability, byId, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, waitItems } from "../commands";
+import { Btn, Icon, IconButton, FOCUS, Status, T, midTruncate } from "./kit";
+import { availability, bindOpenKeys, byId, commands, draftKey, focusComposer, focusWaiting, keyLabel, otherWaits, run, runSlashCommand, sendPrompt, term, waitItems } from "../commands";
+import type { Cmd } from "../commands";
+import type { FileEntry } from "../store";
 import {
-  agentCatalog, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model,
-  modelCatalog, projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
+  agentCatalog, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model, modelCatalog, tick,
+  projectWorktrees, sessionDraft, sessionWorktrees, userHome, worktreeForDirectory, viewed, waitIndex, toast,
 } from "../store";
 import { ApiError, newKey, request } from "../core/transport";
 import { Approval, Question } from "../core/api";
 import { agentColor, agentRailColor } from "../agent-color";
+import { fmtDuration } from "./timeline";
+
+// Composer (DESIGN_PLAN D11, I5): a card on the panel surface, pill selectors, the context meter,
+// a Working row above it while busy, the completion block on its top edge and the project strip below.
+const focused = signal(false);
+const selected = signal(0);
+/** The completion token the user closed with Esc; it reopens when the token changes. */
+const dismissed = signal<string | null>(null);
+const atListing = signal<{ key: string; entries: FileEntry[] } | null>(null);
+let atSeq = 0;
+const MENU_LIMIT = 10;
+
+type CompletionRow = { key: string; value: string; help: string; hint?: string; muted?: string; accept: string };
+type Completion = { kind: "slash" | "file"; query: string; dir: string; rows: CompletionRow[] };
+
+/** `/` completes commands when the draft is a single word; `@` completes project paths at the end of the draft. */
+function completionFor(text: string): Completion | null {
+  if (text.includes("\n")) return null;
+  if (/^\/\S*$/.test(text)) {
+    const query = text.slice(1).toLowerCase();
+    const rows = commands
+      .filter((c: Cmd) => !!c.slash && c.slash.toLowerCase().startsWith(query))
+      .map((c: Cmd): CompletionRow => {
+        const a = availability(c);
+        return { key: c.id, value: `/${c.slash}`, help: c.title, hint: keyLabel(c) ?? undefined, muted: a.ok ? undefined : a.reason, accept: `/${c.slash} ` };
+      });
+    return { kind: "slash", query, dir: "", rows };
+  }
+  const at = text.match(/(?:^|\s)@([^\s]*)$/);
+  if (at) {
+    const query = at[1];
+    const slash = query.lastIndexOf("/");
+    const dir = slash < 0 ? "" : query.slice(0, slash + 1);
+    const base = query.slice(dir.length).toLowerCase();
+    const listing = atListing();
+    const entries = listing && listing.key.endsWith(`|${dir}`) ? listing.entries : [];
+    const rows = entries
+      .filter((e) => !e.ignored && e.name.toLowerCase().startsWith(base))
+      .sort((a, b) => (a.kind === "directory" ? 0 : 1) - (b.kind === "directory" ? 0 : 1) || a.name.localeCompare(b.name))
+      .map((e): CompletionRow => {
+        const isDir = e.kind === "directory";
+        return { key: e.name, value: `@${dir}${e.name}${isDir ? "/" : ""}`, help: isDir ? "directory" : e.kind, accept: `@${dir}${e.name}${isDir ? "/" : " "}` };
+      });
+    return { kind: "file", query, dir, rows };
+  }
+  return null;
+}
 
 export function Composer() {
   let ref: any;
@@ -45,93 +94,168 @@ export function Composer() {
     const entry = agentCatalog().agents.find((a) => a.name === agent());
     return entry?.model || defaultModel();
   };
-  const modelLabel = () => {
+  const modelParts = () => {
     const ref = modelRef();
-    if (!ref) return "default";
+    if (!ref) return { name: "default", provider: "" };
     const entry = modelCatalog().find((item) => item.ref === ref);
-    if (!entry) return ref.split("/").at(-1) ?? ref;
-    const name = entry.name || ref.split("/").at(-1) || ref;
-    const provider = entry.provider || ref.split("/")[0];
-    return `${name}${provider && !isNarrow() ? ` ${provider}` : ""}`;
+    if (!entry) return { name: ref.split("/").at(-1) ?? ref, provider: "" };
+    return { name: entry.name || ref.split("/").at(-1) || ref, provider: entry.provider || ref.split("/")[0] };
   };
   const effort = () => {
     const s: any = ses();
     return s ? (s.effort || s.extra?.effort || "default") : (sessionDraft().effort || "default");
   };
-  const usageLabel = () => {
+  /** The latest request's input occupancy, as a count and a share of the model's window. */
+  const usage = (): { input: number; pct: number | null } | null => {
     m();
     const events = model.selected?.events ?? [];
     const latest = [...events].reverse().find((event) => event.type === "usage");
     const input = Number(latest?.data?.input_tokens);
-    if (!Number.isFinite(input) || input < 0) return "";
+    if (!Number.isFinite(input) || input < 0) return null;
     const ref = modelRef();
     const entry = modelCatalog().find((item) => item.ref === ref);
     const window = Number(entry?.context);
-    return Number.isFinite(window) && window > 0
-      ? `${composerCount(input)} (${(100 * input / window).toFixed(1)}%)`
-      : composerCount(input);
+    return { input, pct: Number.isFinite(window) && window > 0 ? (100 * input) / window : null };
   };
-  const paletteHint = () => {
-    const c = byId.get("palette.open");
-    return `${c ? keyLabel(c) ?? "cmd+p" : "cmd+p"} commands`;
+  const usageLabel = () => {
+    const u = usage();
+    if (!u) return "";
+    if (u.pct === null) return compact(u.input);
+    return `${compact(u.input)} · ${u.pct >= 10 ? Math.round(u.pct) : u.pct.toFixed(1)}%`;
   };
+  const meterPct = () => Math.min(100, usage()?.pct ?? 0);
+
+  // Completion: the rows for the draft, the keys while it is open, and the file listing for `@`.
+  const completion = () => completionFor(text());
+  const open = () => {
+    const c = completion();
+    return !!c && c.rows.length > 0 && dismissed() !== text();
+  };
+  const accept = (row: CompletionRow) => {
+    const c = completion();
+    if (!c) return;
+    const t = text();
+    const next = c.kind === "file" ? t.slice(0, t.length - (c.query.length + 1)) + row.accept : row.accept;
+    draft.update((d) => ({ ...d, [key()]: next }));
+    selected.set(0);
+  };
+  effect(() => {
+    if (!open()) return;
+    return bindOpenKeys({
+      down: () => { const n = completion()?.rows.length ?? 0; selected.set(Math.min(Math.max(0, n - 1), selected() + 1)); },
+      up: () => selected.set(Math.max(0, selected() - 1)),
+      tab: () => { const c = completion(); const row = c?.rows[Math.min(selected(), (c?.rows.length ?? 1) - 1)]; if (row) accept(row); },
+    });
+  });
+  effect(() => {
+    const c = completion();
+    const project = currentProject();
+    if (!c || c.kind !== "file" || !project) return;
+    const session = viewed()?.id;
+    const k = `${project}|${session ?? ""}|${c.dir}`;
+    if (untracked(() => atListing()?.key) === k) return;
+    const seq = ++atSeq;
+    void request<{ entries: FileEntry[] }>("GET", `/api/project/${project}/files`, { query: { path: c.dir.replace(/\/$/, ""), session } })
+      .then((d) => { if (seq === atSeq) atListing.set({ key: k, entries: d.entries ?? [] }); })
+      .catch(() => { if (seq === atSeq) atListing.set({ key: k, entries: [] }); });
+  });
+
+  const agentName = () => capitalize(agent());
   return (
     <View class="px-4 pb-2 pt-1 items-center" testID="composer-area">
-      <View class="w-full max-w-[760px] bg-card" accessibilityLabel="Composer" testID="composer-panel">
-        <View class="flex-row min-w-0">
-          <View class={`w-[3px] shrink-0 ${agentRailColor(agent())}`} testID="composer-agent-rail" />
-          <View class="flex-1 min-w-0 px-3 pt-3 pb-1">
-            <Input
-              ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
-              placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
-              readonly={!live() || !!ses()?.archived}
-              submitBehavior="submit" onSubmit={() => void send()} onChange={(t) => draft.update((d) => ({ ...d, [key()]: t }))}
-              onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.height) + 16)))}
-              style={{ height: h() }}
-              class="px-1 py-1 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
-            />
-            <View class="h-2" />
-            <View class="flex-row items-center gap-2 min-w-0 min-h-8">
-              <View class="flex-1 min-w-0 flex-row items-center gap-1">
-                <Selector command="agent.change" label={capitalize(agent())} color={agentColor(agent())} testID="composer-agent" />
-                <Text class={T.meta}>·</Text>
-                <Selector command="model.change" label={modelLabel()} testID="composer-model" />
-                <If when={!isNarrow()}>
-                  <Text class={T.meta}>·</Text>
-                  <Selector command="model.effort" label={effort()} muted testID="composer-effort" />
-                </If>
-                <If when={busy()}>
-                  <Text class={T.meta}>· esc</Text>
-                  <Btn label="Stop" icon="stop" onPress={() => run("session.interrupt")} disabled={!availability(byId.get("session.interrupt")!).ok} reason={availability(byId.get("session.interrupt")!).reason} testID="interrupt" />
-                </If>
-                <If when={!busy() && interrupted()}>
-                  <Text class={T.meta}>·</Text>
-                  <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
-                </If>
+      <View class="w-full max-w-[760px]">
+        <If when={busy()}><WorkingRow /></If>
+        <If when={open()}>
+          {() => {
+            const c = () => completion()!;
+            const rows = () => c().rows.slice(0, MENU_LIMIT);
+            return (
+              <View class="w-full bg-popover rounded-t-[10px] pt-1.5 pb-1 overflow-hidden" testID="completion" accessibilityLabel="Completion">
+                <Each of={rows()} key={(r) => r.key}>
+                  {(r, i) => {
+                    const sel = () => i() === Math.min(selected(), rows().length - 1);
+                    return (
+                      <Button onPress={() => accept(r())} selected={sel()} testID={`completion-${r().key}`}
+                        class={`flex-row items-center gap-3 h-8 px-3 hover:bg-accent selected:bg-selection ${FOCUS}`}>
+                        <If when={sel()}>{() => <View class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />}</If>
+                        <Text numberOfLines={1} class={`font-mono text-[12.5px] leading-5 font-medium ${r().muted ? "text-muted-foreground" : "text-foreground"}`}>{r().value}</Text>
+                        <Text numberOfLines={1} class="flex-1 min-w-0 text-[12px] leading-4 text-muted-foreground">{r().muted ? `${r().help} · ${r().muted}` : r().help}</Text>
+                        <If when={!!r().hint}><Text class="text-xs leading-4 text-muted-foreground">{r().hint ?? ""}</Text></If>
+                      </Button>
+                    );
+                  }}
+                </Each>
+                <View class="flex-row items-center gap-3 h-7 px-3">
+                  <Text class={T.meta}>↑↓ move</Text>
+                  <Text class={T.meta}>tab accept</Text>
+                  <Text class={T.meta}>esc close</Text>
+                  <View class="flex-1" />
+                  <Text class={T.meta}>{`${Math.min(selected(), rows().length - 1) + 1} of ${c().rows.length}`}</Text>
+                </View>
               </View>
-              <View class="shrink-0 flex-row items-center gap-2">
-                <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : ""} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
-              </View>
+            );
+          }}
+        </If>
+        <View
+          class={`w-full rounded-(--radius-card) border bg-card px-4 py-3 ${focused() ? "border-ring" : "border-border"}`}
+          accessibilityLabel="Composer" testID="composer-panel"
+        >
+          <Input
+            ref={(n: any) => (ref = n)} multiline value={text()} testID="composer-input" accessibilityLabel="Message"
+            placeholder={reason() ?? (centre() === "new_session" ? "Message to start a new session" : "Type a message…")}
+            readonly={!live() || !!ses()?.archived}
+            submitBehavior="submit" onSubmit={() => void send()}
+            onChange={(t) => { selected.set(0); draft.update((d) => ({ ...d, [key()]: t })); }}
+            onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
+            onKeyPress={(e: { key: string }) => { if (String(e.key).toLowerCase() === "escape" && open()) dismissed.set(text()); }}
+            onContentSizeChange={(s) => h.set(Math.min(220, Math.max(44, Math.ceil(s.height) + 16)))}
+            style={{ height: h() }}
+            class="px-0 py-0 text-[14px] leading-[22px] text-foreground placeholder:text-muted-foreground"
+          />
+          <View class="h-2" />
+          <View class="flex-row items-center gap-1 min-w-0 min-h-8">
+            <View class="flex-1 min-w-0 flex-row items-center gap-1">
+              <Selector command="agent.change" label={agentName()} dot={agentRailColor(agent())} labelClass={`font-semibold ${agentColor(agent())}`} testID="composer-agent" />
+              <Selector command="model.change" label={modelParts().name} sub={isNarrow() || !modelParts().provider ? undefined : modelParts().provider} testID="composer-model" />
+              <If when={!isNarrow()}>
+                <Selector command="model.effort" label={effort()} testID="composer-effort" />
+              </If>
+              <If when={!busy() && interrupted()}>
+                <Btn label="Continue" icon="play" onPress={() => run("session.continue")} disabled={!availability(byId.get("session.continue")!).ok} reason={availability(byId.get("session.continue")!).reason} testID="continue" />
+              </If>
+            </View>
+            <View class="shrink-0 flex-row items-center gap-3">
+              <If when={!!usageLabel() && !isNarrow()}>
+                <View class="flex-row items-center gap-2" testID="composer-meter">
+                  <If when={usage()?.pct !== null && usage()?.pct !== undefined}>
+                    <View class="w-20 h-1 rounded-full bg-border overflow-hidden">
+                      <View class={`h-full rounded-full ${agentRailColor(agent())}`} style={{ width: `${meterPct()}%` }} />
+                    </View>
+                  </If>
+                  <Text numberOfLines={1} class={T.meta} testID="composer-usage">{usageLabel()}</Text>
+                </View>
+              </If>
+              <IconButton icon="arrow-up" label="Send message" testID="send" disabled={!canSend()} onPress={() => void send()} class={canSend() ? "bg-primary hover:bg-primary" : "bg-raised"} tint={canSend() ? "tint-on-accent" : undefined} reason={!canSend() ? (reason() ?? "Type a message first") : undefined} />
             </View>
           </View>
         </View>
-        <View class="flex-row items-center justify-end gap-3 min-h-7 bg-sidebar px-3 py-1.5" testID="composer-status-band">
-          <If when={!!usageLabel()}><Text class={T.sec} numberOfLines={1} testID="composer-usage">{usageLabel()}</Text></If>
-          <Text class={T.meta}>{paletteHint()}</Text>
-        </View>
+        <LocationStrip />
       </View>
-      <LocationStrip />
     </View>
   );
 }
 
-function composerCount(n: number): string {
+/** `82k`, `11.1k`, `1.2M`: the composer's compact counts. */
+function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
 }
 function capitalize(s: string): string { return s ? `${s[0].toUpperCase()}${s.slice(1)}` : "Build"; }
-function Selector(p: { command: string; label: string; color?: string; muted?: boolean; testID: string }) {
+
+/** A pill selector on the control row: an optional dot, the label, a muted sub-label and a chevron. */
+function Selector(p: { command: string; label: string; dot?: string; labelClass?: string; sub?: string; testID: string }) {
   const c = byId.get(p.command);
   const state = () => c ? availability(c) : { ok: false, reason: "Command is unavailable." };
   const disabled = () => !state().ok;
@@ -141,16 +265,56 @@ function Selector(p: { command: string; label: string; color?: string; muted?: b
       onPress={() => void run(p.command)} disabled={disabled()} testID={p.testID}
       accessibilityLabel={`${p.label}${disabled() ? `, unavailable: ${reason()}` : ""}`}
       tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{disabled() ? `${p.label}: ${reason()}` : p.label}</Text>}
-      class={`min-w-0 shrink rounded-(--radius) px-1 py-1 hover:bg-accent disabled:opacity-50 ${FOCUS}`}
+      class={`flex-row items-center gap-1.5 min-w-0 shrink h-7 px-2 rounded-(--radius) hover:bg-accent disabled:opacity-50 ${FOCUS}`}
     >
-      <Text numberOfLines={1} class={`text-[12px] leading-4 ${p.color ?? (p.muted ? "text-muted-foreground" : "text-foreground-secondary")}`}>{p.label}</Text>
+      <If when={!!p.dot}>{() => <View class={`size-2 shrink-0 rounded-full ${p.dot}`} />}</If>
+      <Text numberOfLines={1} class={`text-[13px] leading-5 ${p.labelClass ?? "text-foreground-secondary"}`}>{p.label}</Text>
+      <If when={!!p.sub}><Text numberOfLines={1} class="text-[13px] leading-5 text-muted-foreground">{p.sub!}</Text></If>
+      <Icon name="chevron-down" size={12} class="tint-muted-foreground" />
     </Button>
   );
 }
 
+/** `◐ Working · 12s · ↓4.1k` above the card while the session runs; ticks once a second. */
+function WorkingRow() {
+  const turn = () => { m(); const msgs = model.selected?.messages ?? []; return [...msgs].reverse().find((x) => x.role === "user"); };
+  const elapsed = () => {
+    tick();
+    const u = turn();
+    return u ? Math.max(0, Date.now() / 1000 - u.created) : 0;
+  };
+  const output = () => {
+    m();
+    const u = turn();
+    if (!u) return 0;
+    return (model.selected?.events ?? []).reduce((sum, e) => {
+      if (e.type !== "usage" || !(e.time >= u.created)) return sum;
+      const n = Number(e.data?.output_tokens);
+      return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+    }, 0);
+  };
+  effect(() => {
+    const id = setInterval(() => tick.set(Date.now()), 1000);
+    return () => clearInterval(id);
+  });
+  return (
+    <View class="flex-row items-center gap-2 h-7 mb-1 px-1" testID="working-row">
+      <Status kind="running" />
+      <Text class="text-[13px] leading-5 font-semibold text-foreground">Working</Text>
+      <Text class={T.sec}>{`· ${fmtDuration(elapsed())}`}</Text>
+      <Text class={T.sec} testID="working-output">{`· ↓${compact(output())}`}</Text>
+      <View class="flex-1" />
+      <Text class={T.meta}>steering needs Core (Step 12a)</Text>
+      <Btn label="Stop" icon="stop" onPress={() => run("session.interrupt")} disabled={!availability(byId.get("session.interrupt")!).ok} reason={availability(byId.get("session.interrupt")!).reason} testID="interrupt" />
+    </View>
+  );
+}
+
+/** The project strip under the card: project, home-shortened path, branch, checkout or worktree; palette hint when idle. */
 function LocationStrip() {
   const project = () => { m(); const id = currentProject(); return id ? model.projects.get(id) ?? null : null; };
   const session = () => { m(); return viewed(); };
+  const busy = () => { m(); return session()?.status === "busy"; };
   const directory = () => session()?.directory ?? project()?.path ?? "";
   const selectedTree = () => {
     const s = session(), p = currentProject();
@@ -174,31 +338,39 @@ function LocationStrip() {
     const c = byId.get("session.worktrees");
     return c ? availability(c) : { ok: false, reason: "Worktree controls are not available in NSH." };
   };
+  const paletteHint = () => {
+    const c = byId.get("palette.open");
+    return `${c ? keyLabel(c) ?? "cmd+p" : "cmd+p"} commands`;
+  };
+  const tooltip = (text: string) => <Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{text}</Text>;
   return (
     <If when={project() && directory()}>
-      <View class="w-full max-w-[760px] pt-2" testID="location-strip">
-        <View class="flex-row items-end gap-3 min-w-0">
-          <If when={!!session()}>
+      <View class="w-full flex-row items-center gap-2 min-h-7 pt-1.5 px-1 min-w-0" testID="location-strip">
+        <Text numberOfLines={1} class="shrink-0 max-w-[30%] text-[13px] leading-5 font-semibold text-foreground">{project()?.name ?? ""}</Text>
+        <If when={!!session()}>
+          <Button
+            disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
+            accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
+            tooltip={tooltip(directoryAvailability().reason ?? "Change session directory")}
+            class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
+          ><Text numberOfLines={1} class={`${T.meta} min-w-0`}>{path()}</Text></Button>
+        </If>
+        <If when={!session()}><Text testID="location-directory" numberOfLines={1} class={`min-w-0 shrink ${T.meta}`}>{path()}</Text></If>
+        <If when={!!branch()}>
+          <If when={!!session()} else={<Text numberOfLines={1} class={`${T.sec} shrink`}>{`⌥ ${branch()!}`}</Text>}>
             <Button
-              disabled={!directoryAvailability().ok} onPress={() => void run("session.change_directory")} testID="location-directory"
-              accessibilityLabel={`Directory ${path()}, unavailable: ${directoryAvailability().reason ?? ""}`}
-              tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{directoryAvailability().reason ?? "Change session directory"}</Text>}
-              class={`min-w-0 shrink rounded-(--radius) px-0.5 border-b-2 border-primary pb-1 disabled:opacity-50 ${FOCUS}`}
-            ><Text numberOfLines={1} class={`${T.sec} min-w-0`}>{path()}</Text></Button>
+              disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
+              accessibilityLabel={`Branch ${branch()}, unavailable: ${worktreeAvailability().reason ?? ""}`}
+              tooltip={tooltip(worktreeAvailability().reason ?? "Worktree controls")}
+              class={`min-w-0 shrink rounded-(--radius) disabled:opacity-50 ${FOCUS}`}
+            ><Text numberOfLines={1} class={T.sec}>{`⌥ ${branch()!}`}</Text></Button>
           </If>
-          <If when={!session()}><Text testID="location-directory" numberOfLines={1} class={`min-w-0 shrink border-b-2 border-primary px-0.5 pb-1 ${T.sec}`}>{path()}</Text></If>
-          <If when={!!branch()}>
-            <If when={!!session()} else={<Text numberOfLines={1} class={`${T.sec} shrink`}>{branch()!}</Text>}>
-              <Button
-                disabled={!worktreeAvailability().ok} onPress={() => void run("session.worktrees")} testID="location-branch"
-                accessibilityLabel={`Branch ${branch()}, unavailable: ${worktreeAvailability().reason ?? ""}`}
-                tooltip={<Text class="text-xs text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{worktreeAvailability().reason ?? "Worktree controls"}</Text>}
-                class={`min-w-0 shrink rounded-(--radius) px-0.5 disabled:opacity-50 ${FOCUS}`}
-              ><Text numberOfLines={1} class={T.sec}>{branch()!}</Text></Button>
-            </If>
-          </If>
-          <If when={linked()}><Text testID="location-worktree" class="shrink-0 text-[12px] leading-4 font-bold text-agent-violet">worktree</Text></If>
-        </View>
+        </If>
+        <If when={linked()} else={<Text testID="location-checkout" class={`shrink-0 ${T.meta}`}>checkout</Text>}>
+          <Text testID="location-worktree" class="shrink-0 text-[12px] leading-4 font-bold text-agent-violet">worktree</Text>
+        </If>
+        <View class="flex-1" />
+        <If when={!busy()}><Text class={T.meta}>{paletteHint()}</Text></If>
       </View>
     </If>
   );

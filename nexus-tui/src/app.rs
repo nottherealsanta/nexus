@@ -3468,7 +3468,12 @@ impl App {
             return self.escape();
         }
         if self.ui.diff_open.is_some() && self.ui.overlay.is_none() && self.ui.dialog.is_none() {
-            let lines = self.diff_lines().len();
+            // The rows the view draws (split or unified at its width).
+            let width = self.regions.timeline.width.saturating_sub(2) as usize;
+            let patch = self.diff_lines().join("\n");
+            let lines = crate::diff::Diff::from_patch(&patch)
+                .render(width, &crate::diff::Look::default())
+                .len();
             let page = self.regions.timeline.height.saturating_sub(2) as usize;
             let max = lines.saturating_sub(page);
             match name.as_str() {

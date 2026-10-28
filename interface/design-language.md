@@ -9,7 +9,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   `surface.canvas`. No rule separates them: the surface step is the edge, and
   only where surfaces collapse (ANSI-16, monochrome) a `│` in `border.default`
   is drawn at each sidebar edge. `border.strong` is decorative (diff split rule,
-  tool-detail box). Under a modal the buffer is dimmed by `paint::scrim`: each
+  tool-detail box, block-quote rail). Under a modal the buffer is dimmed by `paint::scrim`: each
   cell's colours move 50% toward the canvas, or `DIM` where colours cannot be
   blended. Panel surfaces hold the composer and the
   settings modal; raised surfaces hold user messages and modal panels. Borders are

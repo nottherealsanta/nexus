@@ -1,17 +1,13 @@
-//! Markdown to styled rows, following the canonical assistant text
-//! (`app.tcss` `.timeline-assistant ...`): coloured headings, colour-only inline
-//! code, fences and quotes on the panel colour with a quote bar,
-//! hanging-indent lists and aligned tables. HTML is literal; URLs stay visible.
+//! Markdown to styled rows (DESIGN_PLAN.md D08): bold headings (H1 underlined),
+//! inline code on the panel colour, fences as a panel block with a header row
+//! and inset code (no rule, no rail), quotes behind a `│`, hanging-indent
+//! lists and aligned tables. HTML is literal; URLs stay visible.
 use crate::theme::Theme;
 use crate::{mermaid, mermaid_text};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
-};
-use ratatui_markdown::{
-    markdown::{MarkdownBlock, MarkdownRenderer},
-    theme::{Generation, RichTextTheme},
 };
 use std::{
     cell::RefCell,
@@ -28,14 +24,10 @@ pub struct Palette {
     quiet: Color,
     muted: Color,
     accent: Color,
-    element_hi: Color,
     border: Color,
     border_strong: Color,
-    purple: Color,
     blue: Color,
-    background: Color,
     success: Color,
-    warning: Color,
     panel: Color,
     ascii: bool,
 }
@@ -47,42 +39,13 @@ impl Palette {
             quiet: color("text.muted"),
             muted: color("text.secondary"),
             accent: color("interactive.accent"),
-            element_hi: color("interactive.selection"),
             border: color("border.default"),
-            border_strong: color("border.default"),
-            purple: color("status.info"),
+            border_strong: color("border.strong"),
             blue: color("status.info"),
-            background: color("surface.canvas"),
             success: color("status.success"),
-            warning: color("status.warning"),
             panel: color("surface.panel"),
             ascii: theme.opts.ascii,
         }
-    }
-}
-
-// ratatui-markdown 0.3.6 (MIT OR Apache-2.0) shares our ratatui 0.29 types.
-// Reuse its fenced-code presentation, not its lossy line-oriented parser or
-// character-count wrapping. CommonMark structure and cell wrapping stay local.
-struct MarkdownTheme<'a>(&'a Palette);
-macro_rules! theme_colors {
-    ($($method:ident => $field:ident),* $(,)?) => {
-        $(fn $method(&self) -> Color { self.0.$field })*
-    };
-}
-impl RichTextTheme for MarkdownTheme<'_> {
-    fn generation(&self) -> Generation {
-        Generation(0)
-    }
-    theme_colors! {
-        get_text_color => text, get_muted_text_color => quiet,
-        get_primary_color => accent, get_popup_selected_background => element_hi,
-        get_popup_selected_text_color => text, get_border_color => border,
-        get_focused_border_color => border_strong, get_secondary_color => purple,
-        get_info_color => blue, get_background_color => background,
-        get_json_key_color => blue, get_json_string_color => success,
-        get_json_number_color => warning, get_json_bool_color => purple,
-        get_json_null_color => quiet, get_accent_yellow => warning,
     }
 }
 
@@ -180,6 +143,8 @@ struct Walker<'a> {
     code_block: Option<String>,
     heading: Option<HeadingLevel>,
     links: Vec<String>,
+    /// `cur` length at each open link, to read back its visible text.
+    link_starts: Vec<usize>,
     table: Option<Table>,
     item_depth: usize,
     fences: usize,
@@ -197,25 +162,19 @@ impl<'a> Walker<'a> {
     fn indent(&self) -> usize {
         self.levels.len().saturating_sub(1) * 3 + if self.levels.is_empty() { 0 } else { 3 }
     }
-    fn bg(&self) -> Option<ratatui::style::Color> {
-        (self.quote > 0).then_some(self.p.panel)
-    }
     fn prefix(&mut self) -> (Vec<Span<'static>>, usize) {
         let mut spans = Vec::new();
         let mut hang = 0;
-        let bg = self.bg();
         if self.quote > 0 {
-            let mut style = Style::default().fg(self.p.accent);
-            if let Some(bg) = bg {
-                style = style.bg(bg);
-            }
+            let style = Style::default().fg(self.p.border_strong);
+            let rail = if self.p.ascii { "| " } else { "│ " };
             for _ in 0..self.quote {
-                spans.push(Span::styled("▌ ", style));
+                spans.push(Span::styled(rail, style));
                 hang += 2;
             }
         }
         let base = self.indent();
-        let text_style = bg.map(|bg| Style::default().bg(bg)).unwrap_or_default();
+        let text_style = Style::default();
         match self.marker.take() {
             Some(marker) => {
                 let lead = base.saturating_sub(3);
@@ -238,7 +197,7 @@ impl<'a> Walker<'a> {
         self.rows.push(Row {
             prefix,
             spans,
-            bg: self.bg(),
+            bg: None,
             blank: false,
             image: None,
             fence: None,
@@ -255,8 +214,8 @@ impl<'a> Walker<'a> {
     }
     fn style(&self) -> Style {
         let mut style = Style::default();
-        if let Some(bg) = self.bg() {
-            style = style.bg(bg);
+        if self.quote > 0 {
+            style = style.fg(self.p.muted);
         }
         if self.bold > 0 {
             style = style.add_modifier(Modifier::BOLD);
@@ -269,10 +228,8 @@ impl<'a> Walker<'a> {
         }
         if let Some(level) = self.heading {
             let color = match level {
-                HeadingLevel::H1 => self.p.accent,
-                HeadingLevel::H2 => self.p.purple,
-                HeadingLevel::H3 => self.p.success,
-                _ => self.p.warning,
+                HeadingLevel::H1 | HeadingLevel::H2 => self.p.text,
+                _ => self.p.muted,
             };
             style = style.fg(color).add_modifier(Modifier::BOLD);
         }
@@ -302,55 +259,26 @@ impl<'a> Walker<'a> {
         if closed && language == "mermaid" && !self.p.ascii && !self.mermaid_art(body, index) {
             self.mermaid_text(body, index);
         }
-        // ratatui-markdown without its `mermaid` feature renders a mermaid
-        // fence as zero lines, swallowing the source. Render it as `text`
-        // and relabel the header so the original language stays visible.
-        let relabel = language == "mermaid";
-        let render_language = if relabel { "text" } else { language };
-        let block = MarkdownBlock::code_block(render_language, body.replace('\t', "    "));
+        // The header row names the language (a mermaid fence keeps its own
+        // name: the source below the diagram is model context). The code sits
+        // inset by 2 on the panel; there is no rule and no rail. The renderer
+        // draws `copy` at the right end of the header on focus or hover.
+        let panel = Style::default().bg(self.p.panel);
         let label = if language.is_empty() {
             "code"
         } else {
             language
         };
-        let width = self
-            .width
-            .saturating_sub(self.quote * 2 + self.indent() + 2);
-        let rule = if self.p.ascii { "-" } else { "─" };
-        let rule_len = width.saturating_sub(label.width() + 3);
-        self.cur.push(Span::styled(
-            format!("{label} {}", rule.repeat(rule_len)),
-            Style::default().fg(self.p.quiet).bg(self.p.panel),
-        ));
+        self.cur
+            .push(Span::styled(label.to_owned(), panel.fg(self.p.quiet)));
         self.fence_row(index);
-        for (n, mut line) in MarkdownRenderer::new(self.width)
-            .render(&[block], &MarkdownTheme(self.p))
-            .into_iter()
-            .enumerate()
-        {
-            let plain: String = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect();
-            if n == 0 || plain.trim_start().starts_with('╰') {
-                continue;
-            }
-            if self.p.ascii {
-                if let Some(span) = line
-                    .spans
-                    .iter_mut()
-                    .find(|span| span.content.contains('│'))
-                {
-                    span.content = span.content.replacen('│', "|", 1).into();
-                }
-            }
-            self.cur.extend(line.spans.into_iter().map(|mut span| {
-                span.style = span.style.bg(self.p.panel);
-                span
-            }));
+        for line in body.replace('\t', "    ").lines() {
+            self.cur
+                .push(Span::styled(line.to_owned(), panel.fg(self.p.text)));
             self.fence_row(index);
         }
+        // One panel row of padding below the code.
+        self.fence_row(index);
     }
     /// Push the diagram rows plus a quiet `◇ mermaid` label. `false` means the
     /// source cannot be drawn within the row width and nothing was pushed.
@@ -359,33 +287,19 @@ impl<'a> Walker<'a> {
         let Some(art) = mermaid_cached(body, self.p, avail) else {
             return false;
         };
-        let bg = self.bg();
         for line in art.iter() {
             let (prefix, _) = self.prefix();
-            let spans = line
-                .spans
-                .iter()
-                .cloned()
-                .map(|mut span| {
-                    if let Some(bg) = bg {
-                        span.style = span.style.bg(bg);
-                    }
-                    span
-                })
-                .collect();
+            let spans = line.spans.to_vec();
             self.rows.push(Row {
                 prefix,
                 spans,
-                bg,
+                bg: None,
                 blank: false,
                 image: None,
                 fence: Some(index),
             });
         }
-        let mut label = Style::default().fg(self.p.quiet);
-        if let Some(bg) = bg {
-            label = label.bg(bg);
-        }
+        let label = Style::default().fg(self.p.quiet);
         self.cur
             .push(Span::styled("◇ mermaid · source below", label));
         let (prefix, _) = self.prefix();
@@ -393,7 +307,7 @@ impl<'a> Walker<'a> {
         self.rows.push(Row {
             prefix,
             spans,
-            bg,
+            bg: None,
             blank: false,
             image: None,
             fence: Some(index),
@@ -407,24 +321,13 @@ impl<'a> Walker<'a> {
         let Some(rows) = mermaid_text::render(body, avail) else {
             return false;
         };
-        let bg = self.bg();
         let p = self.p;
-        let styled = |tone: mermaid_text::Tone| {
-            let style = match tone {
-                mermaid_text::Tone::Title => {
-                    Style::default().fg(p.muted).add_modifier(Modifier::BOLD)
-                }
-                mermaid_text::Tone::Heading => {
-                    Style::default().fg(p.text).add_modifier(Modifier::BOLD)
-                }
-                mermaid_text::Tone::Label => Style::default().fg(p.text),
-                mermaid_text::Tone::Bar => Style::default().fg(p.accent),
-                mermaid_text::Tone::Quiet => Style::default().fg(p.quiet),
-            };
-            match bg {
-                Some(bg) => style.bg(bg),
-                None => style,
-            }
+        let styled = |tone: mermaid_text::Tone| match tone {
+            mermaid_text::Tone::Title => Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+            mermaid_text::Tone::Heading => Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            mermaid_text::Tone::Label => Style::default().fg(p.text),
+            mermaid_text::Tone::Bar => Style::default().fg(p.accent),
+            mermaid_text::Tone::Quiet => Style::default().fg(p.quiet),
         };
         for row in rows {
             let (prefix, _) = self.prefix();
@@ -435,16 +338,13 @@ impl<'a> Walker<'a> {
             self.rows.push(Row {
                 prefix,
                 spans,
-                bg,
+                bg: None,
                 blank: false,
                 image: None,
                 fence: Some(index),
             });
         }
-        let mut label = Style::default().fg(self.p.quiet);
-        if let Some(bg) = bg {
-            label = label.bg(bg);
-        }
+        let label = Style::default().fg(self.p.quiet);
         self.cur
             .push(Span::styled("◇ mermaid · source below", label));
         let (prefix, _) = self.prefix();
@@ -452,7 +352,7 @@ impl<'a> Walker<'a> {
         self.rows.push(Row {
             prefix,
             spans,
-            bg,
+            bg: None,
             blank: false,
             image: None,
             fence: Some(index),
@@ -461,7 +361,7 @@ impl<'a> Walker<'a> {
     }
     fn fence_row(&mut self, index: usize) {
         let (mut prefix, _) = self.prefix();
-        prefix.push(Span::styled(" ", Style::default().bg(self.p.panel)));
+        prefix.push(Span::styled("  ", Style::default().bg(self.p.panel)));
         let spans = std::mem::take(&mut self.cur);
         self.rows.push(Row {
             prefix,
@@ -747,6 +647,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
         code_block: None,
         heading: None,
         links: Vec::new(),
+        link_starts: Vec::new(),
         table: None,
         item_depth: 0,
         fences: 0,
@@ -766,9 +667,20 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
             Event::Start(Tag::Strikethrough) => w.strike += 1,
             Event::End(TagEnd::Strikethrough) => w.strike = w.strike.saturating_sub(1),
             Event::Start(Tag::Heading { level, .. }) => w.heading = Some(level),
-            Event::End(TagEnd::Heading(_)) => {
+            Event::End(TagEnd::Heading(level)) => {
+                let underline = (level == HeadingLevel::H1).then(|| {
+                    let text: usize = w.cur.iter().map(|s| s.content.width()).sum();
+                    text.min(w.width.saturating_sub(w.indent() + w.quote * 2))
+                        .max(1)
+                });
                 w.flush();
                 w.heading = None;
+                if let Some(len) = underline {
+                    let rule = if p.ascii { "-" } else { "─" };
+                    w.cur
+                        .push(Span::styled(rule.repeat(len), Style::default().fg(p.quiet)));
+                    w.flush();
+                }
                 w.blank();
             }
             Event::Start(Tag::BlockQuote(_)) => w.quote += 1,
@@ -830,6 +742,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 w.links.push(dest_url.to_string());
+                w.link_starts.push(w.cur.len());
             }
             Event::End(TagEnd::Image) => {
                 if let Some(url) = w.links.pop() {
@@ -837,9 +750,22 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 }
             }
             Event::End(TagEnd::Link) => {
+                let start = w.link_starts.pop().unwrap_or(0);
+                let shown: String = w
+                    .cur
+                    .get(start..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
                 if let Some(url) = w.links.pop() {
-                    let style = w.style().fg(p.quiet);
-                    w.text(&format!(" ({url})"), style);
+                    // The URL stays visible (the reader sees where a link goes),
+                    // except for a file path, which is the link text, and for a
+                    // link whose text already is the URL.
+                    if url.contains("://") && shown != url {
+                        let style = w.style().fg(p.quiet);
+                        w.text(&format!(" ({url})"), style);
+                    }
                 }
             }
             Event::End(TagEnd::Paragraph) => {
@@ -882,11 +808,12 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 if w.table.is_some() {
                     w.text(&value, Style::default());
                 } else {
-                    let mut style = Style::default().fg(p.warning);
+                    // Primary text on the panel, padded by one space; never accent.
+                    let mut style = Style::default().fg(p.text).bg(p.panel);
                     if w.bold > 0 {
                         style = style.add_modifier(Modifier::BOLD);
                     }
-                    w.cur.push(Span::styled(value.to_string(), style));
+                    w.cur.push(Span::styled(format!(" {value} "), style));
                 }
             }
             Event::Text(value) if w.code_block.is_some() => fence_body.push_str(&value),
@@ -910,8 +837,16 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 w.blank();
             }
             Event::TaskListMarker(done) => {
-                let mark = if done { "[x] " } else { "[ ] " };
-                w.cur.push(Span::styled(mark, Style::default().fg(p.quiet)));
+                let quiet = Style::default().fg(p.quiet);
+                if done && !p.ascii {
+                    w.cur.push(Span::styled("[", quiet));
+                    w.cur
+                        .push(Span::styled("✓", Style::default().fg(p.success)));
+                    w.cur.push(Span::styled("] ", quiet));
+                } else {
+                    let mark = if done { "[x] " } else { "[ ] " };
+                    w.cur.push(Span::styled(mark, quiet));
+                }
             }
             _ => {}
         }
@@ -989,5 +924,86 @@ mod tests {
         assert!(text.contains("Title") && text.contains("https://example.test"));
         assert!(text.contains("one") && text.contains("two") && text.contains("graph TD"));
         assert_eq!(fence_sources(source), ["graph TD"]);
+    }
+
+    fn row_text(row: &Row) -> String {
+        row.prefix
+            .iter()
+            .chain(&row.spans)
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn fence_is_a_panel_block_with_a_header_and_inset_code() {
+        let theme = Theme::new(Options::default());
+        let palette = Palette::from_theme(&theme);
+        let rows = lines("```python\ndef f():\n    return 1\n```", &palette, 40);
+        let text: Vec<String> = rows.iter().map(row_text).collect();
+        assert_eq!(
+            text,
+            ["  python", "  def f():", "      return 1", "  "],
+            "header, code inset by 2, one padding row"
+        );
+        let panel = theme.color("surface.panel");
+        assert!(rows.iter().all(|r| r.bg == panel && r.fence == Some(0)));
+        // No rule and no rail anywhere in the block.
+        assert!(text.iter().all(|t| !t.contains('─') && !t.contains('│')));
+        // The language is muted, the code primary.
+        let muted = theme.color("text.muted");
+        assert_eq!(rows[0].spans[0].style.fg, muted);
+        assert_eq!(rows[1].spans[0].style.fg, theme.color("text.primary"));
+        let bare = lines("```\nx\n```", &palette, 40);
+        assert_eq!(row_text(&bare[0]), "  code");
+    }
+
+    #[test]
+    fn inline_code_is_primary_on_panel_padded_and_never_accent() {
+        let theme = Theme::new(Options::default());
+        let palette = Palette::from_theme(&theme);
+        let rows = lines("use `Loader.load` here", &palette, 60);
+        let code = rows[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Loader.load"))
+            .unwrap();
+        assert_eq!(code.content, " Loader.load ");
+        assert_eq!(code.style.fg, theme.color("text.primary"));
+        assert_eq!(code.style.bg, theme.color("surface.panel"));
+        assert_ne!(code.style.fg, theme.color("interactive.accent"));
+    }
+
+    #[test]
+    fn headings_quotes_lists_and_links_follow_d08() {
+        let theme = Theme::new(Options::default());
+        let palette = Palette::from_theme(&theme);
+        let src = "# Title\n\n### Small\n\n> quoted\n\n- one\n  - two\n\n[site](https://a.test) and [f](src/a.py:42)";
+        let rows = lines(src, &palette, 60);
+        let text: Vec<String> = rows.iter().map(row_text).collect();
+        assert_eq!(text[0], "Title");
+        assert_eq!(text[1], "─────", "H1 underline is as wide as the text");
+        assert_eq!(rows[0].spans[0].style.fg, theme.color("text.primary"));
+        assert!(rows[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(rows[1].spans[0].style.fg, theme.color("text.muted"));
+        let small = rows.iter().find(|r| row_text(r) == "Small").unwrap();
+        assert_eq!(small.spans[0].style.fg, theme.color("text.secondary"));
+        let quote = rows
+            .iter()
+            .find(|r| row_text(r).contains("quoted"))
+            .unwrap();
+        assert_eq!(quote.prefix[0].content, "│ ");
+        assert_eq!(quote.prefix[0].style.fg, theme.color("border.strong"));
+        assert!(text.iter().any(|t| t == "• one"));
+        assert!(text.iter().any(|t| t.trim_start() == "◦ two"));
+        let link = rows.last().unwrap();
+        let site = link.spans.iter().find(|s| s.content == "site").unwrap();
+        assert_eq!(site.style.fg, theme.color("status.info"));
+        assert!(site.style.add_modifier.contains(Modifier::UNDERLINED));
+        let all = row_text(link);
+        assert!(all.contains("(https://a.test)"), "{all}");
+        assert!(
+            !all.contains("(src/a.py:42)"),
+            "a file link shows only its text: {all}"
+        );
     }
 }

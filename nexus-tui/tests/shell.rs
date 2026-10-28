@@ -1291,8 +1291,8 @@ fn clicking_a_changed_file_opens_its_diff_and_esc_returns() {
     assert!(!text.contains("staged only"));
     let add = lines.iter().position(|l| l.contains("new line")).unwrap();
     let del = lines.iter().position(|l| l.contains("old line")).unwrap();
-    assert!(lines[add].contains("   8  +new line"), "{}", lines[add]);
-    let x = col_of(&lines[add], "+new line") as u16;
+    assert!(lines[add].contains(" 8 + new line"), "{}", lines[add]);
+    let x = col_of(&lines[add], "new line") as u16;
     let add_bg = buf[(x, add as u16)].bg;
     let del_bg = buf[(x, del as u16)].bg;
     assert_ne!(add_bg, del_bg);

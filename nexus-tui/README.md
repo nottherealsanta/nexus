@@ -54,6 +54,35 @@ history (all messages, the retained diagnostics that carry duration and usage,
 and the snapshot) after the bounded snapshot view. Model, effort and agent
 pickers, session export and a directory change are wired.
 
+### Markdown and diffs (DESIGN_PLAN.md D08, D09)
+
+`markdown.rs` draws assistant text. Headings are bold: H1 and H2 in
+`text.primary` (H1 with a muted `─` underline as wide as its text), H3 and
+below in `text.secondary`. Inline code is `text.primary` on `surface.panel`,
+padded by one space, never accent. A fence is a `surface.panel` block across
+the reading column: a header row with the language (`code` when absent) in
+`text.muted`, the code inset by 2, one padding row; there is no rule and no
+rail. A focused or hovered fence shows `copy` at the right end of its header
+(a click copies the source). Lists use `•` and `◦`; block quotes sit behind a
+`│` in `border.strong` with `text.secondary` text; links are `status.info` and
+underlined, followed by `(url)` unless the target is a file path; task items
+show `[✓]` (success) or `[ ]`. Mermaid is unchanged. Not done yet: OSC 8
+hyperlinks (the buffer has no cell for escape sequences) and `path:line` links
+that open the file view.
+
+`diff.rs` is the one diff renderer, for edit, write and patch tool details and
+for the Git diff view. It parses `git diff` text, `apply_patch` text, an
+old/new pair (no line numbers: the position is unknown) or new file content
+(numbered from 1). A column of 110 cells or more gets the split view: old
+number and text, a `│` rule in `border.strong`, new number and text; removed
+lines tint the left with `diff.del_bg`, added lines tint the right with
+`diff.add_bg`, and the empty side of an add or delete is hatched with `╱` in
+`border.default` (`/` in ASCII). Below 110 cells the unified view shows the new
+line numbers, then `+` or `-`, then the text on the tint. Tinted text is
+primary, context text is muted, long lines wrap inside their column (wide CJK
+characters included), hunks are separated by a muted `⋯ @@ … @@` row, and a
+diff with several files gets a `path  +a −r` header per file.
+
 The Files tab is a lazy tree: folders expand one level at a time, Git status
 letters are right-aligned, ignored entries are muted and can be hidden, and a
 root row switches between the project checkout and the open session's worktree
@@ -79,8 +108,8 @@ Untracked from Core's `/api/session/{id}/git` (`staged`, `unstaged` and the
 porcelain `status` code). A file changed in both the index and the worktree
 appears in both groups. Click a row, or press Enter with the right sidebar
 focused (`up`/`down` move), to open its diff from `/git/diff` in the centre
-column: `+` lines on `diff.add_bg`, `-` lines on `diff.del_bg`, muted hunk
-headers, new-file line numbers. A Staged row shows the staged diff, an Unstaged
+column, drawn by `diff.rs` (D09, see Markdown and diffs below): split at 110
+cells and wider, unified below. A Staged row shows the staged diff, an Unstaged
 row the unstaged one; Untracked rows show a notice because Core's diff has no
 untracked contents. Esc returns to the timeline.
 
