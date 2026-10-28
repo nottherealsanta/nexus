@@ -117,7 +117,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Regions::compute(area, flags, |w| heights(a, w))
     };
     let mut hits = HitMap::default();
-    let mut metrics = (0usize, 0usize);
+    let mut metrics = (0usize, 0usize, None::<usize>);
     let timeline = {
         let a: &App = app;
         Some(crate::timeline::build(
@@ -184,6 +184,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         }
         draw_waiting(&cx, buf, regions.waiting, &mut hits);
         draw_composer(&cx, buf, regions.composer, &mut hits);
+        if let Some(behind) = metrics.2 {
+            draw_jump(&cx, buf, regions.composer, behind, &mut hits);
+        }
         draw_completion(&cx, buf, &regions, &mut hits);
         if let Some(l) = regions
             .left
@@ -364,7 +367,7 @@ fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
     let inner_w = w.saturating_sub(10) as usize;
     let rows = app.composer_ref().layout(inner_w).0.len().clamp(1, 8) as u16;
-    let (waiting, composer) = (waiting_height(app), rows + 6);
+    let (waiting, composer) = (waiting_height(app, w), rows + 6);
     Heights {
         banner,
         waiting,
@@ -374,23 +377,6 @@ fn heights(app: &App, w: u16) -> Heights {
 
 /// Option rows the question card shows at most; the cursor scrolls the rest.
 const ASK_ROWS: usize = 5;
-
-/// Rows between the question text and the hint line: the options, or the
-/// one-line prompt of a free-text question.
-fn question_rows(app: &App) -> usize {
-    app.ask_current()
-        .map_or(1, |c| c.options().len().clamp(1, ASK_ROWS))
-}
-
-fn waiting_height(app: &App) -> u16 {
-    match app.wait_focused() {
-        None => 0,
-        Some(w) => match w.kind {
-            WaitKind::Approval => 6,
-            WaitKind::Question => 4 + question_rows(app) as u16,
-        },
-    }
-}
 
 // ============================================================================
 // header
@@ -866,7 +852,7 @@ fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         } else {
             format!("{key} {label}")
         };
-        right.push((t, cx.st(ACCENT, PANEL), Some(Target::BannerAction(0))));
+        right.push((t, cx.st(SECONDARY, PANEL), Some(Target::BannerAction(0))));
     }
     if let Some(i) = b.hide {
         right.push((
@@ -892,55 +878,139 @@ fn draw_banner(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         rx = x1;
     }
     put(buf, r.x + 1, r.y, &glyph, cx.st(tok, PANEL), 2);
+    // The first words in the level colour, the rest secondary.
     let room = (edge.saturating_sub(r.x + 4)) as usize;
     let text = truncate(&b.text, room.saturating_sub(2), cx.ell());
-    put(
+    let cut = banner_head(&text);
+    let (head, rest) = text.split_at(cut);
+    let hx = put(
         buf,
         r.x + 3,
         r.y,
-        &text,
-        cx.st(SECONDARY, PANEL),
+        head,
+        cx.st(tok, PANEL).add_modifier(Modifier::BOLD),
         room as u16,
+    );
+    put(
+        buf,
+        hx,
+        r.y,
+        rest,
+        cx.st(SECONDARY, PANEL),
+        (r.x + 3 + room as u16).saturating_sub(hx),
     );
 }
 
+/// Where a banner's lead phrase ends: its first ` · ` or `. `, else its first
+/// four words.
+fn banner_head(text: &str) -> usize {
+    for sep in [" \u{b7} ", ". "] {
+        if let Some(i) = text.find(sep) {
+            return i;
+        }
+    }
+    let mut words = 0;
+    for (i, c) in text.char_indices() {
+        if c == ' ' {
+            words += 1;
+            if words == 4 {
+                return i;
+            }
+        }
+    }
+    text.len()
+}
+
+/// Toasts (D15): top-right under the header (and the banner), the oldest on
+/// top, three drawn and `+N more` for the queue. Each is a raised block with
+/// the level `▌`, the level glyph, a bold title and `×`; a body line when the
+/// text has one. No lifetime hairline. A click opens the full text.
 fn draw_toasts(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let toasts = &cx.app.ui.alerts.toasts;
     if toasts.is_empty() {
         return;
     }
-    let bottom = g.timeline.y + g.timeline.height;
-    let mut y = bottom;
-    for t in toasts.iter().rev() {
-        if y <= g.timeline.y {
+    let parts: Vec<(String, String)> = toasts
+        .iter()
+        .take(crate::ui::SHOWN)
+        .map(|t| crate::ui::split_title(&t.text))
+        .collect();
+    let longest = parts
+        .iter()
+        .map(|(t, b)| width(t).max(width(b)) + 8)
+        .max()
+        .unwrap_or(0);
+    let w = paint::toast_width(longest, g.centre.width);
+    let x = g.centre.right().saturating_sub(w + 1);
+    let bottom = g.timeline.bottom();
+    let mut y = g.timeline.y;
+    let mut shown = 0;
+    let focused = cx.app.ui.focus == Focus::Alert;
+    for (i, (t, (title, body))) in toasts.iter().zip(&parts).enumerate() {
+        let h = if body.is_empty() { 1 } else { 2 };
+        if y + h > bottom {
             break;
         }
+        let r = Rect::new(x, y, w, h);
+        let bg = if focused && i == 0 {
+            "interactive.selection"
+        } else {
+            RAISED
+        };
         let (glyph, tok) = cx.level(t.level);
-        let max_w = g.centre.width.saturating_sub(4).min(60) as usize;
-        let body = truncate(&t.text, max_w.saturating_sub(4), cx.ell());
-        let w = (width(&body) + 6).min(g.centre.width as usize) as u16;
-        y -= 1;
-        let r = Rect::new(g.centre.x + g.centre.width - w - 1, y, w, 1);
-        clear(buf, r, cx.st(PRIMARY, RAISED));
-        put(buf, r.x + 1, r.y, glyph, cx.st(tok, RAISED), 2);
+        clear(buf, r, cx.st(PRIMARY, bg));
+        for row in r.y..r.bottom() {
+            put(
+                buf,
+                r.x,
+                row,
+                cx.t.structure("focus_bar"),
+                cx.st(tok, bg),
+                1,
+            );
+        }
+        hits.add(r, Target::ToastOpen(t.id));
+        put(buf, r.x + 2, r.y, glyph, cx.st(tok, bg), 2);
+        let room = w.saturating_sub(8) as usize;
         put(
             buf,
-            r.x + 3,
+            r.x + 4,
             r.y,
-            &body,
-            cx.st(PRIMARY, RAISED),
-            r.width - 5,
+            &truncate(title, room, cx.ell()),
+            cx.st(PRIMARY, bg).add_modifier(Modifier::BOLD),
+            room as u16,
         );
-        let hov = cx.hovered(r);
+        if !body.is_empty() {
+            put(
+                buf,
+                r.x + 4,
+                r.y + 1,
+                &truncate(body, room, cx.ell()),
+                cx.st(SECONDARY, bg),
+                room as u16,
+            );
+        }
+        let close = Rect::new(r.right() - 3, r.y, 3, 1);
+        hits.add(close, Target::ToastDismiss(t.id));
         put(
             buf,
             r.right() - 2,
             r.y,
             cx.t.structure("close"),
-            cx.st(if hov { PRIMARY } else { MUTED }, RAISED),
+            cx.st(if cx.hovered(close) { PRIMARY } else { MUTED }, bg),
             1,
         );
-        hits.add(r, Target::ToastDismiss(t.id));
+        y += h + 1;
+        shown += 1;
+    }
+    let hidden = toasts.len() - shown;
+    // `y` is one row past the last toast's gap; the tag sits on that gap row.
+    if hidden > 0 && shown > 0 && y > g.timeline.y && y - 1 < bottom {
+        let tag = format!(" +{hidden} more ");
+        let tw = width(&tag) as u16;
+        let r = Rect::new((x + w).saturating_sub(tw), y - 1, tw, 1);
+        clear(buf, r, cx.st(MUTED, RAISED));
+        put(buf, r.x, r.y, &tag, cx.st(MUTED, RAISED), tw);
     }
 }
 
@@ -2851,9 +2921,9 @@ fn draw_timeline(
     r: Rect,
     hits: &mut HitMap,
     timeline: &crate::timeline::Timeline,
-) -> (usize, usize) {
+) -> (usize, usize, Option<usize>) {
     if r.height == 0 || r.width < 4 {
-        return (0, 0);
+        return (0, 0, None);
     }
     let a = cx.app;
     hits.add(r, Target::Timeline);
@@ -2912,7 +2982,7 @@ fn draw_timeline(
                 1,
             );
         }
-        return (0, r.height as usize);
+        return (0, r.height as usize, None);
     }
     let total = lines.len();
     let h = r.height as usize;
@@ -3004,33 +3074,47 @@ fn draw_timeline(
             1,
         );
     }
-    if top < max_top {
-        let key = a
-            .manifest
-            .command("session.jump_latest")
-            .and_then(|c| c.tui_key())
-            .unwrap_or("end");
-        let s = format!(
-            " {} jump to latest {} {key} ",
-            cx.t.status("running").0.replace('◐', "v"),
-            cx.t.structure("separator")
-        );
-        let s = if cx.t.opts.ascii {
-            s
-        } else {
-            s.replace('v', "↓")
-        };
-        let w = width(&s) as u16;
-        let rr = Rect::new(r.right().saturating_sub(w + 1), r.bottom() - 1, w, 1);
-        let mut st = cx.st(ACCENT, RAISED);
-        if cx.hovered(rr) {
-            st = st.add_modifier(Modifier::UNDERLINED);
-        }
-        clear(buf, rr, st);
-        put(buf, rr.x, rr.y, &s, st, w);
-        hits.add(rr, Target::JumpLatest);
+    // Blocks wholly below the viewport count for the jump pill, which is
+    // drawn on the composer's live row, never over the timeline.
+    let behind = (top < max_top).then(|| {
+        timeline
+            .blocks
+            .iter()
+            .filter(|b| b.start >= top + h)
+            .count()
+    });
+    (total, h, behind)
+}
+
+/// The jump-to-latest pill (D15): raised, right-aligned on the live row above
+/// the composer card, `↓ 3 new · end`. `behind` counts the blocks below the
+/// viewport.
+fn draw_jump(cx: &Cx, buf: &mut Buffer, composer: Rect, behind: usize, hits: &mut HitMap) {
+    if composer.height < 7 {
+        return;
     }
-    (total, h)
+    let key = cx
+        .app
+        .manifest
+        .command("session.jump_latest")
+        .and_then(|c| c.tui_key())
+        .unwrap_or("end");
+    let arrow = if cx.t.opts.ascii { "v" } else { "\u{2193}" };
+    let count = if behind > 0 {
+        format!(" {behind} new")
+    } else {
+        String::new()
+    };
+    let s = format!(" {arrow}{count} {} {key} ", cx.t.structure("separator"));
+    let rr = paint::pill_rect(composer, width(&s) as u16);
+    let mut st = cx.st(SECONDARY, RAISED);
+    if cx.hovered(rr) {
+        st = st.add_modifier(Modifier::UNDERLINED);
+    }
+    clear(buf, rr, st);
+    put(buf, rr.x, rr.y, &s, st, rr.width);
+    put(buf, rr.x + 1, rr.y, arrow, cx.st(ACCENT, RAISED), 1);
+    hits.add(rr, Target::JumpLatest);
 }
 
 /// One timeline row. A band row (the user message) spans the whole page width
@@ -3138,29 +3222,218 @@ fn draw_sticky(
 // waiting card and composer
 // ============================================================================
 
-/// (enabled, bold, focused)
-type BtnState = (bool, bool, bool);
+/// Diff rows the waiting card shows at most (D14).
+const WAIT_DIFF_ROWS: usize = 12;
+/// Parameter-table rows the card shows at most.
+const WAIT_TABLE_ROWS: usize = 6;
 
-fn button(cx: &Cx, buf: &mut Buffer, pos: (u16, u16), label: &str, state: BtnState) -> Rect {
-    let (enabled, bold, focused) = state;
-    let s = format!("[ {label} ]");
-    let mut style = if enabled {
-        cx.st(PRIMARY, PANEL)
-    } else {
-        cx.st(MUTED, PANEL)
-    };
-    if bold && enabled {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    if focused && enabled {
-        style = style.add_modifier(Modifier::REVERSED);
-    }
-    let x1 = put(buf, pos.0, pos.1, &s, style, 40);
-    Rect::new(pos.0, pos.1, x1 - pos.0, 1)
+/// One row of the waiting card, in order. Rows are listed whole, then dropped
+/// by priority (diff, blanks, pads, table, options) until the card fits.
+enum WRow {
+    Pad,
+    Blank,
+    Head,
+    Sub,
+    Table(String, String),
+    Diff(Vec<ratatui::text::Span<'static>>),
+    DiffNote(String),
+    Ask(String),
+    Opt(usize),
+    Field(String),
+    Choice(usize),
+    Hint,
 }
 
+type ApprovalParts = (String, Vec<(String, String)>, Option<crate::diff::Diff>);
+
+/// The approval's tool, its parameters and, for edit, write and patch, the diff.
+fn approval_parts(app: &App, id: &str) -> ApprovalParts {
+    use crate::diff::Diff;
+    let Some(p) = app.state.model.approvals.get(id) else {
+        return (String::new(), Vec::new(), None);
+    };
+    let args = match &p.args {
+        Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+        other => other.clone(),
+    };
+    let str_of = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| args[*k].as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+    let (diff, skip): (Option<Diff>, &[&str]) = match p.tool.as_str() {
+        "edit" | "patch" => {
+            let d = match args["patch"].as_str() {
+                Some(patch) => Diff::from_patch(patch),
+                None => Diff::from_replace(
+                    &str_of(&["old_string", "old"]),
+                    &str_of(&["new_string", "new"]),
+                ),
+            };
+            (
+                Some(d),
+                &["patch", "old_string", "new_string", "old", "new"],
+            )
+        }
+        "write" => (Some(Diff::from_new(&str_of(&["content"]))), &["content"]),
+        _ => (None, &[]),
+    };
+    let diff = diff.filter(|d| !d.is_empty());
+    let mut table = Vec::new();
+    match &args {
+        Value::Object(m) => {
+            for (k, v) in m {
+                if diff.is_some() && skip.contains(&k.as_str()) {
+                    continue;
+                }
+                let text = json_str(v);
+                let mut lines = text.lines();
+                let first = lines.next().unwrap_or("").to_owned();
+                let more = lines.next().is_some();
+                table.push((k.clone(), if more { format!("{first} …") } else { first }));
+            }
+        }
+        Value::Null => {}
+        other => table.push(("args".into(), json_str(other))),
+    }
+    (p.tool.clone(), table, diff)
+}
+
+/// The rows of the focused waiting card for a region `w` cells wide, fitted to
+/// `limit` rows (`usize::MAX` for the natural height).
+fn wait_rows(app: &App, w: u16, limit: usize) -> Vec<WRow> {
+    let Some(item) = app.wait_focused() else {
+        return Vec::new();
+    };
+    let inner = w.saturating_sub(8) as usize;
+    let mut rows = vec![WRow::Pad, WRow::Head, WRow::Sub, WRow::Blank];
+    match item.kind {
+        WaitKind::Approval => {
+            let (_, table, diff) = approval_parts(app, &item.id);
+            for (k, v) in table.into_iter().take(WAIT_TABLE_ROWS) {
+                rows.push(WRow::Table(k, v));
+            }
+            if let Some(diff) = diff {
+                let look = crate::diff::Look::from_theme(&app.theme);
+                let all = diff.render(inner, &look);
+                rows.push(WRow::Blank);
+                let cap = if all.len() > WAIT_DIFF_ROWS {
+                    WAIT_DIFF_ROWS - 1
+                } else {
+                    all.len()
+                };
+                let more = all.len() - cap;
+                rows.extend(all.into_iter().take(cap).map(WRow::Diff));
+                if more > 0 {
+                    rows.push(WRow::DiffNote(format!("{more} more rows")));
+                }
+            }
+            rows.push(WRow::Blank);
+            rows.extend((0..4).map(WRow::Choice));
+            rows.push(WRow::Blank);
+        }
+        WaitKind::Question => {
+            if let Some(c) = app.ask_current() {
+                rows.push(WRow::Ask(
+                    json_str(&c.question["question"]).replace('\n', " "),
+                ));
+                let opts = c.options().len();
+                let shown = opts.min(ASK_ROWS);
+                let top = c
+                    .draft
+                    .cursor
+                    .saturating_sub(shown.saturating_sub(1))
+                    .min(opts - shown);
+                rows.extend((top..top + shown).map(WRow::Opt));
+                if opts == 0 {
+                    rows.push(WRow::Field(
+                        "Type the answer in the composer below, then press enter.".into(),
+                    ));
+                } else if c.allows_text() {
+                    rows.push(WRow::Blank);
+                    rows.push(WRow::Field(
+                        "Or type your own answer in the composer below.".into(),
+                    ));
+                }
+            }
+            rows.push(WRow::Blank);
+        }
+    }
+    rows.push(WRow::Hint);
+    rows.push(WRow::Pad);
+    // Fit: diff first, then blanks, pads, the field, table rows, option rows.
+    fn drop_last(rows: &mut Vec<WRow>, pick: fn(&WRow) -> bool, keep: usize) -> bool {
+        if rows.iter().filter(|r| pick(r)).count() > keep {
+            if let Some(i) = rows.iter().rposition(pick) {
+                rows.remove(i);
+                return true;
+            }
+        }
+        false
+    }
+    while rows.len() > limit {
+        let done = drop_last(
+            &mut rows,
+            |r| matches!(r, WRow::Diff(_) | WRow::DiffNote(_)),
+            0,
+        ) || drop_last(&mut rows, |r| matches!(r, WRow::Blank), 0)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Pad), 0)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Field(_)), 0)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Table(..)), 1)
+            || drop_last(&mut rows, |r| matches!(r, WRow::Opt(_)), 1);
+        if !done {
+            break;
+        }
+    }
+    rows
+}
+
+fn waiting_height(app: &App, w: u16) -> u16 {
+    wait_rows(app, w, usize::MAX).len() as u16
+}
+
+/// Key hints as `key label` pairs: the key bold, the label muted. Returns the
+/// rect of each pair.
+fn hints_at(
+    cx: &Cx,
+    buf: &mut Buffer,
+    (x, y): (u16, u16),
+    end: u16,
+    hints: &[(String, String)],
+) -> Vec<Rect> {
+    let key = cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD);
+    let muted = cx.st(MUTED, PANEL);
+    let mut at = x;
+    let mut out = Vec::new();
+    for (i, (k, label)) in hints.iter().enumerate() {
+        if i > 0 {
+            at = put(buf, at, y, &cx.sep(), muted, end.saturating_sub(at));
+        }
+        let start = at;
+        at = put(buf, at, y, k, key, end.saturating_sub(at));
+        let label = if k.is_empty() {
+            label.clone()
+        } else {
+            format!(" {label}")
+        };
+        at = put(buf, at, y, &label, muted, end.saturating_sub(at));
+        out.push(Rect::new(start, y, at - start, 1));
+    }
+    out
+}
+
+fn mmss(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+const READ_ONLY_CARD: &str = "read-only until Core is connected";
+
+/// The waiting card (D14), docked above the composer on `surface.panel` with a
+/// heavy accent rail: the header, the parameters (and the diff, capped at 12
+/// rows) or the question, the key-chip choices and the key hints.
 fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
-    if r.height < 3 {
+    if r.height < 3 || r.width < 12 {
         return;
     }
     let a = cx.app;
@@ -3168,299 +3441,318 @@ fn draw_waiting(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     let items = a.wait_items();
     let at = a.ui.wait_idx.min(items.len().saturating_sub(1));
     let focused = a.ui.focus == Focus::Waiting;
-    clear(buf, r, cx.st(SECONDARY, PANEL));
+    let writable = a.writable();
+    let card = Rect::new(r.x + 2, r.y, r.width.saturating_sub(4), r.height);
+    clear(buf, card, cx.st(SECONDARY, PANEL));
     let rail_style = if focused {
         cx.st(ACCENT, PANEL).add_modifier(Modifier::BOLD)
     } else {
         cx.st(ACCENT, PANEL)
     };
-    for y in r.y..r.bottom() {
-        put(buf, r.x, y, cx.t.structure("rail_heavy"), rail_style, 1);
+    for y in card.y..card.bottom() {
+        put(buf, card.x, y, cx.t.structure("rail_heavy"), rail_style, 1);
     }
-    let x = r.x + 2;
-    let inner_w = r.width.saturating_sub(4);
-    let (wg, wl, wt) = cx.t.status("waiting");
-    let child = w
-        .child
-        .as_ref()
-        .map(|c| format!("{}{} {c}", cx.sep().trim_start(), "child"))
-        .unwrap_or_default();
-    let _ = child;
-    // title row
-    let head_right = if items.len() > 1 {
-        format!(
-            "{} of {}  {}",
-            at + 1,
-            items.len(),
-            a.manifest
-                .command("waiting.next")
-                .and_then(|c| c.tui_key())
-                .map(|k| format!("{k} next"))
-                .unwrap_or_default()
-        )
+    let x = card.x + 3;
+    let end = card.right().saturating_sub(2);
+    let inner_w = end.saturating_sub(x);
+    let rows = wait_rows(a, r.width, r.height as usize);
+    let (wg, _, wt) = cx.t.status("waiting");
+    let tool = if w.kind == WaitKind::Approval {
+        approval_parts(a, &w.id).0
     } else {
         String::new()
     };
-    let hr_w = width(&head_right) as u16;
-    let mut tx = put(buf, x, r.y, wg, cx.st(wt, PANEL), 2);
-    tx = put(
-        buf,
-        tx + 1,
-        r.y,
-        wl,
-        cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD),
-        10,
-    );
-    let (what, detail): (String, Vec<String>) = match w.kind {
-        WaitKind::Approval => {
-            let ap = a.state.model.approvals.get(&w.id);
-            let tool = ap.map(|p| p.tool.clone()).unwrap_or_default();
-            let mut lines = Vec::new();
-            if let Some(p) = ap {
-                match &p.args {
-                    Value::Object(m) => {
-                        for (k, v) in m.iter().take(2) {
-                            lines.push(format!("{k}: {}", json_str(v).replace('\n', " ")));
-                        }
-                    }
-                    other => lines.push(json_str(other)),
-                }
-            }
-            (tool, lines)
-        }
-        WaitKind::Question => {
-            let mut lines = Vec::new();
-            if let Some(c) = a.ask_current() {
-                lines.push(
-                    json_str(&c.question["question"])
-                        .trim_matches('"')
-                        .replace('\n', " "),
-                );
-            }
-            ("question".into(), lines)
-        }
-    };
-    let who = match &w.child {
-        Some(c) => format!("{}{what} in child: {c}", cx.sep()),
-        None => format!("{}{what}", cx.sep()),
-    };
-    let room = (inner_w.saturating_sub(hr_w + 2)).saturating_sub(tx - x) as usize;
-    put(
-        buf,
-        tx,
-        r.y,
-        &truncate(&who, room, cx.ell()),
-        cx.st(SECONDARY, PANEL),
-        room as u16,
-    );
-    if hr_w > 0 {
-        let hx = r.right().saturating_sub(hr_w + 1);
-        put(buf, hx, r.y, &head_right, cx.st(MUTED, PANEL), hr_w);
-        hits.add(Rect::new(hx, r.y, hr_w, 1), Target::Wait(WaitButton::Next));
-    }
-    for (i, l) in detail.iter().enumerate().take(2) {
-        put(
+    let marker = if cx.t.opts.ascii { ">" } else { "\u{25b8}" };
+    let table_w = rows
+        .iter()
+        .filter_map(|row| match row {
+            WRow::Table(k, _) => Some(width(k)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(14);
+    let band_row = |buf: &mut Buffer, y: u16, fg: &str| {
+        clear(
             buf,
-            x + 2,
-            r.y + 1 + i as u16,
-            &truncate(l, inner_w.saturating_sub(2) as usize, cx.ell()),
-            cx.st(SECONDARY, PANEL),
-            inner_w,
+            Rect::new(card.x + 1, y, card.width.saturating_sub(1), 1),
+            cx.st(fg, "interactive.selection"),
         );
-    }
-    // buttons: choices Core does not offer are shown disabled with the reason
-    let by = r.y + 3;
-    let writable = a.writable();
-    match w.kind {
-        WaitKind::Approval => {
-            let mut bx = x + 2;
-            let defs = [
-                ("allow once", "waiting.allow_once", Some(WaitButton::Allow)),
-                ("allow session", "waiting.allow_session", None),
-                ("deny", "waiting.deny", Some(WaitButton::Deny)),
-                ("deny with note", "waiting.deny_note", None),
-            ];
-            for (label, id, target) in defs {
-                let enabled = target.is_some() && writable;
-                let rect = button(
-                    cx,
-                    buf,
-                    (bx, by),
-                    label,
-                    (
-                        enabled,
-                        id == "waiting.allow_once",
-                        focused && id == "waiting.allow_once",
-                    ),
-                );
-                if let (Some(t), true) = (target, enabled) {
-                    hits.add(rect, Target::Wait(t));
-                }
-                bx = rect.right() + 2;
-            }
-            let hint = defs
-                .iter()
-                .filter(|d| d.2.is_some())
-                .filter_map(|d| {
-                    a.manifest
-                        .command(d.1)
-                        .and_then(|c| c.tui_key().map(|k| format!("{k} {}", d.0)))
-                })
-                .collect::<Vec<_>>()
-                .join(&cx.sep());
-            put(
-                buf,
-                x + 2,
-                by + 1,
-                &truncate(&hint, inner_w as usize, cx.ell()),
-                cx.st(MUTED, PANEL),
-                inner_w,
-            );
-            let reason = a
-                .manifest
-                .command("waiting.allow_session")
-                .and_then(|c| c.unavailable_reason.clone())
-                .unwrap_or_default();
-            let note = if writable {
-                "allow session, deny with note: not offered by Core yet.".to_owned()
-            } else {
-                reason
-            };
-            put(
-                buf,
-                x + 2,
-                by + 2,
-                &truncate(&note, inner_w as usize, cx.ell()),
-                cx.st(MUTED, PANEL),
-                inner_w,
-            );
-        }
-        WaitKind::Question => draw_question_body(cx, buf, r, (x, inner_w), writable, hits),
-    }
-}
-
-/// The options (or the free-text prompt), a key hint and the submit button of
-/// the focused question. Each option is a mouse target.
-fn draw_question_body(
-    cx: &Cx,
-    buf: &mut Buffer,
-    r: Rect,
-    (x, inner_w): (u16, u16),
-    writable: bool,
-    hits: &mut HitMap,
-) {
-    let a = cx.app;
-    let Some(c) = a.ask_current() else { return };
-    let focused = a.ui.focus == Focus::Waiting;
-    let opts = c.options();
-    let mut y = r.y + 2;
-    if opts.is_empty() {
         put(
             buf,
-            x + 2,
+            card.x + 1,
             y,
-            "Type the answer in the composer below, then press enter.",
-            cx.st(SECONDARY, PANEL),
-            inner_w,
+            marker,
+            cx.st(ACCENT, "interactive.selection")
+                .add_modifier(Modifier::BOLD),
+            1,
         );
-    } else {
-        let shown = opts.len().min(ASK_ROWS);
-        let top = c
-            .draft
-            .cursor
-            .saturating_sub(shown - 1)
-            .min(opts.len() - shown);
-        for (i, o) in opts.iter().enumerate().skip(top).take(shown) {
-            let on = c.draft.chosen.contains(&i);
-            let mark = match (c.multiple(), on) {
-                (true, true) => "[x]",
-                (true, false) => "[ ]",
-                (false, true) => "(*)",
-                (false, false) => "( )",
-            };
-            let num = (i + 1) % 10;
-            let label = json_str(&o["label"]);
-            let line = format!("{mark} {num} {}", label.trim_matches('"'));
-            let at = focused && i == c.draft.cursor;
-            let mut st = cx.st(if at { PRIMARY } else { SECONDARY }, PANEL);
-            if at {
-                st = st.add_modifier(Modifier::REVERSED);
+    };
+    for (i, row) in rows.iter().enumerate() {
+        let y = card.y + i as u16;
+        match row {
+            WRow::Pad | WRow::Blank => {}
+            WRow::Head => {
+                let title = match w.kind {
+                    WaitKind::Approval => format!("Allow {tool}?"),
+                    WaitKind::Question => "Nexus asks".to_owned(),
+                };
+                let tx = put(buf, x, y, wg, cx.st(wt, PANEL), 2);
+                let right = if items.len() > 1 {
+                    let key = a
+                        .manifest
+                        .command("waiting.next")
+                        .and_then(|c| c.tui_key())
+                        .map(|k| format!("{}{k} next", cx.sep()))
+                        .unwrap_or_default();
+                    format!("{} of {}{key}", at + 1, items.len())
+                } else {
+                    String::new()
+                };
+                let rw = width(&right) as u16;
+                let room = inner_w.saturating_sub(rw + 3) as usize;
+                put(
+                    buf,
+                    tx + 1,
+                    y,
+                    &truncate(&title, room, cx.ell()),
+                    cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD),
+                    room as u16,
+                );
+                if rw > 0 {
+                    let rx = end.saturating_sub(rw);
+                    put(buf, rx, y, &right, cx.st(MUTED, PANEL), rw);
+                    hits.add(Rect::new(rx, y, rw, 1), Target::Wait(WaitButton::Next));
+                }
             }
-            let w = (inner_w.saturating_sub(2) as usize).min(width(&line));
-            put(
-                buf,
-                x + 2,
-                y,
-                &truncate(&line, inner_w.saturating_sub(2) as usize, cx.ell()),
-                st,
-                inner_w,
-            );
-            if writable {
-                hits.add(Rect::new(x + 2, y, w as u16, 1), Target::WaitOption(i));
+            WRow::Sub => {
+                let mut sub = format!("waiting on you{}{}", cx.sep(), mmss(a.wait_secs(&w.id)));
+                if let Some(c) = a.ask_current().filter(|c| c.total > 1) {
+                    sub.push_str(&format!(
+                        "{}question {} of {}",
+                        cx.sep(),
+                        c.index + 1,
+                        c.total
+                    ));
+                }
+                if let Some(child) = &w.child {
+                    sub.push_str(&format!("{}in child: {child}", cx.sep()));
+                }
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(&sub, inner_w as usize, cx.ell()),
+                    cx.st(MUTED, PANEL),
+                    inner_w,
+                );
             }
-            y += 1;
+            WRow::Table(k, v) => {
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(k, table_w, cx.ell()),
+                    cx.st(MUTED, PANEL),
+                    table_w as u16,
+                );
+                let vx = x + table_w as u16 + 2;
+                let room = end.saturating_sub(vx) as usize;
+                put(
+                    buf,
+                    vx,
+                    y,
+                    &truncate(v, room, cx.ell()),
+                    cx.st(PRIMARY, PANEL),
+                    room as u16,
+                );
+            }
+            WRow::Diff(spans) => {
+                buf.set_line(x, y, &Line::from(spans.clone()), inner_w);
+            }
+            WRow::DiffNote(note) => {
+                put(buf, x, y, note, cx.st(MUTED, PANEL), inner_w);
+            }
+            WRow::Ask(q) => {
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(q, inner_w as usize, cx.ell()),
+                    cx.st(PRIMARY, PANEL).add_modifier(Modifier::BOLD),
+                    inner_w,
+                );
+            }
+            WRow::Opt(i) => {
+                let Some(c) = a.ask_current() else { continue };
+                let Some(o) = c.options().get(*i) else {
+                    continue;
+                };
+                let on = c.draft.chosen.contains(i);
+                let mark = match (c.multiple(), on) {
+                    (true, true) => "[x]",
+                    (true, false) => "[ ]",
+                    (false, true) => "(*)",
+                    (false, false) => "( )",
+                };
+                let label = json_str(&o["label"]);
+                let line = format!("{mark} {} {}", (i + 1) % 10, label.trim_matches('"'));
+                let mut st = cx.st(SECONDARY, PANEL);
+                if *i == c.draft.cursor {
+                    band_row(buf, y, PRIMARY);
+                    st = cx
+                        .st(PRIMARY, "interactive.selection")
+                        .add_modifier(Modifier::BOLD);
+                }
+                put(
+                    buf,
+                    x,
+                    y,
+                    &truncate(&line, inner_w as usize, cx.ell()),
+                    st,
+                    inner_w,
+                );
+                if writable {
+                    let lw = width(&line).min(inner_w as usize) as u16;
+                    hits.add(Rect::new(x, y, lw, 1), Target::WaitOption(*i));
+                }
+            }
+            WRow::Field(text) => {
+                clear(buf, Rect::new(x, y, inner_w, 1), cx.st(MUTED, RAISED));
+                put(
+                    buf,
+                    x + 1,
+                    y,
+                    &truncate(text, inner_w.saturating_sub(2) as usize, cx.ell()),
+                    cx.st(MUTED, RAISED),
+                    inner_w.saturating_sub(2),
+                );
+            }
+            WRow::Choice(n) => {
+                let defs: [(&str, &str, Option<WaitButton>, &str); 4] = [
+                    (
+                        "Allow once",
+                        "waiting.allow_once",
+                        Some(WaitButton::Allow),
+                        "",
+                    ),
+                    (
+                        "Allow for session",
+                        "waiting.allow_session",
+                        None,
+                        "not offered by Core yet",
+                    ),
+                    ("Deny", "waiting.deny", Some(WaitButton::Deny), ""),
+                    (
+                        "Deny with a note",
+                        "waiting.deny_note",
+                        None,
+                        "Core does not support notes yet",
+                    ),
+                ];
+                let (label, cmd, target, why) = defs[*n];
+                let offered = target.is_some();
+                let enabled = offered && writable;
+                let selected = enabled && a.ui.wait_choice == *n;
+                let bg = if selected {
+                    band_row(buf, y, PRIMARY);
+                    "interactive.selection"
+                } else {
+                    PANEL
+                };
+                let key = a
+                    .manifest
+                    .command(cmd)
+                    .and_then(|c| c.tui_key())
+                    .unwrap_or("");
+                let chip = format!(" {key} ");
+                let chip_style = if enabled {
+                    cx.st(PRIMARY, RAISED).add_modifier(Modifier::BOLD)
+                } else {
+                    cx.st(MUTED, RAISED)
+                };
+                let cw = (width(&chip) as u16).max(3);
+                put(buf, x, y, &chip, chip_style, cw);
+                let lx = x + cw + 1;
+                let mut label_style = if enabled {
+                    cx.st(PRIMARY, bg)
+                } else {
+                    cx.st(MUTED, bg)
+                };
+                if selected {
+                    label_style = label_style.add_modifier(Modifier::BOLD);
+                }
+                let lend = put(buf, lx, y, label, label_style, end.saturating_sub(lx));
+                let reason = if !offered {
+                    why
+                } else if !writable {
+                    READ_ONLY_CARD
+                } else {
+                    ""
+                };
+                if !reason.is_empty() {
+                    let rx = lend + 2;
+                    put(
+                        buf,
+                        rx,
+                        y,
+                        &truncate(reason, end.saturating_sub(rx) as usize, cx.ell()),
+                        cx.st(MUTED, bg),
+                        end.saturating_sub(rx),
+                    );
+                }
+                if let (Some(t), true) = (target, enabled) {
+                    hits.add(
+                        Rect::new(card.x + 1, y, card.width.saturating_sub(1), 1),
+                        Target::Wait(t),
+                    );
+                }
+            }
+            WRow::Hint => {
+                let key = |id: &str, fallback: &str| {
+                    a.manifest
+                        .command(id)
+                        .and_then(|c| c.tui_key().map(str::to_owned))
+                        .unwrap_or_else(|| fallback.to_owned())
+                };
+                let mut hints: Vec<(String, String)> = Vec::new();
+                let mut submit = None;
+                match (&w.kind, a.ask_current()) {
+                    (WaitKind::Question, Some(c)) if c.draft.sent => {
+                        hints.push((String::new(), "sending the answers...".into()));
+                    }
+                    (WaitKind::Question, Some(c)) if focused => {
+                        if !c.options().is_empty() {
+                            hints.push((updown(cx).to_owned(), "move".into()));
+                        }
+                        if c.multiple() {
+                            hints.push(("space".into(), "tick".into()));
+                        }
+                        let last = c.index + 1 >= c.total;
+                        submit = Some(hints.len());
+                        hints.push((
+                            "enter".into(),
+                            if last { "submit" } else { "next question" }.into(),
+                        ));
+                        hints.push(("esc".into(), "stops the turn".into()));
+                    }
+                    (_, _) if !focused => {
+                        hints.push((key("waiting.focus", "alt+w"), "answer".into()));
+                    }
+                    _ => {
+                        hints.push((updown(cx).to_owned(), "choose".into()));
+                        hints.push(("enter".into(), "confirm".into()));
+                    }
+                }
+                let rects = hints_at(cx, buf, (x, y), end, &hints);
+                if let (Some(i), true) = (submit, writable) {
+                    if let Some(rc) = rects.get(i) {
+                        hits.add(*rc, Target::Wait(WaitButton::Submit));
+                    }
+                }
+            }
         }
     }
-    let by = r.bottom().saturating_sub(2);
-    let step = if c.total > 1 {
-        format!("question {} of {}  ", c.index + 1, c.total)
-    } else {
-        String::new()
-    };
-    let hint = if c.draft.sent {
-        "sending the answers...".to_owned()
-    } else if opts.is_empty() {
-        format!("{step}enter in the composer sends the answer")
-    } else {
-        let pick = if c.multiple() {
-            "space/number tick, enter confirms"
-        } else {
-            "number or up/down+enter picks"
-        };
-        let text = if c.allows_text() {
-            ", or type a note"
-        } else {
-            ""
-        };
-        format!("{step}{pick}{text}")
-    };
-    put(
-        buf,
-        x + 2,
-        by,
-        &truncate(&hint, inner_w.saturating_sub(2) as usize, cx.ell()),
-        cx.st(MUTED, PANEL),
-        inner_w,
-    );
-    let last = c.index + 1 >= c.total;
-    let label = if last {
-        "submit answers"
-    } else {
-        "next question"
-    };
-    let enabled = writable && !c.draft.sent;
-    let rect = button(cx, buf, (x + 2, by + 1), label, (enabled, true, false));
-    if enabled {
-        hits.add(rect, Target::Wait(WaitButton::Submit));
-    }
-    let key = a
-        .manifest
-        .command("waiting.submit_answers")
-        .and_then(|c| c.tui_key())
-        .map(|k| format!("{k} {label}"))
-        .unwrap_or_default();
-    put(
-        buf,
-        rect.right() + 2,
-        by + 1,
-        &truncate(
-            &format!("{key}{}esc stops the turn", cx.sep()),
-            inner_w.saturating_sub(rect.width + 4) as usize,
-            cx.ell(),
-        ),
-        cx.st(MUTED, PANEL),
-        inner_w,
-    );
 }
 
 /// Display parts of a `provider/id` model reference. The catalog name wins over
@@ -4800,6 +5092,9 @@ fn draw_overlay(cx: &Cx, buf: &mut Buffer, area: Rect, o: &Overlay, hits: &mut H
             draw_notifications(cx, buf, area, *selected, hits)
         }
         OverlayKind::Help { top } => draw_help(cx, buf, area, *top, hits),
+        OverlayKind::AlertDetail { id, top, .. } => {
+            draw_alert_detail(cx, buf, area, *id, *top, hits)
+        }
     }
 }
 
@@ -5059,7 +5354,12 @@ fn draw_palette(cx: &Cx, buf: &mut Buffer, area: Rect, p: &Palette, hits: &mut H
 fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hits: &mut HitMap) {
     let b = modal_box(area, 64, 30);
     let m = modal(cx, buf, area, b, "Notifications", hits);
-    hint_row(cx, buf, &m, &[(updown(cx), "move"), ("esc", "close")]);
+    hint_row(
+        cx,
+        buf,
+        &m,
+        &[(updown(cx), "move"), ("enter", "open"), ("esc", "close")],
+    );
     let hist = &cx.app.ui.alerts.history;
     if hist.is_empty() {
         put(
@@ -5101,6 +5401,86 @@ fn draw_notifications(cx: &Cx, buf: &mut Buffer, area: Rect, selected: usize, hi
         }
         hits.add(rr, Target::NoticeItem(i));
         y += h;
+    }
+}
+
+/// The full text of one alert: the modal recipe, the title from the alert,
+/// the whole text wrapped and scrollable (D15).
+fn draw_alert_detail(
+    cx: &Cx,
+    buf: &mut Buffer,
+    area: Rect,
+    id: u64,
+    top: usize,
+    hits: &mut HitMap,
+) {
+    let Some((level, full)) = cx.app.ui.alerts.full(id) else {
+        return;
+    };
+    let (title, _) = crate::ui::split_title(full);
+    let wide = (area.width as usize * 6 / 10).clamp(48, 92) as u16;
+    let inner = wide.saturating_sub(4) as usize;
+    // The body repeats the title only when the text is one line.
+    let text = match full.split_once('\n') {
+        Some((_, rest)) => rest.trim().to_owned(),
+        None => full.to_owned(),
+    };
+    let mut rows: Vec<String> = Vec::new();
+    for para in text.split('\n') {
+        if para.trim().is_empty() {
+            rows.push(String::new());
+        } else {
+            rows.extend(text::wrap(para, inner));
+        }
+    }
+    let want = (rows.len() + 6).clamp(10, 40) as u16;
+    let b = modal_box(area, wide, want);
+    let (glyph, tok) = cx.level(level);
+    let m = modal(cx, buf, area, b, &format!("{glyph} {title}"), hits);
+    let _ = tok;
+    let h = m.body.height as usize;
+    let top = top.min(rows.len().saturating_sub(h));
+    for (i, row) in rows.iter().skip(top).take(h).enumerate() {
+        put(
+            buf,
+            m.x,
+            m.body.y + i as u16,
+            row,
+            cx.st(PRIMARY, RAISED),
+            m.w,
+        );
+    }
+    let has_session = cx
+        .app
+        .ui
+        .alerts
+        .history
+        .iter()
+        .any(|n| n.id == id && n.session.is_some());
+    let mut hints = vec![("c", "copy")];
+    if has_session {
+        hints.push(("enter", "go to session"));
+    }
+    if rows.len() > h {
+        hints.push((updown(cx), "scroll"));
+    }
+    hints.push(("esc", "close"));
+    hint_row(cx, buf, &m, &hints);
+    if rows.len() > h {
+        let more = format!(
+            "{}-{} of {}",
+            top + 1,
+            (top + h).min(rows.len()),
+            rows.len()
+        );
+        put(
+            buf,
+            m.x + m.w - width(&more) as u16,
+            m.hint_y,
+            &more,
+            cx.st(MUTED, RAISED),
+            width(&more) as u16,
+        );
     }
 }
 

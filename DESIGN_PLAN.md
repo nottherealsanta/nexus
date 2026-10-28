@@ -566,7 +566,7 @@ Work stopped at the user's request after I4. State on `nexus10`:
 | I5 composer | done (soft card, `paint::meter` on the control row, Working row, card-wide completion, project strip) | done (soft card, no rail/band, meter, Working row, card-wide completion, strip) | `12dfa97` + the TUI I5 commit |
 | I6 sidebars | done (search row, project and worktree groups, D03 rows, row-menu popover, rail band; SESSION / CONTEXT / GIT right sidebar) | done (52 px rows with agent line and `n ↳`, hover `⋯` menu, 11 px uppercase group headers, uppercase right-sidebar labels, 96 px key grid, 4 px meter, Git groups; no search row yet: `session.search` has no NSH handler; no per-row branch: the row has no branch data) | the TUI I6 commit and `interface: NSH sidebars (DESIGN_PLAN I6)` |
 | I7 modal recipe | done (`render.rs` `modal`: scrim, borderless raised block, title and `esc`, hint row; palette, pickers, Settings, confirm, help, notifications; UPPERCASE muted Settings headings, selection band; `[ Cancel ]` default) | not started | the TUI I7 commit |
-| I8 waiting card, alerts | not started | not started | |
+| I8 waiting card, alerts | done (`draw_waiting` with table, capped diff and key-chip choices; toasts top-right with `+N more`; full-text modal from a click, Enter or the notifications modal; the jump pill on the live row; banner lead in the level colour) | not started | the TUI I8 commit |
 | I9 new-session view | not started | not started | |
 | I10 files, narrow, states | not started | not started | |
 

@@ -116,7 +116,10 @@ nexus-tui --dark --dump-frame 120x36 --out DIR --name palette --svg \
 
 `--keys` takes space-separated tokens: key names in the manifest syntax
 (`ctrl+p`, `alt+2`, `ctrl+,`, `esc`, `enter`, `down`, `space`, `f1`) or text typed
-character by character (`/mo`). Core's replies are applied between tokens.
+character by character (`/mo`). A frame is drawn before each token, so scrolling
+and other keys that need the last layout work, and Core's replies are applied between tokens.
+A seeded Core has no pending approval, so the waiting card and alert shots come from
+fixtures: `I8_SHOTS=DIR cargo test --test alerts -- --ignored shots` writes their SVGs.
 `--svg` writes `<name>.svg` beside `<name>.txt` (truecolor unless `--256`/`--16`).
 
 `nexus-tui/tools/shots.sh <root> <out>` runs a standard set (session at three

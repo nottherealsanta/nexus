@@ -67,6 +67,14 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   shows the title and place. Settings is the modal recipe over the scrimmed
   session: search, UPPERCASE muted section headings, values right-aligned, the selected
   row on the selection band with the focus bar, ←/→ to change. Escape clears the search, then closes.
+- The waiting card is docked above the composer on the panel surface with a heavy accent
+  rail: `◆ Allow bash?`, `waiting on you · 0:42`, the parameter table, the diff capped at
+  12 rows and the choices as key chips on `surface.raised` (the selected row on the
+  selection band; a choice Core does not offer is muted with its reason). Toasts are
+  raised blocks top-right under the header (level `▌`, glyph, bold title, `×`, no
+  lifetime hairline), three at a time with `+N more`; clicking one opens its full text in
+  the modal. The banner is one row at the top of the page and pushes the timeline down;
+  the jump-to-latest pill is raised, right-aligned on the row above the composer card.
 - The location strip under the composer names the project in bold, then its path (muted),
   `⌥ branch` and `checkout` (muted) or `worktree` (bold violet), with
   `ctrl+p commands` muted at the right; there is no accent underline. Counts abbreviate as `1.2K` and `3.4M`.

@@ -68,6 +68,26 @@ pub fn modal_rect(area: Rect, width: u16, height: u16, high: bool) -> Rect {
     )
 }
 
+/// A toast's width (DESIGN_PLAN.md D15): 36 to 48 cells for `want`, within
+/// the page column and two cells of its edges.
+pub fn toast_width(want: usize, avail: u16) -> u16 {
+    (want.clamp(36, 48) as u16)
+        .min(avail.saturating_sub(2))
+        .max(1)
+}
+
+/// The jump-to-latest pill (D15): `width` cells on the composer region's first
+/// row (the live row above the card), right-aligned with the card's edge.
+pub fn pill_rect(composer: Rect, width: u16) -> Rect {
+    let width = width.min(composer.width.saturating_sub(4));
+    Rect::new(
+        composer.right().saturating_sub(2 + width),
+        composer.y,
+        width,
+        1,
+    )
+}
+
 /// The context meter (DESIGN_PLAN.md D11): `cells` hatch cells, the first
 /// `ceil(cells * fraction)` painted with `filled` and the rest with `empty`.
 /// Mono and ASCII use `/` for filled and `.` for empty cells so the two stay

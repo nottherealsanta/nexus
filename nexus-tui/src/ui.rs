@@ -165,8 +165,20 @@ pub struct Palette {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayKind {
     Palette(Palette),
-    Notifications { selected: usize },
-    Help { top: usize },
+    Notifications {
+        selected: usize,
+    },
+    Help {
+        top: usize,
+    },
+    /// The full text of one alert (a toast or a past notification), wrapped
+    /// and scrollable (DESIGN_PLAN.md D15). `back` is the notifications row
+    /// it was opened from; Esc returns there.
+    AlertDetail {
+        id: u64,
+        top: usize,
+        back: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +255,26 @@ pub struct Notice {
     pub read: bool,
 }
 
+/// Toasts drawn at once; the rest wait behind `+N more`.
+pub const SHOWN: usize = 3;
+/// Toasts kept in all, drawn or queued.
+const QUEUE: usize = 9;
+
+/// A toast's title and body from its full text: the first line is the title
+/// and the rest the body; a single line splits at its first `: ` when that
+/// comes early (`Export failed: disk full`).
+pub fn split_title(text: &str) -> (String, String) {
+    if let Some((head, rest)) = text.split_once('\n') {
+        return (head.trim().to_owned(), rest.trim().to_owned());
+    }
+    match text.split_once(": ") {
+        Some((head, rest)) if head.chars().count() <= 32 && !rest.is_empty() => {
+            (head.to_owned(), rest.to_owned())
+        }
+        _ => (text.to_owned(), String::new()),
+    }
+}
+
 /// Toasts expire; every one is also kept as a notice (the notifications drawer).
 #[derive(Debug, Default, Clone)]
 pub struct Alerts {
@@ -283,8 +315,9 @@ impl Alerts {
             text,
             born: now,
         });
-        // At most three stacked; the oldest goes (it stays in the history).
-        while self.toasts.len() > 3 {
+        // Three are drawn, the rest queue behind `+N more`; the oldest goes
+        // past `QUEUE` (it stays in the history).
+        while self.toasts.len() > QUEUE {
             self.toasts.remove(0);
         }
     }
@@ -299,8 +332,26 @@ impl Alerts {
 
     /// Drop expired toasts, except the one the pointer or focus holds.
     pub fn expire(&mut self, now: Instant, held: Option<u64>) {
+        // A queued toast starts its lifetime when it is first drawn.
+        for t in self.toasts.iter_mut().skip(SHOWN) {
+            t.born = now;
+        }
         self.toasts
             .retain(|t| held == Some(t.id) || now.duration_since(t.born) < Self::lifetime(t.level));
+    }
+
+    /// The full text and level of the alert `id`, toast or history entry.
+    pub fn full(&self, id: u64) -> Option<(Level, &str)> {
+        self.history
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| (n.level, n.text.as_str()))
+            .or_else(|| {
+                self.toasts
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| (t.level, t.text.as_str()))
+            })
     }
 
     pub fn dismiss(&mut self, id: u64) {
@@ -385,6 +436,8 @@ pub enum Target {
     BannerAction(usize),
     BannerHide(usize),
     ToastDismiss(u64),
+    /// Open the full text of a toast.
+    ToastOpen(u64),
     PaletteItem(usize),
     NoticeItem(usize),
     DialogButton(usize),

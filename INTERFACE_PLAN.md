@@ -507,22 +507,45 @@ PLAN.md (Step 12a).
 #### Waiting card
 
 ```
- ┃ ◆ waiting · edit src/loader.py                              1 of 2  tab next
- ┃   @@ -12,7 +12,10 @@ …
- ┃   [ allow once ]  [ allow session ]  [ deny ]  [ deny with note ]
- ┃   a once · s session · d deny · n note
+ ┃  ◆ Allow bash?                                         1 of 2 · tab next
+ ┃  waiting on you · 0:42
+ ┃
+ ┃  command  pytest tests/test_loader.py -q --maxfail=1
+ ┃  cwd      ~/repos/nexus-demo
+ ┃
+ ┃▸  y  Allow once
+ ┃   a  Allow for session  not offered by Core yet
+ ┃   n  Deny
+ ┃   d  Deny with a note   Core does not support notes yet
+ ┃
+ ┃  ↑↓ choose · enter confirm
 ```
 
-Docked directly above the composer, accent rail, panel surface. Row 1: mark
-`◆`, the word, the tool and key argument, count and cycle hint at the right.
-Body: full parameters or the questions with their options. Options row:
-bracketed buttons; the focused one is reverse, the default is bold.
-- A choice Core does not offer is shown disabled with its reason, not hidden.
-  Questions render options as `( )`/`(*)` or `[ ]`/`[x]` with a free-text field
-  and `enter submit`.
-- Loading (submitting): buttons replaced by `◐ sending…`. Error: `✕` and the
-  error above the buttons; the card stays. Empty: no card exists. Cancelled:
-  the card closes; the timeline row says `⊖ cancelled: interrupted`.
+Docked directly above the composer, aligned with its card, on the panel
+surface with a heavy `┃` rail in `interactive.accent` (bold while the card has
+focus). Header: `◆` and a bold title (`Allow {tool}?`, or `Nexus asks` for a
+question), with `1 of 2 · tab next` muted at the right; below it
+`waiting on you · 0:42` in muted (the time since the client first saw the
+request; a question adds `question 1 of 2`, a child session `in child: …`).
+Body: the full parameters as a key/value table (muted keys, primary values, at
+most six rows); for edit, write and patch the diff (D09, from `diff.rs`) capped
+at 12 rows with `N more rows` for the rest, and the diff's own arguments left
+out of the table.
+- **Choices:** one per row, `▸` and the selection band on the selected one, the
+  key (from the manifest) as a chip in bold primary on `surface.raised`. Up/Down
+  move between the offered choices, Enter confirms, a click or the key acts.
+  A choice Core does not offer (allow for session, deny with a note) is muted
+  with its reason beside it, never hidden. Unfocused, the last row reads
+  `alt+w answer`.
+- **Questions:** one question at a time: a bold row, its options as `( )`/`(*)`
+  or `[ ]`/`[x]` with their number, a free-text field row (`Or type your own
+  answer in the composer below.`) and hints `↑↓ move · enter submit ·
+  esc stops the turn`. `enter submit` is also a click target.
+- **Short screens:** the card drops its diff rows first, then blank rows and
+  pads, then table rows; every choice stays.
+- Loading (submitting): the hint reads `sending the answers...`. Error: the
+  card stays and a toast says why. Empty: no card exists. Cancelled: the card
+  closes; the timeline row says `⊖ cancelled: interrupted`.
 
 #### Settings row
 
@@ -586,19 +609,31 @@ a `+N` count.
 #### Toast
 
 ```
-                                              ┌────────────────────────┐
-                                              │ ✓ Copied               │
-                                              └────────────────────────┘
+                                          ▌ ✕ Turn failed                ×
+                                          ▌   429 rate limited · retrying in 8s
 ```
 
-Raised surface, bottom-right of the centre column in the TUI and NSH, one line
-(two at most), glyph then text, no actions except `undo` where one exists.
-They expire in 4 s (8 s for errors, no auto-dismiss while hovered or focused),
-stack up to three, newest at the bottom, and every toast is also kept in the
-notifications drawer. Levels: success `✓`, info `i`, warning `!`, error `✕`.
-Loading: not used (use a banner or inline spinner). Hovered: pauses the timer
-and shows `×`. Pressed: dismisses. Disabled and empty: n/a. Screen readers get
-the text as a polite live region (assertive for errors).
+Raised surface, top-right of the centre column under the header (and the
+banner), 36 to 48 cells wide. A `▌` in the level colour, the level glyph, a
+bold title and `×` on the first row; an optional body line below it (the text
+splits at its first line, or at an early `: `). No lifetime hairline. The
+oldest is on top; three are drawn and the rest wait behind `+N more` (a queued
+toast starts its timer when it is first drawn). They expire in 4 s (8 s for
+errors, no auto-dismiss while hovered or focused), and every toast is also kept
+in the notifications drawer with its full text. Levels: success `✓`, info `i`,
+warning `!`, error `✕`.
+- **Full text:** a click on a toast, or Enter on the focused one (the oldest),
+  opens the modal (D13) titled with the toast, the whole text wrapped and
+  scrollable, hints `c copy · esc close` (`enter go to session` when the alert
+  came from another session). The notifications drawer opens the same modal
+  for an entry; Esc returns to the list.
+- **Jump to latest:** a raised pill, `↓ 3 new · end`, right-aligned with the
+  composer card on the row above it. It never covers the timeline. `3` counts
+  the blocks wholly below the viewport.
+- Loading: not used (use a banner or inline spinner). Hovered: shows `×` bright.
+  Pressed: dismisses (`×`) or opens the text (elsewhere). Disabled and empty:
+  n/a. Screen readers get the text as a polite live region (assertive for
+  errors).
 
 ### Review checklist
 

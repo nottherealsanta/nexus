@@ -388,6 +388,9 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
         let home = discovery::home().unwrap_or_default();
         for token in &args.keys {
+            // A frame first, so keys that need the last layout (scrolling,
+            // mouse targets) see it, as they do in the live app.
+            let _ = render::render_buffer(&mut app, w, h);
             for k in token {
                 app.handle_key(*k);
             }

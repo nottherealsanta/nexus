@@ -415,6 +415,12 @@ pub struct Ui {
     pub scrolls: HashMap<String, Scroll>,
     pub drafts: HashMap<String, Composer>,
     pub wait_idx: usize,
+    /// The highlighted choice of the focused approval card (0 allow once, 2 deny).
+    pub wait_choice: usize,
+    /// When each waiting request was first seen, for `waiting on you · 0:42`.
+    pub wait_seen: HashMap<String, Instant>,
+    /// The card and clock text last announced by `tick`.
+    pub wait_shown: Option<(String, u64)>,
     pub ask: AskDraft,
     pub project: Option<String>,
     /// Content rows and viewport rows of the timeline at the last draw.
@@ -559,6 +565,9 @@ impl App {
                 completion: CompletionState::default(),
                 drafts: HashMap::new(),
                 wait_idx: 0,
+                wait_choice: 0,
+                wait_seen: HashMap::new(),
+                wait_shown: None,
                 ask: AskDraft::default(),
                 project: None,
                 timeline_total: 0,
@@ -1473,6 +1482,24 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
+        if let Some(Overlay {
+            kind:
+                OverlayKind::AlertDetail {
+                    back: Some(selected),
+                    ..
+                },
+            restore,
+        }) = self
+            .ui
+            .overlay
+            .take_if(|o| matches!(o.kind, OverlayKind::AlertDetail { back: Some(_), .. }))
+        {
+            self.ui.overlay = Some(Overlay {
+                kind: OverlayKind::Notifications { selected },
+                restore,
+            });
+            return;
+        }
         if let Some(o) = self.ui.overlay.take() {
             self.apply_restore(o.restore);
         }
@@ -2820,8 +2847,14 @@ impl App {
                 }
             }
             "waiting.submit_answers" => self.ask_confirm(false),
-            "waiting.next" => self.ui.wait_idx += 1,
-            "waiting.prev" => self.ui.wait_idx = self.ui.wait_idx.saturating_sub(1),
+            "waiting.next" => {
+                self.ui.wait_idx += 1;
+                self.ui.wait_choice = 0;
+            }
+            "waiting.prev" => {
+                self.ui.wait_idx = self.ui.wait_idx.saturating_sub(1);
+                self.ui.wait_choice = 0;
+            }
             "waiting.focus" => {
                 if !self.wait_items().is_empty() {
                     self.ui.focus = Focus::Waiting;
@@ -2882,6 +2915,14 @@ impl App {
         {
             self.ui.focus = Focus::Composer;
         }
+    }
+
+    /// The full-text modal of alert `id` (D15).
+    pub fn open_alert_detail(&mut self, id: u64, back: Option<usize>) {
+        if self.ui.alerts.full(id).is_none() {
+            return;
+        }
+        self.open_overlay(OverlayKind::AlertDetail { id, top: 0, back });
     }
 
     fn dismiss_alert(&mut self) {
@@ -3233,8 +3274,9 @@ impl App {
             self.frame = self.frame.wrapping_add(1);
             changed = true;
         }
+        changed |= self.note_waits(now);
         let held = self.mouse.and_then(|(x, y)| match self.hits.at(x, y) {
-            Some(Target::ToastDismiss(id)) => Some(*id),
+            Some(Target::ToastDismiss(id) | Target::ToastOpen(id)) => Some(*id),
             _ => None,
         });
         let before = self.ui.alerts.toasts.len();
@@ -3245,6 +3287,31 @@ impl App {
             changed = true;
         }
         changed
+    }
+
+    /// Start the clock of every waiting request that has none and drop the
+    /// clocks of resolved ones. True when a card's `0:42` text changed.
+    fn note_waits(&mut self, now: Instant) -> bool {
+        let ids: Vec<String> = self.wait_items().into_iter().map(|w| w.id).collect();
+        self.ui.wait_seen.retain(|k, _| ids.contains(k));
+        for id in &ids {
+            self.ui.wait_seen.entry(id.clone()).or_insert(now);
+        }
+        // Only the focused card shows a clock.
+        let shown = self
+            .wait_focused()
+            .map(|w| (w.id.clone(), self.wait_secs(&w.id)));
+        let changed = shown != self.ui.wait_shown;
+        self.ui.wait_shown = shown;
+        changed
+    }
+
+    /// Whole seconds request `id` has waited on the user.
+    pub fn wait_secs(&self, id: &str) -> u64 {
+        self.ui
+            .wait_seen
+            .get(id)
+            .map_or(0, |t| self.clock.saturating_duration_since(*t).as_secs())
     }
 
     /// Note which groups of the freshly built timeline are live. A group that
@@ -3581,6 +3648,8 @@ impl App {
                     let action = self.banners().into_iter().find_map(|b| b.action);
                     if let Some((_, _, cmd)) = action {
                         self.run_command(&cmd);
+                    } else if let Some(id) = self.ui.alerts.toasts.first().map(|t| t.id) {
+                        self.open_alert_detail(id, None);
                     }
                 }
                 "x" | "backspace" | "delete" => self.dismiss_alert(),
@@ -3688,11 +3757,38 @@ impl App {
             "down" => self.overlay_move(1),
             "pageup" => self.overlay_move(-8),
             "pagedown" => self.overlay_move(8),
+            "c" if matches!(
+                self.ui.overlay,
+                Some(Overlay {
+                    kind: OverlayKind::AlertDetail { .. },
+                    ..
+                })
+            ) =>
+            {
+                if let Some(Overlay {
+                    kind: OverlayKind::AlertDetail { id, .. },
+                    ..
+                }) = &self.ui.overlay
+                {
+                    if let Some((_, text)) = self.ui.alerts.full(*id) {
+                        let text = text.to_owned();
+                        self.effects.push(Effect::Copy(text));
+                        self.toast(Level::Success, "Copied");
+                    }
+                }
+            }
             "enter" => match &self.ui.overlay {
                 Some(Overlay {
                     kind: OverlayKind::Palette(_),
                     ..
                 }) => self.palette_activate(None),
+                Some(Overlay {
+                    kind: OverlayKind::AlertDetail { id, .. },
+                    ..
+                }) => {
+                    let id = *id;
+                    self.notice_open_session(id);
+                }
                 Some(Overlay {
                     kind: OverlayKind::Notifications { selected },
                     ..
@@ -3733,19 +3829,35 @@ impl App {
                     .clamp(0, n_notices.saturating_sub(1) as isize)
                     as usize;
             }
-            Some(OverlayKind::Help { top }) => {
+            Some(OverlayKind::Help { top } | OverlayKind::AlertDetail { top, .. }) => {
                 *top = (*top as isize + delta).max(0) as usize;
             }
             None => {}
         }
     }
 
+    /// A notifications row opens the alert's full text (D15).
     fn notice_activate(&mut self, index: usize) {
+        if let Some(id) = self.ui.alerts.history.get(index).map(|n| n.id) {
+            if let Some(Overlay {
+                kind: OverlayKind::Notifications { selected },
+                ..
+            }) = self.ui.overlay.as_mut()
+            {
+                *selected = index;
+            }
+            self.open_alert_detail(id, Some(index));
+        }
+    }
+
+    /// Go to the session an alert came from, if it has one.
+    fn notice_open_session(&mut self, alert: u64) {
         let session = self
             .ui
             .alerts
             .history
-            .get(index)
+            .iter()
+            .find(|n| n.id == alert)
             .and_then(|n| n.session.clone());
         if let Some(id) = session.filter(|id| self.state.model.sessions.contains_key(id)) {
             self.close_overlay();
@@ -4219,6 +4331,27 @@ impl App {
         }
         if self.ask_current().is_some() && !matches!(name, "left" | "right") {
             return self.ask_key(ev, name);
+        }
+        if self
+            .wait_focused()
+            .is_some_and(|w| w.kind == WaitKind::Approval)
+        {
+            match name {
+                "up" | "down" => {
+                    // only the offered choices (allow once, deny) take the cursor
+                    self.ui.wait_choice = if self.ui.wait_choice == 0 { 2 } else { 0 };
+                    return;
+                }
+                "enter" => {
+                    let id = if self.ui.wait_choice == 2 {
+                        "waiting.deny"
+                    } else {
+                        "waiting.allow_once"
+                    };
+                    return self.run_command(id);
+                }
+                _ => {}
+            }
         }
         if name == "left" {
             self.execute("waiting.prev");
@@ -4755,6 +4888,7 @@ impl App {
                 }
             }
             Target::ToastDismiss(id) => self.ui.alerts.dismiss(id),
+            Target::ToastOpen(id) => self.open_alert_detail(id, None),
             Target::PaletteItem(i) => self.palette_activate(Some(i)),
             Target::NoticeItem(i) => self.notice_activate(i),
             Target::DialogButton(i) => {

@@ -371,11 +371,13 @@ fn waiting_card_sits_above_the_composer_and_hides_unoffered_choices() {
     assert!(wait_row < composer_row);
     let all = joined(&rows);
     assert!(
-        all.contains("allow once")
-            && all.contains("allow session")
-            && all.contains("deny with note")
+        all.contains("Allow once")
+            && all.contains("Allow for session")
+            && all.contains("Deny with a note")
     );
-    assert!(all.contains("not offered by Core"));
+    // a choice Core does not offer shows its reason (D14)
+    assert!(all.contains("not offered by Core yet"), "{all}");
+    assert!(all.contains("Core does not support notes yet"), "{all}");
     assert!(all.contains("1 of 2"));
     // y allows once, through the focused card
     press(&mut app2, &["alt+w", "y"]);
@@ -1385,17 +1387,20 @@ const DB: &str = r#"{"id":"db","question":"Which database?","options":[{"id":"pg
 #[test]
 fn question_card_shows_options_and_a_number_key_answers() {
     let mut app = asking(&format!("[{DB}]"), (120, 36));
+    // unfocused, the card says how to answer; focused, it lists its keys
+    assert!(joined(&draw(&mut app, 120, 36).1).contains("alt+w answer"));
+    press(&mut app, &["alt+w"]);
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(
         all.contains("Which database?")
             && all.contains("1 PostgreSQL")
             && all.contains("2 SQLite")
-            && all.contains("submit answers"),
+            && all.contains("enter submit"),
         "{all}"
     );
     assert!(!all.contains("arrives with"), "{all}");
-    press(&mut app, &["alt+w", "2"]);
+    press(&mut app, &["2"]);
     assert_eq!(
         answers_sent(&app),
         vec![serde_json::json!([{"question_id": "db", "selected": ["lite"], "text": null}])]

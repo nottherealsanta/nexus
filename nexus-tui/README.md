@@ -312,8 +312,15 @@ title and breadcrumbs centred, notification count and right toggle trailing;
 the toggles stay when a sidebar is closed. Left tabs Sessions, Files, Projects
 with Settings fixed at the bottom; right sidebar SESSION, CONTEXT and GIT
 (the Git section shows its manifest reason when unavailable). Below 100 columns the sidebars become drawers
-opened from the same toggles. The waiting card sits directly above the composer.
-It also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
+opened from the same toggles. The waiting card sits directly above the composer
+(DESIGN_PLAN D14): a heavy accent rail, `Allow bash?`, `waiting on you · 0:42`, the
+parameters (and, for edit, write and patch, the diff capped at 12 rows), and a choice
+list with key chips (`y` allow once, `n` deny; Up/Down and Enter also choose; choices
+Core does not offer show their reason). Toasts (D15) are top-right under the header, three
+at a time with `+N more`; a click, or Enter on the focused toast (`F6` to it), opens
+the full text in a modal (`c` copies, Esc closes), and the notifications modal opens the
+same text for an entry. The `↓ N new · end` pill sits on the row above the composer card.
+The card also answers `ask` questions: `Alt+W` focuses it, a number key (1-9, 0 for the
 tenth) or Up/Down with Enter picks an option, Space or a number ticks options of a
 multi-select question, and clicking an option picks it. A question without options,
 or one that allows a note, takes text typed in the composer (typing from the
