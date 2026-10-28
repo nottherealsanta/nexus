@@ -55,7 +55,7 @@ Previews clip with `…` and a long grid ends in `+N more`. After the first turn
 section folds to `▸ Context · 4 items · ~2.9k tokens`. The new-session view shows the same
 sections under a header block (`New session in <project>`, agent, model, effort, directory and
 branch, then the `Tab`/`ctrl+m`/`ctrl+e`/`ctrl+d` hints); until Core session drafts land
-(PLAN.md Step 12a) its preview is built on the client (the agent's description, the project's
+(PLAN.md Step 12a) its preview is built on the client (the first line of the agent's prompt body, which Core serves from `GET /api/agent/{name}` (the description is never sent to the model, so it is never shown), the project's
 `AGENTS.md` when the TUI can read it, the agent's tool list or the default tools) and every
 count reads `~N` with "estimated" on hover. The turn footer adds the catalog price when the
 model has one.

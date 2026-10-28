@@ -335,6 +335,17 @@ pub fn context_folded(items: usize, total: u64, estimated: bool, sep: &str) -> (
     )
 }
 
+/// The first meaningful line of a system prompt: not blank, not a heading and
+/// not an HTML comment. The preview shows only text the model receives.
+pub fn first_prompt_line(prompt: &str) -> String {
+    prompt
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("<!--"))
+        .unwrap_or("")
+        .to_owned()
+}
+
 /// The rows of the open context: one per section header, its preview or grid
 /// rows and a blank row between sections, then the total row. Widths count
 /// terminal cells; every row fits in `layout.width`. Clipping is announced:
@@ -475,6 +486,15 @@ mod ctx_tests {
         rows.iter()
             .map(|r| r.iter().map(|(t, _)| t.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn the_prompt_preview_is_the_first_meaningful_prompt_line() {
+        assert_eq!(
+            first_prompt_line("\n# Harness\n<!-- note -->\n  You are an agent.\nNext"),
+            "You are an agent."
+        );
+        assert_eq!(first_prompt_line("# Only a heading"), "");
     }
 
     #[test]

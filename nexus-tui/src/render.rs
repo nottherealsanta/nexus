@@ -2872,10 +2872,11 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
         .agents
         .iter()
         .find(|ag| ag["name"].as_str() == Some(agent_name.as_str()));
-    let description = agent
-        .and_then(|ag| ag["description"].as_str())
+    // Only what the model receives: the agent's prompt body is the system
+    // prompt. The description is for the pickers and is never sent.
+    let prompt = agent
+        .and_then(|ag| ag["prompt"].as_str())
         .unwrap_or("")
-        .trim()
         .to_owned();
     // An agent with no `tools` list is offered every default tool; every new
     // session also gets the workspace entry point.
@@ -2898,13 +2899,13 @@ fn preview_sections(cx: &Cx) -> (Vec<paint::CtxSection>, u64) {
     let file = file_path.as_deref().and_then(instruction_file);
     let file_tokens = file.as_ref().map_or(0, |(bytes, _)| bytes.div_ceil(4));
     let prompt_tokens =
-        PROMPT_BASE_TOKENS + (description.chars().count() as u64).div_ceil(4) + file_tokens;
+        PROMPT_BASE_TOKENS + (prompt.chars().count() as u64).div_ceil(4) + file_tokens;
     let tool_tokens = tools.len() as u64 * TOOL_SCHEMA_TOKENS;
     let mut sections = vec![CtxSection {
         title: "System prompt".into(),
         tokens: Some(prompt_tokens),
         meta: agent_name.clone(),
-        body: CtxBody::Preview(description),
+        body: CtxBody::Preview(paint::first_prompt_line(&prompt)),
     }];
     sections.push(match (&file, &file_path) {
         (Some((_, line)), Some(path)) => CtxSection {

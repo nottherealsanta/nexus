@@ -982,6 +982,14 @@ impl CoreApi {
         self.http.get("/api/agent", &query).await
     }
 
+    /// One agent with its `prompt` (the system prompt body).
+    pub async fn agent(&self, name: &str, project: Option<&str>) -> Result<Value, Error> {
+        let query: Vec<(&str, String)> = project
+            .map(|p| vec![("project", p.to_owned())])
+            .unwrap_or_default();
+        self.http.get(&format!("/api/agent/{name}"), &query).await
+    }
+
     pub async fn set_model_rev(
         &self,
         session: &str,

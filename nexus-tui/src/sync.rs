@@ -496,7 +496,24 @@ async fn load_catalog(
     project: Option<&str>,
 ) -> Option<(Vec<Value>, Vec<Value>, String, String)> {
     let models = api.models().await.ok()?;
-    let agents = api.agents(project).await.ok()?;
+    let mut agents = api.agents(project).await.ok()?;
+    // The list omits the system prompt body; the new-session context preview
+    // shows its first line, so fetch each agent's prompt (a miss leaves none).
+    if let Some(list) = agents.get_mut("agents").and_then(Value::as_array_mut) {
+        for agent in list {
+            let Some(name) = agent["name"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            if let Some(prompt) = api
+                .agent(&name, project)
+                .await
+                .ok()
+                .and_then(|a| a["prompt"].as_str().map(str::to_owned))
+            {
+                agent["prompt"] = Value::String(prompt);
+            }
+        }
+    }
     let default_model = api
         .default_model()
         .await

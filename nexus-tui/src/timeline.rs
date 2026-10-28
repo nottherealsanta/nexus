@@ -851,12 +851,7 @@ impl Builder<'_> {
         let total = sys_tokens + tool_tokens;
         let window = self.context_window();
         let sep = self.sep();
-        let first_prompt_line = sys
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty() && !l.starts_with('#'))
-            .unwrap_or("")
-            .to_owned();
+        let first_prompt_line = crate::paint::first_prompt_line(sys);
         let agent_name = agent["name"].as_str().unwrap_or("?");
         let file_path = file["path"].as_str().unwrap_or("");
         let file_title = std::path::Path::new(file_path).file_name().map_or_else(

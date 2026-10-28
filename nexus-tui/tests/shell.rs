@@ -2651,6 +2651,7 @@ fn new_session_app(dir: &std::path::Path, size: (u16, u16)) -> nexus_tui::app::A
     let mut app = empty(opts(Mode::Dark, Tier::TrueColor), size);
     app.state.agents = vec![serde_json::json!({
         "name": "build", "source": "builtin", "description": "Does the actual work.",
+        "prompt": "# Harness\n\nYou are an AI agent running in Nexus.\n\n{{tools}}",
         "tools": ["read", "bash", "edit", "write"]
     })];
     for p in app.state.model.projects.values_mut() {
@@ -2681,7 +2682,7 @@ fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md()
         "Build",
         "Tab agent \u{b7} ctrl+m model \u{b7} ctrl+e effort \u{b7} ctrl+d directory",
         "\u{25c6} System prompt",
-        "Does the actual work.",
+        "You are an AI agent running in Nexus.",
         "\u{25c6} AGENTS.md",
         "Read PLAN.md first: principles, layout.",
         "in the system prompt",
@@ -2691,6 +2692,8 @@ fn the_new_session_view_shows_the_header_block_and_d10_sections_with_agents_md()
     ] {
         assert!(all.contains(needle), "missing {needle:?}:\n{all}");
     }
+    // The description is for the pickers; the model never receives it.
+    assert!(!all.contains("Does the actual work."), "{all}");
     // Estimated until Core drafts land: every count carries `~`.
     assert!(all.contains("~") && all.contains(" tok"), "{all}");
     // The centred placeholder is gone, and there is no bar in the total row.
