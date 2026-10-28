@@ -15,10 +15,10 @@ nontext_min = 3.0       # border.focus, focus, accent, status marks, diff marks
 
 # ---------------------------------------------------------------- dark
 [dark.surface]
-canvas = "#0B0B0B"      # app background, timeline, sidebars
+canvas = "#0B0B0B"      # the page: timeline and centre column
 panel  = "#1e1e1e"      # cards, composer, notices
 raised = "#242424"      # dialogs, menus, toasts, user message
-sidebar = "#141414"     # left sidebar and session rail
+sidebar = "#141414"     # the chrome: header band, left sidebar (and rail) and right sidebar
 
 
 [dark.agent]
@@ -38,6 +38,7 @@ muted     = "#868c93"   # metadata, counts, key hints, timestamps, reasoning
 
 [dark.border]
 default = "#2a2a2a"     # hairlines and dividers (decorative)
+strong  = "#4a4a50"     # diff split rule, tool-detail box (decorative)
 focus   = "#e8a46e"     # focus ring / focus bar (meaningful, >= 3:1)
 
 [dark.interactive]
@@ -84,6 +85,7 @@ muted     = "#5c636a"
 
 [light.border]
 default = "#d4d5d2"
+strong  = "#c2c3c0"
 focus   = "#a84e16"
 
 [light.interactive]
@@ -189,6 +191,7 @@ style = ""
 "text.secondary" = 248
 "text.muted" = 246
 "border.default" = 236
+"border.strong" = 239
 "border.focus" = 179
 "interactive.accent" = 179
 "interactive.on_accent" = 233
@@ -222,6 +225,7 @@ style = ""
 "text.secondary" = 238
 "text.muted" = 240
 "border.default" = 188
+"border.strong" = 250
 "border.focus" = 94
 "interactive.accent" = 94
 "interactive.on_accent" = 231
@@ -255,6 +259,7 @@ style = ""
 "text.secondary" = "white"
 "text.muted" = "bright_black"
 "border.default" = "bright_black"
+"border.strong" = "bright_black"
 "border.focus" = "yellow"
 "interactive.accent" = "yellow"
 "interactive.on_accent" = "black"
@@ -288,6 +293,7 @@ style = ""
 "text.secondary" = "bright_black"
 "text.muted" = "bright_black"
 "border.default" = "white"
+"border.strong" = "white"
 "border.focus" = "red"
 "interactive.accent" = "red"
 "interactive.on_accent" = "white"
@@ -325,6 +331,7 @@ style = ""
 "text.secondary" = []
 "text.muted" = ["dim"]
 "border.default" = ["dim"]
+"border.strong" = []
 "border.focus" = ["bold"]
 "interactive.accent" = ["bold"]
 "interactive.focus" = ["bold"]         # always with the focus bar glyph

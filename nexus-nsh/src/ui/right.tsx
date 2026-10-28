@@ -111,7 +111,7 @@ function ContextBar(p: { used: number; window: number }) {
 export function RightSidebar(p: { drawer?: boolean }) {
   const s = () => viewed();
   return (
-    <View class={`bg-background ${p.drawer ? "flex-1" : "w-[288px] border-l border-border"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
+    <View class={`bg-sidebar ${p.drawer ? "flex-1" : "w-[300px]"}`} testID="right-sidebar" accessibilityLabel="Right sidebar">
       <Scroll class="flex-1" contentClass="">
         <Section title={sections[0].label}>
           <If when={s()} else={<Text class={T.sec}>Select a session to see its details.</Text>}>

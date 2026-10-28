@@ -4603,6 +4603,14 @@ impl App {
                     self.open_session(&id);
                 }
             }
+            Target::SessionCrumb(i) => {
+                let id = self
+                    .viewed_id()
+                    .and_then(|v| self.ancestors_of(v).get(i).map(|s| s.id.clone()));
+                if let Some(id) = id {
+                    self.open_session(&id);
+                }
+            }
             Target::SessionTabClose(i) => {
                 if let Some(id) = self.tab_ids().get(i).cloned() {
                     self.close_tab(&id);

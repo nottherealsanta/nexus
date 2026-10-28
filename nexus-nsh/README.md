@@ -23,6 +23,19 @@ clipping is announced and the show-all control restores the whole inspection
 output. Selecting a session loads its full stored history (messages, retained
 diagnostics, snapshot) after the bounded snapshot view.
 
+The chrome follows D02. The 44 px header band and both sidebars sit on `bg-sidebar`
+(the chrome surface) with no edge rules; the centre is `bg-background` (the canvas). The
+header is three slots that match the sidebars (264 px, the centre, 300 px when the right
+sidebar is docked). Over the docked left sidebar its left slot holds the 32 px toggle and
+the Sessions, Files and Projects icons (they follow the sidebar's open state; narrow, they
+are in the drawer with labels). The session tabs are 28 px with a 6 px radius, aligned with
+the 760 px reading column: the viewed tab is on the canvas surface with primary text, the
+others are muted with a hover fill. Their × shows on hover (and on the viewed tab). The run status sits at the
+column's right edge; the bell and right toggle are at the far right. Glyphs and status
+tones come from `interface/theme.toml` (`glyphs.status`, `glyphs.attention`). The
+`border.strong` token is emitted as `border-strong` (`--border-strong`) for the decorative
+split rules and tool boxes.
+
 The composer follows the TUI's borderless panel, agent-colour rail and darker
 status band. Its controls show the model/provider and effort; the status band
 shows latest input-token occupancy and the palette hint. The location strip shows

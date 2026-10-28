@@ -49,7 +49,7 @@ export function Btn(p: { label: string; onPress?: () => void; kind?: "primary" |
 }
 
 /** Status mark: glyph + word, colour from the same token table as the TUI. */
-const TONE: Record<string, string> = {
+export const TONE: Record<string, string> = {
   "text.primary": "text-foreground", "status.success": "text-success", "status.error": "text-error", "interactive.accent": "text-primary",
   "status.warning": "text-warning", "text.muted": "text-muted-foreground", "status.info": "text-info",
 };

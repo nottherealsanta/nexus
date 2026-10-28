@@ -38,7 +38,7 @@ pub fn left_width(total: u16, flags: Flags) -> u16 {
         return RAIL_WIDTH;
     }
     let right = if flags.right_open {
-        sidebar_width(total)
+        right_width(total)
     } else {
         0
     };
@@ -81,11 +81,22 @@ pub struct Regions {
     pub title: Rect,
 }
 
+/// Default width of the docked left sidebar (DESIGN_PLAN.md D17): 34 cells from
+/// 160 columns, 28 below.
 pub fn sidebar_width(total: u16) -> u16 {
-    if total >= 150 {
-        32
+    if total >= 160 {
+        34
     } else {
         28
+    }
+}
+
+/// Width of the docked right sidebar: 36 cells from 160 columns, 30 below.
+pub fn right_width(total: u16) -> u16 {
+    if total >= 160 {
+        36
+    } else {
+        30
     }
 }
 
@@ -107,6 +118,7 @@ impl Regions {
         let body_y = area.y + header.height;
         let body_h = area.height.saturating_sub(header.height);
         let sw = sidebar_width(area.width);
+        let rw = right_width(area.width);
 
         let (mut x, mut w) = (area.x, area.width);
         let mut left = None;
@@ -119,14 +131,19 @@ impl Regions {
                 w -= lw;
             }
             if flags.right_open {
-                w -= sw;
-                right = Some(r(x + w, body_y, sw, body_h));
+                w -= rw;
+                right = Some(r(x + w, body_y, rw, body_h));
             }
         }
         let centre = r(x, body_y, w, body_h);
 
         let drawer = flags.drawer.filter(|_| narrow).map(|side| {
-            let dw = sw.min(area.width.saturating_sub(4)).max(22.min(area.width));
+            let dw = match side {
+                Side::Left => sw,
+                Side::Right => rw,
+            }
+            .min(area.width.saturating_sub(4))
+            .max(22.min(area.width));
             let rect = match side {
                 Side::Left => r(area.x, body_y, dw, body_h),
                 Side::Right => r(area.x + area.width - dw, body_y, dw, body_h),
@@ -158,7 +175,7 @@ impl Regions {
         );
 
         // Header: [ toggle ] [ title ............ ] [ bell ] [ toggle ]
-        let toggle_left = r(header.x, header.y, 4.min(header.width), header.height);
+        let toggle_left = r(header.x, header.y, 3.min(header.width), header.height);
         let toggle_right = r(
             header.x + header.width.saturating_sub(4),
             header.y,
@@ -272,13 +289,28 @@ mod tests {
         let g = Regions::compute(Rect::new(0, 0, 120, 36), flags(true, true), heights);
         assert!(!g.narrow);
         assert_eq!(g.left.unwrap().width, 28);
-        assert_eq!(g.right.unwrap().width, 28);
-        assert_eq!(g.centre.width, 120 - 56);
+        assert_eq!(g.right.unwrap().width, 30);
+        assert_eq!(g.centre.width, 120 - 58);
         assert_eq!(g.header.height + g.centre.height, 36);
         assert_eq!(
             g.composer.y + g.composer.height,
             g.centre.y + g.centre.height
         );
+    }
+
+    #[test]
+    fn sidebar_widths_follow_the_breakpoints() {
+        // D17: left 34 / right 36 from 160 columns, 28 / 30 below.
+        for (total, l, r) in [(200, 34, 36), (160, 34, 36), (159, 28, 30), (120, 28, 30)] {
+            let g = Regions::compute(Rect::new(0, 0, total, 40), flags(true, true), heights);
+            assert_eq!(g.left.unwrap().width, l, "left at {total}");
+            assert_eq!(g.right.unwrap().width, r, "right at {total}");
+        }
+        // a saved width still wins
+        let mut f = flags(true, true);
+        f.left_width = 40;
+        let g = Regions::compute(Rect::new(0, 0, 200, 40), f, heights);
+        assert_eq!(g.left.unwrap().width, 40);
     }
 
     #[test]

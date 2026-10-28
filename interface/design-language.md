@@ -4,8 +4,14 @@ The visual reference is the old Nexus TUI in `../nexus/rust/tui/src`. This
 client adapts its patterns to the Core API and the one-timeline model. The
 shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
 
-- Canvas holds the timeline and the details sidebar; the left sidebar and its
-  rail sit on `surface.sidebar`; panel surfaces hold the composer and the
+- Chrome and page: the header band and both sidebars (and the rail) share one
+  chrome surface, `surface.sidebar`; the centre column is the page,
+  `surface.canvas`. No rule separates them: the surface step is the edge, and
+  only where surfaces collapse (ANSI-16, monochrome) a `│` in `border.default`
+  is drawn at each sidebar edge. `border.strong` is decorative (diff split rule,
+  tool-detail box). Under a modal the buffer is dimmed by `paint::scrim`: each
+  cell's colours move 50% toward the canvas, or `DIM` where colours cannot be
+  blended. Panel surfaces hold the composer and the
   settings modal; raised surfaces hold user messages and modal panels. Borders are
   quiet hairlines. A focused row uses the focus bar as well as its selection
   surface so the state remains visible without colour.
@@ -20,10 +26,17 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   consecutive activity folds into a verb group. Folded content remains
   accessible, and any clipped output is labelled. Running activity uses the
   old Nexus soft shimmer; reduced motion and monochrome stay static.
-- The header row carries the sidebar toggles, the breadcrumb title and the
-  bell. The sidebar's first row carries the Sessions / Files / Projects icons
-  (label on hover; the active icon bold on a surface). Sidebars and panels reserve
-  consistent gutters. Session rows show title and `project ⌥ branch` on
+- The header row is a band on the chrome surface. The left toggle is at x=1,
+  then the Sessions / Files / Projects icons in the band over the left sidebar
+  (the active icon bold primary, the others muted; label on hover). Session
+  tabs start at the centre column: `{glyph} {title} ×` per open session
+  (spinner running, `◆` waiting, `●` unread, `✕` failed, `·` idle). The viewed
+  tab is bold primary on the page surface so it joins the page below; others are
+  muted on the band; `+` ends the strip. A viewed child session shows
+  `root › child` with the earlier crumbs clickable. The run status is right-aligned
+  at the centre column's right edge; the notification count and right toggle are
+  at the far right. The rail keeps its icons as a column. Sidebars and panels reserve
+  consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. Session rows show title and `project ⌥ branch` on
   separate lines and end with `+ New session`; the open session is bold, focus
   is a bar, hover is a surface, and waiting is marked. The left sidebar resizes
   by its edge and collapses to a rail of one letter per session whose hover

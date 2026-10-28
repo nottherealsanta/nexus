@@ -116,6 +116,7 @@ def main(path):
                     check(f"{p} role {name} rail", cc[role["rail"]], bg,
                           1.1 if role["rail"].startswith("border.") else nmin)  # hairline rails are decorative
         check(f"{tn} border.default vs canvas (informational >=1.1)", c["border.default"], c["surface.canvas"], 1.1)
+        check(f"{tn} border.strong vs canvas (decorative, informational >=1.1)", c["border.strong"], c["surface.canvas"], 1.1)
 
     slots = set(data["dark"]["agent"])
     if slots != set(data["light"]["agent"]):

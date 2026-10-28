@@ -419,7 +419,7 @@ fn toggle_glyph(cx: &Cx, side: Side) -> String {
 }
 
 fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
-    let base = cx.st(SECONDARY, CANVAS);
+    let base = cx.st(SECONDARY, SIDEBAR);
     clear(buf, g.header, base);
     let focus_bar = cx.t.structure("focus_bar");
     for (side, rect, focus) in [
@@ -427,7 +427,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         (Side::Right, g.toggle_right, Focus::ToggleRight),
     ] {
         let focused = cx.app.ui.focus == focus;
-        let mut style = cx.st(PRIMARY, CANVAS);
+        let mut style = cx.st(SECONDARY, SIDEBAR);
         if cx.hovered(rect) {
             style = style.patch(cx.t.bg("interactive.hover"));
         }
@@ -443,7 +443,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
                         rect.x,
                         rect.y,
                         focus_bar,
-                        cx.st("interactive.focus", CANVAS)
+                        cx.st("interactive.focus", SIDEBAR)
                             .add_modifier(Modifier::BOLD),
                         2,
                     );
@@ -459,7 +459,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
                         gx + gw,
                         rect.y,
                         focus_bar,
-                        cx.st("interactive.focus", CANVAS)
+                        cx.st("interactive.focus", SIDEBAR)
                             .add_modifier(Modifier::BOLD),
                         1,
                     );
@@ -476,6 +476,14 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
         );
     }
 
+    // The sidebar icons live in the band over the docked left sidebar.
+    if let Some(l) = g
+        .left
+        .filter(|l| l.width.saturating_sub(1) > crate::layout::RAIL_WIDTH)
+    {
+        draw_tab_icons(cx, buf, l, hits);
+    }
+
     // bell: only with unread notices
     let unread = cx.app.ui.alerts.unread();
     if unread > 0 {
@@ -486,7 +494,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             x,
             g.bell.y,
             &s,
-            cx.st("status.info", CANVAS),
+            cx.st("status.info", SIDEBAR),
             g.bell.width,
         );
         hits.add(g.bell, Target::Notifications);
@@ -497,7 +505,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     let tr = Rect::new(
         tx0,
         g.title.y,
-        g.title.right().saturating_sub(tx0),
+        g.title.right().min(g.centre.right()).saturating_sub(tx0),
         g.title.height,
     );
     if tr.width < 3 {
@@ -505,7 +513,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
     }
     if let Some(e) = &cx.app.ui.edit {
         let label = format!("{} ", e.label);
-        let lx = put(buf, tr.x + 1, tr.y, &label, cx.st(MUTED, CANVAS), tr.width);
+        let lx = put(buf, tr.x + 1, tr.y, &label, cx.st(MUTED, SIDEBAR), tr.width);
         let (rows, _) = e.buf.layout(tr.width.saturating_sub(10) as usize);
         let line = rows.first().cloned().unwrap_or_default();
         let ex = put(
@@ -513,7 +521,7 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             lx,
             tr.y,
             &line,
-            cx.st(PRIMARY, CANVAS).add_modifier(Modifier::UNDERLINED),
+            cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::UNDERLINED),
             tr.width,
         );
         put(
@@ -521,17 +529,20 @@ fn draw_header(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
             ex + 1,
             tr.y,
             "enter save - esc cancel",
-            cx.st(MUTED, CANVAS),
+            cx.st(MUTED, SIDEBAR),
             tr.right().saturating_sub(ex + 1),
         );
         buf.set_style(Rect::new(lx, tr.y, 0, 0), Style::default());
         return;
     }
-    draw_tabs(cx, buf, g.title, hits);
+    draw_tabs(cx, buf, tr, hits);
 }
 
-/// The session tabs: `● Title ×` per open session, the viewed one raised,
-/// then `+`. The connection or run status sits at the right.
+/// The session tabs (DESIGN_PLAN.md D02): `{glyph} {title} ×` per open
+/// session. The viewed tab is bold primary on the page surface so it reads as
+/// joined to the page below; the others are muted on the chrome band. `+` ends
+/// the strip. A viewed child session shows `root › child`. The run status sits
+/// at the centre column's right edge.
 fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     let a = cx.app;
     let status = header_status(cx);
@@ -554,58 +565,104 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     let ascii = cx.t.opts.ascii;
     let glyph_of = |id: &str| -> (String, Style) {
         if a.is_busy(id) {
-            (cx.t.spinner(a.frame / 2).to_owned(), cx.st(ACCENT, CANVAS))
+            (
+                cx.t.spinner(a.frame / 2).to_owned(),
+                cx.st(PRIMARY, SIDEBAR),
+            )
         } else if a.ui.failed_sessions.contains(id) {
             (
                 if ascii { "x" } else { "\u{2715}" }.to_owned(),
-                cx.st("status.error", CANVAS),
+                cx.st("status.error", SIDEBAR),
             )
+        } else if a.session_waiting(id) {
+            let (g, tok) = cx.t.attention("waiting");
+            (g.to_owned(), cx.st(tok, SIDEBAR))
         } else if a.ui.unread_sessions.contains(id) {
             (
                 if ascii { "*" } else { "\u{25cf}" }.to_owned(),
-                cx.st("status.info", CANVAS),
+                cx.st("status.info", SIDEBAR),
             )
         } else {
             (
-                if ascii { "o" } else { "\u{25cb}" }.to_owned(),
-                cx.st(MUTED, CANVAS),
+                if ascii { "." } else { "\u{b7}" }.to_owned(),
+                cx.st(MUTED, SIDEBAR),
             )
         }
     };
     struct Tab {
         index: Option<usize>,
-        title: String,
+        /// Breadcrumb parts (root first); one part for a plain title.
+        parts: Vec<String>,
         active: bool,
         id: Option<String>,
     }
+    let title_of = |id: &str| {
+        a.state
+            .model
+            .sessions
+            .get(id)
+            .map_or_else(|| id.to_owned(), |s| s.title.clone())
+    };
     let mut tabs: Vec<Tab> = ids
         .iter()
         .enumerate()
-        .map(|(i, id)| Tab {
-            index: Some(i),
-            title: a
-                .state
-                .model
-                .sessions
-                .get(id)
-                .map_or_else(|| id.clone(), |s| s.title.clone()),
-            active: !settings && viewed.as_deref() == Some(id.as_str()),
-            id: Some(id.clone()),
+        .map(|(i, id)| {
+            let active = !settings && viewed.as_deref() == Some(id.as_str());
+            let parts = if active {
+                let chain = a.ancestors_of(id);
+                if chain.len() > 1 {
+                    chain.iter().map(|s| s.title.clone()).collect()
+                } else {
+                    vec![title_of(id)]
+                }
+            } else {
+                vec![title_of(id)]
+            };
+            Tab {
+                index: Some(i),
+                parts,
+                active,
+                id: Some(id.clone()),
+            }
         })
         .collect();
     if let Some(label) = extra {
         tabs.push(Tab {
             index: None,
-            title: label.to_owned(),
+            parts: vec![label.to_owned()],
             active: true,
             id: None,
         });
     }
+    let sep = format!(" {} ", cx.t.structure("breadcrumb"));
+    // The shown text of each part within `max` cells: earlier crumbs shrink
+    // first, the last part keeps at least six.
+    let shown = |t: &Tab, max: usize| -> Vec<String> {
+        let n = t.parts.len();
+        if n == 1 {
+            return vec![truncate(&t.parts[0], max, cx.ell())];
+        }
+        let seps = width(&sep) * (n - 1);
+        let early = (max.saturating_sub(seps + 6) / (n - 1)).clamp(3, 10);
+        let mut out: Vec<String> = t.parts[..n - 1]
+            .iter()
+            .map(|p| truncate(p, early, cx.ell()))
+            .collect();
+        let used: usize = out.iter().map(|p| width(p)).sum::<usize>() + seps;
+        out.push(truncate(
+            &t.parts[n - 1],
+            max.saturating_sub(used).max(6),
+            cx.ell(),
+        ));
+        out
+    };
+    let title_w = |t: &Tab, max: usize| {
+        let p = shown(t, max);
+        p.iter().map(|s| width(s)).sum::<usize>() + width(&sep) * (p.len() - 1)
+    };
     // The room: leave the `+` and the status.
     let avail = (tr.width as usize).saturating_sub(status_w + 4);
-    let cell = |t: &Tab, max: usize| {
-        5 + width(&truncate(&t.title, max, cx.ell())) + usize::from(t.id.is_some()) * 2
-    };
+    let cell = |t: &Tab, max: usize| 5 + title_w(t, max) + usize::from(t.id.is_some()) * 2;
     let mut max_title = 28usize;
     let total = |tabs: &[Tab], max: usize| tabs.iter().map(|t| cell(t, max) + 1).sum::<usize>();
     while max_title > 8 && total(&tabs, max_title) > avail {
@@ -624,7 +681,7 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     }
     let mut x = tr.x + 1;
     if dropped_left {
-        x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, CANVAS), 1) + 1;
+        x = put(buf, x, tr.y, cx.ell(), cx.st(MUTED, SIDEBAR), 1) + 1;
     }
     for t in &tabs {
         let w = cell(t, max_title) as u16;
@@ -633,8 +690,8 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         }
         let rect = Rect::new(x, tr.y, w, 1);
         let hovered = cx.hovered(rect);
-        let bg = if t.active { RAISED } else { CANVAS };
-        let mut base = cx.st(if t.active { PRIMARY } else { SECONDARY }, bg);
+        let bg = if t.active { CANVAS } else { SIDEBAR };
+        let mut base = cx.st(if t.active { PRIMARY } else { MUTED }, bg);
         if hovered && !t.active {
             base = base.patch(cx.t.bg("interactive.hover"));
         }
@@ -642,23 +699,45 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
         let mut cx_x = x + 1;
         if let Some(id) = &t.id {
             let (g, gs) = glyph_of(id);
-            let gs = gs.patch(cx.t.bg(if t.active { RAISED } else { CANVAS }));
+            let gs = gs.patch(cx.t.bg(bg));
             cx_x = put(buf, cx_x, tr.y, &g, gs, 1) + 1;
         }
-        let title = truncate(&t.title, max_title, cx.ell());
-        let tstyle = if t.active {
-            base.add_modifier(Modifier::BOLD)
-        } else {
-            base
-        };
-        put(
-            buf,
-            cx_x,
-            tr.y,
-            &title,
-            tstyle,
-            rect.right().saturating_sub(cx_x),
-        );
+        let parts = shown(t, max_title);
+        let last = parts.len() - 1;
+        if let (Some(i), Some(_)) = (t.index, &t.id) {
+            hits.add(rect, Target::SessionTab(i));
+        }
+        for (pi, part) in parts.iter().enumerate() {
+            let style = if pi == last && t.active {
+                base.add_modifier(Modifier::BOLD)
+            } else {
+                base
+            };
+            let start = cx_x;
+            cx_x = put(
+                buf,
+                cx_x,
+                tr.y,
+                part,
+                style,
+                rect.right().saturating_sub(cx_x),
+            );
+            if pi < last {
+                hits.add(rect, Target::SessionTab(t.index.unwrap_or(0)));
+                hits.add(
+                    Rect::new(start, tr.y, cx_x - start, 1),
+                    Target::SessionCrumb(pi),
+                );
+                cx_x = put(
+                    buf,
+                    cx_x,
+                    tr.y,
+                    &sep,
+                    base.patch(cx.t.fg(MUTED)),
+                    rect.right().saturating_sub(cx_x),
+                );
+            }
+        }
         if let (Some(i), Some(_)) = (t.index, &t.id) {
             let close = Rect::new(rect.right().saturating_sub(3), tr.y, 2, 1);
             let hot = cx.hovered(close);
@@ -674,7 +753,6 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
                 },
                 1,
             );
-            hits.add(rect, Target::SessionTab(i));
             hits.add(close, Target::SessionTabClose(i));
         }
         x += w + 1;
@@ -683,9 +761,9 @@ fn draw_tabs(cx: &Cx, buf: &mut Buffer, tr: Rect, hits: &mut HitMap) {
     if x + 2 <= tr.right() {
         let rect = Rect::new(x, tr.y, 3, 1);
         let style = if cx.hovered(rect) {
-            cx.st(PRIMARY, CANVAS).patch(cx.t.bg("interactive.hover"))
+            cx.st(PRIMARY, SIDEBAR).patch(cx.t.bg("interactive.hover"))
         } else {
-            cx.st(MUTED, CANVAS)
+            cx.st(MUTED, SIDEBAR)
         };
         clear(buf, rect, style);
         put(buf, x + 1, tr.y, "+", style, 1);
@@ -702,7 +780,7 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
                 let (_, label, _) = cx.t.status("running");
                 Some((
                     format!("{} {label}", cx.t.spinner(a.frame / 2)),
-                    cx.st(PRIMARY, CANVAS),
+                    cx.st(PRIMARY, SIDEBAR),
                 ))
             } else {
                 None
@@ -714,7 +792,7 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
                 cx.t.spinner(a.frame / 2),
                 a.state.connection.label()
             ),
-            cx.st(SECONDARY, CANVAS),
+            cx.st(SECONDARY, SIDEBAR),
         )),
         c => {
             let (g, _, tok) = cx.t.status("error");
@@ -727,7 +805,7 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
                         c.label()
                     }
                 ),
-                cx.st(tok, CANVAS),
+                cx.st(tok, SIDEBAR),
             ))
         }
     }
@@ -844,14 +922,27 @@ fn draw_toasts(cx: &Cx, buf: &mut Buffer, g: &Regions, hits: &mut HitMap) {
 // left sidebar
 // ============================================================================
 
+/// The sidebar's edge column. The surface step is the edge; only where the
+/// surfaces collapse (ANSI-16, monochrome) is a `│` drawn.
 fn draw_sidebar_edge(cx: &Cx, buf: &mut Buffer, x: u16, r: Rect) {
+    clear(
+        buf,
+        Rect::new(x, r.y, 1, r.height),
+        cx.st(SECONDARY, SIDEBAR),
+    );
+    if !matches!(
+        cx.t.opts.tier,
+        crate::theme::Tier::Ansi16 | crate::theme::Tier::Mono
+    ) {
+        return;
+    }
     for y in r.y..r.bottom() {
         put(
             buf,
             x,
             y,
             cx.t.structure("rail"),
-            cx.st("border.default", CANVAS),
+            cx.st("border.default", SIDEBAR),
             1,
         );
     }
@@ -921,8 +1012,15 @@ fn draw_left(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     }
     hits.add(sr, Target::SettingsEntry);
 
-    draw_tab_icons(cx, buf, r, hits);
-    let body = Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(4));
+    // Docked: the icons are in the header band and the body starts on the
+    // first row. A drawer keeps its own icon row.
+    let top = if cx.app.narrow() {
+        draw_tab_icons(cx, buf, r, hits);
+        2
+    } else {
+        1
+    };
+    let body = Rect::new(r.x, r.y + top, r.width, r.height.saturating_sub(top + 2));
     match a.ui.tab {
         Tab::Sessions => draw_sessions(cx, buf, body, focused, hits),
         Tab::Files => draw_files(cx, buf, body, focused, hits),
@@ -956,7 +1054,13 @@ fn tab_icons(cx: &Cx, r: Rect) -> Vec<(Tab, Rect, String, &'static str)> {
         let rect = if rail {
             Rect::new(r.x, r.y + 1 + i, r.width, 1)
         } else {
+            // in the header band, over the docked sidebar
+            Rect::new(r.x + 3 + i * 3, r.y.saturating_sub(1), 3, 1)
+        };
+        let rect = if !rail && cx.app.narrow() {
             Rect::new(r.x + 1 + i * 4, r.y, 3, 1)
+        } else {
+            rect
         };
         if rect.right() <= r.right() && rect.bottom() <= r.bottom() {
             out.push((tab, rect, t.label.clone(), glyph));
@@ -2000,7 +2104,7 @@ fn kv(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, key: &str, value: &str) {
     if *y >= r.bottom() {
         return;
     }
-    put(buf, r.x + 1, *y, key, cx.st(MUTED, CANVAS), 9);
+    put(buf, r.x + 1, *y, key, cx.st(MUTED, SIDEBAR), 9);
     let vw = r.width.saturating_sub(12) as usize;
     put(
         buf,
@@ -2008,9 +2112,9 @@ fn kv(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, key: &str, value: &str) {
         *y,
         &truncate(value, vw, cx.ell()),
         if key == "agent" {
-            cx.st(SECONDARY, CANVAS).patch(cx.t.agent_style(value))
+            cx.st(SECONDARY, SIDEBAR).patch(cx.t.agent_style(value))
         } else {
-            cx.st(SECONDARY, CANVAS)
+            cx.st(SECONDARY, SIDEBAR)
         },
         vw as u16,
     );
@@ -2022,7 +2126,7 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
         return;
     }
     let a = cx.app;
-    clear(buf, r, cx.st(SECONDARY, CANVAS));
+    clear(buf, r, cx.st(SECONDARY, SIDEBAR));
     hits.add(r, Target::Swallow);
     let focused = a.ui.focus == Focus::Right;
     let mut y = r.y;
@@ -2038,7 +2142,7 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             break;
         }
         let head = Rect::new(r.x, y, r.width, 1);
-        let mut hs = cx.st(PRIMARY, CANVAS).add_modifier(Modifier::BOLD);
+        let mut hs = cx.st(PRIMARY, SIDEBAR).add_modifier(Modifier::BOLD);
         if cx.hovered(head) {
             hs = hs.patch(cx.t.bg("interactive.hover"));
         }
@@ -2048,12 +2152,12 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 r.x,
                 y,
                 cx.t.structure("focus_bar"),
-                cx.st("interactive.focus", CANVAS)
+                cx.st("interactive.focus", SIDEBAR)
                     .add_modifier(Modifier::BOLD),
                 1,
             );
         }
-        put(buf, r.x + 1, y, cx.t.fold(true), cx.st(MUTED, CANVAS), 1);
+        put(buf, r.x + 1, y, cx.t.fold(true), cx.st(MUTED, SIDEBAR), 1);
         put(buf, r.x + 3, y, &sec.label, hs, r.width.saturating_sub(4));
         hits.add(head, Target::RightSection(i));
         y += 1;
@@ -2069,7 +2173,7 @@ fn draw_right(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                     if y >= r.bottom() {
                         break;
                     }
-                    put(buf, r.x + 3, y, &l, cx.st(MUTED, CANVAS), r.width - 4);
+                    put(buf, r.x + 3, y, &l, cx.st(MUTED, SIDEBAR), r.width - 4);
                     y += 1;
                 }
             }
@@ -2085,7 +2189,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
             r.x + 3,
             *y,
             "Open a session",
-            cx.st(MUTED, CANVAS),
+            cx.st(MUTED, SIDEBAR),
             r.width.saturating_sub(4),
         );
         *y += 1;
@@ -2107,7 +2211,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
             } else {
                 "Loading Git status…"
             },
-            cx.st(MUTED, CANVAS),
+            cx.st(MUTED, SIDEBAR),
             r.width.saturating_sub(4),
         );
         *y += 1;
@@ -2130,7 +2234,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                     r.x + 3,
                     *y,
                     &line,
-                    cx.st(MUTED, CANVAS),
+                    cx.st(MUTED, SIDEBAR),
                     r.width.saturating_sub(4),
                 );
                 *y += 1;
@@ -2154,7 +2258,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                 r.x + 3,
                 *y,
                 &truncate(&header, r.width.saturating_sub(4) as usize, cx.ell()),
-                cx.st(SECONDARY, CANVAS),
+                cx.st(SECONDARY, SIDEBAR),
                 r.width.saturating_sub(4),
             );
             *y += 1;
@@ -2165,7 +2269,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                     r.x + 3,
                     *y,
                     "Clean",
-                    cx.st(MUTED, CANVAS),
+                    cx.st(MUTED, SIDEBAR),
                     r.width.saturating_sub(4),
                 );
                 *y += 1;
@@ -2184,7 +2288,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                         r.x + 3,
                         *y,
                         &format!("{} {count}", row.group.label()),
-                        cx.st(MUTED, CANVAS).add_modifier(Modifier::BOLD),
+                        cx.st(MUTED, SIDEBAR).add_modifier(Modifier::BOLD),
                         r.width.saturating_sub(4),
                     );
                     *y += 1;
@@ -2194,7 +2298,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                 }
                 let line = Rect::new(r.x, *y, r.width, 1);
                 let selected = index == cx.app.ui.git_cursor;
-                let mut style = cx.st(SECONDARY, CANVAS);
+                let mut style = cx.st(SECONDARY, SIDEBAR);
                 if selected && focused {
                     style = style.patch(cx.t.bg("interactive.selection"));
                 } else if cx.hovered(line) {
@@ -2207,7 +2311,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                         r.x,
                         *y,
                         cx.t.structure("focus_bar"),
-                        cx.st("interactive.focus", CANVAS),
+                        cx.st("interactive.focus", SIDEBAR),
                         1,
                     );
                 }
@@ -2224,7 +2328,7 @@ fn git_status(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16, hits: &mut HitMap
                         r.x + 3,
                         *y,
                         &glyph.to_string(),
-                        cx.st(token, CANVAS).patch(style),
+                        cx.st(token, SIDEBAR).patch(style),
                         1,
                     );
                 }
@@ -2256,7 +2360,7 @@ fn session_info(cx: &Cx, buf: &mut Buffer, r: Rect, y: &mut u16) {
             r.x + 3,
             *y,
             "No session open",
-            cx.st(MUTED, CANVAS),
+            cx.st(MUTED, SIDEBAR),
             r.width - 4,
         );
         *y += 1;

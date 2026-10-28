@@ -16,11 +16,14 @@ show their branch and linked-worktree marker from Core below the composer; a
 project with no session shows its own branch. The composer shows the agent in
 its colour, catalog model names, a pending model change, effort and context
 occupancy against price tiers and the window, explained on hover.
-The first row holds the sidebar toggles, the breadcrumb title
-and the notification bell. The Sessions / Files / Projects tabs are icons in
-the sidebar's first row (a column on the rail); hovering shows the label.
-The left sidebar has its own surface
-(`surface.sidebar`): two-line session rows (title, `project ⌥ branch`) and a
+The first row is a band on the chrome surface (`surface.sidebar`, shared
+with both sidebars; no rules between them, a `│` edge only in ANSI-16 and
+mono). It holds the left toggle, the Sessions / Files / Projects icons over the
+left sidebar (a column on the rail, the drawer's first row when narrow;
+hovering shows the label), the session tabs, the run status at the centre's
+right edge, the notification count and the right toggle. Sidebars are 34 / 36
+cells from 160 columns and 28 / 30 below. `paint::scrim` dims a buffer under a
+modal. The left sidebar has two-line session rows (title, `project ⌥ branch`) and a
 closing `+ New session` row. Drag its inner edge to resize it (20–60 columns);
 dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
@@ -28,7 +31,7 @@ title and place. Settings → Sidebar switches full / rail / hidden. The locatio
 strip under the composer shows the directory (underlined by the accent rule),
 the branch and, only in a linked worktree, `worktree`. The composer panel has
 an agent-coloured rail and a status band with `11.1K (4.1%)`.
-The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`). `alt+d`
+The header holds session tabs (`×`, `+`, `alt+x`, `alt+[`, `alt+]`): the viewed tab is bold on the page surface, the others muted on the band, a child session shows `root › child` with clickable earlier crumbs. `alt+d`
 (or Settings → Timeline detail) cycles the timeline between low (one line per
 activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
@@ -180,6 +183,7 @@ for selection, undo/redo and collapsed large pastes; sent text expands every pas
 | `app` | Focus model, `when`-term evaluation, command availability, the palette, the Esc chain, keyboard/mouse/paste handling. Produces `Effect`s (API call, supervisor command, clipboard, quit, suspend). |
 | `actions` | The mutations the shell makes (prompt, new session, continue, interrupt, archive, rename, delete, allow/deny), each with its own `RequestId`; a failed send hands the draft back. |
 | `timeline` | The session timeline: blocks in model order (starting context, turns, user/assistant text, reasoning, tools and their diffs, notices, diagnostics, child cards) with fold state and the list of selectable blocks. Folding is view state only. |
+| `paint` | Buffer-level drawing helpers: `scrim` (dim a buffer under a modal). |
 | `render` | Ratatui drawing from the model, theme and manifest. Timeline blocks become hit targets as they are drawn. `render_text` renders to a text grid for tests and frame dumps. |
 | `term` | Raw mode, alternate screen, mouse, bracketed paste, kitty keyboard flags; restored on error, panic (hook) and Ctrl+Z suspend/resume. |
 

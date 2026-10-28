@@ -50,16 +50,22 @@ describe("agent colours", () => {
 });
 
 describe("shell", () => {
-  test("header anchors, left tabs and fixed Settings entry", async () => {
+  test("header anchors, sidebar tabs in the header, fixed Settings entry", async () => {
     const app = await open("./App.tsx", { network: core(), width: 1024, height: 768, platform: "web" });
     await app.waitFor("text:demo");
+    expect(app.shows("id:header")).toBe(true);
     expect(app.shows("id:toggle-left")).toBe(true);
     expect(app.shows("id:toggle-right")).toBe(true);
     expect(app.shows("id:open-settings")).toBe(true);
-    // tabs: Sessions (selected, with label), Files, Projects, in manifest order
+    // tabs: Sessions, Files, Projects, in manifest order; docked, they sit in the header's left slot
     const labels = (manifest.navigation.left_sidebar.tab as readonly { id: string }[]).map((t) => t.id);
     expect(labels).toEqual(["sessions", "files", "projects"]);
     expect(app.shows("id:tab-sessions") && app.shows("id:tab-files") && app.shows("id:tab-projects")).toBe(true);
+    // the icons follow the left sidebar: closing it hides them, reopening shows them again
+    await app.press("id:toggle-left");
+    expect(app.shows("id:tab-files")).toBe(false);
+    await app.press("id:toggle-left");
+    expect(app.shows("id:tab-files")).toBe(true);
   });
 
   test("session tabs open, switch and close without deleting their sessions", async () => {

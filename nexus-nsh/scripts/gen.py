@@ -69,6 +69,7 @@ def css(mode: str) -> dict[str, str]:
         "warning": g("status.warning"),
         "error": g("status.error"),
         "info": g("status.info"),
+        "border-strong": g("border.strong"),
         "diff-add": g("diff.add"),
         "diff-del": g("diff.del"),
         "diff-add-bg": g("diff.add_bg"),

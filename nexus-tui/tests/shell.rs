@@ -54,8 +54,8 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
             assert!(all.contains("Type a message"), "{all}");
             assert!(!rows.last().unwrap().contains("✓ live"));
             if w >= 100 {
-                // tab icons in manifest order at the top of the sidebar,
-                // settings pinned at the bottom
+                // tab icons in manifest order in the header band over the
+                // sidebar, settings pinned at the bottom
                 let tabs: Vec<u16> = m
                     .navigation
                     .left_sidebar
@@ -64,7 +64,8 @@ fn shell_anatomy_at_every_size_dark_and_mono() {
                     .map(|t| {
                         let tab = nexus_tui::ui::Tab::from_id(&t.id).unwrap();
                         let r = app.hits.rect_of(&Target::Tab(tab)).expect("tab icon");
-                        assert_eq!(r.y, 1, "icons sit on the sidebar's first row");
+                        assert_eq!(r.y, 0, "icons sit in the header band");
+                        assert!(r.right() <= app.regions.left.unwrap().right());
                         r.x
                     })
                     .collect();
@@ -126,9 +127,22 @@ fn dark_frames_use_the_theme_file_surfaces() {
             .any(|cell| cell.bg == Color::Rgb(0x24, 0x24, 0x24)),
         "user block uses raised surface"
     );
-    assert_eq!(buf[(27, 10)].symbol(), "│");
-    assert_eq!(buf[(27, 10)].fg, Color::Rgb(0x2a, 0x2a, 0x2a));
-    assert_eq!(buf[(92, 10)].symbol(), "│");
+    // The chrome: header band and both sidebars share surface.sidebar, the
+    // surface step is the edge, so no rule is drawn between them (D01/D02).
+    let sidebar = Color::Rgb(0x14, 0x14, 0x14);
+    assert_eq!(buf[(110, 0)].bg, sidebar, "header band over the centre");
+    assert_eq!(buf[(60, 0)].bg, sidebar);
+    assert_eq!(buf[(100, 10)].bg, sidebar, "right sidebar");
+    assert_eq!(buf[(27, 10)].symbol(), " ", "no edge rule in truecolor");
+    assert_eq!(buf[(90, 10)].symbol(), " ");
+    assert_eq!(buf[(27, 10)].bg, sidebar);
+    // surfaces collapse in ANSI-16 and mono: the edge is drawn there
+    for tier in [Tier::Ansi16, Tier::Mono] {
+        let mut low = with_turn(opts(Mode::Dark, tier), (120, 36));
+        let (buf, _) = draw(&mut low, 120, 36);
+        assert_eq!(buf[(27, 10)].symbol(), "│", "{tier:?}");
+        assert_eq!(buf[(90, 10)].symbol(), "│", "{tier:?}");
+    }
     let mut light = with_turn(opts(Mode::Light, Tier::TrueColor), (120, 36));
     let (buf, _) = draw(&mut light, 120, 36);
     assert_eq!(buf[(60, 10)].bg, Color::Rgb(0xf7, 0xf7, 0xf5));
@@ -571,14 +585,8 @@ fn files_tree_expands_with_git_marks_and_hides_ignored() {
         !all.contains(".git"),
         "the repository metadata is never a tree row"
     );
-    let row = |name: &str| {
-        rows.iter()
-            .find(|row| row.contains(name))
-            .unwrap()
-            .split('\u{2502}')
-            .next()
-            .unwrap()
-    };
+    let row = |name: &str| rows.iter().find(|row| row.contains(name)).unwrap();
+    let row = |name: &str| row(name).chars().take(28).collect::<String>();
     assert!(row("a.rs").trim_end().ends_with('M'), "{all}");
     assert!(row("new.rs").trim_end().ends_with('?'), "{all}");
     assert!(row("gone.rs").trim_end().ends_with('D'), "{all}");
@@ -1851,4 +1859,89 @@ fn tabs_replace_the_title_open_close_and_switch() {
     assert!(app.viewed_id().is_none());
     let (_, rows) = draw(&mut app, 120, 36);
     assert!(rows[0].contains("New session"), "{}", rows[0]);
+}
+
+#[test]
+fn header_tabs_follow_the_chrome_band_styles() {
+    // D02: the viewed tab is bold primary on the page surface, joined to the
+    // page; other tabs are muted on the band; `+` ends the strip.
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    let mut other = app.state.model.sessions[SESSION].clone();
+    other.id = "other".into();
+    other.title = "Other session".into();
+    app.state.model.sessions.insert(other.id.clone(), other);
+    app.ui.tabs = vec![SESSION.to_owned(), "other".to_owned()];
+    let (buf, rows) = draw(&mut app, 160, 40);
+    let band = Color::Rgb(0x14, 0x14, 0x14);
+    let page = Color::Rgb(0x0b, 0x0b, 0x0b);
+    let at = |needle: &str| col_of(&rows[0], needle) as u16;
+    let viewed = &buf[(at(app.state.model.sessions[SESSION].title.as_str()), 0)];
+    assert_eq!(viewed.bg, page, "the viewed tab sits on the page surface");
+    assert!(viewed.modifier.contains(ratatui::style::Modifier::BOLD));
+    let others = &buf[(at("Other session"), 0)];
+    assert_eq!(others.bg, band, "other tabs sit on the band");
+    assert!(!others.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_ne!(viewed.fg, others.fg, "viewed is primary, others muted");
+    assert!(
+        rows[0].contains(" + ") || rows[0].contains('+'),
+        "{:?}",
+        rows[0]
+    );
+    // the strip starts at the centre column, not over the sidebar
+    let centre = app.regions.centre.x;
+    assert!(at("Other session") > centre);
+}
+
+#[test]
+fn sidebar_icons_sit_in_the_band_over_the_sidebar() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let (buf, rows) = draw(&mut app, 120, 36);
+    let left = app.regions.left.unwrap();
+    let toggle = app.hits.rect_of(&Target::ToggleLeft).unwrap();
+    let mut prev = toggle.right();
+    for tab in [
+        nexus_tui::ui::Tab::Sessions,
+        nexus_tui::ui::Tab::Files,
+        nexus_tui::ui::Tab::Projects,
+    ] {
+        let r = app.hits.rect_of(&Target::Tab(tab)).unwrap();
+        assert_eq!(r.y, 0);
+        assert!(r.x >= prev && r.right() <= left.right(), "{r:?}");
+        prev = r.right();
+    }
+    // the sidebar's first row is free for its own content: nothing but the
+    // sessions list starts there (no icon row)
+    assert!(
+        !rows[1].chars().take(27).any(|c| c == '\u{2261}'),
+        "{:?}",
+        rows[1]
+    );
+    assert_eq!(buf[(1, 0)].bg, Color::Rgb(0x14, 0x14, 0x14));
+}
+
+#[test]
+fn a_viewed_child_session_shows_root_and_child_crumbs() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (160, 40));
+    let mut parent = app.state.model.sessions[SESSION].clone();
+    parent.id = "ses_parent".into();
+    parent.title = "Root task".into();
+    parent.parent_id = None;
+    app.state.model.sessions.insert(parent.id.clone(), parent);
+    {
+        let child = app.state.model.sessions.get_mut(SESSION).unwrap();
+        child.parent_id = Some("ses_parent".into());
+        child.title = "Child task".into();
+    }
+    let (_, rows) = draw(&mut app, 160, 40);
+    assert!(
+        rows[0].contains("Root task \u{203a} Child task"),
+        "{:?}",
+        rows[0]
+    );
+    // the earlier crumb is clickable and opens the root
+    let crumb = app.hits.rect_of(&Target::SessionCrumb(0)).expect("crumb");
+    assert_eq!(crumb.y, 0);
+    assert_eq!(app.hits.at(crumb.x, 0), Some(&Target::SessionCrumb(0)));
+    app.click(Target::SessionCrumb(0));
+    assert_eq!(app.viewed_id(), Some("ses_parent"));
 }

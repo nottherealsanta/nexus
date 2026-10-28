@@ -345,6 +345,8 @@ pub enum Target {
     /// An open session's tab in the header, by position.
     SessionTab(usize),
     SessionTabClose(usize),
+    /// An earlier crumb of the viewed child session's tab: index into its ancestors.
+    SessionCrumb(usize),
     Notifications,
     Tab(Tab),
     SettingsEntry,
