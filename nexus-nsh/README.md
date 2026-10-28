@@ -16,9 +16,20 @@ workspace session tabs, new-session view, timeline, waiting card, composer,
 settings navigation, alerts, notifications and connection states are usable
 against a real Core. Tabs show running, unread, failed and idle state; they
 switch, rename and close without deleting sessions. The timeline has starting
-context, turn headers and footers, folding, Markdown, and three detail levels:
-activity groups collapsed in low, individual collapsed tools in medium, and
-expanded tools in high. High-detail output keeps the first 30 and last 20 lines;
+context, Markdown, and three detail levels: activity groups collapsed in low,
+individual collapsed tools in medium, and expanded tools in high. Each user
+message is the turn's header: a full-width raised card (`#n · time` on the right,
+Copy and Fold on hover) that folds to one line. A sticky copy of the current
+user card sits under the header with `↑ N lines of this turn above`, pushed up by
+the next card and clicked to scroll back. Turn footers are a right-aligned meta
+row (`▪ Agent · models · effort · tools · duration · tokens · cost`) with no
+status word: a failed turn shows its first error line above it, and an
+interrupted one adds `/continue`. Durations read `0.4s`, `4.2s`, `1m 05s` and
+`1h 02m`. Activity groups are 28 px rows with `+N −M` and failures when folded;
+members are 24 px rows on a tree line with verb icons (the status glyph replaces
+the icon while running, failed or waiting), and a member's output sits in a
+320 px box with Show all. Thoughts show `Thought · preview`, with the body behind
+a 2 px rule. High-detail output keeps the first 30 and last 20 lines;
 clipping is announced and the show-all control restores the whole inspection
 output. Selecting a session loads its full stored history (messages, retained
 diagnostics, snapshot) after the bounded snapshot view.
@@ -108,7 +119,7 @@ e2e/down.sh /tmp/nsh-e2e
 | `src/core/sync.ts` | Connection supervisor: handshake, snapshot, SSE resume, backoff, restart detection, history loading. |
 | `src/store.ts` | Reactive view state: connection, model revision, drafts, overlays, alerts, prefs. |
 | `src/commands.ts` | The command registry from the manifest: availability terms, handlers, keys, Esc chain. |
-| `src/ui/timeline.tsx` | Timeline blocks: context, turns, text, reasoning, tools/diffs, children, diagnostics, footers. |
+| `src/ui/timeline.tsx` | Timeline blocks: context, user cards (turn headers), text, thoughts, groups and members, children, diagnostics, footers, and the sticky user bar. |
 | `src/ui/*` | Header, sidebars, right sidebar, composer and waiting card, settings, overlays, alerts. |
 | `src/gen/*` | Generated from `interface/`; never edit. |
 

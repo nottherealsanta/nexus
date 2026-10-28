@@ -3,7 +3,7 @@ import { describe, expect, open, test } from "nsh/test";
 import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, foldEventPages } from "./src/core/reduce";
-import { capToolDetail, detailOf } from "./src/ui/timeline";
+import { capToolDetail, detailOf, fmtDuration } from "./src/ui/timeline";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -434,6 +434,13 @@ describe("context, composer and footer parity", () => {
   });
 });
 
+describe("timeline rhythm", () => {
+  test("durations read 0.4s, 4.2s, 1m 05s and 1h 02m, never <1 s", () => {
+    expect([0.4, 4.2, 12, 65, 3720].map(fmtDuration)).toEqual(["0.4s", "4.2s", "12s", "1m 05s", "1h 02m"]);
+    expect(fmtDuration(0.04).includes("<1")).toBe(false);
+  });
+});
+
 describe("tool output detail cap", () => {
   test("caps plain, raw, and diff detail at the same head and tail", () => {
     const output = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
@@ -484,7 +491,7 @@ describe("tool output detail cap", () => {
     let text = app.texts().join("\n");
     expect(text.includes("plain line 1") && text.includes("plain line 100")).toBe(true);
     expect(text.includes("plain line 401") && text.includes("plain line 500")).toBe(true);
-    expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
+    expect(text.includes("↑ 300 earlier lines") && text.includes("Show all")).toBe(true);
     expect(text.includes("plain line 250")).toBe(false);
 
     await app.keyboard.press("o");
@@ -512,7 +519,7 @@ describe("tool output detail cap", () => {
     text = diffApp.texts().join("\n");
     expect(text.includes("diff line 1") && text.includes("diff line 100")).toBe(true);
     expect(text.includes("diff line 401") && text.includes("diff line 500")).toBe(true);
-    expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
+    expect(text.includes("↑ 300 earlier lines") && text.includes("Show all")).toBe(true);
   });
 
   test("detail cycles groups, tools and high-detail clipping, then resets hand-open state", async () => {
@@ -543,7 +550,7 @@ describe("tool output detail cap", () => {
     await app.waitFor("text:high line 1");
     let text = app.texts().join("\n");
     expect(text.includes("high line 30") && text.includes("high line 101") && text.includes("high line 120")).toBe(true);
-    expect(text.includes("70 lines hidden · show all (o)")).toBe(true);
+    expect(text.includes("↑ 70 earlier lines") && text.includes("Show all")).toBe(true);
     expect(text.includes("high line 31") || text.includes("high line 100")).toBe(false);
     await app.press("id:tool-show-all-call_bash");
     await app.waitFor("text:high line 100");

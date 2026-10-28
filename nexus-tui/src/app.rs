@@ -421,6 +421,10 @@ pub struct Ui {
     /// (turns open, reasoning and tool detail closed, context open only before
     /// the first turn).
     pub timeline_open: HashMap<String, bool>,
+    /// Keys of the activity groups that were live at the last draw, and the
+    /// frame at which a group finished (its glyph flashes for `FLASH_FRAMES`).
+    pub live_groups: std::collections::HashSet<String>,
+    pub group_flash: HashMap<String, usize>,
     /// The block the keyboard is on, as an index into `timeline_blocks`.
     pub timeline_sel: Option<usize>,
     /// The selected block's key, so a fold (which changes line ranges and may
@@ -557,6 +561,8 @@ impl App {
                 timeline_total: 0,
                 timeline_height: 0,
                 timeline_open: HashMap::new(),
+                live_groups: std::collections::HashSet::new(),
+                group_flash: HashMap::new(),
                 timeline_sel: None,
                 timeline_sel_key: None,
                 timeline_blocks: Vec::new(),
@@ -3198,6 +3204,7 @@ impl App {
         let mut changed = false;
         let animated = !self.theme.opts.reduced_motion
             && (!self.state.model.running.is_empty()
+                || !self.ui.group_flash.is_empty()
                 || matches!(
                     self.state.connection,
                     ConnectionState::Starting | ConnectionState::Connecting
@@ -3218,6 +3225,25 @@ impl App {
             changed = true;
         }
         changed
+    }
+
+    /// Note which groups of the freshly built timeline are live. A group that
+    /// was live at the last draw and now is not has just finished: its glyph
+    /// flashes the accent for `timeline::FLASH_FRAMES` (never with reduced motion).
+    pub fn note_live_groups(&mut self, timeline: &crate::timeline::Timeline) {
+        let now: std::collections::HashSet<String> = timeline.live_groups.iter().cloned().collect();
+        if !self.theme.opts.reduced_motion {
+            for key in self.ui.live_groups.difference(&now) {
+                if timeline.blocks.iter().any(|b| &b.key == key) {
+                    self.ui.group_flash.insert(key.clone(), self.frame);
+                }
+            }
+        }
+        self.ui.live_groups = now;
+        let frame = self.frame;
+        self.ui
+            .group_flash
+            .retain(|_, at| frame.wrapping_sub(*at) < crate::timeline::FLASH_FRAMES);
     }
 
     pub fn set_size(&mut self, w: u16, h: u16) {
@@ -3828,6 +3854,21 @@ impl App {
         if b.kind == crate::timeline::BlockKind::Child {
             if let Some(id) = b.target.clone() {
                 self.open_session(&id);
+                return;
+            }
+        }
+        // Enter on an open tool whose output is clipped shows all of it first
+        // (`↑ N earlier lines · enter show all`); the next Enter folds the tool.
+        if b.kind == crate::timeline::BlockKind::Tool && b.clipped {
+            let open = self
+                .ui
+                .timeline_open
+                .get(&b.key)
+                .copied()
+                .unwrap_or(self.ui.detail == crate::ui::Detail::High);
+            let all = format!("{}:all", b.key);
+            if open && !self.ui.timeline_open.get(&all).copied().unwrap_or(false) {
+                self.ui.timeline_open.insert(all, true);
                 return;
             }
         }
@@ -4649,6 +4690,7 @@ impl App {
                 self.select_block(i);
                 self.copy_selected();
             }
+            Target::StickyUser(i) => self.select_block(i),
             Target::JumpLatest => self.run_command("session.jump_latest"),
             Target::Composer => self.ui.focus = Focus::Composer,
             Target::ComposerAgent => self.run_command("agent.change"),

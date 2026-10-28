@@ -126,6 +126,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             regions.timeline.width.saturating_sub(2) as usize,
         ))
     };
+    if let Some(t) = &timeline {
+        app.note_live_groups(t);
+    }
     {
         let a: &App = app;
         let cx = Cx {
@@ -776,10 +779,32 @@ fn header_status(cx: &Cx) -> Option<(String, Style)> {
     match &a.state.connection {
         ConnectionState::Live => {
             let id = a.viewed_id()?;
-            if a.is_busy(id) {
-                let (_, label, _) = cx.t.status("running");
+            if !a.wait_items().is_empty() {
+                // `◆ waiting for you`: a wait is pending in this session or a child.
+                let (g, _, tok) = cx.t.status("waiting");
+                Some((format!("{g} waiting for you"), cx.st(tok, SIDEBAR)))
+            } else if a.is_busy(id) {
+                // `◐ working 12s`: the elapsed time of the running turn.
+                let elapsed = a
+                    .messages()
+                    .iter()
+                    .rev()
+                    .find(|m| {
+                        m.role == "user"
+                            && !crate::timeline::is_notice(
+                                m.parts
+                                    .iter()
+                                    .find_map(|p| p["text"].as_str())
+                                    .unwrap_or(""),
+                            )
+                    })
+                    .map(|m| crate::timeline::fmt_duration(crate::app::now_secs() - m.created));
                 Some((
-                    format!("{} {label}", cx.t.spinner(a.frame / 2)),
+                    format!(
+                        "{} working{}",
+                        cx.t.spinner(a.frame / 2),
+                        elapsed.map(|e| format!(" {e}")).unwrap_or_default()
+                    ),
                     cx.st(PRIMARY, SIDEBAR),
                 ))
             } else {
@@ -2851,11 +2876,7 @@ fn draw_timeline(
         a.ui.scroll.top.min(max_top)
     };
     for (i, line) in lines.iter().skip(top).take(h).enumerate() {
-        let y = r.y + i as u16;
-        if let Some(bg) = line.bg {
-            clear(buf, Rect::new(inner.x, y, inner.width, 1), bg);
-        }
-        buf.set_line(inner.x, y, &Line::from(line.spans.clone()), inner.width);
+        draw_tline(cx, buf, r, inner, r.y + i as u16, line);
     }
     // Every visible block is clickable; a click selects and toggles it.
     for (bi, b) in timeline.blocks.iter().enumerate() {
@@ -2888,26 +2909,35 @@ fn draw_timeline(
                 hits.add(button, Target::CopyBlock(bi));
             }
         }
-        // Open turns have a padding row for the copy action. Hide it when
-        // the beginning of the block has scrolled away.
+        // An open user band shows `copy` on its last text row (its bottom
+        // padding row when the message is a single row, where the first row
+        // holds `#n · time`) while hovered or focused.
+        let focused = a.ui.focus == Focus::Timeline && a.ui.timeline_sel == Some(bi);
         if b.kind == crate::timeline::BlockKind::Turn
-            && b.start >= top
-            && (cx.hovered(rect)
-                || (a.ui.focus == Focus::Timeline && a.ui.timeline_sel == Some(bi)))
+            && b.end - b.start >= 3
+            && (cx.hovered(rect) || focused)
             && inner.width >= 8
         {
-            let button = Rect::new(inner.right() - 6, y0, 5, 1);
-            put(
-                buf,
-                button.x,
-                button.y,
-                "Copy",
-                cx.st(MUTED, RAISED),
-                button.width,
-            );
-            hits.add(button, Target::CopyBlock(bi));
+            let rows = b.end - b.start - 2;
+            let row = if rows >= 2 { b.end - 2 } else { b.end - 1 };
+            if row >= top && row < top + h {
+                let y = r.y + (row - top) as u16;
+                let label = "copy";
+                let button =
+                    Rect::new(inner.right() - label.len() as u16, y, label.len() as u16, 1);
+                put(
+                    buf,
+                    button.x,
+                    button.y,
+                    label,
+                    cx.st(MUTED, RAISED),
+                    button.width,
+                );
+                hits.add(button, Target::CopyBlock(bi));
+            }
         }
     }
+    draw_sticky(cx, buf, r, inner, hits, timeline, top);
     // The focus location: the selected block's first row, else the top.
     let bar_y = if a.ui.focus == Focus::Timeline {
         a.ui.timeline_sel
@@ -2955,6 +2985,107 @@ fn draw_timeline(
         hits.add(rr, Target::JumpLatest);
     }
     (total, h)
+}
+
+/// One timeline row. A band row (the user message) spans the whole page width
+/// and carries its rail `▌` at the left edge; any other row with a background
+/// fills the content width.
+fn draw_tline(
+    cx: &Cx,
+    buf: &mut Buffer,
+    r: Rect,
+    inner: Rect,
+    y: u16,
+    line: &crate::timeline::TLine,
+) {
+    if let Some(bg) = line.bg {
+        let area = if line.rail.is_some() { r } else { inner };
+        clear(buf, Rect::new(area.x, y, area.width, 1), bg);
+    }
+    buf.set_line(inner.x, y, &Line::from(line.spans.clone()), inner.width);
+    if let Some(rail) = line.rail {
+        let glyph = if cx.t.opts.ascii {
+            cx.t.structure("rail")
+        } else {
+            cx.t.structure("focus_bar")
+        };
+        put(buf, r.x, y, glyph, rail, 1);
+    }
+}
+
+/// The sticky user header (D04): the pinned copy of the user band whose text
+/// has scrolled off the top, with a shade row and the count of this turn's rows
+/// above. The next band pushes it up; a click scrolls back to the band.
+fn draw_sticky(
+    cx: &Cx,
+    buf: &mut Buffer,
+    r: Rect,
+    inner: Rect,
+    hits: &mut HitMap,
+    timeline: &crate::timeline::Timeline,
+    top: usize,
+) {
+    let bands: Vec<(usize, &crate::timeline::Block)> = timeline
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.kind == crate::timeline::BlockKind::Turn && b.end - b.start >= 3)
+        .collect();
+    let cards: Vec<(usize, usize)> = bands
+        .iter()
+        .map(|(_, b)| (b.start, b.end - b.start))
+        .collect();
+    let Some(pin) = crate::sticky::select(&cards, top, timeline.lines.len()) else {
+        return;
+    };
+    let (block_index, _) = bands[pin.card];
+    let skip = pin.rows - pin.shown;
+    let ascii = cx.t.opts.ascii;
+    for k in skip..pin.rows {
+        let y = r.y + (k - skip) as u16;
+        if y >= r.bottom() {
+            break;
+        }
+        if k < pin.body {
+            let mut line = crate::timeline::TLine {
+                spans: timeline.lines[pin.first + 1 + k].spans.clone(),
+                bg: timeline.lines[pin.first + 1 + k].bg,
+                rail: timeline.lines[pin.first + 1 + k].rail,
+            };
+            if pin.clipped && k + 1 == pin.body {
+                crate::sticky::ellipsize(&mut line.spans, cx.ell());
+            }
+            draw_tline(cx, buf, r, inner, y, &line);
+        } else {
+            let row = Rect::new(r.x, y, r.width, 1);
+            clear(buf, row, cx.st(MUTED, RAISED));
+            let (shade, label) =
+                crate::sticky::shade(crate::sticky::above(&pin, top), inner.width as usize, ascii);
+            let x = put(
+                buf,
+                inner.x,
+                y,
+                &shade,
+                cx.st("border.strong", RAISED),
+                inner.width,
+            );
+            put(buf, x, y, &label, cx.st(MUTED, RAISED), inner.width);
+            put(
+                buf,
+                r.x,
+                y,
+                if ascii {
+                    cx.t.structure("rail")
+                } else {
+                    cx.t.structure("focus_bar")
+                },
+                cx.st(MUTED, RAISED),
+                1,
+            );
+        }
+    }
+    let shown = Rect::new(r.x, r.y, r.width, pin.shown.min(r.height as usize) as u16);
+    hits.add(shown, Target::StickyUser(block_index));
 }
 
 // ============================================================================

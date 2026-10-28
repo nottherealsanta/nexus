@@ -24,6 +24,14 @@ import copy from "./icons/copy.svg";
 import check from "./icons/check.svg";
 import alert from "./icons/alert.svg";
 import command from "./icons/command.svg";
+import read from "./icons/read.svg";
+import edit from "./icons/edit.svg";
+import shell from "./icons/shell.svg";
+import code from "./icons/code.svg";
+import ask from "./icons/ask.svg";
+import session from "./icons/session.svg";
+import web from "./icons/web.svg";
+// Tool verbs (timeline members): `search` above is the tool search glyph too.
 export const icons = {
   "panel-left": panel_left,
   "panel-right": panel_right,
@@ -50,5 +58,12 @@ export const icons = {
   "check": check,
   "alert": alert,
   "command": command,
+  "read": read,
+  "edit": edit,
+  "shell": shell,
+  "code": code,
+  "ask": ask,
+  "session": session,
+  "web": web,
 } as const;
 export type IconName = keyof typeof icons;

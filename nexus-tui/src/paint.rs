@@ -49,10 +49,75 @@ pub fn scrim(theme: &Theme, buf: &mut Buffer, area: Rect) {
     }
 }
 
+/// Verb glyphs for tool rows (DESIGN_PLAN.md D06), as `(name, unicode, ascii)`.
+/// Mirrors `[glyphs.verb]` in `interface/theme.toml` (a test compares them).
+pub const VERBS: [(&str, &str, &str); 8] = [
+    ("read", "→", ">"),
+    ("edit", "←", "<"),
+    ("shell", "$", "$"),
+    ("search", "*", "*"),
+    ("code", "λ", "L"),
+    ("ask", "?", "?"),
+    ("session", "↳", "^"),
+    ("web", "↗", "^"),
+];
+
+/// The verb family of a tool name (a `VERBS` name), if it has one.
+pub fn verb_family(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "read" => "read",
+        "edit" | "write" | "patch" => "edit",
+        "bash" | "bash_output" | "bash_kill" => "shell",
+        "grep" | "glob" | "search" | "find" => "search",
+        "code" => "code",
+        "ask" => "ask",
+        "session" => "session",
+        "web_search" | "web_fetch" => "web",
+        _ => return None,
+    })
+}
+
+/// The glyph in front of a tool row: its verb glyph, or a dot for a tool
+/// without a verb. `ascii` picks the ASCII fallback.
+pub fn verb_glyph(tool: &str, ascii: bool) -> &'static str {
+    verb_family(tool)
+        .and_then(|family| VERBS.iter().find(|(name, _, _)| *name == family))
+        .map_or(if ascii { "-" } else { "·" }, |(_, uni, asc)| {
+            if ascii {
+                asc
+            } else {
+                uni
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::theme::{Mode, Options};
+
+    #[test]
+    fn verb_glyphs_match_the_theme_file_and_have_ascii_fallbacks() {
+        use unicode_width::UnicodeWidthStr;
+        let doc: toml::Table = include_str!("../../interface/theme.toml").parse().unwrap();
+        let table = doc["glyphs"]["verb"].as_table().expect("[glyphs.verb]");
+        assert_eq!(table.len(), VERBS.len());
+        for (name, uni, asc) in VERBS {
+            let row = table[name].as_table().unwrap();
+            assert_eq!(row["unicode"].as_str(), Some(uni), "{name}");
+            assert_eq!(row["ascii"].as_str(), Some(asc), "{name}");
+            assert!(asc.is_ascii(), "{name}");
+            assert_eq!(uni.width(), 1, "{name} is single width");
+        }
+        for tool in ["read", "edit", "write", "bash", "code", "ask", "session"] {
+            assert!(verb_glyph(tool, true).is_ascii(), "{tool}");
+            assert_eq!(verb_glyph(tool, false).width(), 1, "{tool}");
+        }
+        assert_eq!(verb_glyph("read", false), "→");
+        assert_eq!(verb_glyph("read", true), ">");
+        assert_eq!(verb_glyph("web_fetch", false), "↗");
+        assert_eq!(verb_glyph("mystery", true), "-");
+    }
 
     fn theme(tier: Tier) -> Theme {
         Theme::new(Options {

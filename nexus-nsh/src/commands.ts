@@ -105,6 +105,8 @@ interface Handler { run: () => void | Promise<void>; mutates?: boolean }
 export const handlers = new Map<string, Handler>();
 const on = (id: string, run: Handler["run"], mutates = false) => handlers.set(id, { run, mutates });
 
+/** Copies text to the system clipboard and confirms it (the timeline's message copy). */
+export function copyText(text: string, done: string) { void Clipboard.writeText(text).then(() => toast("success", done)); }
 export function toggleLeft() { if (isNarrow()) drawer.set(drawer() === "left" ? null : "left"); else { leftOpen.update((v) => !v); savePrefs(); } }
 export function rightIsOpen(w: number) { return rightOpen() ?? w >= 1280; }
 export function toggleRight(w: number) {

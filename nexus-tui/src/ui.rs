@@ -365,6 +365,8 @@ pub enum Target {
     /// One timeline block, by index in the last built timeline.
     Block(usize),
     CopyBlock(usize),
+    /// The pinned copy of a user band (sticky header): scrolls back to the band, by block index.
+    StickyUser(usize),
     JumpLatest,
     Composer,
     ComposerAgent,

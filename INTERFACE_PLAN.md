@@ -161,13 +161,13 @@ never rely on colour alone.
 
 | Role | Text | Surface | Rail (left edge) | Label / style |
 | --- | --- | --- | --- | --- |
-| User text | primary | raised | muted `▌` only without surface colour | none; padded block |
+| User text | primary | raised | muted `▌` at the band's left edge (focus colour when focused) | none; full-width padded band |
 | Agent text | primary | canvas | none | none; flush text |
 | Reasoning | muted | canvas | hairline `│` | `Thought`, italic |
 | Context notice | secondary | panel | info `┃` | `context` |
 | Context insertion | secondary | panel | accent `┃` | `inserted` (steering, settings) |
 | Execution diagnostic | secondary | panel | warning `┃` | `diagnostic` (retries, hooks, provider errors) |
-| Tool activity | secondary | canvas | none | foldable group; expanded tool details |
+| Tool activity | secondary | canvas | none | foldable group with `├─`/`╰─` members; detail in a `┌ │ ╰` box |
 | Child card | primary | panel | info `┃`, boxed | `child` |
 
 Rules: only user text has a filled block; only notices, insertions and
@@ -390,44 +390,68 @@ was clipped and why.
 
 #### Turn header
 
-In the TUI, the user-message block is the turn header. Its gutter contains the
-fold marker; the first text row shows the turn number and local time at the
-right. A folded turn shows the first message line and its tool count, duration
-and status. A hovered or focused block exposes Copy. Large messages have a
-separate expand control and are always sent and copied whole. The matching NSH
-presentation remains in A8.
+In the TUI, the user-message block is the turn header: a band across the whole
+page width on the raised surface, with the rail `▌` at its left edge (muted,
+the focus colour when focused) and one padding row above and below. The fold
+marker sits inside the band at the text edge and the text starts two cells
+after it. The first text row shows tags (`steer`, `queued`, `via voice`,
+`from parent`), then the turn number and local time at the right (`#2 · 3:44 PM`);
+the text wraps before it. A folded turn is one row: the first message line, and
+`#2 · 3 tools · 4.2s · ✓` at the right. A hovered or focused band shows `copy` on its last
+text row. Large messages have a separate expand control and are always sent and
+copied whole. Once the band's text has scrolled off the top while its turn is
+still on screen, a copy is pinned under the header: at most three rows, ending
+in `…`, then a `░` shade row with `↑ N lines of this turn above` at the right.
+The next band pushes it up, and a click scrolls back to the band. The matching
+NSH presentation remains in A8.
 
 #### Turn footer
 
 ```
- ───────────────────────────────────────────────────────────────────────────
- codex/gpt-5 · high · 42 s · 4 calls · 7 tools · 12k in 9k cached 2k out · $0.04 · ✓ done
+                       ▪ Build · gpt-6.1-terra · medium · 3 tools · 4.2s · 12k in · 2k out · $0.04
 ```
 
-One muted row, right-aligned and without a rule: `▪ Build` (agent in its
-colour, bold), model name from the catalog (every model used), effort,
-duration, calls, tools, tokens, cost, then the end status with glyph and
-label. Long footers wrap; the status is never truncated. Cost is computed from the catalog's prices (uncached input, cached
-input, output) and is absent when the model has no price. Wraps at width into a second muted row, never truncating the status.
-Interrupted: `◼ interrupted`; error: `✕ error`; step limit: `◼ step limit`.
-Running: absent until the turn ends (the live row above the composer shows the
-running status). Hovered: tokens expand into a breakdown tooltip (NSH) or a
-`i` key (TUI).
+One muted row, right-aligned at the end of the turn after a blank row, with no
+rule: `▪ Build` (agent in its colour, bold), the models used (`a → b` when the
+model changed), effort, tools, duration, tokens (`in`, then `cached` if any,
+then `out`), cost. It never states how the turn ended: no `done`, `interrupted`
+or `error` word or glyph. An interrupted turn (or one stopped at the step limit)
+adds `/continue` after the footer (`enter continue` while the composer is
+empty); a failed turn puts the first line of its error, `✕ …` in the error
+colour, on the row above. Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`,
+never `<1 s`. When the row does not fit, the segments break from the left onto
+extra right-aligned rows. Cost is computed from the catalog's prices (uncached
+input, cached input, output) and is absent when the model has no price.
+Running: absent until the turn ends (the header says `◐ working 12s`, and
+`◆ waiting for you` while a question or approval is pending). Hovered: tokens
+expand into a breakdown tooltip (NSH) or a `i` key (TUI).
 
 #### Tool activity
 
 In the TUI, consecutive tool calls and reasoning form a foldable group. A live
-group shows `▾ Working` and a muted tree of its newest five members; it
-announces earlier members and can be expanded to show them all. Reduced motion
-keeps the heading static. A finished group folds to a count by verb and, where
-available, elapsed time. Denials and failures are counted separately; a failed
-group carries an error glyph and word even when folded. Pending approvals and
-questions keep their group and turn open.
+group shows `▾ Working` (the old soft shimmer; reduced motion keeps it static)
+with its elapsed time, and under it the newest five members in a `├─`/`╰─` tree
+with `… N earlier` above them. A finished group folds to verbs in first-seen
+order with counts (`Read 2 files, ran 1 command`), `+N −M` for edits, and
+elapsed time at the right; its glyph flashes the accent for six frames when it
+finishes (never with reduced motion). Denials and failures are counted
+separately (`⊘ 1 denied`, `✕ 1 failed`) and stay visible when folded, even on a
+narrow row. Pending approvals and questions keep their group and turn open.
 
-An expanded group shows selectable `▸ Shell date`, `▸ Read src/app.rs` and
-reasoning rows. Opening a member shows its existing detail behind a `│` rail,
-including diffs, output and raw data. Execution-only detail is labelled apart
-from model context. NSH's matching presentation is still tracked in A8.
+An expanded group lists its members as `{tree} {glyph} {Verb}  {key argument}  {summary}`
+with the duration at the right. The glyph is the verb's (`→` read, `←` edit and
+write, `$` shell, `*` search, `λ` code, `?` ask, `↳` session, `↗` web; ASCII
+`> < $ * L ? ^ ^`), replaced by the status glyph while the member runs
+(spinner), fails (`✕`), is denied (`⊘`) or waits (`◆`). Reasoning members read
+`▸ Thought for 2.1s · preview`; open, the summary is italic behind a `│` rail;
+encrypted reasoning says `encrypted, replayed to the provider` and has no
+expansion; running reasoning is `▾ Thinking… 2.4s` with its last five rows
+behind `┃`. Opening a member shows the old box: `┌ Shell cmd  raw  3.4s`, the body behind `│ `
+(`border.strong`) and `╰` on the last row. The command shows its first two rows,
+the output its last eight behind `↑ N earlier lines · enter show all`; diffs and the raw
+view keep a head and a tail. `raw` toggles the exact arguments and result.
+Execution-only detail is labelled apart from model context. NSH's matching
+presentation is still tracked in A8.
 
 #### Child card
 
@@ -780,10 +804,11 @@ token counts, and accepts the edits above.
 - **Folding.** Any turn folds to its header line: number, first line of the
   user message, tools used, duration, status. "Fold all but last" is a
   command. Folding is view state only.
-- **Turn footer** at the end of each turn: model, effort, duration, model calls,
-  tool calls, tokens (input / cached / output / reasoning), cost, and how the
-  turn ended (done, interrupted, error, step limit).
-- **Reasoning** is shown collapsed ("Thought for 12.0s"), expandable to the
+- **Turn footer** at the end of each turn: models, effort, tools, duration,
+  tokens (input / cached / output / reasoning) and cost. How the turn ended is
+  not part of it (interrupted turns add a `/continue` hint, failed turns a
+  `✕` error row above).
+- **Reasoning** is shown collapsed ("Thought for 12s · preview"), expandable to the
   summary text. Encrypted reasoning is labelled as such (it exists, it is
   replayed, it is not readable).
 - **Notices and insertions** (child finished, session directory changed,

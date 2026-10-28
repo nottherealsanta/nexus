@@ -26,6 +26,10 @@ const ACCENT: &str = "interactive.accent";
 pub struct TLine {
     pub spans: Vec<Span<'static>>,
     pub bg: Option<Style>,
+    /// A full-width band row (the user message, DESIGN_PLAN.md D04): the
+    /// background spans the whole page width and the rail `▌` is drawn at its
+    /// left edge in this style.
+    pub rail: Option<Style>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +72,12 @@ pub struct Timeline {
     pub lines: Vec<TLine>,
     pub blocks: Vec<Block>,
     pub turns: usize,
+    /// Keys of the activity groups that are live (running or waiting) now.
+    pub live_groups: Vec<String>,
 }
+
+/// Frames a finished group's glyph flashes the accent (DESIGN_PLAN.md D06).
+pub const FLASH_FRAMES: usize = 6;
 
 /// Turn facts gathered from messages and the durable diagnostics that follow
 /// them (usage, steps, model, end reason).
@@ -140,12 +149,14 @@ pub fn build(app: &App, t: &Theme, frame: usize, width: usize) -> Timeline {
         turn: None,
         denied: HashSet::new(),
         thoughts,
+        live_groups: Vec::new(),
     };
     b.run();
     Timeline {
         lines: b.out,
         blocks: b.blocks,
         turns: b.turn.map_or(0, |n| n + 1),
+        live_groups: b.live_groups,
     }
 }
 
@@ -199,6 +210,7 @@ struct Builder<'a> {
     denied: HashSet<String>,
     /// Reasoning duration per summary text.
     thoughts: HashMap<String, f64>,
+    live_groups: Vec<String>,
 }
 
 fn json_str(v: &Value) -> String {
@@ -280,6 +292,20 @@ const DETAIL_TAIL: usize = 100;
 const HIGH_HEAD: usize = 30;
 const HIGH_TAIL: usize = 20;
 
+/// Output rows kept at the end of a tool's detail (the rest folds behind
+/// `↑ N earlier lines`), and command rows kept at its start.
+const OUTPUT_TAIL: usize = 8;
+const COMMAND_ROWS: usize = 2;
+
+/// A tool's detail rows. `head` leading rows (the command) are never cut;
+/// `tail_cap` output keeps its last `OUTPUT_TAIL` rows, anything else (a diff,
+/// the raw view) keeps a head and a tail.
+struct ToolDetail {
+    rows: Vec<(String, Style)>,
+    head: usize,
+    tail_cap: bool,
+}
+
 /// Tokens estimated from a character count (about four characters each).
 fn estimate(chars: usize) -> u64 {
     (chars as u64).div_ceil(4)
@@ -295,25 +321,61 @@ fn share_of(tokens: u64, window: u64) -> String {
     }
 }
 
-fn fmt_duration(secs: f64) -> String {
-    let s = secs.max(0.0);
-    if s < 0.95 {
-        "<1 s".into()
-    } else if s < 60.0 {
-        format!("{:.0} s", s)
-    } else if s < 3600.0 {
-        format!(
-            "{:.0}m {:02}s",
-            (s / 60.0).floor(),
-            (s % 60.0).round() as u64
-        )
+/// `0.4s`, `4.2s`, `12s`, `1m 05s`, `1h 02m` (DESIGN_PLAN.md D05); never `<1 s`.
+pub(crate) fn fmt_duration(secs: f64) -> String {
+    let s = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
+    if s < 9.95 {
+        format!("{s:.1}s")
+    } else if s < 59.5 {
+        format!("{s:.0}s")
+    } else if s < 3599.5 {
+        let t = s.round() as u64;
+        format!("{}m {:02}s", t / 60, t % 60)
     } else {
-        format!(
-            "{:.0}h {:02}m",
-            (s / 3600.0).floor(),
-            ((s % 3600.0) / 60.0).floor() as u64
-        )
+        let t = s as u64;
+        format!("{}h {:02}m", t / 3600, (t % 3600) / 60)
     }
+}
+
+/// The right block of a user band: tags (`steer`, `queued`, `via voice`,
+/// `from parent`) before `#n`, then the local time.
+fn band_meta(tags: &[&str], n: usize, clock: Option<&str>, sep: &str) -> String {
+    let mut parts: Vec<String> = tags.iter().map(|t| (*t).to_owned()).collect();
+    parts.push(format!("#{}", n + 1));
+    parts.extend(clock.map(str::to_owned));
+    parts.join(sep)
+}
+
+/// Tags a user message carries. Core records none yet (steer and queue wait on
+/// Step 12a), so this is empty until it does.
+fn user_tags(_message: &crate::api::Message) -> Vec<&'static str> {
+    Vec::new()
+}
+
+/// How a turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End {
+    Running,
+    Done,
+    Error,
+    Interrupted,
+    StepLimit,
+}
+
+/// Seconds the model has been reasoning in the current step: from its first
+/// reasoning delta since the last boundary (text, tool, step or part end).
+fn live_reasoning_secs(events: &[crate::api::Event], now: f64) -> Option<f64> {
+    let mut start = None;
+    for event in events {
+        match event.kind.as_str() {
+            "reasoning_delta" => {
+                start.get_or_insert(event.time);
+            }
+            "part_done" | "text_delta" | "tool_start" | "step_start" => start = None,
+            _ => {}
+        }
+    }
+    start.map(|t: f64| (now - t).max(0.0))
 }
 
 impl Builder<'_> {
@@ -340,7 +402,11 @@ impl Builder<'_> {
     }
 
     fn line(&mut self, spans: Vec<Span<'static>>) {
-        self.out.push(TLine { spans, bg: None });
+        self.out.push(TLine {
+            spans,
+            bg: None,
+            rail: None,
+        });
     }
     fn blank(&mut self) {
         self.line(Vec::new());
@@ -696,16 +762,37 @@ impl Builder<'_> {
                     self.turn,
                     false,
                     |b| {
-                        let st = b.t.role_style("reasoning");
-                        let rail = b.t.role_rail_style("reasoning");
-                        b.line(vec![
-                            Span::styled(format!("{} ", b.t.structure("rail")), rail),
-                            Span::styled("Thinking", st),
-                        ]);
-                        for row in text::wrap(&s.reasoning, b.bw.saturating_sub(2)) {
+                        // `▾ Thinking… 2.4s`, the last 5 rows behind `┃`, and
+                        // `│ … N earlier lines` above them (D07).
+                        let muted = b.meta();
+                        let italic = muted.add_modifier(Modifier::ITALIC);
+                        let strong = b.st("border.strong", CANVAS);
+                        let weak = b.st("border.default", CANVAS);
+                        let mut head = vec![
+                            Span::styled(format!("{} ", b.t.fold(true)), muted),
+                            Span::styled(
+                                format!("Thinking{}", b.ell()),
+                                muted.add_modifier(Modifier::BOLD),
+                            ),
+                        ];
+                        if let Some(secs) =
+                            live_reasoning_secs(&view.events, crate::app::now_secs())
+                        {
+                            head.push(Span::styled(format!(" {}", fmt_duration(secs)), muted));
+                        }
+                        b.line(head);
+                        let rows = text::wrap(&s.reasoning, b.bw.saturating_sub(4).max(1));
+                        let hidden = rows.len().saturating_sub(5);
+                        if hidden > 0 {
                             b.line(vec![
-                                Span::styled(format!("{} ", b.t.structure("rail")), rail),
-                                Span::styled(row, st),
+                                Span::styled(format!("  {} ", b.t.structure("rail")), weak),
+                                Span::styled(format!("{} {hidden} earlier lines", b.ell()), muted),
+                            ]);
+                        }
+                        for row in rows.into_iter().skip(hidden) {
+                            b.line(vec![
+                                Span::styled(format!("  {} ", b.t.structure("rail_heavy")), strong),
+                                Span::styled(row, italic),
                             ]);
                         }
                     },
@@ -1072,12 +1159,14 @@ impl Builder<'_> {
         let message_key = format!("user:{}", message.id);
         let meta = turns.get(n).cloned().unwrap_or_default();
         let bg = self.t.role_style("user_text");
-        let gutter = self.st(MUTED, CANVAS);
-        let rail = self.st(MUTED, "surface.raised");
-        let use_rail = matches!(
-            self.t.opts.tier,
-            crate::theme::Tier::Ansi16 | crate::theme::Tier::Mono
-        );
+        let raised = "surface.raised";
+        let gutter = self.st(MUTED, raised);
+        // The rail is muted, and the focus colour while the band is focused.
+        let rail = if self.selected() {
+            self.st("interactive.focus", raised)
+        } else {
+            self.st(MUTED, raised)
+        };
         let big = text.len() > 4096 || text.lines().count() > 40;
         let full = self.is_open(&message_key, !big);
         let body = if folded {
@@ -1087,8 +1176,13 @@ impl Builder<'_> {
         } else {
             text.to_owned()
         };
+        let sep = self.sep();
+        let tags = user_tags(message);
+        let clock = local_clock(message.created);
         let metadata = if folded {
-            let mut parts = vec![format!("#{}", n + 1)];
+            // `#2 · 3 tools · 4.2s · ✓`: the turn summary sits in the right block.
+            let mut parts: Vec<String> = tags.iter().map(|t| (*t).to_owned()).collect();
+            parts.push(format!("#{}", n + 1));
             if meta.tools > 0 {
                 parts.push(format!(
                     "{} tool{}",
@@ -1096,7 +1190,7 @@ impl Builder<'_> {
                     if meta.tools == 1 { "" } else { "s" }
                 ));
             }
-            if meta.duration() >= 0.5 {
+            if meta.duration() >= 0.05 {
                 parts.push(fmt_duration(meta.duration()));
             }
             let status: String = self
@@ -1104,23 +1198,20 @@ impl Builder<'_> {
                 .iter()
                 .map(|s| s.content.as_ref())
                 .collect();
-            parts.push(status);
-            parts.join(&self.sep())
+            parts.extend(status.split(' ').next().map(str::to_owned));
+            parts.join(&sep)
         } else {
-            local_clock(message.created).map_or_else(
-                || format!("#{}", n + 1),
-                |clock| format!("#{}{}{}", n + 1, self.sep(), clock),
-            )
+            band_meta(&tags, n, clock.as_deref(), &sep)
         };
         let marker = self.t.fold(!folded).to_owned();
-        let fallback_rail = self.t.structure("focus_bar").to_owned();
         self.block(key, BlockKind::Turn, Some(n), true, |b| {
-            let pad = |prefix: String| TLine {
-                spans: vec![Span::styled(prefix, gutter)],
+            let pad = || TLine {
+                spans: vec![Span::styled(" ", bg)],
                 bg: Some(bg),
+                rail: Some(rail),
             };
             if !folded {
-                b.out.push(pad(marker.clone()));
+                b.out.push(pad());
             }
             let available = b.bw.saturating_sub(3);
             let meta_width = width(&metadata);
@@ -1133,36 +1224,30 @@ impl Builder<'_> {
             if big && !full && !folded {
                 rows.truncate(6);
             }
+            if rows.is_empty() {
+                rows.push(String::new());
+            }
             for (i, row) in rows.iter().enumerate() {
-                let prefix = if folded {
-                    marker.as_str()
-                } else if use_rail {
-                    fallback_rail.as_str()
-                } else {
-                    " "
-                };
+                // The fold marker sits inside the band; the text starts 2 cells after it.
+                let mark = if i == 0 { marker.as_str() } else { " " };
                 let mut spans = vec![
-                    Span::styled(
-                        prefix.to_owned(),
-                        if !folded && use_rail { rail } else { gutter },
-                    ),
-                    Span::styled(format!("  {row}"), bg),
+                    Span::styled(" ", bg),
+                    Span::styled(mark.to_owned(), gutter),
+                    Span::styled(format!(" {row}"), bg),
                 ];
                 if i == 0 && meta_width + 3 < b.bw {
                     let padding = b.bw.saturating_sub(3 + width(row) + meta_width).max(1);
                     spans.push(Span::styled(" ".repeat(padding), bg));
-                    spans.push(Span::styled(
-                        metadata.clone(),
-                        b.st(MUTED, "surface.raised"),
-                    ));
+                    spans.push(Span::styled(metadata.clone(), b.st(MUTED, raised)));
                 }
                 b.out.push(TLine {
                     spans,
                     bg: Some(bg),
+                    rail: Some(rail),
                 });
             }
             if !folded {
-                b.out.push(pad(" ".into()));
+                b.out.push(pad());
             }
         });
         if let Some(block) = self.blocks.last_mut() {
@@ -1187,42 +1272,48 @@ impl Builder<'_> {
         }
     }
 
-    fn turn_status(&self, meta: &TurnMeta) -> Vec<Span<'static>> {
+    fn turn_end(&self, meta: &TurnMeta) -> End {
         if meta.running {
-            return vec![
+            return End::Running;
+        }
+        if let Some((kind, _)) = &meta.error {
+            if kind != "interrupted" {
+                return End::Error;
+            }
+        }
+        match meta.stop.as_deref() {
+            Some("max_steps") => End::StepLimit,
+            Some(_) if meta.error.is_none() => End::Done,
+            _ if meta.end_event || meta.followed => End::Done,
+            _ => End::Interrupted,
+        }
+    }
+
+    /// The end status of a turn as glyph and word. Only the folded user band
+    /// uses it (as the glyph); the footer never says how the turn ended (D05).
+    fn turn_status(&self, meta: &TurnMeta) -> Vec<Span<'static>> {
+        let status = |name: &str| {
+            let (g, l, tok) = self.t.status(name);
+            vec![Span::styled(format!("{g} {l}"), self.status_style(tok))]
+        };
+        match self.turn_end(meta) {
+            End::Running => vec![
                 Span::styled(
                     format!("{} ", self.t.spinner(self.frame / 2)),
                     self.st(PRIMARY, CANVAS),
                 ),
                 Span::styled("running".to_string(), self.primary()),
-            ];
-        }
-        if let Some((kind, _)) = &meta.error {
-            if kind != "interrupted" {
-                let (g, l, tok) = self.t.status("error");
-                return vec![Span::styled(format!("{g} {l}"), self.status_style(tok))];
-            }
-        }
-        match meta.stop.as_deref() {
-            Some("max_steps") => {
+            ],
+            End::Error => status("error"),
+            End::StepLimit => {
                 let (g, _, tok) = self.t.status("interrupted");
                 vec![Span::styled(
                     format!("{g} step limit"),
                     self.status_style(tok),
                 )]
             }
-            Some(_) if meta.error.is_none() => {
-                let (g, l, tok) = self.t.status("done");
-                vec![Span::styled(format!("{g} {l}"), self.status_style(tok))]
-            }
-            _ if meta.end_event || meta.followed => {
-                let (g, l, tok) = self.t.status("done");
-                vec![Span::styled(format!("{g} {l}"), self.status_style(tok))]
-            }
-            _ => {
-                let (g, l, tok) = self.t.status("interrupted");
-                vec![Span::styled(format!("{g} {l}"), self.status_style(tok))]
-            }
+            End::Done => status("done"),
+            End::Interrupted => status("interrupted"),
         }
     }
 
@@ -1241,8 +1332,16 @@ impl Builder<'_> {
         )))
     }
 
+    /// The turn footer (DESIGN_PLAN.md D05): right-aligned
+    /// `▪ Agent · models · effort · tools · duration · tokens · cost`, with no
+    /// end status. An interrupted turn adds the `/continue` hint after it, a
+    /// failed turn puts the first line of its error on the row above.
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
         let Some(meta) = turns.get(n) else { return };
+        let end = self.turn_end(meta);
+        if end == End::Running {
+            return;
+        }
         let session = self.app.viewed();
         let mut bits: Vec<String> = Vec::new();
         if !meta.models.is_empty() {
@@ -1252,7 +1351,14 @@ impl Builder<'_> {
                     .filter(|n| !n.is_empty())
                     .map_or_else(|| used.clone(), str::to_owned)
             };
-            bits.push(meta.models.iter().map(name).collect::<Vec<_>>().join(" / "));
+            let arrow = format!(" {} ", self.t.structure("arrow"));
+            bits.push(
+                meta.models
+                    .iter()
+                    .map(name)
+                    .collect::<Vec<_>>()
+                    .join(&arrow),
+            );
         } else if let Some(m) = session.and_then(|s| s.model.clone()) {
             let short = m.rsplit('/').next().unwrap_or(&m).to_owned();
             if m != "default" && !m.is_empty() {
@@ -1270,14 +1376,6 @@ impl Builder<'_> {
                 bits.push(effort);
             }
         }
-        bits.push(fmt_duration(meta.duration()));
-        if meta.steps > 0 {
-            bits.push(format!(
-                "{} call{}",
-                meta.steps,
-                if meta.steps == 1 { "" } else { "s" }
-            ));
-        }
         if meta.tools > 0 {
             bits.push(format!(
                 "{} tool{}",
@@ -1285,22 +1383,27 @@ impl Builder<'_> {
                 if meta.tools == 1 { "" } else { "s" }
             ));
         }
+        bits.push(fmt_duration(meta.duration()));
         if meta.has_usage() {
-            let mut tok = format!("{} in", fmt_count(meta.input));
+            bits.push(format!("{} in", fmt_count(meta.input)));
             if meta.cached > 0 {
-                tok.push_str(&format!(" {} cached", fmt_count(meta.cached)));
+                bits.push(format!("{} cached", fmt_count(meta.cached)));
             }
-            tok.push_str(&format!(" {} out", fmt_count(meta.output)));
+            bits.push(format!("{} out", fmt_count(meta.output)));
             if meta.reasoning > 0 {
-                tok.push_str(&format!(" {} reasoning", fmt_count(meta.reasoning)));
+                bits.push(format!("{} reasoning", fmt_count(meta.reasoning)));
             }
-            bits.push(tok);
             if let Some(cost) = self.turn_cost(meta) {
                 bits.push(cost);
             }
         }
-        // Right-aligned like old Nexus: `▪ Build · GPT-6 Luna · 3.3s`, then the
-        // detail and the end status, which is never truncated.
+        if matches!(end, End::Interrupted | End::StepLimit) {
+            bits.push(if self.app.term("composer.empty").unwrap_or(false) {
+                "enter continue".to_owned()
+            } else {
+                "/continue".to_owned()
+            });
+        }
         let agent = session.map(|s| s.agent.clone()).unwrap_or_default();
         let label: String = agent
             .chars()
@@ -1308,56 +1411,62 @@ impl Builder<'_> {
             .map(|c| c.to_uppercase().collect::<String>() + &agent[c.len_utf8()..])
             .unwrap_or_default();
         let glyph = if self.t.opts.ascii { "*" } else { "\u{25aa}" };
-        let lead = if label.is_empty() {
-            String::new()
-        } else {
-            format!("{glyph} {label}")
-        };
-        let text = bits.join(&self.sep());
-        let status = self.turn_status(meta);
-        let sw: usize = status.iter().map(|s| width(s.content.as_ref())).sum();
-        let lead_w = if lead.is_empty() {
-            0
-        } else {
-            width(&lead) + width(&self.sep())
-        };
-        let room = self.bw.saturating_sub(lead_w + sw + 2).max(8);
-        let mut rows = text::wrap(&text, room);
-        if rows.is_empty() {
-            rows.push(String::new());
+        let sep = self.sep();
+        let sep_w = width(&sep);
+
+        // Break the segments from the left onto extra right-aligned rows.
+        let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+        let mut used = 0usize;
+        if !label.is_empty() {
+            rows[0].push(Span::styled(
+                format!("{glyph} "),
+                self.st(MUTED, CANVAS).patch(self.t.agent_style(&agent)),
+            ));
+            rows[0].push(Span::styled(
+                label.clone(),
+                self.primary().add_modifier(Modifier::BOLD),
+            ));
+            used = width(glyph) + 1 + width(&label);
         }
-        let count = rows.len();
-        for (i, row) in rows.iter().enumerate() {
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            let mut used = 0;
-            if i == 0 && !lead.is_empty() {
-                let style = self.t.agent_style(&agent);
-                spans.push(Span::styled(
-                    format!("{glyph} "),
-                    self.st(MUTED, CANVAS).patch(style),
-                ));
-                spans.push(Span::styled(
-                    label.clone(),
-                    self.primary().add_modifier(Modifier::BOLD),
-                ));
-                used += width(&lead);
-                if !row.is_empty() {
-                    spans.push(Span::styled(self.sep(), self.meta()));
-                    used += width(&self.sep());
-                }
+        for bit in bits {
+            let w = width(&bit);
+            let row = rows.last_mut().expect("a row");
+            if row.is_empty() {
+                row.push(Span::styled(bit, self.meta()));
+                used = w;
+            } else if used + sep_w + w <= self.bw {
+                row.push(Span::styled(sep.clone(), self.meta()));
+                row.push(Span::styled(bit, self.meta()));
+                used += sep_w + w;
+            } else {
+                rows.push(vec![Span::styled(bit, self.meta())]);
+                used = w;
             }
-            spans.push(Span::styled(row.clone(), self.meta()));
-            used += width(row);
-            if i + 1 == count {
-                if used > 0 {
-                    spans.push(Span::raw(" ".to_owned()));
-                    used += 1;
-                }
-                spans.extend(status.clone());
-                used += sw;
-            }
-            let pad = self.bw.saturating_sub(used + 1);
-            spans.insert(0, Span::raw(" ".repeat(pad)));
+        }
+        if end == End::Error {
+            let msg = meta
+                .error
+                .as_ref()
+                .map(|(kind, message)| {
+                    let line = first_line(message);
+                    if line.is_empty() {
+                        kind.clone()
+                    } else {
+                        line
+                    }
+                })
+                .unwrap_or_default();
+            let text = format!("{} {msg}", self.t.status("error").0);
+            let text = truncate(&text, self.bw, self.ell());
+            let pad = self.bw.saturating_sub(width(&text));
+            self.line(vec![
+                Span::raw(" ".repeat(pad)),
+                Span::styled(text, self.status_style("status.error")),
+            ]);
+        }
+        for mut spans in rows {
+            let used: usize = spans.iter().map(|s| width(s.content.as_ref())).sum();
+            spans.insert(0, Span::raw(" ".repeat(self.bw.saturating_sub(used))));
             self.line(spans);
         }
     }
@@ -1386,6 +1495,7 @@ impl Builder<'_> {
                     Span::styled(format!(" {label}"), st.add_modifier(Modifier::BOLD)),
                 ],
                 bg: Some(bgst),
+                rail: None,
             });
             for row in text::wrap(text, b.bw.saturating_sub(2)) {
                 b.out.push(TLine {
@@ -1394,6 +1504,7 @@ impl Builder<'_> {
                         Span::styled(format!(" {row}"), st),
                     ],
                     bg: Some(bgst),
+                    rail: None,
                 });
             }
         });
@@ -1438,15 +1549,32 @@ impl Builder<'_> {
         if activity.is_empty() {
             return;
         }
+        // A lone thought is its own `▸ Thought for 2.1s · preview` row (D07).
+        if let [Activity::Thought(m, i, p)] = activity.as_slice() {
+            let secs = self.thoughts.get(&json_str(&p["summary"])).copied();
+            self.reasoning_block(m, *i, p, None, secs);
+            activity.clear();
+            return;
+        }
         let first = match &activity[0] {
             Activity::Thought(m, i, _) => format!("reason:{}:{i}", m.id),
             Activity::Tool { id, .. } => format!("tool:{id}"),
         };
         let key = format!("group:{first}");
+        let flash = !self.t.opts.reduced_motion
+            && self
+                .app
+                .ui
+                .group_flash
+                .get(&key)
+                .is_some_and(|at| self.frame.wrapping_sub(*at) < FLASH_FRAMES);
         let has_wait = activity
             .iter()
             .any(|a| matches!(a, Activity::Tool { id, .. } if waiting.contains_key(id)));
         let running = has_wait || (busy && activity.iter().any(|a| matches!(a, Activity::Tool { id, .. } if !results.contains_key(id) && !traces.get(id).is_some_and(|t| t.end.is_some()))));
+        if running {
+            self.live_groups.push(key.clone());
+        }
         let default_open = running || has_wait || self.app.ui.detail != crate::ui::Detail::Low;
         let open = has_wait || self.is_open(&key, default_open);
         let tree_mode = running
@@ -1468,11 +1596,14 @@ impl Builder<'_> {
                 .unwrap_or(false);
         let mut starts = Vec::new();
         let mut ends = Vec::new();
+        // Verb labels in first-seen order, with their counts.
+        let mut order: Vec<&str> = Vec::new();
         let mut counts = std::collections::BTreeMap::<&str, usize>::new();
         let mut unknown = std::collections::BTreeSet::<&str>::new();
         let mut thought_secs = 0.0_f64;
         let mut failed = 0;
         let mut denied_count = 0;
+        let (mut added, mut removed, mut edits) = (0usize, 0usize, false);
         for item in activity.iter() {
             let label = match item {
                 Activity::Thought(_, _, p) => {
@@ -1481,7 +1612,7 @@ impl Builder<'_> {
                     }
                     "Thought"
                 }
-                Activity::Tool { id, name, .. } => {
+                Activity::Tool { id, name, args } => {
                     if let Some(trace) = traces.get(id) {
                         if let Some(start) = trace.start {
                             starts.push(start);
@@ -1490,12 +1621,18 @@ impl Builder<'_> {
                             ends.push(end);
                         }
                     }
+                    let failure = results.get(id).is_some_and(|d| d.is_error)
+                        || traces.get(id).is_some_and(|t| t.error.is_some());
                     if self.denied.contains(id) {
                         denied_count += 1;
-                    } else if results.get(id).is_some_and(|d| d.is_error)
-                        || traces.get(id).is_some_and(|t| t.error.is_some())
-                    {
+                    } else if failure {
                         failed += 1;
+                    } else if matches!(name.as_str(), "edit" | "patch") {
+                        if let Some((a, r)) = diff_counts(args) {
+                            added += a;
+                            removed += r;
+                            edits = true;
+                        }
                     }
                     match name.as_str() {
                         "bash" => "Ran command",
@@ -1514,17 +1651,21 @@ impl Builder<'_> {
                     }
                 }
             };
+            if !counts.contains_key(label) {
+                order.push(label);
+            }
             *counts.entry(label).or_default() += 1;
         }
         let summary = if running {
             "Working".to_owned()
         } else {
-            counts
+            order
                 .iter()
-                .map(|(label, count)| {
+                .map(|label| {
+                    let count = counts[label];
                     if *label == "Thought" {
                         return if thought_secs > 0.0 {
-                            format!("Thought for {thought_secs:.1}s")
+                            format!("Thought for {}", fmt_duration(thought_secs))
                         } else {
                             "Thought".to_owned()
                         };
@@ -1533,15 +1674,27 @@ impl Builder<'_> {
                         return format!("Used {}", unknown.iter().next().unwrap());
                     }
                     let (verb, noun) = label.rsplit_once(' ').unwrap_or((label, ""));
-                    format!(
-                        "{verb} {count} {noun}{}",
-                        if *count == 1 { "" } else { "s" }
-                    )
+                    format!("{verb} {count} {noun}{}", if count == 1 { "" } else { "s" })
+                })
+                .enumerate()
+                // `Read 2 files, ran 1 command`: only the first verb is capitalised.
+                .map(|(i, piece)| {
+                    let mut chars = piece.chars();
+                    match chars.next() {
+                        Some(c) if i > 0 => c.to_lowercase().collect::<String>() + chars.as_str(),
+                        _ => piece,
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let duration = if !running && !starts.is_empty() && !ends.is_empty() {
+        let duration = if running {
+            starts
+                .iter()
+                .copied()
+                .reduce(f64::min)
+                .map(|start| (crate::app::now_secs() - start).max(0.0))
+        } else if !starts.is_empty() && !ends.is_empty() {
             let start = starts.into_iter().fold(f64::INFINITY, f64::min);
             let end = ends.into_iter().fold(f64::NEG_INFINITY, f64::max);
             (end >= start).then_some(end - start)
@@ -1554,44 +1707,74 @@ impl Builder<'_> {
             .map(|s| s.agent.clone())
             .unwrap_or_default();
         self.block(key, BlockKind::Group, self.turn, !has_wait, |b| {
-            let mut spans = vec![Span::styled(format!("{} ", b.t.fold(open)), b.meta())];
+            let marker = Span::styled(
+                format!("{} ", b.t.fold(open)),
+                if flash {
+                    b.st(ACCENT, CANVAS).add_modifier(Modifier::BOLD)
+                } else {
+                    b.meta()
+                },
+            );
+            // Edit counts and failures stay whole: a narrow row shortens the
+            // summary, never the `✕ 1 failed` that must be visible when folded.
+            let mut tail: Vec<Span<'static>> = Vec::new();
+            if edits {
+                tail.push(Span::styled(
+                    format!("  +{added}"),
+                    b.st("diff.add", CANVAS),
+                ));
+                tail.push(Span::styled(
+                    format!(
+                        " {}{removed}",
+                        if b.t.opts.ascii { "-" } else { "\u{2212}" }
+                    ),
+                    b.st("diff.del", CANVAS),
+                ));
+            }
+            if denied_count > 0 {
+                tail.push(Span::styled(
+                    format!("{}{} denied", b.sep(), denied_count),
+                    b.meta(),
+                ));
+            }
+            if failed > 0 {
+                tail.push(Span::styled(
+                    format!("{}{} {failed} failed", b.sep(), b.t.status("error").0),
+                    b.st("status.error", CANVAS),
+                ));
+            }
+            let right = duration
+                .map(|d| vec![Span::styled(fmt_duration(d), b.meta())])
+                .unwrap_or_default();
+            let fixed: usize = [&marker]
+                .into_iter()
+                .chain(tail.iter())
+                .chain(right.iter())
+                .map(|s| width(s.content.as_ref()))
+                .sum();
+            let room = b.bw.saturating_sub(fixed + 1);
+            let shown = if width(&summary) > room && !running {
+                truncate(&summary, room.max(8), b.ell())
+            } else {
+                summary.clone()
+            };
+            let mut left = vec![marker];
             if running && !b.t.opts.reduced_motion && !b.t.mono() {
-                spans.extend(crate::theme::shimmer(
-                    &summary,
+                left.extend(crate::theme::shimmer(
+                    &shown,
                     b.frame,
                     true,
                     b.meta(),
                     b.t.agent_style(&agent),
                 ));
             } else {
-                spans.push(Span::styled(
-                    summary.clone(),
+                left.push(Span::styled(
+                    shown,
                     if running { b.primary() } else { b.meta() },
                 ));
             }
-            if let Some(duration) = duration {
-                spans.push(Span::styled(
-                    format!("{}{:0.1}s", b.sep(), duration),
-                    b.meta(),
-                ));
-            }
-            if denied_count > 0 {
-                spans.push(Span::styled(
-                    format!("{}{} denied", b.sep(), denied_count),
-                    b.meta(),
-                ));
-            }
-            if failed > 0 {
-                spans.push(Span::styled(
-                    format!(
-                        " {} {} {failed} failed",
-                        b.t.structure("separator"),
-                        b.t.status("error").0
-                    ),
-                    b.st("status.error", CANVAS),
-                ));
-            }
-            b.line(spans);
+            left.extend(tail);
+            b.row(left, right);
         });
         if let Some(block) = self.blocks.last_mut() {
             block.default_open = Some(default_open);
@@ -1606,12 +1789,13 @@ impl Builder<'_> {
             };
             if skipped > 0 {
                 self.line(vec![Span::styled(
-                    format!("{} {skipped} earlier", self.ell()),
+                    format!("  {} {skipped} earlier", self.ell()),
                     self.meta(),
                 )]);
             }
+            let _ = tree_mode;
             for (index, item) in activity.iter().enumerate().skip(skipped) {
-                let tree = tree_mode.then_some(index + 1 == activity.len());
+                let tree = Some(index + 1 == activity.len());
                 match item {
                     Activity::Thought(m, i, p) => {
                         let secs = self.thoughts.get(&json_str(&p["summary"])).copied();
@@ -1636,6 +1820,8 @@ impl Builder<'_> {
         activity.clear();
     }
 
+    /// `▸ Thought for 2.1s · preview` (D07). Open: the summary in italics
+    /// behind a `│` rail. Encrypted: labelled, with no expansion.
     fn reasoning_block(
         &mut self,
         m: &crate::api::Message,
@@ -1647,30 +1833,56 @@ impl Builder<'_> {
         let key = format!("reason:{}:{pi}", m.id);
         let summary = json_str(&p["summary"]);
         let encrypted = summary.trim().is_empty();
-        let open = self.is_open(&key, false);
-        let st = self.t.role_style("reasoning");
-        let rail = self.t.role_rail_style("reasoning");
-        let razor = self.t.structure("rail").to_owned();
+        let open = !encrypted && self.is_open(&key, false);
         let label = self.t.role("reasoning").label.clone();
-        self.block(key, BlockKind::Reasoning, self.turn, true, |b| {
+        let muted = self.meta();
+        let italic = muted.add_modifier(Modifier::ITALIC);
+        let tree_style = self.st("border.default", CANVAS);
+        let rail = self.st("border.default", CANVAS);
+        let vbar = self.t.structure("rail").to_owned();
+        self.block(key, BlockKind::Reasoning, self.turn, !encrypted, |b| {
             let prefix = match tree {
-                Some(true) => b.t.structure("tree_end"),
-                Some(false) => b.t.structure("tree_mid"),
-                None => b.t.fold(open),
+                Some(true) => format!("  {} ", b.t.structure("tree_end")),
+                Some(false) => format!("  {} ", b.t.structure("tree_mid")),
+                None => format!("{} ", b.t.fold(open)),
             };
-            let head = if encrypted {
-                format!("{label} · encrypted (replayed, not readable)")
-            } else if let Some(seconds) = seconds {
-                format!("{label} for {seconds:.1}s")
-            } else {
-                label.clone()
-            };
-            b.line(vec![Span::styled(format!("{prefix} {head}"), st)]);
-            if open && !encrypted {
-                for row in text::wrap(&summary, b.bw.saturating_sub(2)) {
+            let mut head = vec![
+                Span::styled(
+                    prefix.clone(),
+                    if tree.is_some() { tree_style } else { muted },
+                ),
+                Span::styled(label.clone(), muted.add_modifier(Modifier::BOLD)),
+            ];
+            if let Some(seconds) = seconds {
+                head.push(Span::styled(
+                    format!(" for {}", fmt_duration(seconds)),
+                    muted,
+                ));
+            }
+            if !open {
+                let preview = if encrypted {
+                    "encrypted, replayed to the provider".to_owned()
+                } else {
+                    first_line(&summary)
+                };
+                if !preview.is_empty() {
+                    let used: usize = head.iter().map(|s| width(s.content.as_ref())).sum();
+                    let sep = b.sep();
+                    let room = b.bw.saturating_sub(used + width(&sep));
+                    if room > 3 {
+                        head.push(Span::styled(sep, muted));
+                        head.push(Span::styled(truncate(&preview, room, b.ell()), italic));
+                    }
+                }
+            }
+            b.line(head);
+            if open {
+                let indent = if tree.is_some() { "    " } else { "  " };
+                let room = b.bw.saturating_sub(indent.len() + 2).max(1);
+                for row in text::wrap(&summary, room) {
                     b.line(vec![
-                        Span::styled(format!("{razor} "), rail),
-                        Span::styled(row, st),
+                        Span::styled(format!("{indent}{vbar} "), rail),
+                        Span::styled(row, italic),
                     ]);
                 }
             }
@@ -1700,50 +1912,85 @@ impl Builder<'_> {
         let denied = self.denied.contains(call_id);
         let failed = !denied
             && (done.is_some_and(|d| d.is_error) || trace.is_some_and(|t| t.error.is_some()));
+        let busy = self.app.viewed_id().is_some_and(|id| self.app.is_busy(id));
+        let running = busy && done.is_none() && !trace.is_some_and(|t| t.end.is_some());
         let duration = trace.and_then(|t| {
             let start = t.start?;
-            let end = t.end.or_else(|| {
-                self.app
-                    .viewed_id()
-                    .filter(|id| self.app.is_busy(id))
-                    .map(|_| crate::app::now_secs())
-            })?;
+            let end = t.end.or_else(|| busy.then(crate::app::now_secs))?;
             Some((end - start).max(0.0))
         });
-        let (arg, _) = tool_summary(name, args, done);
+        let (arg, summary) = tool_summary(name, args, done);
         let exit_code = (name == "bash")
             .then(|| done.and_then(|d| bash_exit_code(&d.output)))
             .flatten()
             .filter(|code| *code != 0);
         let mut detail = self.tool_detail(name, args, done, trace, raw);
-        // Head and tail stay visible; the middle says how much it hides and
-        // `o` (or "show all") brings it back. Clipping here is the UI's, never
-        // the model's.
+        // Output keeps its command rows and its last rows; a diff or the raw
+        // view keeps a head and a tail. The marker says how much it hides and
+        // `o` (or Enter on the open row) brings it back. Clipping here is the
+        // UI's, never the model's.
         let all = self.is_open(&format!("{key}:all"), false);
-        // High detail opens every tool, so it keeps each one short.
-        let (head, tail_rows) = if self.app.ui.detail == crate::ui::Detail::High {
-            (HIGH_HEAD, HIGH_TAIL)
+        let up = if self.t.opts.ascii { "^" } else { "\u{2191}" };
+        let clipped;
+        if detail.tail_cap {
+            let out_rows = detail.rows.len() - detail.head;
+            clipped = out_rows > OUTPUT_TAIL + 2;
+            if clipped && !all {
+                let hidden = out_rows - OUTPUT_TAIL;
+                let tail = detail.rows.split_off(detail.rows.len() - OUTPUT_TAIL);
+                detail.rows.truncate(detail.head);
+                detail.rows.push((
+                    format!("{up} {hidden} earlier lines · enter show all"),
+                    self.meta(),
+                ));
+                detail.rows.extend(tail);
+            }
         } else {
-            (DETAIL_HEAD, DETAIL_TAIL)
-        };
-        let clipped = detail.len() > head + tail_rows + 20;
-        if clipped && !all {
-            let hidden = detail.len() - head - tail_rows;
-            let tail = detail.split_off(detail.len() - tail_rows);
-            detail.truncate(head);
-            detail.push((
-                format!("{} {hidden} lines hidden · show all (o)", self.ell()),
-                self.st(ACCENT, CANVAS),
-            ));
-            detail.extend(tail);
+            // High detail opens every tool, so it keeps each one short.
+            let (head, tail_rows) = if self.app.ui.detail == crate::ui::Detail::High {
+                (HIGH_HEAD, HIGH_TAIL)
+            } else {
+                (DETAIL_HEAD, DETAIL_TAIL)
+            };
+            clipped = detail.rows.len() > head + tail_rows + 20;
+            if clipped && !all {
+                let hidden = detail.rows.len() - head - tail_rows;
+                let tail = detail.rows.split_off(detail.rows.len() - tail_rows);
+                detail.rows.truncate(head);
+                detail.rows.push((
+                    format!("{} {hidden} lines hidden · show all (o)", self.ell()),
+                    self.st(ACCENT, CANVAS),
+                ));
+                detail.rows.extend(tail);
+            }
         }
+        if clipped && all {
+            let n = detail.rows.len() - detail.head;
+            detail.rows.insert(
+                detail.head,
+                (
+                    format!("{up} showing all {n} lines · o show less"),
+                    self.meta(),
+                ),
+            );
+        }
+        let rows = detail.rows;
         let key = key.to_owned();
         let name = name.to_owned();
+        let denied_word = self.t.status("denied").0.to_owned();
         self.block(key.clone(), BlockKind::Tool, turn, true, |b| {
-            let prefix = match tree {
-                Some(true) => b.t.structure("tree_end"),
-                Some(false) => b.t.structure("tree_mid"),
-                None => b.t.fold(open),
+            let strong = b.st("border.strong", CANVAS);
+            let ascii = b.t.opts.ascii;
+            let box_open = open && !rows.is_empty();
+            let (prefix, prefix_style) = if box_open {
+                (if ascii { "+" } else { "\u{250c}" }.to_owned(), strong)
+            } else {
+                let glyph = match tree {
+                    Some(true) => b.t.structure("tree_end"),
+                    Some(false) => b.t.structure("tree_mid"),
+                    None => b.t.fold(open),
+                };
+                (glyph.to_owned(), b.st("border.default", CANVAS))
             };
             let verb = match name.as_str() {
                 "bash" => "Shell",
@@ -1756,68 +2003,111 @@ impl Builder<'_> {
                 "web_fetch" => "Fetch",
                 _ => &name,
             };
-            let mut right = Vec::new();
-            if is_waiting {
-                right.push(Span::styled(
-                    format!("{} waiting", b.t.status("waiting").0),
+            // The status glyph replaces the verb glyph for running, error,
+            // denied and waiting.
+            let (glyph, glyph_style) = if is_waiting {
+                (
+                    b.t.status("waiting").0.to_owned(),
                     b.st("interactive.accent", CANVAS),
-                ));
+                )
             } else if denied {
-                right.push(Span::styled(format!("{}denied", b.sep()), b.meta()));
+                (denied_word.clone(), b.st("status.error", CANVAS))
             } else if failed {
-                right.push(Span::styled(format!("{}failed", b.sep()), b.meta()));
+                (
+                    b.t.status("error").0.to_owned(),
+                    b.st("status.error", CANVAS),
+                )
+            } else if running {
+                (b.t.spinner(b.frame / 2).to_owned(), b.st(PRIMARY, CANVAS))
+            } else {
+                (crate::paint::verb_glyph(&name, ascii).to_owned(), b.meta())
+            };
+            let mut left = vec![
+                Span::styled(format!("  {prefix} "), prefix_style),
+                Span::styled(format!("{glyph} "), glyph_style),
+                Span::styled(verb.to_owned(), b.primary().add_modifier(Modifier::BOLD)),
+            ];
+            if !arg.is_empty() {
+                left.push(Span::styled(format!("  {arg}"), b.secondary()));
+            }
+            if failed {
+                if let Some(line) = done
+                    .map(|d| first_line(&d.output))
+                    .filter(|l| !l.is_empty())
+                {
+                    left.push(Span::styled(
+                        format!("  {line}"),
+                        b.st("status.error", CANVAS),
+                    ));
+                }
+            } else if let Some(parts) = summary.filter(|_| !is_waiting && !denied && name != "bash")
+            {
+                for (i, (text, _)) in parts.iter().enumerate() {
+                    let token = match (name.as_str(), i) {
+                        ("edit" | "patch", 0) => "diff.add",
+                        ("edit" | "patch", _) => "diff.del",
+                        ("write", _) => "diff.add",
+                        _ => MUTED,
+                    };
+                    let text = if ascii {
+                        text.replace('\u{2212}', "-")
+                    } else {
+                        text.clone()
+                    };
+                    left.push(Span::styled(
+                        format!("{}{text}", if i == 0 { "  " } else { "" }),
+                        b.st(token, CANVAS),
+                    ));
+                }
+            }
+            let mut right = Vec::new();
+            if open {
+                right.push(Span::styled(
+                    "raw",
+                    if raw {
+                        b.st(ACCENT, CANVAS).add_modifier(Modifier::BOLD)
+                    } else {
+                        b.meta()
+                    },
+                ));
+            }
+            let mut tail = Vec::new();
+            if is_waiting {
+                tail.push(Span::styled("waiting", b.st("interactive.accent", CANVAS)));
+            } else if denied {
+                tail.push(Span::styled("denied", b.st("status.error", CANVAS)));
             } else if let Some(duration) = duration {
-                right.push(Span::styled(format!("{duration:.1}s"), b.meta()));
+                tail.push(Span::styled(fmt_duration(duration), b.meta()));
             }
             if let Some(code) = exit_code {
-                if !right.is_empty() {
-                    right.insert(0, Span::styled(b.sep(), b.meta()));
+                if !tail.is_empty() {
+                    tail.insert(0, Span::styled(b.sep(), b.meta()));
                 }
-                right.insert(
+                tail.insert(
                     0,
                     Span::styled(format!("exit {code}"), b.st("status.error", CANVAS)),
                 );
             }
-            let right_width: usize = right.iter().map(|s| width(s.content.as_ref())).sum();
-            let label = if arg.is_empty() {
-                format!("{prefix} {verb}")
-            } else {
-                format!("{prefix} {verb} {arg}")
-            };
-            let room =
-                b.bw.saturating_sub(right_width + usize::from(!right.is_empty()));
-            b.row(
-                vec![Span::styled(truncate(&label, room, b.ell()), b.meta())],
-                right,
-            );
-            if open && !detail.is_empty() {
-                for (line, style) in detail.clone() {
+            if !right.is_empty() && !tail.is_empty() {
+                right.push(Span::raw("  "));
+            }
+            right.extend(tail);
+            b.row(left, right);
+            if box_open {
+                let vbar = b.t.structure("rail").to_owned();
+                let corner = if ascii {
+                    "`".to_owned()
+                } else {
+                    "\u{2570}".to_owned()
+                };
+                let last = rows.len() - 1;
+                for (i, (line, style)) in rows.iter().enumerate() {
+                    let rail = if i == last { &corner } else { &vbar };
                     b.line(vec![
-                        Span::styled(
-                            format!("  {} ", b.t.structure("rail")),
-                            b.st("border.default", CANVAS),
-                        ),
-                        Span::styled(line, style),
+                        Span::styled(format!("  {rail} "), strong),
+                        Span::styled(line.clone(), *style),
                     ]);
                 }
-                b.line(vec![
-                    Span::styled("   ", b.meta()),
-                    Span::styled(
-                        if raw { "[raw] " } else { "raw " },
-                        if raw { b.st(ACCENT, CANVAS) } else { b.meta() },
-                    ),
-                    Span::styled("r", b.meta()),
-                    Span::styled(
-                        if clipped && all {
-                            format!("{}show less o", b.sep())
-                        } else if clipped {
-                            format!("{}show all o", b.sep())
-                        } else {
-                            String::new()
-                        },
-                        b.meta(),
-                    ),
-                ]);
             }
         });
         if clipped {
@@ -1834,8 +2124,10 @@ impl Builder<'_> {
         done: Option<&Done>,
         trace: Option<&ToolTrace>,
         raw: bool,
-    ) -> Vec<(String, Style)> {
+    ) -> ToolDetail {
         let mut out = Vec::new();
+        let mut head = 0;
+        let mut tail_cap = false;
         if raw {
             for line in args.lines() {
                 out.push((line.to_owned(), self.secondary()));
@@ -1852,7 +2144,11 @@ impl Builder<'_> {
                     ));
                 }
             }
-            return out;
+            return ToolDetail {
+                rows: out,
+                head,
+                tail_cap,
+            };
         }
         let a = arg_json(args).unwrap_or(Value::Null);
         match name {
@@ -1901,6 +2197,26 @@ impl Builder<'_> {
                 }
             }
             _ => {
+                tail_cap = true;
+                // A command shows its first two rows (`$ cmd`, then a
+                // continuation) ahead of its output.
+                let command = match name {
+                    "bash" => a["command"].as_str(),
+                    "code" => a["code"].as_str(),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    let lines: Vec<&str> = command.lines().collect();
+                    for (i, line) in lines.iter().take(COMMAND_ROWS).enumerate() {
+                        let more = i + 1 == COMMAND_ROWS && lines.len() > COMMAND_ROWS;
+                        let lead = if i == 0 && name == "bash" { "$ " } else { "  " };
+                        out.push((
+                            format!("{lead}{line}{}", if more { " …" } else { "" }),
+                            self.primary(),
+                        ));
+                    }
+                    head = out.len();
+                }
                 if let Some(d) = done {
                     for line in d.output.lines() {
                         out.push((
@@ -1919,7 +2235,11 @@ impl Builder<'_> {
                 }
             }
         }
-        out
+        ToolDetail {
+            rows: out,
+            head,
+            tail_cap,
+        }
     }
 
     fn child_card(&mut self, call_id: &str, args: &str, results: &HashMap<String, Done>) {
@@ -2032,6 +2352,7 @@ impl Builder<'_> {
                         s
                     },
                     bg: Some(bgst),
+                    rail: None,
                 });
                 let body = if let Some(d) = done {
                     let lines: Vec<&str> =
@@ -2059,6 +2380,7 @@ impl Builder<'_> {
                                 Span::styled(row, st),
                             ],
                             bg: Some(bgst),
+                            rail: None,
                         });
                     }
                 }
@@ -2594,8 +2916,66 @@ fn tool_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::reasoning_times;
+    use super::{band_meta, fmt_duration, live_reasoning_secs, reasoning_times};
     use crate::api::Event;
+
+    #[test]
+    fn durations_are_never_below_a_tenth_and_never_say_less_than_one() {
+        for (secs, want) in [
+            (0.0, "0.0s"),
+            (0.4, "0.4s"),
+            (0.96, "1.0s"),
+            (4.2, "4.2s"),
+            (9.94, "9.9s"),
+            (9.96, "10s"),
+            (12.0, "12s"),
+            (59.4, "59s"),
+            (59.6, "1m 00s"),
+            (65.0, "1m 05s"),
+            (125.4, "2m 05s"),
+            (3599.0, "59m 59s"),
+            (3720.0, "1h 02m"),
+            (36000.0, "10h 00m"),
+            (-3.0, "0.0s"),
+            (f64::NAN, "0.0s"),
+        ] {
+            assert_eq!(fmt_duration(secs), want, "{secs}");
+        }
+        assert!(!fmt_duration(0.01).contains('<'));
+    }
+
+    #[test]
+    fn tags_go_before_the_turn_number_and_time() {
+        let sep = " · ";
+        assert_eq!(band_meta(&[], 1, Some("3:44 PM"), sep), "#2 · 3:44 PM");
+        assert_eq!(
+            band_meta(&["steer"], 2, Some("3:46 PM"), sep),
+            "steer · #3 · 3:46 PM"
+        );
+        assert_eq!(band_meta(&["queued"], 3, None, sep), "queued · #4");
+    }
+
+    #[test]
+    fn live_thinking_time_starts_at_the_first_delta_of_the_step() {
+        let ev = |id, time, kind: &str| Event {
+            id,
+            cursor: None,
+            seq: None,
+            time,
+            kind: kind.into(),
+            session_id: None,
+            data: serde_json::Value::Null,
+        };
+        let events = vec![
+            ev(1, 10.0, "reasoning_delta"),
+            ev(2, 11.0, "part_done"),
+            ev(3, 20.0, "reasoning_delta"),
+            ev(4, 21.0, "reasoning_delta"),
+        ];
+        let secs = live_reasoning_secs(&events, 22.4).unwrap();
+        assert!((secs - 2.4).abs() < 1e-9, "{secs}");
+        assert_eq!(live_reasoning_secs(&events[..2], 30.0), None);
+    }
 
     fn event(id: i64, time: f64, kind: &str, data: serde_json::Value) -> Event {
         Event {

@@ -37,7 +37,7 @@ activity group), medium (each tool on a collapsed line, the default) and high
 (every tool expanded, long output capped). Drag the left sidebar's edge to resize it.
 The starting-context section lists the system prompt, tools, instructions,
 agent and child agents with estimated tokens (characters ÷ 4), detail rows, a
-total and the share of the model's window; a turn footer adds the catalog
+total and the share of the model's window; the turn footer adds the catalog
 price when the model has one.
 
 Settings is a centred modal over the dimmed session: type to search, ↑/↓ to
@@ -84,9 +84,31 @@ headers, new-file line numbers. A Staged row shows the staged diff, an Unstaged
 row the unstaged one; Untracked rows show a notice because Core's diff has no
 untracked contents. Esc returns to the timeline.
 
-Tool output longer than 220 lines keeps its first and last 100 lines with a
-`N lines hidden · show all (o)` row between; `o` on a focused tool toggles the
-full output (`r` raw, `i` inspector work there too). The right sidebar's Session
+Timeline rhythm (DESIGN_PLAN.md D04-D07): the user message is a band across the
+whole page width on the raised surface (rail `▌` at its edge, muted or the focus
+colour, the fold marker inside, `#n · time` at the right, `copy` on hover or
+focus). When its text has scrolled off the top, `sticky.rs` pins a copy under
+the header (three rows at most, a `░` shade row with `↑ N lines of this turn
+above`); the next band pushes it up and a click scrolls back. The turn footer is
+the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
+row with no end status: an interrupted turn adds `/continue` (`enter continue`
+with an empty composer), a failed turn puts its first error line (`✕`) above.
+Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Activity groups fold to
+`Read 2 files, ran 1 command` with `+N −M` and `✕ N failed`; a live group is
+`Working` (shimmer) over its newest five members and `… N earlier`, and its glyph
+flashes the accent for six frames when it finishes (not with reduced motion).
+Members lead with a verb glyph (`→ ← $ * λ ? ↳ ↗`, ASCII `> < $ * L ? ^ ^`,
+from `paint::verb_glyph` and `[glyphs.verb]` in `theme.toml`) that the status
+glyph replaces while running, failed, denied or waiting. Opening a member shows
+the old box (`┌ │ ╰` in `border.strong`): the command's first two rows, the last
+eight output rows behind `↑ N earlier lines · enter show all` (a diff or the raw
+view keeps a head and a tail), and a `raw` toggle on the head row. `o`, or Enter
+on the open tool, shows all; `r` raw and `i` inspector work on a focused tool.
+Reasoning reads `▸ Thought for 2.1s · preview`, and `▾ Thinking… 2.4s` with its
+last five rows while it streams. The header status reads `◐ working 12s`,
+`◆ waiting for you` or `✕ offline`.
+
+The right sidebar's Session
 info totals turns, calls, tools by name, tokens, a context bar against the
 model's window and the catalog cost. Right-click (or `m`) on a sidebar row opens
 its action menu; the Projects tab ends with `+ Add project` (an inline path

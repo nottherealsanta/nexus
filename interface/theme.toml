@@ -398,6 +398,18 @@ tab_sessions = { unicode = "≡", ascii = "S" }
 tab_files    = { unicode = "▤", ascii = "F" }
 tab_projects = { unicode = "◫", ascii = "P" }
 
+# Verb glyphs in front of tool rows (DESIGN_PLAN.md D06). The status glyph
+# replaces the verb glyph while a tool runs, fails, is denied or waits.
+[glyphs.verb]
+read    = { unicode = "→", ascii = ">" }
+edit    = { unicode = "←", ascii = "<" }   # edit, write, patch
+shell   = { unicode = "$", ascii = "$" }
+search  = { unicode = "*", ascii = "*" }
+code    = { unicode = "λ", ascii = "L" }
+ask     = { unicode = "?", ascii = "?" }
+session = { unicode = "↳", ascii = "^" }
+web     = { unicode = "↗", ascii = "^" }
+
 [glyphs.attention]
 waiting = { unicode = "◆", ascii = "?", token = "interactive.accent", rank = 1 }
 error   = { unicode = "✕", ascii = "x", token = "status.error",       rank = 2 }

@@ -1,32 +1,38 @@
 import { agentColor } from "../agent-color";
-import { List, Text, View } from "nsh";
+import { List, Scroll, signal, Text, View } from "nsh";
 import { Button, TextView } from "nsh/base";
-import { Btn, FOCUS, Icon, Status, T } from "./kit";
-import { jump, run } from "../commands";
+import { FOCUS, Icon, IconButton, Status, T } from "./kit";
+import { copyText, jump, run } from "../commands";
 import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, timelineDetail, timelineOpen, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
-import { roles } from "../gen/theme";
-import { signal } from "nsh";
+import type { IconName } from "../icons";
+import { roles, statusGlyphs } from "../gen/theme";
 
 type Tone = "info" | "accent" | "warning";
 type TurnStatus = "running" | "done" | "error" | "interrupted" | "step_limit";
+type Diff = { add: number; del: number };
 
 type Row =
-  | { key: string; kind: "turn"; n: number; title: string; meta: string; status: TurnStatus; open: boolean }
-  | { key: string; kind: "footer"; text: string; status: TurnStatus }
+  | { key: string; kind: "footer"; agent: string; segments: { text: string; tip?: string }[]; error?: string; interrupted: boolean }
+  | {
+      key: string; kind: "user"; n: number; time: string; text: string; turnKey: string; folded: boolean;
+      tools: number; duration: string; status: TurnStatus;
+    }
   | {
       key: string; kind: "context"; meta: string; reconstructed?: boolean; open: boolean;
       items: { key: string; name: string; chip?: string; tokens?: string; details: string[] }[];
       total: string; share?: string;
     }
-  | { key: string; kind: "user"; text: string }
   | { key: string; kind: "notice"; text: string; label: string; tone: Tone }
   | { key: string; kind: "assistant"; text: string; streaming?: boolean }
-  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean }
-  | { key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[]; open: boolean; defaultOpen: boolean; failed: number }
+  | { key: string; kind: "reasoning"; text: string; encrypted?: boolean; open: boolean; running?: boolean }
+  | {
+      key: string; kind: "activity"; summary: string; items: (Extract<Row, { kind: "tool" }> | Extract<Row, { kind: "reasoning" }>)[];
+      open: boolean; defaultOpen: boolean; failed: number; duration?: string; diff?: Diff;
+    }
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
-      state: "running" | "done" | "error" | "waiting"; duration?: string; output?: string;
+      state: "running" | "done" | "error" | "waiting"; duration?: string; seconds?: number; diff?: Diff; output?: string;
       detail: { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" }[];
       raw: string; open: boolean; clipped: boolean; showAll: boolean;
     }
@@ -40,6 +46,7 @@ const DETAIL_HEAD = 100;
 const DETAIL_TAIL = 100;
 const HIGH_HEAD = 30;
 const HIGH_TAIL = 20;
+const HIDDEN_MARK = "lines hidden · show all (o)";
 
 /** UI-only cap: the model's separate output clip stays untouched. */
 export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = DETAIL_HEAD, tail = DETAIL_TAIL): ToolDetailLine[] {
@@ -47,13 +54,23 @@ export function capToolDetail(lines: ToolDetailLine[], showAll: boolean, head = 
   const hidden = lines.length - head - tail;
   return [
     ...lines.slice(0, head),
-    { text: `… ${hidden} lines hidden · show all (o)`, tone: "accent" },
+    { text: `… ${hidden} ${HIDDEN_MARK}`, tone: "accent" },
     ...lines.slice(-tail),
   ];
 }
 
 const NOTICE = /^\[(Nexus notice|Nexus recovery|Notification)/;
 const closedTurns = signal<Record<string, boolean>>({});
+// Sticky user bar: the bands' geometry (content coordinates) and the list's scroll offset.
+type Band = { key: string; top: number; height: number; n: number; text: string; turnKey: string };
+const bands = signal<Record<string, Band>>({});
+const scrollY = signal(0);
+const hoveredBand = signal<string | null>(null);
+const focusedBand = signal<string | null>(null);
+// Sticky user bar line height (secondary text) and bar height, for the push-up geometry.
+const STICKY_LINE = 20;
+const STICKY_BAR = 28;
+
 function open(key: string, fallback: boolean): boolean {
   const v = timelineOpen()[key];
   return v === undefined ? fallback : v;
@@ -61,6 +78,9 @@ function open(key: string, fallback: boolean): boolean {
 function toggle(key: string, fallback: boolean) {
   const now = open(key, fallback);
   timelineOpen.update((o) => ({ ...o, [key]: !now }));
+}
+function toggleFold(key: string) {
+  closedTurns.update((o) => ({ ...o, [key]: !(o[key] ?? false) }));
 }
 
 function toolArg(args: string | undefined): string {
@@ -133,12 +153,19 @@ function toolNameLines(names: string[], maxChars: number): string[] {
   }
   return rows.filter(Boolean);
 }
-function fmtDuration(s: number): string {
-  if (!isFinite(s) || s < 0.95) return "<1 s";
-  if (s < 60) return `${Math.round(s)} s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s`;
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+/** Durations: `0.4s`, `4.2s`, `12s`, `1m 05s`, `1h 02m`. Never `<1 s`. */
+export function fmtDuration(s: number): string {
+  if (!isFinite(s) || s < 0) s = 0;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  const whole = Math.round(s);
+  if (whole < 60) return `${whole}s`;
+  if (whole < 3600) return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+  return `${Math.floor(whole / 3600)}h ${String(Math.floor((whole % 3600) / 60)).padStart(2, "0")}m`;
 }
+function clock(sec: number): string {
+  return new Date(sec * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+function titleCase(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
 function text(m: Message): string {
   return m.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n");
 }
@@ -217,11 +244,12 @@ function statusOf(t: TurnMeta): TurnStatus {
   if (t.stop || t.endEvent || t.followed) return "done";
   return "interrupted";
 }
-const STATUS_LABEL: Record<TurnStatus, string> = {
-  running: "running", done: "done", error: "error", interrupted: "interrupted", step_limit: "step limit",
-};
+/** The status mark on a folded user band (no status word anywhere in the footer). */
+function turnGlyph(s: TurnStatus): keyof typeof statusGlyphs | undefined {
+  return s === "running" ? "running" : s === "done" ? "done" : s === "error" ? "error" : s === "interrupted" ? "interrupted" : undefined;
+}
 
-function diffCounts(args: string | undefined): { add: number; del: number } | null {
+function diffCounts(args: string | undefined): Diff | null {
   if (!args) return null;
   try {
     const o = JSON.parse(args);
@@ -364,13 +392,12 @@ export function buildRows(): Row[] {
         const key = `turn:${sid}:${n}`;
         const folded = closedTurns()[key] ?? false;
         foldedTurn = folded;
-        const status = meta ? statusOf(meta) : "running";
-        const bits: string[] = [];
-        if (meta?.tools) bits.push(`${meta.tools} tool${meta.tools === 1 ? "" : "s"}`);
-        if (meta) bits.push(fmtDuration(meta.endTime - meta.startTime));
-        out.push({ key: `${key}-head`, kind: "turn", n: n + 1, title: firstLine(body), meta: bits.join(" · "), status, open: !folded });
+        out.push({
+          key: msg.id, kind: "user", n: n + 1, time: clock(msg.created), text: body, turnKey: key, folded,
+          tools: meta?.tools ?? 0, duration: meta ? fmtDuration(meta.endTime - meta.startTime) : "",
+          status: meta ? statusOf(meta) : "running",
+        });
         if (folded) { rows.push({ t: msg.created, r: out }); continue; }
-        out.push({ key: msg.id, kind: "user", text: body });
       }
     } else if (msg.role === "assistant") {
       if (foldedTurn) { rows.push({ t: msg.created, r: out }); continue; }
@@ -408,7 +435,7 @@ export function buildRows(): Row[] {
             else if (p.name === "edit" || p.name === "patch") summary = res?.is_error ? "failed" : counts ? `+${counts.add} −${counts.del}` : "";
             else if (p.name === "write") { try { summary = `+${detailLines(String(JSON.parse(p.arguments ?? "{}").content ?? "")).length}`; } catch {} }
             else if (res?.output) summary = `${detailLines(res.output).length} lines`;
-            const dur = tr?.start !== undefined && tr?.end !== undefined ? fmtDuration(tr.end - tr.start) : undefined;
+            const seconds = tr?.start !== undefined && tr?.end !== undefined ? tr.end - tr.start : undefined;
             const key = `tool:${id}`;
             const rawOpen = open(`${key}:raw`, false);
             const showAll = toolOutputAll()[key] ?? false;
@@ -421,7 +448,8 @@ export function buildRows(): Row[] {
             out.push({
               key, kind: "tool", id, name: p.name ?? "tool", arg: toolArg(p.arguments), summary,
               tone: counts ? (counts.add >= 0 ? "accent" : "info") : "info",
-              state, duration: dur, output: res?.output,
+              state, duration: seconds !== undefined ? fmtDuration(seconds) : undefined, seconds,
+              diff: counts ?? undefined, output: res?.output,
               detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
               open: open(key, detailLevel === "high"), clipped, showAll,
@@ -436,23 +464,28 @@ export function buildRows(): Row[] {
       const meta = metas[turnAt - 1];
       if (meta && !foldedTurn) {
         const v = viewed();
-        const bits: string[] = [];
-        if (meta.models.length) bits.push(meta.models.join(" / "));
-        else if (v?.model && String(v.model) !== "default") bits.push(String(v.model));
-        if (v?.effort) bits.push(String(v.effort));
-        bits.push(fmtDuration(meta.endTime - meta.startTime));
-        if (meta.steps) bits.push(`${meta.steps} call${meta.steps === 1 ? "" : "s"}`);
-        if (meta.tools) bits.push(`${meta.tools} tool${meta.tools === 1 ? "" : "s"}`);
+        const segments: { text: string; tip?: string }[] = [];
+        if (meta.models.length) segments.push({ text: meta.models.join(" → ") });
+        else if (v?.model && String(v.model) !== "default") segments.push({ text: String(v.model) });
+        if (v?.effort) segments.push({ text: String(v.effort) });
+        if (meta.tools) segments.push({ text: `${meta.tools} tool${meta.tools === 1 ? "" : "s"}` });
+        segments.push({ text: fmtDuration(meta.endTime - meta.startTime) });
         if (meta.input + meta.cached + meta.output + meta.reasoning > 0) {
           let tok = `${fmtCount(meta.input)} in`;
           if (meta.cached) tok += ` ${fmtCount(meta.cached)} cached`;
           tok += ` ${fmtCount(meta.output)} out`;
           if (meta.reasoning) tok += ` ${fmtCount(meta.reasoning)} reasoning`;
-          bits.push(tok);
+          const tip = `input ${meta.input.toLocaleString()} · cached ${meta.cached.toLocaleString()} · output ${meta.output.toLocaleString()} · reasoning ${meta.reasoning.toLocaleString()}`;
+          segments.push({ text: tok, tip });
           const cost = turnCost(meta);
-          if (cost) bits.push(cost);
+          if (cost) segments.push({ text: cost });
         }
-        rows.push({ t: msg.created + 0.0001, r: [{ key: `footer:${sid}:${meta.n}`, kind: "footer", text: bits.join(" · "), status: statusOf(meta) }] });
+        const status = statusOf(meta);
+        const error = status === "error" ? (firstLine(meta.error?.message ?? "") || meta.error?.kind) : undefined;
+        rows.push({
+          t: msg.created + 0.0001,
+          r: [{ key: `footer:${sid}:${meta.n}`, kind: "footer", agent: String(v?.agent ?? ""), segments, error, interrupted: status === "interrupted" }],
+        });
       }
     }
   }
@@ -469,7 +502,7 @@ export function buildRows(): Row[] {
     if (i > 0) flat.unshift(...flat.splice(i, 1));
   }
   const st = model.streaming.get(sel.sessionId);
-  if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true });
+  if (st?.reasoning) flat.push({ key: "stream-r", kind: "reasoning", text: st.reasoning, open: true, running: true });
   if (st?.text) flat.push({ key: "stream-t", kind: "assistant", text: st.text, streaming: true });
   if (sel.eventsGap) flat.unshift({ key: "older-events", kind: "older", text: `${sel.eventsGap[0].toUpperCase()}${sel.eventsGap.slice(1)}.` });
   return groupActivities(flat);
@@ -506,15 +539,20 @@ function groupActivities(rows: Row[]): Row[] {
     const key = `group:${items[0].key}`;
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
     const defaultOpen = timelineDetail() !== "low" || waiting;
+    const tools = items.filter((item): item is Extract<Row, { kind: "tool" }> => item.kind === "tool");
+    const timed = tools.filter((tool) => tool.seconds !== undefined);
+    const diffs = tools.filter((tool) => tool.diff !== undefined);
     result.push({
       key, kind: "activity", summary: activitySummary(items), items,
       open: open(key, defaultOpen), defaultOpen,
-      failed: items.filter((item) => item.kind === "tool" && item.state === "error").length,
+      failed: tools.filter((tool) => tool.state === "error").length,
+      duration: timed.length ? fmtDuration(timed.reduce((sum, tool) => sum + (tool.seconds ?? 0), 0)) : undefined,
+      diff: diffs.length ? diffs.reduce<Diff>((sum, tool) => ({ add: sum.add + (tool.diff?.add ?? 0), del: sum.del + (tool.diff?.del ?? 0) }), { add: 0, del: 0 }) : undefined,
     });
     items = [];
   };
   for (const row of rows) {
-    if (row.kind === "tool" || (row.kind === "reasoning" && !row.key.startsWith("stream-"))) items.push(row);
+    if (row.kind === "tool" || (row.kind === "reasoning" && !row.running)) items.push(row);
     else { flush(); result.push(row); }
   }
   flush();
@@ -524,15 +562,22 @@ function groupActivities(rows: Row[]): Row[] {
 const RAIL: Record<string, string> = { info: "bg-info", accent: "bg-primary", warning: "bg-warning" };
 function Rail(p: { color: string }) { return <View class={`w-[3px] self-stretch rounded-full ${p.color}`} />; }
 
-function StatusPill(p: { status: TurnStatus }) {
-  const kind = p.status === "running" ? "running" : p.status === "done" ? "done" : p.status === "error" ? "error" : "interrupted";
-  return <Status kind={kind} word />;
+/** Band geometry for the sticky bar: reported by each user band's layout. */
+function bandLayout(row: Row): ((b: { origin: { x: number; y: number }; size: { width: number; height: number } }) => void) | undefined {
+  if (row.kind !== "user") return undefined;
+  return (b) => {
+    const cur = bands();
+    const prev = cur[row.key];
+    const next: Band = { key: row.key, top: b.origin.y, height: b.size.height, n: row.n, text: firstLine(row.text), turnKey: row.turnKey };
+    if (prev && prev.top === next.top && prev.height === next.height && prev.text === next.text && prev.n === next.n) return;
+    bands.set({ ...cur, [row.key]: next });
+  };
 }
 
 function RowView(p: { r: () => Row }) {
   const r = p.r;
   return (
-    <View class="w-full items-center px-4">
+    <View class="w-full items-center px-4" onLayout={(b: any) => bandLayout(r())?.(b)}>
       <View class="w-full max-w-[760px]">
         <If when={r().kind === "context"}>
           {() => {
@@ -565,39 +610,29 @@ function RowView(p: { r: () => Row }) {
             );
           }}
         </If>
-        <If when={r().kind === "turn"}>
-          {() => {
-            const t = r() as Extract<Row, { kind: "turn" }>;
-            const key = `turn:${model.selected?.sessionId}:${t.n - 1}`;
-            return (
-              <Button onPress={() => closedTurns.update((o) => ({ ...o, [key]: !(o[key] ?? false) }))}
-                class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 mt-3 hover:bg-accent ${FOCUS}`} testID="turn-header">
-                <Text class={T.meta}>{t.open ? "▾" : "▸"}</Text>
-                <Text class={T.meta}>{`#${t.n}`}</Text>
-                <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 font-medium text-foreground">{t.title}</Text>
-                <If when={!!t.meta}><Text class={T.meta}>{t.meta}</Text></If>
-                <StatusPill status={t.status} />
-              </Button>
-            );
-          }}
+        <If when={r().kind === "user"}>
+          <UserBand r={r as () => Extract<Row, { kind: "user" }>} />
         </If>
         <If when={r().kind === "footer"}>
           {() => {
             const f = r() as Extract<Row, { kind: "footer" }>;
             return (
-              <View class="flex-row items-center gap-2 pt-2 pb-1 flex-wrap" testID="turn-footer">
-                <View class="w-full h-px bg-border" />
-                <Text class={`flex-1 min-w-0 ${T.meta}`}>{f.text}</Text>
-                <StatusPill status={f.status} />
+              <View class="w-full items-end gap-0.5 pt-3 pb-1" testID="turn-footer">
+                <If when={!!f.error}><Text selectable class="text-xs leading-4 text-error">{`✕ ${f.error}`}</Text></If>
+                <View class="flex-row flex-wrap justify-end items-center">
+                  <If when={!!f.agent}><Text class={`text-xs leading-4 font-semibold ${agentColor(f.agent)}`}>{`▪ ${titleCase(f.agent)}`}</Text></If>
+                  <Each of={f.segments} key={(s, i) => `${i}`}>
+                    {(s) => (
+                      <Text class={T.meta} tooltip={s().tip ? <Text class="text-xs leading-4 text-popover-foreground bg-popover border border-border rounded-(--radius) px-2 py-1">{s().tip!}</Text> : undefined}>
+                        {` · ${s().text}`}
+                      </Text>
+                    )}
+                  </Each>
+                  <If when={f.interrupted}><Text class="text-xs leading-4 text-warning">{" · /continue"}</Text></If>
+                </View>
               </View>
             );
           }}
-        </If>
-        <If when={r().kind === "user"}>
-          <View class="flex-row gap-3 rounded-(--radius-card) bg-raised border border-border px-3.5 py-3" testID="msg-user">
-            <Rail color="bg-primary" />
-            <Text selectable class={`flex-1 min-w-0 ${T.body}`}>{(r() as any).text}</Text>
-          </View>
         </If>
         <If when={r().kind === "notice"}>
           <View class="flex-row gap-3 rounded-(--radius-card) bg-card border border-border px-3.5 py-2.5 my-1">
@@ -614,20 +649,7 @@ function RowView(p: { r: () => Row }) {
           </View>
         </If>
         <If when={r().kind === "reasoning"}>
-          {() => {
-            const x = r() as Extract<Row, { kind: "reasoning" }>;
-            return (
-              <View class="py-1.5">
-                <Button onPress={() => toggle(`reason:${x.key}`, false)} class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID="reasoning">
-                  <Text class={T.meta}>{x.open ? "▾" : "▸"}</Text>
-                  <Text class="text-xs leading-4 italic text-muted-foreground">{roles.reasoning.label}{x.encrypted ? " · encrypted (replayed, not readable)" : ""}</Text>
-                </Button>
-                <If when={x.open && !x.encrypted}>
-                  <View class="pl-5 pt-1"><Text selectable class="text-[13px] leading-5 italic text-muted-foreground">{x.text}</Text></View>
-                </If>
-              </View>
-            );
-          }}
+          <ReasoningRow x={r as () => Extract<Row, { kind: "reasoning" }>} />
         </If>
         <If when={r().kind === "activity"}>
           <ActivityRow r={r as () => Extract<Row, { kind: "activity" }>} />
@@ -672,6 +694,84 @@ function RowView(p: { r: () => Row }) {
   );
 }
 
+/** A user message: the reading column's raised card (folded: one line). Its header is the turn's header. */
+function UserBand(p: { r: () => Extract<Row, { kind: "user" }> }) {
+  const r = p.r;
+  const fold = () => toggleFold(r().turnKey);
+  const copy = () => copyText(r().text, "Copied message");
+  const glyph = () => turnGlyph(r().status);
+  const meta = () => `#${r().n} · ${r().time}`;
+  return (
+    <If when={r().folded} else={
+      <View class="w-full rounded-(--radius-card) bg-raised px-4 py-3 relative" testID="msg-user"
+        onHoverIn={() => hoveredBand.set(r().key)} onHoverOut={() => hoveredBand.set(null)}
+        onFocus={() => focusedBand.set(r().key)} onBlur={() => { if (focusedBand() === r().key) focusedBand.set(null); }}>
+        <If when={focusedBand() === r().key}>
+          {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" />}
+        </If>
+        <View class="flex-row items-start gap-3">
+          <Text selectable class="flex-1 min-w-0 text-[15px] leading-6 text-foreground">{r().text}</Text>
+          <View class="flex-row items-center gap-1 pt-0.5">
+            {/* Hover icons: kept mounted (keyboard reachable), shown while the card is hovered or focused. */}
+            <View class={`flex-row items-center ${hoveredBand() === r().key || focusedBand() === r().key ? "" : "opacity-0"}`}>
+              <IconButton icon="copy" label="Copy message" onPress={copy} testID={`copy-user-${r().n}`} />
+              <IconButton icon="chevron-down" label="Fold message" onPress={fold} testID={`fold-user-${r().n}`} />
+            </View>
+            <Text class={`${T.meta} pt-1`}>{meta()}</Text>
+          </View>
+        </View>
+      </View>
+    }>
+      <Button onPress={fold} accessibilityLabel={`${meta()} folded, show`} testID={`msg-user-folded-${r().n}`}
+        class={`w-full flex-row items-center gap-2 rounded-(--radius-card) bg-raised px-4 min-h-9 hover:bg-accent ${FOCUS}`}>
+        <Icon name="chevron-right" size={14} class="tint-muted-foreground" />
+        <Text numberOfLines={1} class="flex-1 min-w-0 text-[14px] leading-[22px] text-foreground">{r().text}</Text>
+        <If when={r().tools > 0 || !!r().duration}>
+          {() => <Text class={T.meta}>{[r().tools ? `${r().tools} tool${r().tools === 1 ? "" : "s"}` : "", r().duration].filter(Boolean).join(" · ")}</Text>}
+        </If>
+        <If when={!!glyph()}>{() => <Status kind={glyph()!} />}</If>
+        <Text class={T.meta}>{meta()}</Text>
+      </Button>
+    </If>
+  );
+}
+
+/** The sticky copy of the current turn's user band, under the header; the next band pushes it up. */
+function StickyBar(p: { scrollTo: (offset: number) => void }) {
+  const sid = () => model.selected?.sessionId ?? "";
+  const list = () => Object.values(bands())
+    .filter((b) => b.turnKey.startsWith(`turn:${sid()}:`))
+    .sort((a, b) => a.top - b.top);
+  const current = () => {
+    const y = scrollY();
+    const all = list();
+    let idx = -1;
+    all.forEach((b, i) => { if (b.top < y) idx = i; });
+    return idx < 0 ? null : { band: all[idx], next: all[idx + 1] as Band | undefined };
+  };
+  return (
+    <If when={!!current()}>
+      {() => {
+        const c = current()!;
+        const y = scrollY();
+        const lines = Math.max(0, Math.floor((Math.min(y, c.next?.top ?? Infinity) - c.band.top) / STICKY_LINE));
+        const offset = c.next ? Math.min(0, c.next.top - y - STICKY_BAR) : 0;
+        return (
+          <View class="absolute left-0 right-0 items-center" pointerEvents="box-none" style={{ top: offset }} testID="sticky-user">
+            <View class="w-full max-w-[760px] px-4">
+              <Button onPress={() => p.scrollTo(c.band.top)} accessibilityLabel="Scroll to this message" testID="sticky-user-button"
+                class={`w-full flex-row items-center gap-3 rounded-(--radius) bg-raised border-b border-border px-3 min-h-7 hover:bg-accent ${FOCUS}`}>
+                <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{c.band.text}</Text>
+                <Text class={T.meta}>{`↑ ${lines} lines of this turn above`}</Text>
+              </Button>
+            </View>
+          </View>
+        );
+      }}
+    </If>
+  );
+}
+
 function ContextItem(p: { item: () => Extract<Row, { kind: "context" }>["items"][number] }) {
   const item = p.item;
   return (
@@ -693,20 +793,41 @@ function ToolTone(tone: string): string {
   return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : tone === "accent" ? "text-primary" : "text-foreground-secondary";
 }
 
+/** Member label and the verb icon (the status glyph replaces it while running, failed or waiting). */
+const VERB: Record<string, string> = {
+  bash: "Shell", read: "Read", edit: "Edit", patch: "Edit", write: "Write", code: "Code", ask: "Ask",
+  web_search: "Web search", web_fetch: "Fetch", grep: "Search", glob: "Find",
+};
+function verbLabel(name: string): string { return VERB[name] ?? name; }
+function verbIcon(name: string): IconName {
+  if (name === "read") return "read";
+  if (name === "edit" || name === "patch" || name === "write") return "edit";
+  if (name.startsWith("bash")) return "shell";
+  if (name.startsWith("web_")) return "web";
+  if (name === "grep" || name === "glob" || name === "search") return "search";
+  if (name === "ask") return "ask";
+  if (name === "session") return "session";
+  return "code";
+}
+
 function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   const r = p.r;
   return (
     <View class="py-0.5">
       <Button onPress={() => toggle(r().key, r().defaultOpen)} testID={`activity-${r().key.replaceAll(":", "-")}`}
-        class={`w-full flex-row items-center gap-1.5 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
-        <Text class={T.meta}>{r().open ? "▾" : "▸"}</Text>
+        class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`}>
+        <Icon name={r().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
         <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground-secondary">{r().summary}</Text>
-        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`${r().failed} failed`}</Text></If>
+        <If when={!!r().diff}>
+          {() => <Text class={T.meta}><Text class="text-success">{`+${r().diff!.add}`}</Text>{" "}<Text class="text-error">{`−${r().diff!.del}`}</Text></Text>}
+        </If>
+        <If when={r().failed > 0}><Text class="text-xs leading-4 text-error">{`✕ ${r().failed} failed`}</Text></If>
+        <If when={!!r().duration}><Text class={T.meta}>{r().duration!}</Text></If>
       </Button>
       <If when={r().open}>
-        <View class="ml-4 border-l border-border pl-2">
+        <View class="ml-[11px]">
           <Each of={r().items} key={(item) => item.key}>
-            {(item) => <ActivityItem item={item} />}
+            {(item) => <ActivityItem item={item} last={() => r().items.at(-1)?.key === item().key} />}
           </Each>
         </View>
       </If>
@@ -714,51 +835,66 @@ function ActivityRow(p: { r: () => Extract<Row, { kind: "activity" }> }) {
   );
 }
 
-function ActivityItem(p: { item: () => ActivityEntry }) {
+/** A member of an expanded group: a tree branch (1 px line, 12 px tick) to the left of the row. */
+function ActivityItem(p: { item: () => ActivityEntry; last: () => boolean }) {
   const item = p.item;
   return (
-    <View>
+    <View class="relative pl-[18px]">
+      <If when={p.last()} else={<View class="absolute left-0 top-0 bottom-0 w-px bg-border" />}>
+        {() => <View class="absolute left-0 top-0 h-3 w-px bg-border" />}
+      </If>
+      <View class="absolute left-0 top-3 w-3 h-px bg-border" />
       <If when={item().kind === "tool"}>
         <ToolRow r={item as () => Extract<Row, { kind: "tool" }>} />
       </If>
       <If when={item().kind === "reasoning"}>
-        {() => {
-          const x = item() as Extract<Row, { kind: "reasoning" }>;
-          return (
-            <View class="py-1.5">
-              <Button onPress={() => toggle(`reason:${x.key}`, false)} class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID="reasoning">
-                <Text class={T.meta}>{x.open ? "▾" : "▸"}</Text>
-                <Text class="text-xs leading-4 italic text-muted-foreground">{roles.reasoning.label}{x.encrypted ? " · encrypted (replayed, not readable)" : ""}</Text>
-              </Button>
-              <If when={x.open && !x.encrypted}>
-                <View class="pl-5 pt-1"><Text selectable class="text-[13px] leading-5 italic text-muted-foreground">{x.text}</Text></View>
-              </If>
-            </View>
-          );
-        }}
+        <ReasoningRow x={item as () => Extract<Row, { kind: "reasoning" }>} />
       </If>
     </View>
   );
 }
 
-function ToolDetail(p: {
-  line: () => Extract<Row, { kind: "tool" }>["detail"][number];
-  id: string;
-  focus: () => void;
-  blur: () => void;
-}) {
-  const line = p.line();
-  if (line.text.includes("lines hidden · show all (o)")) {
-    return (
-      <View onFocus={p.focus} onBlur={p.blur}>
-        <Button onPress={() => { p.focus(); void run("tool.show_all_output"); }}
-          class={`self-start rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
-          <Text testID={`tool-show-all-${p.id}`} class="font-mono text-xs leading-[18px] text-primary">{line.text}</Text>
+/** Thought rows (D07): `▸ Thought · preview`; running shows the last 5 lines behind a rule. */
+function ReasoningRow(p: { x: () => Extract<Row, { kind: "reasoning" }> }) {
+  const x = p.x;
+  const lines = () => x().text.split("\n").filter((l) => l.trim().length > 0);
+  const hidden = () => Math.max(0, lines().length - 5);
+  return (
+    <View class="py-0.5">
+      <If when={x().running} else={
+        <Button onPress={() => toggle(`reason:${x().key}`, false)} testID="reasoning"
+          class={`w-full flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+          <Icon name={x().open ? "chevron-down" : "chevron-right"} size={14} class="tint-muted-foreground" />
+          <Text class={`text-[13px] leading-5 font-semibold text-muted-foreground`}>{roles.reasoning.label}</Text>
+          <If when={!!x().encrypted}>
+            {() => <Text class="text-[13px] leading-5 italic text-muted-foreground">encrypted, replayed to the provider</Text>}
+          </If>
+          <If when={!x().encrypted}>
+            {() => <Text numberOfLines={1} class="flex-1 min-w-0 text-[13px] leading-5 italic text-muted-foreground">{firstLine(x().text)}</Text>}
+          </If>
         </Button>
-      </View>
-    );
-  }
-  return <Text selectable class={`font-mono text-xs leading-[18px] ${ToolTone(line.tone)}`}>{line.text}</Text>;
+      }>
+        <View class="flex-row items-center gap-2 px-1 min-h-6" testID="reasoning">
+          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{"Thinking…"}</Text>
+        </View>
+      </If>
+      <If when={x().running || (x().open && !x().encrypted)}>
+        <View class="ml-[7px] border-l-2 border-border pl-4 py-1">
+          <If when={x().running && hidden() > 0}>
+            {() => <Text class="text-xs leading-4 text-muted-foreground">{`… ${hidden()} earlier lines`}</Text>}
+          </If>
+          <Text selectable class="text-[13px] leading-5 italic text-foreground-secondary">
+            {x().running ? lines().slice(-5).join("\n") : x().text}
+          </Text>
+        </View>
+      </If>
+    </View>
+  );
+}
+
+/** One line of a member's detail output (the hidden-lines marker is shown as the foot instead). */
+function ToolDetail(p: { line: () => ToolDetailLine }) {
+  return <Text selectable class={`font-mono text-xs leading-[18px] ${ToolTone(p.line().tone)}`}>{p.line().text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
@@ -767,33 +903,55 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   const markFocused = () => focusedTool.set({ key: r().key, clipped: r().clipped, toggleRaw });
   const clearFocused = () => { if (focusedTool()?.key === r().key) focusedTool.set(null); };
   const open = () => r().open;
+  const live = () => r().state === "running" || r().state === "waiting" || r().state === "error";
   const stateKind = () => (r().state === "running" ? "running" : r().state === "waiting" ? "waiting" : r().state === "error" ? "error" : "done");
+  const body = () => r().detail.filter((x) => !x.text.includes(HIDDEN_MARK));
+  const marker = () => r().detail.find((x) => x.text.includes(HIDDEN_MARK));
+  const hidden = () => marker()?.text.match(/(\d+) lines hidden/)?.[1] ?? "";
   return (
     <View class="py-0.5">
       <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
-        class={`flex-row items-center gap-1.5 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
-        <Status kind={stateKind()} />
-        <Text class="w-[52px] text-[13px] leading-5 font-medium text-foreground">{r().name}</Text>
+        class={`flex-row items-center gap-2 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
+        <If when={live()} else={<Icon name={verbIcon(r().name)} size={16} class="tint-foreground-secondary" />}>
+          {() => <Status kind={stateKind()} />}
+        </If>
+        <Text class="min-w-[52px] text-[13px] leading-5 font-medium text-foreground">{verbLabel(r().name)}</Text>
         <Text numberOfLines={1} ellipsizeMode="middle" class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
         <If when={r().state !== "waiting" && !!r().summary}>
           <Text class={T.meta}><Text class={r().summary.startsWith("+") ? "text-success" : r().summary.startsWith("−") ? "text-error" : "text-muted-foreground"}>{r().summary}</Text></Text>
         </If>
-        <If when={r().state !== "waiting" && !!r().duration}><Text class={T.meta}>{r().duration}</Text></If>
+        <If when={r().state !== "waiting" && !!r().duration}><Text class={T.meta}>{r().duration!}</Text></If>
         <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
       </View>
       <If when={open()}>
-        <View class="ml-6 mt-1 mb-1 rounded-(--radius) border border-border bg-card px-3 py-2 gap-0.5">
-          <Each of={r().detail} key={(x, i) => `${i}`}>
-            {(x) => <ToolDetail line={x} id={r().id} focus={markFocused} blur={clearFocused} />}
-          </Each>
-          <View onFocus={markFocused} onBlur={clearFocused}>
-            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`self-start mt-1 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
+        <View class="ml-[18px] mt-1 mb-1 rounded-(--radius) bg-card overflow-hidden">
+          <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
+            <Text class="text-xs leading-4 font-semibold text-foreground">{verbLabel(r().name)}</Text>
+            <Text numberOfLines={1} class="flex-1 min-w-0 font-mono text-xs leading-4 text-foreground-secondary">{r().arg}</Text>
+            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
               <Text class={T.meta}>{r().raw ? "[raw]" : "raw · r"}</Text>
             </Button>
           </View>
+          <Scroll class="max-h-[320px]" contentClass="px-3 py-2 gap-0.5">
+            <Each of={body()} key={(x, i) => `${i}`}>
+              {(x) => <ToolDetail line={x} />}
+            </Each>
+          </Scroll>
+          <If when={!!marker()}>
+            {() => (
+              <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
+                <Text class={T.meta}>{`↑ ${hidden()} earlier lines`}</Text>
+                <View class="flex-1" />
+                <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-show-all-${r().id}`}>
+                  <Text class="text-[13px] leading-5 font-medium text-primary">Show all</Text>
+                </Button>
+              </View>
+            )}
+          </If>
           <If when={r().clipped && r().showAll}>
-            <View onFocus={markFocused} onBlur={clearFocused}>
-              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`self-start rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+            <View onFocus={markFocused} onBlur={clearFocused} class="flex-row items-center gap-2 h-7 px-3">
+              <View class="flex-1" />
+              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
                 <Text testID={`tool-show-less-${r().id}`} class={T.meta}>show less o</Text>
               </Button>
             </View>
@@ -814,12 +972,16 @@ export function Timeline() {
         <List
           ref={(n: any) => (ref = n)} each={rows()} keyExtractor={(x) => x.key} estimatedItemSize={72} class="flex-1" contentClass="py-3"
           maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 96 }}
-          onScroll={(e) => scrolledUp.set(e.contentSize.height - (e.offset.y + e.size.height) > 160)}
+          onScroll={(e) => {
+            scrollY.set(e.offset.y);
+            scrolledUp.set(e.contentSize.height - (e.offset.y + e.size.height) > 160);
+          }}
           scrollEventThrottle={64}
         >
           {(r) => <RowView r={r} />}
         </List>
       </If>
+      <StickyBar scrollTo={(offset) => { try { ref?.scrollToOffset({ offset, animated: true }); } catch {} }} />
       <If when={scrolledUp()}>
         <View class="absolute bottom-3 left-0 right-0 items-center" pointerEvents="box-none">
           <Button onPress={() => run("session.jump_latest")} accessibilityLabel="Jump to latest" testID="jump-latest" class={`flex-row items-center gap-1.5 rounded-full border border-border bg-popover px-3 min-h-8 shadow-md hover:bg-accent ${FOCUS}`}>
@@ -842,4 +1004,3 @@ function EmptyTimeline() {
     </View>
   );
 }
-void Btn; void isNarrow;

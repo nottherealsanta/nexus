@@ -22,10 +22,24 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   (tokens, price tier and window) on hover. A model change requested during a
   turn is marked until the next call; narrow rows shed effort and provider
   before names or the agent.
-- Timeline items follow model context order. User messages use a raised block;
-  consecutive activity folds into a verb group. Folded content remains
-  accessible, and any clipped output is labelled. Running activity uses the
-  old Nexus soft shimmer; reduced motion and monochrome stay static.
+- Timeline items follow model context order. The user message is a band across
+  the whole page width on the raised surface: the rail `▌` at its left edge
+  (muted, the focus colour when focused), padding rows above and below, the fold
+  marker inside at the text edge and `#n · time` at the right. Once its text has
+  scrolled off, a copy is pinned under the header (three rows at most, then a `░`
+  shade row in `border.strong` with `↑ N lines of this turn above`), pushed up by
+  the next band. The turn footer is one muted right-aligned row,
+  `▪ Agent · models · effort · tools · duration · tokens · cost`, with no rule
+  and no end status (an interrupted turn adds `/continue`, a failed one a `✕`
+  error row above). Durations read `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Consecutive activity folds into a verb
+  group; a live group is `Working` (old Nexus's soft shimmer) over its newest five
+  members in a `├─`/`╰─` tree, a finished one a count by verb with `+N −M` and
+  failures that stay visible. Members lead with a verb glyph (`[glyphs.verb]` in
+  `theme.toml`) that the status glyph replaces while running, failed, denied or
+  waiting; their detail is the old `┌ │ ╰` box in `border.strong` with capped
+  output and a `raw` toggle. Reasoning is `▸ Thought for 2.1s · preview` (italic
+  muted preview). Folded content remains accessible, and any clipped output is
+  labelled. Reduced motion and monochrome stay static.
 - The header row is a band on the chrome surface. The left toggle is at x=1,
   then the Sessions / Files / Projects icons in the band over the left sidebar
   (the active icon bold primary, the others muted; label on hover). Session
@@ -33,7 +47,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   (spinner running, `◆` waiting, `●` unread, `✕` failed, `·` idle). The viewed
   tab is bold primary on the page surface so it joins the page below; others are
   muted on the band; `+` ends the strip. A viewed child session shows
-  `root › child` with the earlier crumbs clickable. The run status is right-aligned
+  `root › child` with the earlier crumbs clickable. The run status (`◐ working 12s`, `◆ waiting for you`, `✕ offline`) is right-aligned
   at the centre column's right edge; the notification count and right toggle are
   at the far right. The rail keeps its icons as a column. Sidebars and panels reserve
   consistent gutters; the left sidebar is 34 cells from 160 columns and 28 below, the right 36 and 30. Session rows show title and `project ⌥ branch` on

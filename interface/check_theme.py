@@ -144,7 +144,7 @@ def main(path):
     st = data["glyphs"]["status"]
     if set(st) != set(STATUSES):
         errors.append(f"glyphs.status must be exactly {STATUSES}")
-    for table in ("status", "fold", "sidebar", "attention", "structure"):
+    for table in ("status", "fold", "sidebar", "attention", "structure", "verb"):
         for name, g in data["glyphs"][table].items():
             for mode in ("unicode", "ascii"):
                 s = g[mode]
@@ -154,6 +154,9 @@ def main(path):
                     errors.append(f"glyph {table}.{name} ascii is not ASCII")
             if "token" in g and g["token"] not in t0:
                 errors.append(f"glyph {table}.{name}: unknown token {g['token']}")
+    verbs = {"read", "edit", "shell", "search", "code", "ask", "session", "web"}
+    if set(data["glyphs"]["verb"]) != verbs:
+        errors.append(f"glyphs.verb must be exactly {sorted(verbs)}")
     for mode in ("unicode", "ascii"):
         marks = [st[s][mode] for s in STATUSES]
         if len(set(marks)) != len(marks):
