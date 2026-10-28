@@ -11,6 +11,7 @@
 pub mod actions;
 pub mod api;
 pub mod app;
+pub mod completion;
 pub mod composer;
 pub mod discovery;
 pub mod editor;

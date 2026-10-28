@@ -161,7 +161,6 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
      totals.
 4. **Files**
    - Syntax highlighting (the library is still undecided).
-   - `@` completion in the composer.
 5. **Projects**
    - Add and remove projects from the TUI.
 6. **Settings**
@@ -294,6 +293,7 @@ The visual target is the old Nexus TUI (screenshots reviewed 2026-10-28):
 | The event log grew forever and the floor stayed 0 | Prefix retention with a durable head high-water mark, recovery/replay pins and an explicit `history_unavailable` boundary (done 2026-10-27) | Storage is bounded without losing recovery evidence |
 | Separate TUI and NSH designs | One interface spec for both (INTERFACE_PLAN.md) | Same features, same names |
 | Old host `search_files` over the custom protocol, with read-deny roots from host policy | Core `GET /api/project/{id}/files/search` (`q`, `limit`, `directories`, `session`): the same bounded, Git-aware, ranked walk, with no read-deny roots (done 2026-10-28) | Clients complete `@` paths over HTTP. nexus10 has no read-deny policy, so the search takes no deny roots and reads only the selected root |
+| Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 
 ## Known gaps
 

@@ -211,6 +211,8 @@ impl AppState {
                     self.default_model = default_model;
                 }
             }
+            // The app owns completion replies.
+            SyncMsg::Completion { .. } => {}
             SyncMsg::Git { session, data } => self.git = Some((session, data)),
             SyncMsg::Diff {
                 session,

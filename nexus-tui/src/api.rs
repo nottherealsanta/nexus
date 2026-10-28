@@ -882,6 +882,28 @@ impl CoreApi {
             .await
     }
 
+    /// Workspace path candidates for an `@` completion token (files and
+    /// directories; directories end with `/`).
+    pub async fn files_search(
+        &self,
+        project: &str,
+        session: Option<&str>,
+        query: &str,
+        limit: u32,
+    ) -> Result<Value, Error> {
+        let mut params = vec![
+            ("q", query.to_owned()),
+            ("limit", limit.to_string()),
+            ("directories", "1".to_owned()),
+        ];
+        if let Some(session) = session {
+            params.push(("session", session.to_owned()));
+        }
+        self.http
+            .get(&format!("/api/project/{project}/files/search"), &params)
+            .await
+    }
+
     /// Read a UTF-8 workspace file.
     pub async fn file(
         &self,

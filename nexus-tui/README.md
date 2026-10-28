@@ -149,6 +149,7 @@ Lower layers know nothing of higher ones.
 | `sync` | The connection supervisor task: handshake, snapshot, SSE, reconnect with backoff, resync, restart detection. Emits `SyncMsg`, takes `Command`. |
 | `state` | `ConnectionState`, `Banner`, `AppState` (model + connection + banners; `apply(SyncMsg)`). |
 | `manifest`, `theme` | `interface/manifest.toml` and `interface/theme.toml` embedded with `include_str!` and parsed into typed structs: commands, keys, Esc chain, navigation, settings; colour tokens per mode and tier (truecolor, 256, ANSI-16, monochrome), glyph tables (Unicode/ASCII). No command list, key, reason, colour or glyph is copied by hand. |
+| `completion` | Ranking (`rank_menu`, typo distance), acceptance text and the per-token reply cache for the composer's completion popup, copied from old Nexus. |
 | `text`, `keys`, `composer`, `editor` | Display-width helpers, key names, and the multi-line composer. The grapheme editor and visual layout are adapted from old Nexus; composer movement and deletion respect grapheme boundaries. The composer uses the editor
 for selection, undo/redo and collapsed large pastes; sent text expands every paste. |
 | `ui`, `layout` | View-state types (focus, overlays, dialogs, alerts, mouse targets). `Regions::compute` is the one geometry function; the renderer registers every clickable rect in a `HitMap` as it draws it and the map is rebuilt each frame. |
@@ -223,6 +224,19 @@ newline where `Shift+Enter` is not reported, `Ctrl+C` copies a composer selectio
 (and suspends elsewhere), and `Ctrl+Y` redoes.
 `/name` in the composer runs the command with that slash name (`/rename New
 title`, `/continue`, `/new`, `/settings`...); an unknown `/word` is sent as text.
+
+As-you-type completion: a popup of up to ten rows sits above the composer on the
+raised surface. Typing `/word` as the draft's first word ranks the manifest's
+slash commands locally (prefix, then subsequence, then typo, then the rest, so
+the height stays steady), each with its title as muted help and the reason when
+it is off. A token starting with `@` asks Core for paths
+(`GET /api/project/{id}/files/search`, directories end with `/`), keeps replies
+cached per token, drops a reply for an old token and pads a short list from an
+empty-query listing. Up/Down move, Tab or Enter accepts (`@path ` or `/name `;
+a `dir/` gets no space so completion continues inside it), Enter on a lone
+`/command` runs the highlighted one, a click accepts a row, and Esc hides the
+popup for that token without reaching the Esc chain. Nothing completes while a
+question, dialog or palette is open.
 
 In the timeline, Up/Down (or j/k) move between blocks, Enter or Space opens or
 closes the selected block (a child card opens the child), Left/Right close or
