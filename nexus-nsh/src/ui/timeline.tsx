@@ -539,6 +539,8 @@ function groupActivities(rows: Row[]): Row[] {
   let items: ActivityEntry[] = [];
   const flush = () => {
     if (!items.length) return;
+    // A run of only thoughts is no activity group: each is its own `▸ Thought · preview` row (D07).
+    if (items.every((item) => item.kind === "reasoning")) { result.push(...items); items = []; return; }
     const key = `group:${items[0].key}`;
     const waiting = items.some((item) => item.kind === "tool" && item.state === "waiting");
     const defaultOpen = timelineDetail() !== "low" || waiting;
