@@ -9,6 +9,7 @@ import { Project, Session } from "../core/api";
 import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
+import { agentColor } from "../agent-color";
 
 const TAB_ICON: Record<string, IconName> = { sessions: "sessions", files: "files", projects: "projects" };
 const tabs = manifest.navigation.left_sidebar.tab as unknown as { id: "sessions" | "files" | "projects"; label: string; command: string; order: number }[];
@@ -130,9 +131,8 @@ function SessionsTab() {
         <List each={rowItems()} keyExtractor={(x) => x.key} class="flex-1" contentStyle={{ paddingHorizontal: 8, paddingBottom: 8, gap: 2 }} testID="session-list">
           {(x) => (
             <If when={x().kind === "header"} else={<SessionRow s={() => (x() as any).s as Session} />}>
-              <View class="flex-row items-center gap-2 px-1.5 pt-3 pb-1">
-                <Text style={{ numberOfLines: 1 }} class="flex-1 text-xs leading-4 font-medium text-muted-foreground">{(x() as any).title}</Text>
-                <Text class={T.meta}>{String((x() as any).n)}</Text>
+              <View class="px-2 pt-4 pb-1" testID="session-group">
+                <Text style={{ numberOfLines: 1 }} class="text-[11px] leading-4 font-semibold uppercase tracking-[0.06em] text-muted-foreground">{(x() as any).title}</Text>
               </View>
             </If>
           )}
@@ -172,16 +172,28 @@ function SessionRow(p: { s: () => Session }) {
           onFocus={() => focusedSidebarRow.set(ref())}
           onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
           onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
-          class={`flex-row items-center gap-1 rounded-(--radius) px-1.5 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
+          class={`group/row relative rounded-(--radius) px-2 py-2 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-[56px]" : "h-[52px]"} ${FOCUS}`}
         >
-          <View class="w-3.5 items-center">
-            <If when={att()} else={<If when={s().status === "busy"} else={<Text class="text-[13px] leading-5 text-transparent"> </Text>}><Status kind="running" /></If>}><AttentionMark kind="waiting" /></If>
+          <If when={focusedSidebarRow()?.id === s().id}>
+            {() => <View class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-primary" testID="row-focus-bar" />}
+          </If>
+          <View class="flex-row items-center gap-2 h-5">
+            <View class="w-3.5 items-center">
+              <If when={att()} else={<If when={s().status === "busy"} else={<Text class="text-[13px] leading-5 text-transparent"> </Text>}><Status kind="running" /></If>}><AttentionMark kind="waiting" /></If>
+            </View>
+            <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${sel() ? "text-foreground font-semibold" : "text-foreground font-medium"}`}>{s().title || "Untitled"}</Text>
+            <Text class={`${T.meta} group-hover/row:opacity-0`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
           </View>
-          <Text style={{ numberOfLines: 1 }} class={`flex-1 min-w-0 text-[13px] leading-5 ${sel() ? "text-foreground font-medium" : "text-foreground-secondary"}`}>{s().title || "Untitled"}</Text>
-          <View class="flex-row items-center gap-1.5">
-            <If when={n() > 0}><Text class={T.meta}>{`${n()}↳`}</Text></If>
-            <Text class={`${T.meta} w-7 text-right`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
+          <View class="flex-row items-center gap-1 pl-[22px] h-4">
+            <Text style={{ numberOfLines: 1 }} class={`text-xs leading-4 ${agentColor(s().agent)}`}>{s().agent}</Text>
+            <View class="flex-1" />
+            <If when={n() > 0}><Text class={T.meta}>{`${n()} ↳`}</Text></If>
           </View>
+          <Button onPress={() => { focusedSidebarRow.set(ref()); sidebarRowMenu.set(ref()); void selectSession(s().id); }}
+            accessibilityLabel={`Actions for ${s().title || "Untitled"}`} testID={`row-menu-${s().id}`}
+            class={`absolute right-1.5 top-1.5 size-6 items-center justify-center rounded-(--radius) opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:bg-hover ${FOCUS}`}>
+            <Text class="text-[15px] leading-5 text-foreground-secondary">⋯</Text>
+          </Button>
         </View>
       }
     >

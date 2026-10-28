@@ -10,18 +10,19 @@ const sections = manifest.navigation.right_sidebar.section as unknown as { id: s
 
 function Field(p: { k: string; v?: string | null; mono?: boolean; children?: JSX.Element }) {
   return (
-    <View class="flex-row items-start gap-3 py-1">
-      <Text class={`w-[76px] shrink-0 ${T.meta} pt-0.5`}>{p.k}</Text>
+    <View class="flex-row items-start gap-3 min-h-6 py-0.5">
+      <Text class={`w-24 shrink-0 ${T.meta} pt-0.5`}>{p.k}</Text>
       <View class="flex-1 min-w-0">
         {p.children ?? <Text style={{ userSelect: "text" }} class={`${p.mono ? "font-mono text-xs leading-5" : "text-[13px] leading-5"} text-foreground`}>{p.v || "—"}</Text>}
       </View>
     </View>
   );
 }
+const LABEL = "text-[11px] leading-4 font-semibold uppercase tracking-[0.06em] text-muted-foreground";
 function Section(p: { title: string; children?: JSX.Element }) {
   return (
-    <View class="px-4 py-3 border-b border-border">
-      <Text class="text-[13px] leading-5 font-semibold text-foreground pb-1.5">{p.title}</Text>
+    <View class="px-4 pt-5 pb-1" testID={`right-section-${p.title.toLowerCase().replace(/ /g, "-")}`}>
+      <Text class={`${LABEL} pb-2`}>{p.title}</Text>
       {p.children}
     </View>
   );
@@ -97,13 +98,60 @@ function money(usd: number): string { return usd < 0.01 ? "<$0.01" : `$${usd.toF
 function ContextBar(p: { used: number; window: number }) {
   const percent = p.used / p.window * 100;
   const shown = Math.min(100, Math.max(0, percent));
-  const tone = percent >= 95 ? "bg-error" : percent >= 80 ? "bg-warning" : "bg-secondary";
+  const tone = percent >= 95 ? "bg-error" : percent >= 80 ? "bg-warning" : "bg-primary";
   return (
     <View class="flex-row items-center gap-2 min-w-0" testID="session-context">
-      <View class="h-2 flex-1 min-w-8 overflow-hidden rounded-full bg-muted">
+      <View class="h-1 flex-1 min-w-8 overflow-hidden rounded-full bg-border">
         <View class={`h-full rounded-full ${tone}`} style={{ width: `${shown}%` }} />
       </View>
       <Text class="w-10 text-right text-[13px] leading-5 text-foreground-secondary">{`${percent.toFixed(0)}%`}</Text>
+    </View>
+  );
+}
+
+type Change = { path: string; status?: string; staged?: boolean; unstaged?: boolean; added?: number; removed?: number };
+const LETTER_TONE: Record<string, string> = { M: "text-warning", A: "text-success", "?": "text-success", D: "text-error", R: "text-info" };
+function GitGroup(p: { title: string; rows: Change[]; letter: (c: Change) => string }) {
+  return (
+    <If when={p.rows.length > 0}>
+      <View class="pt-3" testID={`git-group-${p.title.toLowerCase()}`}>
+        <View class="flex-row items-center min-h-6"><Text class={`${T.sec} flex-1`}>{p.title}</Text><Text class={T.meta}>{String(p.rows.length)}</Text></View>
+        <Each of={p.rows} key={(c) => c.path}>
+          {(row) => {
+            const c = row();
+            const l = p.letter(c);
+            return (
+              <View class="flex-row items-center gap-2 min-h-6 rounded-(--radius) px-1 -mx-1 hover:bg-accent" testID="git-row">
+                <Text class={`w-3.5 text-center font-mono text-xs leading-5 font-semibold ${LETTER_TONE[l] ?? "text-muted-foreground"}`}>{l}</Text>
+                <Text style={{ numberOfLines: 1, textOverflow: "ellipsis-middle" }} class="flex-1 min-w-0 text-[13px] leading-5 text-foreground">{c.path}</Text>
+                <Text class={`${T.meta} text-diff-add`}>{`+${c.added ?? 0}`}</Text>
+                <Text class={`${T.meta} text-diff-del`}>{`−${c.removed ?? 0}`}</Text>
+              </View>
+            );
+          }}
+        </Each>
+      </View>
+    </If>
+  );
+}
+function GitRows(p: { data: () => any }) {
+  const d = () => p.data();
+  const changes = (): Change[] => d().changes ?? [];
+  const untracked = () => changes().filter((c) => c.status === "??");
+  const staged = () => changes().filter((c) => c.staged);
+  const unstaged = () => changes().filter((c) => c.unstaged && c.status !== "??");
+  const ahead = () => Number(d().ahead) || 0, behind = () => Number(d().behind) || 0;
+  return (
+    <View>
+      <View class="flex-row items-center gap-2 min-h-6">
+        <Text class="text-[13px] leading-5 font-medium text-foreground">{`⌥ ${d().branch ?? "—"}`}</Text>
+        <If when={ahead() > 0}><Text class={T.meta}>{`↑${ahead()}`}</Text></If>
+        <If when={behind() > 0}><Text class={T.meta}>{`↓${behind()}`}</Text></If>
+      </View>
+      <If when={changes().length === 0}><Text class={`${T.sec} pt-2`}>Working tree clean.</Text></If>
+      <GitGroup title="Staged" rows={staged()} letter={(c) => (c.status ?? "M")[0]} />
+      <GitGroup title="Unstaged" rows={unstaged()} letter={(c) => (c.status ?? " M")[1] || "M"} />
+      <GitGroup title="Untracked" rows={untracked()} letter={() => "?"} />
     </View>
   );
 }
@@ -149,6 +197,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     }}
                   </If>
                   <Field k="Children" v={kids() ? `${kids()} (${runningKids()} running, ${failedKids()} failed)` : "none"} />
+                  <Text class={`${LABEL} pt-5 pb-2`}>Context</Text>
                   <If when={totals().reported}>
                     <Field k="Input" v={fmtCount(totals().input)} />
                     <Field k="Cached" v={fmtCount(totals().cached)} />
@@ -158,7 +207,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
                       const models = modelCatalog();
                       const window = Number(catalogModel(totals().lastModel, models)?.context);
                       return totals().lastInput !== null && Number.isFinite(window) && window > 0
-                        ? <Field k="Context"><ContextBar used={totals().lastInput!} window={window} /></Field>
+                        ? <View class="py-1"><ContextBar used={totals().lastInput!} window={window} /></View>
                         : null;
                     }}
                     <If when={totals().cost !== null}>
@@ -166,7 +215,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
                     </If>
                   </If>
                   <If when={!totals().reported}><Field k="Tokens" v="not reported" /></If>
-                  <Text class={`${T.meta} pt-2`}>Kernel state is not reported by Core yet.</Text>
+                  <Text class={`${T.meta} pt-3`}>Kernel state is not reported by Core yet.</Text>
                 </View>
               );
             }}
@@ -176,10 +225,7 @@ export function RightSidebar(p: { drawer?: boolean }) {
           <If when={s()} else={<Text class={T.sec}>Select a session to see Git status.</Text>}>
             <If when={gitStatus()} else={<Text class={T.sec}>Loading Git status…</Text>}>
               <If when={gitStatus()?.error}><Text class={T.sec}>{gitStatus()?.error}</Text></If>
-              <If when={gitStatus()?.data}><View>
-                <Text class={T.sec}>{gitStatus()?.data.branch} ↑{gitStatus()?.data.ahead} ↓{gitStatus()?.data.behind}</Text>
-                <Each of={gitStatus()?.data.changes ?? []} key={(change: any) => change.path}>{(change: any) => <Text class={T.sec}>{change().path} +{change().added} −{change().removed}</Text>}</Each>
-              </View></If>
+              <If when={gitStatus()?.data}><GitRows data={() => gitStatus()!.data} /></If>
             </If>
           </If>
         </Section>
