@@ -7,7 +7,7 @@ import { manifest } from "./gen/manifest";
 import {
   addProjectOpen, archivedFilter, banners, bump, centre, confirmDialog, connection, currentProject, dismissToast, drawer,
   currentWorktree, draft, isNarrow, leftOpen, leftTab, live, loadComposerData, loadProjectWorktrees, m, model, notifications, paletteOpen, previousCentre, renaming, rightOpen,
-  picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sync, toast, toasts, unread, viewed, waitIndex,
+  focusedSidebarRow, focusedTool, picker, savePrefs, scopeAll, scrolledUp, selectProject, selectSession, sidebarRowMenu, sync, toast, toasts, toolOutputAll, unread, viewed, waitIndex,
 } from "./store";
 import { ApiError, newKey, request } from "./core/transport";
 import { Message } from "./core/api";
@@ -90,7 +90,9 @@ function evalTerm(t: string): boolean {
     case "connection.no_daemon": { const c = connection(); return c.kind === "offline" && c.noDaemon; }
     case "provider.signed_in": return providersSignedIn();
     case "has_notifications": return notifications().length > 0;
-    default: return false; // focus.*, editor.dirty, tool.*: no per-item focus tracking in this increment
+    case "focus.tool": return !!focusedTool();
+    case "tool.output_clipped_in_ui": return !!focusedTool()?.clipped;
+    default: return false; // other focus.*, editor.dirty: no per-item focus tracking in this increment
   }
 }
 let signedIn = false;
@@ -163,6 +165,32 @@ export function askDelete(id?: string) {
     run: async () => { await request("DELETE", `/api/session/${s.id}`, { key: newKey() }); toast("success", "Session deleted"); },
   });
 }
+export function askRemoveProject(id?: string) {
+  const row = focusedSidebarRow();
+  const target = id ?? (leftTab() === "projects" && row?.kind === "project" ? row.id : currentProject());
+  const project = target ? model.projects.get(target) : undefined;
+  if (!target || !project) return;
+  let sessions = 0;
+  for (const session of model.sessions.values()) if (session.project_id === target) sessions++;
+  confirmDialog.set({
+    title: "Remove project",
+    body: `Remove “${project.name}”${sessions ? ` and its ${sessions} session${sessions === 1 ? "" : "s"}` : ""}?\nThe directory and its files stay. This cannot be undone.`,
+    confirm: "Remove", destructive: true,
+    run: async () => {
+      if (!live()) { toast("warning", "Core is not connected: the view is read-only."); return; }
+      await request("DELETE", `/api/project/${target}`, { key: newKey() });
+      toast("success", "Project removed");
+    },
+  });
+}
+
+function openFocusedSidebarMenu() {
+  const row = focusedSidebarRow();
+  if (!row) return;
+  sidebarRowMenu.set(row);
+  if (row.kind === "session") void selectSession(row.id);
+  else selectProject(row.id);
+}
 export async function archive(id?: string, undo = false) {
   const s = id ? model.sessions.get(id) : viewed(); if (!s) return;
   const root = (() => { let c = s; while (c.parent_id && model.sessions.get(c.parent_id)) c = model.sessions.get(c.parent_id)!; return c; })();
@@ -201,6 +229,8 @@ on("session.new", newSession);
 on("session.switch", () => { tab("sessions"); });
 on("project.switch", () => tab("projects"));
 on("project.add", () => addProjectOpen.set(true), true);
+on("project.remove", () => askRemoveProject());
+on("sidebar.row_menu", openFocusedSidebarMenu);
 on("session.rename", () => renaming.set(true), true);
 on("session.archive", () => archive(), true);
 on("session.unarchive", () => archive(undefined, true), true);
@@ -208,6 +238,19 @@ on("session.delete", () => askDelete(), true);
 on("session.interrupt", interrupt, true);
 on("session.continue", continueSession, true);
 on("session.copy_id", () => { const s = viewed(); if (s) void Clipboard.writeText(s.id).then(() => toast("success", "Copied session id")); });
+on("session.open_inspector", () => {
+  const s = viewed();
+  if (!s) return;
+  const url = new URL("/inspector", import.meta.url);
+  url.hash = s.id;
+  void openUrl(url.href).catch(() => toast("info", "Open /inspector on the host page."));
+});
+on("tool.show_all_output", () => {
+  const tool = focusedTool();
+  if (!tool?.clipped) return;
+  toolOutputAll.update((all) => ({ ...all, [tool.key]: !(all[tool.key] ?? false) }));
+});
+on("tool.raw_toggle", () => focusedTool()?.toggleRaw());
 on("sessions.scope_toggle", () => scopeAll.update((v) => !v));
 on("sessions.archived_filter", () => archivedFilter.update((v) => !v));
 on("session.jump_latest", () => { scrolledUp.set(false); jump.fn(); });
@@ -357,6 +400,18 @@ export function bindKeys(): () => void {
     if (!k || k === "esc" || !GLOBAL_CONTEXTS.has(c.key_context ?? "") || !hasModifier(k)) continue;
     if (c.id === "app.quit") continue; // platform-owned
     try { offs.push(keymap.bind(toKeystroke(k), () => { void run(c.id); }, { when: "always" })); } catch { /* the platform keeps this keystroke */ }
+  }
+  for (const id of ["sidebar.row_menu", "tool.raw_toggle", "tool.show_all_output"]) {
+    const c = byId.get(id);
+    const k = c?.keys?.nsh;
+    if (!k) continue;
+    try {
+      offs.push(keymap.bind(toKeystroke(k), () => {
+        if (id === "sidebar.row_menu" && focusedSidebarRow()) void run(id);
+        if (id === "tool.raw_toggle" && focusedTool()) void run(id);
+        if (id === "tool.show_all_output" && focusedTool()?.clipped) void run(id);
+      }, { when: "notEditing" }));
+    } catch { /* the platform keeps this keystroke */ }
   }
   try { offs.push(keymap.bind("escape", () => { escape(); }, { when: "always" })); } catch {}
   return () => offs.forEach((f) => f());

@@ -15,6 +15,7 @@ export const connection = signal<ConnectionState>({ kind: "connecting" });
 export const info = signal<Info | null>(null);
 export const userHome = signal("");
 export const modelCatalog = signal<any[]>([]);
+export const catalogSource = signal("");
 export const defaultModel = signal("");
 export const agentCatalog = signal<{ project: string | null; agents: any[] }>({ project: null, agents: [] });
 export const sessionWorktrees = signal<Record<string, any | null>>({});
@@ -50,6 +51,11 @@ export const settingsSection = signal<string | null>(null);
 export const themeChoice = signal<"system" | "light" | "dark">("system");
 export const prefs = signal<Record<string, boolean | number | string>>({});
 export const scrolledUp = signal(false);
+export type SidebarRowTarget = { kind: "session" | "project"; id: string };
+export const focusedSidebarRow = signal<SidebarRowTarget | null>(null);
+export const sidebarRowMenu = signal<SidebarRowTarget | null>(null);
+export const focusedTool = signal<{ key: string; clipped: boolean; toggleRaw: () => void } | null>(null);
+export const toolOutputAll = signal<Record<string, boolean>>({});
 
 export const width = () => windowSize().width;
 export const NARROW = 820;
@@ -84,12 +90,14 @@ const agentCache = new Map<string, any[]>();
 const agentRequests = new Set<string>();
 const sessionWorktreeRequests = new Set<string>();
 const projectWorktreeRequests = new Set<string>();
+const sessionWorktreeSeq = new Map<string, number>();
+const projectWorktreeSeq = new Map<string, number>();
 const directoryEventsSeen = new Map<string, number>();
 
 export function loadComposerData(project = currentProject()) {
   if (!modelsAsked) {
     modelsAsked = true;
-    void request<any>("GET", "/api/model").then((r) => modelCatalog.set(r.models ?? [])).catch(() => { modelsAsked = false; });
+    void reloadModelCatalog().catch(() => { modelsAsked = false; });
   }
   if (!defaultAsked) {
     defaultAsked = true;
@@ -108,24 +116,40 @@ export function loadComposerData(project = currentProject()) {
   }
 }
 
+/** Refresh the Core-backed catalog and keep the composer/settings views in sync. */
+export async function reloadModelCatalog() {
+  const response = await request<any>("GET", "/api/model");
+  modelCatalog.set(response.models ?? []);
+  catalogSource.set(response.source ?? "");
+  return response;
+}
+
 export function loadSessionWorktrees(id: string, refresh = false) {
   if (!refresh && (sessionWorktreeRequests.has(id) || Object.prototype.hasOwnProperty.call(sessionWorktrees(), id))) return;
   sessionWorktreeRequests.add(id);
+  const seq = (sessionWorktreeSeq.get(id) ?? 0) + 1;
+  sessionWorktreeSeq.set(id, seq);
   void request<any>("GET", `/api/session/${id}/worktrees`).then((data) => {
-    sessionWorktrees.update((all) => ({ ...all, [id]: data }));
+    if (sessionWorktreeSeq.get(id) === seq) sessionWorktrees.update((all) => ({ ...all, [id]: data }));
   }).catch(() => {
-    sessionWorktrees.update((all) => ({ ...all, [id]: null }));
-  }).finally(() => sessionWorktreeRequests.delete(id));
+    if (sessionWorktreeSeq.get(id) === seq) sessionWorktrees.update((all) => ({ ...all, [id]: null }));
+  }).finally(() => {
+    if (sessionWorktreeSeq.get(id) === seq) sessionWorktreeRequests.delete(id);
+  });
 }
 
 export function loadProjectWorktrees(id: string, refresh = false) {
   if (!refresh && (projectWorktreeRequests.has(id) || Object.prototype.hasOwnProperty.call(projectWorktrees(), id))) return;
   projectWorktreeRequests.add(id);
+  const seq = (projectWorktreeSeq.get(id) ?? 0) + 1;
+  projectWorktreeSeq.set(id, seq);
   void request<any>("GET", `/api/project/${id}/worktrees`).then((data) => {
-    projectWorktrees.update((all) => ({ ...all, [id]: data }));
+    if (projectWorktreeSeq.get(id) === seq) projectWorktrees.update((all) => ({ ...all, [id]: data }));
   }).catch(() => {
-    projectWorktrees.update((all) => ({ ...all, [id]: null }));
-  }).finally(() => projectWorktreeRequests.delete(id));
+    if (projectWorktreeSeq.get(id) === seq) projectWorktrees.update((all) => ({ ...all, [id]: null }));
+  }).finally(() => {
+    if (projectWorktreeSeq.get(id) === seq) projectWorktreeRequests.delete(id);
+  });
 }
 
 /** The most-specific checkout containing a directory (path-component aware). */

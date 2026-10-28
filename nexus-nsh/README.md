@@ -16,15 +16,31 @@ new-session view, timeline, waiting card, composer, settings navigation, alerts,
 notifications and connection states are usable against a real Core. The timeline
 now matches the TUI's information architecture: starting-context section, turn
 headers and footers, folding, collapsed reasoning, Markdown, tool-specific detail
-(diffs, output caps, raw), child cards and diagnostics. Selecting a session loads
-its full stored history (messages, retained diagnostics, snapshot) after the
-bounded snapshot view.
+(diffs and raw output), and details over 220 lines show the first and last 100
+with an announced, clickable show-all toggle. Selecting a session loads its full
+stored history (messages, retained diagnostics, snapshot) after the bounded
+snapshot view.
+
+The composer follows the TUI's borderless panel and separate project/branch/
+directory strip. It shows the catalog model name and provider, effort, latest
+request usage and context occupancy; the starting-context section lists the
+prompt, tools, instructions, agent and child/workspace tools with estimates and
+the catalog window share. Turn footers include catalog-priced cost when prices
+are available. The right sidebar derives session turns, model calls, tool usage,
+enabled tools, token totals, latest-request context and catalog-priced cost from
+loaded messages and wire events; it also counts descendant sessions. Right-click
+or Shift+F10 opens the manifest-driven session/project row menu, including
+confirmed project removal, and Projects has a trailing `+ Add project` row.
+Settings shows Core's default model, catalog and loaded agents, with model and
+agent pickers and catalog refresh. Worktree data is loaded for branch/location
+display, while directory and worktree actions remain disabled with a reason.
+Kernel state is the remaining session-info item not reported by Core.
 
 Still missing (shown disabled with their reason, never as a control that appears
-to work): files and the built-in editor, Git, worktrees, steering/queueing, the
-handoff/one-turn/inspector-wire flows, settings editing beyond theme, sign-in
-over the API and dictation. Those need Core increments (PLAN.md Steps 11a/12a)
-or the remaining 12.4 client work.
+to work): the complete files/editor and Git workflows, worktree controls,
+steering/queueing, handoff and one-turn sessions, inspector wire controls,
+settings editing beyond theme, sign-in over the API and dictation. Those need
+Core increments (PLAN.md Steps 11a/12a) or the remaining 12.4 client work.
 
 ## Build, run, test
 

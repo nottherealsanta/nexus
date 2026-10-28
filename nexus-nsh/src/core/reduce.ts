@@ -62,6 +62,7 @@ export class Model {
   projects = new Map<string, Project>();
   sessions = new Map<string, Session>();
   running = new Map<string, string>();
+  failedSessions = new Set<string>();
   approvals = new Map<string, Approval>();
   questions = new Map<string, Question>();
   streaming = new Map<string, Streaming>();
@@ -82,6 +83,7 @@ export class Model {
     this.lastId = s.watermark.head;
     this.projects = new Map(s.projects.map((p) => [p.id, p]));
     this.running = new Map(s.running.map((t) => [t.session_id, t.id]));
+    this.failedSessions = new Set(s.sessions.filter((session) => session.status === "failed").map((session) => session.id));
     this.sessions = new Map();
     for (const raw of s.sessions) {
       const ses = normalizeSession(raw);
@@ -119,6 +121,10 @@ export class Model {
     const byId = new Map<number, CoreEvent>();
     for (const e of [...h.events, ...live]) byId.set(e.id, e);
     v.events = [...byId.values()].sort((a, b) => a.id - b.id);
+    for (const event of v.events) {
+      if (event.type === "session.error") this.failedSessions.add(h.sessionId);
+      if (event.type === "session.status" && event.data?.status === "busy") this.failedSessions.delete(h.sessionId);
+    }
     v.starting = h.starting;
     v.eventsGap = h.eventsGap;
     v.loaded = true;
@@ -167,10 +173,12 @@ export class Model {
         if (!sid) break;
         const s = this.sessions.get(sid);
         if (s) s.status = d.status;
+        if (d.status === "busy") this.failedSessions.delete(sid);
         if (d.status === "busy") { if (d.turn_id) this.running.set(sid, d.turn_id); }
         else { this.running.delete(sid); this.streaming.delete(sid); }
         break;
       }
+      case "session.error": if (sid) this.failedSessions.add(sid); break;
       case "turn.recovered":
         if (sid) { this.running.delete(sid); this.streaming.delete(sid); }
         break;
@@ -205,6 +213,7 @@ export class Model {
 
   private dropSession(id: string) {
     this.sessions.delete(id); this.running.delete(id); this.streaming.delete(id);
+    this.failedSessions.delete(id);
     for (const [k, a] of this.approvals) if (a.session_id === id) this.approvals.delete(k);
     for (const [k, q] of this.questions) if (q.session_id === id) this.questions.delete(k);
     if (this.selected?.sessionId === id) { this.selected = null; this.selectedDeleted = id; }

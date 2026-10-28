@@ -4,7 +4,7 @@ import { Button } from "nsh/base";
 import { Btn, T, FOCUS } from "./kit";
 import { manifest } from "../gen/manifest";
 import { byId, commands, keyLabel, loadProviders, run } from "../commands";
-import { info, compat, isNarrow, m, model, savePrefs, settingsSection, themeChoice, toast, currentProject } from "../store";
+import { catalogSource, info, compat, isNarrow, m, model, reloadModelCatalog, savePrefs, settingsSection, themeChoice, toast, currentProject } from "../store";
 import { CLIENT_API, CLIENT_VERSION } from "../core/api";
 import { request } from "../core/transport";
 
@@ -45,10 +45,22 @@ function listFor(id: string): JSX.Element {
   const lines = (xs: string[], none: string) => (xs.length ? <View class={`gap-1 ${isNarrow() ? "items-start" : "items-end"}`}>{xs.map((x) => <Value text={x} />)}</View> : <Value text={none} />);
   switch (id) {
     case "providers.list": return d.providers ? lines(d.providers.map((x) => `${x.label ?? x.id} · ${x.connected ? "signed in" : "not signed in"}`), "none") : <Value text="loading…" />;
-    case "providers.default_model": return <Value text={d.modelDefault ?? "—"} mono />;
-    case "models.default": return <Value text={d.modelDefault ?? "—"} mono />;
-    case "models.catalog": return <Value text={d.models ? `${d.models.models?.length ?? 0} models (${d.models.source ?? "catalog"})` : "loading…"} />;
-    case "agents.list": return d.agents ? lines((d.agents.agents ?? []).map((a: any) => `${a.name} · ${a.source}`), "none") : <Value text="loading…" />;
+    case "models.catalog": {
+      const label = d.models ? `${d.models.models?.length ?? 0} models · ${d.models.source || catalogSource() || "catalog"}` : "loading…";
+      return <Button onPress={() => void run("model.change")} accessibilityLabel={`Model catalog: ${label}`} testID="setting-model-catalog"
+        class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
+        <Text class="text-[13px] leading-5 text-foreground-secondary">{label}</Text>
+        <Text class={T.meta}>Open</Text>
+      </Button>;
+    }
+    case "models.refresh": return <Btn label="Refresh catalog" onPress={() => void refreshCatalog()} kind="ghost" testID="setting-model-refresh" />;
+    case "agents.list": {
+      const names = d.agents?.agents?.map((a: any) => a.name).filter(Boolean).join(", ") || "none";
+      return <Button onPress={() => void run("agent.change")} accessibilityLabel={`Loaded agents: ${names}`} testID="setting-agents-list"
+        class={`rounded-(--radius) px-2 min-h-8 hover:bg-accent ${FOCUS}`}>
+        <Text class="text-[13px] leading-5 text-foreground-secondary">{d.agents ? names : "loading…"}</Text>
+      </Button>;
+    }
     case "agents.default_root": return <Value text="build" />;
     case "tools.defaults": return <Value text="Per-session today (disabled_tools); no global default in Core." />;
     case "keybindings.list": return <Value text={`${commands.filter((c) => c.keys?.nsh).length} commands with keys (see the palette)`} />;
@@ -61,8 +73,18 @@ function listFor(id: string): JSX.Element {
   }
 }
 
+async function refreshCatalog() {
+  try {
+    const refreshed = await reloadModelCatalog();
+    data.update((d) => ({ ...d, models: refreshed }));
+    toast("success", "Model catalog refreshed");
+  } catch (e) {
+    toast("error", e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** Rows whose behaviour this increment really implements. Everything else is shown disabled with a reason. */
-const WIRED = new Set(["appearance.theme", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "agents.list", "agents.default_root", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
+const WIRED = new Set(["appearance.theme", "about.inspector", "providers.list", "providers.default_model", "models.default", "models.catalog", "models.refresh", "agents.list", "agents.default_root", "tools.defaults", "keybindings.list", "about.versions", "about.daemon"]);
 
 function control(r: Row): JSX.Element {
   if (r.id === "appearance.theme") {
@@ -70,6 +92,8 @@ function control(r: Row): JSX.Element {
       onPick={(v) => { if (v === "named") { toast("info", "Named themes: shared theme tokens arrive with Step 12.2."); return; } themeChoice.set(v as any); setColorScheme(v as "light" | "dark" | "system"); savePrefs(); }} />;
   }
   if (r.id === "about.inspector") return <Btn label="Open inspector" onPress={() => { void openUrl(new URL("/inspector", import.meta.url).href).catch(() => toast("info", "Open /inspector on the host page.")); }} />;
+  if (r.id === "providers.default_model" || r.id === "models.default") return <Value text={data().modelDefault || "not reported"} mono />;
+  if (r.id === "models.catalog" || r.id === "models.refresh" || r.id === "agents.list") return listFor(r.id);
   if (r.kind === "choice" && r.options) return <Seg label={r.label} options={r.options} value={String(r.default ?? r.options[0])} disabled />;
   if (r.kind === "toggle") return <Text class="text-[13px] leading-5 text-muted-foreground">{r.default ? "[x] on" : "[ ] off"}</Text>;
   if (r.kind === "number") return <Text class="text-[13px] leading-5 text-muted-foreground">{String(r.default ?? "—")}</Text>;

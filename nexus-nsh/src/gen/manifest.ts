@@ -448,7 +448,8 @@ export const manifest = {
       "label": "Provider default model",
       "kind": "choice",
       "scope": "core",
-      "clients": "both"
+      "clients": "both",
+      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
      },
      {
       "id": "providers.add_custom",
@@ -470,7 +471,8 @@ export const manifest = {
       "kind": "choice",
       "scope": "core",
       "clients": "both",
-      "command": "model.change"
+      "command": "model.change",
+      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
      },
      {
       "id": "models.default_effort",
@@ -478,7 +480,8 @@ export const manifest = {
       "kind": "choice",
       "scope": "core",
       "clients": "both",
-      "command": "model.effort"
+      "command": "model.effort",
+      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
      },
      {
       "id": "models.catalog",
@@ -513,7 +516,8 @@ export const manifest = {
       "label": "Default root agent",
       "kind": "choice",
       "scope": "core",
-      "clients": "both"
+      "clients": "both",
+      "unavailable_reason": "Core has no default setting for this yet (PLAN.md Step 12a); change the open session from the composer."
      },
      {
       "id": "agents.open_file",
@@ -2191,6 +2195,23 @@ export const manifest = {
     "row_menu"
    ],
    "note": "Confirm; its sessions go with it."
+  },
+  {
+   "id": "sidebar.row_menu",
+   "title": "Actions for this row",
+   "category": "session",
+   "keys": {
+    "tui": "m",
+    "nsh": "shift+f10"
+   },
+   "key_context": "sidebar",
+   "when": [
+    "always"
+   ],
+   "placement": [
+    "sidebar"
+   ],
+   "note": "Right-click on a row opens the same menu. Sessions: rename, archive, delete, export, copy id, inspector. Projects: remove."
   },
   {
    "id": "project.open",

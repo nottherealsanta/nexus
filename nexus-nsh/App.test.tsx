@@ -3,6 +3,7 @@ import { describe, expect, open, test } from "nsh/test";
 import { manifest } from "./src/gen/manifest";
 import { agentSlot } from "./src/agent-color";
 import { Model, foldEventPages } from "./src/core/reduce";
+import { capToolDetail, detailOf } from "./src/ui/timeline";
 
 const sse = (...frames: string[]) => frames.join("");
 const connected = `event: server.connected\ndata: {"generation":"log_t","head":0,"head_cursor":"log_t:0","floor":0}\n\n`;
@@ -18,6 +19,8 @@ const core = (info: object = { name: "nexus", version: "0.10.0.dev0", pid: 1 }) 
   "GET */api/snapshot*": { body: snapshot },
   "GET */api/event*": { body: sse(connected), headers: { "content-type": "text/event-stream" } },
   "GET */api/provider": { body: [] },
+  "GET */api/model/default": { body: { model: "scripted/m" } },
+  "GET */api/model": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/model*": { body: { source: "t", models: [], model: "scripted/m" } },
   "GET */api/agent*": { body: { agents: [], problems: [] } },
   "GET */api/session/*": { body: snapshot.sessions[0] },
@@ -234,7 +237,7 @@ describe("context, composer and footer parity", () => {
         ...selectedSessionNetwork({
           "GET */api/session/ses_1/message": { body: [] },
           "GET */api/session/ses_1/snapshot": { body: starting },
-          "GET */api/model*": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 100000 }] } },
+          "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 100000 }] } },
         }),
       },
       width: 1024, height: 768, platform: "web",
@@ -259,7 +262,7 @@ describe("context, composer and footer parity", () => {
     const app = await open("./App.tsx", {
       network: selectedSessionNetwork({
         "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
-        "GET */api/model*": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 400000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
+        "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-5", context: 400000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
       }),
       width: 1024, height: 768, platform: "web",
     });
@@ -271,21 +274,49 @@ describe("context, composer and footer parity", () => {
     expect(footer.includes("$0.16")).toBe(true);
   });
 
+  test("composer uses the catalog label and latest usage with tier and window occupancy", async () => {
+    const events = [
+      { id: 1, type: "usage", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { input_tokens: 1000 } },
+      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 11100 } },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({
+        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/model": { body: { models: [{ ref: "codex/gpt-5", provider: "codex", name: "GPT-6.1 Terra", context: 1_000_000, tiers: [270_000] }] } },
+      }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:composer-usage");
+    const shown = app.texts().join("\n");
+    expect(shown.includes("GPT-6.1 Terra codex")).toBe(true);
+    expect(shown.includes("11.1K · 4.1% · 1.1%")).toBe(true);
+  });
+
   test("location strip uses the longest matching linked worktree and shows disabled action reasons", async () => {
     const session = { ...snapshot.sessions[0], directory: "/work/demo/ws/nested", model: "codex/gpt-5" };
+    let worktreeReads = 0;
     const app = await open("./App.tsx", {
       network: {
         ...selectedSessionNetwork({
           "GET */api/snapshot*": { body: { ...snapshot, sessions: [session] } },
           "GET */api/session/ses_1": { body: session },
-          "GET */api/session/ses_1/worktrees": { body: {
-            session_directory: session.directory, project_directory: "/work/demo",
-            worktrees: [
-              { path: "/work/demo", branch: "trunk", main: true },
-              { path: "/work/demo/ws", branch: "feature", main: false },
-              { path: "/work/demo/ws/nested", branch: "nested", main: false },
-            ],
-          } },
+          "GET */api/session/ses_1/event*": { body: { events: [{
+            id: 8, type: "session.directory_changed", session_id: "ses_1", cursor: "log_t:8", seq: 8, time: 3,
+            data: { from: "/work/demo", to: session.directory },
+          }], more: false, floor: 0, history_truncated: false } },
+          "GET */api/session/ses_1/worktrees": () => {
+            worktreeReads++;
+            return { body: {
+              session_directory: session.directory, project_directory: "/work/demo",
+              worktrees: [
+                { path: "/work/demo", branch: "trunk", main: true },
+                { path: "/work/demo/ws", branch: "feature", main: false },
+                { path: "/work/demo/ws/nested", branch: "nested", main: false },
+              ],
+            } };
+          },
         }),
       },
       width: 1024, height: 768, platform: "web",
@@ -293,12 +324,13 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("text:Refactor loader");
     await app.press("id:session-ses_1");
     await app.waitFor("id:location-worktree");
+    await app.waitFor("id:msg-diag");
     const shown = app.texts().join("\n");
     expect(shown.includes("demo")).toBe(true);
     expect(shown.includes("nested")).toBe(true);
     expect(shown.includes("/work/demo/ws/nested")).toBe(true);
     expect(shown.includes("worktree")).toBe(true);
-    expect(app.requests().some((r) => r.url.includes("/api/session/ses_1/worktrees"))).toBe(true);
+    expect(worktreeReads >= 2).toBe(true);
     expect(app.shows("id:location-directory")).toBe(true);
   });
 
@@ -314,5 +346,224 @@ describe("context, composer and footer parity", () => {
     await app.waitFor("text:trunk");
     expect(app.requests().some((r) => r.url.includes("/api/project/prj_1/worktrees"))).toBe(true);
     expect(app.shows("id:location-worktree")).toBe(false);
+  });
+});
+
+describe("tool output detail cap", () => {
+  test("caps plain, raw, and diff detail at the same head and tail", () => {
+    const output = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
+    const patch = Array.from({ length: 500 }, (_, i) => `+diff line ${i + 1}`).join("\n");
+    const args = JSON.stringify({ command: "printf output" });
+    const details = [
+      detailOf("bash", args, output, false),
+      detailOf("bash", args, output, true),
+      detailOf("edit", JSON.stringify({ patch }), undefined, false),
+    ];
+    for (const lines of details) {
+      const capped = capToolDetail(lines, false);
+      expect(capped).toHaveLength(201);
+      expect(capped[100].text).toContain(`${lines.length - 200} lines hidden · show all (o)`);
+      expect(capToolDetail(lines, true)).toEqual(lines);
+    }
+    expect(capToolDetail(details[1], false)[100].text).toContain("301 lines hidden");
+  });
+
+  test("keeps the first and last 100 lines for plain, raw, and diff detail, with a reversible toggle", async () => {
+    const plain = Array.from({ length: 500 }, (_, i) => `plain line ${i + 1}`).join("\n");
+    const patch = Array.from({ length: 500 }, (_, i) => `+diff line ${i + 1}`).join("\n");
+    const messages = [
+      { ...userMessage, parts: [{ type: "text", text: "Run the tools" }] },
+      {
+        id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", created: 2,
+        parts: [
+          { type: "tool_call", id: "call_bash", name: "bash", arguments: JSON.stringify({ command: "printf output" }) },
+          { type: "tool_call", id: "call_edit", name: "edit", arguments: JSON.stringify({ patch }) },
+        ],
+      },
+      { id: "m_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_bash", output: plain, is_error: false }] },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: messages } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:tool-row-call_bash");
+    await app.press("id:tool-row-call_bash");
+    await app.waitFor("text:plain line 1");
+    let text = app.texts().join("\n");
+    expect(text.includes("plain line 1") && text.includes("plain line 100")).toBe(true);
+    expect(text.includes("plain line 401") && text.includes("plain line 500")).toBe(true);
+    expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
+    expect(text.includes("plain line 250")).toBe(false);
+
+    await app.keyboard.press("o");
+    expect(app.texts().join("\n").includes("plain line 250")).toBe(true);
+    expect(app.texts().includes("show less o")).toBe(true);
+    await app.keyboard.press("o");
+    expect(app.texts().join("\n").includes("plain line 250")).toBe(false);
+    await app.keyboard.press("r");
+    text = app.texts().join("\n");
+    expect(text.includes("[raw]")).toBe(true);
+
+    const diffMessages = [
+      { ...userMessage, parts: [{ type: "text", text: "Run the edit" }] },
+      { id: "m_edit", session_id: "ses_1", seq: 2, role: "assistant", created: 2, parts: [{ type: "tool_call", id: "call_edit", name: "edit", arguments: JSON.stringify({ patch }) }] },
+      { id: "m_edit_result", session_id: "ses_1", seq: 3, role: "tool", created: 3, parts: [{ type: "tool_result", call_id: "call_edit", output: "edited", is_error: false }] },
+    ];
+    const diffApp = await open("./App.tsx", {
+      network: selectedSessionNetwork({ "GET */api/session/ses_1/message": { body: diffMessages } }),
+      width: 1024, height: 768, platform: "web",
+    });
+    await diffApp.waitFor("text:Refactor loader");
+    await diffApp.press("id:session-ses_1");
+    await diffApp.waitFor("id:tool-row-call_edit");
+    await diffApp.press("id:tool-row-call_edit");
+    text = diffApp.texts().join("\n");
+    expect(text.includes("diff line 1") && text.includes("diff line 100")).toBe(true);
+    expect(text.includes("diff line 401") && text.includes("diff line 500")).toBe(true);
+    expect(text.includes("300 lines hidden · show all (o)")).toBe(true);
+  });
+});
+
+describe("session info totals", () => {
+  test("matches call, tool, token, context, price, and child totals", async () => {
+    const session = {
+      ...snapshot.sessions[0], model: "codex/gpt-5",
+      tools: ["bash", "read", "edit", "write", "code", "ask", "bash_output", "bash_kill", "expose_workspace_tools", "web_search"],
+      disabled_tools: ["write"],
+    };
+    const children = [
+      { ...session, id: "ses_running", title: "Running child", parent_id: "ses_1", parent_call_id: "child-running", status: "busy" },
+      { ...session, id: "ses_failed", title: "Failed child", parent_id: "ses_1", parent_call_id: "child-failed", status: "failed" },
+    ];
+    const toolCalls = [
+      ...Array.from({ length: 12 }, (_, i) => ({ type: "tool_call", id: `bash-${i}`, name: "bash", arguments: "{}" })),
+      ...Array.from({ length: 4 }, (_, i) => ({ type: "tool_call", id: `edit-${i}`, name: "edit", arguments: "{}" })),
+      { type: "tool_call", id: "read-1", name: "read", arguments: "{}" },
+      { type: "tool_call", id: "code-1", name: "code", arguments: "{}" },
+    ];
+    const messages = [
+      { ...userMessage, parts: [{ type: "text", text: "Summarize this session" }] },
+      { id: "m_tools", session_id: "ses_1", seq: 2, role: "assistant", parts: toolCalls, created: 2 },
+    ];
+    const events = [
+      { id: 1, type: "wire_request", session_id: "ses_1", cursor: "log_t:1", seq: 1, time: 1.1, data: { body: { model: "unpriced/model" } } },
+      { id: 2, type: "usage", session_id: "ses_1", cursor: "log_t:2", seq: 2, time: 1.2, data: { input_tokens: 1000, output_tokens: 0 } },
+      { id: 3, type: "wire_request", session_id: "ses_1", cursor: "log_t:3", seq: 3, time: 1.3, data: { body: { model: "gpt-5" } } },
+      { id: 4, type: "usage", session_id: "ses_1", cursor: "log_t:4", seq: 4, time: 1.4, data: { input_tokens: 10_000, output_tokens: 1000, reasoning_tokens: 200 } },
+      { id: 5, type: "wire_request", session_id: "ses_1", cursor: "log_t:5", seq: 5, time: 1.5, data: { body: { model: "codex/gpt-5" } } },
+      { id: 6, type: "usage", session_id: "ses_1", cursor: "log_t:6", seq: 6, time: 1.6, data: { input_tokens: 50_000, cached_input_tokens: 20_000, output_tokens: 2000, reasoning_tokens: 300 } },
+    ];
+    const app = await open("./App.tsx", {
+      network: selectedSessionNetwork({
+        "GET */api/snapshot*": { body: { ...snapshot, sessions: [session, ...children], running: [{ id: "turn_child", session_id: "ses_running" }] } },
+        "GET */api/session/ses_1": { body: session },
+        "GET */api/session/ses_1/message": { body: messages },
+        "GET */api/session/ses_1/event*": { body: { events, more: false, floor: 0, history_truncated: false } },
+        "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", context: 200_000, input_cost: 1, output_cost: 10, cache_read_cost: 0.2 }] } },
+        "GET */api/model/default": { body: { model: "codex/gpt-5" } },
+      }),
+      width: 1440, height: 900, platform: "web",
+    });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("id:right-sidebar");
+    await app.waitFor("text:61.0K");
+    const shown = app.texts().join("\n");
+    for (const expected of [
+      "Turns", "1 · 3 calls", "Used", "bash 12 · edit 4 · +2", "Tools", "9 on · 1 off",
+      "Input", "61.0K", "Cached", "20.0K", "Output", "3.0K", "Reasoning", "500",
+      "Context", "25%", "Cost", "$0.07+", "Children", "2 (1 running, 1 failed)",
+      "Kernel state is not reported by Core yet.",
+    ]) expect(shown.includes(expected)).toBe(true);
+  });
+
+  test("says when Core has not reported usage", async () => {
+    const app = await open("./App.tsx", { network: selectedSessionNetwork(), width: 1440, height: 900, platform: "web" });
+    await app.waitFor("text:Refactor loader");
+    await app.press("id:session-ses_1");
+    await app.waitFor("text:not reported");
+    const shown = app.texts().join("\n");
+    expect(shown.includes("Tokens") && shown.includes("not reported")).toBe(true);
+    expect(shown.includes("Input")).toBe(false);
+  });
+});
+
+describe("sidebar row menus", () => {
+  test("session menu comes from row_menu commands and supports Shift+F10", async () => {
+    const app = await open("./App.tsx", { network: selectedSessionNetwork(), width: 1024, height: 768, platform: "web" });
+    await app.waitFor("id:session-ses_1");
+    await app.rightClick("id:session-ses_1");
+    await app.waitFor("text:Rename session");
+    let shown = app.texts().join("\n");
+    for (const label of ["Rename session", "Archive session", "Unarchive session", "Delete session", "Export session", "Copy session id", "Open session in inspector"])
+      expect(shown.includes(label)).toBe(true);
+    expect(shown.includes("This session is not archived.")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.press("id:session-ses_1");
+    await app.keyboard.press("shift+f10");
+    await app.waitFor("text:Open session in inspector");
+    shown = app.texts().join("\n");
+    expect(shown.includes("Delete session") && shown.includes("Export session")).toBe(true);
+  });
+
+  test("project row menu confirms removal with its session count; a disconnected Core blocks the delete", async () => {
+    const child = { ...snapshot.sessions[0], id: "ses_child", title: "Child", parent_id: "ses_1", parent_call_id: "call_1" };
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/snapshot*": { body: { ...snapshot, sessions: [snapshot.sessions[0], child] } },
+        "DELETE */api/project/prj_1": { status: 204, body: null },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:demo");
+    await app.press("id:tab-projects");
+    await app.waitFor("id:project-prj_1");
+    expect(app.shows("id:add-project")).toBe(true);
+    await app.rightClick("id:project-prj_1");
+    await app.waitFor("text:Remove project");
+    await app.press("id:row-action-project.remove");
+    await app.waitFor("id:confirm-dialog");
+    const dialog = app.texts().join("\n");
+    expect(dialog.includes("demo") && dialog.includes("2 sessions")).toBe(true);
+    expect(dialog.includes("The directory and its files stay. This cannot be undone.")).toBe(true);
+    await app.press("id:confirm-ok");
+    expect(app.requests().some((request) => request.method === "DELETE" && request.url.includes("/api/project/prj_1"))).toBe(false);
+    expect(app.texts().join("\n").includes("Core is not connected: the view is read-only.")).toBe(true);
+  });
+});
+
+describe("Core-backed settings values", () => {
+  test("shows the default model and catalog, refreshes, and opens model and agent pickers", async () => {
+    const app = await open("./App.tsx", {
+      network: {
+        ...core(),
+        "GET */api/model": { body: { source: "fixture catalog", models: [{ ref: "codex/gpt-5", name: "GPT-5", context: 200_000 }] } },
+        "GET */api/model/default": { body: { model: "codex/gpt-5" } },
+        "GET */api/agent*": { body: { agents: [{ name: "build", source: "builtin" }, { name: "plan", source: "builtin" }] } },
+      },
+      width: 1024, height: 768, platform: "web",
+    });
+    await app.waitFor("text:demo");
+    await app.press("id:open-settings");
+    await app.press("id:section-models");
+    await app.waitFor("text:1 models · fixture catalog");
+    expect(app.shows("id:setting-models.default")).toBe(true);
+    expect(app.texts().join("\n").includes("codex/gpt-5")).toBe(true);
+    expect(app.texts().join("\n").includes("Core has no default setting for this yet")).toBe(true);
+    const before = app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length;
+    await app.press("id:setting-model-refresh");
+    await app.waitUntil(() => app.requests().filter((r) => r.method === "GET" && r.url.endsWith("/api/model")).length > before);
+    await app.press("id:setting-model-catalog");
+    await app.waitFor("id:picker");
+    expect(app.texts().join("\n").includes("GPT-5")).toBe(true);
+    await app.keyboard.press("escape");
+    await app.press("id:section-agents");
+    await app.waitFor("text:build, plan");
+    await app.press("id:setting-agents-list");
+    await app.waitFor("id:picker");
+    expect(app.texts().join("\n").includes("Change agent")).toBe(true);
   });
 });

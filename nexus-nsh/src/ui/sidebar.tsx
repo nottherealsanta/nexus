@@ -1,11 +1,11 @@
 import type { JSX } from "nsh";
 import { List, Scroll, Text, View } from "nsh";
-import { Button, ContextMenu, Menu, MenuItem, MenuSeparator, Tab, Tabs, Input } from "nsh/base";
+import { Button, ContextMenu, MenuItem, Tab, Tabs, Input } from "nsh/base";
 import { Btn, Icon, IconButton, Status, AttentionMark, T, FOCUS, relTime, abbrev, midTruncate } from "./kit";
 import { manifest } from "../gen/manifest";
-import { archive, askDelete, availability, byId, keyLabel, newSession, run, toggleLeft } from "../commands";
-import { archivedFilter, centre, connection, currentProject, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, tick, live, viewed, savePrefs } from "../store";
-import { Session } from "../core/api";
+import { availability, byId, commands, keyLabel, newSession, run, toggleLeft } from "../commands";
+import { archivedFilter, centre, connection, currentProject, focusedSidebarRow, isNarrow, leftTab, m, model, scopeAll, selectProject, selectSession, sidebarRowMenu, tick, live, viewed, savePrefs, SidebarRowTarget } from "../store";
+import { Project, Session } from "../core/api";
 import { fileListing, loadFiles, showFile } from "../store";
 import { icons, IconName } from "../icons";
 import { fold } from "../gen/theme";
@@ -145,15 +145,26 @@ function Chip(p: { label: string; on: boolean; onPress: () => void }) {
 
 function SessionRow(p: { s: () => Session }) {
   const s = p.s;
+  const ref = () => ({ kind: "session" as const, id: s().id });
   const sel = () => model.selected?.sessionId === s().id && centre() === "session";
   const n = () => childCount(s().id);
   const att = () => { m(); return attention(s().id); };
   return (
     <ContextMenu
+      open={sidebarRowMenu()?.kind === "session" && sidebarRowMenu()?.id === s().id}
+      onOpenChange={(open) => {
+        if (open) {
+          focusedSidebarRow.set(ref());
+          sidebarRowMenu.set(ref());
+          void selectSession(s().id);
+        } else if (sidebarRowMenu()?.id === s().id) sidebarRowMenu.set(null);
+      }}
       popupClass="min-w-[188px] rounded-(--radius-card) border border-border bg-popover p-1 shadow-lg"
       trigger={
-        <Button
-          onPress={() => void selectSession(s().id)} selected={sel()} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
+        <View role="button"
+          onFocus={() => focusedSidebarRow.set(ref())}
+          onBlur={() => { if (sidebarRowMenu()?.id !== s().id && focusedSidebarRow()?.id === s().id) focusedSidebarRow.set(null); }}
+          onPress={() => { focusedSidebarRow.set(ref()); void selectSession(s().id); }} accessibilityState={{ selected: sel() }} testID={`session-${s().id}`} accessibilityLabel={`${s().title || "Untitled"}, ${s().status === "busy" ? "running" : "idle"}`}
           class={`flex-row items-center gap-1 rounded-(--radius) px-1.5 hover:bg-accent selected:bg-selection ${isNarrow() ? "min-h-11" : "min-h-8"} ${FOCUS}`}
         >
           <View class="w-3.5 items-center">
@@ -164,34 +175,39 @@ function SessionRow(p: { s: () => Session }) {
             <If when={n() > 0}><Text class={T.meta}>{`${n()}↳`}</Text></If>
             <Text class={`${T.meta} w-7 text-right`}>{relTime(s().updated, (tick(), Date.now()))}</Text>
           </View>
-        </Button>
+        </View>
       }
     >
-      <SessionMenuItems id={s().id} />
+      <RowMenuItems row={ref} />
     </ContextMenu>
   );
 }
-function SessionMenuItems(p: { id: string }) {
-  const item = (label: string, act: () => void, id?: string, danger = false) => {
-    const c = id ? byId.get(id) : undefined;
-    const a = c ? availability(c) : { ok: true };
-    return (
-      <MenuItem onSelect={act} disabled={!a.ok} class={`flex-row items-center gap-2 rounded-(--radius) px-2 min-h-8 hover:bg-accent disabled:opacity-50`}>
-        <Text class={`flex-1 text-[13px] leading-5 ${danger ? "text-error" : "text-popover-foreground"}`}>{label}</Text>
-        <Text class={T.meta}>{!a.ok ? (a as any).reason?.slice(0, 0) : ""}</Text>
-      </MenuItem>
-    );
+function RowMenuItems(p: { row: () => SidebarRowTarget }) {
+  const items = () => commands.filter((c) => c.placement.includes("row_menu") && c.id.startsWith(`${p.row().kind}.`));
+  const choose = (id: string) => {
+    const row = p.row();
+    sidebarRowMenu.set(null);
+    if (row.kind === "session") void selectSession(row.id).then(() => run(id));
+    else { selectProject(row.id); void run(id); }
   };
-  const s = model.sessions.get(p.id);
   return (
-    <View>
-      {item("Open", () => void selectSession(p.id))}
-      {item("Rename", () => { void selectSession(p.id).then(() => run("session.rename")); }, "session.rename")}
-      {s?.archived ? item("Unarchive", () => void archive(p.id, true), "session.unarchive") : item("Archive", () => void archive(p.id), "session.archive")}
-      {item("Copy id", () => { void selectSession(p.id).then(() => run("session.copy_id")); }, "session.copy_id")}
-      <MenuSeparator class="my-1 h-px bg-border" />
-      {item("Delete…", () => askDelete(p.id), "session.delete", true)}
-    </View>
+    <Each of={items()} key={(c) => c.id}>
+      {(cmd) => {
+        const c = cmd();
+        const state = () => availability(c);
+        const danger = c.id === "project.remove" || c.id === "session.delete";
+        return <MenuItem onSelect={() => choose(c.id)} disabled={!state().ok}
+          accessibilityLabel={`${c.title}${state().ok ? "" : `, unavailable: ${state().reason}`}`}
+          testID={`row-action-${c.id}`}
+          class="flex-col items-stretch gap-0 rounded-(--radius) px-2 py-1.5 hover:bg-accent disabled:opacity-50">
+          <View class="flex-row items-center gap-2">
+            <Text class={`flex-1 text-[13px] leading-5 ${danger ? "text-error" : "text-popover-foreground"}`}>{c.title}</Text>
+            <Text class={T.meta}>{keyLabel(c) ?? ""}</Text>
+          </View>
+          <If when={!state().ok}><Text class={T.meta}>{state().reason!}</Text></If>
+        </MenuItem>;
+      }}
+    </Each>
   );
 }
 
@@ -212,31 +228,59 @@ function FilesTab() {
 }
 function ProjectsTab() {
   const rows = () => { m(); return model.projectsRecent(); };
+  const items = () => [...rows().map((project) => ({ kind: "project" as const, id: project.id, project })), { kind: "add" as const, id: "add-project" }];
   const count = (id: string) => { let n = 0; for (const s of model.sessions.values()) if (s.project_id === id && !s.parent_id && !s.archived) n++; return n; };
   return (
     <View class="flex-1 min-h-0">
       <View class="flex-row items-center gap-2 p-2">
         <Text class="flex-1 text-[13px] leading-5 font-medium text-foreground px-1">Projects</Text>
-        <Btn label="Add project" icon="plus" onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} reason={(availability(byId.get("project.add")!) as any).reason} testID="add-project" />
       </View>
-      <If when={rows().length > 0} else={<Empty title="No projects yet" body="Add a project by its directory path. Core creates it if it is new." />}>
-        <List each={rows()} keyExtractor={(x) => x.id} class="flex-1" contentClass="px-2 pb-2 gap-0.5" testID="project-list">
-          {(pr) => {
-            const sel = () => currentProject() === pr().id;
-            return (
-              <Button onPress={() => selectProject(pr().id)} selected={sel()} testID={`project-${pr().id}`} accessibilityLabel={`Project ${pr().name}`}
-                class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent selected:bg-selection ${FOCUS}`}>
-                <View class="flex-row items-center gap-2">
-                  <Text numberOfLines={1} class={`flex-1 text-[13px] leading-5 ${sel() ? "text-foreground font-medium" : "text-foreground"}`}>{pr().name}</Text>
-                  <Text class={T.meta}>{`${count(pr().id)} · ${relTime(pr().updated)}`}</Text>
-                </View>
-                <Text numberOfLines={1} class={`${T.meta} font-mono`}>{midTruncate(pr().path, 32)}</Text>
-              </Button>
-            );
-          }}
-        </List>
-      </If>
+      <If when={rows().length === 0}><Empty title="No projects yet" body="Add a project by its directory path. Core creates it if it is new." /></If>
+      <List each={items()} keyExtractor={(x) => x.id} class="flex-1" contentClass="px-2 pb-2 gap-0.5" testID="project-list">
+        {(item) => {
+          const row = item();
+          if (row.kind === "add") return <Button onPress={() => run("project.add")} disabled={!availability(byId.get("project.add")!).ok} testID="add-project" accessibilityLabel="+ Add project"
+            class={`flex-row items-center gap-2 rounded-(--radius) px-2.5 min-h-8 hover:bg-accent ${FOCUS}`}>
+            <Text class="text-[13px] leading-5 text-primary">+</Text>
+            <Text class="text-[13px] leading-5 text-foreground">Add project</Text>
+          </Button>;
+          return <ProjectRow project={() => row.project} count={count} />;
+        }}
+      </List>
     </View>
   );
 }
-void Input; void Scroll; void abbrev; void icons; void fold; void newSession; void toggleLeft; void Menu; void connection; void live; void viewed;
+
+function ProjectRow(p: { project: () => Project; count: (id: string) => number }) {
+  const project = p.project;
+  const ref = () => ({ kind: "project" as const, id: project().id });
+  const selected = () => currentProject() === project().id;
+  return (
+    <ContextMenu
+      open={sidebarRowMenu()?.kind === "project" && sidebarRowMenu()?.id === project().id}
+      onOpenChange={(open) => {
+        if (open) {
+          focusedSidebarRow.set(ref());
+          sidebarRowMenu.set(ref());
+          selectProject(project().id);
+        } else if (sidebarRowMenu()?.id === project().id) sidebarRowMenu.set(null);
+      }}
+      popupClass="min-w-[188px] rounded-(--radius-card) border border-border bg-popover p-1 shadow-lg"
+      trigger={
+        <View role="button" onFocus={() => focusedSidebarRow.set(ref())}
+          onBlur={() => { if (sidebarRowMenu()?.id !== project().id && focusedSidebarRow()?.id === project().id) focusedSidebarRow.set(null); }}
+          onPress={() => { focusedSidebarRow.set(ref()); selectProject(project().id); }} accessibilityState={{ selected: selected() }} testID={`project-${project().id}`} accessibilityLabel={`Project ${project().name}`}
+          class={`gap-0.5 rounded-(--radius) px-2.5 py-1.5 hover:bg-accent selected:bg-selection ${FOCUS}`}>
+          <View class="flex-row items-center gap-2">
+            <Text numberOfLines={1} class={`flex-1 text-[13px] leading-5 ${selected() ? "text-foreground font-medium" : "text-foreground"}`}>{project().name}</Text>
+            <Text class={T.meta}>{`${p.count(project().id)} · ${relTime(project().updated)}`}</Text>
+          </View>
+          <Text numberOfLines={1} class={`${T.meta} font-mono`}>{midTruncate(project().path, 32)}</Text>
+        </View>
+      }
+    >
+      <RowMenuItems row={ref} />
+    </ContextMenu>
+  );
+}
+void Input; void Scroll; void abbrev; void icons; void fold; void newSession; void toggleLeft; void connection; void live; void viewed;

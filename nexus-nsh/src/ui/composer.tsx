@@ -1,6 +1,6 @@
 import { Text, View, signal } from "nsh";
 import { Button, Input } from "nsh/base";
-import { Btn, Icon, IconButton, Status, T, FOCUS, midTruncate } from "./kit";
+import { Btn, IconButton, Status, T, FOCUS, midTruncate } from "./kit";
 import { availability, byId, draftKey, focusComposer, focusWaiting, otherWaits, run, sendPrompt, term, waitItems } from "../commands";
 import {
   agentCatalog, centre, connection, currentProject, defaultModel, draft, info, isNarrow, live, m, model,
@@ -62,8 +62,7 @@ export function Composer() {
     const input = Number(latest?.data?.input_tokens);
     if (!Number.isFinite(input) || input < 0) return "";
     const ref = modelRef();
-    const entry = modelCatalog().find((item) => item.ref === ref)
-      ?? modelCatalog().find((item) => String(item.ref ?? "").split("/").at(-1) === ref.split("/").at(-1));
+    const entry = modelCatalog().find((item) => item.ref === ref);
     const values = [composerCount(input)];
     const window = Number(entry?.context);
     const tiers: number[] = Array.isArray(entry?.tiers) ? [...new Set<number>((entry.tiers as unknown[]).map(Number))]
@@ -322,4 +321,3 @@ function QuestionBody(p: { q: Question }) {
     </View>
   );
 }
-void Icon; void waitItems;

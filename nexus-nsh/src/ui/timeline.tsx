@@ -3,7 +3,7 @@ import { List, Text, View } from "nsh";
 import { Button, TextView } from "nsh/base";
 import { Btn, FOCUS, Icon, Status, T } from "./kit";
 import { jump, run } from "../commands";
-import { agentCatalog, defaultModel, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, viewed } from "../store";
+import { agentCatalog, defaultModel, focusedTool, isNarrow, m, model, modelCatalog, scrolledUp, selectSession, toolOutputAll, viewed } from "../store";
 import type { CoreEvent, Message, Part } from "../core/api";
 import { roles } from "../gen/theme";
 import { signal } from "nsh";
@@ -26,13 +26,29 @@ type Row =
   | {
       key: string; kind: "tool"; id: string; name: string; arg: string; summary: string; tone: Tone;
       state: "running" | "done" | "error" | "waiting"; duration?: string; output?: string;
-      detail: { text: string; tone: "plain" | "add" | "del" | "info" | "error" }[];
-      raw: string; open: boolean;
+      detail: { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" }[];
+      raw: string; open: boolean; clipped: boolean; showAll: boolean;
     }
   | { key: string; kind: "child"; childId?: string; agent: string; title: string; status: string; tone: Tone; body: string; open: boolean }
   | { key: string; kind: "diag"; text: string; label: string; detail?: string; tone: Tone }
   | { key: string; kind: "older"; text: string }
   | { key: string; kind: "empty" };
+
+export type ToolDetailLine = { text: string; tone: "plain" | "add" | "del" | "info" | "error" | "accent" };
+const DETAIL_HEAD = 100;
+const DETAIL_TAIL = 100;
+const DETAIL_THRESHOLD = DETAIL_HEAD + DETAIL_TAIL + 20;
+
+/** UI-only cap: the model's separate output clip stays untouched. */
+export function capToolDetail(lines: ToolDetailLine[], showAll: boolean): ToolDetailLine[] {
+  if (showAll || lines.length <= DETAIL_THRESHOLD) return lines;
+  const hidden = lines.length - DETAIL_HEAD - DETAIL_TAIL;
+  return [
+    ...lines.slice(0, DETAIL_HEAD),
+    { text: `… ${hidden} lines hidden · show all (o)`, tone: "accent" },
+    ...lines.slice(-DETAIL_TAIL),
+  ];
+}
 
 const NOTICE = /^\[(Nexus notice|Nexus recovery|Notification)/;
 const closedTurns = signal<Record<string, boolean>>({});
@@ -75,15 +91,15 @@ function effectiveModelRef(): string {
   const agent = agentCatalog().agents.find((a) => a.name === (s?.agent ?? "build"));
   return agent?.model || defaultModel();
 }
-function catalogModel(ref: string): any | undefined {
+function catalogModel(ref: string, matchBareId = false): any | undefined {
   const models = modelCatalog();
   return models.find((entry) => entry.ref === ref)
-    ?? models.find((entry) => bareModel(String(entry.ref ?? "")) === bareModel(ref));
+    ?? (matchBareId ? models.find((entry) => bareModel(String(entry.ref ?? "")) === bareModel(ref)) : undefined);
 }
 function turnCost(t: TurnMeta): string | undefined {
   const used = t.models.at(-1);
   if (!used) return undefined;
-  const entry = catalogModel(used);
+  const entry = catalogModel(used, true);
   if (!entry) return undefined;
   const input = entry.input_cost, output = entry.output_cost;
   if (typeof input !== "number" || !Number.isFinite(input) || typeof output !== "number" || !Number.isFinite(output)) return undefined;
@@ -221,23 +237,29 @@ function diffCounts(args: string | undefined): { add: number; del: number } | nu
     return { add: newS ? newS.split("\n").length : 0, del: oldS ? oldS.split("\n").length : 0 };
   } catch { return null; }
 }
-function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean): { text: string; tone: "plain" | "add" | "del" | "info" | "error" }[] {
+function detailLines(value: string): string[] {
+  if (!value) return [];
+  const lines = value.split(/\r\n|\n/);
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+export function detailOf(name: string, args: string | undefined, output: string | undefined, raw: boolean): ToolDetailLine[] {
   if (raw) {
-    const lines = (args ?? "").split("\n").slice(0, 60).map((l) => ({ text: l, tone: "plain" as const }));
-    return [...lines, ...(output ?? "").split("\n").slice(0, 60).map((l) => ({ text: l, tone: "plain" as const }))];
+    const lines = detailLines(args ?? "").map((l) => ({ text: l, tone: "plain" as const }));
+    return [...lines, ...detailLines(output ?? "").map((l) => ({ text: l, tone: "plain" as const }))];
   }
   if (name === "edit" || name === "patch") {
     try {
       const o = JSON.parse(args ?? "{}");
       if (typeof o.patch === "string") {
-        return o.patch.split("\n").slice(0, 200).map((l: string) => ({
+        return detailLines(o.patch).map((l: string) => ({
           text: l,
           tone: l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "info" : "plain",
         }));
       }
       const out: { text: string; tone: "add" | "del" | "info" }[] = [{ text: `@@ ${o.path ?? ""}`, tone: "info" }];
-      for (const l of String(o.old_string ?? o.old ?? "").split("\n").slice(0, 100)) out.push({ text: `- ${l}`, tone: "del" });
-      for (const l of String(o.new_string ?? o.new ?? "").split("\n").slice(0, 100)) out.push({ text: `+ ${l}`, tone: "add" });
+      for (const l of detailLines(String(o.old_string ?? o.old ?? ""))) out.push({ text: `- ${l}`, tone: "del" });
+      for (const l of detailLines(String(o.new_string ?? o.new ?? ""))) out.push({ text: `+ ${l}`, tone: "add" });
       return out;
     } catch { /* fall through to the output */ }
   }
@@ -245,14 +267,11 @@ function detailOf(name: string, args: string | undefined, output: string | undef
     try {
       const o = JSON.parse(args ?? "{}");
       const out: { text: string; tone: "add" | "info" }[] = [{ text: `+ ${o.path ?? ""}`, tone: "info" }];
-      for (const l of String(o.content ?? "").split("\n").slice(0, 200)) out.push({ text: `+ ${l}`, tone: "add" });
+      for (const l of detailLines(String(o.content ?? ""))) out.push({ text: `+ ${l}`, tone: "add" });
       return out;
     } catch { /* fall through */ }
   }
-  const lines = (output ?? "").split("\n");
-  const out = lines.slice(0, 200).map((l) => ({ text: l, tone: "plain" as const }));
-  if (lines.length > 200) out.push({ text: `… ${lines.length - 200} lines hidden · show all`, tone: "plain" as const });
-  return out;
+  return detailLines(output ?? "").map((l) => ({ text: l, tone: "plain" as const }));
 }
 
 export function buildRows(): Row[] {
@@ -318,7 +337,7 @@ export function buildRows(): Row[] {
       t: -1,
       r: [{
         key: `context-${sid}`, kind: "context",
-        meta: `${items.length} items · ~${fmtCount(total)} tokens${share ? ` · ${share} of window` : ""}`,
+        meta: `· ${items.length} items · ~${fmtCount(total)} tokens${share ? ` · ${share} of window` : ""}`,
         reconstructed: s.origin === "reconstructed", open: open(`context:${sid}`, metas.length === 0),
         items, total: `~${fmtCount(total)}`, share,
       }],
@@ -386,18 +405,22 @@ export function buildRows(): Row[] {
             let summary = "";
             if (waiting.has(id)) summary = "waiting for approval";
             else if (p.name === "edit" || p.name === "patch") summary = res?.is_error ? "failed" : counts ? `+${counts.add} −${counts.del}` : "";
-            else if (p.name === "write") { try { summary = `+${String(JSON.parse(p.arguments ?? "{}").content ?? "").split("\n").length}`; } catch {} }
-            else if (res?.output) summary = `${(res.output.match(/\n/g)?.length ?? 0) + 1} lines`;
+            else if (p.name === "write") { try { summary = `+${detailLines(String(JSON.parse(p.arguments ?? "{}").content ?? "")).length}`; } catch {} }
+            else if (res?.output) summary = `${detailLines(res.output).length} lines`;
             const dur = tr?.start !== undefined && tr?.end !== undefined ? fmtDuration(tr.end - tr.start) : undefined;
             const key = `tool:${id}`;
             const rawOpen = open(`${key}:raw`, false);
+            const showAll = toolOutputAll()[key] ?? false;
+            const allDetail = detailOf(p.name ?? "tool", p.arguments, res?.output, rawOpen);
+            const clipped = allDetail.length > DETAIL_THRESHOLD;
+            const detail = capToolDetail(allDetail, showAll);
             out.push({
               key, kind: "tool", id, name: p.name ?? "tool", arg: toolArg(p.arguments), summary,
               tone: counts ? (counts.add >= 0 ? "accent" : "info") : "info",
               state, duration: dur, output: res?.output,
-              detail: detailOf(p.name ?? "tool", p.arguments, res?.output, rawOpen),
+              detail,
               raw: rawOpen ? JSON.stringify({ arguments: p.arguments ?? "", output: res?.output ?? "" }, null, 2) : "",
-              open: open(key, false),
+              open: open(key, false), clipped, showAll,
             });
           }
         }
@@ -600,31 +623,54 @@ function ContextItem(p: { item: () => Extract<Row, { kind: "context" }>["items"]
   const item = p.item;
   return (
     <View class="min-w-0 gap-0.5">
-        <View class="flex-row items-center gap-1.5">
-          <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{item().name}</Text>
-          <If when={!!item().chip}><Text class={T.meta}>{item().chip!}</Text></If>
-          <View class="flex-1" />
-          <If when={!!item().tokens}><Text class={T.meta}>{item().tokens!}</Text></If>
-        </View>
-        <Each of={item().details} key={(x, i) => `${item().key}-${i}`}>
-          {(detail) => <Text class={T.meta} numberOfLines={2}>{detail()}</Text>}
-        </Each>
+      <View class="flex-row items-center gap-1.5">
+        <Text class="text-[13px] leading-5 font-semibold text-foreground-secondary">{item().name}</Text>
+        <If when={!!item().chip}><Text class={T.meta}>{item().chip!}</Text></If>
+        <View class="flex-1" />
+        <If when={!!item().tokens}><Text class={T.meta}>{item().tokens!}</Text></If>
+      </View>
+      <Each of={item().details} key={(x, i) => `${item().key}-${i}`}>
+        {(detail) => <Text class={T.meta} numberOfLines={2}>{detail()}</Text>}
+      </Each>
     </View>
   );
 }
 
 function ToolTone(tone: string): string {
-  return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : "text-foreground-secondary";
+  return tone === "add" ? "text-success" : tone === "del" ? "text-error" : tone === "info" ? "text-info" : tone === "error" ? "text-error" : tone === "accent" ? "text-primary" : "text-foreground-secondary";
+}
+
+function ToolDetail(p: {
+  line: () => Extract<Row, { kind: "tool" }>["detail"][number];
+  id: string;
+  focus: () => void;
+  blur: () => void;
+}) {
+  const line = p.line();
+  if (line.text.includes("lines hidden · show all (o)")) {
+    return (
+      <View onFocus={p.focus} onBlur={p.blur}>
+        <Button onPress={() => { p.focus(); void run("tool.show_all_output"); }}
+          class={`self-start rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+          <Text testID={`tool-show-all-${p.id}`} class="font-mono text-xs leading-[18px] text-primary">{line.text}</Text>
+        </Button>
+      </View>
+    );
+  }
+  return <Text selectable class={`font-mono text-xs leading-[18px] ${ToolTone(line.tone)}`}>{line.text}</Text>;
 }
 
 function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
   const r = p.r;
+  const toggleRaw = () => toggle(`${r().key}:raw`, false);
+  const markFocused = () => focusedTool.set({ key: r().key, clipped: r().clipped, toggleRaw });
+  const clearFocused = () => { if (focusedTool()?.key === r().key) focusedTool.set(null); };
   const open = () => r().open;
   const stateKind = () => (r().state === "running" ? "running" : r().state === "waiting" ? "waiting" : r().state === "error" ? "error" : "done");
   return (
     <View class="py-0.5">
-      <Button onPress={() => toggle(r().key, false)} accessibilityLabel={`${r().name} ${r().state}`} selected={open()}
-        class={`flex-row items-center gap-1.5 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID="tool-row">
+      <View role="button" onFocus={markFocused} onBlur={clearFocused} onPress={() => { markFocused(); toggle(r().key, false); }} accessibilityLabel={`${r().name} ${r().state}`} accessibilityState={{ selected: open() }}
+        class={`flex-row items-center gap-1.5 rounded-(--radius) px-1 min-h-7 hover:bg-accent ${FOCUS}`} testID={`tool-row-${r().id}`}>
         <Status kind={stateKind()} />
         <Text class="w-[52px] text-[13px] leading-5 font-medium text-foreground">{r().name}</Text>
         <Text numberOfLines={1} ellipsizeMode="middle" class="flex-1 min-w-0 font-mono text-xs leading-5 text-foreground-secondary">{r().arg}</Text>
@@ -633,15 +679,24 @@ function ToolRow(p: { r: () => Extract<Row, { kind: "tool" }> }) {
         </If>
         <If when={r().state !== "waiting" && !!r().duration}><Text class={T.meta}>{r().duration}</Text></If>
         <If when={r().state === "waiting"}><Text class="text-[13px] text-primary">waiting</Text></If>
-      </Button>
+      </View>
       <If when={open()}>
         <View class="ml-6 mt-1 mb-1 rounded-(--radius) border border-border bg-card px-3 py-2 gap-0.5">
           <Each of={r().detail} key={(x, i) => `${i}`}>
-            {(x) => <Text selectable class={`font-mono text-xs leading-[18px] ${ToolTone(x().tone)}`}>{x().text}</Text>}
+            {(x) => <ToolDetail line={x} id={r().id} focus={markFocused} blur={clearFocused} />}
           </Each>
-          <Button onPress={() => toggle(`${r().key}:raw`, false)} class={`self-start mt-1 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
-            <Text class={T.meta}>{r().raw ? "[raw]" : "raw · r"}</Text>
-          </Button>
+          <View onFocus={markFocused} onBlur={clearFocused}>
+            <Button onPress={() => { markFocused(); toggleRaw(); }} class={`self-start mt-1 rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`} testID={`tool-raw-${r().id}`}>
+              <Text class={T.meta}>{r().raw ? "[raw]" : "raw · r"}</Text>
+            </Button>
+          </View>
+          <If when={r().clipped && r().showAll}>
+            <View onFocus={markFocused} onBlur={clearFocused}>
+              <Button onPress={() => { markFocused(); void run("tool.show_all_output"); }} class={`self-start rounded-(--radius) px-1 min-h-6 hover:bg-accent ${FOCUS}`}>
+                <Text testID={`tool-show-less-${r().id}`} class={T.meta}>show less o</Text>
+              </Button>
+            </View>
+          </If>
         </View>
       </If>
     </View>
