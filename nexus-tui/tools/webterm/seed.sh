@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Start two isolated Cores (mode-700 homes, no provider calls) for the visual
 # harness: a seeded workspace and an empty one. Writes <root>/env for shots.mjs.
+# NEXUS_CMD is the Core CLI (default `uv run nexus`, run from nexus-core);
+# NEXUS_PY runs seed_messages.py (default `uv run python`, or the python beside
+# a NEXUS_CMD that ends in `nexus`, e.g. NEXUS_CMD=/tmp/nexus10-venv/bin/nexus).
 #   tools/webterm/seed.sh <root>            start and seed
 #   tools/webterm/seed.sh <root> stop       stop both
 set -euo pipefail
@@ -8,7 +11,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 core="$here/../../../nexus-core"
 root="${1:?usage: seed.sh <root> [stop]}"
 mkdir -p "$root"
-nexus() { (cd "$core" && NEXUS10_HOME="$1" NEXUS_PORT="$2" uv run nexus "${@:3}"); }
+cmd="${NEXUS_CMD:-uv run nexus}"
+py="${NEXUS_PY:-uv run python}"
+if [ -z "${NEXUS_PY:-}" ] && [ -n "${NEXUS_CMD:-}" ] && [ "${NEXUS_CMD##*/}" = nexus ]; then py="${NEXUS_CMD%nexus}python"; fi
+# $cmd and $py are word-split on purpose: they may hold `uv run ...`.
+nexus() { (cd "$core" && NEXUS10_HOME="$1" NEXUS_PORT="$2" $cmd "${@:3}"); }
 if [ "${2:-}" = "stop" ]; then
   nexus "$root/home" 4799 daemon stop || true
   nexus "$root/home-empty" 4798 daemon stop || true
@@ -45,7 +52,7 @@ for t in "Refactor the loader" "Fix flaky test in sync" "Release notes for 0.10"
 done
 api /api/session s9 "{\"project\":\"$p2\",\"title\":\"Spike: terminal harness\"}" >/dev/null
 nexus "$root/home" 4799 daemon stop >/dev/null
-(cd "$core" && NEXUS10_HOME="$root/home" uv run python "$here/seed_messages.py" "$first")
+(cd "$core" && NEXUS10_HOME="$root/home" $py "$here/seed_messages.py" "$first")
 nexus "$root/home" 4799 daemon start
 printf 'WEBTERM_HOME=%s\nWEBTERM_HOME_EMPTY=%s\nWEBTERM_PORT=4799\nWEBTERM_PORT_EMPTY=4798\n' "$root/home" "$root/home-empty" > "$root/env"
 echo "seeded; env in $root/env"

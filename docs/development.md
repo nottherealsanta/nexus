@@ -103,6 +103,31 @@ Tuning (all optional, read at daemon start):
 | `NEXUS10_KEEP_TURNS` | 200 | Recent turns kept per session |
 | `NEXUS10_MUTATION_RETENTION_DAYS` | 7 | Idempotency-key lifetime after resolution |
 
+## Visual review of the TUI
+
+`nexus-tui --dump-frame` renders the real shell against a real Core with no TTY.
+Besides text frames it can press keys through the app's own key handling and
+write colour SVGs:
+
+```sh
+nexus-tui --dark --dump-frame 120x36 --out DIR --name palette --svg \
+  --keys "ctrl+k Refactor enter ctrl+p"
+```
+
+`--keys` takes space-separated tokens: key names in the manifest syntax
+(`ctrl+p`, `alt+2`, `ctrl+,`, `esc`, `enter`, `down`, `space`, `f1`) or text typed
+character by character (`/mo`). Core's replies are applied between tokens.
+`--svg` writes `<name>.svg` beside `<name>.txt` (truecolor unless `--256`/`--16`).
+
+`nexus-tui/tools/shots.sh <root> <out>` runs a standard set (session at three
+sizes in dark and light, palette, settings, files, new session, detail high,
+delete confirmation, slash completion) against two seeded, isolated Cores and
+converts the SVGs to PNG with headless Chromium, with no node. It always stops
+the Cores. `NEXUS_CMD` picks the Core CLI (default `uv run nexus`; for example
+`NEXUS_CMD=/tmp/nexus10-venv/bin/nexus`), `CHROME` the browser (default the
+Playwright headless shell). The node harness in `nexus-tui/tools/webterm`
+(xterm.js, mouse and hover shots) remains for what keys cannot reach.
+
 ## Commands
 
 Run uv from `nexus-core/`. Use uv only: `uv add <pkg>`, never `pip install`.

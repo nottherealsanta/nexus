@@ -1,6 +1,8 @@
 # Design plan: a polished TUI and NSH
 
-Status: proposal, 2026-10-28. Mock-ups for every decision are in the temporary
+Status: decided 2026-10-28. The user chose option A for every decision
+(`nexus-design-mockup/choices.json`), with the notes folded into D01, D05, D10, D11,
+D13, D15 and D18 below. Mock-ups for every decision are in the temporary
 folder [`nexus-design-mockup/`](nexus-design-mockup/README.md) (open
 `nexus-design-mockup/shots/index.html`). Delete that folder when this plan has
 landed. Captures of the TUI as it is today are in `nexus-design-mockup/before/`,
@@ -15,7 +17,12 @@ and lands in the same increment as the code.
 
 ## What is wrong today
 
-From the captures in `before/`, at 120×36 and 160×48:
+From the captures in `before/`, at 120×36 and 160×48. They were taken before
+commits `43586c2`…`0624c37` landed on `nexus10` (context chips, a right-aligned
+footer, a composer rail and status band, session tabs and detail levels, row
+menus). Those commits fixed parts of this list in a different direction. The
+increments below start from the current code and replace what conflicts with
+the decisions (for example, the composer rail and the session tab strip).
 
 1. **No frame.** The header row floats on the canvas. It has empty space over the sidebars and no
    band, so the window has no top edge. The sidebars are separated from the timeline only by
@@ -71,8 +78,9 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
 
 - `interface/theme.toml` values stay. Two additions:
   - `border.strong`: dark `#4a4a50`, light `#c2c3c0` (256: 239 / 250; 16:
-    `bright_black` / `white`; mono: `[]`). It is decorative and used for modal
-    frames, the diff split rule and the open tool-detail corner.
+    `bright_black` / `white`; mono: `[]`). It is decorative and used only for the
+    diff split rule and the open tool-detail box (`┌ │ ╰`). **Modals and popovers have
+    no border** (user choice).
   - `surface.scrim`: no colour of its own. It is defined as a 50% blend of every
     cell's fg and bg toward `surface.canvas`. The TUI applies it to the buffer under a modal. NSH
     uses `rgb(0 0 0 / .45)` in dark and `rgb(0 0 0 / .18)` in light.
@@ -87,16 +95,24 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
 ### D02 — Shell frame and header band
 
 ```
-◧  ≡ Sessions  ▤  ◫      nexus-demo › Refactor the loader                         ◐ working 12s   ● 1  ◨
+◧ ≡ ▤ ◫   · Refactor the loader ×  ◆ Review the CJK… ×  ◐ Release notes ×  +        ◐ working 12s   ● 1  ◨
 ```
 
-- **Header band:** row 0, the full width, on `surface.sidebar`.
-  - The left toggle sits at x=1.
-  - The **left-sidebar tabs move into the band** over the sidebar, as INTERFACE_PLAN already
-    says. The active tab shows its icon and label, bold, on a `surface.panel` chip. The inactive
-    tabs show their icon only, muted, with the label on hover.
-  - The breadcrumb starts at the centre column's text edge: earlier crumbs muted, the last one
-    bold primary.
+Decided with the user: keep the old-Nexus **session tabs** that landed in `5409281`, and give
+them the D02 chrome band. The breadcrumb from the first mock-up is used only for child
+sessions (see below).
+
+- **Header band:** row 0, the full width, on `surface.sidebar` (the chrome), no rule under it.
+  - The left toggle sits at x=1, then the left sidebar's three icons (`≡ ▤ ◫`, the active one
+    bold primary, the others muted; label on hover). They stay in the band over the sidebar,
+    so the sidebar's own first row is free for its search row.
+  - **Session tabs** start at the centre column's text edge: `{glyph} {title} ×` per opened
+    session (spinner running, `◆` waiting, `●` unread, `✕` failed, `·` idle), separated by one
+    cell. The **viewed tab** is bold primary on `surface.canvas`, so it reads as joined to the
+    page below it; other tabs are muted on the band. `+` (muted) ends the strip. Behaviour is
+    unchanged from `5409281` (close, `alt+[`/`alt+]`, rename on click, shortening, leading `…`).
+  - **Child sessions:** the viewed tab's title becomes the breadcrumb `root › child`
+    (earlier crumbs muted and clickable).
   - The run status is right-aligned at the centre column's right edge: `◐ working 12s`,
     `◆ waiting for you`, `✕ offline`.
   - At the far right: the attention count (`● 1`), then the right toggle.
@@ -111,8 +127,9 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
 - **NSH:**
   - The 44 px header uses `--surface-sidebar`, with no bottom border. The left sidebar is 264 px
     and the right 300 px, both on `--surface-sidebar`; the centre is `--surface-canvas`.
-  - The breadcrumb is aligned with the 760 px reading column.
-  - Tabs are 32 px icon buttons; the active one shows its icon and label on `--surface-panel`.
+  - Sidebar icons are 32 px icon buttons in the header's left slot. Session tabs follow,
+    aligned with the reading column: 28 px tall, 6 px radius, the viewed one on
+    `--surface-canvas` with primary text, others muted with a hover fill, `×` on hover.
 - Shots: `d02-shell-200x50`, `d02-shell-120x36`, NSH `d02-shell`.
 
 ### D03 — Sessions sidebar
@@ -185,7 +202,7 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
 ### D05 — Turn footer
 
 ```
-                         ▪ Build · gpt-6.1-terra · medium · 3 tools · 4.2s · 12k in · 2k out · $0.04 · ✓ done
+                                  ▪ Build · gpt-6.1-terra · medium · 3 tools · 4.2s · 12k in · 2k out · $0.04
 ```
 
 - The footer is right-aligned at the end of the turn, with one blank row before it and no hairline.
@@ -195,15 +212,16 @@ to `nexus-design-mockup/shots/` (`tui/<id>-<mode>.png`, `nsh/<id>-<theme>.png`).
   - the models used (`a → b` when the model changed);
   - effort, tool count and duration;
   - tokens: `in`, then `cached` if any, then `out`;
-  - cost when known;
-  - the end status with its glyph and word.
+  - cost when known.
+- **No end status** (user choice): the footer never says `done`, `interrupted` or `error`.
+  How a turn ended shows elsewhere: an interrupted turn adds the `/continue` hint
+  (`enter continue` when the composer is empty) after the footer; a failed turn has the first
+  line of its error in `status.error` with `✕` on the row above the footer. The session row,
+  the header status and the right sidebar still carry the session state.
 - Durations are formatted as `0.4s`, `4.2s`, `1m 05s` or `1h 02m`, never `<1 s`.
-- **Narrow width:** the footer wraps from the left onto a second right-aligned row. The status always
-  stays on the last row.
-- **Interrupted:** `◼ interrupted`, then the `/continue` hint (`enter continue` when the
-  composer is empty). **Error:** `✕ error` with the first line of the error on a muted row above.
-- **NSH:** a right-aligned meta row. The status is a chip (glyph and word in the status colour)
-  and the token segment has a tooltip with the breakdown.
+- **Narrow width:** the footer wraps from the left onto a second right-aligned row.
+- **NSH:** a right-aligned meta row with no status chip. The token segment has a tooltip with
+  the breakdown.
 - Shots: `d05-footer` (done, interrupted, error, model change, narrow), NSH `d04-turn`.
 
 ### D06 — Activity groups and tool lines
@@ -313,6 +331,8 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
     read        bash        edit        write      (4-column grid; off tools struck through, muted)
   Context total · 17,580 tokens · 8.8% of the window
   ```
+  - **No bar** (user choice): the total is text only. Each section header keeps its token
+    count.
   - `◆` is muted, the title bold primary and the tokens secondary; the meta is muted.
   - One preview line per text section, and a column grid for the inventories.
 - After the first turn the whole section folds to
@@ -326,7 +346,7 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
   The centred "Type a message below" text is removed.
 - **NSH:** each section is a card on `--surface-panel` with a 10 px radius and a header row
   (title, tokens and meta). Tools are a 4-column grid of 24 px chips with switches. The total is
-  shown as a meter bar.
+  a text row, with no meter bar.
 - Shots: `d10-new-session`, `d10-context-folded`, NSH `d10-new-session`.
 
 ### D11 — Composer
@@ -335,6 +355,9 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
   - `surface.panel`, inset by the 2-cell gutter, with half-row edges (`▄` above and `▀` below
     in the panel colour; old Nexus used `▀`). It reads as a card without spending full rows.
   - Rows: the input, a blank row, then the control row.
+- **Replaces `5409281`'s composer** (decided with the user): remove the agent-coloured rail
+  and the darker status band; the context figure moves back onto the control row as the `╱`
+  meter, and `ctrl+p commands` moves to the project strip.
 - **Placeholder:** `Type a message…`. The cursor block sits on the first letter, as in old
   Nexus; there is no focus rail in truecolor. In ANSI-16 and mono, the focus bar is drawn at
   the left edge.
@@ -349,9 +372,9 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
   The control row's right side becomes `esc stop`.
   - Enter while busy steers once Core supports it. Until then the row says
     `steering needs Core (Step 12a)`.
-- **Completion** (`/` and `@`): a raised popover anchored to the card's top edge with a rounded
-  `border.strong` frame. It shows ten rows; the selected row has the selection band and focus bar.
-  Key hints sit in the bottom border.
+- **Completion** (`/` and `@`): a borderless `surface.raised` block sitting directly on the
+  card's top edge, **exactly as wide as the composer card** (user choice). It shows ten rows;
+  the selected row has the selection band and focus bar. Key hints are its last row, muted.
 - **Project strip** below the card, on the canvas:
   - `nexus-demo` (bold primary), `~/repos/nexus-demo` (muted), `⌥ main` (secondary), and
     `checkout` (muted) or `worktree` (bold violet, as in old Nexus).
@@ -362,6 +385,7 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
     (`--border-focus` when focused) and 12×16 px padding.
   - The control row holds pill selectors (agent in its colour, model, effort), the meter as an
     80×4 px bar in the agent colour, and the send/stop button on the right.
+  - Completion is a borderless raised block the width of the card, flush with its top edge.
 - Shots: `d11-composer` (idle, draft, busy, completion, narrow), NSH `d11-composer`.
 
 ### D12 — Right sidebar
@@ -383,10 +407,11 @@ Old Nexus `transcript/groups.rs` and `transcript/tools.rs`, polished:
 
 One modal recipe for every overlay:
 
-- **Frame:** `surface.raised` with a rounded frame in `border.strong`.
-  - The title (bold primary) sits in the top border; `esc` (muted) sits in the top border on
-    the right.
-  - The scrim (D01) is applied to everything underneath.
+- **Block, no border** (user choice): a filled `surface.raised` block with generous padding,
+  2 cells left and right and 1 blank row top and bottom.
+  - The title (bold primary) is the first row inside; `esc` (muted) is right-aligned on it.
+  - The scrim (D01) is applied to everything underneath; with no frame, the scrim and the
+    surface step are what separate the modal from the session.
   - Width is 64 cells for the palette and pickers, 88 for Settings, and 44–60 for confirms,
     centred. Height is capped at 70% of the frame.
 - **Search row:** `⌕` and the query, with the placeholder muted. Below it, a hairline in
@@ -396,12 +421,12 @@ One modal recipe for every overlay:
     full accent fill in Settings.
   - **Disabled:** muted, with the reason shown in the footer when selected.
 - **Section headings:** UPPERCASE bold muted, with a blank row before each one except the first.
-- **Footer:** key hints in the bottom border (`↑↓ move · enter run · esc close`) and a count
-  (`12 of 99`) on the right.
+- **Footer:** key hints as the last row inside (`↑↓ move · enter run · esc close`), muted, with
+  a count (`12 of 99`) on the right.
 - **Settings** has 12 sections, more than fit at the 70% height cap. At ≥ 160 columns it gets a section index on the left (the 12 names, the current one on the selection band); narrower, the list scrolls and the footer names the next section.
 - **Confirm:** a body text, then the buttons: `[ Cancel ]` (the safe default, selected) and
   `[ Delete ]` in `status.error`.
-- **NSH:** a 10 px radius dialog, a 1 px `--border-default` border, a shadow
+- **NSH:** a 10 px radius dialog with 24 px padding, **no border**, a shadow
   `0 12px 40px rgb(0 0 0 / .4)` and the scrim. The search input is 40 px. Rows are 32 px with
   selection and a 2 px accent bar.
 - Shots: `d13-palette`, `d13-settings`, `d13-model-picker`, `d13-confirm`,
@@ -433,15 +458,19 @@ One modal recipe for every overlay:
 - **Toasts:** top-right of the page, under the header, 36–48 cells wide, newest at the bottom,
   three at most, then `+N more`. Old Nexus anatomy:
   - `raised`, a `▌` in the level colour, the level glyph, a bold title and `×` on the right.
-  - The bottom hairline shrinks over the toast's lifetime.
+  - **No lifetime hairline** (user choice).
+  - **Full text on click:** a click, or Enter on a focused toast, opens a borderless modal
+    (D13) titled by the toast, with the whole notification wrapped and scrollable (long
+    provider errors and bodies included), hints `c copy · esc close`. The notifications
+    drawer opens the same modal for past entries.
 - **Banner:** one row at the top of the page on `panel`; it pushes the timeline down one row and never covers it. The level glyph and the first words
   are in the level colour; actions are on the right (`r retry · × hide`).
 - **Jump to latest:** a raised pill, right-aligned on the row above the composer card:
   `↓ 3 new · end`. It never overlaps content.
 - **NSH:** toasts are 360 px, top-right under the header, `--surface-raised`, with a 10 px
-  radius and a progress hairline. The banner is a 36 px strip. Jump to latest is a floating
+  radius and no progress hairline; clicking opens the full-text dialog. The banner is a 36 px strip. Jump to latest is a floating
   pill above the composer.
-- Shots: `d15-alerts`, NSH `d15-alerts`.
+- Shots: `d15-alerts`, `d15-toast-detail`, NSH `d15-alerts`, `d15-toast-detail`.
 
 ### D16 — Files
 
@@ -474,14 +503,25 @@ One modal recipe for every overlay:
 ### D18 — Empty, loading and offline states
 
 - **Empty workspace:**
-  - A centred block on the page with the Nexus wordmark in half-blocks (from the old splash).
+  - A centred block on the page with the **Nexus splash logo** (user choice), in the accent
+    colour, used by both clients wherever a splash or wordmark appears (empty workspace,
+    connecting screen):
+    ```
+        _/      _/
+       _/_/    _/
+      _/  _/  _/
+     _/    _/_/
+    _/      _/
+    ```
+    ASCII mode needs no fallback; monochrome draws it bold.
   - Below it: `No projects yet`, `ctrl+o add a project · ctrl+p commands`.
 - **Loading:** a muted `◐ loading sessions…` in place of the list, with no layout shift.
 - **Offline:**
   - The header shows `✕ offline`.
   - A banner reads `Disconnected from Core · retrying in 4s · r retry`.
   - The composer stays editable with `Reconnecting to Core… your draft is kept`.
-- **NSH:** the same text, and the wordmark is an SVG.
+- **NSH:** the same text, and the logo is the same five rows in Monaspace (or an SVG traced
+  from it) in `--interactive-accent`.
 - Shots: `d18-empty`, `d18-offline`, NSH `d18-states`.
 
 ### D19 — Motion and accessibility
@@ -502,7 +542,8 @@ One modal recipe for every overlay:
 
 ## Choosing
 
-`nexus-design-mockup/shots/index.html` is a chooser. For each decision it shows
+Done: `nexus-design-mockup/choices.json` (2026-10-28) picks A everywhere, with notes.
+`nexus-design-mockup/shots/index.html` is the chooser. For each decision it shows
 the recommended option (A), the alternatives (several from old Nexus) and today's
 TUI. Choose one per decision, add notes, then **Export choices** (it downloads
 `choices.json`). Save that file as `nexus-design-mockup/choices.json`. This plan
@@ -556,28 +597,25 @@ them. Never delete a test to make room; restate what it checks.
   - Add a `surface-sidebar` utility if `gen.py` does not emit one.
 - Review: `d02-shell-200x50` against a webterm shot of the same fixture.
 
-### I2 — Header band and tabs in the band (D02)
+### I2 — Header band: sidebar icons and session tabs (D02)
 
-- **TUI `render.rs`:**
-  - `draw_header` takes over the tabs: move `draw_tab_icons` into the band at x=4 over the left
-    sidebar, and remove the sidebar's first-row tab strip (`draw_left` starts its content one row
-    higher).
-  - Active tab: icon and label, bold, on `surface.panel`. Inactive tabs: icon only, muted.
-  - The hover tooltip (`draw_tab_tooltip`) stays, anchored under the band.
-  - Breadcrumb: start it at `centre.x + 2` instead of centring it. Earlier crumbs are muted and
-    clickable; the last crumb is bold primary.
-  - `header_status` is right-aligned at the centre's right edge: `◐ working 12s`, `◆ waiting for
-    you`, `✕ offline`.
-  - The attention count and the right toggle sit at the far right.
-  - Update the `layout.rs` hit rects for the tabs, the crumbs and the status.
-- **`layout.rs`:** set the widths from D17: left 34 at ≥160 columns, 28 at 120–159;
-  right 36 / 30. The saved `ui.left_width` still wins when it is set.
-- **NSH `header.tsx` and `sidebar.tsx`:**
-  - Move the `Tabs` from the sidebar top into the header's left slot (the header grid has
-    `264px 1fr 300px` columns to match the sidebars).
-  - `Crumbs` aligns with the 760 px column.
-- Tests: update the header layout tests in `tests/shell.rs` and add one for the tab click rects
-  in the band.
+- **TUI `render.rs` `draw_header`** (session tabs from `5409281` stay; restyle them):
+  - Paint the band on `surface.sidebar`. Move `draw_tab_icons` into the band at x=4 over the
+    left sidebar; `draw_left` starts its content one row higher, with the search row first.
+  - Session tabs start at the centre's text edge: the viewed tab bold primary on
+    `surface.canvas`, the others muted on the band, glyphs per D02, `+` last. Keep the existing
+    fitting rules and keys.
+  - Child sessions: the viewed tab shows `root › child` with clickable earlier crumbs.
+  - `header_status` right-aligned at the centre's right edge; the attention count and the right
+    toggle at the far right.
+  - Update the `layout.rs` hit rects for the icons, the tabs, the crumbs and the status.
+- **`layout.rs`:** widths from D17: left 34 at ≥160 columns, 28 at 120–159; right 36 / 30.
+  The saved `ui.left_width` still wins when it is set.
+- **NSH `header.tsx` and `sidebar.tsx`:** sidebar icon buttons move into the header's left
+  slot; session tabs (from `0624c37`) restyled per D02; the header grid has `264px 1fr 300px`
+  columns to match the sidebars.
+- Tests: update the header tests in `tests/shell.rs` (tab styles, icon hit rects in the band,
+  child breadcrumb).
 
 ### I3 — Timeline rhythm: user band, footer, reasoning, groups (D04–D07)
 
@@ -588,10 +626,11 @@ them. Never delete a test to make room; restate what it checks.
   - `#n · time` is muted on the first row.
   - Tags (`steer`, `queued`, `from parent`) go before `#n`.
 - **`turn_footer`:**
-  - Becomes the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost ·
-    status` row after a blank row, with no hairline.
-  - Wrap rule: break the segments from the left onto an extra right-aligned row; the status
-    stays on the last row.
+  - Becomes the right-aligned `▪ Agent · models · effort · tools · duration · tokens · cost`
+    row after a blank row, with no hairline and **no end status** (D05).
+  - Interrupted turns add the `/continue` hint after it; failed turns put the error's first
+    line (`✕` in `status.error`) on the row above it.
+  - Wrap rule: break the segments from the left onto an extra right-aligned row.
   - Remove the footer's header-like placement above the next turn.
 - **`fmt_duration`:** `0.4s`, `4.2s`, `1m 05s`, `1h 02m`. Replace every `<1 s`.
 - **`reasoning_block`:**
@@ -614,6 +653,9 @@ them. Never delete a test to make room; restate what it checks.
   - The output cap is 2 command rows and 8 tail rows, with `↑ N earlier lines · enter show all`.
   - The `raw` toggle is right-aligned on the head row.
   - Finish flash: 6 frames of accent on the group glyph, none with reduced motion.
+- **Detail levels** (`alt+d`, from `5409281`) stay: low shows only the folded summary rows,
+  medium (default) shows the live tree and folded finished groups, high opens every group's
+  members. The D06 styles apply at every level.
 - **Sticky header** (new `sticky.rs`, adapted from old `rust/tui/src/sticky.rs`):
   - When a band's first row is above the viewport, pin a copy under the header: at most 3 rows,
     then the `░` shade row in `border.strong` with `↑ N lines of this turn above`.
@@ -622,7 +664,7 @@ them. Never delete a test to make room; restate what it checks.
 - **NSH `timeline.tsx`:**
   - `RowView` for user rows: the full-column raised card, a 10 px radius, 12×16 px padding and
     a 2 px accent bar when focused.
-  - Footer: a right-aligned meta row with a status chip and a token tooltip.
+  - Footer: a right-aligned meta row with a token tooltip and no status chip.
   - Groups: 28 px rows; members 24 px with a 1 px tree line and 16 px verb icons
     (add `src/icons/{read,edit,shell,search,code,ask,session,web}.svg`).
   - Thought rows as in D07.
@@ -663,7 +705,8 @@ them. Never delete a test to make room; restate what it checks.
 
 ### I5 — Composer and project strip (D11)
 
-- **`render.rs` `draw_composer`:**
+- **`render.rs` `draw_composer`:** remove the agent rail and the status band from `5409281`
+  (and their tests), then:
   - Half-row card edges (`▄` and `▀` in the panel colour; `─` rules in mono and ASCII).
   - Input at x+3, then a blank row, then the control row.
   - The placeholder cursor sits on the first letter.
@@ -676,8 +719,9 @@ them. Never delete a test to make room; restate what it checks.
   - A live row above the card: `◐ Working · 12s · ↓4.1k`, with the shimmer.
   - The control row's right side reads `esc stop`.
   - Remove the old busy markers inside the card.
-- **Completion (`draw_completion`):** a rounded `border.strong` frame on raised, anchored to the
-  card's top edge, with the selection band and focus bar, and key hints in the bottom border.
+- **Completion (`draw_completion`):** a borderless raised block exactly as wide as the composer
+  card, flush with its top edge, with the selection band and focus bar, and key hints as its
+  last row.
 - **Project strip:** replace the accent underline with the D11 segments. Bold `worktree`
   in `agent.violet`.
 - **NSH `composer.tsx`:** the card with a 12 px radius and a 1 px border (focus colour when
@@ -715,15 +759,17 @@ them. Never delete a test to make room; restate what it checks.
 - Add **`render.rs` `modal(frame, title, width)`**, used by `draw_palette`,
   `draw_settings_modal`, the pickers, `draw_dialog`, `draw_help` and
   `draw_notifications`:
-  - It applies the scrim to the whole frame, fills `surface.raised` and draws a rounded frame
-    in `border.strong`.
-  - The title goes in the top border, `esc` on the right, key hints in the bottom border.
+  - It applies the scrim to the whole frame and fills `surface.raised` with **no border**:
+    2 cells of padding left and right, 1 row top and bottom.
+  - The title is the first row inside with `esc` on the right; key hints are the last row
+    inside.
+  - `kit`-style fills must reset modifiers so text styles underneath do not leak in.
 - **Settings:** UPPERCASE muted section headings replace violet. The selected row has the
   selection band and focus bar, replacing the accent fill. Reasons show in the footer.
 - **Confirm:** `[ Cancel ]` is the selected default; `[ Delete ]` is in `status.error`.
 - **NSH `overlays.tsx` and `settings.tsx`:** one `Dialog` shell with a 10 px radius, the scrim
   and the shadow; 32 px rows with selection and a 2 px accent bar.
-- Tests: a scrim cell test, frame geometry at 80×24 (the modal fits within 2 cells of each
+- Tests: a scrim cell test, no border cells drawn, block geometry at 80×24 (the modal fits within 2 cells of each
   edge), the selected-row style.
 
 ### I8 — Waiting card and alerts (D14, D15)
@@ -733,19 +779,25 @@ them. Never delete a test to make room; restate what it checks.
   - The parameter table, with the diff from I4 capped at 12 rows.
   - The key-chip choice list, where a choice Core does not offer shows its reason.
   - Questions use `( )`/`(*)` and `[ ]`/`[x]`, plus free text.
-- **`draw_toasts`:** top-right under the header, with the level `▌`, glyph, bold title, `×`
-  and the shrinking lifetime hairline.
+- **`draw_toasts`:** top-right under the header, with the level `▌`, glyph, bold title and
+  `×`; no lifetime hairline.
+- **Toast detail:** a click, or Enter on a focused toast, opens the I7 modal with the full
+  notification text (wrapped, scrollable, `c` copies it, Esc closes). The notifications
+  drawer (`draw_notifications`) opens the same modal for an entry. Keep the full text on the
+  alert record; today's toast may store only the title.
 - **`draw_banner`:** one row at the top of the page.
 - **Jump to latest:** a raised pill on the row above the composer card, right-aligned. It
   never draws over the timeline.
 - **NSH:** `composer.tsx` `WaitingCard` per D14; `alerts.tsx` toasts top-right, the 36 px
-  banner and the floating jump pill.
-- Tests: waiting card heights, toast stacking and `+N more`, the pill position at 80×24.
+  banner, the floating jump pill and a full-text dialog when a toast is clicked.
+- Tests: waiting card heights, toast stacking and `+N more`, the pill position at 80×24, the
+  toast-detail modal opening from a click and from Enter.
 
 ### I9 — New-session view and starting context (D10)
 
 - **`draw_new_session_context`:** the header block, then the context sections in the D10
   layout. The tools grid uses the session's tool switches.
+  - No context bar: the total is a text row; each section header keeps its token count.
   - The preview stays client-side until Core session drafts land (PLAN.md Step 12a). Each
     section's token count reads `~` with "estimated" on hover until then.
 - **`timeline.rs` `context_section`:** the same section renderer. It folds to one line after
@@ -763,12 +815,14 @@ them. Never delete a test to make room; restate what it checks.
   - A gutter with a `│` and the bottom search row.
 - **Narrow layouts (`layout.rs`):** apply the D17 breakpoints. Drawers open over the scrim, and
   the header sheds to toggles and the left-truncated crumb.
-- **`empty_state`:** the half-block NEXUS wordmark from the old `splash.rs` (static, no
-  animation) and the next-step sentence.
+- **`empty_state`:** the D18 splash logo (the five-row `_/` N, accent, bold in mono) and the
+  next-step sentence. Put the logo rows in one constant shared with the connecting screen.
 - **Offline:** the banner text, `✕ offline` in the header and the composer placeholder.
 - **NSH:** `sidebar.tsx` Files tab (blocked until NSH files land; see PLAN.md "NSH (12.5
   rest)"), a phone layout with drawers and 44 px targets, and the empty and offline states.
-- Tests: breakpoint table, drawer hit-testing, wordmark in ASCII.
+- **NSH:** the same logo rows as a shared constant (generated into `src/gen/` if it moves to
+  `interface/`), rendered in Monaspace in the accent colour.
+- Tests: breakpoint table, drawer hit-testing, the logo rows and their centring.
 
 ## Tooling
 
@@ -789,13 +843,15 @@ These land with the increment that implements them:
 
 | Where | Change |
 | --- | --- |
-| INTERFACE_PLAN "Turn footer" | Right-aligned at the end of the turn, `▪ Agent · …`, no hairline (D05) |
-| INTERFACE_PLAN "Workspace header" | Header band on the chrome surface; the run status sits at the centre's right edge (D02) |
-| INTERFACE_PLAN "Toast" | Top-right under the header (old Nexus), not bottom-right (D15) |
+| INTERFACE_PLAN "Turn footer" | Right-aligned at the end of the turn, `▪ Agent · …`, no hairline, no end status word (D05) |
+| INTERFACE_PLAN "Workspace header" | Header band on the chrome surface holding the sidebar icons and the session tabs (viewed tab on the canvas surface); child breadcrumb in the viewed tab; run status at the centre's right edge (D02) |
+| INTERFACE_PLAN "Toast" | Top-right under the header (old Nexus), not bottom-right; no lifetime hairline; click opens the full text (D15) |
+| INTERFACE_PLAN "Dialog and confirm" | Borderless raised block with padding over the scrim; title and hints inside (D13) |
 | INTERFACE_PLAN "Waiting card" | The choice list with key chips replaces the bracketed button row (D14) |
 | INTERFACE_PLAN "Layout" (Settings) | Selection band and focus bar instead of the accent fill; UPPERCASE muted headings instead of violet (D13) |
-| INTERFACE_PLAN "Composer" | Half-row card, no focus rail in colour tiers, `╱` meter (D11) |
-| INTERFACE_PLAN "Context section" | `◆` sections with preview lines and a tools grid (D10) |
+| INTERFACE_PLAN "Composer" | Half-row card, no agent rail and no status band (replacing `5409281`), `╱` meter on the control row, completion as wide as the card (D11) |
+| INTERFACE_PLAN "Context section" | `◆` sections with preview lines and a tools grid; total as text, no bar (D10) |
+| INTERFACE_PLAN "Loading and empty states" | The `_/` N splash logo in both clients (D18) |
 | design-language.md | Chrome and page surfaces, rationed accent (never inline code), section label style, modal recipe |
-| PLAN.md ledger | "Old top bar with session tabs → header band with icon tabs and breadcrumb"; "Old modal backdrop dim → scrim on the cell buffer"; "Old sticky user card → kept"; "Old `╱` meter → kept in the composer and the right sidebar" |
+| PLAN.md ledger | "Session tabs → kept, restyled in the chrome band"; "Composer rail and status band → soft card with the `╱` meter (user choice)"; "Old modal backdrop dim → scrim on the cell buffer"; "Old sticky user card → kept"; "Old `╱` meter → kept in the composer and the right sidebar" |
 | PLAN.md Open questions | "Focus ring colour" is answered by D01 (A shares the accent; C is a cool hue) |

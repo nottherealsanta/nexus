@@ -26,6 +26,7 @@ pub mod reduce;
 pub mod render;
 pub mod state;
 pub mod stats;
+pub mod svg;
 pub mod sync;
 pub mod term;
 pub mod text;

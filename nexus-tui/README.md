@@ -111,6 +111,9 @@ cargo run                  # the TUI (starts Core if needed)
 cargo run -- --once        # no UI: print connection state + sessions once live, then exit
 cargo run -- --dump-frame 80x24,120x36 --open first --out DIR
                            # no TTY: render the real shell against the real Core to text files
+# also: --svg (write <name>.svg, real colours), --keys "ctrl+p down enter /mo"
+# (press keys first, space separated), --name NAME (file stem)
+tools/shots.sh ROOT OUT    # node-free: seeded Cores -> standard shots -> PNG (see ../docs/development.md)
 ```
 
 Display options (flags override the environment): `--dark | --light`, `--mono`

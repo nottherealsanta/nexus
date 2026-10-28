@@ -73,6 +73,68 @@ pub fn hint(key: &str) -> &str {
     key
 }
 
+/// Parse a key spec such as `ctrl+p down enter /mo` into key presses, one group
+/// per space-separated token. A token is a key name in the manifest's syntax
+/// (`ctrl+,`, `alt+2`, `esc`, `space`, `f1`), else literal text typed one
+/// character at a time. Used by `--dump-frame --keys`.
+pub fn parse_spec(spec: &str) -> Result<Vec<Vec<KeyEvent>>, String> {
+    spec.split_whitespace().map(parse_token).collect()
+}
+
+fn named(key: &str) -> Option<KeyCode> {
+    Some(match key {
+        "space" => KeyCode::Char(' '),
+        "enter" => KeyCode::Enter,
+        "esc" => KeyCode::Esc,
+        "tab" => KeyCode::Tab,
+        "backspace" => KeyCode::Backspace,
+        "delete" => KeyCode::Delete,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        _ => {
+            let n = key.strip_prefix('f')?.parse::<u8>().ok()?;
+            (1..=12).contains(&n).then_some(KeyCode::F(n))?
+        }
+    })
+}
+
+fn parse_token(token: &str) -> Result<Vec<KeyEvent>, String> {
+    let mut mods = KeyModifiers::NONE;
+    let mut rest = token;
+    for (prefix, m) in [
+        ("ctrl+", KeyModifiers::CONTROL),
+        ("alt+", KeyModifiers::ALT),
+        ("shift+", KeyModifiers::SHIFT),
+        ("cmd+", KeyModifiers::SUPER),
+    ] {
+        if let Some(r) = rest.strip_prefix(prefix).filter(|r| !r.is_empty()) {
+            mods |= m;
+            rest = r;
+        }
+    }
+    let mut chars = rest.chars();
+    let single = match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(KeyCode::Char(c)),
+        _ => None,
+    };
+    if let Some(code) = named(rest).or(single) {
+        return Ok(vec![KeyEvent::new(code, mods)]);
+    }
+    if mods != KeyModifiers::NONE {
+        return Err(format!("unknown key {token}"));
+    }
+    Ok(token
+        .chars()
+        .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +192,28 @@ mod tests {
             None
         );
         assert_eq!(printable(&ev(KeyCode::Char('a'), KeyModifiers::ALT)), None);
+    }
+
+    #[test]
+    fn spec_tokens_are_keys_or_text() {
+        let spec = parse_spec("ctrl+p esc alt+2 ctrl+, /mo f1 shift+tab").unwrap();
+        let names: Vec<Vec<String>> = spec
+            .iter()
+            .map(|t| t.iter().map(|k| name(k).unwrap()).collect())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                vec!["ctrl+p"],
+                vec!["esc"],
+                vec!["alt+2"],
+                vec!["ctrl+,"],
+                vec!["/", "m", "o"],
+                vec!["f1"],
+                vec!["shift+tab"],
+            ]
+        );
+        assert!(parse_spec("").unwrap().is_empty());
+        assert!(parse_spec("ctrl+nope").is_err());
     }
 }

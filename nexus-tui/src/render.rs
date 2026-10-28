@@ -258,11 +258,15 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 /// Render to a text grid (one string per row), for tests and frame dumps.
 pub fn render_text(app: &mut App, w: u16, h: u16) -> Vec<String> {
+    buffer_rows(&render_buffer(app, w, h))
+}
+
+/// Render to a cell buffer (styles included), for frame dumps and SVG.
+pub fn render_buffer(app: &mut App, w: u16, h: u16) -> Buffer {
     use ratatui::backend::TestBackend;
     let mut term = ratatui::Terminal::new(TestBackend::new(w, h)).expect("test terminal");
     term.draw(|f| render(f, app)).expect("draw");
-    let buf = term.backend().buffer().clone();
-    buffer_rows(&buf)
+    term.backend().buffer().clone()
 }
 
 pub fn buffer_rows(buf: &Buffer) -> Vec<String> {

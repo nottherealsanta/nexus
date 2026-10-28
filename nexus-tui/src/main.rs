@@ -2,19 +2,21 @@
 //!
 //! `nexus-tui`                  run the TUI
 //! `nexus-tui --once`           connect, print state once live, exit (no UI)
-//! `nexus-tui --dump-frame WxH` connect, render the real shell to text, exit
+//! `nexus-tui --dump-frame WxH` connect, render the real shell to text (or SVG), exit
 //! See `--help` for the display options.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use nexus_tui::actions::{self, ActionDone};
 use nexus_tui::app::{App, Effect};
 use nexus_tui::discovery;
+use nexus_tui::keys;
 use nexus_tui::prefs;
 use nexus_tui::render;
 use nexus_tui::state::{AppState, ConnectionState};
+use nexus_tui::svg;
 use nexus_tui::sync::{self, SyncConfig, SyncMsg};
 use nexus_tui::term;
 use nexus_tui::text::base64;
@@ -40,6 +42,13 @@ Other:
   --dump-frame W,HxW,H   render the shell as text at these sizes, then exit
                          (e.g. 80x24,120x36); add --open first to select the
                          most recent session, --out DIR to write files
+  --keys \"SPEC\"         with --dump-frame: press keys before rendering, space
+                         separated: ctrl+p esc down enter alt+2; any other
+                         token is typed as text (\"/mo\")
+  --svg                  with --dump-frame --out: also write <name>.svg
+                         (real colours and styles; truecolor unless --256/--16)
+  --name NAME            with --dump-frame --out: file stem (default
+                         frame-WxH; with several sizes NAME-WxH)
   --help
 ";
 
@@ -50,6 +59,9 @@ struct Args {
     dump: Vec<(u16, u16)>,
     out: Option<PathBuf>,
     open_first: bool,
+    svg: bool,
+    keys: Vec<Vec<KeyEvent>>,
+    name: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -61,6 +73,9 @@ fn parse_args() -> Result<Args, String> {
         dump: Vec::new(),
         out: None,
         open_first: false,
+        svg: false,
+        keys: Vec::new(),
+        name: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -98,6 +113,9 @@ fn parse_args() -> Result<Args, String> {
                 }
                 a.open_first = true;
             }
+            "--svg" => a.svg = true,
+            "--keys" => a.keys = keys::parse_spec(&it.next().ok_or("--keys needs a spec")?)?,
+            "--name" => a.name = Some(it.next().ok_or("--name needs a file stem")?),
             "--out" => a.out = Some(PathBuf::from(it.next().ok_or("--out needs a directory")?)),
             "--dump-frame" => {
                 let v = it.next().ok_or("--dump-frame needs sizes such as 80x24")?;
@@ -280,9 +298,59 @@ async fn wait_live(handle: &mut sync::SyncHandle, app: &mut App, limit: Duration
     false
 }
 
+/// Time given to Core's replies after each `--keys` token.
+const KEY_SETTLE: Duration = Duration::from_millis(350);
+
+/// Run the app's effects and apply Core's replies for `limit`, as the
+/// interactive loop does between key presses.
+async fn pump(
+    handle: &mut sync::SyncHandle,
+    app: &mut App,
+    home: &std::path::Path,
+    done_tx: &mpsc::UnboundedSender<ActionDone>,
+    done_rx: &mut mpsc::UnboundedReceiver<ActionDone>,
+    limit: Duration,
+) {
+    let deadline = Instant::now() + limit;
+    loop {
+        for effect in std::mem::take(&mut app.effects) {
+            match effect {
+                Effect::Sync(c) => {
+                    let _ = handle.commands.send(c);
+                }
+                Effect::Api(call) => {
+                    let api = actions::api_for(home);
+                    let tx = done_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = tx.send(actions::run(api, call).await);
+                    });
+                }
+                _ => {}
+            }
+        }
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        tokio::select! {
+            m = handle.messages.recv() => match m {
+                Some(m) => app.apply_sync(m),
+                None => break,
+            },
+            Some(done) = done_rx.recv() => app.apply_done(done),
+            _ = tokio::time::sleep(left) => {}
+        }
+        app.tick(Instant::now());
+    }
+}
+
 async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
     let mut handle = sync::spawn(cfg);
-    let mut app = App::new(AppState::new(), Theme::new(args.opts), (120, 36));
+    let mut opts = args.opts;
+    if !args.over.tier {
+        // Frames are reviewed in colour whatever the terminal running this says.
+        opts.tier = Tier::TrueColor;
+    }
+    let mut app = App::new(AppState::new(), Theme::new(opts), (120, 36));
     if !wait_live(&mut handle, &mut app, Duration::from_secs(30)).await {
         eprintln!(
             "nexus-tui: Core did not become live: {}",
@@ -314,19 +382,59 @@ async fn dump(cfg: SyncConfig, args: &Args) -> i32 {
             }
         }
     }
+    if !args.keys.is_empty() {
+        let (w, h) = args.dump[0];
+        app.set_size(w, h);
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<ActionDone>();
+        let home = discovery::home().unwrap_or_default();
+        for token in &args.keys {
+            for k in token {
+                app.handle_key(*k);
+            }
+            pump(
+                &mut handle,
+                &mut app,
+                &home,
+                &done_tx,
+                &mut done_rx,
+                KEY_SETTLE,
+            )
+            .await;
+        }
+        pump(
+            &mut handle,
+            &mut app,
+            &home,
+            &done_tx,
+            &mut done_rx,
+            KEY_SETTLE * 2,
+        )
+        .await;
+    }
     for (w, h) in &args.dump {
         app.set_size(*w, *h);
-        let rows = render::render_text(&mut app, *w, *h);
-        let text = rows.join("\n");
+        let buf = render::render_buffer(&mut app, *w, *h);
+        let text = render::buffer_rows(&buf).join("\n");
         match &args.out {
             Some(dir) => {
                 let _ = std::fs::create_dir_all(dir);
-                let name = format!("frame-{w}x{h}.txt");
-                if let Err(e) = std::fs::write(dir.join(&name), format!("{text}\n")) {
-                    eprintln!("nexus-tui: {e}");
-                    return 1;
+                let stem = match (&args.name, args.dump.len()) {
+                    (Some(n), 1) => n.clone(),
+                    (Some(n), _) => format!("{n}-{w}x{h}"),
+                    (None, _) => format!("frame-{w}x{h}"),
+                };
+                let mut files = vec![(format!("{stem}.txt"), format!("{text}\n"))];
+                if args.svg {
+                    let (fg, bg) = svg::page_colors(opts.mode == Mode::Light);
+                    files.push((format!("{stem}.svg"), svg::to_svg(&buf, fg, bg)));
                 }
-                println!("wrote {}", dir.join(name).display());
+                for (name, body) in files {
+                    if let Err(e) = std::fs::write(dir.join(&name), body) {
+                        eprintln!("nexus-tui: {e}");
+                        return 1;
+                    }
+                    println!("wrote {}", dir.join(name).display());
+                }
             }
             None => println!("--- {w}x{h} ---\n{text}"),
         }

@@ -1,0 +1,113 @@
+{
+  "exported": "2026-10-28T11:12:59.783Z",
+  "choices": {
+    "D01": {
+      "title": "Palette and surfaces",
+      "pick": "A",
+      "option": "nexus10 tokens + border.strong",
+      "note": "but no borders for modal - modal should just have light gray bg with good padding "
+    },
+    "D02": {
+      "title": "Shell frame and header",
+      "pick": "A",
+      "option": "Chrome band",
+      "note": ""
+    },
+    "D03": {
+      "title": "Sessions sidebar",
+      "pick": "A",
+      "option": "Two-line rows by project",
+      "note": ""
+    },
+    "D04": {
+      "title": "User message",
+      "pick": "A",
+      "option": "Full-bleed band",
+      "note": ""
+    },
+    "D05": {
+      "title": "Turn footer",
+      "pick": "A",
+      "option": "Right-aligned, end of turn",
+      "note": "remove \"done\" \"interrupted\" and \"error\" from turn footer "
+    },
+    "D06": {
+      "title": "Tool activity",
+      "pick": "A",
+      "option": "Verb glyph tree",
+      "note": ""
+    },
+    "D07": {
+      "title": "Reasoning",
+      "pick": "A",
+      "option": "Thought for 2.1s · preview",
+      "note": ""
+    },
+    "D08": {
+      "title": "Markdown and code fences",
+      "pick": "A",
+      "option": "Panel block with a header row",
+      "note": ""
+    },
+    "D09": {
+      "title": "Diffs",
+      "pick": "A",
+      "option": "Split when wide, unified when narrow",
+      "note": ""
+    },
+    "D10": {
+      "title": "New session and starting context",
+      "pick": "A",
+      "option": "Context sections",
+      "note": "do now show the bar along with with how much context taken by context headers"
+    },
+    "D11": {
+      "title": "Composer",
+      "pick": "A",
+      "option": "Soft card (old Nexus)",
+      "note": "but the completion should not have boarders and they are as wide as composer "
+    },
+    "D12": {
+      "title": "Right sidebar",
+      "pick": "A",
+      "option": "SESSION / CONTEXT / GIT sections",
+      "note": ""
+    },
+    "D13": {
+      "title": "Overlays: palette, settings and pickers",
+      "pick": "A",
+      "option": "Framed over a scrim, selection band",
+      "note": "no border - otherwise looks good "
+    },
+    "D14": {
+      "title": "Waiting card (approval and question)",
+      "pick": "A",
+      "option": "Key-chip list (old Nexus)",
+      "note": ""
+    },
+    "D15": {
+      "title": "Toasts, banners and jump to latest",
+      "pick": "A",
+      "option": "Top-right of the page (old Nexus)",
+      "note": "remove lifetime hairline - when clicked on opens a simple modal with the full notification (sometime notification are long)  "
+    },
+    "D16": {
+      "title": "Files",
+      "pick": "A",
+      "option": "Tree with guides, file view with gutter",
+      "note": ""
+    },
+    "D17": {
+      "title": "Small terminals and phones",
+      "pick": "A",
+      "option": "Drawers below 100 columns",
+      "note": ""
+    },
+    "D18": {
+      "title": "Empty, offline and loading",
+      "pick": "A",
+      "option": "Wordmark and plain sentences",
+      "note": "                 \n    _/      _/   \n   _/_/    _/    \n  _/  _/  _/     \n _/    _/_/      \n_/      _/       \n             \n\nthis is the splash logo for TUI and NSH"
+    }
+  }
+}
