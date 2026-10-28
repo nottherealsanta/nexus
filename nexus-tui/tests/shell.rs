@@ -981,3 +981,108 @@ fn settings_arrows_change_animations_monochrome_and_sidebar() {
     press(&mut app, &["right"]);
     assert!(app.ui.left_open && !app.ui.left_rail);
 }
+
+#[test]
+fn session_rows_end_with_child_count_and_age_and_truncate_the_place_first() {
+    let mut app = with_turn(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    let now = nexus_tui::app::now_secs();
+    let parent = app.state.model.sessions.get_mut(SESSION).unwrap();
+    parent.updated = now - 3.0 * 3600.0 - 30.0;
+    let mut child = parent.clone();
+    child.id = "ses_child".into();
+    child.parent_id = Some(SESSION.into());
+    child.updated = now - 5.0 * 60.0;
+    let mut grandchild = child.clone();
+    grandchild.id = "ses_grandchild".into();
+    grandchild.parent_id = Some("ses_child".into());
+    for s in [child, grandchild] {
+        app.state.model.sessions.insert(s.id.clone(), s);
+    }
+    app.state.worktrees.insert(
+        SESSION.into(),
+        serde_json::json!({
+            "session_directory": "/work/nexus-home/ws",
+            "worktrees": [{"path": "/work/nexus-home", "branch": "main"}]
+        }),
+    );
+    let (_, rows) = draw(&mut app, 120, 36);
+    let row = rows
+        .iter()
+        .find(|line| line.contains("x ⌥ main"))
+        .expect("parent row");
+    assert!(row.contains("2 ↳ 3h"), "{row:?}");
+    // Child sessions are not listed, so only the parent row has a meta.
+    assert!(!rows.iter().any(|l| l.contains("1 ↳")), "{rows:#?}");
+
+    // A long place is truncated and the meta survives.
+    app.state.model.projects.values_mut().for_each(|p| {
+        p.name = "a-very-long-project-name-that-cannot-fit".into();
+    });
+    let (_, rows) = draw(&mut app, 120, 36);
+    let row = rows
+        .iter()
+        .find(|line| line.trim_start().starts_with("a-very-long"))
+        .expect("long row");
+    assert!(row.contains('…'), "{row:?}");
+    assert!(row.contains("2 ↳ 3h"), "{row:?}");
+    assert!(!row.contains("that-cannot-fit"), "{row:?}");
+}
+
+#[test]
+fn preferences_are_restored_and_saved_when_a_setting_changes() {
+    use nexus_tui::prefs::{self, Overrides, Prefs};
+    let home = std::env::temp_dir().join(format!("nexus-tui-shell-prefs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let mut saved = Prefs::default();
+    saved.ui.left_width = Some(40);
+    saved.ui.right_open = Some(false);
+    saved.theme.mode = Some("light".into());
+    saved.theme.monochrome = Some(true);
+    saved.theme.animations = Some(false);
+    prefs::save(&home, &saved).unwrap();
+
+    let mut o = opts(Mode::Dark, Tier::TrueColor);
+    o.reduced_motion = false;
+    let mut app = empty(o, (120, 36));
+    app.apply_prefs(&home, prefs::load(&home), Overrides::default());
+    assert_eq!(app.ui.left_width, 40);
+    assert!(!app.ui.right_open);
+    assert_eq!(app.theme.opts.mode, Mode::Light);
+    assert_eq!(app.theme.opts.tier, Tier::Mono);
+    assert!(app.theme.opts.reduced_motion);
+    // Nothing changed yet: the file is untouched.
+    let before = std::fs::read(prefs::path(&home)).unwrap();
+    app.persist_prefs();
+    assert_eq!(std::fs::read(prefs::path(&home)).unwrap(), before);
+
+    // A drag saves only on release.
+    app.ui.left_drag = true;
+    app.ui.left_width = 52;
+    app.persist_prefs();
+    assert_eq!(prefs::load(&home).ui.left_width, Some(40));
+    app.ui.left_drag = false;
+    app.persist_prefs();
+    assert_eq!(prefs::load(&home).ui.left_width, Some(52));
+    assert_eq!(prefs::load(&home).theme.mode.as_deref(), Some("light"));
+
+    // A flag overrides the file for the run and is not written back.
+    let mut flagged = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    flagged.apply_prefs(
+        &home,
+        prefs::load(&home),
+        Overrides {
+            mode: true,
+            tier: true,
+        },
+    );
+    assert_eq!(flagged.theme.opts.mode, Mode::Dark);
+    assert_eq!(flagged.theme.opts.tier, Tier::TrueColor);
+    flagged.ui.left_open = false;
+    flagged.persist_prefs();
+    let p = prefs::load(&home);
+    assert_eq!(p.ui.left_open, Some(false));
+    assert_eq!(p.theme.mode.as_deref(), Some("light"));
+    assert_eq!(p.theme.monochrome, Some(true));
+    let _ = std::fs::remove_dir_all(home);
+}

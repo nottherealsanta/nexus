@@ -1034,6 +1034,17 @@ fn session_place(cx: &Cx, s: &crate::api::Session) -> String {
     )
 }
 
+/// Right-aligned meta of a session row: child count, then time of last
+/// activity (`2 ↳ 3m`).
+fn session_meta(cx: &Cx, s: &crate::api::Session, children: usize) -> String {
+    let age = text::age(now_secs(), s.updated);
+    if children == 0 {
+        return age;
+    }
+    let glyph = if cx.t.opts.ascii { ">" } else { "↳" };
+    format!("{children} {glyph} {age}")
+}
+
 fn draw_files(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut HitMap) {
     let a = cx.app;
     let root = a.files_root_label();
@@ -1491,14 +1502,32 @@ fn draw_sessions(cx: &Cx, buf: &mut Buffer, r: Rect, focused: bool, hits: &mut H
             }
         } else {
             let detail = session_place(cx, s);
-            put(
-                buf,
-                rr.x + 3,
-                y,
-                &truncate(&detail, rr.width.saturating_sub(4) as usize, cx.ell()),
-                cx.st(MUTED, SIDEBAR).patch(bg),
-                rr.width.saturating_sub(4),
-            );
+            let inner = rr.width.saturating_sub(4) as usize;
+            let meta = session_meta(cx, s, a.descendants(&s.id));
+            let muted = cx.st(MUTED, SIDEBAR).patch(bg);
+            // Drop the meta when even a short place would not fit beside it.
+            let meta_w = width(&meta);
+            if meta_w > 0 && inner >= meta_w + 6 {
+                let place = truncate(&detail, inner - meta_w - 1, cx.ell());
+                put(buf, rr.x + 3, y, &place, muted, (inner - meta_w) as u16);
+                put(
+                    buf,
+                    rr.x + 3 + (inner - meta_w) as u16,
+                    y,
+                    &meta,
+                    muted,
+                    meta_w as u16,
+                );
+            } else {
+                put(
+                    buf,
+                    rr.x + 3,
+                    y,
+                    &truncate(&detail, inner, cx.ell()),
+                    muted,
+                    inner as u16,
+                );
+            }
         }
         hits.add(rr, Target::SideRow(v.entry));
     }

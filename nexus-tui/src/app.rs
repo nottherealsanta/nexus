@@ -22,7 +22,7 @@ use crate::layout::{contains, Flags, HitMap, Regions};
 use crate::manifest::{term, Command, Manifest};
 use crate::state::{AppState, Banner, ConnectionState};
 use crate::sync::{Command as SyncCommand, SyncMsg};
-use crate::theme::{Theme, Tier};
+use crate::theme::{Mode, Theme, Tier};
 use crate::ui::*;
 
 /// Work the event loop performs on the shell's behalf.
@@ -187,6 +187,14 @@ pub struct FileRow {
     pub ignored: bool,
 }
 
+/// Where preferences are saved, what the file holds and what this run last
+/// observed, so that only settings the user changed are written back.
+pub struct PrefsSync {
+    home: std::path::PathBuf,
+    stored: crate::prefs::Prefs,
+    seen: crate::prefs::Prefs,
+}
+
 pub struct Ui {
     pub focus: Focus,
     pub left_open: bool,
@@ -240,6 +248,8 @@ pub struct Ui {
     /// Blocks of the last drawn timeline (selection and clicks use them).
     pub timeline_blocks: Vec<crate::timeline::Block>,
     pub monochrome_before: Option<Tier>,
+    /// Client preferences file state; `None` until `App::apply_prefs`.
+    pub prefs: Option<PrefsSync>,
 }
 
 pub struct App {
@@ -360,6 +370,7 @@ impl App {
                 timeline_sel_key: None,
                 timeline_blocks: Vec::new(),
                 monochrome_before: None,
+                prefs: None,
             },
             hits: HitMap::default(),
             regions,
@@ -3304,6 +3315,93 @@ impl App {
             }
         }
         self.theme = self.theme.with(options);
+    }
+
+    // ---- preferences ----------------------------------------------------------------------------
+
+    fn prefs_now(&self) -> crate::prefs::Prefs {
+        use crate::prefs::{Prefs, ThemePrefs, UiPrefs};
+        Prefs {
+            ui: UiPrefs {
+                left_width: Some(self.ui.left_width),
+                left_rail: Some(self.ui.left_rail),
+                left_open: Some(self.ui.left_open),
+                right_open: Some(self.ui.right_open),
+            },
+            theme: ThemePrefs {
+                mode: Some(
+                    match self.theme.opts.mode {
+                        Mode::Dark => "dark",
+                        Mode::Light => "light",
+                    }
+                    .into(),
+                ),
+                monochrome: Some(self.theme.opts.tier == Tier::Mono),
+                animations: Some(!self.theme.opts.reduced_motion),
+            },
+        }
+    }
+
+    /// Start from saved preferences, then keep `<home>/tui.json` up to date
+    /// (`persist_prefs`). Flags and environment (`over`, and a reduced-motion
+    /// or monochrome request already in the options) win over the file.
+    pub fn apply_prefs(
+        &mut self,
+        home: &std::path::Path,
+        prefs: crate::prefs::Prefs,
+        over: crate::prefs::Overrides,
+    ) {
+        if let Some(w) = prefs.ui.left_width {
+            self.ui.left_width = w;
+        }
+        if let Some(v) = prefs.ui.left_rail {
+            self.ui.left_rail = v;
+        }
+        if let Some(v) = prefs.ui.left_open {
+            self.ui.left_open = v;
+        }
+        if let Some(v) = prefs.ui.right_open {
+            self.ui.right_open = v;
+        }
+        let mut options = self.theme.opts;
+        if !over.mode {
+            match prefs.theme.mode.as_deref() {
+                Some("dark") => options.mode = Mode::Dark,
+                Some("light") => options.mode = Mode::Light,
+                _ => {}
+            }
+        }
+        if !over.tier && options.tier != Tier::Mono && prefs.theme.monochrome == Some(true) {
+            self.ui.monochrome_before = Some(options.tier);
+            options.tier = Tier::Mono;
+        }
+        if prefs.theme.animations == Some(false) {
+            options.reduced_motion = true;
+        }
+        self.theme = self.theme.with(options);
+        self.ui.prefs = Some(PrefsSync {
+            home: home.to_owned(),
+            stored: prefs,
+            seen: self.prefs_now(),
+        });
+    }
+
+    /// Save the preferences when one changed since the last call. A sidebar
+    /// edge drag is saved when the button is released.
+    pub fn persist_prefs(&mut self) {
+        if self.ui.left_drag || self.ui.prefs.is_none() {
+            return;
+        }
+        let now = self.prefs_now();
+        let Some(sync) = self.ui.prefs.as_mut() else {
+            return;
+        };
+        if sync.seen == now {
+            return;
+        }
+        crate::prefs::merge_changes(&mut sync.stored, &sync.seen, &now);
+        sync.seen = now;
+        let _ = crate::prefs::save(&sync.home, &sync.stored);
     }
 
     // ---- mouse ----------------------------------------------------------------------------------

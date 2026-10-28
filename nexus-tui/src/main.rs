@@ -12,6 +12,7 @@ use crossterm::event::{Event, KeyEventKind};
 use nexus_tui::actions::{self, ActionDone};
 use nexus_tui::app::{App, Effect};
 use nexus_tui::discovery;
+use nexus_tui::prefs;
 use nexus_tui::render;
 use nexus_tui::state::{AppState, ConnectionState};
 use nexus_tui::sync::{self, SyncConfig, SyncMsg};
@@ -31,6 +32,9 @@ Display options (flags override the environment):
   --ascii                ASCII glyphs (also NEXUS10_ASCII=1 or a non-UTF-8 locale)
   --reduced-motion       no spinner animation (also NEXUS10_REDUCED_MOTION=1)
 
+Layout and appearance changes are remembered in $NEXUS10_HOME/tui.json;
+flags and the environment override it for the run.
+
 Other:
   --once                 print connection state and sessions once live, then exit
   --dump-frame W,HxW,H   render the shell as text at these sizes, then exit
@@ -41,6 +45,7 @@ Other:
 
 struct Args {
     opts: Options,
+    over: prefs::Overrides,
     once: bool,
     dump: Vec<(u16, u16)>,
     out: Option<PathBuf>,
@@ -51,6 +56,7 @@ fn parse_args() -> Result<Args, String> {
     let mut opts = Options::from_env();
     let mut a = Args {
         opts,
+        over: prefs::Overrides::default(),
         once: false,
         dump: Vec::new(),
         out: None,
@@ -63,11 +69,26 @@ fn parse_args() -> Result<Args, String> {
                 print!("{HELP}");
                 std::process::exit(0);
             }
-            "--dark" => opts.mode = Mode::Dark,
-            "--light" => opts.mode = Mode::Light,
-            "--mono" => opts.tier = Tier::Mono,
-            "--256" => opts.tier = Tier::Ansi256,
-            "--16" => opts.tier = Tier::Ansi16,
+            "--dark" => {
+                opts.mode = Mode::Dark;
+                a.over.mode = true;
+            }
+            "--light" => {
+                opts.mode = Mode::Light;
+                a.over.mode = true;
+            }
+            "--mono" => {
+                opts.tier = Tier::Mono;
+                a.over.tier = true;
+            }
+            "--256" => {
+                opts.tier = Tier::Ansi256;
+                a.over.tier = true;
+            }
+            "--16" => {
+                opts.tier = Tier::Ansi16;
+                a.over.tier = true;
+            }
             "--ascii" => opts.ascii = true,
             "--reduced-motion" => opts.reduced_motion = true,
             "--once" => a.once = true,
@@ -118,7 +139,7 @@ async fn main() {
     } else if !args.dump.is_empty() {
         dump(cfg, &args).await
     } else {
-        match run(cfg, home, args.opts).await {
+        match run(cfg, home, args.opts, args.over).await {
             Ok(()) => 0,
             Err(e) => {
                 term::leave();
@@ -132,11 +153,17 @@ async fn main() {
 
 // ---- interactive -------------------------------------------------------------
 
-async fn run(cfg: SyncConfig, home: PathBuf, opts: Options) -> std::io::Result<()> {
+async fn run(
+    cfg: SyncConfig,
+    home: PathBuf,
+    opts: Options,
+    over: prefs::Overrides,
+) -> std::io::Result<()> {
     let mut terminal = term::enter()?;
     let _guard = term::Guard;
     let size = terminal.size()?;
     let mut app = App::new(AppState::new(), Theme::new(opts), (size.width, size.height));
+    app.apply_prefs(&home, prefs::load(&home), over);
 
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Event>();
     std::thread::spawn(move || {
@@ -173,6 +200,7 @@ async fn run(cfg: SyncConfig, home: PathBuf, opts: Options) -> std::io::Result<(
             Some(done) = done_rx.recv() => app.apply_done(done),
             _ = tick.tick() => dirty = app.tick(Instant::now()),
         }
+        app.persist_prefs();
         for effect in std::mem::take(&mut app.effects) {
             match effect {
                 Effect::Quit => break 'main,
