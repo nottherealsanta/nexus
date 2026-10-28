@@ -96,24 +96,37 @@ def left_sessions(open_i=0, extra_states=None, new_open=False, search="Search se
 </aside>'''
 
 # ---------- header ----------
-def header(tab="sessions", crumbs=("nexus-demo", "Refactor the loader"), run=("ok", "idle"), attn=1, left=True, right=True, mid_extra=""):
+def header(tab="sessions", crumbs=("nexus-demo", "Refactor the loader"), run=("ok", "idle"), attn=1, left=True, right=True, mid_extra="", child=None):
     tabs = [("sessions", "sessions", "Sessions"), ("files", "files", "Files"), ("projects", "projects", "Projects")]
     t = ""
     for key, ic, lab in tabs:
-        if key == tab: t += f'<span class="tab on">@ic({ic},s14)<span>{lab}</span></span>'
-        else: t += f'<span class="tab" title="{lab}">@ic({ic},s14)</span>'
+        t += f'<span class="icon-btn hi {"on" if key == tab else ""}" title="{lab}">@ic({ic},s14)</span>'
+    title = crumbs[-1] if crumbs else ""
+    titles = [s[0] for s in SESS]
+    if not crumbs or title == "Nexus":
+        stab = []
+    elif title in titles:
+        stab = [(s[0], s[1], s[0] == title) for s in SESS[:4]]
+    else:
+        stab = [(s[0], s[1], False) for s in SESS[:3]] + [(title, "none", True)]
     cr = ""
-    for i, c in enumerate(crumbs):
-        if i: cr += '<span class="sep">›</span>'
-        cr += f"<b class='trunc'>{c}</b>" if i == len(crumbs) - 1 else f"<span class='trunc'>{c}</span>"
+    for ttl, mk, viewed in stab:
+        g = mark(mk) if mk != "none" else '<span class="mark idle">·</span>'
+        if viewed and child:
+            label = f'<span class="trunc muted">{ttl}</span><span class="sep">›</span><b class="trunc">{child}</b>'
+        else:
+            label = f'<span class="trunc">{ttl}</span>'
+        cr += f'<span class="stab {"on" if viewed else ""}">{g}{label}<span class="x">@ic(x,s12)</span></span>'
+    if stab:
+        cr += '<span class="stab-new" title="New session">@ic(plus,s14)</span>'
     rs = ""
     if run:
         k, txt = run
         cls = {"wait": "wait", "off": "off"}.get(k, "")
         rs = f'<span class="runstat {cls}">{mark(k) if k != "off" else mark("err")}<span>{txt}</span></span>'
     att = f'<span class="attn"><i></i>{attn}</span>' if attn else ""
-    return f'''<header class="hdr"><div class="hdr-l"><span class="icon-btn">@ic(panel-left)</span><nav class="tabs">{t}</nav></div>
-<div class="hdr-c"><div class="crumb">{cr}</div>{rs}</div>
+    return f'''<header class="hdr"><div class="hdr-l"><span class="icon-btn">@ic(panel-left)</span><nav class="hicons">{t}</nav></div>
+<div class="hdr-c"><div class="stabs">{cr}</div>{rs}</div>
 <div class="hdr-r">{att}<span class="icon-btn">@ic(panel-right)</span></div></header>'''
 
 # ---------- right sidebar ----------
@@ -188,7 +201,7 @@ def member(icon, verb, arg, sum_="", time="", cls="", status=None):
     ico = f'<span class="vi mark {status}" style="width:16px">{mark(status)}</span>' if status else f'@ic({icon},vi)'
     return f'<div class="member {cls}">{ico}<b>{verb}</b><span class="arg">{arg}</span><span class="sum">{sum_}</span><span class="time">{time}</span></div>'
 
-def footer(extra_status='<span class="st ok">@ic(check)done</span>', model="gpt-6.1-terra", tools="3 tools", dur="4.2s", toks="12k in · 2k out · $0.04"):
+def footer(extra_status='', model="gpt-6.1-terra", tools="3 tools", dur="4.2s", toks="12k in · 2k out · $0.04"):
     return f'<div class="foot"><b class="ag-build">▪ Build</b><span class="dot">·</span><span>{model}</span><span class="dot">·</span><span>medium</span><span class="dot">·</span><span>{tools}</span><span class="dot">·</span><span>{dur}</span><span class="dot">·</span><span>{toks}</span>{extra_status}</div>'
 
 def scroll(inner, bottom=False):

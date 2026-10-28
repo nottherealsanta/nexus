@@ -13,7 +13,7 @@
       "id": "D02", "title": "Shell frame and header",
       "question": "How is the window framed, and where do the tabs and title go?",
       "options": [
-        {"key": "A", "label": "Chrome band", "recommended": true, "desc": "The header band and both sidebars share one chrome surface around the page. The tab icons sit in the band over the sidebar. The breadcrumb is aligned with the page, and the run status is on the right.", "tui": ["d02-shell-200x50", "d02-shell-120x36"], "nsh": ["d02-shell"]},
+        {"key": "A", "label": "Chrome band", "recommended": true, "desc": "The header band and both sidebars share one chrome surface around the page. The tab icons sit in the band over the sidebar. The breadcrumb is aligned with the page, and the run status is on the right.", "tui": ["d02-shell-200x50", "d02-shell-120x36", "d02-child-tab"], "nsh": ["d02-shell"]},
         {"key": "B", "label": "Old tab strip", "kind": "old", "desc": "Old Nexus: open sessions as tabs across the top, with a location row under them (~/repos/nexus · main) and Idle on the right.", "tui": ["alt-d02-tabs"], "reference": ["tui-session.png"]},
         {"key": "C", "label": "Today", "kind": "current", "desc": "A header row floating on the canvas, with the tabs in the sidebar's first row.", "before": ["22-session-160x48-dark-160x48.png", "02-session-light-120x36.png"]}
       ]
@@ -40,7 +40,7 @@
       "id": "D05", "title": "Turn footer",
       "question": "Where do a turn's model, duration, tokens and status go?",
       "options": [
-        {"key": "A", "label": "Right-aligned, end of turn", "recommended": true, "desc": "▪ Build · model · effort · tools · 4.2s · tokens · cost · ✓ done, right-aligned with no rule (old Nexus).", "tui": ["d05-footer"], "nsh": ["d04-turn"]},
+        {"key": "A", "label": "Right-aligned, end of turn", "recommended": true, "desc": "▪ Build · model · effort · tools · 4.2s · tokens · cost · right-aligned (no end-status word) with no rule (old Nexus).", "tui": ["d05-footer"], "nsh": ["d04-turn"]},
         {"key": "B", "label": "Left, under a hairline", "desc": "The current INTERFACE_PLAN spec: one muted row below a full-width hairline, left-aligned.", "tui": ["alt-d05-left"]},
         {"key": "C", "label": "Today", "kind": "current", "desc": "'<1 s · 3 tools   ✓ done' above a rule. It reads as the next turn's header.", "before": ["21-tools-expanded-dark-120x36.png"]}
       ]
@@ -126,7 +126,7 @@
       "id": "D15", "title": "Toasts, banners and jump to latest",
       "question": "Where do transient alerts appear?",
       "options": [
-        {"key": "A", "label": "Top-right of the page (old Nexus)", "recommended": true, "desc": "Toasts under the header, top-right, with a level bar and a lifetime hairline. A banner at the top of the page. A jump-to-latest pill above the composer.", "tui": ["d15-alerts"], "nsh": ["d15-alerts"]},
+        {"key": "A", "label": "Top-right of the page (old Nexus)", "recommended": true, "desc": "Toasts under the header, top-right, with a level bar. Enter or click opens the full text in a modal. A banner at the top of the page. A jump-to-latest pill above the composer.", "tui": ["d15-alerts", "d15-toast-detail"], "nsh": ["d15-alerts", "d15-toast-detail"]},
         {"key": "B", "label": "Bottom-right, above the composer", "desc": "The INTERFACE_PLAN position. Closer to where you type, but competes with the composer and the jump pill.", "tui": ["alt-d15-bottom"]}
       ]
     },
@@ -150,7 +150,7 @@
       "id": "D18", "title": "Empty, offline and loading",
       "question": "What do the empty and error states look like?",
       "options": [
-        {"key": "A", "label": "Wordmark and plain sentences", "recommended": true, "desc": "A half-block NEXUS wordmark (from the old splash) with the next step and its key. Offline: a banner, ✕ offline in the header and an editable composer.", "tui": ["d18-empty", "d18-offline"], "nsh": ["d18-states"]},
+        {"key": "A", "label": "Wordmark and plain sentences", "recommended": true, "desc": "An N logo drawn in _/ strokes with the next step and its key. Offline: a banner, ✕ offline in the header and an editable composer.", "tui": ["d18-empty", "d18-offline"], "nsh": ["d18-states"]},
         {"key": "B", "label": "Today", "kind": "current", "desc": "Today's empty workspace.", "before": ["05-empty-workspace-dark-120x36.png"]}
       ]
     }

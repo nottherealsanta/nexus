@@ -22,7 +22,7 @@ fn band(p: &mut P, c: Centre, y: u16, text: &str, tag: &str, n: u8, time: &str, 
     let fy = y + pad;
     p.put(c.x, fy, &[(if folded { t.g("closed") } else { t.g("open") }, t.muted().patch(rb))]);
     if folded {
-        let tail: Vec<Seg> = vec![("3 tools · 4.2s · ", t.muted().patch(rb)), (t.g("done"), t.fg("status.success").patch(rb))];
+        let tail: Vec<Seg> = vec![("3 tools · 4.2s", t.muted().patch(rb))];
         let tw = crate::kit::segs_w(&tail);
         let l0 = crate::kit::trunc(&lines[0], right - tw - 3 - tx);
         p.put(tx, fy, &[(&l0, t.primary().patch(rb))]);

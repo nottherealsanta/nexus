@@ -34,6 +34,8 @@ pub struct Shell {
     /// Index into SESSIONS of the open session (None: new-session view).
     pub open: Option<usize>,
     pub focus_row: Option<usize>,
+    /// Child session title: the viewed tab reads `root › child`.
+    pub child: Option<&'static str>,
 }
 
 impl Default for Shell {
@@ -50,6 +52,7 @@ impl Default for Shell {
             composer_focus: true,
             open: Some(0),
             focus_row: None,
+            child: None,
         }
     }
 }
@@ -127,31 +130,65 @@ impl Shell {
         let toggle = if self.left.is_some() { t.g("left_open") } else { t.g("closed_box") };
         p.put(1, 0, &[(toggle, t.secondary())]);
         if let Some(tab) = self.left {
-            // Tabs live in the header band over the sidebar (INTERFACE_PLAN "anchors").
+            // The three sidebar icons stay in the band over the sidebar; no label chip.
             let mut x = 4;
-            for (k, g, label) in [(Tab::Sessions, "sessions", "Sessions"), (Tab::Files, "files", "Files"), (Tab::Projects, "projects", "Projects")] {
-                if k == tab {
-                    x = p.put(x, 0, &[(" ", t.bg("surface.panel")), (t.g(g), bold(t.primary()).patch(t.bg("surface.panel"))), (" ", t.bg("surface.panel")), (label, bold(t.primary()).patch(t.bg("surface.panel"))), (" ", t.bg("surface.panel"))]);
+            for (k, g) in [(Tab::Sessions, "sessions"), (Tab::Files, "files"), (Tab::Projects, "projects")] {
+                x = p.put(x, 0, &[(t.g(g), if k == tab { bold(t.primary()) } else { t.muted() })]);
+                x += 2;
+            }
+        }
+        // Session tabs start at the centre column's text edge: `{glyph} {title} ×`, one cell apart.
+        let cx = lw + 2;
+        let end = w - rw.max(4);
+        let limit = end.saturating_sub(24).max(cx);
+        if !self.crumbs.is_empty() {
+            let vb = t.bg("surface.canvas");
+            let mut x = cx;
+            let tab_of = |i: usize| -> (&'static str, &'static str) { (SESSIONS[i].title, SESSIONS[i].mark) };
+            let mut tabs: Vec<(&'static str, &'static str, bool)> = Vec::new();
+            if let Some(o) = self.open {
+                for i in 0..4 {
+                    let (ti, mk) = tab_of(i);
+                    tabs.push((ti, mk, i == o));
+                }
+            } else {
+                for i in 0..3 {
+                    let (ti, mk) = tab_of(i);
+                    tabs.push((ti, mk, false));
+                }
+                tabs.push(("New session", "", true));
+            }
+            for (title, mark, viewed) in tabs {
+                let (g, gs) = match mark {
+                    "waiting" => (t.g("waiting"), t.accent()),
+                    "running" => (t.g("running"), t.primary()),
+                    "error" => (t.g("error"), t.fg("status.error")),
+                    "unread" => (t.g("unread"), t.fg("status.info")),
+                    _ => ("·", t.muted()),
+                };
+                let tt = trunc(title, if viewed { 26 } else { 18 });
+                if viewed {
+                    let mut segs: Vec<Seg> = vec![(" ", vb), (g, gs.patch(vb)), (" ", vb)];
+                    match self.child {
+                        Some(ch) => {
+                            segs.push((title, t.muted().patch(vb)));
+                            segs.push((" ", vb));
+                            segs.push((t.g("crumb"), t.muted().patch(vb)));
+                            segs.push((" ", vb));
+                            segs.push((ch, bold(t.primary()).patch(vb)));
+                        }
+                        None => segs.push((&tt, bold(t.primary()).patch(vb))),
+                    }
+                    segs.push((" ×", t.muted().patch(vb)));
+                    segs.push((" ", vb));
+                    x = p.put_clip(x, 0, &segs, limit);
                 } else {
-                    x = p.put(x, 0, &[(" ", Style::default()), (t.g(g), t.muted()), (" ", Style::default())]);
+                    x = p.put_clip(x, 0, &[(g, gs), (" ", t.muted()), (&tt, t.muted()), (" ×", t.muted())], limit);
                 }
                 x += 1;
             }
+            p.put_clip(x, 0, &[("+", t.muted())], limit);
         }
-        // Breadcrumb starts at the centre column's text edge.
-        let cx = lw + 2;
-        let mut segs: Vec<Seg> = Vec::new();
-        for (i, c) in self.crumbs.iter().enumerate() {
-            if i > 0 {
-                segs.push((" ", t.muted()));
-                segs.push((t.g("crumb"), t.muted()));
-                segs.push((" ", t.muted()));
-            }
-            let last = i + 1 == self.crumbs.len();
-            segs.push((c, if last { bold(t.primary()) } else { t.muted() }));
-        }
-        let end = w - rw.max(4);
-        p.put_clip(cx, 0, &segs, end);
         // Right block: run status over the centre's right edge, then bell and toggle at the far edge.
         let mut status: Vec<Seg> = Vec::new();
         let secs;
@@ -460,15 +497,7 @@ pub fn footer(p: &mut P, c: Centre, y: u16, agent: &str, model: &str, segs: &[&s
         v.push((" · ", t.muted()));
         v.push((s, t.muted()));
     }
-    v.push((" · ", t.muted()));
-    let (g, st, word) = match status {
-        "done" => (t.g("done"), t.fg("status.success"), " done"),
-        "error" => (t.g("error"), t.fg("status.error"), " error"),
-        "interrupted" => (t.g("interrupted"), t.fg("status.warning"), " interrupted"),
-        _ => (t.g("running"), t.primary(), " running"),
-    };
-    v.push((g, st));
-    v.push((word, st));
+    let _ = status; // D05: no end-status word or glyph
     p.put_r(c.x + c.w, y, &v);
 }
 
@@ -558,7 +587,8 @@ pub fn tool_glyph(verb: &str) -> &'static str {
 
 // ---------------------------------------------------------------- modal, motion and rail helpers (appended)
 
-/// Modal frame (D13): `surface.raised`, rounded `border.strong`, bold title and `esc` in the top border.
+/// Modal (D13): a borderless `surface.raised` block. Padding is 2 cells and one blank row; the bold title
+/// is the first row inside with `esc` right-aligned on it. Hints go on the last row inside (`y + h - 2`).
 pub fn modal(p: &mut P, x: u16, y: u16, w: u16, h: u16, title: &str, esc: bool) {
     let t = p.t;
     for yy in y..(y + h).min(p.h) {
@@ -568,18 +598,19 @@ pub fn modal(p: &mut P, x: u16, y: u16, w: u16, h: u16, title: &str, esc: bool) 
     }
     p.fill(x, y, w, h, "surface.raised");
     let rb = t.bg("surface.raised");
-    let tt: Vec<Seg> = if title.is_empty() { vec![] } else { vec![(title, bold(t.primary()).patch(rb))] };
-    p.frame(x, y, w, h, t.fg("border.strong").patch(rb), true, &tt);
+    if !title.is_empty() {
+        p.put(x + 2, y + 1, &[(title, bold(t.primary()).patch(rb))]);
+    }
     if esc {
-        p.put_r(x + w - 2, y, &[(" esc ", t.muted().patch(rb))]);
+        p.put_r(x + w - 2, y + 1, &[("esc", t.muted().patch(rb))]);
     }
 }
 
-/// Key hints in a frame's bottom border (row `y`), a count or note on the right.
+/// Key hints on a modal's last row inside (row `y`), a count or note on the right.
 pub fn hints(p: &mut P, x: u16, y: u16, w: u16, left: &[(&str, &str)], right: &str) {
     let t = p.t;
     let rb = t.bg("surface.raised");
-    let mut v: Vec<Seg> = vec![(" ", rb)];
+    let mut v: Vec<Seg> = vec![];
     for (i, (k, wd)) in left.iter().enumerate() {
         if i > 0 {
             v.push((" · ", t.muted().patch(rb)));
@@ -588,10 +619,9 @@ pub fn hints(p: &mut P, x: u16, y: u16, w: u16, left: &[(&str, &str)], right: &s
         v.push((" ", rb));
         v.push((wd, t.muted().patch(rb)));
     }
-    v.push((" ", rb));
     p.put(x + 2, y, &v);
     if !right.is_empty() {
-        p.put_r(x + w - 2, y, &[(" ", rb), (right, t.muted().patch(rb)), (" ", rb)]);
+        p.put_r(x + w - 2, y, &[(right, t.muted().patch(rb))]);
     }
 }
 
@@ -662,7 +692,7 @@ impl Shell {
         if rw > 0 {
             p.fill(w - rw, 1, rw, h - 1, "surface.sidebar");
         }
-        let bare = Shell { left: None, left_w: self.left_w, right: self.right, right_w: self.right_w, crumbs: self.crumbs, busy: self.busy, draft: self.draft, composer: self.composer, composer_focus: self.composer_focus, open: self.open, focus_row: self.focus_row };
+        let bare = Shell { left: None, left_w: self.left_w, right: self.right, right_w: self.right_w, crumbs: self.crumbs, busy: self.busy, draft: self.draft, composer: self.composer, composer_focus: self.composer_focus, open: self.open, focus_row: self.focus_row, child: self.child };
         bare.header(p, lw, rw);
         let t = p.t;
         p.put(1, 0, &[(t.g("left_open"), t.secondary())]);

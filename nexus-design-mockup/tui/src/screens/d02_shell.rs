@@ -16,9 +16,16 @@ fn main_120(p: &mut P) {
     common::turn_one(p, c, 2);
 }
 
+fn child_tab(p: &mut P) {
+    let s = Shell { left_w: 34, right_w: 36, child: Some("Survey loaders"), ..Shell::default() };
+    let c = s.draw(p);
+    common::turn_one(p, c, 2);
+}
+
 pub fn shots() -> Vec<Shot> {
     vec![
         Shot { id: "d02-shell-200x50", caption: "Shell: header band, chrome sidebars, centre page (200×50)", w: 200, h: 50, modes: DLM, ascii: true, draw: main_view },
         Shot { id: "d02-shell-120x36", caption: "Shell at 120×36", w: 120, h: 36, modes: DL, ascii: false, draw: main_120 },
+        Shot { id: "d02-child-tab", caption: "Child session: the viewed tab reads root › child", w: 200, h: 50, modes: DL, ascii: false, draw: child_tab },
     ]
 }

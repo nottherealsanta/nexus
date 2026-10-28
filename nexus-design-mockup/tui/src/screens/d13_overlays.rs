@@ -4,7 +4,7 @@ use crate::kit::{bold, width, Seg, P};
 use crate::shell::{backdrop, hints, modal, mrow, sel_row, Shell};
 use ratatui::style::Style;
 
-fn under(p: &mut P) {
+pub fn under(p: &mut P) {
     backdrop(p, &Shell { left_w: 34, right_w: 36, ..Shell::default() });
     p.scrim();
     // Mono: reversed cells need an explicit fg, or the SVG writer merges the whole row into one run.
@@ -49,10 +49,10 @@ fn palette(p: &mut P) {
         ("APP", &[("Open settings", "ctrl+,"), ("Toggle left sidebar", "ctrl+b"), ("Toggle right sidebar", "alt+b"), ("Show keyboard shortcuts", "f1"), ("Change theme", "/theme"), ("Toggle wire view", "ctrl+w")]),
     ];
     let n: u16 = sections.iter().map(|(_, r)| r.len() as u16 + 1).sum::<u16>() + 2;
-    let (w, h) = (64, n + 5);
+    let (w, h) = (64, n + 8);
     let (x, y) = ((p.w - w) / 2, 5);
     modal(p, x, y, w, h, "Command palette", true);
-    let mut r = search(p, x, y, w, "", "Type a command…");
+    let mut r = search(p, x, y + 2, w, "", "Type a command…");
     for (i, (name, rows)) in sections.iter().enumerate() {
         if i > 0 {
             r += 1;
@@ -66,17 +66,17 @@ fn palette(p: &mut P) {
             r += 1;
         }
     }
-    hints(p, x, y + h - 1, w, &[("↑↓", "move"), ("enter", "run"), ("esc", "close")], "14 of 62");
+    hints(p, x, y + h - 2, w, &[("↑↓", "move"), ("enter", "run"), ("esc", "close")], "14 of 62");
 }
 
 fn settings(p: &mut P) {
     under(p);
     let t = p.t;
-    let (w, h) = (88, 35);
+    let (w, h) = (88, 39);
     let (x, y) = ((p.w - w) / 2, 6);
     modal(p, x, y, w, h, "Settings", true);
     let rb = t.bg("surface.raised");
-    let mut r = search(p, x, y, w, "", "Filter settings…");
+    let mut r = search(p, x, y + 2, w, "", "Filter settings…");
     let on = |b: bool| if b { ("on", t.primary()) } else { ("off", t.muted()) };
     // (label, value, value style, disabled)
     type Row<'a> = (&'a str, &'a str, Style, bool);
@@ -111,19 +111,19 @@ fn settings(p: &mut P) {
         }
     }
     p.put(x + 3, r, &[("▾ ", t.muted().patch(rb)), ("Tools · Skills · MCP · Context · Dictation · Keybindings · Notifications · About", t.muted().patch(rb))]);
-    let fy = y + h - 3;
+    let fy = y + h - 5;
     p.hline(x + 1, fy, w - 2, t.g("rule"), t.hair().patch(rb));
     p.put(x + 3, fy + 1, &[("Sign in", bold(t.secondary()).patch(rb)), ("  ", rb), (sel_reason, t.muted().patch(rb))]);
-    hints(p, x, y + h - 1, w, &[("↑↓", "move"), ("enter", "change"), ("tab", "section"), ("esc", "close")], "12 sections");
+    hints(p, x, y + h - 2, w, &[("↑↓", "move"), ("enter", "change"), ("tab", "section"), ("esc", "close")], "12 sections");
 }
 
 fn picker(p: &mut P) {
     under(p);
     let t = p.t;
-    let (w, h) = (64, 19);
+    let (w, h) = (64, 22);
     let (x, y) = ((p.w - w) / 2, 8);
     modal(p, x, y, w, h, "Change model", true);
-    let mut r = search(p, x, y, w, "", "Search 214 models…");
+    let mut r = search(p, x, y + 2, w, "", "Search 214 models…");
     let groups: [(&str, &[(&str, &str, &str)]); 3] = [
         ("CODEX", &[("gpt-6.1-terra", "400k", "current"), ("gpt-6.1-mini", "400k", ""), ("gpt-6-codex", "272k", ""), ("gpt-5.5", "200k", "")]),
         ("ANTHROPIC", &[("claude-opus-5", "1M", ""), ("claude-sonnet-5-5", "1M", ""), ("claude-haiku-5", "200k", "")]),
@@ -144,29 +144,29 @@ fn picker(p: &mut P) {
             r += 1;
         }
     }
-    hints(p, x, y + h - 1, w, &[("↑↓", "move"), ("enter", "select"), ("esc", "close")], "9 of 214");
+    hints(p, x, y + h - 2, w, &[("↑↓", "move"), ("enter", "select"), ("esc", "close")], "9 of 214");
 }
 
 fn confirm(p: &mut P) {
     under(p);
     let t = p.t;
-    let (w, h) = (54, 10);
+    let (w, h) = (54, 12);
     let (x, y) = ((p.w - w) / 2, 16);
     modal(p, x, y, w, h, "Delete session?", true);
     let rb = t.bg("surface.raised");
-    let n = p.wrap(x + 3, y + 2, w - 6, "“Fix flaky test in sync” and its 3 turns are removed from disk. Child sessions are kept. This cannot be undone.", t.primary().patch(rb));
+    let n = p.wrap(x + 2, y + 3, w - 4, "“Fix flaky test in sync” and its 3 turns are removed from disk. Child sessions are kept. This cannot be undone.", t.primary().patch(rb));
     let by = y + 3 + n + 1;
     // Buttons: Cancel is the safe default (selected), Delete in status.error.
     let cancel: Vec<Seg> = vec![("[ ", t.muted()), ("Cancel", bold(t.primary())), (" ]", t.muted())];
     let cw = crate::kit::segs_w(&cancel);
-    let bx = x + w - 3 - cw - 2 - width("[ Delete ]");
+    let bx = x + w - 2 - cw - 2 - width("[ Delete ]");
     p.fill(bx - 1, by, cw + 2, 1, "interactive.selection");
     p.put(bx - 1, by, &[(t.g("focus"), t.fg("interactive.focus").patch(t.bg("interactive.selection")))]);
     let cs: Vec<Seg> = cancel.iter().map(|(s, st)| (*s, st.patch(t.bg("interactive.selection")))).collect();
     p.put(bx, by, &cs);
     p.put(bx + cw + 2, by, &[("[ ", t.fg("status.error").patch(rb)), ("Delete", bold(t.fg("status.error")).patch(rb)), (" ]", t.fg("status.error").patch(rb))]);
     let _ = sel_row;
-    hints(p, x, y + h - 1, w, &[("←→", "choose"), ("enter", "confirm"), ("esc", "cancel")], "");
+    hints(p, x, y + h - 2, w, &[("←→", "choose"), ("enter", "confirm"), ("esc", "cancel")], "");
 }
 
 pub fn shots() -> Vec<Shot> {

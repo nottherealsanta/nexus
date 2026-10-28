@@ -3,8 +3,8 @@ use super::{Shot, DL};
 use crate::kit::{bold, P};
 use crate::shell::{backdrop, Busy, Shell, Tab};
 
-/// The half-block NEXUS wordmark: two rows of ▀▄█ glyphs, five cells per letter.
-const MARK: [&str; 2] = ["█▀▄ █ ████▀ ▀▄ ▄▀ █   █ ▄▀▀▀▀", "█  ▀█ █▄▄▄▄ ▄▀ ▀▄ ▀▄▄▄▀ ▄▄▄▄▀"];
+/// The splash logo: an N drawn in `_/` strokes (6 rows, left offsets exact).
+pub const MARK: [&str; 6] = ["                 ", "    _/      _/   ", "   _/_/    _/    ", "  _/  _/  _/     ", " _/    _/_/      ", "_/      _/       "];
 
 fn empty_side(p: &mut P, lw: u16, find: &str, body: &[&str]) {
     let t = p.t;
@@ -22,12 +22,13 @@ fn empty(p: &mut P) {
     let s = Shell { left: Some(Tab::Projects), left_w: 34, right: false, composer: false, crumbs: &[], open: None, ..Shell::default() };
     let c = s.draw(p);
     empty_side(p, 34, "  Filter projects", &["+ Add project"]);
-    let cy = p.h / 2 - 4;
+    let cy = p.h / 2 - 6;
+    let lx = c.bx + c.bw.saturating_sub(17) / 2;
     for (i, row) in MARK.iter().enumerate() {
-        p.put_c(c.bx, c.bw, cy + i as u16, &[(row, t.accent())]);
+        p.put(lx, cy + i as u16, &[(row, t.accent())]);
     }
-    p.put_c(c.bx, c.bw, cy + 4, &[("No projects yet", bold(t.primary()))]);
-    p.put_c(c.bx, c.bw, cy + 6, &[("ctrl+o", bold(t.secondary())), (" add a project · ", t.muted()), ("ctrl+p", bold(t.secondary())), (" commands", t.muted())]);
+    p.put_c(c.bx, c.bw, cy + 8, &[("No projects yet", bold(t.primary()))]);
+    p.put_c(c.bx, c.bw, cy + 10, &[("ctrl+o", bold(t.secondary())), (" add a project · ", t.muted()), ("ctrl+p", bold(t.secondary())), (" commands", t.muted())]);
 }
 
 fn offline(p: &mut P) {
@@ -52,7 +53,7 @@ fn loading(p: &mut P) {
 
 pub fn shots() -> Vec<Shot> {
     vec![
-        Shot { id: "d18-empty", caption: "Empty workspace: wordmark, no projects", w: 200, h: 50, modes: DL, ascii: false, draw: empty },
+        Shot { id: "d18-empty", caption: "Empty workspace: logo, no projects", w: 200, h: 50, modes: DL, ascii: false, draw: empty },
         Shot { id: "d18-offline", caption: "Offline: header status, banner, draft kept", w: 200, h: 50, modes: DL, ascii: false, draw: offline },
         Shot { id: "d18-loading", caption: "Loading sessions without layout shift", w: 200, h: 50, modes: DL, ascii: false, draw: loading },
     ]

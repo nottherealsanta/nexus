@@ -1,7 +1,7 @@
 //! D10 — the starting context and the new-session view.
 use super::{common, Shot, DL};
 use crate::kit::{bold, trunc, P};
-use crate::shell::{group, meter, Busy, Centre, Shell};
+use crate::shell::{group, Busy, Centre, Shell};
 use ratatui::style::Modifier;
 
 /// `◆ Title   tokens · meta` and an optional muted preview; returns rows used.
@@ -45,7 +45,6 @@ fn context(p: &mut P, c: Centre, mut y: u16) -> u16 {
     y += section(p, c, y, "Skills", "6,780 tok", "7 skills · 2 sources", "");
     y += grid(p, c, y, &["review", "commit", "debug", "test-writer", "refactor", "release", "docs"], &[]) + 1;
     p.put(c.x, y, &[("Context total", bold(t.secondary())), (" · ", t.muted()), ("17,580 tokens", t.primary()), (" · ", t.muted()), ("8.8% of the window", t.muted())]);
-    meter(p, c.x + 56, y, 20, 0.088, "build");
     y + 1
 }
 

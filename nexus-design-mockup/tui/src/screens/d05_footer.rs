@@ -11,23 +11,16 @@ fn u(s: &str, st: Style) -> Unit {
     vec![(s.to_string(), st)]
 }
 
-/// Footer rows ending at `end`, at most `avail` cells wide; the status stays on the last row.
+/// Footer rows ending at `end`, at most `avail` cells wide.
 /// Returns the rows used.
 fn foot(p: &mut P, end: u16, avail: u16, y: u16, agent: &str, model: &str, mids: &[&str], status: &str, tail: &str) -> u16 {
     let t = p.t;
     let mut units: Vec<Unit> = vec![vec![(t.g("square").into(), t.agent(agent)), (" ".into(), t.muted()), (agent_title(agent).into(), bold(t.agent(agent)))], u(model, t.secondary())];
     units.extend(mids.iter().map(|m| u(m, t.muted())));
-    let (g, st, word) = match status {
-        "done" => (t.g("done"), t.fg("status.success"), "done"),
-        "error" => (t.g("error"), t.fg("status.error"), "error"),
-        _ => (t.g("interrupted"), t.fg("status.warning"), "interrupted"),
-    };
-    let mut last: Unit = vec![(g.into(), st), (format!(" {word}"), st)];
+    let _ = status; // no end-status word or glyph; only the `/continue` hint remains
     if !tail.is_empty() {
-        last.push(("  ".into(), t.muted()));
-        last.push((tail.into(), t.muted()));
+        units.push(u(tail, t.muted()));
     }
-    units.push(last);
     let uw = |x: &Unit| x.iter().map(|(s, _)| width(s)).sum::<u16>();
     let mut rows: Vec<Vec<Unit>> = vec![vec![]];
     let mut cur = 0u16;
@@ -67,7 +60,7 @@ fn sheet(p: &mut P) {
         let n = f(p, y + 4);
         y += 4 + n + 1;
     };
-    block(p, "done", "The first edit did not apply because the line had changed; I re-read the file and applied it.", &|p, y| foot(p, end, c.w, y, "build", "gpt-6.1-terra", &mids, "done", ""));
+    block(p, "normal", "The first edit did not apply because the line had changed; I re-read the file and applied it.", &|p, y| foot(p, end, c.w, y, "build", "gpt-6.1-terra", &mids, "done", ""));
     block(p, "model changed mid-turn · a → b", "Switched to the larger model for the test run.", &|p, y| foot(p, end, c.w, y, "build", "gpt-6.0-terra → gpt-6.1-terra", &["medium", "5 tools", "1m 05s", "31k in · 8k cached · 4k out", "$0.21"], "done", ""));
     block(p, "interrupted · the hint becomes `enter continue` when the composer is empty", "I'll add the regression test next, starting with", &|p, y| foot(p, end, c.w, y, "build", "gpt-6.1-terra", &["medium", "1 tool", "0.4s", "9k in · 310 out"], "interrupted", "/continue"));
     block(p, "error · the first line of the error sits on a muted row above", "Running the suite now.", &|p, y| {
@@ -76,7 +69,7 @@ fn sheet(p: &mut P) {
         1 + foot(p, end, c.w, y + 1, "orchestrate", "gpt-6.1-terra", &["high", "2 tools", "1h 02m", "88k in · 21k cached · 6k out"], "error", "")
     });
     // Narrow: a 56-cell column, wrapping from the left.
-    caption(p, c.x, y, "narrow · 56 cells: wraps from the left onto a second right-aligned row; the status stays on the last row");
+    caption(p, c.x, y, "narrow · 56 cells: wraps from the left onto a second right-aligned row");
     y += 2;
     let nc = Centre { w: 56, ..c };
     let nend = nc.x + nc.w;
@@ -88,5 +81,5 @@ fn sheet(p: &mut P) {
 }
 
 pub fn shots() -> Vec<Shot> {
-    vec![Shot { id: "d05-footer", caption: "Turn footer: done, model change, interrupted, error and narrow", w: 200, h: 50, modes: DL, ascii: false, draw: sheet }]
+    vec![Shot { id: "d05-footer", caption: "Turn footer (no end-status word): normal, model change, interrupted with /continue, error line above, narrow", w: 200, h: 50, modes: DL, ascii: false, draw: sheet }]
 }

@@ -1,12 +1,13 @@
 d01-tokens	160	46	Tokens and surfaces: chrome, page, panel, raised, text, accent, status, agents, diff
 d02-shell-200x50	200	50	Shell: header band, chrome sidebars, centre page (200×50)
 d02-shell-120x36	120	36	Shell at 120×36
+d02-child-tab	200	50	Child session: the viewed tab reads root › child
 d03-sessions	200	50	Sessions sidebar: open (band), focus (bar), hover, marks, shimmering running title
 d03-sessions-worktrees-menu	200	50	Worktree sub-groups and the row menu
 d03-rail	200	50	Rail mode: three-row items
 d04-user-band	200	50	User band: open, focused, folded, and the tags (steer, queued, via voice, from parent)
 d04-sticky	200	50	Sticky user header: a scrolled turn with the band pinned under the header
-d05-footer	200	50	Turn footer: done, model change, interrupted, error and narrow
+d05-footer	200	50	Turn footer (no end-status word): normal, model change, interrupted with /continue, error line above, narrow
 d06-groups	200	50	Activity groups: folded, live shimmer, expanded members, member detail box
 d07-reasoning	200	50	Reasoning: finished, open, running, encrypted
 d08-markdown	200	50	Markdown: headings, inline code, lists, table, link, quote and a focused fence
@@ -22,10 +23,11 @@ d13-confirm	200	50	Confirm: Cancel is the safe default
 d14-approval	200	50	Approval card for bash, docked above the composer
 d14-question	200	50	Question card: options and free text
 d15-alerts	200	50	Toasts, a banner and the jump-to-latest pill
+d15-toast-detail	200	50	Enter or click on a toast opens its full text in a borderless modal
 d16-files	200	50	Files tab and the file view with search
 d17-80x24	80	24	80x24: one pane, toggles and breadcrumb only, wrapped footer
 d17-80x24-drawer	80	24	80x24 with the left drawer over a scrimmed page
-d18-empty	200	50	Empty workspace: wordmark, no projects
+d18-empty	200	50	Empty workspace: logo, no projects
 d18-offline	200	50	Offline: header status, banner, draft kept
 d18-loading	200	50	Loading sessions without layout shift
 alt-d01-oldpalette	200	50	D01 B: old Nexus Grok Night palette

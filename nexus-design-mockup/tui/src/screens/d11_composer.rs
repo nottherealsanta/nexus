@@ -98,7 +98,7 @@ fn cap(p: &mut P, x: u16, y: u16, label: &str, note: &str) {
 /// Completion popover anchored above the card's top edge (rows end at `edge - 1`).
 fn pop(p: &mut P, x: u16, edge: u16, w: u16, rows: &[(&str, &str, &str)], sel: usize, hint: &[(&str, &str)], count: &str) {
     let t = p.t;
-    let h = rows.len() as u16 + 2;
+    let h = rows.len() as u16 + 4;
     let y = edge - h;
     modal(p, x, y, w, h, "", false);
     for (i, (name, desc, key)) in rows.iter().enumerate() {
@@ -106,7 +106,7 @@ fn pop(p: &mut P, x: u16, edge: u16, w: u16, rows: &[(&str, &str, &str)], sel: u
         let ns = if on { bold(t.primary()) } else { t.primary() };
         mrow(p, x, y + 1 + i as u16, w, " ", t.muted(), &[(name, ns), ("  ", t.muted()), (desc, t.secondary())], &[(key, t.muted())], on);
     }
-    hints(p, x, y + h - 1, w, hint, count);
+    hints(p, x, y + h - 2, w, hint, count);
 }
 
 fn sheet(p: &mut P) {
@@ -136,16 +136,16 @@ fn sheet(p: &mut P) {
     let mut y = 1;
     cap(p, rx, y, "/ COMPLETION", "popover on the card's top edge, ten rows at most");
     let rows = [("/model", "Change model", "ctrl+m"), ("/mcp", "MCP servers", ""), ("/compact", "Hand off to a new session", ""), ("/theme", "Change theme", ""), ("/rename", "Rename session", ""), ("/project", "Switch project", "alt+p")];
-    let top = y + 2 + rows.len() as u16 + 2;
+    let top = y + 2 + rows.len() as u16 + 4;
     let b = card(p, rx, top, w, &Card { lines: &["/m"], ..Card::default() });
-    pop(p, rx, top, 64, &rows, 0, &[("↑↓", "move"), ("tab", "complete"), ("esc", "close")], "6 of 24");
+    pop(p, rx, top, w, &rows, 0, &[("↑↓", "move"), ("tab", "complete"), ("esc", "close")], "6 of 24");
     strip(p, rx, b, w, false, true);
     y = b + 3;
     cap(p, rx, y, "@ FILE COMPLETION", "paths from the project; the basename is bold");
     let rows = [("loader.py", "src/nexus", ""), ("loader_cache.py", "src/nexus", ""), ("test_loader.py", "tests", ""), ("loader.md", "docs", ""), ("loaders.toml", "config", "")];
-    let top = y + 2 + rows.len() as u16 + 2;
+    let top = y + 2 + rows.len() as u16 + 4;
     let b = card(p, rx, top, w, &Card { lines: &["Please look at @load"], ..Card::default() });
-    pop(p, rx, top, 64, &rows, 1, &[("↑↓", "move"), ("tab", "insert"), ("esc", "close")], "5 of 41");
+    pop(p, rx, top, w, &rows, 1, &[("↑↓", "move"), ("tab", "insert"), ("esc", "close")], "5 of 41");
     strip(p, rx, b, w, false, true);
     y = b + 3;
     cap(p, rx, y, "OFFLINE", "the draft is kept while Core reconnects");

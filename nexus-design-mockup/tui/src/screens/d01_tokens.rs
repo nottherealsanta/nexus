@@ -103,13 +103,12 @@ fn sheet(p: &mut P) {
     p.hline(b, 24, cw, "─", t.hair());
     chip(p, b, 26, "border.strong");
     p.put(b + 42, 26, &[("proposed", bold(t.fg("status.warning")))]);
-    p.put(b, 27, &[("modal frames, diff split rule, open tool corner", t.muted())]);
+    p.put(b, 27, &[("diff split rule, open tool corner (modals have no border)", t.muted())]);
     p.hline(b, 28, cw, "─", t.fg("border.strong"));
     chip(p, b, 30, "border.focus");
-    label(p, b, 33, "MODAL FRAME");
-    p.fill(b, 35, 34, 5, "surface.raised");
-    p.frame(b, 35, 34, 5, t.fg("border.strong"), true, &[("Commands", bold(t.primary()).patch(t.bg("surface.raised")))]);
-    p.put(b + 2, 37, &[("⌕ ", t.muted().patch(t.bg("surface.raised"))), ("Search…", t.muted().patch(t.bg("surface.raised")))]);
+    label(p, b, 33, "MODAL (NO BORDER)");
+    crate::shell::modal(p, b, 35, 34, 6, "Commands", true);
+    p.put(b + 2, 38, &[("⌕ ", t.muted().patch(t.bg("surface.raised"))), ("Search…", t.muted().patch(t.bg("surface.raised")))]);
 
     // -- column C: status, agents, diff
     label(p, c, 3, "STATUS");

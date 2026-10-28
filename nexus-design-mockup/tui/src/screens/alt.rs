@@ -179,12 +179,12 @@ fn footer_left(p: &mut P) {
     y += prose(p, c, y, "Done: parse_manifest is memoized on the file's mtime and a regression test counts parses.") + 1;
     p.hline(c.x, y, c.w, t.g("rule"), t.hair());
     y += 1;
-    p.put(c.x, y, &[("codex/gpt-6.1-terra · medium · 4.2s · 2 calls · 3 tools · 12k in 9k cached 2k out · $0.04 · ", t.muted()), (t.g("done"), t.fg("status.success")), (" done", t.fg("status.success"))]);
+    p.put(c.x, y, &[("codex/gpt-6.1-terra · medium · 4.2s · 2 calls · 3 tools · 12k in 9k cached 2k out · $0.04", t.muted())]);
     y += 2;
     y += user_block(p, c, y, &["Now run the whole suite."], 2, "3:44 PM", false, false) + 1;
     y += prose(p, c, y, "The suite was interrupted while pytest was running.") + 1;
     p.hline(c.x, y, c.w, t.g("rule"), t.hair());
-    p.put(c.x, y + 1, &[("codex/gpt-6.1-terra · medium · 12.0s · 1 call · 1 tool · ", t.muted()), (t.g("interrupted"), t.fg("status.warning")), (" interrupted", t.fg("status.warning"))]);
+    p.put(c.x, y + 1, &[("codex/gpt-6.1-terra · medium · 12.0s · 1 call · 1 tool", t.muted()), ("  /continue", t.muted())]);
 }
 
 // ---------------------------------------------------------------- D06 / D07

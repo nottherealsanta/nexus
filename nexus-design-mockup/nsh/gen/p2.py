@@ -83,7 +83,7 @@ def d10():
 <div class="sec-card"><div class="ch">{diamond}<b>AGENTS.md</b><span class="tk">3,880 tok</span></div><div class="meta" style="padding-left:24px">~/repos/nexus · 1 file</div>
 <div class="pv" style="padding-left:24px">This branch (nexus10, Nexus 0.10) rebuilds Nexus from the provider wire up. Read PLAN.md first…</div></div>
 <div class="sec-card"><div class="ch">{diamond}<b>Tools</b><span class="tk">4,780 tok</span></div><div class="meta" style="padding-left:24px">9 tools · 8 on</div><div class="tgrid">{tg}</div></div>
-<div class="total"><b>Context total</b><span>17,580 tokens</span><span class="meter"><i style="width:8.8%"></i></span><span>8.8% of the window</span></div>
+<div class="total"><b>Context total</b><span>17,580 tokens</span><span>8.8% of the window</span></div>
 </div></div>''' + composer(focus=True, pct=9, used="18k")
     page("d10-new-session", "D10 new session", "1440,900",
          win(c, hdr=header(crumbs=("nexus-demo", "New session"), run=None, attn=0), left=left_sessions(new_open=True),
@@ -95,13 +95,13 @@ def d11():
         return f'<div><span class="cap">{cap}</span><div class="stage" style="{"width:%dpx;"%w if w else ""}">{inner}</div></div>'
     comp_rows = [("/model", "Switch model", "ctrl+m"), ("/agent", "Switch agent", "tab"), ("/effort", "Set reasoning effort", "ctrl+e"), ("/new", "New session", "ctrl+n"), ("/compact", "Hand off to a fresh context", ""), ("/continue", "Continue after interruption", "enter")]
     pr = "".join(f'<div class="pop-row {"sel" if i==0 else ""}"><b style="font-family:Monaspace Argon,monospace;font-weight:500;font-size:12.5px;color:var(--text-primary)">{a}</b><span class="m" style="margin-left:12px;color:var(--text-muted);font-size:12px">{b}</span>{"<span class=kbd>%s</span>"%c if c else ""}</div>' for i, (a, b, c) in enumerate(comp_rows))
-    pop = f'<div class="pop" style="margin-bottom:8px">{pr}<div class="pop-foot"><span>↑↓ move</span><span>tab accept</span><span>esc close</span><span class="r">6 of 12</span></div></div>'
+    pop = f'<div class="pop" style="margin-bottom:0;padding-top:8px;border-radius:10px 10px 0 0">{pr}<div class="pop-foot"><span>↑↓ move</span><span>tab accept</span><span>esc close</span><span class="r">6 of 12</span></div></div>'
     body = f'''<div class="sheet-pad"><h1>D11 · Composer</h1><div style="height:24px"></div>
 <div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px 32px">
 {st("Idle", composer())}
 {st("Focused, with a draft", composer(text="Can you also add a test that covers the cache invalidation when the file’s mtime changes?", focus=True))}
 {st("Busy (live row above the card, esc stop)", composer(state="busy"))}
-{st("Completion (anchored to the card’s top edge)", '<div class="col" style="margin:0 auto">' + pop + '</div>' + composer(text="/", focus=True, strip=False))}
+{st("Completion (anchored to the card’s top edge)", '<div class="dock col" style="padding-bottom:0">' + pop + '</div>' + composer(text="/", focus=True, strip=False).replace('class="dock col"', 'class="dock col" style="padding-top:0"', 1))}
 {st("Narrow: sheds effort, provider, meter", '<div style="width:420px;margin:0 auto">' + composer(narrow=True, text="Run the tests again", focus=False) + '</div>')}
 {st("Jump to latest (never overlaps content)", composer(jump="3 new"))}
 </div></div>'''
@@ -130,7 +130,7 @@ def d13():
     sw = lambda on: f'<span class="switch {"on" if on else ""}"></span>'
     st = f'''<div class="dialog" style="width:704px;top:44px">
 <div class="dlg-h"><span class="t-title">Settings</span><span class="kbd">esc</span></div>
-<div class="dlg-body" style="height:700px;border-top:1px solid var(--border-default);padding:8px 16px">
+<div class="dlg-body" style="height:700px;padding:8px 0">
 <div class="dlg-sec"><span class="lbl">Appearance</span></div>
 {setrow("Theme","Follows the system by default",sel("Dark"))}{setrow("Text size","Scales all type levels together",sel("100%"))}{setrow("Reduce motion","Static spinner, no shimmer or finish flash",sw(False))}
 <div class="dlg-sec"><span class="lbl">Agents</span></div>
@@ -159,13 +159,25 @@ def d14():
 def d15():
     banner = '<div class="banner warn"><span class="lv">@ic(alert,s14)Rate limited</span><span>codex is throttling requests · retrying in 8s</span><span class="acts"><span class="accent" style="font-weight:500">Retry</span><span class="muted" style="display:inline-flex">@ic(x,s14)</span></span></div>'
     toasts = '''<div class="toasts">
-<div class="toast ok" style="--w:70%"><span class="gl">@ic(check,s14)</span><div><div class="ti">Session archived</div><div class="tx">Spike: terminal harness</div><div class="acts"><span class="accent">Undo</span></div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span><span class="bar"></span></div>
-<div class="toast err" style="--w:45%"><span class="gl">@ic(alert,s14)</span><div><div class="ti">Tool failed</div><div class="tx">bash exited with code 1 in tests/test_sync.py</div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span><span class="bar"></span></div>
-<div class="toast info" style="--w:80%"><span class="gl">@ic(info,s14)</span><div><div class="ti">Needs your approval</div><div class="tx">Review the CJK width handling · bash</div><div class="acts"><span class="accent">Open</span></div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span><span class="bar"></span></div>
+<div class="toast ok" style="--w:70%"><span class="gl">@ic(check,s14)</span><div><div class="ti">Session archived</div><div class="tx">Spike: terminal harness</div><div class="acts"><span class="accent">Undo</span></div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span></div>
+<div class="toast err" style="--w:45%"><span class="gl">@ic(alert,s14)</span><div><div class="ti">Turn failed</div><div class="tx">429 rate limited · retrying in 8s</div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span></div>
+<div class="toast info" style="--w:80%"><span class="gl">@ic(info,s14)</span><div><div class="ti">Needs your approval</div><div class="tx">Review the CJK width handling · bash</div><div class="acts"><span class="accent">Open</span></div></div><span class="icon-btn" style="width:24px;height:24px;color:var(--text-muted)">@ic(x,s14)</span></div>
 <span class="t-meta" style="padding:0 10px;height:24px;line-height:24px;border-radius:12px;background:var(--surface-raised);box-shadow:0 0 0 1px var(--border-default)">+2 more</span></div>'''
     c = banner + scroll(turn(False)) + composer(jump="3 new")
     c = c.replace('<div class="banner', toasts.replace('class="toasts"', 'class="toasts" style="top:48px"') + '<div class="banner', 1)
     page("d15-alerts", "D15 alerts", "1440,900", win(c, hdr=header(run=("ok", "idle"), attn=3)))
+    body = """<p>provider: 429 rate limited. The request to codex/gpt-6.1-terra was rejected because the organization exceeded its tokens-per-minute quota for this model. Nexus will retry automatically in 8s (attempt 2 of 5).</p>
+<p>The provider returned this body:</p>
+<pre class="mono" style="white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:18px;color:var(--text-secondary);background:var(--surface-panel);border-radius:6px;padding:12px;margin:0">{"error": {"type": "rate_limit_exceeded", "code": "rate_limit_exceeded",
+  "message": "Rate limit reached for gpt-6.1-terra in organization org-7Qd2xK on tokens per min (TPM): Limit 800000, Used 784210, Requested 31804. Please try again in 1.5s.",
+  "param": null}}</pre>
+<p>Request id <span class="mono">req_9f2c4a71b0e84d5c</span>. Retry-After: 8. The turn is paused, not lost: the 3 tool results already received are kept in the context.</p>
+<p>If this keeps happening, switch to a model with more headroom (ctrl+m) or wait for the window to reset. Rate limits are per organization, so other sessions using the same sign-in count against the same quota.</p>"""
+    dlg = f'''<div class="dialog" style="width:640px;top:96px">
+<div class="dlg-h"><span class="t-title">Turn failed</span><span class="kbd">esc</span></div>
+<div class="dlg-body" style="padding:0;font-size:14px;line-height:22px;color:var(--text-primary);display:flex;flex-direction:column;gap:12px">{body}</div>
+<div class="dlg-f"><span>c copy</span><span>esc close</span></div></div>'''
+    page("d15-toast-detail", "D15 toast detail", "1440,900", win(scroll(turn(False)) + composer(), hdr=header(run=("ok", "idle"), attn=3), overlay='<div class="scrim"></div>' + dlg))
 
 # ================= d16 files =================
 def d16():

@@ -138,7 +138,7 @@ def d17():
 <div class="prose"><p><code>parse_manifest</code> is called from <code>Loader.load</code> on every request. I’ll memoize it on the file’s mtime so edits still show up.</p></div>
 {READ_G}{EDIT_G}
 <div class="prose"><p>Both tests pass now.</p></div>
-<div class="foot"><b class="ag-build">▪ Build</b><span class="dot">·</span><span>medium</span><span class="dot">·</span><span>3 tools</span><span class="dot">·</span><span>4.2s</span><span class="dot">·</span><span>$0.04</span><span class="st ok">@ic(check)done</span></div>
+<div class="foot"><b class="ag-build">▪ Build</b><span class="dot">·</span><span>medium</span><span class="dot">·</span><span>3 tools</span><span class="dot">·</span><span>4.2s</span><span class="dot">·</span><span>$0.04</span></div>
 </div>
 <div style="position:relative;flex:none"><span class="jump" style="right:16px">@ic(arrow-down,s14)<span>3 new</span></span></div>
 <div class="composer"><div class="in"><span class="caret"></span>Type a message…</div>
@@ -148,8 +148,13 @@ def d17():
 
 # ================= d18 states =================
 def d18():
-    wm = '''<div class="wordmark"><svg width="168" height="48" viewBox="0 0 168 48" fill="none"><g stroke="var(--text-muted)" stroke-width="1.5"><path d="M10 34 24 12 38 34M10 34h28"/></g><circle cx="24" cy="12" r="4" fill="var(--interactive-accent)"/><circle cx="10" cy="34" r="3" fill="var(--text-secondary)"/><circle cx="38" cy="34" r="3" fill="var(--text-secondary)"/>
-<text x="56" y="34" font-family="system-ui, sans-serif" font-size="30" font-weight="700" letter-spacing="3" fill="var(--text-primary)">nexus</text></svg></div>'''
+    LOGO = '''                 
+    _/      _/   
+   _/_/    _/    
+  _/  _/  _/     
+ _/    _/_/      
+_/      _/       '''
+    wm = f'<pre class="logo">{LOGO}</pre>'
     empty_c = f'''<div class="page-scroll" style="display:flex;align-items:center;justify-content:center"><div class="wordmark" style="gap:20px">{wm}<div style="text-align:center"><div class="t-title">No projects yet</div><div class="t-sec" style="margin-top:4px">Add a project to start a session.</div>
 <div class="row gap8" style="justify-content:center;margin-top:16px"><span class="btn primary">@ic(plus,s14)Add a project<span class="kbd">ctrl+o</span></span><span class="btn">Commands<span class="kbd">ctrl+p</span></span></div></div></div></div>'''
     left_empty = '''<aside class="sb sb-l"><div class="sb-search" style="opacity:.6">@ic(search,s14)<span>Search sessions</span><span class="kbd">ctrl+k</span></div><div class="grp"><span class="lbl">Projects</span></div><div class="t-sec muted" style="padding:4px 10px">Nothing here yet.</div><div class="sb-foot"><div class="menu-row">@ic(settings,s14)<span>Settings</span><span class="kbd">ctrl+,</span></div></div></aside>'''

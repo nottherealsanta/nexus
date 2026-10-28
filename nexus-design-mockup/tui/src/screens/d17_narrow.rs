@@ -34,7 +34,7 @@ fn base(p: &mut P) -> Centre {
     // The footer wraps from the left onto a second row; the status stays on the last row.
     let end = c.x + c.w;
     p.put_r(end, y, &[(t.g("square"), t.agent("build")), (" ", t.muted()), (agent_title("build"), bold(t.agent("build"))), (" · gpt-6.1-terra · medium · 3 tools · 4.2s", t.muted())]);
-    p.put_r(end, y + 1, &[("12k in · 2k out · $0.04 · ", t.muted()), (t.g("done"), t.fg("status.success")), (" done", t.fg("status.success"))]);
+    p.put_r(end, y + 1, &[("12k in · 2k out · $0.04", t.muted())]);
     let _ = trunc;
     c
 }
