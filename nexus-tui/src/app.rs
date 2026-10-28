@@ -187,6 +187,16 @@ pub struct FileRow {
     pub ignored: bool,
 }
 
+/// The file view's `/` search: the query, whether it is still being typed
+/// (letters edit it; otherwise `n`/`N` move between matches), and the index
+/// of the current match.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FileSearch {
+    pub query: String,
+    pub typing: bool,
+    pub hit: Option<usize>,
+}
+
 pub struct Ui {
     pub focus: Focus,
     pub left_open: bool,
@@ -203,6 +213,7 @@ pub struct Ui {
     pub side_top: usize,
     pub file_open: bool,
     pub file_scroll: usize,
+    pub file_search: Option<FileSearch>,
     /// Files tree: expanded relative directories, ignored visibility, and
     /// whether to browse the project checkout instead of the session directory.
     pub files_expanded: std::collections::BTreeSet<String>,
@@ -333,6 +344,7 @@ impl App {
                 side_top: 0,
                 file_open: false,
                 file_scroll: 0,
+                file_search: None,
                 files_expanded: std::collections::BTreeSet::new(),
                 files_hide_ignored: false,
                 files_project_root: false,
@@ -1757,6 +1769,7 @@ impl App {
                     "file" | "symlink" => {
                         self.ui.file_open = true;
                         self.ui.file_scroll = 0;
+                        self.ui.file_search = None;
                         self.request_files(row.path.clone(), true);
                         self.ui.focus = Focus::Timeline;
                     }
@@ -2438,6 +2451,110 @@ impl App {
         }
     }
 
+    /// Number of lines in the open file (0 while it loads or fails).
+    pub fn file_line_count(&self) -> usize {
+        self.state
+            .file
+            .as_ref()
+            .and_then(|(_, _, _, data)| data.as_ref().ok())
+            .and_then(|data| data["content"].as_str())
+            .map_or(0, |content| content.lines().count())
+    }
+
+    /// Indices of the open file's lines that contain the search query, ignoring ASCII case.
+    pub fn file_matches(&self) -> Vec<usize> {
+        let Some(query) = self
+            .ui
+            .file_search
+            .as_ref()
+            .map(|s| s.query.to_ascii_lowercase())
+        else {
+            return Vec::new();
+        };
+        if query.is_empty() {
+            return Vec::new();
+        }
+        self.state
+            .file
+            .as_ref()
+            .and_then(|(_, _, _, data)| data.as_ref().ok())
+            .and_then(|data| data["content"].as_str())
+            .map_or(Vec::new(), |content| {
+                content
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, line)| line.to_ascii_lowercase().contains(&query))
+                    .map(|(i, _)| i)
+                    .collect()
+            })
+    }
+
+    /// Keys for the file view's `/` search. Returns whether the key was taken.
+    fn file_search_key(&mut self, ev: &KeyEvent, name: &str) -> bool {
+        let typed = keys::printable(ev);
+        let Some(search) = self.ui.file_search.as_mut() else {
+            if typed == Some('/') {
+                self.ui.file_search = Some(FileSearch {
+                    typing: true,
+                    ..FileSearch::default()
+                });
+                return true;
+            }
+            return false;
+        };
+        let typing = search.typing;
+        match typed {
+            Some('n') if !typing => self.file_goto(true),
+            Some('N') if !typing => self.file_goto(false),
+            _ if name == "enter" => {
+                search.typing = false;
+                self.file_goto(true);
+            }
+            _ if name == "backspace" => {
+                search.query.pop();
+                search.typing = true;
+                search.hit = None;
+            }
+            // Back to editing the same query.
+            Some('/') if !typing => search.typing = true,
+            // While not typing, j and k keep scrolling.
+            Some(c) if typing || !matches!(c, 'j' | 'k') => {
+                search.query.push(c);
+                search.typing = true;
+                search.hit = None;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Moves the search to the next or previous match and scrolls it to the top of the view.
+    fn file_goto(&mut self, forward: bool) {
+        let matches = self.file_matches();
+        let scroll = self.ui.file_scroll;
+        let Some(search) = self.ui.file_search.as_mut() else {
+            return;
+        };
+        let count = matches.len();
+        if count == 0 {
+            search.hit = None;
+            return;
+        }
+        let next = match (search.hit, forward) {
+            (Some(i), true) => (i + 1) % count,
+            (Some(i), false) => (i + count - 1) % count,
+            (None, true) => matches.iter().position(|&line| line >= scroll).unwrap_or(0),
+            (None, false) => matches
+                .iter()
+                .rposition(|&line| line < scroll)
+                .unwrap_or(count - 1),
+        };
+        search.hit = Some(next);
+        let page = self.regions.timeline.height.saturating_sub(2) as usize;
+        let max = self.file_line_count().saturating_sub(page);
+        self.ui.file_scroll = matches[next].min(max);
+    }
+
     pub fn handle_key(&mut self, ev: KeyEvent) {
         let Some(name) = keys::name(&ev) else { return };
         match name.as_str() {
@@ -2496,19 +2613,19 @@ impl App {
                 && self.ui.dialog.is_none()
                 && self.ui.edit.is_none()
             {
-                self.ui.file_open = false;
+                // The first Esc ends a search; the next one closes the file.
+                if self.ui.file_search.take().is_none() {
+                    self.ui.file_open = false;
+                }
                 return;
             }
             return self.escape();
         }
         if self.ui.file_open && self.ui.overlay.is_none() && self.ui.dialog.is_none() {
-            let lines = self
-                .state
-                .file
-                .as_ref()
-                .and_then(|(_, _, _, data)| data.as_ref().ok())
-                .and_then(|data| data["content"].as_str())
-                .map_or(0, |content| content.lines().count());
+            if self.file_search_key(&ev, &name) {
+                return;
+            }
+            let lines = self.file_line_count();
             let page = self.regions.timeline.height.saturating_sub(2) as usize;
             let max = lines.saturating_sub(page);
             match name.as_str() {

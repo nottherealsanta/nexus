@@ -1211,37 +1211,74 @@ fn draw_file_view(cx: &Cx, buf: &mut Buffer, r: Rect) {
         Ok(data) => {
             let content = data["content"].as_str().unwrap_or("");
             let page = r.height.saturating_sub(2) as usize;
+            let query = cx
+                .app
+                .ui
+                .file_search
+                .as_ref()
+                .map(|search| search.query.to_ascii_lowercase())
+                .filter(|query| !query.is_empty());
             for (i, line) in content
                 .lines()
                 .enumerate()
                 .skip(cx.app.ui.file_scroll)
                 .take(page)
             {
-                let label = format!("{:>4}  {line}", i + 1);
+                let prefix = format!("{:>4}  ", i + 1);
+                let label = format!("{prefix}{line}");
                 let label = truncate(&label, r.width.saturating_sub(1) as usize, cx.ell());
+                let y = r.y + 1 + (i - cx.app.ui.file_scroll) as u16;
                 put(
                     buf,
                     r.x + 1,
-                    r.y + 1 + (i - cx.app.ui.file_scroll) as u16,
+                    y,
                     &label,
                     cx.st(SECONDARY, SIDEBAR),
                     r.width.saturating_sub(1),
                 );
+                if let Some(query) = &query {
+                    let base = r.x + 1 + width(&prefix) as u16;
+                    for (at, _) in line.to_ascii_lowercase().match_indices(query.as_str()) {
+                        let x = base + width(&line[..at]) as u16;
+                        if x >= r.right() {
+                            break;
+                        }
+                        let len = (width(query) as u16).min(r.right() - x);
+                        buf.set_style(Rect::new(x, y, len, 1), cx.t.bg("interactive.selection"));
+                    }
+                }
             }
-            let remaining = content
-                .lines()
-                .count()
-                .saturating_sub(cx.app.ui.file_scroll + page);
-            if remaining > 0 && r.height >= 2 {
-                let notice = format!("{remaining} more lines · scroll");
-                put(
-                    buf,
-                    r.x + 1,
-                    r.bottom() - 1,
-                    &notice,
-                    cx.st(MUTED, SIDEBAR),
-                    r.width.saturating_sub(1),
-                );
+            let total = content.lines().count();
+            let remaining = total.saturating_sub(cx.app.ui.file_scroll + page);
+            if r.height >= 2 {
+                if let Some(search) = &cx.app.ui.file_search {
+                    let found = cx.app.file_matches().len();
+                    let status = match (search.query.is_empty(), found) {
+                        (true, _) => String::new(),
+                        (false, 0) => "  no matches".to_owned(),
+                        (false, n) => format!("  {n} matches"),
+                    };
+                    put(
+                        buf,
+                        r.x + 1,
+                        r.bottom() - 1,
+                        &format!("/{}{status}", search.query),
+                        cx.st(PRIMARY, SIDEBAR),
+                        r.width.saturating_sub(1),
+                    );
+                } else if remaining > 0 {
+                    let first = cx.app.ui.file_scroll + 1;
+                    let last = (cx.app.ui.file_scroll + page).min(total);
+                    let notice = format!("lines {first}-{last} of {total} · scroll");
+                    put(
+                        buf,
+                        r.x + 1,
+                        r.bottom() - 1,
+                        &notice,
+                        cx.st(MUTED, SIDEBAR),
+                        r.width.saturating_sub(1),
+                    );
+                }
             }
         }
         Err(error) => {

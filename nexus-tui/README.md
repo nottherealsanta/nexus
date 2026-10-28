@@ -45,7 +45,12 @@ root row switches between the project checkout and the open session's worktree
 when there is more than one. Enter opens a read-only, line-numbered file view
 with a `~` path; Esc returns to the timeline. The selected file can be copied as
 an absolute path, inserted as `@path`, or opened in `$VISUAL`/`$EDITOR` with the
-terminal suspended. The file view has no syntax highlighting or search yet.
+terminal suspended. In the file view `/` opens a search line: typing filters
+and highlights matches, Enter or `n` goes to the next match and `N` to the
+previous one, and the first Esc ends the search while the next closes the file.
+Core serves whole files up to 1 MiB and has no offsets, so the bottom notice
+gives the exact range shown (`lines 1-40 of 300`). The file view has no syntax
+highlighting yet.
 
 Still Step 12.4: the built-in editor, Git diff UI, worktree
 management in the UI, settings editing beyond theme/monochrome, and
