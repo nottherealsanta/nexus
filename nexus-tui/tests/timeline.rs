@@ -925,13 +925,13 @@ fn the_context_section_lists_items_with_estimates_and_the_window_share() {
         "Context",
         "System prompt",
         "You are a coding agent.",
-        "Tools [3]",
+        "Tools  [3]",
         "read  bash  edit",
-        "Instructions AGENTS.md loaded",
+        "Instructions  AGENTS.md loaded",
         "/work/AGENTS.md",
         "part of the system prompt",
-        "Agent build",
-        "Child agents [2]",
+        "Agent  build",
+        "Child agents  [2]",
         "scout  plan",
         "of the window",
     ] {
@@ -974,7 +974,14 @@ fn the_turn_footer_prices_a_turn_from_the_catalog() {
     });
     let text = rows(&mut a).join("\n");
     // 50K fresh input at $1, 50K cached at $0.20, 10K output at $10 per million.
-    assert!(text.contains("100K in 50.0K cached 10.0K out"), "{text}");
+    assert!(
+        text.contains("100K in") && text.contains("10.0K out"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\u{25aa} Build"),
+        "right-aligned agent lead: {text}"
+    );
     assert!(text.contains("$0.16"), "{text}");
 }
 

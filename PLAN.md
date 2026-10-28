@@ -319,6 +319,7 @@ says why the rest cannot change. Still open:
 | Turn footer without price | Footer adds cost from the catalog's prices when the model has them (2026-10-28) | Spec: every turn shows what it cost |
 | Output clipped to the first 200 lines, "show all" did nothing | First and last 100 lines with the hidden count between and `o` to toggle the whole output; `r`, `o`, `i` work on a focused tool (2026-10-28) | Clipping is announced and reversible; the model's own clip stays separate |
 | Projects were added with the CLI only | `+ Add project` and a confirmed remove in the Projects tab; right-click or `m` opens a row menu of the manifest's `row_menu` commands (2026-10-28) | Core already serves `POST`/`DELETE /api/project` |
+| Turn footer was a rule plus a left-aligned row; context items were a rail list | Footer is right-aligned `▪ Build · model · …` with no rule; context items are chip headings with indented details, as in old Nexus (2026-10-28) | The user asked for the old look |
 | Composer completion was host-driven (the host ranked `/` commands and searched `@` files) | The TUI ranks the manifest's slash commands locally (prefix, subsequence, typo, then the rest; always ten rows) and asks Core's `GET /api/project/{id}/files/search` for `@` paths, padded from an empty-query listing; replies are cached per token and a reply for an old token is dropped | Completion needs only the Core HTTP API, and the popup keeps its height while typing |
 
 ## Known gaps

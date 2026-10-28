@@ -356,28 +356,27 @@ turn (system prompt, tool list, instructions, agent, child agents).
 
 ```
  ▾ Context · 5 items · ~2.9K tokens · 1.4% of window
-   │ System prompt                                          ~1.0K
-   │   You are an AI agent running in Nexus, a coding agent…
-   │
-   │ Tools [9]                                              ~1.9K
-   │   read  bash  bash_output  bash_kill  edit  write  ask  +2 more
-   │
-   │ Instructions AGENTS.md loaded                          ~0.7K
-   │   /work/AGENTS.md · 2.8 KB, part of the system prompt
-   │
-   │ Agent build
-   │   builtin · Does the actual work…
-   │
-   │ total  ~2.9K tokens · 1.4% of the window
+   ▐ System prompt ▌ ~1.0K tokens
+    You are a coding agent running in Nexus, a coding agent…
+
+   ▐ Tools ▌ [9] ~1.9K tokens
+    read  bash  bash_output  bash_kill  edit  write  ask  +2 more
+
+   ▐ Instructions ▌ AGENTS.md loaded ~0.7K tokens
+    /work/AGENTS.md · 2.8 KB, part of the system prompt
+
+   ▐ Agent ▌ build
+    builtin · Does the actual work…
+
+   total  ~2.9K tokens · 1.4% of the window
 ```
 
 Header: fold marker, title (secondary, bold), `·`-separated meta in muted, with
-the share of the model's window when the catalog reports one. Body: a hairline
-rail, a bold name per item with a muted count chip, the estimated token figure
-flush right (at most 96 cells from the rail, so labels and figures stay
-together), and muted detail rows under it (first prompt line, tool names in at
+the share of the model's window when the catalog reports one. Body, as in old Nexus: each item's name is a bold label on a filled chip
+(reversed in monochrome), followed by a count and the estimated token figure,
+with muted detail rows indented under the chip's text (first prompt line, tool names in at
 most two rows then `+N more`, the instruction file's path and size). A blank
-rail row separates items; a `total` row closes the list. Estimates are
+row separates items; a `total` row closes the list. Estimates are
 characters ÷ 4 and carry `~`; the provider's own counts appear in the turn
 footer. Instructions are part of the system prompt, so the total counts only
 the system prompt and the tool schemas. Collapsed by default after the first
@@ -402,9 +401,10 @@ presentation remains in A8.
  codex/gpt-5 · high · 42 s · 4 calls · 7 tools · 12k in 9k cached 2k out · $0.04 · ✓ done
 ```
 
-One muted row below a hairline: model (and every model used), effort,
+One muted row, right-aligned and without a rule: `▪ Build` (agent in its
+colour, bold), model name from the catalog (every model used), effort,
 duration, calls, tools, tokens, cost, then the end status with glyph and
-label. Cost is computed from the catalog's prices (uncached input, cached
+label. Long footers wrap; the status is never truncated. Cost is computed from the catalog's prices (uncached input, cached
 input, output) and is absent when the model has no price. Wraps at width into a second muted row, never truncating the status.
 Interrupted: `◼ interrupted`; error: `✕ error`; step limit: `◼ step limit`.
 Running: absent until the turn ends (the live row above the composer shows the

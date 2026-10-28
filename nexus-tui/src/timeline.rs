@@ -825,44 +825,39 @@ impl Builder<'_> {
             if !open {
                 return;
             }
-            let rail_style = b.st("border.default", CANVAS);
-            let name_style = b.secondary().add_modifier(Modifier::BOLD);
             let meta = b.meta();
-            let rail = format!("  {} ", b.t.structure("rail"));
-            // Keep the token column near its labels on a wide terminal.
-            let inner = b.bw.saturating_sub(width(&rail)).min(96);
-            // Heading row: name, count chip, then the token figure flush right.
+            // As in old Nexus: the name on a filled chip, the figures after it,
+            // detail rows under the chip's text, a blank row between items.
+            let chip_style = if b.t.mono() {
+                Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+            } else {
+                b.st(CANVAS, SECONDARY).add_modifier(Modifier::BOLD)
+            };
+            let inner = b.bw.min(100);
             let item = |b: &mut Self, name: &str, chip: Option<String>, tokens: Option<String>| {
                 let mut spans = vec![
-                    Span::styled(rail.clone(), rail_style),
-                    Span::styled(name.to_owned(), name_style),
+                    Span::styled("  ".to_owned(), meta),
+                    Span::styled(format!(" {name} "), chip_style),
                 ];
-                let mut used = width(name);
                 if let Some(chip) = chip {
-                    used += 1 + width(&chip);
-                    spans.push(Span::styled(format!(" {chip}"), meta));
+                    spans.push(Span::styled(format!(" {chip}"), b.secondary()));
                 }
                 if let Some(tokens) = tokens {
-                    let pad = inner.saturating_sub(used + width(&tokens)).max(1);
-                    spans.push(Span::styled(" ".repeat(pad), meta));
-                    spans.push(Span::styled(tokens, meta));
+                    spans.push(Span::styled(format!(" {tokens} tokens"), meta));
                 }
                 b.line(spans);
             };
-            // Muted detail rows under a heading, clipped with an announced ellipsis.
             let detail = |b: &mut Self, text: &str| {
                 if text.is_empty() {
                     return;
                 }
-                let room = inner.saturating_sub(2).max(1);
-                b.line(vec![
-                    Span::styled(rail.clone(), rail_style),
-                    Span::styled(format!("  {}", truncate(text, room, b.ell())), meta),
-                ]);
+                let room = inner.saturating_sub(3).max(1);
+                b.line(vec![Span::styled(
+                    format!("   {}", truncate(text, room, b.ell())),
+                    meta,
+                )]);
             };
-            let blank = |b: &mut Self| {
-                b.line(vec![Span::styled(rail.trim_end().to_owned(), rail_style)]);
-            };
+            let blank = |b: &mut Self| b.line(vec![Span::raw(String::new())]);
 
             item(
                 b,
@@ -952,8 +947,7 @@ impl Builder<'_> {
             }
             blank(b);
             let mut total_row = vec![
-                Span::styled(rail.clone(), rail_style),
-                Span::styled("total".to_owned(), meta),
+                Span::styled("  total".to_owned(), meta),
                 Span::styled(format!("  ~{} tokens", fmt_count(total)), b.secondary()),
             ];
             if let Some(w) = window {
@@ -1246,14 +1240,16 @@ impl Builder<'_> {
 
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
         let Some(meta) = turns.get(n) else { return };
-        self.line(vec![Span::styled(
-            self.t.structure("rule").repeat(self.bw),
-            self.st("border.default", CANVAS),
-        )]);
         let session = self.app.viewed();
         let mut bits: Vec<String> = Vec::new();
         if !meta.models.is_empty() {
-            bits.push(meta.models.join(" / "));
+            let name = |used: &String| {
+                crate::stats::catalog_entry(&self.app.state.models, used)
+                    .and_then(|m| m["name"].as_str())
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| used.clone(), str::to_owned)
+            };
+            bits.push(meta.models.iter().map(name).collect::<Vec<_>>().join(" / "));
         } else if let Some(m) = session.and_then(|s| s.model.clone()) {
             let short = m.rsplit('/').next().unwrap_or(&m).to_owned();
             if m != "default" && !m.is_empty() {
@@ -1300,23 +1296,65 @@ impl Builder<'_> {
                 bits.push(cost);
             }
         }
+        // Right-aligned like old Nexus: `▪ Build · GPT-6 Luna · 3.3s`, then the
+        // detail and the end status, which is never truncated.
+        let agent = session.map(|s| s.agent.clone()).unwrap_or_default();
+        let label: String = agent
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().collect::<String>() + &agent[c.len_utf8()..])
+            .unwrap_or_default();
+        let glyph = if self.t.opts.ascii { "*" } else { "\u{25aa}" };
+        let lead = if label.is_empty() {
+            String::new()
+        } else {
+            format!("{glyph} {label}")
+        };
         let text = bits.join(&self.sep());
-        let mut rows = text::wrap(&text, self.bw);
-        // The end status is never truncated: append it to the last row, or a
-        // new one when it does not fit.
         let status = self.turn_status(meta);
         let sw: usize = status.iter().map(|s| width(s.content.as_ref())).sum();
-        let last_w = rows.last().map_or(0, |r| width(r));
-        if last_w + 1 + sw > self.bw {
+        let lead_w = if lead.is_empty() {
+            0
+        } else {
+            width(&lead) + width(&self.sep())
+        };
+        let room = self.bw.saturating_sub(lead_w + sw + 2).max(8);
+        let mut rows = text::wrap(&text, room);
+        if rows.is_empty() {
             rows.push(String::new());
         }
+        let count = rows.len();
         for (i, row) in rows.iter().enumerate() {
-            let mut spans = vec![Span::styled(row.clone(), self.meta())];
-            if i + 1 == rows.len() {
-                let pad = self.bw.saturating_sub(width(row) + 1 + sw).max(1);
-                spans.push(Span::raw(" ".repeat(pad)));
-                spans.extend(status.clone());
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut used = 0;
+            if i == 0 && !lead.is_empty() {
+                let style = self.t.agent_style(&agent);
+                spans.push(Span::styled(
+                    format!("{glyph} "),
+                    self.st(MUTED, CANVAS).patch(style),
+                ));
+                spans.push(Span::styled(
+                    label.clone(),
+                    self.primary().add_modifier(Modifier::BOLD),
+                ));
+                used += width(&lead);
+                if !row.is_empty() {
+                    spans.push(Span::styled(self.sep(), self.meta()));
+                    used += width(&self.sep());
+                }
             }
+            spans.push(Span::styled(row.clone(), self.meta()));
+            used += width(row);
+            if i + 1 == count {
+                if used > 0 {
+                    spans.push(Span::raw(" ".to_owned()));
+                    used += 1;
+                }
+                spans.extend(status.clone());
+                used += sw;
+            }
+            let pad = self.bw.saturating_sub(used + 1);
+            spans.insert(0, Span::raw(" ".repeat(pad)));
             self.line(spans);
         }
     }
