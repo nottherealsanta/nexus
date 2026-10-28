@@ -25,7 +25,8 @@
     cursorBlink: false,
     theme: { background: bg, foreground: fg },
   });
-  term.loadAddon(new CanvasAddon.CanvasAddon());
+  // The canvas renderer mis-scales when devicePixelRatio > 1; the DOM renderer stays crisp.
+  if (q.get("canvas") !== "0") term.loadAddon(new CanvasAddon.CanvasAddon());
   term.open(document.getElementById("term"));
   const ws = new WebSocket(`ws://${location.host}/pty?profile=${q.get("profile")}&cols=${cols}&rows=${rows}`);
   window.__last = Date.now(); window.__exited = null; window.__bytes = 0;

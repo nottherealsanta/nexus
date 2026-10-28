@@ -26,7 +26,12 @@ dragging below 14 columns collapses it to a rail of one letter per session,
 with search on top and `+` below, and hovering a letter shows the session's
 title and place. Settings → Sidebar switches full / rail / hidden. The location
 strip under the composer names the project (underlined by the accent rule),
-directory, branch and checkout kind.
+then the branch, the directory and, only in a linked worktree, `worktree`.
+The panel ends half a row below the control row (an upper half block).
+The starting-context section lists the system prompt, tools, instructions,
+agent and child agents with estimated tokens (characters ÷ 4), detail rows, a
+total and the share of the model's window; a turn footer adds the catalog
+price when the model has one.
 
 Settings is a centred modal over the dimmed session: type to search, ↑/↓ to
 move, ←/→ to change a value, Enter to act, Esc to clear the search and then

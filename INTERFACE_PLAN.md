@@ -290,7 +290,7 @@ a state never changes a component's size or position.
   form a vertical line.
 - **Right column** holds meta, right-aligned in one block: counts, durations,
   tokens, key hints. Within a column, numbers right-align; units follow
-  (`12 s`, `1.2k`, `+14 −3`). Never let meta push the title: the title
+  (`12 s`, `1.2K`, `+14 −3`). Never let meta push the title: the title
   truncates first.
 - **Segment order** in any row: mark, title/name, key argument, summary, then
   the right block. Separator is `·`. Order of meta in the right block: count,
@@ -299,7 +299,7 @@ a state never changes a component's size or position.
   close`, ordered by importance, placed on the surface they act on (dialogs and cards), in the command
   palette or F1, and in the composer for stop. There is no status footer.
   Keys that conflict with text input are not shown there.
-- **Counts** use plain digits with thousands abbreviated at 1,000 (`1.2k`).
+- **Counts** use plain digits with thousands abbreviated at 1,000 (`1.2K`, `3.4M`).
 - Align `+N −M` as two fixed-width groups so adjacent rows stack.
 
 ### Component anatomy
@@ -352,21 +352,39 @@ from their parent rather than listed as separate root rows.
 #### Context section
 
 A section of the timeline that groups what the model received before the first
-turn (system prompt, tool list, instructions, skills, context insertions).
+turn (system prompt, tool list, instructions, agent, child agents).
 
 ```
- ▾ Context · 6 items · 4.1k tokens
-   │ system prompt        1.8k
-   │ tools (9)            1.6k
-   │ AGENTS.md            0.7k
+ ▾ Context · 5 items · ~2.9K tokens · 1.4% of window
+   │ System prompt                                          ~1.0K
+   │   You are an AI agent running in Nexus, a coding agent…
+   │
+   │ Tools [9]                                              ~1.9K
+   │   read  bash  bash_output  bash_kill  edit  write  ask  +2 more
+   │
+   │ Instructions AGENTS.md loaded                          ~0.7K
+   │   /work/AGENTS.md · 2.8 KB, part of the system prompt
+   │
+   │ Agent build
+   │   builtin · Does the actual work…
+   │
+   │ total  ~2.9K tokens · 1.4% of the window
 ```
 
-Header: fold marker, title (secondary, bold), `·`-separated meta in muted.
-Body rows use a hairline rail and the right-aligned token column. Collapsed by
-default after the first turn. Focused: focus bar on the header. Hovered: header
-background. Loading: `loading context…`. Error: `✕ failed to load context`
-with retry key hint. Empty: `No context yet`. Clipped items show a
-`context` notice line stating what was clipped and why.
+Header: fold marker, title (secondary, bold), `·`-separated meta in muted, with
+the share of the model's window when the catalog reports one. Body: a hairline
+rail, a bold name per item with a muted count chip, the estimated token figure
+flush right (at most 96 cells from the rail, so labels and figures stay
+together), and muted detail rows under it (first prompt line, tool names in at
+most two rows then `+N more`, the instruction file's path and size). A blank
+rail row separates items; a `total` row closes the list. Estimates are
+characters ÷ 4 and carry `~`; the provider's own counts appear in the turn
+footer. Instructions are part of the system prompt, so the total counts only
+the system prompt and the tool schemas. Collapsed by default after the first
+turn. Focused: focus bar on the header. Hovered: header background. Loading:
+`loading context…`. Error: `✕ failed to load context` with retry key hint.
+Empty: `No context yet`. Clipped items show a `context` notice line stating what
+was clipped and why.
 
 #### Turn header
 
@@ -386,7 +404,8 @@ presentation remains in A8.
 
 One muted row below a hairline: model (and every model used), effort,
 duration, calls, tools, tokens, cost, then the end status with glyph and
-label. Wraps at width into a second muted row, never truncating the status.
+label. Cost is computed from the catalog's prices (uncached input, cached
+input, output) and is absent when the model has no price. Wraps at width into a second muted row, never truncating the status.
 Interrupted: `◼ interrupted`; error: `✕ error`; step limit: `◼ step limit`.
 Running: absent until the turn ends (the live row above the composer shows the
 running status). Hovered: tokens expand into a breakdown tooltip (NSH) or a
@@ -427,7 +446,9 @@ counts. Open with Enter or a click; the answer expands in place.
 #### Composer
 
 The composer is a borderless `surface.panel` fill with a blank row above the
-input and one between the input and the control row. A canvas gutter surrounds
+input and one between the input and the control row. It ends half a row below
+the control row (the TUI draws an upper half block in the panel colour; ANSI-16,
+monochrome and ASCII have no surface edge to draw). A canvas gutter surrounds
 it. The placeholder is `Type a message…`; disconnected sessions show the
 reason. In ANSI-16 and monochrome the focused input has a focus bar.
 
@@ -435,8 +456,11 @@ The control row contains agent, model and effort selectors. The agent name is
 capitalised and shown in its identity colour; the model uses the catalog display
 name and provider; a change requested during a turn reads `old → new (next
 call)`. A busy turn shows `esc stop`; an interrupted turn offers `continue`.
-The directory is on a separate canvas row below the panel and opens the
-directory control. For an existing session, Core’s worktree listing supplies
+The location strip is a separate canvas row below the panel: the project name
+(bold, underlined by the accent rule), the branch, the directory (`~` form),
+and `worktree` in violet only when the session is in a linked worktree. A main
+checkout shows its branch and nothing else. The path opens the directory
+control and the branch opens the worktrees control. For an existing session, Core’s worktree listing supplies
 its branch and linked worktree marker, refreshed on directory changes; before a
 session exists, `GET /api/project/{id}/worktrees` supplies the project's own
 branch the same way. The right-hand count estimates context from the latest

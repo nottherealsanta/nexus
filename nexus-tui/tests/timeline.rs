@@ -899,3 +899,81 @@ fn collapsed_bash_rows_show_a_non_zero_exit_code() {
         "zero exit stays quiet: {text}"
     );
 }
+
+fn starting_context() -> serde_json::Value {
+    serde_json::json!({
+        "origin": "created",
+        "system_prompt": format!("You are a coding agent.\n{}", "x".repeat(4000)),
+        "tools": ["read", "bash", "edit"],
+        "tool_definitions": {"read": {"name": "read", "parameters": {"type": "object"}}},
+        "instruction_file": {"path": "/work/AGENTS.md", "status": "loaded", "bytes": 800},
+        "agent": {"name": "build", "source": "builtin", "description": "Does the work."},
+        "child_agents": [{"name": "scout"}, {"name": "plan"}],
+        "workspace": {"active": false}
+    })
+}
+
+#[test]
+fn the_context_section_lists_items_with_estimates_and_the_window_share() {
+    let mut a = empty(opts(Mode::Dark, Tier::TrueColor), (120, 36));
+    a.open_session(SESSION);
+    a.state.model.selected.as_mut().unwrap().starting = Some(starting_context());
+    a.state.models = vec![serde_json::json!({"ref": "codex/gpt-5", "context": 100000})];
+    a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
+    let text = rows(&mut a).join("\n");
+    for needle in [
+        "Context",
+        "System prompt",
+        "You are a coding agent.",
+        "Tools [3]",
+        "read  bash  edit",
+        "Instructions AGENTS.md loaded",
+        "/work/AGENTS.md",
+        "part of the system prompt",
+        "Agent build",
+        "Child agents [2]",
+        "scout  plan",
+        "of the window",
+    ] {
+        assert!(text.contains(needle), "missing {needle:?}:\n{text}");
+    }
+    // The system prompt is ~4,024 characters, so about a thousand tokens.
+    assert!(text.contains("~1.0K"), "{text}");
+}
+
+#[test]
+fn the_turn_footer_prices_a_turn_from_the_catalog() {
+    use nexus_tui::api::Event;
+    let mut a = app();
+    a.state.model.sessions.get_mut(SESSION).unwrap().model = Some("codex/gpt-5".into());
+    a.state.models = vec![serde_json::json!({
+        "ref": "codex/gpt-5", "context": 400000,
+        "input_cost": 1.0, "output_cost": 10.0, "cache_read_cost": 0.2
+    })];
+    let first = a.messages()[0].created;
+    let events = &mut a.state.model.selected.as_mut().unwrap().events;
+    events.push(Event {
+        id: 900,
+        cursor: None,
+        seq: None,
+        time: first + 0.1,
+        kind: "wire_request".into(),
+        session_id: Some(SESSION.into()),
+        data: serde_json::json!({"body": {"model": "gpt-5"}}),
+    });
+    events.push(Event {
+        id: 901,
+        cursor: None,
+        seq: None,
+        time: first + 0.2,
+        kind: "usage".into(),
+        session_id: Some(SESSION.into()),
+        data: serde_json::json!({
+            "input_tokens": 100000, "cached_input_tokens": 50000, "output_tokens": 10000
+        }),
+    });
+    let text = rows(&mut a).join("\n");
+    // 50K fresh input at $1, 50K cached at $0.20, 10K output at $10 per million.
+    assert!(text.contains("100K in 50.0K cached 10.0K out"), "{text}");
+    assert!(text.contains("$0.16"), "{text}");
+}

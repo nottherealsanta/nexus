@@ -31,7 +31,7 @@ shared source of colours, terminal fallbacks and glyphs is `theme.toml`.
   session: search, violet section headings, values right-aligned, the selected
   row on an accent fill, ←/→ to change. Escape clears the search, then closes.
 - The location strip under the composer names the project in bold over an
-  accent segment of the closing rule, then directory, branch and checkout kind.
+  accent segment of the closing rule, then branch, directory and `worktree` (violet, only in a linked worktree). The composer panel ends half a row below its control row. Counts abbreviate as `1.2K` and `3.4M`.
 - Narrow layouts keep the centre readable and use drawers for sidebars. Large
   text, CJK and combined graphemes must fit without splitting; keyboard and
   mouse hit targets follow the painted geometry. Empty, loading, error and

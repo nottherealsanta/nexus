@@ -262,12 +262,27 @@ fn fmt_count(n: u64) -> String {
     if n >= 1000 {
         let k = n as f64 / 1000.0;
         if k >= 100.0 {
-            format!("{k:.0}k")
+            format!("{k:.0}K")
         } else {
-            format!("{k:.1}k")
+            format!("{k:.1}K")
         }
     } else {
         n.to_string()
+    }
+}
+
+/// Tokens estimated from a character count (about four characters each).
+fn estimate(chars: usize) -> u64 {
+    (chars as u64).div_ceil(4)
+}
+
+/// `4.1%`, or `<0.1%` for a sliver.
+fn share_of(tokens: u64, window: u64) -> String {
+    let pct = tokens as f64 / window as f64 * 100.0;
+    if pct > 0.0 && pct < 0.1 {
+        "<0.1%".to_owned()
+    } else {
+        format!("{pct:.1}%")
     }
 }
 
@@ -720,22 +735,32 @@ impl Builder<'_> {
         // Expanded before the first turn; collapsed once the session has content.
         let open = self.is_open(&key, no_turns);
         let sys = s["system_prompt"].as_str().unwrap_or("");
-        let tools = s["tools"].as_array().map_or(0, |v| v.len());
-        let defs = s["tool_definitions"].as_object().map_or(0, |m| m.len());
+        let names: Vec<&str> = s["tools"]
+            .as_array()
+            .map(|v| v.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let schemas = &s["tool_definitions"];
         let file = &s["instruction_file"];
         let agent = &s["agent"];
-        let est = sys.chars().count().div_ceil(4) as u64;
-        let file_label = match file["status"].as_str() {
-            Some("loaded") => format!(
-                "AGENTS.md · {}",
-                file["bytes"]
-                    .as_u64()
-                    .map_or(String::new(), |b| format!("{b} B"))
-            ),
-            Some(other) => format!("AGENTS.md · {other}"),
-            None => "AGENTS.md".into(),
+        // Estimates are characters / 4 and say so; the provider's own count
+        // arrives with the first request (see the turn footer).
+        let sys_tokens = estimate(sys.chars().count());
+        let tool_tokens = if schemas.as_object().is_some_and(|m| !m.is_empty()) {
+            estimate(schemas.to_string().chars().count())
+        } else {
+            0
         };
-        let items = 3 + usize::from(defs > 0);
+        let file_tokens = file["bytes"].as_u64().map(|b| estimate(b as usize));
+        let total = sys_tokens + tool_tokens;
+        let window = self.context_window();
+        let mut items = vec!["system prompt", "tools", "instructions", "agent"];
+        let children = s["child_agents"].as_array().map_or(0, Vec::len);
+        if children > 0 {
+            items.push("child agents");
+        }
+        if s["workspace"]["active"].as_bool().unwrap_or(false) {
+            items.push("workspace tools");
+        }
         let mut header = vec![
             Span::styled(format!("{} ", self.t.fold(open)), self.st(MUTED, CANVAS)),
             Span::styled(
@@ -744,63 +769,206 @@ impl Builder<'_> {
             ),
             Span::styled(
                 self.sep()
-                    + &format!("{items} items")
+                    + &format!("{} items", items.len())
                     + &self.sep()
-                    + &format!("~{} tokens", fmt_count(est)),
+                    + &format!("~{} tokens", fmt_count(total)),
                 self.meta(),
             ),
         ];
+        if let Some(share) = window.map(|w| share_of(total, w)) {
+            header.push(Span::styled(
+                self.sep() + &format!("{share} of window"),
+                self.meta(),
+            ));
+        }
         if s["origin"].as_str() == Some("reconstructed") {
             header.push(Span::styled(
                 self.sep() + "reconstructed",
                 self.st("status.warning", CANVAS),
             ));
         }
+        let file_status = match file["status"].as_str() {
+            Some("loaded") => "loaded".to_owned(),
+            Some("missing") => "not found".to_owned(),
+            Some(other) => other.replace('_', " "),
+            None => "not read".to_owned(),
+        };
+        let file_path = file["path"].as_str().unwrap_or("").to_owned();
+        let file_bytes = file["bytes"].as_u64().filter(|&b| b > 0);
+        let first_prompt_line = sys
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or("")
+            .to_owned();
+        let child_names = s["child_agents"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|c| c["name"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            })
+            .unwrap_or_default();
+        let agent_name = agent["name"].as_str().unwrap_or("?").to_owned();
+        let agent_source = agent["source"].as_str().unwrap_or("?").to_owned();
+        let agent_description = agent["description"].as_str().unwrap_or("").to_owned();
         self.block(key.clone(), BlockKind::Context, None, true, |b| {
             b.row(header, Vec::new());
             if !open {
                 return;
             }
-            let rail = b.st("border.default", CANVAS);
-            let name = b.secondary();
-            let toc = b.meta();
-            let row = |b: &mut Self, label: &str, value: String| {
-                let pad = b.bw.saturating_sub(2 + width(label) + width(&value));
+            let rail_style = b.st("border.default", CANVAS);
+            let name_style = b.secondary().add_modifier(Modifier::BOLD);
+            let meta = b.meta();
+            let rail = format!("  {} ", b.t.structure("rail"));
+            // Keep the token column near its labels on a wide terminal.
+            let inner = b.bw.saturating_sub(width(&rail)).min(96);
+            // Heading row: name, count chip, then the token figure flush right.
+            let item = |b: &mut Self, name: &str, chip: Option<String>, tokens: Option<String>| {
+                let mut spans = vec![
+                    Span::styled(rail.clone(), rail_style),
+                    Span::styled(name.to_owned(), name_style),
+                ];
+                let mut used = width(name);
+                if let Some(chip) = chip {
+                    used += 1 + width(&chip);
+                    spans.push(Span::styled(format!(" {chip}"), meta));
+                }
+                if let Some(tokens) = tokens {
+                    let pad = inner.saturating_sub(used + width(&tokens)).max(1);
+                    spans.push(Span::styled(" ".repeat(pad), meta));
+                    spans.push(Span::styled(tokens, meta));
+                }
+                b.line(spans);
+            };
+            // Muted detail rows under a heading, clipped with an announced ellipsis.
+            let detail = |b: &mut Self, text: &str| {
+                if text.is_empty() {
+                    return;
+                }
+                let room = inner.saturating_sub(2).max(1);
                 b.line(vec![
-                    Span::styled(format!("  {} ", b.t.structure("rail")), rail),
-                    Span::styled(label.to_string(), name),
-                    Span::styled(" ".repeat(pad.max(1)), toc),
-                    Span::styled(value, toc),
+                    Span::styled(rail.clone(), rail_style),
+                    Span::styled(format!("  {}", truncate(text, room, b.ell())), meta),
                 ]);
             };
-            row(
+            let blank = |b: &mut Self| {
+                b.line(vec![Span::styled(rail.trim_end().to_owned(), rail_style)]);
+            };
+
+            item(
                 b,
-                "system prompt",
-                format!("{} B · ~{} tokens", sys.len(), fmt_count(est)),
+                "System prompt",
+                None,
+                Some(format!("~{}", fmt_count(sys_tokens))),
             );
-            row(
+            detail(b, &first_prompt_line);
+            blank(b);
+
+            item(
                 b,
-                "agent",
-                format!(
-                    "{} · {}",
-                    agent["name"].as_str().unwrap_or("?"),
-                    agent["source"].as_str().unwrap_or("?")
-                ),
+                "Tools",
+                Some(format!("[{}]", names.len())),
+                (tool_tokens > 0).then(|| format!("~{}", fmt_count(tool_tokens))),
             );
-            row(b, &format!("tools ({tools})"), format!("{defs} schemas"));
-            row(
+            if !names.is_empty() {
+                // Names flow in rows of the available width, at most two rows.
+                let room = inner.saturating_sub(2).max(1);
+                let mut rows: Vec<String> = vec![String::new()];
+                let mut shown = 0;
+                for name in &names {
+                    let last = rows.last_mut().unwrap();
+                    let add = if last.is_empty() { 0 } else { 2 } + width(name);
+                    if width(last) + add > room {
+                        if rows.len() == 2 {
+                            break;
+                        }
+                        rows.push(String::new());
+                    }
+                    let last = rows.last_mut().unwrap();
+                    if !last.is_empty() {
+                        last.push_str("  ");
+                    }
+                    last.push_str(name);
+                    shown += 1;
+                }
+                if shown < names.len() {
+                    let more = format!("  +{} more", names.len() - shown);
+                    let last = rows.last_mut().unwrap();
+                    if width(last) + width(&more) > room {
+                        *last = truncate(last, room.saturating_sub(width(&more)), "");
+                    }
+                    last.push_str(&more);
+                }
+                for row in rows {
+                    detail(b, &row);
+                }
+            }
+            blank(b);
+
+            item(
                 b,
-                &file_label,
-                file["path"].as_str().unwrap_or("").to_string(),
+                "Instructions",
+                Some(format!("AGENTS.md {file_status}")),
+                file_tokens.map(|t| format!("~{}", fmt_count(t))),
             );
-            let children = s["child_agents"].as_array().map_or(0, Vec::len);
+            let mut place =
+                text::truncate_middle(&file_path, inner.saturating_sub(2 + 26).max(12), b.ell());
+            if let Some(bytes) = file_bytes {
+                place.push_str(&format!(
+                    "{}{} B, part of the system prompt",
+                    b.sep(),
+                    bytes
+                ));
+            }
+            detail(b, &place);
+            blank(b);
+
+            item(b, "Agent", Some(agent_name.clone()), None);
+            detail(
+                b,
+                &if agent_description.is_empty() {
+                    agent_source.clone()
+                } else {
+                    format!("{agent_source}{}{agent_description}", b.sep())
+                },
+            );
             if children > 0 {
-                row(b, "child agents", children.to_string());
+                blank(b);
+                item(b, "Child agents", Some(format!("[{children}]")), None);
+                detail(b, &child_names);
             }
-            if s["workspace"]["active"].as_bool().unwrap_or(false) {
-                row(b, "workspace tools", "active".into());
+            if items.contains(&"workspace tools") {
+                blank(b);
+                item(b, "Workspace tools", Some("active".into()), None);
             }
+            blank(b);
+            let mut total_row = vec![
+                Span::styled(rail.clone(), rail_style),
+                Span::styled("total".to_owned(), meta),
+                Span::styled(format!("  ~{} tokens", fmt_count(total)), b.secondary()),
+            ];
+            if let Some(w) = window {
+                total_row.push(Span::styled(
+                    format!("{}{} of the window", b.sep(), share_of(total, w)),
+                    meta,
+                ));
+            }
+            b.line(total_row);
         });
+    }
+
+    /// The viewed session's context window from the catalog, when it reports one.
+    fn context_window(&self) -> Option<u64> {
+        let model = self.app.effective_model(self.app.viewed());
+        self.app
+            .state
+            .models
+            .iter()
+            .find(|m| m["ref"].as_str() == Some(model.as_str()))
+            .and_then(|m| m["context"].as_u64())
+            .filter(|&n| n > 0)
     }
 
     // -- turns -----------------------------------------------------------------
@@ -1054,6 +1222,29 @@ impl Builder<'_> {
         }
     }
 
+    /// The turn's price from the catalog (USD per million tokens), when the
+    /// model is listed with prices: uncached input, cached input and output
+    /// (reasoning tokens are billed as output and already counted there).
+    fn turn_cost(&self, meta: &TurnMeta) -> Option<String> {
+        let used = meta.models.last()?;
+        let id = used.rsplit('/').next().unwrap_or(used);
+        let entry = self.app.state.models.iter().find(|m| {
+            m["ref"]
+                .as_str()
+                .is_some_and(|r| r == used || r.rsplit('/').next() == Some(id))
+        })?;
+        let price = |key: &str| entry[key].as_f64();
+        let (input, output) = (price("input_cost")?, price("output_cost")?);
+        let cache = price("cache_read_cost").unwrap_or(input);
+        let fresh = meta.input.saturating_sub(meta.cached) as f64;
+        let usd = (fresh * input + meta.cached as f64 * cache + meta.output as f64 * output) / 1e6;
+        Some(if usd < 0.01 {
+            "<$0.01".to_owned()
+        } else {
+            format!("${usd:.2}")
+        })
+    }
+
     fn turn_footer(&mut self, n: usize, turns: &[TurnMeta]) {
         let Some(meta) = turns.get(n) else { return };
         self.line(vec![Span::styled(
@@ -1106,6 +1297,9 @@ impl Builder<'_> {
                 tok.push_str(&format!(" {} reasoning", fmt_count(meta.reasoning)));
             }
             bits.push(tok);
+            if let Some(cost) = self.turn_cost(meta) {
+                bits.push(cost);
+            }
         }
         let text = bits.join(&self.sep());
         let mut rows = text::wrap(&text, self.bw);

@@ -398,12 +398,12 @@ fn composer_uses_latest_usage_and_catalog_window() {
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("Example Model codex"), "{all}");
-    assert!(all.contains("10.0k · 5.0%"), "{all}");
+    assert!(all.contains("10.0K · 5.0%"), "{all}");
     app.state.models.clear();
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(
-        all.contains("example codex") && all.contains("10.0k"),
+        all.contains("example codex") && all.contains("10.0K"),
         "{all}"
     );
     assert!(!all.contains("5.0%"));
@@ -443,7 +443,7 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     assert!(row.contains("Orchestrate"), "{row}");
     assert!(!row.contains("orchestrate"), "{row}");
     // Used, the next price tier and the window, as old Nexus showed them.
-    assert!(all_contains(&rows, "52.0k · 26.0% · 5.2%"), "{row}");
+    assert!(all_contains(&rows, "52.0K · 26.0% · 5.2%"), "{row}");
 
     let context = app
         .hits
@@ -452,9 +452,9 @@ fn composer_capitalises_the_agent_and_shows_price_tier_occupancy() {
     app.mouse = Some((context.x + 1, context.y));
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
-    assert!(all.contains("Context: 52.0k of 1.0M tokens"), "{all}");
+    assert!(all.contains("Context: 52.0K of 1.0M tokens"), "{all}");
     assert!(
-        all.contains("26.0% at 200.0k") && all.contains("5.2% of window"),
+        all.contains("26.0% at 200.0K") && all.contains("5.2% of window"),
         "{all}"
     );
     assert!(all.contains("Estimated from the latest request"), "{all}");
@@ -528,7 +528,10 @@ fn project_worktrees_supply_sidebar_and_location_branches_without_a_session_list
     let (_, rows) = draw(&mut app, 120, 36);
     let all = joined(&rows);
     assert!(all.contains("x \u{2325} project-branch"), "{all}");
-    assert!(all.contains("project-branch  worktree"), "{all}");
+    assert!(
+        all.contains("project-branch /work/nexus-home/ws worktree"),
+        "{all}"
+    );
 }
 
 #[test]
@@ -692,9 +695,10 @@ fn new_session_location_uses_the_projects_own_worktrees() {
     let all = joined(&rows);
     assert!(all.contains("trunk"), "{all}");
     assert!(
-        !all.contains("worktree"),
-        "main checkout is not labelled: {all}"
+        all.contains("trunk") && !all.contains("main checkout"),
+        "a main checkout shows only its branch: {all}"
     );
+    assert!(!all.contains("worktree"), "{all}");
 }
 
 #[test]
@@ -711,7 +715,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         }),
     );
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(joined(&rows).contains("feature  worktree"));
+    assert!(joined(&rows).contains("feature /work/nexus-home/ws worktree"));
     assert!(app.hits.rect_of(&Target::ComposerWorktree).is_some());
     app.effects.clear();
     app.apply_sync(SyncMsg::Event(Event {
@@ -729,7 +733,7 @@ fn location_shows_only_the_current_worktree_and_invalidates_on_move() {
         .iter()
         .any(|e| matches!(e, Effect::Sync(Command::Worktrees(id)) if id == SESSION)));
     let (_, rows) = draw(&mut app, 120, 36);
-    assert!(!joined(&rows).contains("feature  worktree"));
+    assert!(!joined(&rows).contains("feature /work/nexus-home/ws worktree"));
 }
 
 #[test]

@@ -18,6 +18,10 @@ const arg = (n, d) => {
 const envFile = arg("env");
 const outDir = arg("out");
 const only = arg("only", "");
+// Wide shots grow by --grow; 80-column shots stay put because they test narrow layouts.
+const grow = Number(arg("grow", "1.5"));
+const scale = Number(arg("scale", "2"));
+const font = Number(arg("font", "18"));
 const bin = path.resolve(arg("bin", path.join(here, "../../target/debug/nexus-tui")));
 if (!envFile || !outDir) {
   console.error("usage: node shots.mjs --env <root>/env --out <dir> [--bin path] [--only substr]");
@@ -52,6 +56,10 @@ console.log("browser up");
 // One shot: spawn the binary in a PTY, drive it with `steps`, photograph it.
 async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, home = cfg.WEBTERM_HOME, steps = async () => {} }) {
   if (only && !name.includes(only)) return;
+  if (cols >= 120) {
+    cols = Math.round(cols * grow);
+    rows = Math.round(rows * grow);
+  }
   const t = THEMES[theme];
   // Each shot starts from default client preferences.
   fs.rmSync(path.join(home, "tui.json"), { force: true });
@@ -61,8 +69,8 @@ async function shot({ name, cols, rows, theme = "dark", args = [], env = {}, hom
     args: [t.flag, ...args],
     env: { NEXUS10_HOME: home, NEXUS_TUI_NO_START: "1", NEXUS10_REDUCED_MOTION: "1", ...env },
   });
-  const page = await browser.newPage({ viewport: { width: 1800, height: 1100 } });
-  await page.goto(`http://127.0.0.1:${port}/?profile=${profile}&cols=${cols}&rows=${rows}&bg=${encodeURIComponent(t.bg)}&fg=${encodeURIComponent(t.fg)}`);
+  const page = await browser.newPage({ viewport: { width: 3200, height: 1800 }, deviceScaleFactor: scale });
+  await page.goto(`http://127.0.0.1:${port}/?profile=${profile}&cols=${cols}&rows=${rows}&font=${font}&canvas=${scale > 1 ? 0 : 1}&bg=${encodeURIComponent(t.bg)}&fg=${encodeURIComponent(t.fg)}`);
   const h = {
     page,
     idle: (ms = 500) => page.evaluate((m) => window.__idle(m), ms),
@@ -158,6 +166,13 @@ await shot({ name: "rail-160x48-dark", cols: 160, rows: 48, steps: async (h) => 
 await shot({ name: "rail-hover-160x48-dark", cols: 160, rows: 48, steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 5, 500); } });
 await shot({ name: "rail-hover-120x36-light", cols: 120, rows: 36, theme: "light", steps: async (h) => { await h.openSession(); await h.sidebar(1); await h.hover(3, 8, 500); } });
 await shot({ name: "tab-hover-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.hover(6, 1, 500); } });
+// An empty session opens on its starting context, expanded.
+for (const theme of ["dark", "light"]) {
+  await shot({ name: `context-120x36-${theme}`, cols: 120, rows: 36, theme, steps: async (h) => {
+    await h.key("Control+k", 400); await h.type("Release notes", 300); await h.key("Enter", 600);
+    await h.waitFor("Release notes for 0.10"); await h.waitFor("total"); await h.idle(500);
+  } });
+}
 await shot({ name: "complete-slash-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.openSession(); await h.type("/mo", 600); } });
 await shot({ name: "complete-at-120x36-dark", cols: 120, rows: 36, steps: async (h) => { await h.waitFor("side-project"); await h.type("look at @s", 1500); } });
 await shot({ name: "new-session-120x36-dark", cols: 120, rows: 36 });

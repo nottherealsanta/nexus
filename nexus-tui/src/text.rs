@@ -168,7 +168,7 @@ pub fn count(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1000 {
-        format!("{:.1}k", n as f64 / 1000.0)
+        format!("{:.1}K", n as f64 / 1000.0)
     } else {
         n.to_string()
     }
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(age(1000.0, 990.0), "now");
         assert_eq!(age(1000.0, 1000.0 - 180.0), "3m");
         assert_eq!(age(100_000.0, 100_000.0 - 7200.0), "2h");
-        assert_eq!(count(1200), "1.2k");
+        assert_eq!(count(1200), "1.2K");
         assert_eq!(count(1_200_000), "1.2M");
         assert_eq!(capitalize("orchestrate"), "Orchestrate");
         assert_eq!(capitalize("éclair"), "Éclair");

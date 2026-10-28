@@ -330,7 +330,7 @@ pub(crate) fn composer_inner(r: Rect) -> Rect {
         r.x + 3,
         r.y + 1,
         r.width.saturating_sub(6),
-        r.height.saturating_sub(5),
+        r.height.saturating_sub(6),
     )
 }
 
@@ -338,7 +338,7 @@ fn heights(app: &App, w: u16) -> Heights {
     let banner = u16::from(!app.banners().is_empty());
     let inner_w = w.saturating_sub(6) as usize;
     let rows = app.composer_ref().layout(inner_w).0.len().clamp(1, 8) as u16;
-    let (waiting, composer) = (waiting_height(app), rows + 5);
+    let (waiting, composer) = (waiting_height(app), rows + 6);
     Heights {
         banner,
         waiting,
@@ -2980,14 +2980,27 @@ fn composer_usage(cx: &Cx, session: &crate::api::Session) -> Option<ComposerUsag
 }
 
 fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
-    if r.height < 6 || r.width < 8 {
+    if r.height < 7 || r.width < 8 {
         return;
     }
     let a = cx.app;
     let focused = a.ui.focus == Focus::Composer;
     let base = cx.st(PRIMARY, PANEL);
-    let panel = Rect::new(r.x + 1, r.y, r.width.saturating_sub(2), r.height - 2);
+    let panel = Rect::new(r.x + 1, r.y, r.width.saturating_sub(2), r.height - 3);
     clear(buf, panel, base);
+    // The panel ends half a row below the controls: an upper half block in the
+    // panel colour over the canvas. Without distinct surfaces there is no edge.
+    if !cx.t.opts.ascii
+        && matches!(
+            cx.t.opts.tier,
+            crate::theme::Tier::TrueColor | crate::theme::Tier::Ansi256
+        )
+    {
+        let edge = cx.st(PANEL, CANVAS);
+        for x in panel.x..panel.right() {
+            put(buf, x, panel.bottom(), "\u{2580}", edge, 1);
+        }
+    }
     hits.add(panel, Target::Composer);
     if focused
         && matches!(
@@ -3065,7 +3078,7 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
     // Selectors and actions share the control row; each has its own hit target.
     // The right block is computed first: the left side gives way in the order
     // effort → provider → extra percentages → truncated names (A2).
-    let cy = r.bottom() - 3;
+    let cy = r.bottom() - 4;
     let avail = r.width.saturating_sub(6) as usize;
     let busy = a.viewed_id().is_some_and(|i| a.is_busy(i));
     let interrupted = a.term("session.interrupted").unwrap_or(false);
@@ -3306,9 +3319,27 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
             );
         }
         let name_end = x;
-        let kind = if linked { "worktree" } else { "checkout" };
-        let tail = branch.map_or(0, |b| width(b) + width(kind) + 4);
-        let room = (end.saturating_sub(x + 1) as usize).saturating_sub(tail);
+        // Order as in old Nexus: name, branch, path, then `worktree` in violet
+        // when the session is in a linked worktree. A main checkout says nothing.
+        let kind = "worktree";
+        if let Some(branch) = branch {
+            x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), end.saturating_sub(x));
+            let begin = x;
+            x = put(
+                buf,
+                x,
+                y,
+                &truncate(branch, 24, cx.ell()),
+                cx.st(SECONDARY, CANVAS),
+                end.saturating_sub(x),
+            );
+            if x > begin {
+                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerWorktree);
+            }
+        }
+        // The kind is dropped before the path is shortened below a useful length.
+        let kind_width = if linked { width(kind) + 1 } else { 0 };
+        let room = (end.saturating_sub(x + 1) as usize).saturating_sub(kind_width);
         if room > 3 {
             x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), 1);
             let begin = x;
@@ -3324,29 +3355,10 @@ fn draw_composer(cx: &Cx, buf: &mut Buffer, r: Rect, hits: &mut HitMap) {
                 hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerDirectory);
             }
         }
-        if let Some(branch) = branch {
-            x = put(buf, x, y, "  ", cx.st(MUTED, CANVAS), end.saturating_sub(x));
-            let begin = x;
-            x = put(
-                buf,
-                x,
-                y,
-                branch,
-                cx.st(SECONDARY, CANVAS),
-                end.saturating_sub(x),
-            );
-            if x > begin {
-                hits.add(Rect::new(begin, y, x - begin, 1), Target::ComposerWorktree);
-            }
-            let token = if linked { "agent.violet" } else { MUTED };
-            put(
-                buf,
-                x,
-                y,
-                &format!("  {kind}"),
-                cx.st(token, CANVAS),
-                end.saturating_sub(x),
-            );
+        if linked && x + 1 + (width(kind) as u16) <= end {
+            x = put(buf, x, y, " ", cx.st(MUTED, CANVAS), 1);
+            let style = cx.st("agent.violet", CANVAS).add_modifier(Modifier::BOLD);
+            put(buf, x, y, kind, style, end.saturating_sub(x));
         }
         // the rule closing the strip; the accent marks the project name
         let rule = cx.t.structure("rule");
